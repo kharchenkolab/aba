@@ -1,0 +1,49 @@
+.composer {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--panel-bd);
+  background: var(--bg);
+}
+
+.composer__box {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg);
+  border: 1.5px solid var(--panel-bd);
+  border-radius: var(--r);
+  padding: 6px 8px 6px 12px;
+  transition: border-color 0.15s;
+}
+.composer__box:focus-within { border-color: var(--accent); }
+.composer__box--disabled { opacity: 0.6; }
+
+.composer__input {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: transparent;
+  min-height: 22px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.composer__input::placeholder { color: var(--text-4); }
+
+.composer__send {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, opacity 0.15s;
+}
+.composer__send:hover:not(:disabled) { background: #2a55ee; }
+.composer__send:disabled { opacity: 0.4; cursor: default; }

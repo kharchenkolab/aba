@@ -1,6 +1,49 @@
 # aba
 
-Lightweight HTML mockups of a research-workspace UI (project tree, chat with advisor agents, figure and finding views).
+AI-orchestrated bioinformatics workspace. Chat with the Guide agent (Claude), explore CSV data, and generate plots — all in a persistent, Slack-like interface.
+
+## Running the app
+
+**Requires:** Python 3.8+, Node 20 (via nvm), an Anthropic API key.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+./start.sh
+# open http://localhost:5173
+```
+
+The chat history persists in `backend/aba.db`. Closing and reopening the browser picks up exactly where you left off.
+
+### What Guide can do
+- List and read CSV files from `backend/data/`
+- Execute Python (pandas + matplotlib) and display plots inline in the chat
+- Answer questions about the data in natural language
+
+### Adding your own data
+Drop CSV files into `backend/data/` (or set `DATA_DIR=/your/path` in the environment). Guide will find them automatically via `list_data_files`.
+
+## Layout
+
+```
+backend/
+  main.py        FastAPI app + routes
+  guide.py       Claude API loop with streaming tool use
+  tools.py       Tool executors: list_data_files, read_csv_info, run_python
+  db.py          SQLite message persistence
+  config.py      Paths + system prompt
+  data/          CSV data files (add yours here)
+  artifacts/     Generated plot PNGs (served at /artifacts/*)
+frontend/
+  src/
+    App.tsx              4-column layout
+    useChat.ts           SSE streaming + history hook
+    components/          Rail, ProjectTree, ChatPane, Message, Composer, AdvisorRail
+mockup/                  Original static HTML mockups (reference)
+```
+
+---
+
+## Static mockups
 
 ## Layout
 

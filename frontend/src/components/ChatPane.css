@@ -1,0 +1,57 @@
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.chat-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--panel-bd);
+  height: 42px;
+  flex-shrink: 0;
+}
+
+.chat-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  height: 36px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-3);
+  transition: background 0.1s, color 0.1s;
+}
+.chat-tab--active {
+  color: var(--guide);
+  background: var(--tree-active-bg);
+  font-weight: 600;
+}
+.chat-tab--quiet {
+  color: var(--text-4);
+  font-size: 12px;
+  cursor: default;
+}
+
+.chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0;
+}
+
+.chat-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-4);
+  font-size: 13px;
+}
