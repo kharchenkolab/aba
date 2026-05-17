@@ -3,3 +3,9 @@
 .idea/
 .vscode/
 node_modules/
+__pycache__/
+*.pyc
+.venv/
+backend/aba.db
+backend/artifacts/*.png
+frontend/dist/
