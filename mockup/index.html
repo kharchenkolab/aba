@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Macrophage Stimulation Pilot — Chat</title>
+<meta name="viewport" content="width=1440, initial-scale=1" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- =========== LEFT RAIL =========== -->
+  <aside class="rail">
+    <div class="rail__brand">
+      <svg><use href="icons.svg#i-brand"/></svg>
+      <span>Vienna<br/>Biocenter</span>
+    </div>
+    <nav class="rail__nav">
+      <a><svg><use href="icons.svg#i-home"/></svg>Home</a>
+      <a><svg><use href="icons.svg#i-projects"/></svg>Projects</a>
+      <a><svg><use href="icons.svg#i-queues"/></svg>Queues</a>
+      <a><svg><use href="icons.svg#i-alerts"/></svg>Alerts</a>
+    </nav>
+    <div class="rail__user">
+      <div class="rail__avatar">PP</div>
+      <span>Peter</span>
+    </div>
+  </aside>
+
+  <!-- =========== PROJECT TREE =========== -->
+  <aside class="tree">
+    <div class="tree__head">
+      Macrophage Stimulation Pilot
+      <svg class="chev"><use href="icons.svg#i-chev-down"/></svg>
+    </div>
+
+    <section class="tree__section">
+      <div class="tree__section-head">
+        <svg class="icon"><use href="icons.svg#i-db"/></svg>
+        Data
+        <svg class="chev"><use href="icons.svg#i-chev-up"/></svg>
+      </div>
+      <div class="tree__items">
+        <div class="tree__item is-active">
+          <svg class="icon" style="color:var(--accent)"><use href="icons.svg#i-dataset"/></svg>
+          <span class="tree__item-label">
+            ID5521 scRNA-seq
+            <span class="meta"><span class="dot"></span>ingested</span>
+          </span>
+          <span class="more"><svg style="width:14px;height:14px"><use href="icons.svg#i-more"/></svg></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="tree__section">
+      <a class="tree__section-head" href="figure.html" style="text-decoration:none; color:inherit; cursor:pointer;">
+        <svg class="icon"><use href="icons.svg#i-fig"/></svg>
+        Figures
+        <svg class="chev"><use href="icons.svg#i-chev-down"/></svg>
+      </a>
+    </section>
+
+    <section class="tree__section">
+      <a class="tree__section-head" href="finding.html" style="text-decoration:none; color:inherit; cursor:pointer;">
+        <svg class="icon"><use href="icons.svg#i-bulb"/></svg>
+        Findings
+        <svg class="chev"><use href="icons.svg#i-chev-down"/></svg>
+      </a>
+    </section>
+
+    <section class="tree__section">
+      <div class="tree__section-head">
+        <svg class="icon"><use href="icons.svg#i-doc"/></svg>
+        Manuscript
+        <svg class="chev"><use href="icons.svg#i-chev-down"/></svg>
+      </div>
+    </section>
+  </aside>
+
+  <!-- =========== MAIN =========== -->
+  <section class="main">
+    <div class="tabs">
+      <a class="tab is-active"><svg class="icon-guide"><use href="icons.svg#i-guide"/></svg>Guide</a>
+      <a class="tab"><svg class="icon-metho"><use href="icons.svg#i-metho"/></svg>Methodologist</a>
+      <a class="tab"><svg class="icon-skeptic"><use href="icons.svg#i-skeptic"/></svg>Skeptic</a>
+      <a class="tab"><svg class="icon-explorer"><use href="icons.svg#i-explorer"/></svg>Explorer</a>
+      <a class="tab"><svg class="icon-stylist"><use href="icons.svg#i-stylist"/></svg>Stylist</a>
+    </div>
+
+    <div class="chat">
+      <div class="chat__scroll">
+
+        <!-- user msg -->
+        <div class="msg">
+          <div class="msg__avatar is-user">PP</div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name">Peter</span><span class="msg__time">10:02 AM</span></div>
+            <div class="msg__text">Can you check on the status of my scRNA-seq experiment ID5521 that's supposed to come from our sequencing core?</div>
+          </div>
+        </div>
+
+        <!-- guide msg -->
+        <div class="msg">
+          <div class="msg__avatar is-guide"><svg><use href="icons.svg#i-guide"/></svg></div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name is-guide">Guide</span><span class="msg__badge">APP</span><span class="msg__time">10:02 AM</span></div>
+            <div class="msg__text">I checked the sequencing core status for experiment ID5521. Sequencing and primary processing are complete. 18 libraries have been delivered to institutional storage, and matching metadata are available in LIMS. Would you like me to pull the dataset into the workspace?</div>
+          </div>
+        </div>
+
+        <!-- user msg -->
+        <div class="msg">
+          <div class="msg__avatar is-user">PP</div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name">Peter</span><span class="msg__time">10:03 AM</span></div>
+            <div class="msg__text">Yes, please pull it in.</div>
+          </div>
+        </div>
+
+        <!-- guide msg with dataset card -->
+        <div class="msg">
+          <div class="msg__avatar is-guide"><svg><use href="icons.svg#i-guide"/></svg></div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name is-guide">Guide</span><span class="msg__badge">APP</span><span class="msg__time">10:03 AM</span></div>
+            <div class="msg__text">Done. I created a dataset card for ID5521 and linked storage and LIMS metadata.</div>
+            <div class="card">
+              <div class="card__icon"><svg><use href="icons.svg#i-dataset"/></svg></div>
+              <div class="card__body">
+                <div class="card__title">ID5521 scRNA-seq</div>
+                <div class="card__sub">scRNA-seq (10x)</div>
+              </div>
+              <div class="card__chips">
+                <span class="chip ok"><span class="dotok"><svg><use href="icons.svg#i-check"/></svg></span>Institutional Storage connected</span>
+                <span class="chip ok"><span class="dotok"><svg><use href="icons.svg#i-check"/></svg></span>LIMS connected</span>
+                <!--<span class="chip warn"><span class="dotinfo">⊕</span>18 samples found</span>-->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- user msg -->
+        <div class="msg">
+          <div class="msg__avatar is-user">PP</div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name">Peter</span><span class="msg__time">10:04 AM</span></div>
+            <div class="msg__text">Show me the dataset structure.</div>
+          </div>
+        </div>
+
+        <!-- guide structure summary -->
+        <div class="msg">
+          <div class="msg__avatar is-guide"><svg><use href="icons.svg#i-guide"/></svg></div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name is-guide">Guide</span><span class="msg__badge">APP</span><span class="msg__time">10:04 AM</span></div>
+            <div class="msg__text">
+              <p>Here is the current structure summary (v0):</p>
+              <div class="design-wrap">
+                <div class="axis-x">donor</div>
+                <div class="axis-y">timepoint</div>
+                <table class="design-grid">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th class="ctrl">D1</th>
+                      <th class="ctrl">D2</th>
+                      <th class="ctrl">D3</th>
+                      <th class="stim">D4</th>
+                      <th class="stim">D5</th>
+                      <th class="stim">D6</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><th>0h</th><td class="ctrl"></td><td class="ctrl"></td><td class="ctrl"></td><td class="stim"></td><td class="stim"></td><td class="stim"></td></tr>
+                    <tr><th>4h</th><td class="ctrl"></td><td class="ctrl"></td><td class="ctrl"></td><td class="stim"></td><td class="stim"></td><td class="stim"></td></tr>
+                    <tr><th>24h</th><td class="ctrl"></td><td class="ctrl"></td><td class="ctrl"></td><td class="stim"></td><td class="stim"></td><td class="stim"></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="design-legend">
+                <span class="design-legend__label">conditions:</span>
+                <span><span class="sw ctrl"></span>control</span>
+                <span><span class="sw stim"></span>stimulated</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- methodologist warning -->
+        <div class="msg advisor">
+          <div class="msg__avatar is-metho"><svg><use href="icons.svg#i-metho"/></svg></div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name is-metho">Methodologist</span><span class="msg__time">10:05 AM</span></div>
+            <div class="msg__text">
+              <svg class="warn-ic" width="14" height="14"><use href="icons.svg#i-warning"/></svg>
+              The current design does not track sequencing batch, which could confound further analysis.
+            </div>
+          </div>
+        </div>
+
+        <!-- user msg -->
+        <div class="msg">
+          <div class="msg__avatar is-user">PP</div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name">Peter</span><span class="msg__time">10:06 AM</span></div>
+            <div class="msg__text">Look at LIMS data to recover the batches.</div>
+          </div>
+        </div>
+
+        <!-- guide with attach pill -->
+        <div class="msg">
+          <div class="msg__avatar is-guide"><svg><use href="icons.svg#i-guide"/></svg></div>
+          <div class="msg__body">
+            <div class="msg__head"><span class="msg__name is-guide">Guide</span><span class="msg__badge">APP</span><span class="msg__time">10:06 AM</span></div>
+            <div class="msg__text">Checking LIMS… I found sequencing batch annotations for all 18 libraries and can attach them to the dataset.</div>
+            <div class="pill-row">
+              <span class="check"><svg><use href="icons.svg#i-check"/></svg></span>
+              Sequencing batch annotations found for 18/18 libraries
+              <button class="btn-attach">Attach to dataset</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="composer">
+        <div class="composer__box">
+          <svg class="clip"><use href="icons.svg#i-paperclip"/></svg>
+          <input class="composer__input" value="Please run a recommended scRNA-seq QC pipeline on this data" />
+          <button class="composer__send"><svg><use href="icons.svg#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========== RIGHT RAIL =========== -->
+  <aside class="right">
+    <div class="right__panel no-pad advisors">
+      <div class="advisors__head">
+        Advisor Team
+        <span class="right-icons">
+          <svg><use href="icons.svg#i-help"/></svg>
+          <svg><use href="icons.svg#i-more"/></svg>
+        </span>
+      </div>
+
+      <div class="advisor">
+        <div class="advisor__row">
+          <div class="advisor__icon guide"><svg><use href="icons.svg#i-guide"/></svg></div>
+          <div>
+            <div class="advisor__name">Guide</div>
+            <div class="advisor__sub"><span class="dot green"></span>online</div>
+          </div>
+          <span class="advisor__chev"><svg><use href="icons.svg#i-chev-up"/></svg></span>
+        </div>
+      </div>
+
+      <div class="advisor">
+        <div class="advisor__row">
+          <div class="advisor__icon metho"><svg><use href="icons.svg#i-metho"/></svg></div>
+          <div>
+            <div class="advisor__name">Methodologist</div>
+            <div class="advisor__sub"><span class="warn"><svg><use href="icons.svg#i-warning"/></svg>has a comment</span></div>
+          </div>
+          <span class="advisor__chev"><svg><use href="icons.svg#i-chev-up"/></svg></span>
+        </div>
+        <div class="advisor__note">
+          <div class="meta"><span class="lbl">Latest: note</span><span style="color:var(--text-3)">10:05 AM</span></div>
+          Batch is not currently tracked in the design.
+          <div><button class="btn">View in thread</button></div>
+        </div>
+      </div>
+
+      <div class="advisor">
+        <div class="advisor__row">
+          <div class="advisor__icon skeptic"><svg><use href="icons.svg#i-skeptic"/></svg></div>
+          <div>
+            <div class="advisor__name">Skeptic</div>
+            <div class="advisor__sub">quiet</div>
+          </div>
+          <span class="advisor__chev"><svg><use href="icons.svg#i-chev-down"/></svg></span>
+        </div>
+      </div>
+
+      <div class="advisor">
+        <div class="advisor__row">
+          <div class="advisor__icon explorer"><svg><use href="icons.svg#i-explorer"/></svg></div>
+          <div>
+            <div class="advisor__name">Explorer</div>
+            <div class="advisor__sub">quiet</div>
+          </div>
+          <span class="advisor__chev"><svg><use href="icons.svg#i-chev-down"/></svg></span>
+        </div>
+      </div>
+
+      <div class="advisor">
+        <div class="advisor__row">
+          <div class="advisor__icon stylist"><svg><use href="icons.svg#i-stylist"/></svg></div>
+          <div>
+            <div class="advisor__name">Stylist</div>
+            <div class="advisor__sub">quiet</div>
+          </div>
+          <span class="advisor__chev"><svg><use href="icons.svg#i-chev-down"/></svg></span>
+        </div>
+      </div>
+
+      <div class="advisors__settings">
+        <svg class="lead"><use href="icons.svg#i-cog"/></svg>
+        Team settings
+        <span class="chev"><svg><use href="icons.svg#i-chev-right"/></svg></span>
+      </div>
+    </div>
+  </aside>
+
+</div>
+<script src="resizers.js"></script>
+</body>
+</html>
