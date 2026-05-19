@@ -1,0 +1,4 @@
+# Scripted Guide session: produces a real PNG via run_python; system should
+# auto-register it as a figure entity and emit entity_registered events.
+{"blocks": [{"type": "text", "text": "Let me make a quick distribution plot of mt_fraction."}, {"type": "tool_use", "name": "run_python", "input": {"code": "# mt_fraction distribution\nimport pandas as pd\nimport matplotlib.pyplot as plt\ndf = pd.read_csv(f'{DATA_DIR}/cells.csv')\nfig, ax = plt.subplots(figsize=(4,3))\nax.hist(df['mt_fraction'], bins=20)\nax.set_xlabel('mt_fraction'); ax.set_ylabel('cells')\nfig.tight_layout(); fig.savefig('mt_hist.png', dpi=100)\nprint('made hist; n=', len(df))"}}]}
+{"blocks": [{"type": "text", "text": "Plotted mt_fraction across 100 cells; distribution is right-skewed with a small tail above 0.1."}]}
