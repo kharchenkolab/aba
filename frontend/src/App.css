@@ -7,6 +7,15 @@
 }
 .app > * { min-height: 0; min-width: 0; overflow: hidden; }
 
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+.main > .focus { flex: 0 0 auto; max-height: 50vh; overflow: auto; }
+.main > .chat-pane { flex: 1 1 0; min-height: 0; }
+
 .hero {
   position: relative;
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react'
-import { DisplayMessage } from '../types'
+import { useEffect, useRef } from 'react'
+import type { DisplayMessage, Entity } from '../types'
 import Message from './Message'
 import Composer from './Composer'
 import './ChatPane.css'
@@ -9,9 +9,16 @@ interface Props {
   streaming: boolean
   streamMsg: DisplayMessage | null
   onSend: (text: string) => void
+  focusedEntity: Entity | null
 }
 
-export default function ChatPane({ messages, streaming, streamMsg, onSend }: Props) {
+export default function ChatPane({
+  messages,
+  streaming,
+  streamMsg,
+  onSend,
+  focusedEntity,
+}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -21,6 +28,10 @@ export default function ChatPane({ messages, streaming, streamMsg, onSend }: Pro
   }, [messages, streamMsg])
 
   const all = streamMsg ? [...messages, streamMsg] : messages
+  const focusChipText =
+    !focusedEntity || focusedEntity.type === 'workspace'
+      ? 'Workspace'
+      : `${focusedEntity.type} · ${focusedEntity.title}`
 
   return (
     <div className="chat-pane">
@@ -35,12 +46,22 @@ export default function ChatPane({ messages, streaming, streamMsg, onSend }: Pro
         <span className="chat-tab chat-tab--quiet" title="Coming soon">Skeptic</span>
         <span className="chat-tab chat-tab--quiet" title="Coming soon">Explorer</span>
         <span className="chat-tab chat-tab--quiet" title="Coming soon">Stylist</span>
+        <span
+          className={`focus-chip ${focusedEntity && focusedEntity.type !== 'workspace' ? 'focus-chip--active' : ''}`}
+          title="Conversation is scoped to this entity"
+        >
+          {focusChipText}
+        </span>
       </div>
 
       <div className="chat-scroll" ref={scrollRef}>
         {all.length === 0 && (
           <div className="chat-empty">
-            <p>Ask Guide about your data.</p>
+            <p>
+              {focusedEntity && focusedEntity.type !== 'workspace'
+                ? `Ask Guide about this ${focusedEntity.type}.`
+                : 'Ask Guide about your data.'}
+            </p>
           </div>
         )}
         {all.map((m, i) => (
