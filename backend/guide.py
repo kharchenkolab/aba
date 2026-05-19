@@ -19,10 +19,15 @@ def _api_messages(history: list) -> list:
 async def stream_response(
     user_text: str,
     *,
-    entity_id: str = WORKSPACE_ID,
+    focus_entity_id: str = WORKSPACE_ID,
 ) -> AsyncGenerator[str, None]:
     """
-    Append user message to the entity's thread, run the Guide loop, stream SSE.
+    Append user message to the workspace thread, run the Guide loop, stream SSE.
+
+    The conversation is project-level (one thread per workspace). The user's
+    current `focus_entity_id` is recorded on each message as a tag and used to
+    augment the system prompt with that entity's context — focus shifts the
+    Guide's attention without replacing the conversation.
 
     SSE event format (each line is a JSON string prefixed with "data: "):
       {"type": "delta",       "text": "..."}
@@ -36,12 +41,14 @@ async def stream_response(
         return f"data: {json.dumps(obj)}\n\n"
 
     user_blocks = [{"type": "text", "text": user_text}]
-    append_message("user", user_blocks, entity_id=entity_id)
+    append_message("user", user_blocks,
+                   entity_id=WORKSPACE_ID, focus_entity_id=focus_entity_id)
 
-    history = get_messages(entity_id)
+    history = get_messages(WORKSPACE_ID)
 
     # Focused-entity preamble in front of the canonical system prompt.
-    system = focus_preamble(entity_id) + SYSTEM_PROMPT
+    system = focus_preamble(focus_entity_id) + SYSTEM_PROMPT
+    entity_id = WORKSPACE_ID  # all subsequent writes go here
 
     # An analysis entity will be lazily created the first time this turn
     # produces an artifact, and reused for any subsequent artifacts from the
@@ -72,7 +79,8 @@ async def stream_response(
                         "input": block.input,
                     })
 
-            append_message("assistant", assistant_blocks, entity_id=entity_id)
+            append_message("assistant", assistant_blocks,
+                           entity_id=entity_id, focus_entity_id=focus_entity_id)
             history = get_messages(entity_id)
 
             if final_msg.stop_reason != "tool_use":
@@ -99,7 +107,7 @@ async def stream_response(
                     tool_name=tool_name,
                     tool_input=tool_input,
                     result_obj=result_obj,
-                    focused_entity_id=entity_id,
+                    focused_entity_id=focus_entity_id,
                     analysis_ctx=analysis_ctx,
                 )
                 for ent in new_entities:
@@ -113,7 +121,8 @@ async def stream_response(
                     "content": result_str,
                 })
 
-            append_message("user", tool_result_blocks, entity_id=entity_id)
+            append_message("user", tool_result_blocks,
+                           entity_id=entity_id, focus_entity_id=focus_entity_id)
             history = get_messages(entity_id)
 
         yield sse({"type": "done"})
