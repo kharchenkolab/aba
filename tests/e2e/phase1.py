@@ -232,20 +232,25 @@ def drive_browser(frontend_port: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "05_followup.png"), full_page=True)
         print("✓ focus-aware reply rendered")
 
-        # The figure thread holds only its own follow-up message; the first
-        # user message belongs to the dataset thread.
-        assert page.locator(".msg--user").count() == 1, \
-            "figure thread should have exactly 1 user message"
+        # Focus augments, doesn't replace: BOTH user messages should be in
+        # the same conversation thread, with the figure's metadata available
+        # to the model only on the second turn (via the focus preamble).
+        assert page.locator(".msg--user").count() == 2, \
+            "expected one continuous thread with both user messages"
         assert page.locator('[data-entity-type="figure"]').count() == 1
         assert page.locator(".focus__figure").count() == 1, "no focus image"
 
-        # Step 6: switch back to the dataset → its own thread should reappear.
+        # Step 6: switch back to the dataset → SAME conversation (not a swap),
+        # only focus chip + canvas change.
         ds_row.click()
-        page.wait_for_selector("text=plot the mt_fraction distribution", timeout=3000)
+        page.wait_for_function(
+            "() => document.querySelector('.focus-chip').textContent.includes('dataset')",
+            timeout=2000,
+        )
         page.screenshot(path=str(SHOT_DIR / "06_switched_back.png"), full_page=True)
-        print("✓ dataset thread persisted — switched back, first message visible")
-        assert page.locator(".msg--user").count() == 1, \
-            "dataset thread should have its own 1 user message after switchback"
+        print("✓ continuous thread preserved when focus changes")
+        assert page.locator(".msg--user").count() == 2, \
+            "switching focus should not change the conversation thread"
 
         browser.close()
 

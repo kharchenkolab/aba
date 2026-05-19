@@ -72,16 +72,18 @@ def entities_clear_messages(entity_id: str):
 
 class ChatRequest(BaseModel):
     text: str
-    entity_id: str = WORKSPACE_ID
+    # The entity the user is *focused on* (chip / canvas). Used to augment
+    # the model's context. The chat thread itself is always project-level.
+    focus_entity_id: str = WORKSPACE_ID
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    if not get_entity(req.entity_id):
-        raise HTTPException(404, f"Entity {req.entity_id} not found")
+    if not get_entity(req.focus_entity_id):
+        raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
 
     async def event_stream():
-        async for chunk in stream_response(req.text, entity_id=req.entity_id):
+        async for chunk in stream_response(req.text, focus_entity_id=req.focus_entity_id):
             yield chunk
 
     return StreamingResponse(
@@ -89,6 +91,12 @@ async def chat(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/messages")
+def messages_list():
+    """The project's running conversation (workspace thread)."""
+    return get_messages(WORKSPACE_ID)
 
 
 # ---------- Upload ----------

@@ -65,7 +65,7 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
 }
 
 export function useChat(
-  entityId: string,
+  focusEntityId: string,
   onEntityRegistered?: () => void,
 ) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
@@ -74,12 +74,11 @@ export function useChat(
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
 
-  // Load this entity's thread on focus change.
+  // Load the project's conversation once on mount. The chat thread is
+  // workspace-level — focus changes do NOT swap the conversation.
   useEffect(() => {
     let cancelled = false
-    setMessages([])
-    setStreamMsg(null)
-    fetch(`/api/entities/${encodeURIComponent(entityId)}/messages`)
+    fetch('/api/messages')
       .then(r => (r.ok ? r.json() : Promise.reject(r)))
       .then((raw: RawMsg[]) => {
         if (cancelled) return
@@ -89,7 +88,7 @@ export function useChat(
     return () => {
       cancelled = true
     }
-  }, [entityId])
+  }, [])
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -110,7 +109,7 @@ export function useChat(
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, entity_id: entityId }),
+          body: JSON.stringify({ text, focus_entity_id: focusEntityId }),
         })
         if (!res.body) throw new Error('No response body')
         const reader = res.body.getReader()
@@ -186,7 +185,7 @@ export function useChat(
         ])
       }
     },
-    [streaming, entityId],
+    [streaming, focusEntityId],
   )
 
   return { messages, streaming, streamMsg, sendMessage }

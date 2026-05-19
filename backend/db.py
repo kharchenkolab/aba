@@ -32,18 +32,18 @@ def init_db():
     with _conn() as c:
         c.execute("""
             CREATE TABLE IF NOT EXISTS messages (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_id TEXT    NOT NULL DEFAULT 'workspace',
-                role      TEXT    NOT NULL,
-                content   TEXT    NOT NULL,
-                ts        TEXT    NOT NULL
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id       TEXT    NOT NULL DEFAULT 'workspace',
+                focus_entity_id TEXT,
+                role            TEXT    NOT NULL,
+                content         TEXT    NOT NULL,
+                ts              TEXT    NOT NULL
             )
         """)
-        # Pre-existing rows from the Phase-0 schema had no entity_id; the
-        # DEFAULT covers new inserts but not the column itself when added
-        # to a populated table. Catch that case.
         if not _column_exists(c, "messages", "entity_id"):
             c.execute("ALTER TABLE messages ADD COLUMN entity_id TEXT NOT NULL DEFAULT 'workspace'")
+        if not _column_exists(c, "messages", "focus_entity_id"):
+            c.execute("ALTER TABLE messages ADD COLUMN focus_entity_id TEXT")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS entities (
@@ -150,12 +150,26 @@ def list_entities(*, exclude_workspace: bool = False) -> list[dict]:
 
 # ---------- Messages (entity-scoped) ----------
 
-def append_message(role: str, content_blocks: list, *, entity_id: str = WORKSPACE_ID) -> int:
+def append_message(
+    role: str,
+    content_blocks: list,
+    *,
+    entity_id: str = WORKSPACE_ID,
+    focus_entity_id: Optional[str] = None,
+) -> int:
+    """
+    Append a message to a thread.
+
+    Most messages live on the WORKSPACE_ID thread (the project's running
+    conversation). `focus_entity_id` records which entity the user was
+    looking at when this message was sent — used to highlight or filter
+    later, never to switch the conversation thread.
+    """
     ts = _utcnow()
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO messages (entity_id, role, content, ts) VALUES (?, ?, ?, ?)",
-            (entity_id, role, json.dumps(content_blocks), ts),
+            "INSERT INTO messages (entity_id, focus_entity_id, role, content, ts) VALUES (?, ?, ?, ?, ?)",
+            (entity_id, focus_entity_id, role, json.dumps(content_blocks), ts),
         )
         c.commit()
         return cur.lastrowid
@@ -164,11 +178,17 @@ def append_message(role: str, content_blocks: list, *, entity_id: str = WORKSPAC
 def get_messages(entity_id: str = WORKSPACE_ID) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
-            "SELECT role, content, ts FROM messages WHERE entity_id = ? ORDER BY id",
+            "SELECT role, content, ts, focus_entity_id FROM messages "
+            "WHERE entity_id = ? ORDER BY id",
             (entity_id,),
         ).fetchall()
     return [
-        {"role": r["role"], "content": json.loads(r["content"]), "ts": r["ts"]}
+        {
+            "role": r["role"],
+            "content": json.loads(r["content"]),
+            "ts": r["ts"],
+            "focus_entity_id": r["focus_entity_id"],
+        }
         for r in rows
     ]
 
