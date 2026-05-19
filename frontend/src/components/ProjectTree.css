@@ -40,6 +40,23 @@
 .tree__section-head .ml-auto { margin-left: auto; }
 .tree__section-head .chev { color: var(--text-4); }
 
+.tree__head { cursor: pointer; transition: background 0.1s; }
+.tree__head:hover { background: var(--tree-active-bg); }
+.tree__head.is-active { background: var(--tree-active-bg); }
+
+.tree__count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-4);
+  background: var(--tree-active-bg);
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+.tree__section-head .chev { margin-left: 6px; }
+
 .tree__items { padding: 2px 0 6px; }
 
 .tree__item {

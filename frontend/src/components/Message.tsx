@@ -1,13 +1,13 @@
 import React from 'react'
 import ReactMarkdown from 'react-markdown'
-import { DisplayMessage, Block } from '../types'
+import type { DisplayMessage, Block } from '../types'
 import './Message.css'
 
 function toolLabel(name: string) {
   const labels: Record<string, string> = {
-    list_data_files: 'listed data files',
-    read_csv_info: 'read CSV file',
-    run_python: 'ran Python script',
+    list_data_files: 'listing data files',
+    read_csv_info: 'reading CSV file',
+    run_python: 'running Python',
   }
   return labels[name] ?? name
 }

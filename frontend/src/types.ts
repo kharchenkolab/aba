@@ -29,4 +29,43 @@ export interface ToolResultEvent  { type: 'tool_result'; name: string; result: R
 export interface DoneEvent        { type: 'done' }
 export interface ErrorEvent       { type: 'error';       text: string }
 
-export type SSEEvent = DeltaEvent | ToolStartEvent | ToolResultEvent | DoneEvent | ErrorEvent
+export interface EntityRegisteredEvent {
+  type: 'entity_registered'
+  entity: Entity
+}
+
+export type SSEEvent =
+  | DeltaEvent
+  | ToolStartEvent
+  | ToolResultEvent
+  | EntityRegisteredEvent
+  | DoneEvent
+  | ErrorEvent
+
+// ---------- Entities ----------
+
+export type EntityType =
+  | 'workspace'
+  | 'dataset'
+  | 'analysis'
+  | 'figure'
+  | 'table'
+  | 'result'
+  | 'finding'
+  | 'claim'
+  | 'narrative'
+
+export interface Entity {
+  id: string
+  type: EntityType
+  title: string
+  status: string
+  artifact_path: string | null
+  producing_code: string | null
+  producing_params: Record<string, unknown> | null
+  parent_entity_id: string | null
+  scenario_of: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
