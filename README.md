@@ -4,15 +4,37 @@ AI-orchestrated bioinformatics workspace. Chat with the Guide agent (Claude), ex
 
 ## Running the app
 
-**Requires:** Python 3.8+, Node 20 (via nvm), an Anthropic API key.
+**Requires:** Python 3.8+, Node 20+ (via nvm), an Anthropic API key.
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env       # then put your key in .env
 ./start.sh
 # open http://localhost:5173
 ```
 
 The chat history persists in `backend/aba.db`. Closing and reopening the browser picks up exactly where you left off.
+
+Defaults to `claude-haiku-4-5` (cheap). Override per-shell with `ABA_MODEL=claude-sonnet-4-6` (or any other model id) when you need smarter answers.
+
+## Testing without spending tokens
+
+Most dev work (UI, persistence, tool wiring, SSE plumbing) doesn't need the real model. Set `ABA_FAKE_SESSION` to a JSONL fixture of scripted assistant turns and the Guide loop replays them — tools still execute for real.
+
+```sh
+# end-to-end smoke test, no API key needed
+.venv/bin/python tests/smoke_fake.py
+
+# or run the dev servers in fake mode
+ABA_FAKE_SESSION=tests/fixtures/list_files.jsonl ./start.sh
+```
+
+Fixture format (one assistant turn per line):
+```json
+{"blocks": [{"type": "text", "text": "..."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "..."}]}
+```
+
+Guideline: fake the model unless its reasoning is what you're testing. When you do need a live model, default to Haiku; reach for Sonnet/Opus only for genuine quality checks.
 
 ### What Guide can do
 - List and read CSV files from `backend/data/`
