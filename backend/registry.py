@@ -11,6 +11,7 @@ This is the Phase-1 implementation:
   intentionally.)
 """
 from __future__ import annotations
+import re
 from typing import Optional
 
 from db import create_entity, get_entity, WORKSPACE_ID
@@ -19,17 +20,35 @@ from db import create_entity, get_entity, WORKSPACE_ID
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
     """
     Lazily create (and remember) an `analysis` entity for this turn.
-    `analysis_ctx` is a dict shared across calls within one Guide turn.
+
+    If the user is focused on an existing figure/table/result, group new
+    artifacts under THAT entity's parent analysis (sibling relationship)
+    rather than nesting "Analysis of mt_fraction histogram" under the
+    figure itself.
+
+    `analysis_ctx` is shared across tool calls within one Guide turn.
     """
     if analysis_ctx.get("analysis_id"):
         return analysis_ctx["analysis_id"]
 
-    parent = focused_entity_id or WORKSPACE_ID
+    focused = focused_entity_id or WORKSPACE_ID
+    parent = focused
     title = "Analysis"
-    if parent != WORKSPACE_ID:
-        e = get_entity(parent)
-        if e:
-            title = f"Analysis of {e['title']}"
+
+    if focused != WORKSPACE_ID:
+        focused_ent = get_entity(focused)
+        if focused_ent:
+            # When focused on a leaf artifact, prefer its parent analysis.
+            if focused_ent["type"] in ("figure", "table", "result", "finding"):
+                if focused_ent["parent_entity_id"]:
+                    parent = focused_ent["parent_entity_id"]
+                    title = f"Follow-up on {focused_ent['title']}"
+                else:
+                    parent = focused
+                    title = f"Analysis of {focused_ent['title']}"
+            else:
+                title = f"Analysis of {focused_ent['title']}"
+
     aid = create_entity(
         entity_type="analysis",
         title=title,
@@ -76,10 +95,40 @@ def register_artifacts_from_tool_result(
     return new_records
 
 
+_TITLE_PATTERNS = [
+    re.compile(r"""\.set_title\(\s*['"]([^'"]+)['"]"""),
+    re.compile(r"""\bplt\.title\(\s*['"]([^'"]+)['"]"""),
+    re.compile(r"""\.suptitle\(\s*['"]([^'"]+)['"]"""),
+]
+
+# Comments to skip when nothing else turns up — generic action verbs that
+# describe what the agent is doing, not what the artifact is about.
+_GENERIC_COMMENTS = {
+    "read the data", "read data", "load the data", "load data",
+    "import libraries", "imports", "imports and setup", "setup",
+    "make a plot", "make plot", "plot", "plot the data", "plot data",
+    "create a plot", "create plot", "create histogram", "create the histogram",
+    "make figure", "make a figure", "make a histogram",
+}
+
 def _title_from_code(code: str) -> Optional[str]:
-    """First non-shebang comment of the producing code, if any."""
-    for line in (code or "").splitlines():
+    """
+    Derive a meaningful figure title from the producing code:
+    1) Look for matplotlib title calls (set_title / plt.title / suptitle).
+    2) Otherwise the first non-generic top-level comment.
+    """
+    if not code:
+        return None
+    for pat in _TITLE_PATTERNS:
+        m = pat.search(code)
+        if m:
+            return m.group(1).strip()[:80]
+    for line in code.splitlines():
         s = line.strip()
-        if s.startswith("# ") and not s.startswith("# !"):
-            return s[2:].strip()[:80]
+        if not s.startswith("# ") or s.startswith("# !"):
+            continue
+        body = s[2:].strip()
+        if not body or body.lower() in _GENERIC_COMMENTS:
+            continue
+        return body[:80]
     return None
