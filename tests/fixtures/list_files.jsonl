@@ -1,0 +1,4 @@
+# Scripted Guide session: ask "what's here?", call list_data_files, summarize.
+# Each line = one assistant turn. Tools run for real; only the LLM is faked.
+{"blocks": [{"type": "text", "text": "Let me check the data folder."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "Found 2 CSV files: cells.csv and samples.csv."}]}

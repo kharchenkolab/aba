@@ -6,6 +6,13 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+.env
 backend/aba.db
 backend/artifacts/*.png
 frontend/dist/
+
+# Vendored BioMNI reference clone (kept as a working copy for code reading)
+/biomni/
+
+# E2E test outputs
+tests/e2e/screenshots/
