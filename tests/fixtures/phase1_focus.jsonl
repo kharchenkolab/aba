@@ -1,0 +1,8 @@
+# Phase 1 acceptance fixture.
+# Message 1 (dataset focused) -> 2 turns:
+#   Turn 1: text + tool_use(run_python that produces mt_fraction.png)
+#   Turn 2: text summary after the tool result comes back
+{"blocks": [{"type": "text", "text": "Let me plot the mt_fraction distribution from your dataset."}, {"type": "tool_use", "name": "run_python", "input": {"code": "# mt_fraction distribution\nimport pandas as pd\nimport matplotlib.pyplot as plt\ndf = pd.read_csv(f'{DATA_DIR}/cells.csv')\nfig, ax = plt.subplots(figsize=(5, 3.2))\nax.hist(df['mt_fraction'], bins=25, color='#5b21b6', edgecolor='white')\nax.set_xlabel('mt_fraction'); ax.set_ylabel('cells')\nax.set_title('Per-cell mitochondrial fraction')\nfig.tight_layout(); fig.savefig('mt_fraction.png', dpi=120)\nprint(f'n={len(df)}; median={df[\"mt_fraction\"].median():.3f}; max={df[\"mt_fraction\"].max():.3f}')"}}]}
+{"blocks": [{"type": "text", "text": "Done — 100 cells, median mt_fraction ~0.04 with a small tail above 0.10. The figure is in your project tree under FIGURES."}]}
+# Message 2 (figure focused) -> 1 turn: focus-aware answer about the second peak
+{"blocks": [{"type": "text", "text": "This histogram shows mt_fraction across all 100 cells; most cells sit below 0.05 with a long right tail. The second mode you're seeing — the small cluster of cells with mt_fraction above 0.10, peaking near 0.13 — looks like sample S4, which we flagged earlier as low quality."}]}
