@@ -349,12 +349,27 @@
 }
 .focus__preview-table td em { color: var(--text-4); font-style: normal; }
 .focus__preview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 4px 8px;
   font-size: 11px;
   color: var(--text-4);
   border-top: 1px solid var(--border);
   background: #fafafb;
 }
+.focus__pager { display: flex; align-items: center; gap: 4px; }
+.focus__pager-label { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.focus__pager-btn {
+  width: 22px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: var(--text-2);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+.focus__pager-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+.focus__pager-btn:disabled { opacity: 0.4; cursor: default; }
 .focus__row {
   display: flex;
   gap: 10px;
@@ -431,24 +446,29 @@
 
 /* Spatial reference (Phase 25) */
 .annot { display: flex; flex-direction: column; }
-.annot__wrap { position: relative; display: inline-block; align-self: flex-start; max-width: 100%; }
+/* Figure + a vertical badge gutter to its right. */
+.annot__row { display: flex; align-items: flex-start; gap: 8px; max-width: 100%; }
+.annot__wrap { position: relative; display: inline-block; min-width: 0; max-width: 100%; }
 .annot__wrap--marking { cursor: crosshair; }
 .annot__wrap--marking img { user-select: none; }
 .annot__svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
-/* Compact toolbar overlaid on the figure's top-right corner. */
+/* Vertical badge toolbox sitting just to the right of the figure. */
 .annot__tb {
-  position: absolute;
-  top: 8px; right: 8px;
   display: flex;
-  gap: 2px;
+  flex-direction: column;
+  gap: 3px;
   padding: 3px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
-  backdrop-filter: blur(2px);
+  background: var(--bg-soft);
+  border: 1px solid var(--panel-bd);
+  border-radius: 9px;
+  box-shadow: var(--shadow-sm);
+  transition: opacity 0.12s ease;
 }
+/* On chat figures the gutter is quiet until you hover the figure. */
+.annot__row--hover .annot__tb { opacity: 0; }
+.annot__row--hover:hover .annot__tb,
+.annot__row--hover .annot__tb:focus-within { opacity: 1; }
 .annot__tb-btn {
   width: 26px; height: 26px;
   display: flex; align-items: center; justify-content: center;
@@ -458,8 +478,6 @@
 .annot__tb-btn:hover { background: var(--tree-active-bg); color: var(--text); }
 .annot__tb-btn--on { background: #fce7f3; color: #be185d; }
 .annot__tb-btn--sel { background: #fce7f3; color: #be185d; }
-.annot__tb-btn--go { background: var(--accent); color: #fff; }
-.annot__tb-btn--go:hover { background: #4c1d95; color: #fff; }
 
 .annot-attached {
   display: flex; align-items: center; gap: 10px;

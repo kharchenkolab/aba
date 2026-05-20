@@ -1,21 +1,8 @@
 import { useEffect, useState } from 'react'
+import { AGENTS, AgentAvatar } from './icons'
 import './AdvisorRail.css'
 
-interface Advisor {
-  name: string
-  key: string
-  color: string
-  status: string
-  active?: boolean
-}
-
-const ADVISORS: Advisor[] = [
-  { name: 'Guide',         key: 'guide',         color: 'var(--guide)',    status: 'online', active: true },
-  { name: 'Methodologist', key: 'methodologist', color: 'var(--metho)',    status: 'on run' },
-  { name: 'Skeptic',       key: 'skeptic',       color: 'var(--skeptic)',  status: 'on promote' },
-  { name: 'Explorer',      key: 'explorer',      color: 'var(--explorer)', status: 'on data' },
-  { name: 'Stylist',       key: 'stylist',       color: 'var(--stylist)',  status: 'on write' },
-]
+const ADVISORS = AGENTS.map((a, i) => ({ ...a, active: i === 0 }))
 
 interface AdvisorNote {
   id: number
@@ -23,25 +10,43 @@ interface AdvisorNote {
   advisor: string
   text: string
   created_at: string
-}
-
-function Avatar({ color, name }: { color: string; name: string }) {
-  return (
-    <div className="adv-avatar" style={{ background: color }}>
-      {name[0]}
-    </div>
-  )
+  entity_type?: string | null
+  entity_title?: string | null
 }
 
 interface Props {
   focusedId: string
   focusedType?: string
   onTry?: (text: string) => void
+  onFocus?: (id: string) => void
 }
 
-export default function AdvisorRail({ focusedId, focusedType, onTry }: Props) {
+// "3m ago" / "2h ago" / "4d ago" — so an idea that sat around is dated.
+function relativeTime(iso: string): string {
+  const then = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z').getTime()
+  if (Number.isNaN(then)) return ''
+  const s = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
+
+export default function AdvisorRail({ focusedId, focusedType, onTry, onFocus }: Props) {
   const [notes, setNotes] = useState<AdvisorNote[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
+
+  // Mark a note tried/dismissed so the lightbulb clears and it stops
+  // resurfacing on the next poll.
+  function resolveNote(id: number, status: 'tried' | 'dismissed') {
+    setNotes(prev => prev.filter(n => n.id !== id))
+    fetch(`/api/advisor-notes/${id}/status`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    }).catch(() => {})
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -104,7 +109,7 @@ export default function AdvisorRail({ focusedId, focusedType, onTry }: Props) {
               style={{ cursor: hasNotes ? 'pointer' : 'default' }}
             >
               <div className="adv-avatar-wrap">
-                <Avatar color={adv.color} name={adv.name} />
+                <AgentAvatar agent={adv.key} size={28} />
                 {hasNotes && <span className="adv-bulb" title="Has an idea">💡</span>}
               </div>
               <div className="adv-info">
@@ -121,10 +126,31 @@ export default function AdvisorRail({ focusedId, focusedType, onTry }: Props) {
               <div className="adv-notes">
                 {advNotes.map(n => (
                   <div key={n.id} className="adv-note">
+                    <div className="adv-note-about">
+                      {n.entity_title && (
+                        <button
+                          className="adv-note-subject"
+                          title="Show what this is about"
+                          onClick={() => onFocus?.(n.entity_id)}
+                        >
+                          {n.entity_type ? `${n.entity_type} · ` : ''}{n.entity_title}
+                        </button>
+                      )}
+                      <span className="adv-note-time">{relativeTime(n.created_at)}</span>
+                    </div>
                     <p className="adv-note-text">{n.text}</p>
-                    {onTry && (
-                      <button className="adv-try" onClick={() => onTry(n.text)}>Try it →</button>
-                    )}
+                    <div className="adv-note-actions">
+                      {onTry && (
+                        <button className="adv-try"
+                                onClick={() => { onTry(n.text); resolveNote(n.id, 'tried') }}>
+                          Try it →
+                        </button>
+                      )}
+                      <button className="adv-dismiss" title="Dismiss this idea"
+                              onClick={() => resolveNote(n.id, 'dismissed')}>
+                        Dismiss
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

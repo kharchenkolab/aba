@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DisplayMessage, Entity } from '../types'
+import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
 import Composer from './Composer'
 import TracePanel from './TracePanel'
@@ -16,6 +17,9 @@ interface Props {
   prefill?: string
   onPrefillConsumed?: () => void
   composerFocus?: number
+  onAnnotate?: (a: { image: string; note: string }) => void
+  annotClear?: number
+  onRetry?: () => void
 }
 
 export default function ChatPane({
@@ -29,6 +33,9 @@ export default function ChatPane({
   prefill,
   onPrefillConsumed,
   composerFocus,
+  onAnnotate,
+  annotClear,
+  onRetry,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [traceVisible, setTraceVisible] = useState(false)
@@ -48,16 +55,18 @@ export default function ChatPane({
   return (
     <div className={`chat-pane ${traceVisible ? 'chat-pane--split' : ''}`}>
       <div className="chat-tabs">
-        <span className="chat-tab chat-tab--active">
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" style={{ color: 'var(--guide)' }}>
-            <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 10c-2.2 0-4.1-1.1-5.3-2.8.7-1.1 2.9-1.7 5.3-1.7s4.6.6 5.3 1.7C14.1 13.9 12.2 15 10 15z"/>
-          </svg>
-          Guide
-        </span>
-        <span className="chat-tab chat-tab--quiet" title="Coming soon">Methodologist</span>
-        <span className="chat-tab chat-tab--quiet" title="Coming soon">Skeptic</span>
-        <span className="chat-tab chat-tab--quiet" title="Coming soon">Explorer</span>
-        <span className="chat-tab chat-tab--quiet" title="Coming soon">Stylist</span>
+        {AGENTS.map((a, i) => (
+          <span
+            key={a.key}
+            className={`chat-tab ${i === 0 ? 'chat-tab--active' : 'chat-tab--quiet'}`}
+            title={i === 0 ? undefined : 'Coming soon'}
+          >
+            <span className="chat-tab__icon" style={{ color: a.color }}>
+              <AgentGlyph agent={a.key} size={14} />
+            </span>
+            {a.name}
+          </span>
+        ))}
         <button
           type="button"
           className={`trace-toggle ${traceVisible ? 'trace-toggle--on' : ''}`}
@@ -96,6 +105,9 @@ export default function ChatPane({
                 isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
                 hideToolBlocks={traceVisible}
                 collapseTools={i !== all.length - 1}
+                onAnnotate={onAnnotate}
+                annotClear={annotClear}
+                onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
               />
             ))}
           </div>
@@ -105,9 +117,9 @@ export default function ChatPane({
 
       {annotation && (
         <div className="annot-attached">
-          <img src={`data:image/png;base64,${annotation.image}`} alt="marked region" />
-          <span>Region attached — ask about it (e.g. "what's here?"). Stays until you clear it.</span>
-          <button onClick={onClearAnnotation} title="Remove">×</button>
+          <img src={`data:image/png;base64,${annotation.image}`} alt="highlighted region" />
+          <span>Focused on your highlight — ask about it (e.g. "what's here?"). Stays until you clear it.</span>
+          <button onClick={onClearAnnotation} title="Clear highlight">×</button>
         </div>
       )}
       <Composer onSend={onSend} disabled={streaming}

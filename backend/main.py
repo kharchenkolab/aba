@@ -36,6 +36,7 @@ from scenarios import create_scenario_variant
 from advisors import skeptic_review, explorer_suggest, stylist_review
 from db import (
     list_advisor_notes,
+    set_advisor_note_status,
     list_context_suggestions,
     update_context_suggestion_status,
 )
@@ -188,19 +189,22 @@ def entities_clear_messages(entity_id: str):
 
 
 @app.get("/api/entities/{entity_id}/preview")
-def entities_preview(entity_id: str, limit: int = 20):
+def entities_preview(entity_id: str, limit: int = 20, offset: int = 0):
     """
-    Return a lightweight preview for an entity's artifact.
+    Return a lightweight preview for an entity's artifact, with pagination.
 
     Currently supported types:
-      - dataset (CSV/TSV): first N rows + column names + total row count.
-    Returns {"kind": "table", "columns": [...], "rows": [[...], ...], "total_rows": N}
+      - dataset / table (CSV/TSV): `limit` rows starting at `offset` + column
+        names + total row count.
+    Returns {"kind": "table", "columns": [...], "rows": [[...], ...],
+             "total_rows": N, "offset": offset, "shown": k}
     or {"kind": "none"} if no preview is available.
     """
     e = get_entity(entity_id)
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
 
+    offset = max(0, offset)
     if e["type"] in ("dataset", "table") and e["artifact_path"]:
         raw = e["artifact_path"]
         # Tables are stored as /artifacts/<id>.csv; datasets as disk paths.
@@ -213,7 +217,9 @@ def entities_preview(entity_id: str, limit: int = 20):
             try:
                 import pandas as pd
                 sep = "," if path.suffix.lower() == ".csv" else "\t"
-                df = pd.read_csv(path, sep=sep, nrows=limit)
+                # Skip `offset` data rows but keep the header row (row 0).
+                skip = range(1, offset + 1) if offset > 0 else None
+                df = pd.read_csv(path, sep=sep, skiprows=skip, nrows=limit)
                 # Get total row count without re-reading the whole frame.
                 with path.open("r") as f:
                     total = sum(1 for _ in f) - 1
@@ -222,7 +228,8 @@ def entities_preview(entity_id: str, limit: int = 20):
                     "columns": [str(c) for c in df.columns],
                     "rows": df.astype(object).where(df.notna(), None).values.tolist(),
                     "total_rows": max(total, 0),
-                    "shown": min(limit, len(df)),
+                    "offset": offset,
+                    "shown": len(df),
                 }
             except Exception as ex:  # noqa: BLE001
                 return {"kind": "error", "error": str(ex)}
@@ -241,6 +248,9 @@ class ChatRequest(BaseModel):
     # annotation composited on, plus a short note describing the gesture.
     annotation_image: str | None = None
     annotation_note: str | None = None
+    # Regenerate the last turn's reply without appending a new user message
+    # (used by the message-level retry after a transient API failure).
+    retry: bool = False
 
 
 @app.post("/api/chat")
@@ -254,6 +264,7 @@ async def chat(req: ChatRequest):
             focus_entity_id=req.focus_entity_id,
             annotation_image=req.annotation_image,
             annotation_note=req.annotation_note,
+            retry=req.retry,
         ):
             yield chunk
 
@@ -307,6 +318,18 @@ def entities_advisor_notes(entity_id: str):
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
     return list_advisor_notes(entity_id)
+
+
+class AdvisorNoteStatusRequest(BaseModel):
+    status: str = "dismissed"
+
+
+@app.post("/api/advisor-notes/{note_id}/status")
+def advisor_note_status(note_id: int, req: AdvisorNoteStatusRequest):
+    """Mark a note tried/dismissed so it no longer surfaces as a fresh idea."""
+    if not set_advisor_note_status(note_id, req.status):
+        raise HTTPException(404, f"Note {note_id} not found")
+    return {"ok": True}
 
 
 @app.post("/api/entities/{entity_id}/advise")

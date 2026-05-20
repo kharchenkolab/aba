@@ -95,17 +95,11 @@ export function useChat(
     }
   }, [])
 
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (streaming) return
-      const userMsg: DisplayMessage = {
-        id: `u-${Date.now()}`,
-        role: 'user',
-        blocks: [{ type: 'text', text }],
-      }
-      setMessages(prev => [...prev, userMsg])
+  // Shared streaming core. `retry` regenerates the last turn server-side
+  // (no new user message); otherwise `text` is sent as a fresh turn.
+  const runStream = useCallback(
+    async (opts: { text?: string; retry?: boolean }) => {
       setStreaming(true)
-
       const assistantId = `a-${Date.now()}`
       const streamingBlocks: Block[] = []
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
@@ -119,7 +113,8 @@ export function useChat(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            text,
+            text: opts.text ?? '',
+            retry: !!opts.retry,
             focus_entity_id: focusEntityId,
             ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
           }),
@@ -147,7 +142,14 @@ export function useChat(
               continue
             }
 
-            if (ev.type === 'delta') {
+            if (ev.type === 'notice') {
+              // Transient status (e.g. "Model is busy — retrying…"). Shown
+              // while we wait; cleared as soon as real content arrives.
+              setStreamMsg({
+                id: assistantId, role: 'assistant',
+                blocks: [...streamingBlocks, { type: 'notice', text: ev.text }],
+              })
+            } else if (ev.type === 'delta') {
               const last = streamingBlocks[streamingBlocks.length - 1]
               if (last && last.type === 'text') {
                 ;(last as { type: 'text'; text: string }).text += ev.text
@@ -177,7 +179,7 @@ export function useChat(
               setStreaming(false)
               return
             } else if (ev.type === 'error') {
-              streamingBlocks.push({ type: 'text', text: `⚠️ Error: ${ev.text}` })
+              streamingBlocks.push({ type: 'error', text: ev.text, detail: ev.detail })
               setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
               setStreamMsg(null)
               setStreaming(false)
@@ -193,13 +195,38 @@ export function useChat(
           {
             id: `err-${Date.now()}`,
             role: 'assistant',
-            blocks: [{ type: 'text', text: `Connection error: ${e}` }],
+            blocks: [{ type: 'error', text: "Couldn't reach the server.", detail: String(e) }],
           },
         ])
       }
     },
-    [streaming, focusEntityId],
+    [focusEntityId],
   )
 
-  return { messages, streaming, streamMsg, sendMessage }
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (streaming) return
+      setMessages(prev => [...prev, {
+        id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }],
+      }])
+      await runStream({ text })
+    },
+    [streaming, runStream],
+  )
+
+  // Re-run the last turn after a failure. The user turn is still persisted
+  // server-side, so we drop the trailing error message and regenerate.
+  const retryLast = useCallback(async () => {
+    if (streaming) return
+    setMessages(prev => {
+      const last = prev[prev.length - 1]
+      if (last && last.role === 'assistant' && last.blocks.some(b => b.type === 'error')) {
+        return prev.slice(0, -1)
+      }
+      return prev
+    })
+    await runStream({ retry: true })
+  }, [streaming, runStream])
+
+  return { messages, streaming, streamMsg, sendMessage, retryLast }
 }

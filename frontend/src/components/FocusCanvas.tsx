@@ -12,6 +12,7 @@ interface Props {
   onChange: () => void
   onFocus: (id: string) => void
   onAnnotate?: (a: Annotation) => void
+  annotClear?: number
 }
 
 interface TablePreview {
@@ -32,7 +33,7 @@ type PromoteMode =
   | { kind: 'finding-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate, annotClear }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -157,7 +158,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
         {compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
-          ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} />
+          ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
           : renderBody(entity, preview, entities, onFocus, onChange)}
       </div>
       <div className="focus__meta">
@@ -435,25 +436,7 @@ function renderBody(
             )}
           </div>
           {preview?.kind === 'table' && (
-            <div className="focus__preview-wrap">
-              <table className="focus__preview-table">
-                <thead>
-                  <tr>{preview.columns.map(c => <th key={c}>{c}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {preview.rows.map((row, i) => (
-                    <tr key={i}>
-                      {row.map((v, j) => (
-                        <td key={j}>{v == null ? <em>·</em> : String(v)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="focus__preview-foot">
-                showing {preview.shown} of {preview.total_rows} rows
-              </div>
-            </div>
+            <PreviewTable entityId={e.id} pageSize={15} />
           )}
           {preview?.kind === 'error' && (
             <div className="focus__placeholder">preview error: {preview.error}</div>
@@ -516,7 +499,7 @@ function renderBody(
     }
 
     case 'table':
-      return <TableBody entity={e} />
+      return <PreviewTable entityId={e.id} pageSize={25} />
 
     case 'narrative':
       return <NarrativeBody entity={e} onChange={onChange} />
@@ -528,28 +511,55 @@ function renderBody(
   }
 }
 
-function TableBody({ entity }: { entity: Entity }) {
-  const [preview, setPreview] = useState<Preview | null>(null)
+/** Paginated CSV/TSV preview. Fetches a window of rows per page via the
+ *  preview endpoint's limit/offset. Used for datasets and table entities. */
+function PreviewTable({ entityId, pageSize = 25 }: { entityId: string; pageSize?: number }) {
+  const [page, setPage] = useState(0)
+  const [data, setData] = useState<TablePreview | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => { setPage(0) }, [entityId])
+
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/entities/${encodeURIComponent(entity.id)}/preview?limit=30`)
+    setLoading(true)
+    fetch(`/api/entities/${encodeURIComponent(entityId)}/preview?limit=${pageSize}&offset=${page * pageSize}`)
       .then(r => (r.ok ? r.json() : Promise.reject(r)))
-      .then((p: Preview) => { if (!cancelled) setPreview(p) })
+      .then((p: Preview) => { if (!cancelled && p.kind === 'table') setData(p) })
       .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [entity.id])
-  if (preview?.kind !== 'table') return <p className="focus__placeholder">Loading table…</p>
+  }, [entityId, page, pageSize])
+
+  if (!data) return <p className="focus__placeholder">Loading table…</p>
+
+  const total = data.total_rows
+  const start = page * pageSize
+  const end = start + data.rows.length
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+
   return (
     <div className="focus__preview-wrap">
       <table className="focus__preview-table">
-        <thead><tr>{preview.columns.map(c => <th key={c}>{c}</th>)}</tr></thead>
+        <thead><tr>{data.columns.map(c => <th key={c}>{c}</th>)}</tr></thead>
         <tbody>
-          {preview.rows.map((row, i) => (
+          {data.rows.map((row, i) => (
             <tr key={i}>{row.map((v, j) => <td key={j}>{v == null ? <em>·</em> : String(v)}</td>)}</tr>
           ))}
         </tbody>
       </table>
-      <div className="focus__preview-foot">showing {preview.shown} of {preview.total_rows} rows</div>
+      <div className="focus__preview-foot">
+        <span>{total === 0 ? 'no rows' : `${start + 1}–${end} of ${total} rows`}</span>
+        {pages > 1 && (
+          <span className="focus__pager">
+            <button className="focus__pager-btn" disabled={page === 0 || loading}
+                    onClick={() => setPage(p => Math.max(0, p - 1))} title="Previous page">‹</button>
+            <span className="focus__pager-label">{page + 1} / {pages}</span>
+            <button className="focus__pager-btn" disabled={page >= pages - 1 || loading}
+                    onClick={() => setPage(p => p + 1)} title="Next page">›</button>
+          </span>
+        )}
+      </div>
     </div>
   )
 }

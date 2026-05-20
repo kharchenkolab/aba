@@ -14,6 +14,9 @@ import { useEntities } from './useEntities'
 const FOCUS_DEFAULT = 320
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
+// Tallest the focus panel can grow — leaves a strip of chat (tabs + composer)
+// visible so "maximize figure" doesn't fully hide the conversation.
+const focusMax = () => Math.round(window.innerHeight * 0.82)
 
 export default function App() {
   const [view, setView] = useState<'home' | 'workspace'>('home')
@@ -25,13 +28,18 @@ export default function App() {
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false)
   const [prefill, setPrefill] = useState('')
   const [composerFocus, setComposerFocus] = useState(0)
+  const [annotClear, setAnnotClear] = useState(0)
   const attachAnnotation = (a: { image: string; note: string }) => {
     setAnnotation(a)
     setComposerFocus(n => n + 1)   // jump the cursor to the composer
   }
+  const clearAnnotation = () => {
+    setAnnotation(null)
+    setAnnotClear(n => n + 1)      // erase the drawn mark on the figure too
+  }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const { entities, refresh } = useEntities()
-  const { messages, streaming, streamMsg, sendMessage } = useChat(
+  const { messages, streaming, streamMsg, sendMessage, retryLast } = useChat(
     focusedId, refresh, annotation,
   )
 
@@ -77,12 +85,15 @@ export default function App() {
             onChange={refresh}
             onFocus={setFocusedId}
             onAnnotate={attachAnnotation}
+            annotClear={annotClear}
           />
         </div>
         <VResizer
-          collapsed={focusH < 8}
-          onDrag={dy => setFocusH(h => Math.min(window.innerHeight * 0.78, Math.max(0, h + dy)))}
-          onToggle={() => setFocusH(h => (h < 8 ? FOCUS_DEFAULT : 0))}
+          state={focusH < 8 ? 'chat' : focusH >= focusMax() - 6 ? 'figure' : 'mid'}
+          onDrag={dy => setFocusH(h => Math.min(focusMax(), Math.max(0, h + dy)))}
+          onMaxFigure={() => setFocusH(focusMax())}
+          onMaxChat={() => setFocusH(0)}
+          onRestore={() => setFocusH(FOCUS_DEFAULT)}
         />
         <ChatPane
           messages={messages}
@@ -91,10 +102,13 @@ export default function App() {
           onSend={sendMessage}
           focusedEntity={focused}
           annotation={annotation}
-          onClearAnnotation={() => setAnnotation(null)}
+          onClearAnnotation={clearAnnotation}
           prefill={prefill}
           onPrefillConsumed={() => setPrefill('')}
           composerFocus={composerFocus}
+          onAnnotate={attachAnnotation}
+          annotClear={annotClear}
+          onRetry={retryLast}
         />
       </div>
       <HResizer
@@ -104,7 +118,7 @@ export default function App() {
         onToggle={() => setAdvisorCollapsed(c => !c)}
       />
       {advisorCollapsed ? <div /> : (
-        <AdvisorRail focusedId={focusedId} focusedType={focused?.type} onTry={setPrefill} />
+        <AdvisorRail focusedId={focusedId} focusedType={focused?.type} onTry={setPrefill} onFocus={setFocusedId} />
       )}
     </div>
   )

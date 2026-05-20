@@ -26,16 +26,47 @@ def _api_messages(history: list) -> list:
     return [{"role": m["role"], "content": m["content"]} for m in history]
 
 
+# Transient API conditions worth retrying: 429 (rate limit), 5xx, 529
+# (overloaded), and connection/timeouts. We match on the SDK's status code
+# when present and fall back to a string check.
+_TRANSIENT_TOKENS = ("overloaded", "rate_limit", "timeout", "connection",
+                     "502", "503", "504", "529", "500")
+
+
+def _is_transient(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status in (408, 429, 500, 502, 503, 504, 529):
+        return True
+    return any(tok in str(exc).lower() for tok in _TRANSIENT_TOKENS)
+
+
+def _friendly_error(exc: Exception) -> str:
+    s = str(exc).lower()
+    if "overloaded" in s or getattr(exc, "status_code", None) == 529:
+        return ("The model is overloaded right now and didn't respond after a "
+                "few retries. Please try again in a moment.")
+    if "rate_limit" in s or getattr(exc, "status_code", None) == 429:
+        return "Hit the model's rate limit. Please wait a moment and try again."
+    if "timeout" in s or "connection" in s:
+        return "Lost the connection to the model. Please try again."
+    return "Something went wrong talking to the model. Please try again."
+
+
 async def stream_response(
     user_text: str,
     *,
     focus_entity_id: str = WORKSPACE_ID,
     annotation_image: str | None = None,
     annotation_note: str | None = None,
+    retry: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Append user message to the workspace thread, run the Guide loop, stream SSE.
     See aba_arch2.md §2.3 for the focus context model.
+
+    `retry=True` regenerates the reply for the existing last turn without
+    appending a new user message — used after a transient API failure, where
+    the user turn was already persisted but no assistant reply was produced.
     """
     def sse(obj: dict) -> str:
         return f"data: {json.dumps(obj)}\n\n"
@@ -43,13 +74,14 @@ async def stream_response(
     session_id = new_session_id()
     turn_index = 0
 
-    user_blocks = [{"type": "text", "text": user_text}]
-    if annotation_note:
-        # Persist a small marker so later turns know a region was discussed
-        # (we don't store the image itself — it'd bloat the DB).
-        user_blocks.append({"type": "text", "text": f"[{annotation_note}]"})
-    append_message("user", user_blocks,
-                   entity_id=WORKSPACE_ID, focus_entity_id=focus_entity_id)
+    if not retry:
+        user_blocks = [{"type": "text", "text": user_text}]
+        if annotation_note:
+            # Persist a small marker so later turns know a region was discussed
+            # (we don't store the image itself — it'd bloat the DB).
+            user_blocks.append({"type": "text", "text": f"[{annotation_note}]"})
+        append_message("user", user_blocks,
+                       entity_id=WORKSPACE_ID, focus_entity_id=focus_entity_id)
     history = get_messages(WORKSPACE_ID)
 
     # Vision: inject the annotated figure into the last user turn for THIS
@@ -84,14 +116,36 @@ async def stream_response(
             from db import get_disabled_tools
             disabled = get_disabled_tools()
             active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
-            with open_stream(llm_history, active_tools, system) as stream:
-                for event in stream:
-                    if event.type == "content_block_delta":
-                        delta = event.delta
-                        if delta.type == "text_delta":
-                            yield sse({"type": "delta", "text": delta.text})
 
-                final_msg = stream.get_final_message()
+            # Open + consume the stream, retrying transient API failures
+            # (e.g. 529 overloaded) with exponential backoff. We only retry
+            # while no text has been emitted this turn — otherwise a retry
+            # would duplicate the partial reply.
+            final_msg = None
+            attempt = 0
+            max_retries = 4
+            while True:
+                emitted = False
+                try:
+                    with open_stream(llm_history, active_tools, system) as stream:
+                        for event in stream:
+                            if event.type == "content_block_delta":
+                                delta = event.delta
+                                if delta.type == "text_delta":
+                                    emitted = True
+                                    yield sse({"type": "delta", "text": delta.text})
+                        final_msg = stream.get_final_message()
+                    break
+                except Exception as e:
+                    if emitted or attempt >= max_retries or not _is_transient(e):
+                        raise
+                    attempt += 1
+                    backoff = min(2 ** attempt, 8)
+                    print(f"[guide] transient API error (attempt {attempt}/{max_retries}), "
+                          f"retrying in {backoff}s: {e}")
+                    yield sse({"type": "notice",
+                               "text": f"Model is busy — retrying ({attempt}/{max_retries})…"})
+                    await asyncio.sleep(backoff)
 
             assistant_blocks = []
             text_out = ""
@@ -227,5 +281,7 @@ async def stream_response(
         yield sse({"type": "done"})
 
     except Exception as e:
-        yield sse({"type": "error", "text": str(e)})
+        print(f"[guide] stream_response failed: {type(e).__name__}: {e}")
+        yield sse({"type": "error", "text": _friendly_error(e),
+                   "detail": f"{type(e).__name__}: {e}"})
         yield sse({"type": "done"})

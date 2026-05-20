@@ -183,6 +183,21 @@ def drive(frontend_port: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "04_back_to_result.png"), full_page=True)
         print("✓ notes persist across focus changes")
 
+        # Dismiss the idea → the lightbulb clears and it does NOT resurface on
+        # the next poll (status persisted server-side). Expand only if needed
+        # (it may already be open from the steps above).
+        if page.locator(".adv-dismiss").count() == 0:
+            page.locator(".adv-row--has-notes .adv-rowhead").first.click()
+        page.wait_for_selector(".adv-dismiss", timeout=2000)
+        page.locator(".adv-dismiss").first.click()
+        page.wait_for_function(
+            "() => document.querySelectorAll('.adv-row--has-notes').length === 0",
+            timeout=5000,
+        )
+        page.wait_for_timeout(3000)  # span a poll cycle (2.5s) — must stay gone
+        assert page.locator(".adv-row--has-notes").count() == 0, "dismissed idea resurfaced"
+        print("✓ dismissed idea clears the lightbulb and does not resurface")
+
         browser.close()
 
     print("\nscreenshots:")
