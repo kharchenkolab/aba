@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react'
 import Settings from './Settings'
 import Skills from './Skills'
+import Queues from './Queues'
 import './Rail.css'
 
-export default function Rail() {
+interface Props {
+  onEntitiesChanged: () => void
+}
+
+export default function Rail({ onEntitiesChanged }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [queuesOpen, setQueuesOpen] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
+  const [activeJobs, setActiveJobs] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -17,13 +24,20 @@ export default function Rail() {
           const ns = await r.json()
           if (!cancelled) setPendingCount(ns.length)
         }
+        const jr = await fetch('/api/jobs?limit=50')
+        if (jr.ok) {
+          const js = await jr.json()
+          if (!cancelled) {
+            setActiveJobs(js.filter((j: { status: string }) =>
+              j.status === 'running' || j.status === 'queued').length)
+          }
+        }
       } catch { /* ignore */ }
     }
     tick()
-    // Refresh briskly while Settings is open; idle otherwise.
-    const interval = setInterval(tick, settingsOpen ? 1500 : 8000)
+    const interval = setInterval(tick, (settingsOpen || queuesOpen) ? 1500 : 6000)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [settingsOpen])
+  }, [settingsOpen, queuesOpen])
 
   return (
     <aside className="rail">
@@ -55,6 +69,17 @@ export default function Rail() {
           </svg>
           <span>Skills</span>
         </button>
+        <button
+          className="rail__nav-item rail__nav-item--btn"
+          title="Queues — background jobs"
+          onClick={() => setQueuesOpen(true)}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/>
+          </svg>
+          <span>Queues</span>
+          {activeJobs > 0 && <span className="rail__nav-badge">{activeJobs}</span>}
+        </button>
         <a className="rail__nav-item" title="Alerts">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 002 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
@@ -74,6 +99,9 @@ export default function Rail() {
       </button>
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
       {skillsOpen && <Skills onClose={() => setSkillsOpen(false)} />}
+      {queuesOpen && (
+        <Queues onClose={() => setQueuesOpen(false)} onJobsChanged={onEntitiesChanged} />
+      )}
     </aside>
   )
 }

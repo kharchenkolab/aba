@@ -1,0 +1,62 @@
+.queues-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+}
+.queues {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 90%; max-width: 760px; max-height: 82vh;
+  display: flex; flex-direction: column;
+  padding: 18px 20px 16px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+}
+.queues__head { display: flex; align-items: center; gap: 12px; }
+.queues__head h2 { margin: 0; font-size: 17px; font-weight: 600; flex: 1; }
+.queues__count { font-size: 12px; color: var(--text-4); }
+.queues__close {
+  background: none; border: none; font-size: 22px; line-height: 1;
+  color: var(--text-3); cursor: pointer; padding: 4px 8px;
+}
+.queues__close:hover { color: var(--text); }
+.queues__hint { margin: 6px 0 12px; font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+.queues__empty { padding: 28px; text-align: center; color: var(--text-4); font-size: 13px; }
+.queues__list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+
+.job {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fafafb;
+}
+.job__row { display: flex; align-items: center; gap: 10px; }
+.job__status {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 8px; border-radius: 9999px;
+}
+.q--queued    .job__status, .job__status.q--queued    { background: #e5e7eb; color: #374151; }
+.q--running   .job__status, .job__status.q--running   { background: #dbeafe; color: #1e40af; }
+.q--done      .job__status, .job__status.q--done      { background: #d1fae5; color: #065f46; }
+.q--failed    .job__status, .job__status.q--failed    { background: #fee2e2; color: #b91c1c; }
+.q--cancelled .job__status, .job__status.q--cancelled { background: #f3f4f6; color: #6b7280; }
+.job__title { flex: 1; font-size: 13px; font-weight: 500; color: var(--text); }
+.job__elapsed { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.job__cancel {
+  font-size: 11px; padding: 3px 10px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text-2); cursor: pointer;
+}
+.job__cancel:hover { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+.job__log {
+  margin: 8px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 8px;
+  white-space: pre-wrap; max-height: 120px; overflow-y: auto;
+  color: var(--text-2);
+}
+.q--running .job__status.q--running { animation: q-pulse 1.4s ease-in-out infinite; }
+@keyframes q-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }

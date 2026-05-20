@@ -17,7 +17,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Rail />
+      <Rail onEntitiesChanged={refresh} />
       <ProjectTree
         entities={entities}
         focusedId={focusedId}

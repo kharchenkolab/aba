@@ -21,7 +21,7 @@ Your data access:
 - list_data_files: enumerate files in the data folder.
 - read_csv_info: schema + preview of a CSV.
 - inspect_upload: inspect an opaque file or archive. Auto-extracts .tar/.tar.gz/.zip; recognizes 10x Genomics layouts and AnnData; returns a suggested loader. Use this FIRST on anything you haven't seen, especially archives.
-- run_python: execute Python in a sandbox. Save figures with plt.savefig('out.png') — the system captures any .png files automatically.
+- run_python: execute Python in a sandbox. Save figures with plt.savefig('out.png') — the system captures any .png files automatically. For long pipelines (>30s — e.g. a full scRNA-seq run), pass background=true and a short title; you'll get a job_id back immediately and should tell the user to watch the Queues panel while it runs.
 
 Libraries available in the sandbox:
 - Always: pandas, numpy, matplotlib, seaborn, scipy.
