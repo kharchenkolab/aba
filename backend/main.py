@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from db import (
     list_entities,
     get_entity,
     create_entity,
+    add_edge,
     edges_from,
     edges_to,
     WORKSPACE_ID,
@@ -25,6 +27,7 @@ from promote import (
     promote_results_to_finding,
     promote_findings_to_claim,
 )
+from scenarios import create_scenario_variant
 
 
 app = FastAPI()
@@ -197,6 +200,30 @@ def entities_edges(entity_id: str):
         "outgoing": edges_from(entity_id),
         "incoming": edges_to(entity_id),
     }
+
+
+# ---------- Scenarios ----------
+
+class ScenarioRequest(BaseModel):
+    description: str
+    # Optional: skip the LLM rewrite by supplying the new code directly.
+    code: str | None = None
+    title: str | None = None
+
+
+@app.post("/api/entities/{baseline_id}/create-scenario")
+async def create_scenario(baseline_id: str, req: ScenarioRequest):
+    try:
+        new_entity = await asyncio.get_event_loop().run_in_executor(
+            None,
+            create_scenario_variant,
+            baseline_id, req.description, req.code, req.title,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return new_entity
 
 
 # ---------- Upload ----------

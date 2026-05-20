@@ -47,6 +47,7 @@
 .focus__type--claim    { background: #fce7f3; color: #831843; }
 .focus__type--table    { background: #e0e7ff; color: #3730a3; }
 
+.focus__actions { margin-left: auto; display: flex; gap: 6px; }
 .focus__promote {
   margin-left: auto;
   padding: 5px 12px;
@@ -59,10 +60,70 @@
   cursor: pointer;
   transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
+.focus__actions .focus__promote { margin-left: 0; }
 .focus__promote:hover {
   background: #ede9fe;
   border-color: #c4b5fd;
   color: #5b21b6;
+}
+
+.focus__scenario-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 500;
+}
+.focus__scenario-badge em { font-style: normal; font-weight: 600; }
+
+.focus__compare {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.focus__compare:hover { background: var(--tree-active-bg); }
+.focus__compare--on {
+  background: #ede9fe;
+  border-color: #c4b5fd;
+  color: #5b21b6;
+}
+
+.focus__compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.focus__compare-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.focus__compare-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-4);
+}
+.focus__compare-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.focus__compare-pane .focus__figure { max-height: 300px; }
+.focus__compare-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: #fef3c7;
+  padding: 6px 8px;
+  border-radius: 4px;
 }
 
 .focus__abstract { display: flex; flex-direction: column; gap: 14px; }

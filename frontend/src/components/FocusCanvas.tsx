@@ -26,10 +26,12 @@ type PromoteMode =
   | { kind: 'figure-to-result' }
   | { kind: 'result-to-finding' }
   | { kind: 'finding-to-claim' }
+  | { kind: 'scenario' }
 
 export default function FocusCanvas({ entity, entities, onChange, onFocus }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
+  const [compareOn, setCompareOn] = useState(false)
 
   useEffect(() => {
     setPreview(null)
@@ -98,14 +100,53 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
     onFocus(created.id)
   }
 
+  async function doScenario(description: string) {
+    const r = await fetch(
+      `/api/entities/${encodeURIComponent(entity!.id)}/create-scenario`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+      },
+    )
+    if (!r.ok) throw new Error(`scenario failed: ${r.status} ${await r.text()}`)
+    const created: Entity = await r.json()
+    setPromote(null)
+    onChange()
+    onFocus(created.id)
+  }
+
+  // Resolve baseline for compare view (when focused on a scenario variant).
+  const baseline = entity.scenario_of
+    ? entities.find(e => e.id === entity.scenario_of) ?? null
+    : null
+
   return (
     <div className="focus">
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
-        {renderPromoteButton(entity, setPromote)}
+        {entity.scenario_of && baseline && (
+          <span className="focus__scenario-badge" title={`scenario of ${baseline.title}`}>
+            scenario of <em>{baseline.title}</em>
+          </span>
+        )}
+        {baseline && (
+          <button
+            className={`focus__compare ${compareOn ? 'focus__compare--on' : ''}`}
+            onClick={() => setCompareOn(v => !v)}
+            title="Compare scenario against its baseline"
+          >
+            ⇆ Compare
+          </button>
+        )}
+        {renderActionButton(entity, setPromote)}
       </div>
-      <div className="focus__body">{renderBody(entity, preview, entities, onFocus)}</div>
+      <div className="focus__body">
+        {compareOn && baseline && entity.type === 'figure'
+          ? renderCompareBody(entity, baseline)
+          : renderBody(entity, preview, entities, onFocus)}
+      </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
         <span>•</span>
@@ -145,23 +186,67 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
           onSubmit={doFindingPromote}
         />
       )}
+      {promote?.kind === 'scenario' && (
+        <PromoteDialog
+          title={`Scenario from "${entity.title}"`}
+          prompt="Describe the variation you want to try. Guide will modify the producing code and run it. The new figure will sit alongside this one with a Compare toggle."
+          placeholder="What if we cap n_genes at 2500? — or — exclude sample S4 — or — use mt_fraction cutoff 0.10"
+          onCancel={() => setPromote(null)}
+          onSubmit={doScenario}
+        />
+      )}
     </div>
   )
 }
 
-function renderPromoteButton(
+function renderCompareBody(scenario: Entity, baseline: Entity) {
+  return (
+    <div className="focus__compare-grid">
+      <div className="focus__compare-pane">
+        <div className="focus__compare-label">baseline</div>
+        <h3 className="focus__compare-title">{baseline.title}</h3>
+        {baseline.artifact_path && (
+          <img className="focus__figure" src={baseline.artifact_path} alt={baseline.title} />
+        )}
+      </div>
+      <div className="focus__compare-pane">
+        <div className="focus__compare-label">scenario</div>
+        <h3 className="focus__compare-title">{scenario.title}</h3>
+        {scenario.artifact_path && (
+          <img className="focus__figure" src={scenario.artifact_path} alt={scenario.title} />
+        )}
+        {scenario.metadata?.scenario_description != null && (
+          <div className="focus__compare-desc">
+            change: {String(scenario.metadata.scenario_description)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function renderActionButton(
   entity: Entity,
   setPromote: (m: PromoteMode | null) => void,
 ) {
   if (entity.type === 'figure') {
     return (
-      <button
-        className="focus__promote"
-        onClick={() => setPromote({ kind: 'figure-to-result' })}
-        title="Capture an interpretation of this figure as a result"
-      >
-        ↑ Promote to result
-      </button>
+      <div className="focus__actions">
+        <button
+          className="focus__promote"
+          onClick={() => setPromote({ kind: 'scenario' })}
+          title="Create a scenario variant by modifying this figure's parameters"
+        >
+          ⤴ What if…
+        </button>
+        <button
+          className="focus__promote"
+          onClick={() => setPromote({ kind: 'figure-to-result' })}
+          title="Capture an interpretation of this figure as a result"
+        >
+          ↑ Promote to result
+        </button>
+      </div>
     )
   }
   if (entity.type === 'result') {
