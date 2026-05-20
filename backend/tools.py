@@ -61,11 +61,13 @@ TOOL_SCHEMAS = [
         "name": "run_python",
         "description": (
             "Execute Python code in a sandboxed subprocess. "
-            "pandas and matplotlib are available. "
-            "The data folder is available as the variable DATA_DIR (a string path). "
-            "Save any plots as plt.savefig('output.png') or any .png name — they will be captured and displayed. "
-            "Print any text results you want returned. "
-            "Timeout is 60 seconds."
+            "pandas, numpy, matplotlib, scanpy, anndata, leidenalg, and umap "
+            "are available. The data folder is available as the variable "
+            "DATA_DIR (a string path). Save any plots as plt.savefig('out.png') "
+            "or any .png name — they will be captured and displayed. Print any "
+            "text results you want returned. Default timeout is 90 seconds; for "
+            "scRNA-seq / bulk-RNA pipelines that need more, set timeout_s "
+            "explicitly (max 600s)."
         ),
         "input_schema": {
             "type": "object",
@@ -73,6 +75,12 @@ TOOL_SCHEMAS = [
                 "code": {
                     "type": "string",
                     "description": "Python code to execute"
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Optional timeout in seconds; capped at 600. Use larger values for full pipeline runs.",
+                    "minimum": 5,
+                    "maximum": 600,
                 }
             },
             "required": ["code"]
@@ -114,6 +122,7 @@ def read_csv_info(input_: dict) -> dict:
 
 def run_python(input_: dict) -> dict:
     code = input_.get("code", "")
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 600))
     tmp_dir = Path("/tmp") / f"aba_{uuid.uuid4().hex}"
     tmp_dir.mkdir()
     try:
@@ -132,7 +141,7 @@ def run_python(input_: dict) -> dict:
             [python, str(script)],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout_s,
             env=env,
             cwd=str(tmp_dir)
         )
@@ -152,7 +161,7 @@ def run_python(input_: dict) -> dict:
             "plots": plots
         }
     except subprocess.TimeoutExpired:
-        return {"error": "Code execution timed out (60s limit)"}
+        return {"error": f"Code execution timed out ({timeout_s}s limit)"}
     except Exception as e:
         return {"error": str(e)}
     finally:

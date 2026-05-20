@@ -282,8 +282,13 @@ async def upload_url(req: URLUploadRequest):
     name = Path(parsed.path).name or "downloaded.bin"
     dest = _unique_path(DATA_DIR / name)
 
+    # CDNs (Cloudflare etc.) often reject the default Python-urllib UA.
+    req_obj = urllib.request.Request(
+        req.url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ABA/0.1; +bioinformatics)"},
+    )
     try:
-        with urllib.request.urlopen(req.url, timeout=60) as resp:
+        with urllib.request.urlopen(req_obj, timeout=120) as resp:
             total = 0
             with dest.open("wb") as f:
                 while True:
@@ -292,9 +297,10 @@ async def upload_url(req: URLUploadRequest):
                         break
                     f.write(chunk)
                     total += len(chunk)
-                    # Cap absurd payloads to avoid filling the disk.
                     if total > 2 * 1024 * 1024 * 1024:
                         raise HTTPException(413, "remote file > 2GB; aborting")
+    except urllib.error.HTTPError as e:
+        raise HTTPException(400, f"download failed: HTTP {e.code} {e.reason}")
     except urllib.error.URLError as e:
         raise HTTPException(400, f"download failed: {e}")
 
