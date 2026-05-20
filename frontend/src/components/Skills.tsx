@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import './Skills.css'
 
 interface Item {
-  kind: 'tool' | 'skill'
+  kind: 'tool' | 'skill' | 'module'
   name: string
   category: string
   summary: string
@@ -17,6 +17,8 @@ interface Item {
   description?: string
   input_schema?: unknown
   knowhow_doc?: string
+  enabled?: boolean
+  toggleable?: boolean
 }
 
 interface Category {
@@ -38,12 +40,21 @@ export default function Skills({ onClose }: Props) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Item | null>(null)
 
-  useEffect(() => {
+  function reload() {
     fetch('/api/tools')
       .then(r => (r.ok ? r.json() : Promise.reject(r)))
       .then(setCatalog)
       .catch(() => {})
-  }, [])
+  }
+  useEffect(() => { reload() }, [])
+
+  async function toggle(item: Item) {
+    await fetch(`/api/tools/${encodeURIComponent(item.name)}/enabled`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !item.enabled }),
+    })
+    reload()
+  }
 
   const filtered = useMemo(() => {
     if (!catalog) return null
@@ -87,15 +98,24 @@ export default function Skills({ onClose }: Props) {
                 <h3>{cat.name}</h3>
                 <div className="skills__items">
                   {cat.items.map(it => (
-                    <button
+                    <div
                       key={it.name}
-                      className={`skills__row ${selected?.name === it.name ? 'skills__row--active' : ''}`}
+                      className={`skills__row ${selected?.name === it.name ? 'skills__row--active' : ''} ${it.enabled === false ? 'skills__row--off' : ''}`}
                       onClick={() => setSelected(it)}
                     >
                       <span className={`skills__kind skills__kind--${it.kind}`}>{it.kind}</span>
                       <span className="skills__name">{it.name}</span>
                       <span className="skills__summary">{it.summary}</span>
-                    </button>
+                      {it.toggleable && (
+                        <button
+                          className={`skills__toggle ${it.enabled ? 'is-on' : ''}`}
+                          onClick={e => { e.stopPropagation(); toggle(it) }}
+                          title={it.enabled ? 'Disable (hidden from the agent)' : 'Enable'}
+                        >
+                          <span className="skills__toggle-knob" />
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </section>

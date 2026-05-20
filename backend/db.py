@@ -183,6 +183,14 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
 
+        # Per-tool enabled state (Phase 14). Absent row = enabled.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS tool_settings (
+                name     TEXT PRIMARY KEY,
+                enabled  INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
         if not row:
@@ -483,6 +491,25 @@ def update_context_suggestion_status(suggestion_id: int, status: str) -> bool:
         )
         c.commit()
         return cur.rowcount > 0
+
+
+def get_disabled_tools() -> set[str]:
+    with _conn() as c:
+        try:
+            rows = c.execute("SELECT name FROM tool_settings WHERE enabled=0").fetchall()
+        except sqlite3.OperationalError:
+            return set()
+    return {r["name"] for r in rows}
+
+
+def set_tool_enabled(name: str, enabled: bool) -> None:
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO tool_settings (name, enabled) VALUES (?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET enabled=excluded.enabled",
+            (name, 1 if enabled else 0),
+        )
+        c.commit()
 
 
 def log_event(kind: str, entity_id: Optional[str] = None,
