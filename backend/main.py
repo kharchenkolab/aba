@@ -41,7 +41,7 @@ from db import (
 )
 from adaptive import append_to_policy
 from tools_registry import registry as tools_registry
-from db import list_jobs, get_job, figure_history
+from db import list_jobs, get_job, figure_history, list_events
 from jobs import start_worker, cancel_job
 
 
@@ -566,6 +566,12 @@ def jobs_cancel(job_id: str):
     if not ok:
         raise HTTPException(400, "job not found or not cancellable")
     return get_job(job_id)
+
+
+@app.get("/api/events")
+def events_list(limit: int = 50, offset: int = 0):
+    """Activity / audit feed (newest first)."""
+    return list_events(limit=limit, offset=offset)
 
 
 @app.get("/api/health")

@@ -169,6 +169,20 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
 
+        # Events — append-only activity/audit log. Feeds the Home activity
+        # feed (Phase 13) and the audit view (Phase 24).
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind        TEXT NOT NULL,
+                entity_id   TEXT,
+                title       TEXT,
+                detail      TEXT,
+                ts          TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
+
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
         if not row:
@@ -217,6 +231,10 @@ def create_entity(
             ),
         )
         c.commit()
+    # Log meaningful entity creations to the activity/audit feed.
+    if entity_type not in ("workspace", "analysis"):
+        kind = "scenario_created" if scenario_of else "entity_created"
+        log_event(kind, entity_id=eid, title=title, detail={"type": entity_type})
     return eid
 
 
@@ -367,7 +385,11 @@ def add_advisor_note(entity_id: str, advisor: str, text: str,
              json.dumps(metadata) if metadata else None, now),
         )
         c.commit()
-        return cur.lastrowid
+        note_id = cur.lastrowid
+    ent = get_entity(entity_id)
+    log_event("advisor_note", entity_id=entity_id,
+              title=(ent["title"] if ent else None), detail={"advisor": advisor})
+    return note_id
 
 
 def log_context_assembly(
@@ -461,6 +483,35 @@ def update_context_suggestion_status(suggestion_id: int, status: str) -> bool:
         )
         c.commit()
         return cur.rowcount > 0
+
+
+def log_event(kind: str, entity_id: Optional[str] = None,
+              title: Optional[str] = None, detail: Optional[dict] = None) -> None:
+    """Append an event to the activity/audit log. Best-effort; never raises."""
+    try:
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO events (kind, entity_id, title, detail, ts) VALUES (?, ?, ?, ?, ?)",
+                (kind, entity_id, title, json.dumps(detail) if detail else None, _utcnow()),
+            )
+            c.commit()
+    except Exception:
+        pass
+
+
+def list_events(limit: int = 50, offset: int = 0) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
+        ).fetchall()
+    return [
+        {
+            "id": r["id"], "kind": r["kind"], "entity_id": r["entity_id"],
+            "title": r["title"], "detail": json.loads(r["detail"]) if r["detail"] else None,
+            "ts": r["ts"],
+        }
+        for r in rows
+    ]
 
 
 def _row_to_job(r) -> dict:
