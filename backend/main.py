@@ -41,6 +41,8 @@ from db import (
 )
 from adaptive import append_to_policy
 from tools_registry import registry as tools_registry
+from db import list_jobs, get_job
+from jobs import start_worker, cancel_job
 
 
 app = FastAPI()
@@ -58,6 +60,7 @@ app.mount("/artifacts", StaticFiles(directory=str(ARTIFACTS_DIR)), name="artifac
 @app.on_event("startup")
 def startup():
     init_db()
+    start_worker()
 
 
 # ---------- Entities ----------
@@ -505,6 +508,29 @@ def history_clear_legacy():
 def tools_catalog():
     """Catalog of tools and skills for the Skills screen (Phase 12)."""
     return tools_registry()
+
+
+# ---------- Jobs (Phase 17) ----------
+
+@app.get("/api/jobs")
+def jobs_list(limit: int = 50):
+    return list_jobs(limit=limit)
+
+
+@app.get("/api/jobs/{job_id}")
+def jobs_get(job_id: str):
+    j = get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id} not found")
+    return j
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def jobs_cancel(job_id: str):
+    ok = cancel_job(job_id)
+    if not ok:
+        raise HTTPException(400, "job not found or not cancellable")
+    return get_job(job_id)
 
 
 @app.get("/api/health")

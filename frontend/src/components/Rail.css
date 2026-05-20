@@ -69,6 +69,20 @@
   background: transparent;
   border: none;
   font-family: inherit;
+  position: relative;
+}
+.rail__nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  background: #2563eb;
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 9999px;
+  min-width: 14px;
+  text-align: center;
 }
 
 .rail__user {

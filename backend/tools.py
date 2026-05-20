@@ -81,6 +81,14 @@ TOOL_SCHEMAS = [
                     "description": "Optional timeout in seconds; capped at 600. Use larger values for full pipeline runs.",
                     "minimum": 5,
                     "maximum": 600,
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run as a background job instead of inline. Use for long pipelines (>30s) so the conversation isn't blocked. Returns a job_id immediately; the figures register when the job finishes. Tell the user to watch the Queues panel.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short label for the job (shown in the Queues panel). Only used when background=true.",
                 }
             },
             "required": ["code"]

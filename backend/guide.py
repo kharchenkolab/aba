@@ -13,6 +13,7 @@ from llm import make_open_stream
 from context import focus_preamble_with_fields
 from registry import register_artifacts_from_tool_result
 from adaptive import new_session_id, maybe_reflect
+from jobs import submit_python_job
 
 open_stream = make_open_stream()
 
@@ -107,6 +108,30 @@ async def stream_response(
                 tool_name = block.name
                 tool_input = block.input
                 yield sse({"type": "tool_start", "name": tool_name, "input": tool_input})
+
+                # Background path: submit a job and return immediately.
+                if tool_name == "run_python" and isinstance(tool_input, dict) \
+                        and tool_input.get("background"):
+                    job = submit_python_job(
+                        code=tool_input.get("code", ""),
+                        title=tool_input.get("title") or "Background analysis",
+                        focus_entity_id=focus_entity_id,
+                        timeout_s=int(tool_input.get("timeout_s") or 300),
+                    )
+                    result_obj = {
+                        "job_id": job["id"],
+                        "status": "queued",
+                        "note": "Submitted as a background job. Figures will register when it finishes; watch the Queues panel.",
+                    }
+                    yield sse({"type": "job_submitted", "job": job})
+                    yield sse({"type": "tool_result", "name": tool_name, "result": result_obj})
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result_obj),
+                    })
+                    continue
+
                 loop = asyncio.get_event_loop()
                 result_str = await loop.run_in_executor(
                     None, execute_tool, tool_name, tool_input
