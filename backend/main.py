@@ -571,8 +571,19 @@ def history_clear_legacy():
 
 @app.get("/api/tools")
 def tools_catalog():
-    """Catalog of tools and skills for the Skills screen (Phase 12)."""
+    """Catalog of tools and skills for the Skills screen (Phase 12/14)."""
     return tools_registry()
+
+
+class ToolEnabledRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/tools/{name}/enabled")
+def tools_set_enabled(name: str, req: ToolEnabledRequest):
+    from db import set_tool_enabled
+    set_tool_enabled(name, req.enabled)
+    return {"name": name, "enabled": req.enabled}
 
 
 # ---------- Jobs (Phase 17) ----------

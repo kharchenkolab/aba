@@ -182,8 +182,17 @@ def run_python(input_: dict) -> dict:
     tmp_dir = Path("/tmp") / f"aba_{uuid.uuid4().hex}"
     tmp_dir.mkdir()
     try:
-        # Prepend DATA_DIR injection
-        full_code = f"DATA_DIR = {str(DATA_DIR)!r}\n" + code
+        # Prepend DATA_DIR injection + make the vendored BioMNI tool library
+        # importable in the sandbox (functions are imported, not pre-declared
+        # — per aba_arch2.md §5.1). Heavy BioMNI deps may be absent; imports
+        # that need them will fail gracefully at use time.
+        biomni_path = Path(__file__).parent.parent / "biomni"
+        preamble = (
+            f"DATA_DIR = {str(DATA_DIR)!r}\n"
+            f"import sys as _sys\n"
+            f"_sys.path.insert(0, {str(biomni_path)!r})\n"
+        )
+        full_code = preamble + code
         script = tmp_dir / "script.py"
         script.write_text(full_code)
 

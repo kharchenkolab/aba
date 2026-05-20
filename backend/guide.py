@@ -81,7 +81,10 @@ async def stream_response(
     try:
         while True:
             llm_history = effective_history(WORKSPACE_ID, history)
-            with open_stream(llm_history, TOOL_SCHEMAS, system) as stream:
+            from db import get_disabled_tools
+            disabled = get_disabled_tools()
+            active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+            with open_stream(llm_history, active_tools, system) as stream:
                 for event in stream:
                     if event.type == "content_block_delta":
                         delta = event.delta

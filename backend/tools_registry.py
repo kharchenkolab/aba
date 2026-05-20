@@ -8,6 +8,7 @@ follow biology domain naming where applicable, with a few generic ones
 """
 from __future__ import annotations
 from tools import TOOL_SCHEMAS
+from db import get_disabled_tools
 
 
 def _by_name(name: str) -> dict | None:
@@ -110,8 +111,22 @@ _SKILLS = [
 ]
 
 
+# BioMNI domain modules — importable inside the sandbox (run_python adds the
+# vendored repo to sys.path). Listed here so they're discoverable; some need
+# extra dependencies that may not be installed yet.
+_BIOMNI_MODULES = [
+    ("genomics", "Variant calling, GWAS, sequence analysis helpers."),
+    ("immunology", "Immune-repertoire and cytometry analysis helpers."),
+    ("molecular_biology", "Cloning, primer design, sequence manipulation."),
+    ("single_cell", "Single-cell helpers (annotation, integration)."),
+    ("pharmacology", "Dose-response, PK/PD, compound analysis."),
+    ("literature", "Literature search and retrieval helpers."),
+]
+
+
 def registry() -> dict:
     """Return the full catalog ready for /api/tools to serialize."""
+    disabled = get_disabled_tools()
     tools_out = []
     for t in TOOL_SCHEMAS:
         meta = _TOOL_META.get(t["name"], {})
@@ -123,14 +138,21 @@ def registry() -> dict:
             "example": meta.get("example"),
             "description": t.get("description", ""),
             "input_schema": t.get("input_schema"),
+            "enabled": t["name"] not in disabled,
+            "toggleable": True,
         })
-    skills_out = [{"kind": "skill", **s} for s in _SKILLS]
-    items = tools_out + skills_out
+    skills_out = [{"kind": "skill", "enabled": True, "toggleable": False, **s} for s in _SKILLS]
+    biomni_out = [{
+        "kind": "module", "name": f"biomni.tool.{m}", "category": "BioMNI library",
+        "summary": desc, "example": f"from biomni.tool.{m} import ...  (inside run_python)",
+        "enabled": True, "toggleable": False,
+    } for m, desc in _BIOMNI_MODULES]
+    items = tools_out + skills_out + biomni_out
 
     # Group by category, preserve a sensible order.
     order = [
         "Workspace", "Sandbox", "Provenance", "Analysis flow", "Result chain",
-        "Single-cell", "Bulk RNA-seq", "Other",
+        "Single-cell", "Bulk RNA-seq", "BioMNI library", "Other",
     ]
     cats: dict[str, list] = {c: [] for c in order}
     for it in items:
