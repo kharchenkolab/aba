@@ -8,7 +8,7 @@ provenance walk works the same as for run-generated artifacts).
 from __future__ import annotations
 from typing import Optional
 
-from db import create_entity, get_entity, add_edge
+from db import create_entity, get_entity, update_entity, add_edge, remove_edge
 
 
 def promote_figure_to_result(
@@ -59,6 +59,40 @@ def promote_results_to_finding(
         add_edge(fid, rid, "supports", {"direction": "finding-supported-by-result"})
         add_edge(fid, rid, "wasDerivedFrom")
     return fid
+
+
+def add_result_to_finding(finding_id: str, result_id: str) -> dict:
+    """Attach an additional result to an existing finding."""
+    finding = get_entity(finding_id)
+    if not finding or finding["type"] != "finding":
+        raise ValueError("finding not found")
+    result = get_entity(result_id)
+    if not result or result["type"] != "result":
+        raise ValueError("result not found")
+    supporting = list((finding.get("metadata") or {}).get("supporting_results", []))
+    if result_id not in supporting:
+        supporting.append(result_id)
+        meta = dict(finding.get("metadata") or {})
+        meta["supporting_results"] = supporting
+        update_entity(finding_id, metadata=meta)
+        add_edge(finding_id, result_id, "supports", {"direction": "finding-supported-by-result"})
+        add_edge(finding_id, result_id, "wasDerivedFrom")
+    return get_entity(finding_id)  # type: ignore[return-value]
+
+
+def remove_result_from_finding(finding_id: str, result_id: str) -> dict:
+    finding = get_entity(finding_id)
+    if not finding or finding["type"] != "finding":
+        raise ValueError("finding not found")
+    supporting = list((finding.get("metadata") or {}).get("supporting_results", []))
+    if result_id in supporting:
+        supporting.remove(result_id)
+        meta = dict(finding.get("metadata") or {})
+        meta["supporting_results"] = supporting
+        update_entity(finding_id, metadata=meta)
+        remove_edge(finding_id, result_id, "supports")
+        remove_edge(finding_id, result_id, "wasDerivedFrom")
+    return get_entity(finding_id)  # type: ignore[return-value]
 
 
 def promote_findings_to_claim(
