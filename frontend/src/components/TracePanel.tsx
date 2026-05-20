@@ -15,7 +15,7 @@
  * (per misc/aba_arch2.md §5.1) — code panel + observation, status pending→done.
  */
 import { useState } from 'react'
-import type { DisplayMessage, Block } from '../types'
+import type { DisplayMessage } from '../types'
 import './TracePanel.css'
 
 interface TraceStep {

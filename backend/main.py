@@ -568,6 +568,61 @@ def jobs_cancel(job_id: str):
     return get_job(job_id)
 
 
+@app.get("/api/home-summary")
+def home_summary():
+    """Dashboard data for the Home screen: counts, recent activity, attention."""
+    ents = list_entities(exclude_workspace=True, include_archived=False)
+    counts: dict[str, int] = {}
+    for e in ents:
+        if e["status"] in ("superseded",):
+            continue
+        counts[e["type"]] = counts.get(e["type"], 0) + 1
+    jobs = list_jobs(limit=100)
+    suggestions = list_context_suggestions(status="pending")
+    # advisor notes across all entities
+    note_total = 0
+    for e in ents:
+        note_total += len(list_advisor_notes(e["id"]))
+    created = sorted(
+        (e for e in ents if e["type"] != "analysis"),
+        key=lambda e: e["created_at"],
+    )
+    first = created[0]["created_at"] if created else None
+    last = max((e["updated_at"] for e in ents), default=None)
+    return {
+        "counts": counts,
+        "n_datasets": counts.get("dataset", 0),
+        "started_at": first,
+        "last_touched": last,
+        "recent_events": list_events(limit=8),
+        "attention": {
+            "pending_suggestions": len(suggestions),
+            "active_jobs": len([j for j in jobs if j["status"] in ("queued", "running")]),
+            "failed_jobs": len([j for j in jobs if j["status"] == "failed"]),
+            "advisor_notes": note_total,
+        },
+    }
+
+
+@app.post("/api/sample-project")
+def sample_project():
+    """
+    One-click sample: register the bundled cells.csv as a dataset so a new
+    user has something to explore immediately. Idempotent-ish (creates a
+    fresh dataset each call).
+    """
+    src = Path(__file__).parent / "data" / "cells.csv"
+    if not src.exists():
+        raise HTTPException(500, "sample data missing")
+    dest = _unique_path(DATA_DIR / "sample_cells.csv")
+    shutil.copyfile(src, dest)
+    eid = create_entity(
+        entity_type="dataset", title=dest.name, artifact_path=str(dest),
+        metadata={"size_bytes": dest.stat().st_size, "sample": True},
+    )
+    return get_entity(eid)
+
+
 @app.post("/api/run-probe")
 async def trigger_probe():
     """

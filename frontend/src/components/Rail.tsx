@@ -6,9 +6,11 @@ import './Rail.css'
 
 interface Props {
   onEntitiesChanged: () => void
+  view: 'home' | 'workspace'
+  onNavigate: (v: 'home' | 'workspace') => void
 }
 
-export default function Rail({ onEntitiesChanged }: Props) {
+export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [queuesOpen, setQueuesOpen] = useState(false)
@@ -47,18 +49,26 @@ export default function Rail({ onEntitiesChanged }: Props) {
       </div>
 
       <nav className="rail__nav">
-        <a className="rail__nav-item rail__nav-item--active" title="Home">
+        <button
+          className={`rail__nav-item rail__nav-item--btn ${view === 'home' ? 'rail__nav-item--active' : ''}`}
+          title="Home"
+          onClick={() => onNavigate('home')}
+        >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
           </svg>
           <span>Home</span>
-        </a>
-        <a className="rail__nav-item" title="Projects">
+        </button>
+        <button
+          className={`rail__nav-item rail__nav-item--btn ${view === 'workspace' ? 'rail__nav-item--active' : ''}`}
+          title="Workspace"
+          onClick={() => onNavigate('workspace')}
+        >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M3 3h8v8H3zm0 10h8v8H3zm10-10h8v8h-8zm0 10h8v8h-8z"/>
           </svg>
-          <span>Projects</span>
-        </a>
+          <span>Workspace</span>
+        </button>
         <button
           className="rail__nav-item rail__nav-item--btn"
           title="Skills — tools and pipelines Guide can drive"
