@@ -20,7 +20,12 @@ export default function App() {
       <Rail />
       <ProjectTree entities={entities} focusedId={focusedId} onFocus={setFocusedId} />
       <div className="main">
-        <FocusCanvas entity={focused} />
+        <FocusCanvas
+          entity={focused}
+          entities={entities}
+          onChange={refresh}
+          onFocus={setFocusedId}
+        />
         <ChatPane
           messages={messages}
           streaming={streaming}

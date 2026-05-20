@@ -224,6 +224,12 @@ def drive_live(frontend_port: int) -> int:
             timeout=120000,
         )
         page.screenshot(path=str(SHOT_DIR / "03_followup.png"), full_page=True)
+
+        # Toggle trace on to see the inner loop the live model produced.
+        page.locator(".trace-toggle").click()
+        page.wait_for_selector(".trace-card", timeout=3000)
+        page.screenshot(path=str(SHOT_DIR / "04_trace_on.png"), full_page=True)
+
         browser.close()
 
     print("\nscreenshots:")

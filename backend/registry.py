@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from db import create_entity, get_entity, WORKSPACE_ID
+from db import create_entity, get_entity, add_edge, WORKSPACE_ID
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
@@ -88,6 +88,13 @@ def register_artifacts_from_tool_result(
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name},
             )
+            # PROV-O edges: figure wasGeneratedBy the analysis;
+            # the analysis used the focused entity (if any).
+            add_edge(eid, analysis_id, "wasGeneratedBy")
+            focused = focused_entity_id or WORKSPACE_ID
+            if focused != WORKSPACE_ID:
+                add_edge(analysis_id, focused, "used")
+                add_edge(eid, focused, "wasDerivedFrom")
             rec = get_entity(eid)
             if rec:
                 new_records.append(rec)
