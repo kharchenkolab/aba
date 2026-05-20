@@ -104,6 +104,79 @@ def maybe_reflect(
         return None
 
 
+def run_probe() -> dict | None:
+    """
+    Pop-quiz probe (§3.6): pick a recent entity with upstream provenance, ask
+    the Guide a diagnostic question with that entity's focus context but NO
+    tools, and check whether it can name the upstream from context alone.
+    Failures are logged as quiz_failure context_suggestions.
+
+    Returns a small report dict, or None if there's nothing to probe.
+    """
+    from db import list_entities, add_context_suggestion
+    from provenance import upstream
+    from context import focus_preamble
+
+    # Find a recent figure/result with at least one upstream entity.
+    candidates = [
+        e for e in reversed(list_entities(exclude_workspace=True))
+        if e["type"] in ("figure", "result") and e["status"] == "active"
+    ]
+    target = None
+    up = []
+    for e in candidates:
+        up = upstream(e["id"])
+        if up:
+            target = e
+            break
+    if not target:
+        return None
+
+    expected = {n["title"].lower() for n in up}
+    question = (
+        f"Without querying any external APIs or tools, what data or analysis "
+        f"was '{target['title']}' derived from? Answer in one sentence."
+    )
+
+    if FAKE_SESSION:
+        # Deterministic: simulate a context gap so the loop is demonstrable.
+        answer = "I'm not sure from the context I have."
+        passed = False
+    else:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=API_KEY)
+            system = focus_preamble(target["id"]) + (
+                "You are answering a self-check question from your loaded "
+                "context only. Do not speculate; if you don't know, say so."
+            )
+            msg = client.messages.create(
+                model=MODEL, max_tokens=150, system=system,
+                messages=[{"role": "user", "content": question}],
+            )
+            answer = "".join(
+                b.text for b in msg.content if getattr(b, "type", None) == "text"
+            ).strip()
+            passed = any(name in answer.lower() for name in expected)
+        except Exception:
+            return None
+
+    if not passed:
+        suggestion = (
+            f"When the user focuses on a {target['type']} and asks how it was "
+            f"made, pre-load the titles of its upstream entities "
+            f"({', '.join(sorted(expected))}) so I can answer without retrieval."
+        )
+        add_context_suggestion(
+            session_id="probe", entity_type=target["type"],
+            trigger="quiz_failure", suggestion=suggestion,
+        )
+    return {
+        "entity_id": target["id"], "entity_type": target["type"],
+        "question": question, "answer": answer, "passed": passed,
+    }
+
+
 def policy_path_for(entity_type: str | None) -> Path:
     base = Path(__file__).parent / "knowhow" / "context_policy"
     base.mkdir(parents=True, exist_ok=True)
