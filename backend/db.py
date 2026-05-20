@@ -598,12 +598,23 @@ def update_job(job_id: str, **fields) -> None:
         c.commit()
 
 
+def set_advisor_note_status(note_id: int, status: str) -> bool:
+    """Mark a note 'tried'/'dismissed' so it stops surfacing as a fresh idea."""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE advisor_notes SET status = ? WHERE id = ?", (status, note_id)
+        )
+        return cur.rowcount > 0
+
+
 def list_advisor_notes(entity_id: str) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, entity_id, advisor, text, metadata, status, created_at "
-            "FROM advisor_notes WHERE entity_id = ? AND status = 'active' "
-            "ORDER BY id",
+            "SELECT n.id, n.entity_id, n.advisor, n.text, n.metadata, n.status, "
+            "       n.created_at, e.type AS e_type, e.title AS e_title "
+            "FROM advisor_notes n LEFT JOIN entities e ON e.id = n.entity_id "
+            "WHERE n.entity_id = ? AND n.status = 'active' "
+            "ORDER BY n.id",
             (entity_id,),
         ).fetchall()
     return [
@@ -615,6 +626,10 @@ def list_advisor_notes(entity_id: str) -> list[dict]:
             "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
             "status": r["status"],
             "created_at": r["created_at"],
+            # The subject the note is about, so the note is self-describing
+            # even when the conversation has scrolled past.
+            "entity_type": r["e_type"],
+            "entity_title": r["e_title"],
         }
         for r in rows
     ]

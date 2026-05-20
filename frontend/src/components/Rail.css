@@ -21,15 +21,13 @@
   padding-right: 8px;
 }
 .rail__brand-icon {
-  width: 36px; height: 36px;
-  background: var(--accent);
-  border-radius: 10px;
+  width: 40px; height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
-  font-size: 13px;
-  letter-spacing: -0.5px;
+  /* Logo sits straight on the rail in a soft off-white, distinct from the
+     muted nav buttons (and from their pure-white hover state). */
+  color: #efe8d4;
 }
 .rail__brand span {
   font-size: 9px;

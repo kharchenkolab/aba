@@ -6,6 +6,7 @@
 }
 .skills {
   background: var(--bg);
+  color: var(--text);   /* the modal lives inside the rail; don't inherit its white */
   border: 1px solid var(--border);
   border-radius: 12px;
   width: 90%;

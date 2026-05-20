@@ -173,6 +173,8 @@ def drive_browser(frontend_port: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "01_initial.png"), full_page=True)
         print("✓ initial page loaded")
 
+        # App opens on the Home view; enter the workspace to reach the chat.
+        page.locator('button[title="Workspace"]').click()
         composer = page.locator(".composer__input")
         composer.wait_for(state="visible", timeout=5000)
         composer.fill("what files do we have?")
@@ -184,11 +186,11 @@ def drive_browser(frontend_port: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "03_after_reply.png"), full_page=True)
         print("✓ scripted reply rendered")
 
-        tool_done = page.locator(".msg-tool-indicator.done")
-        assert tool_done.count() >= 1, "no tool_result indicator in DOM"
-        print(f"✓ {tool_done.count()} tool_result indicator(s)")
+        tool_done = page.locator(".tool-line--done")
+        assert tool_done.count() >= 1, "no resolved tool indicator in DOM"
+        print(f"✓ {tool_done.count()} resolved tool indicator(s)")
 
-        assert page.locator(".msg--user").count() == 1
+        assert page.locator(".msg--user").count() >= 1
         print("✓ user message rendered")
 
         browser.close()

@@ -1,18 +1,23 @@
 /**
  * Horizontal draggable divider between the focus canvas and the chat.
- * Drag to resize; the chevron collapses/restores the focus panel so the
- * chat can take most of the height.
+ * Drag to resize freely; two chevron tabs maximize either side:
+ *   ▴ maximize the figure (collapse chat)   ▾ maximize the chat (collapse figure)
+ * Clicking the chevron of the side that's already maximized restores the split.
  */
 import { useEffect, useRef } from 'react'
 import './VResizer.css'
 
+type VState = 'figure' | 'chat' | 'mid'
+
 interface Props {
   onDrag: (deltaY: number) => void
-  onToggle: () => void
-  collapsed: boolean
+  onMaxFigure: () => void
+  onMaxChat: () => void
+  onRestore: () => void
+  state: VState
 }
 
-export default function VResizer({ onDrag, onToggle, collapsed }: Props) {
+export default function VResizer({ onDrag, onMaxFigure, onMaxChat, onRestore, state }: Props) {
   const lastY = useRef(0)
   const dragging = useRef(false)
 
@@ -46,14 +51,22 @@ export default function VResizer({ onDrag, onToggle, collapsed }: Props) {
       }}
     >
       <div className="vresizer__grip" />
-      <button
-        className="vresizer__toggle"
-        title={collapsed ? 'Expand focus panel' : 'Collapse focus panel (maximize chat)'}
-        onMouseDown={e => e.stopPropagation()}
-        onClick={onToggle}
-      >
-        {collapsed ? '▾' : '▴'}
-      </button>
+      <div className="vresizer__tabs" onMouseDown={e => e.stopPropagation()}>
+        <button
+          className={`vresizer__tab ${state === 'figure' ? 'is-active' : ''}`}
+          title={state === 'figure' ? 'Restore split' : 'Maximize figure'}
+          onClick={state === 'figure' ? onRestore : onMaxFigure}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7l7 9H5z" /></svg>
+        </button>
+        <button
+          className={`vresizer__tab ${state === 'chat' ? 'is-active' : ''}`}
+          title={state === 'chat' ? 'Restore split' : 'Maximize chat'}
+          onClick={state === 'chat' ? onRestore : onMaxChat}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17L5 8h14z" /></svg>
+        </button>
+      </div>
     </div>
   )
 }

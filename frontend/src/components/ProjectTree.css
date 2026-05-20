@@ -5,54 +5,64 @@
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  padding: 10px 10px 0;
 }
 
 .tree__head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 12px 14px 10px;
+  padding: 4px 6px 10px;
   font-weight: 700;
-  font-size: 13px;
-  border-bottom: 1px solid var(--tree-border);
+  font-size: 14px;
   flex-shrink: 0;
   cursor: pointer;
   color: var(--text);
+  border-radius: 8px;
+  transition: background 0.1s;
 }
 .tree__head .chev { margin-left: auto; color: var(--text-4); }
 
-.tree__section { border-bottom: 1px solid var(--tree-border); }
+/* Each section is a white card floating on the grey panel, so the groups
+   read as distinct blocks (matching the original design). */
+.tree__section {
+  background: var(--bg);
+  border: 1px solid var(--tree-border);
+  border-radius: var(--r);
+  margin-bottom: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
 
 .tree__section-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 9px 11px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  color: var(--text);
   cursor: pointer;
   transition: background 0.1s;
 }
-.tree__section-head:hover { background: var(--tree-active-bg); }
+.tree__section-head:hover { background: var(--bg-soft); }
+.tree__section-head .icon { color: var(--text-3); }
 .tree__section-head .ml-auto { margin-left: auto; }
 .tree__section-head .chev { color: var(--text-4); }
 
-.tree__head { cursor: pointer; transition: background 0.1s; }
 .tree__head:hover { background: var(--tree-active-bg); }
 .tree__head.is-active { background: var(--tree-active-bg); }
 
 .tree__count {
   margin-left: auto;
   font-size: 11px;
-  font-weight: 500;
-  color: var(--text-4);
-  background: var(--tree-active-bg);
-  padding: 1px 6px;
+  font-weight: 600;
+  color: var(--text-3);
+  background: var(--bg-soft);
+  border: 1px solid var(--tree-border);
+  padding: 0 6px;
   border-radius: 8px;
-  min-width: 16px;
+  min-width: 18px;
   text-align: center;
 }
 .tree__section-head .chev { margin-left: 6px; }
@@ -61,8 +71,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--tree-border);
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  border: 1px solid var(--tree-border);
+  border-radius: 8px;
 }
 .tree__search-icon { color: var(--text-4); }
 .tree__search-input {
@@ -104,8 +117,7 @@
 
 .tree__footer {
   margin-top: auto;
-  padding: 8px 14px;
-  border-top: 1px solid var(--tree-border);
+  padding: 10px 6px 12px;
 }
 .tree__toggle {
   display: flex;
@@ -117,25 +129,28 @@
 }
 .tree__toggle input { margin: 0; }
 
-.tree__items { padding: 2px 0 6px; }
+.tree__items { padding: 2px 6px 7px; }
 
 .tree__item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 6px 5px 22px;
+  padding: 7px 8px;
   font-size: 13px;
   cursor: pointer;
-  border-radius: 0;
-  transition: background 0.1s;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: background 0.1s, border-color 0.1s;
 }
-.tree__item:hover { background: var(--tree-active-bg); }
+.tree__item .icon { color: var(--text-3); }
+.tree__item:hover:not(.is-active) { background: var(--bg-soft); }
 .tree__item.is-active {
   background: var(--tree-active-bg);
-  border-left: 2px solid var(--accent);
-  padding-left: 20px;
+  border-color: var(--tree-active-bd);
+  font-weight: 500;
 }
+.tree__item.is-active .icon { color: var(--accent); }
 .tree__item.is-archived { opacity: 0.55; }
 .tree__item.is-archived .tree__item-label { text-decoration: line-through; }
 .tree__title-line { display: flex; align-items: center; gap: 4px; }

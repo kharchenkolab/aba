@@ -2,6 +2,10 @@ export type Role = 'user' | 'assistant'
 
 export interface TextBlock  { type: 'text';   text: string }
 export interface ImageBlock { type: 'image';  url: string; alt?: string }
+/** Transient status line (e.g. "Model is busy — retrying…"); not persisted. */
+export interface NoticeBlock { type: 'notice'; text: string }
+/** A failed turn — rendered with a retry affordance and expandable detail. */
+export interface ErrorBlock { type: 'error'; text: string; detail?: string }
 export interface ToolStartBlock {
   type: 'tool_start'
   name: string
@@ -13,7 +17,7 @@ export interface ToolResultBlock {
   result: Record<string, unknown>
 }
 
-export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock
+export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock
 
 export interface DisplayMessage {
   id: string
@@ -27,7 +31,8 @@ export interface DeltaEvent       { type: 'delta';       text: string }
 export interface ToolStartEvent   { type: 'tool_start';  name: string; input: Record<string, unknown> }
 export interface ToolResultEvent  { type: 'tool_result'; name: string; result: Record<string, unknown> }
 export interface DoneEvent        { type: 'done' }
-export interface ErrorEvent       { type: 'error';       text: string }
+export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
+export interface NoticeEvent      { type: 'notice';      text: string }
 
 export interface EntityRegisteredEvent {
   type: 'entity_registered'
@@ -41,6 +46,7 @@ export type SSEEvent =
   | EntityRegisteredEvent
   | DoneEvent
   | ErrorEvent
+  | NoticeEvent
 
 // ---------- Entities ----------
 

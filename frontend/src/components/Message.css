@@ -3,7 +3,28 @@
   gap: 8px;
   padding: 5px 14px;
   align-items: flex-start;
+  position: relative;
 }
+
+/* Per-message "show the steps Guide took" eye toggle. Quiet until the
+   message is hovered; stays visible once toggled on. */
+.msg__steps-toggle {
+  position: absolute;
+  top: 5px; right: 10px;
+  display: flex; align-items: center; gap: 3px;
+  padding: 2px 6px;
+  border-radius: 9999px;
+  color: var(--text-4);
+  background: var(--bg);
+  border: 1px solid var(--panel-bd);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.msg:hover .msg__steps-toggle,
+.msg__steps-toggle--on { opacity: 1; }
+.msg__steps-toggle:hover { color: var(--text-2); }
+.msg__steps-toggle--on { color: var(--guide); border-color: var(--guide); }
+.msg__steps-count { font-size: 10px; font-weight: 600; line-height: 1; }
 /* User turns get subtle shading so the eye can scan who said what without
    name labels or big padding. */
 .msg--user { background: var(--bg-soft); }
@@ -25,10 +46,8 @@
   background: var(--user-purple);
   color: #fff;
 }
-.msg__avatar--guide {
-  background: var(--guide);
-  color: #fff;
-}
+/* Guide avatar uses the shared AgentAvatar; nudge it to align with text. */
+.msg .agent-avatar { margin-top: 1px; }
 
 .msg__body { flex: 1; min-width: 0; }
 
@@ -79,6 +98,40 @@
 .msg-text th, .msg-text td { border: 1px solid var(--panel-bd); padding: 3px 8px; text-align: left; }
 .msg-text th { background: var(--bg-soft); font-weight: 600; }
 
+.msg-notice {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0; font-size: 12.5px; font-style: italic;
+  color: var(--warn-fg);
+}
+
+/* Failed turn: warning row with a small retry icon pushed to the right and
+   an expandable disclosure for the raw error detail. */
+.msg-error {
+  margin: 4px 0; padding: 7px 10px;
+  background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px;
+  font-size: 12.5px; color: #b91c1c;
+}
+.msg-error__row { display: flex; align-items: center; gap: 8px; }
+.msg-error__icon { flex-shrink: 0; }
+.msg-error__text { flex: 1; min-width: 0; }
+.msg-error__toggle {
+  flex-shrink: 0; padding: 1px 6px; border-radius: 5px;
+  border: none; background: transparent; color: #b91c1c;
+  font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+.msg-error__toggle:hover { background: rgba(185, 28, 28, 0.08); }
+.msg-error__retry {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 24px; height: 24px; border-radius: 6px;
+  border: 1px solid #ef4444; background: #fff; color: #b91c1c; cursor: pointer;
+}
+.msg-error__retry:hover { background: #ef4444; color: #fff; }
+.msg-error__detail {
+  margin: 8px 0 2px; padding: 8px 10px;
+  background: #fff; border: 1px solid #fca5a5; border-radius: 6px;
+  font-family: var(--mono); font-size: 11.5px; color: #7f1d1d;
+  white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+}
 .msg-image { margin: 6px 0; }
 .msg-image img {
   max-width: 100%;

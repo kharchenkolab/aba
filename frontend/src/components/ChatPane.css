@@ -39,6 +39,9 @@
   font-size: 12px;
   cursor: default;
 }
+.chat-tab__icon { display: inline-flex; align-items: center; }
+/* Colour stays on the icon; quiet tabs keep their glyph hue but dim slightly. */
+.chat-tab--quiet .chat-tab__icon { opacity: 0.7; }
 
 .trace-toggle {
   display: inline-flex;

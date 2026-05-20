@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Settings from './Settings'
 import Skills from './Skills'
 import Queues from './Queues'
+import { RailIcon } from './icons'
 import './Rail.css'
 
 interface Props {
@@ -44,7 +45,7 @@ export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
   return (
     <aside className="rail">
       <div className="rail__brand">
-        <div className="rail__brand-icon">VB</div>
+        <div className="rail__brand-icon"><RailIcon name="brand" size={34} /></div>
         <span>Vienna<br/>Biocenter</span>
       </div>
 
@@ -54,9 +55,7 @@ export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
           title="Home"
           onClick={() => onNavigate('home')}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
-          </svg>
+          <RailIcon name="home" />
           <span>Home</span>
         </button>
         <button
@@ -64,9 +63,7 @@ export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
           title="Workspace"
           onClick={() => onNavigate('workspace')}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M3 3h8v8H3zm0 10h8v8H3zm10-10h8v8h-8zm0 10h8v8h-8z"/>
-          </svg>
+          <RailIcon name="projects" />
           <span>Workspace</span>
         </button>
         <button
@@ -74,9 +71,7 @@ export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
           title="Skills — tools and pipelines Guide can drive"
           onClick={() => setSkillsOpen(true)}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2L4 6v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V6l-8-4zm-1 14l-4-4 1.4-1.4L11 13.2l4.6-4.6L17 10l-6 6z"/>
-          </svg>
+          <RailIcon name="skills" />
           <span>Skills</span>
         </button>
         <button
@@ -84,16 +79,12 @@ export default function Rail({ onEntitiesChanged, view, onNavigate }: Props) {
           title="Queues — background jobs"
           onClick={() => setQueuesOpen(true)}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/>
-          </svg>
+          <RailIcon name="queues" />
           <span>Queues</span>
           {activeJobs > 0 && <span className="rail__nav-badge">{activeJobs}</span>}
         </button>
         <a className="rail__nav-item" title="Alerts">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 002 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-          </svg>
+          <RailIcon name="alerts" />
           <span>Alerts</span>
         </a>
       </nav>

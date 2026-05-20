@@ -155,6 +155,10 @@ def _fake_factory(path: Path):
         else:
             turn = turns[i]
             cursor["i"] += 1
+        # Test hook: a {"raise": "..."} turn simulates an API failure (the
+        # turn is consumed, so a subsequent retry advances to the next turn).
+        if isinstance(turn, dict) and "raise" in turn:
+            raise RuntimeError(turn["raise"])
         return _FakeStream(turn)
 
     return open_stream

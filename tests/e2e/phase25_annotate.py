@@ -106,12 +106,12 @@ def drive(fport: int) -> int:
 
         # Focus the figure → AnnotatedFigure renders with a Mark button.
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".annot__tb-btn", timeout=3000)
-        page.locator(".annot__tb-btn").click()  # enter marking
-        page.wait_for_selector(".annot__wrap--marking", timeout=2000)
+        page.wait_for_selector(".focus-wrap .annot__tb-btn", timeout=3000)
+        page.locator(".focus-wrap .annot__tb-btn").click()  # enter marking
+        page.wait_for_selector(".focus-wrap .annot__wrap--marking", timeout=2000)
 
         # Drag a circle across the figure.
-        wrap = page.locator(".annot__wrap")
+        wrap = page.locator(".focus-wrap .annot__wrap")
         box = wrap.bounding_box()
         page.mouse.move(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.4)
         page.mouse.down()
@@ -132,10 +132,37 @@ def drive(fport: int) -> int:
             "() => !document.querySelector('.composer__input').disabled", timeout=15000)
         assert page.locator(".annot-attached").count() == 1, "annotation should stay attached"
         print("✓ annotation sent and stays attached for follow-ups (sticky)")
-        # Clear it explicitly via the chip ×.
+        # Clear it explicitly via the chip × — this also erases the drawn
+        # mark from the figure.
         page.locator(".annot-attached button").click()
         page.wait_for_selector(".annot-attached", state="detached", timeout=3000)
-        print("✓ chip × clears the annotation")
+        page.wait_for_selector(".focus-wrap .annot__svg", state="detached", timeout=3000)
+        print("✓ chip × clears the annotation and erases the figure mark")
+
+        # --- In-chat figure highlighting -----------------------------------
+        # The same control rides on figures rendered in the chat. Its gutter
+        # badge is quiet until the figure is hovered.
+        chat_fig = page.locator(".chat-scroll .msg-image .annot__row").first
+        chat_fig.scroll_into_view_if_needed()
+        chat_fig.hover()
+        badge = chat_fig.locator(".annot__tb-btn").first
+        badge.click()                                   # enter marking
+        chat_wrap = chat_fig.locator(".annot__wrap")
+        page.wait_for_selector(".chat-scroll .annot__wrap--marking", timeout=2000)
+        cb = chat_wrap.bounding_box()
+        page.mouse.move(cb["x"] + cb["width"] * 0.4, cb["y"] + cb["height"] * 0.4)
+        page.mouse.down()
+        page.mouse.move(cb["x"] + cb["width"] * 0.7, cb["y"] + cb["height"] * 0.6, steps=8)
+        page.mouse.up()
+        page.wait_for_selector(".annot-attached", timeout=3000)
+        page.screenshot(path=str(SHOT_DIR / "03_chat_highlight.png"), full_page=True)
+        print("✓ in-chat figure highlight auto-attaches")
+
+        # Clearing the chip erases the chat figure's mark too.
+        page.locator(".annot-attached button").click()
+        page.wait_for_selector(".annot-attached", state="detached", timeout=3000)
+        page.wait_for_selector(".chat-scroll .annot__svg", state="detached", timeout=3000)
+        print("✓ chip × erases the in-chat mark")
         br.close()
     print("\nscreenshots:")
     for s in sorted(SHOT_DIR.glob("*.png")): print(f"  {s.relative_to(ROOT)}")
