@@ -65,6 +65,23 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_parent ON entities(parent_entity_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_entity ON messages(entity_id)")
 
+        # Entity edges — typed relationships between entities. W3C PROV-O
+        # vocabulary (wasGeneratedBy, wasDerivedFrom, used, wasAssociatedWith)
+        # plus ABA extensions (supports, weakens, variantOf, partOf).
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS entity_edges (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id   TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                rel_type    TEXT NOT NULL,
+                metadata    TEXT,
+                created_at  TEXT NOT NULL,
+                UNIQUE(source_id, target_id, rel_type)
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON entity_edges(source_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON entity_edges(target_id)")
+
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
         if not row:
@@ -146,6 +163,61 @@ def list_entities(*, exclude_workspace: bool = False) -> list[dict]:
     q += " ORDER BY created_at"
     with _conn() as c:
         return [_row_to_entity(r) for r in c.execute(q).fetchall()]
+
+
+# ---------- Edges ----------
+
+def add_edge(source_id: str, target_id: str, rel_type: str,
+             metadata: Optional[dict] = None) -> None:
+    """Insert an edge; idempotent via UNIQUE(source, target, rel)."""
+    now = _utcnow()
+    with _conn() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO entity_edges "
+            "(source_id, target_id, rel_type, metadata, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (source_id, target_id, rel_type,
+             json.dumps(metadata) if metadata else None, now),
+        )
+        c.commit()
+
+
+def edges_from(source_id: str) -> list[dict]:
+    """Outgoing edges (this entity points to others)."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM entity_edges WHERE source_id = ? ORDER BY id",
+            (source_id,),
+        ).fetchall()
+    return [
+        {
+            "source_id": r["source_id"],
+            "target_id": r["target_id"],
+            "rel_type": r["rel_type"],
+            "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def edges_to(target_id: str) -> list[dict]:
+    """Incoming edges (others point at this entity)."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM entity_edges WHERE target_id = ? ORDER BY id",
+            (target_id,),
+        ).fetchall()
+    return [
+        {
+            "source_id": r["source_id"],
+            "target_id": r["target_id"],
+            "rel_type": r["rel_type"],
+            "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
 # ---------- Messages (entity-scoped) ----------

@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
+import PromoteDialog from './PromoteDialog'
 import './FocusCanvas.css'
 
 interface Props {
   entity: Entity | null
+  entities: Entity[]
+  onChange: () => void
+  onFocus: (id: string) => void
 }
 
 interface TablePreview {
@@ -18,8 +22,14 @@ interface NonePreview { kind: 'none' }
 interface ErrorPreview { kind: 'error'; error: string }
 type Preview = TablePreview | NonePreview | ErrorPreview
 
-export default function FocusCanvas({ entity }: Props) {
+type PromoteMode =
+  | { kind: 'figure-to-result' }
+  | { kind: 'result-to-finding' }
+  | { kind: 'finding-to-claim' }
+
+export default function FocusCanvas({ entity, entities, onChange, onFocus }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [promote, setPromote] = useState<PromoteMode | null>(null)
 
   useEffect(() => {
     setPreview(null)
@@ -37,11 +47,55 @@ export default function FocusCanvas({ entity }: Props) {
       <div className="focus focus--empty">
         <p className="focus__empty-title">No entity focused</p>
         <p className="focus__empty-sub">
-          Click a figure, table, or dataset in the tree to scope the conversation
-          to it. Or just talk to Guide here about the project as a whole.
+          Click a figure, dataset, result, or finding in the tree to scope the
+          conversation. Or just talk to Guide here about the project as a whole.
         </p>
       </div>
     )
+  }
+
+  async function doFigurePromote(text: string) {
+    const r = await fetch(
+      `/api/entities/${encodeURIComponent(entity!.id)}/promote-to-result`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interpretation: text }),
+      },
+    )
+    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
+    const created: Entity = await r.json()
+    setPromote(null)
+    onChange()
+    onFocus(created.id)
+  }
+
+  async function doResultPromote(text: string) {
+    // Phase-3 simple form: a finding from this single result. Multi-result
+    // findings come from the finding's own canvas after creation (P3.4).
+    const r = await fetch('/api/findings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result_ids: [entity!.id], text }),
+    })
+    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
+    const created: Entity = await r.json()
+    setPromote(null)
+    onChange()
+    onFocus(created.id)
+  }
+
+  async function doFindingPromote(text: string) {
+    const r = await fetch('/api/claims', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ finding_ids: [entity!.id], text }),
+    })
+    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
+    const created: Entity = await r.json()
+    setPromote(null)
+    onChange()
+    onFocus(created.id)
   }
 
   return (
@@ -49,8 +103,9 @@ export default function FocusCanvas({ entity }: Props) {
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
+        {renderPromoteButton(entity, setPromote)}
       </div>
-      <div className="focus__body">{renderBody(entity, preview)}</div>
+      <div className="focus__body">{renderBody(entity, preview, entities, onFocus)}</div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
         <span>•</span>
@@ -62,11 +117,82 @@ export default function FocusCanvas({ entity }: Props) {
           </>
         )}
       </div>
+
+      {promote?.kind === 'figure-to-result' && (
+        <PromoteDialog
+          title={`Promote "${entity.title}" to a result`}
+          prompt="What does this figure tell you? One or two lines, in your own voice."
+          placeholder="Sample S4 has mt_fraction 0.13, ~3× higher than other samples — likely doublet contamination."
+          onCancel={() => setPromote(null)}
+          onSubmit={doFigurePromote}
+        />
+      )}
+      {promote?.kind === 'result-to-finding' && (
+        <PromoteDialog
+          title={`Lift "${entity.title}" into a finding`}
+          prompt="A finding is the synthesis across one or more results. State it crisply."
+          placeholder="Sample-level QC consistently flags donor S4 across mt_fraction and viability metrics."
+          onCancel={() => setPromote(null)}
+          onSubmit={doResultPromote}
+        />
+      )}
+      {promote?.kind === 'finding-to-claim' && (
+        <PromoteDialog
+          title={`Lift "${entity.title}" into a claim`}
+          prompt="A claim is publishable — keep it sharp. It can be challenged later."
+          placeholder="Sample S4 must be excluded from downstream analysis due to consistent QC failures."
+          onCancel={() => setPromote(null)}
+          onSubmit={doFindingPromote}
+        />
+      )}
     </div>
   )
 }
 
-function renderBody(e: Entity, preview: Preview | null) {
+function renderPromoteButton(
+  entity: Entity,
+  setPromote: (m: PromoteMode | null) => void,
+) {
+  if (entity.type === 'figure') {
+    return (
+      <button
+        className="focus__promote"
+        onClick={() => setPromote({ kind: 'figure-to-result' })}
+        title="Capture an interpretation of this figure as a result"
+      >
+        ↑ Promote to result
+      </button>
+    )
+  }
+  if (entity.type === 'result') {
+    return (
+      <button
+        className="focus__promote"
+        onClick={() => setPromote({ kind: 'result-to-finding' })}
+      >
+        ↑ Lift to finding
+      </button>
+    )
+  }
+  if (entity.type === 'finding') {
+    return (
+      <button
+        className="focus__promote"
+        onClick={() => setPromote({ kind: 'finding-to-claim' })}
+      >
+        ↑ Lift to claim
+      </button>
+    )
+  }
+  return null
+}
+
+function renderBody(
+  e: Entity,
+  preview: Preview | null,
+  entities: Entity[],
+  onFocus: (id: string) => void,
+) {
   switch (e.type) {
     case 'figure':
       return e.artifact_path ? (
@@ -132,40 +258,93 @@ function renderBody(e: Entity, preview: Preview | null) {
             A run that produced one or more artifacts.
             {e.producing_params && ` Params: ${JSON.stringify(e.producing_params)}.`}
           </p>
-          {e.producing_code && (
-            <pre className="focus__code">{e.producing_code}</pre>
-          )}
+          {e.producing_code && <pre className="focus__code">{e.producing_code}</pre>}
         </div>
       )
 
-    case 'result':
-    case 'finding':
-    case 'claim':
-    case 'narrative':
+    case 'result': {
+      const interpretation = (e.metadata?.interpretation as string) ?? ''
+      const evidence = (e.metadata?.evidence_figure as string) ?? null
+      const evidenceEntity = evidence ? entities.find(x => x.id === evidence) : null
+      return (
+        <div className="focus__abstract">
+          <p className="focus__interpretation">{interpretation}</p>
+          {evidenceEntity && (
+            <div className="focus__chain">
+              <div className="focus__chain-head">EVIDENCE</div>
+              <EntityRow ent={evidenceEntity} onClick={() => onFocus(evidenceEntity.id)} />
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    case 'finding': {
+      const text = (e.metadata?.text as string) ?? ''
+      const supportingIds = (e.metadata?.supporting_results as string[]) ?? []
+      const supportingEnts = supportingIds
+        .map(id => entities.find(x => x.id === id))
+        .filter((x): x is Entity => !!x)
+      return (
+        <div className="focus__abstract">
+          <p className="focus__interpretation">{text}</p>
+          {supportingEnts.length > 0 && (
+            <div className="focus__chain">
+              <div className="focus__chain-head">SUPPORTING RESULTS</div>
+              {supportingEnts.map(s => (
+                <EntityRow key={s.id} ent={s} onClick={() => onFocus(s.id)} />
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    case 'claim': {
+      const text = (e.metadata?.text as string) ?? ''
+      const findIds = (e.metadata?.supporting_findings as string[]) ?? []
+      const findEnts = findIds
+        .map(id => entities.find(x => x.id === id))
+        .filter((x): x is Entity => !!x)
+      return (
+        <div className="focus__abstract">
+          <p className="focus__interpretation">{text}</p>
+          {findEnts.length > 0 && (
+            <div className="focus__chain">
+              <div className="focus__chain-head">SUPPORTING FINDINGS</div>
+              {findEnts.map(f => (
+                <EntityRow key={f.id} ent={f} onClick={() => onFocus(f.id)} />
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
     case 'table':
+    case 'narrative':
     default:
       return (
-        <p className="focus__placeholder">
-          {entityTypeBlurb(e.type)}
-        </p>
+        <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
       )
   }
 }
 
+function EntityRow({ ent, onClick }: { ent: Entity; onClick: () => void }) {
+  return (
+    <button className="focus__chain-row" onClick={onClick} type="button">
+      <span className={`focus__type focus__type--${ent.type}`}>{ent.type}</span>
+      <span className="focus__chain-title">{ent.title}</span>
+      <span className="focus__chain-arrow">↗</span>
+    </button>
+  )
+}
+
 function entityTypeBlurb(t: string): string {
   switch (t) {
-    case 'table':
-      return 'Tabular artifact view coming in a later phase.'
-    case 'result':
-      return 'A figure interpreted with a one-line claim. (Promote-to-result lands in Phase 3.)'
-    case 'finding':
-      return 'A synthesis of supporting results. (Phase 3.)'
-    case 'claim':
-      return 'A publishable assertion backed by findings. (Phase 3.)'
-    case 'narrative':
-      return 'A manuscript section composed from claims. (Phase 3.)'
-    default:
-      return 'Detail view not yet implemented for this entity type.'
+    case 'table':     return 'Tabular artifact view coming in a later phase.'
+    case 'narrative': return 'A manuscript section composed from claims.'
+    default:          return 'Detail view not yet implemented for this entity type.'
   }
 }
 

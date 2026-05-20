@@ -15,9 +15,16 @@ from db import (
     list_entities,
     get_entity,
     create_entity,
+    edges_from,
+    edges_to,
     WORKSPACE_ID,
 )
 from guide import stream_response
+from promote import (
+    promote_figure_to_result,
+    promote_results_to_finding,
+    promote_findings_to_claim,
+)
 
 
 app = FastAPI()
@@ -134,6 +141,62 @@ async def chat(req: ChatRequest):
 def messages_list():
     """The project's running conversation (workspace thread)."""
     return get_messages(WORKSPACE_ID)
+
+
+# ---------- Promotion / result chain ----------
+
+class PromoteFigureRequest(BaseModel):
+    interpretation: str
+    title: str | None = None
+
+
+class PromoteResultsRequest(BaseModel):
+    result_ids: list[str]
+    text: str
+    title: str | None = None
+
+
+class PromoteFindingsRequest(BaseModel):
+    finding_ids: list[str]
+    text: str
+    title: str | None = None
+
+
+@app.post("/api/entities/{figure_id}/promote-to-result")
+def promote_to_result(figure_id: str, req: PromoteFigureRequest):
+    try:
+        rid = promote_figure_to_result(figure_id, req.interpretation, req.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return get_entity(rid)
+
+
+@app.post("/api/findings")
+def create_finding(req: PromoteResultsRequest):
+    try:
+        fid = promote_results_to_finding(req.result_ids, req.text, req.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return get_entity(fid)
+
+
+@app.post("/api/claims")
+def create_claim(req: PromoteFindingsRequest):
+    try:
+        cid = promote_findings_to_claim(req.finding_ids, req.text, req.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return get_entity(cid)
+
+
+@app.get("/api/entities/{entity_id}/edges")
+def entities_edges(entity_id: str):
+    if not get_entity(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return {
+        "outgoing": edges_from(entity_id),
+        "incoming": edges_to(entity_id),
+    }
 
 
 # ---------- Upload ----------

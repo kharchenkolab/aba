@@ -25,9 +25,14 @@ const SECTIONS: { label: string; types: EntityType[]; iconPath: string }[] = [
     iconPath: 'M3 4h14v12H3zM5 7h10v2H5zM5 11h6v2H5z',
   },
   {
-    label: 'Findings',
-    types: ['result', 'finding'],
+    label: 'Results',
+    types: ['result'],
     iconPath: 'M10 3a7 7 0 100 14 7 7 0 000-14zm-1 11l-3-3 1.4-1.4L9 11.2l4.6-4.6L15 8l-6 6z',
+  },
+  {
+    label: 'Findings',
+    types: ['finding'],
+    iconPath: 'M10 2L5 7v6l5 5 5-5V7l-5-5zm0 2.4L13.6 8H6.4L10 4.4z',
   },
   {
     label: 'Manuscript',
