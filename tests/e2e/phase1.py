@@ -185,6 +185,8 @@ def drive_browser(frontend_port: int) -> int:
         page = context.new_page()
 
         page.goto(url, wait_until="networkidle")
+        page.locator('button[title="Workspace"]').click()
+        page.wait_for_timeout(150)
         page.screenshot(path=str(SHOT_DIR / "01_initial.png"), full_page=True)
         print("✓ page loaded — workspace focused, tree shows the uploaded dataset")
 

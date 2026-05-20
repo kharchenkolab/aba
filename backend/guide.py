@@ -14,6 +14,7 @@ from context import focus_preamble_with_fields
 from registry import register_artifacts_from_tool_result
 from adaptive import new_session_id, maybe_reflect
 from jobs import submit_python_job
+from summarize import effective_history
 
 open_stream = make_open_stream()
 
@@ -79,7 +80,8 @@ async def stream_response(
 
     try:
         while True:
-            with open_stream(history, TOOL_SCHEMAS, system) as stream:
+            llm_history = effective_history(WORKSPACE_ID, history)
+            with open_stream(llm_history, TOOL_SCHEMAS, system) as stream:
                 for event in stream:
                     if event.type == "content_block_delta":
                         delta = event.delta
