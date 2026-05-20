@@ -1,4 +1,3 @@
-import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { DisplayMessage, Block } from '../types'
 import './Message.css'

@@ -7,6 +7,12 @@
 }
 .app > * { min-height: 0; min-width: 0; overflow: hidden; }
 
+/* Home view: rail + a single full-width Home panel. */
+.app--home {
+  grid-template-columns: var(--w-rail) 1fr;
+}
+.app--home > .home { overflow-y: auto; }
+
 .main {
   display: flex;
   flex-direction: column;
