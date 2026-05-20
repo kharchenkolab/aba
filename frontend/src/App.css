@@ -19,7 +19,7 @@
   height: 100vh;
   overflow: hidden;
 }
-.main > .focus { flex: 0 0 auto; max-height: 50vh; overflow: auto; }
+.focus-wrap { flex: 0 0 auto; overflow: auto; min-height: 0; }
 .main > .chat-pane { flex: 1 1 0; min-height: 0; }
 
 .hero {

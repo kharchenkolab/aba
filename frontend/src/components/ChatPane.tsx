@@ -89,6 +89,7 @@ export default function ChatPane({
                 message={m}
                 isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
                 hideToolBlocks={traceVisible}
+                collapseTools={i !== all.length - 1}
               />
             ))}
           </div>
