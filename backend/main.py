@@ -38,6 +38,7 @@ from db import (
     update_context_suggestion_status,
 )
 from adaptive import append_to_policy
+from tools_registry import registry as tools_registry
 
 
 app = FastAPI()
@@ -476,6 +477,12 @@ def history_legacy():
 def history_clear_legacy():
     clear_messages(WORKSPACE_ID)
     return {"ok": True}
+
+
+@app.get("/api/tools")
+def tools_catalog():
+    """Catalog of tools and skills for the Skills screen (Phase 12)."""
+    return tools_registry()
 
 
 @app.get("/api/health")

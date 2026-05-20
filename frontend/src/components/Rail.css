@@ -65,6 +65,11 @@
 }
 .rail__nav-item:hover { background: rgba(255,255,255,0.08); color: var(--rail-fg); }
 .rail__nav-item--active { background: rgba(255,255,255,0.12); color: var(--rail-fg); }
+.rail__nav-item--btn {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+}
 
 .rail__user {
   display: flex;
