@@ -45,15 +45,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
   }, [entity?.id, entity?.type])
 
   if (!entity || entity.type === 'workspace') {
-    return (
-      <div className="focus focus--empty">
-        <p className="focus__empty-title">No entity focused</p>
-        <p className="focus__empty-sub">
-          Click a figure, dataset, result, or finding in the tree to scope the
-          conversation. Or just talk to Guide here about the project as a whole.
-        </p>
-      </div>
-    )
+    return <WorkspaceCanvas entities={entities} onChange={onChange} onFocus={onFocus} />
   }
 
   async function doFigurePromote(text: string) {
@@ -195,6 +187,97 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
           onSubmit={doScenario}
         />
       )}
+    </div>
+  )
+}
+
+function WorkspaceCanvas({
+  entities, onChange, onFocus,
+}: {
+  entities: Entity[]
+  onChange: () => void
+  onFocus: (id: string) => void
+}) {
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const datasetCount = entities.filter(e => e.type === 'dataset').length
+
+  async function uploadFile(f: File) {
+    setBusy(true); setErr(null)
+    try {
+      const form = new FormData()
+      form.append('file', f)
+      const r = await fetch('/api/upload', { method: 'POST', body: form })
+      if (!r.ok) throw new Error(await r.text())
+      const created: Entity = await r.json()
+      onChange(); onFocus(created.id)
+    } catch (e) { setErr(String(e)) }
+    finally { setBusy(false) }
+  }
+
+  async function submitUrl() {
+    if (!url.trim() || busy) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/api/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      const created: Entity = await r.json()
+      onChange(); onFocus(created.id); setUrl('')
+    } catch (e) { setErr(String(e)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="focus focus--workspace">
+      <h2 className="focus__title">Workspace</h2>
+      <p className="focus__empty-sub">
+        Drop a CSV or paste a URL to add data. Once you have something to work
+        with, you can talk to Guide below.
+      </p>
+      <div className="workspace__add">
+        <label className="workspace__file-btn" htmlFor="ws-upload">
+          Upload file…
+          <input
+            id="ws-upload"
+            type="file"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const f = e.target.files?.[0]
+              if (f) uploadFile(f)
+            }}
+            disabled={busy}
+          />
+        </label>
+        <span className="workspace__or">or</span>
+        <input
+          className="workspace__url"
+          type="url"
+          placeholder="paste a URL…"
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submitUrl() }}
+          disabled={busy}
+        />
+        <button
+          className="workspace__url-btn"
+          onClick={submitUrl}
+          disabled={busy || !url.trim()}
+        >
+          {busy ? 'Downloading…' : 'Add'}
+        </button>
+      </div>
+      {err && <div className="workspace__err">{err}</div>}
+      <div className="workspace__hint">
+        {datasetCount === 0
+          ? 'no data uploaded yet.'
+          : `${datasetCount} dataset${datasetCount === 1 ? '' : 's'} in this project.`}
+      </div>
     </div>
   )
 }

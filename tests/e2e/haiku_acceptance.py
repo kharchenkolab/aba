@@ -230,6 +230,25 @@ def drive_live(frontend_port: int) -> int:
         page.wait_for_selector(".trace-card", timeout=3000)
         page.screenshot(path=str(SHOT_DIR / "04_trace_on.png"), full_page=True)
 
+        # Phase 4 acceptance: scenario via LLM-rewrite. The "What if…" button
+        # is on figures only; the current focus is the figure we made earlier.
+        # Toggle trace off so the canvas is the main view, then trigger
+        # "What if…".
+        page.locator(".trace-toggle").click()
+        page.wait_for_selector(".trace", state="detached", timeout=2000)
+        page.locator("button:has-text('What if')").click()
+        page.wait_for_selector(".promote-dialog", timeout=2000)
+        page.locator(".promote-dialog__textarea").fill(
+            "cap mt_fraction at 0.10"
+        )
+        page.locator(".promote-dialog__btn--primary").click()
+        # Haiku call + figure rendering can take 10-30s.
+        page.wait_for_selector(".focus__scenario-badge", timeout=60000)
+        page.screenshot(path=str(SHOT_DIR / "05_scenario_focused.png"), full_page=True)
+        page.locator(".focus__compare").click()
+        page.wait_for_selector(".focus__compare-grid", timeout=2000)
+        page.screenshot(path=str(SHOT_DIR / "06_scenario_compare.png"), full_page=True)
+
         browser.close()
 
     print("\nscreenshots:")
