@@ -14,7 +14,10 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from db import create_entity, get_entity, add_edge, WORKSPACE_ID
+from db import (
+    create_entity, get_entity, add_edge, update_entity,
+    find_active_figure_by_title, WORKSPACE_ID,
+)
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
@@ -80,6 +83,12 @@ def register_artifacts_from_tool_result(
             url = p.get("url")
             original_name = p.get("original_name") or "figure.png"
             title = _title_from_code(producing_code) or original_name
+
+            # Version history: if an active figure with this exact title
+            # already exists, this is a revision — supersede the old one and
+            # link a wasRevisionOf edge.
+            prior = find_active_figure_by_title(title)
+
             eid = create_entity(
                 entity_type="figure",
                 title=title,
@@ -88,6 +97,9 @@ def register_artifacts_from_tool_result(
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name},
             )
+            if prior and prior["id"] != eid:
+                update_entity(prior["id"], status="superseded")
+                add_edge(eid, prior["id"], "wasRevisionOf")
             # PROV-O edges: figure wasGeneratedBy the analysis;
             # the analysis used the focused entity (if any).
             add_edge(eid, analysis_id, "wasGeneratedBy")

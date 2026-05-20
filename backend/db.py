@@ -559,6 +559,55 @@ def add_edge(source_id: str, target_id: str, rel_type: str,
         c.commit()
 
 
+def find_active_figure_by_title(title: str) -> Optional[dict]:
+    """Most-recent active figure with this exact title (for version chains)."""
+    with _conn() as c:
+        r = c.execute(
+            "SELECT * FROM entities WHERE type='figure' AND title=? "
+            "AND status='active' ORDER BY created_at DESC LIMIT 1",
+            (title,),
+        ).fetchone()
+        return _row_to_entity(r) if r else None
+
+
+def figure_history(entity_id: str) -> list[dict]:
+    """
+    Return the version chain for a figure, newest first. Follows
+    wasRevisionOf edges in both directions from the given entity.
+    """
+    # Walk back (older) and forward (newer) along wasRevisionOf.
+    chain_ids: list[str] = [entity_id]
+    # Older: this --wasRevisionOf--> older
+    cur = entity_id
+    while True:
+        with _conn() as c:
+            r = c.execute(
+                "SELECT target_id FROM entity_edges WHERE source_id=? AND rel_type='wasRevisionOf'",
+                (cur,),
+            ).fetchone()
+        if not r:
+            break
+        cur = r["target_id"]
+        if cur in chain_ids:
+            break
+        chain_ids.append(cur)
+    # Newer: newer --wasRevisionOf--> this
+    cur = entity_id
+    while True:
+        with _conn() as c:
+            r = c.execute(
+                "SELECT source_id FROM entity_edges WHERE target_id=? AND rel_type='wasRevisionOf'",
+                (cur,),
+            ).fetchone()
+        if not r:
+            break
+        cur = r["source_id"]
+        if cur in chain_ids:
+            break
+        chain_ids.insert(0, cur)
+    return [e for e in (get_entity(i) for i in chain_ids) if e]
+
+
 def remove_edge(source_id: str, target_id: str, rel_type: str) -> None:
     with _conn() as c:
         c.execute(

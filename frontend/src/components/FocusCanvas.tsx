@@ -32,6 +32,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   useEffect(() => {
     setPreview(null)
@@ -132,8 +133,22 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
             ⇆ Compare
           </button>
         )}
+        {entity.type === 'figure' && (
+          <button
+            className={`focus__clock ${historyOpen ? 'focus__clock--on' : ''}`}
+            onClick={() => setHistoryOpen(v => !v)}
+            title="Version history"
+          >
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm0 14a6 6 0 110-12 6 6 0 010 12zm.5-9H9v4l3.2 1.9.8-1.3-2.5-1.5V7z"/>
+            </svg>
+          </button>
+        )}
         {renderActionButton(entity, setPromote)}
       </div>
+      {historyOpen && entity.type === 'figure' && (
+        <HistoryDrawer entity={entity} onFocus={onFocus} onClose={() => setHistoryOpen(false)} />
+      )}
       <div className="focus__body">
         {compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
@@ -483,6 +498,58 @@ function renderBody(
         <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
       )
   }
+}
+
+function HistoryDrawer({
+  entity, onFocus, onClose,
+}: {
+  entity: Entity; onFocus: (id: string) => void; onClose: () => void
+}) {
+  const [versions, setVersions] = useState<Entity[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/entities/${encodeURIComponent(entity.id)}/history`)
+      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+      .then((v: Entity[]) => { if (!cancelled) setVersions(v) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [entity.id])
+
+  if (versions.length <= 1) {
+    return (
+      <div className="history">
+        <div className="history__head">Version history <button className="history__close" onClick={onClose}>×</button></div>
+        <div className="history__empty">This is the only version so far.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="history">
+      <div className="history__head">
+        {versions.length} versions
+        <button className="history__close" onClick={onClose}>×</button>
+      </div>
+      <div className="history__strip">
+        {versions.map((v, i) => (
+          <button
+            key={v.id}
+            className={`history__thumb ${v.id === entity.id ? 'history__thumb--current' : ''}`}
+            onClick={() => onFocus(v.id)}
+            title={new Date(v.created_at).toLocaleString()}
+          >
+            {v.artifact_path && <img src={v.artifact_path} alt={v.title} />}
+            <div className="history__thumb-label">
+              {i === 0 ? 'current' : `v${versions.length - i}`}
+              <span className="history__thumb-date">
+                {new Date(v.created_at).toLocaleDateString()}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }

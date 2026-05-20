@@ -141,6 +141,9 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
   const q = query.trim().toLowerCase()
   const filterFn = (e: Entity) => {
     if (e.id === 'workspace') return false
+    // Superseded figures are version history — only the latest shows in the
+    // tree; older versions live in the figure's history drawer.
+    if (e.status === 'superseded') return false
     if (!showArchived && e.status === 'archived') return false
     if (q && !e.title.toLowerCase().includes(q)) return false
     return true

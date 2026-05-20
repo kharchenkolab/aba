@@ -1,0 +1,5 @@
+# Two messages, each producing a figure with the SAME title → version chain.
+{"blocks": [{"type": "text", "text": "Plotting the distribution."}, {"type": "tool_use", "name": "run_python", "input": {"code": "# Per-cell mitochondrial fraction\nimport pandas as pd, matplotlib.pyplot as plt\ndf = pd.read_csv(f'{DATA_DIR}/cells.csv')\nfig,ax=plt.subplots(figsize=(5,3.2)); ax.hist(df['mt_fraction'],bins=15,color='#5b21b6')\nax.set_title('Per-cell mitochondrial fraction'); fig.savefig('v1.png',dpi=110); print('v1')"}}]}
+{"blocks": [{"type": "text", "text": "First version done."}]}
+{"blocks": [{"type": "text", "text": "Re-plotting with finer bins."}, {"type": "tool_use", "name": "run_python", "input": {"code": "# Per-cell mitochondrial fraction\nimport pandas as pd, matplotlib.pyplot as plt\ndf = pd.read_csv(f'{DATA_DIR}/cells.csv')\nfig,ax=plt.subplots(figsize=(5,3.2)); ax.hist(df['mt_fraction'],bins=40,color='#059669')\nax.set_title('Per-cell mitochondrial fraction'); fig.savefig('v2.png',dpi=110); print('v2')"}}]}
+{"blocks": [{"type": "text", "text": "Updated version with finer bins; the older one is in the version history."}]}
