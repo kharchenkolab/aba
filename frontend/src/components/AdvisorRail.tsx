@@ -11,10 +11,10 @@ interface Advisor {
 
 const ADVISORS: Advisor[] = [
   { name: 'Guide',         key: 'guide',         color: 'var(--guide)',    status: 'online', active: true },
-  { name: 'Methodologist', key: 'methodologist', color: 'var(--metho)',    status: 'quiet' },
-  { name: 'Skeptic',       key: 'skeptic',       color: 'var(--skeptic)',  status: 'on demand' },
-  { name: 'Explorer',      key: 'explorer',      color: 'var(--explorer)', status: 'quiet' },
-  { name: 'Stylist',       key: 'stylist',       color: 'var(--stylist)',  status: 'quiet' },
+  { name: 'Methodologist', key: 'methodologist', color: 'var(--metho)',    status: 'on run' },
+  { name: 'Skeptic',       key: 'skeptic',       color: 'var(--skeptic)',  status: 'on promote' },
+  { name: 'Explorer',      key: 'explorer',      color: 'var(--explorer)', status: 'on data' },
+  { name: 'Stylist',       key: 'stylist',       color: 'var(--stylist)',  status: 'on write' },
 ]
 
 interface AdvisorNote {
@@ -35,9 +35,10 @@ function Avatar({ color, name }: { color: string; name: string }) {
 
 interface Props {
   focusedId: string
+  focusedType?: string
 }
 
-export default function AdvisorRail({ focusedId }: Props) {
+export default function AdvisorRail({ focusedId, focusedType }: Props) {
   const [notes, setNotes] = useState<AdvisorNote[]>([])
 
   useEffect(() => {
@@ -55,11 +56,27 @@ export default function AdvisorRail({ focusedId }: Props) {
 
     setNotes([])
     load()
-    // Notes can land asynchronously (Skeptic fires on promote, completes
-    // a few seconds later). Lightly poll while the entity is focused.
+
+    // On focusing a dataset (or narrative), request its on-focus advisor
+    // after a short idle delay — once per focus. The backend no-ops if the
+    // advisor already spoke about this entity.
+    let adviseTimer: ReturnType<typeof setTimeout> | undefined
+    if (focusedType === 'dataset' || focusedType === 'narrative') {
+      adviseTimer = setTimeout(() => {
+        fetch(`/api/entities/${encodeURIComponent(focusedId)}/advise`, { method: 'POST' })
+          .then(() => { if (!stop) load() })
+          .catch(() => {})
+      }, 4000)
+    }
+
+    // Notes can land asynchronously (advisors complete a few seconds later).
     const tick = setInterval(() => { if (!stop) load() }, 2500)
-    return () => { cancelled = true; stop = true; clearInterval(tick) }
-  }, [focusedId])
+    return () => {
+      cancelled = true; stop = true
+      clearInterval(tick)
+      if (adviseTimer) clearTimeout(adviseTimer)
+    }
+  }, [focusedId, focusedType])
 
   const notesByAdvisor: Record<string, AdvisorNote[]> = {}
   for (const n of notes) (notesByAdvisor[n.advisor] ??= []).push(n)

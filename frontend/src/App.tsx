@@ -39,7 +39,7 @@ export default function App() {
           focusedEntity={focused}
         />
       </div>
-      <AdvisorRail focusedId={focusedId} />
+      <AdvisorRail focusedId={focusedId} focusedType={focused?.type} />
     </div>
   )
 }

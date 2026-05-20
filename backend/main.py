@@ -33,7 +33,7 @@ from promote import (
     remove_result_from_finding,
 )
 from scenarios import create_scenario_variant
-from advisors import skeptic_review
+from advisors import skeptic_review, explorer_suggest, stylist_review
 from db import (
     list_advisor_notes,
     list_context_suggestions,
@@ -292,6 +292,24 @@ def entities_advisor_notes(entity_id: str):
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
     return list_advisor_notes(entity_id)
+
+
+@app.post("/api/entities/{entity_id}/advise")
+async def entities_advise(entity_id: str):
+    """
+    Fire the appropriate on-focus advisor for an entity (Explorer for
+    datasets, Stylist for narratives). Idempotent — advisors that have
+    already spoken about the entity won't re-fire. Non-blocking.
+    """
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    loop = asyncio.get_event_loop()
+    if e["type"] == "dataset":
+        loop.run_in_executor(None, explorer_suggest, entity_id)
+    elif e["type"] == "narrative":
+        loop.run_in_executor(None, stylist_review, entity_id)
+    return {"ok": True}
 
 
 # ---------- Adaptive context (§3.6) ----------
