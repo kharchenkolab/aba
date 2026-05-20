@@ -194,10 +194,8 @@ def drive_browser(frontend_port: int) -> int:
         ds_row = page.locator(f'[data-entity-id="{dataset_id}"]')
         ds_row.wait_for(state="visible", timeout=5000)
         ds_row.click()
-        page.wait_for_function(
-            "() => document.querySelector('.focus-chip')?.classList.contains('focus-chip--active')",
-            timeout=2000,
-        )
+        # Canvas title shows the focused entity's type chip when scoped.
+        page.wait_for_selector(".canvas-title__type", timeout=3000)
         # Wait for the CSV preview to populate so the screenshot is meaningful.
         page.wait_for_selector(".focus__preview-table", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "02_dataset_focused.png"), full_page=True)
@@ -248,7 +246,7 @@ def drive_browser(frontend_port: int) -> int:
         # only focus chip + canvas change.
         ds_row.click()
         page.wait_for_function(
-            "() => document.querySelector('.focus-chip').textContent.includes('dataset')",
+            "() => document.querySelector('.canvas-title__type')?.textContent === 'dataset'",
             timeout=2000,
         )
         page.screenshot(path=str(SHOT_DIR / "06_switched_back.png"), full_page=True)

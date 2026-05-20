@@ -444,6 +444,13 @@
 .prov__row:hover { background: var(--tree-active-bg); }
 .prov__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Compact peek variant (chat-first rail) — trim chrome for the narrow column. */
+.focus--compact { font-size: 12.5px; }
+.focus--compact .focus__header { padding: 12px 14px 8px; }
+.focus--compact .focus__title { font-size: 14px; }
+.focus--compact .focus__body { padding: 0 14px 12px; }
+.focus--compact .focus__meta { padding: 0 14px 12px; }
+
 /* Spatial reference (Phase 25) */
 .annot { display: flex; flex-direction: column; }
 /* Figure + a vertical badge gutter to its right. */

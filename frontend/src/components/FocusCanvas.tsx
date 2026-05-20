@@ -13,6 +13,8 @@ interface Props {
   onFocus: (id: string) => void
   onAnnotate?: (a: Annotation) => void
   annotClear?: number
+  /** Compact peek variant (chat-first): trim meta + provenance for the rail. */
+  compact?: boolean
 }
 
 interface TablePreview {
@@ -33,7 +35,7 @@ type PromoteMode =
   | { kind: 'finding-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate, annotClear }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate, annotClear, compact }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -120,7 +122,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
     : null
 
   return (
-    <div className="focus">
+    <div className={`focus ${compact ? 'focus--compact' : ''}`}>
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
@@ -165,7 +167,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
         <span title={entity.id}>id {entity.id}</span>
         <span>•</span>
         <span>created {new Date(entity.created_at).toLocaleString()}</span>
-        {entity.parent_entity_id && (
+        {!compact && entity.parent_entity_id && (
           <>
             <span>•</span>
             <span>parent {entity.parent_entity_id}</span>
@@ -173,7 +175,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
         )}
       </div>
 
-      <ProvenancePanel entity={entity} onFocus={onFocus} />
+      {!compact && <ProvenancePanel entity={entity} onFocus={onFocus} />}
 
       {promote?.kind === 'figure-to-result' && (
         <PromoteDialog

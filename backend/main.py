@@ -281,6 +281,13 @@ def messages_list():
     return get_messages(WORKSPACE_ID)
 
 
+@app.get("/api/search")
+def search_endpoint(q: str = "", limit: int = 25):
+    """Faceted search across entities + chat snippets (M9 fallback recovery)."""
+    from db import search as _search
+    return _search(q, limit=limit)
+
+
 # ---------- Promotion / result chain ----------
 
 class PromoteFigureRequest(BaseModel):

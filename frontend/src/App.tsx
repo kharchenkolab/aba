@@ -1,31 +1,39 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 import Rail from './components/Rail'
 import ProjectTree from './components/ProjectTree'
 import ChatPane from './components/ChatPane'
-import AdvisorRail from './components/AdvisorRail'
+import AdvisorStrip from './components/AdvisorStrip'
 import FocusCanvas from './components/FocusCanvas'
 import Home from './components/Home'
-import VResizer from './components/VResizer'
 import HResizer from './components/HResizer'
+import PostureToggle, { type Posture } from './components/PostureToggle'
+import SearchModal from './components/SearchModal'
 import { useChat } from './useChat'
 import { useEntities } from './useEntities'
+import type { Entity } from './types'
 
-const FOCUS_DEFAULT = 320
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
-// Tallest the focus panel can grow — leaves a strip of chat (tabs + composer)
-// visible so "maximize figure" doesn't fully hide the conversation.
-const focusMax = () => Math.round(window.innerHeight * 0.82)
+
+function entityLabel(e: Entity | null): string {
+  switch (e?.type) {
+    case 'figure': return 'Figure'
+    case 'table': return 'Table'
+    case 'finding': return 'Finding'
+    case 'result': return 'Result'
+    case 'dataset': return 'Dataset'
+    case 'narrative': return 'Section'
+    default: return 'Entity'
+  }
+}
 
 export default function App() {
   const [view, setView] = useState<'home' | 'workspace'>('home')
   const [focusedId, setFocusedId] = useState<string>('workspace')
-  const [focusH, setFocusH] = useState(FOCUS_DEFAULT)
+  const [posture, setPosture] = useState<Posture>('chat')
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
-  const [advisorW, setAdvisorW] = useState(260)
-  const [advisorCollapsed, setAdvisorCollapsed] = useState(false)
   const [prefill, setPrefill] = useState('')
   const [composerFocus, setComposerFocus] = useState(0)
   const [annotClear, setAnnotClear] = useState(0)
@@ -38,12 +46,34 @@ export default function App() {
     setAnnotClear(n => n + 1)      // erase the drawn mark on the figure too
   }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
   const { entities, refresh } = useEntities()
+
+  // Cmd/Ctrl-K opens fallback search.
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault(); setSearchOpen(o => !o)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast } = useChat(
     focusedId, refresh, annotation,
   )
 
   const focused = entities.find(e => e.id === focusedId) ?? null
+  const scoped = !!focused && focused.type !== 'workspace'
+
+  // Single-click focuses an artifact (peek in chat-first). Focusing the
+  // workspace root opens entity-first — that's where workspace-level actions
+  // (add data, new manuscript section) live. "open" promotes any entity.
+  const focus = (id: string) => {
+    setFocusedId(id)
+    if (id === 'workspace') setPosture('entity')
+  }
+  const openEntity = (id: string) => { setFocusedId(id); setPosture('entity') }
 
   if (view === 'home') {
     return (
@@ -52,14 +82,54 @@ export default function App() {
         <Home
           onOpenWorkspace={() => setView('workspace')}
           onEntitiesChanged={refresh}
-          onFocus={setFocusedId}
+          onFocus={openEntity}
         />
       </div>
     )
   }
 
-  const gridCols =
-    `var(--w-rail) ${treeCollapsed ? 0 : treeW}px 14px 1fr 14px ${advisorCollapsed ? 0 : advisorW}px`
+  const gridCols = `var(--w-rail) ${treeCollapsed ? 0 : treeW}px 14px 1fr`
+
+  const chatPane = (compact: boolean) => (
+    <ChatPane
+      messages={messages}
+      streaming={streaming}
+      streamMsg={streamMsg}
+      onSend={sendMessage}
+      focusedEntity={focused}
+      annotation={annotation}
+      onClearAnnotation={clearAnnotation}
+      prefill={prefill}
+      onPrefillConsumed={() => setPrefill('')}
+      composerFocus={composerFocus}
+      onAnnotate={attachAnnotation}
+      annotClear={annotClear}
+      onRetry={retryLast}
+      embedded
+      compact={compact}
+    />
+  )
+
+  const entityPanel = (primary: boolean) => (
+    <div className={`surface-panel entity-surface ${primary ? 'primary' : ''}`}>
+      <FocusCanvas
+        entity={focused}
+        entities={entities}
+        onChange={refresh}
+        onFocus={openEntity}
+        onAnnotate={attachAnnotation}
+        annotClear={annotClear}
+        compact={!primary}
+      />
+    </div>
+  )
+
+  const peekEmpty = (
+    <div className="surface-panel peek-empty">
+      <p>Pick an artifact from the tree to preview it here, or switch to the
+        <button className="link-btn" onClick={() => setPosture('entity')}> workspace view</button>.</p>
+    </div>
+  )
 
   return (
     <div className="app app--workspace" style={{ gridTemplateColumns: gridCols }}>
@@ -68,7 +138,7 @@ export default function App() {
         <ProjectTree
           entities={entities}
           focusedId={focusedId}
-          onFocus={setFocusedId}
+          onFocus={focus}
           onChange={refresh}
         />
       )}
@@ -77,49 +147,40 @@ export default function App() {
         onDrag={dx => setTreeW(w => Math.min(440, Math.max(TREE_MIN, w + dx)))}
         onToggle={() => setTreeCollapsed(c => !c)}
       />
-      <div className="main">
-        <div className="focus-wrap" style={{ height: focusH }}>
-          <FocusCanvas
-            entity={focused}
-            entities={entities}
-            onChange={refresh}
-            onFocus={setFocusedId}
-            onAnnotate={attachAnnotation}
-            annotClear={annotClear}
-          />
+
+      <div className="canvas">
+        <div className="canvas-head">
+          <div className="canvas-title">
+            {scoped
+              ? <><span className="canvas-title__type">{focused!.type}</span>{focused!.title}</>
+              : <>Workspace</>}
+          </div>
+          <div className="canvas-actions">
+            <AdvisorStrip focusedId={focusedId} focusedType={focused?.type}
+                          onTry={setPrefill} onFocus={focus} />
+            <PostureToggle posture={posture} onChange={setPosture} entityLabel={entityLabel(focused)} />
+          </div>
         </div>
-        <VResizer
-          state={focusH < 8 ? 'chat' : focusH >= focusMax() - 6 ? 'figure' : 'mid'}
-          onDrag={dy => setFocusH(h => Math.min(focusMax(), Math.max(0, h + dy)))}
-          onMaxFigure={() => setFocusH(focusMax())}
-          onMaxChat={() => setFocusH(0)}
-          onRestore={() => setFocusH(FOCUS_DEFAULT)}
-        />
-        <ChatPane
-          messages={messages}
-          streaming={streaming}
-          streamMsg={streamMsg}
-          onSend={sendMessage}
-          focusedEntity={focused}
-          annotation={annotation}
-          onClearAnnotation={clearAnnotation}
-          prefill={prefill}
-          onPrefillConsumed={() => setPrefill('')}
-          composerFocus={composerFocus}
-          onAnnotate={attachAnnotation}
-          annotClear={annotClear}
-          onRetry={retryLast}
-        />
+
+        <div className="canvas-body">
+          <div className={`split split--${posture}`}>
+            {posture === 'chat' ? (
+              <>
+                <div className="surface-panel primary chat-primary">{chatPane(false)}</div>
+                {scoped ? entityPanel(false) : peekEmpty}
+              </>
+            ) : (
+              <>
+                {entityPanel(true)}
+                <div className="surface-panel chat-peek">{chatPane(true)}</div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
-      <HResizer
-        side="right"
-        collapsed={advisorCollapsed}
-        onDrag={dx => setAdvisorW(w => Math.min(420, Math.max(180, w - dx)))}
-        onToggle={() => setAdvisorCollapsed(c => !c)}
-      />
-      {advisorCollapsed ? <div /> : (
-        <AdvisorRail focusedId={focusedId} focusedType={focused?.type} onTry={setPrefill} onFocus={setFocusedId} />
-      )}
+
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)}
+                   onPick={openEntity} />
     </div>
   )
 }

@@ -27,9 +27,9 @@
    read as distinct blocks (matching the original design). */
 .tree__section {
   background: var(--bg);
-  border: 1px solid var(--tree-border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }

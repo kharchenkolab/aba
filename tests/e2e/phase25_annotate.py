@@ -106,12 +106,12 @@ def drive(fport: int) -> int:
 
         # Focus the figure → AnnotatedFigure renders with a Mark button.
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".focus-wrap .annot__tb-btn", timeout=3000)
-        page.locator(".focus-wrap .annot__tb-btn").click()  # enter marking
-        page.wait_for_selector(".focus-wrap .annot__wrap--marking", timeout=2000)
+        page.wait_for_selector(".entity-surface .annot__tb-btn", timeout=3000)
+        page.locator(".entity-surface .annot__tb-btn").click()  # enter marking
+        page.wait_for_selector(".entity-surface .annot__wrap--marking", timeout=2000)
 
         # Drag a circle across the figure.
-        wrap = page.locator(".focus-wrap .annot__wrap")
+        wrap = page.locator(".entity-surface .annot__wrap")
         box = wrap.bounding_box()
         page.mouse.move(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.4)
         page.mouse.down()
@@ -136,7 +136,7 @@ def drive(fport: int) -> int:
         # mark from the figure.
         page.locator(".annot-attached button").click()
         page.wait_for_selector(".annot-attached", state="detached", timeout=3000)
-        page.wait_for_selector(".focus-wrap .annot__svg", state="detached", timeout=3000)
+        page.wait_for_selector(".entity-surface .annot__svg", state="detached", timeout=3000)
         print("✓ chip × clears the annotation and erases the figure mark")
 
         # --- In-chat figure highlighting -----------------------------------

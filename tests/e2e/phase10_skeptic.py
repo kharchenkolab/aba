@@ -155,48 +155,47 @@ def drive(frontend_port: int) -> int:
         page.wait_for_selector(".focus__type--result", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "01_promoted.png"), full_page=True)
 
-        # Wait for Skeptic's idea badge in the right-side rail, then expand it.
-        page.wait_for_selector(".adv-row--has-notes", timeout=10000)
-        page.locator(".adv-row--has-notes .adv-rowhead").first.click()
-        page.wait_for_selector(".adv-note-text", timeout=2000)
+        # Wait for Skeptic's pill to light up in the header advisor strip,
+        # then click to open its popover.
+        page.wait_for_selector(".adv-pill--has", timeout=10000)
+        page.locator(".adv-pill--has").first.click()
+        page.wait_for_selector(".adv-pop__text", timeout=2000)
         page.screenshot(path=str(SHOT_DIR / "02_skeptic_note.png"), full_page=True)
-        print("✓ Skeptic idea badge appeared; expanded to read the note")
+        print("✓ Skeptic pill lit up; popover opened with the note")
 
-        note_text = page.locator(".adv-note-text").first.inner_text()
+        note_text = page.locator(".adv-pop__text").first.inner_text()
         assert "Skeptic" in note_text or "outlier" in note_text.lower()
         print(f"  note preview: {note_text[:80]}…")
 
-        # Switch focus → notes pane re-fetches with the new entity's notes.
+        # Switch focus → strip re-fetches with the new entity's notes.
+        page.keyboard.press("Escape")
         page.locator(f'[data-entity-id="{dataset["id"]}"]').click()
         page.wait_for_selector(".focus__preview-table", timeout=3000)
-        # Dataset has no notes yet → no .adv-row--has-notes
         page.wait_for_function(
-            "() => document.querySelectorAll('.adv-row--has-notes').length === 0",
+            "() => document.querySelectorAll('.adv-pill--has').length === 0",
             timeout=5000,
         )
         page.screenshot(path=str(SHOT_DIR / "03_switched_to_dataset.png"), full_page=True)
-        print("✓ rail clears when switching focus")
+        print("✓ strip clears when switching focus")
 
-        # Switch back to the result → notes are still there.
+        # Switch back to the result → the lit pill returns.
         page.locator('[data-entity-type="result"]').first.click()
-        page.wait_for_selector(".adv-row--has-notes", timeout=5000)
+        page.wait_for_selector(".adv-pill--has", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "04_back_to_result.png"), full_page=True)
         print("✓ notes persist across focus changes")
 
-        # Dismiss the idea → the lightbulb clears and it does NOT resurface on
-        # the next poll (status persisted server-side). Expand only if needed
-        # (it may already be open from the steps above).
-        if page.locator(".adv-dismiss").count() == 0:
-            page.locator(".adv-row--has-notes .adv-rowhead").first.click()
-        page.wait_for_selector(".adv-dismiss", timeout=2000)
-        page.locator(".adv-dismiss").first.click()
+        # Dismiss the idea via the popover → the pill clears and does NOT
+        # resurface on the next poll (status persisted server-side).
+        page.locator(".adv-pill--has").first.click()
+        page.wait_for_selector(".adv-pop__dismiss", timeout=2000)
+        page.locator(".adv-pop__dismiss").first.click()
         page.wait_for_function(
-            "() => document.querySelectorAll('.adv-row--has-notes').length === 0",
+            "() => document.querySelectorAll('.adv-pill--has').length === 0",
             timeout=5000,
         )
         page.wait_for_timeout(3000)  # span a poll cycle (2.5s) — must stay gone
-        assert page.locator(".adv-row--has-notes").count() == 0, "dismissed idea resurfaced"
-        print("✓ dismissed idea clears the lightbulb and does not resurface")
+        assert page.locator(".adv-pill--has").count() == 0, "dismissed idea resurfaced"
+        print("✓ dismissed idea clears the pill and does not resurface")
 
         browser.close()
 
