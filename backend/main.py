@@ -228,38 +228,85 @@ async def create_scenario(baseline_id: str, req: ScenarioRequest):
 
 # ---------- Upload ----------
 
+def _unique_path(dest: Path) -> Path:
+    """Suffix the filename if it already exists in the dir."""
+    if not dest.exists():
+        return dest
+    stem, suf = dest.stem, dest.suffix
+    i = 1
+    while True:
+        candidate = dest.parent / f"{stem}_{i}{suf}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):
-    """
-    Accept a file upload, drop it into DATA_DIR, register as a 'dataset' entity.
-    Returns the new entity record.
-    """
+    """Drop an uploaded file into DATA_DIR, register as a 'dataset' entity."""
     if not file.filename:
         raise HTTPException(400, "filename missing")
-
-    # Sanitize: take basename only, no path traversal.
     safe_name = Path(file.filename).name
-    dest = DATA_DIR / safe_name
-    # If a file with that name already exists, suffix to avoid clobbering.
-    if dest.exists():
-        stem, suf = dest.stem, dest.suffix
-        i = 1
-        while True:
-            candidate = DATA_DIR / f"{stem}_{i}{suf}"
-            if not candidate.exists():
-                dest = candidate
-                break
-            i += 1
-
+    dest = _unique_path(DATA_DIR / safe_name)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
-
     size = dest.stat().st_size
     eid = create_entity(
         entity_type="dataset",
         title=dest.name,
         artifact_path=str(dest),
         metadata={"size_bytes": size, "original_name": file.filename},
+    )
+    return get_entity(eid)
+
+
+class URLUploadRequest(BaseModel):
+    url: str
+    title: str | None = None
+
+
+@app.post("/api/upload-url")
+async def upload_url(req: URLUploadRequest):
+    """
+    Download a file from a URL into DATA_DIR and register a dataset entity.
+
+    The Guide can later inspect/unpack the file (e.g. tar.gz of a 10x folder)
+    via tool calls. This endpoint just lands the bytes locally.
+    """
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+    parsed = urllib.parse.urlparse(req.url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "only http(s) URLs are supported")
+    name = Path(parsed.path).name or "downloaded.bin"
+    dest = _unique_path(DATA_DIR / name)
+
+    try:
+        with urllib.request.urlopen(req.url, timeout=60) as resp:
+            total = 0
+            with dest.open("wb") as f:
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    total += len(chunk)
+                    # Cap absurd payloads to avoid filling the disk.
+                    if total > 2 * 1024 * 1024 * 1024:
+                        raise HTTPException(413, "remote file > 2GB; aborting")
+    except urllib.error.URLError as e:
+        raise HTTPException(400, f"download failed: {e}")
+
+    eid = create_entity(
+        entity_type="dataset",
+        title=req.title or dest.name,
+        artifact_path=str(dest),
+        metadata={
+            "size_bytes": dest.stat().st_size,
+            "source_url": req.url,
+            "original_name": name,
+        },
     )
     return get_entity(eid)
 
