@@ -57,12 +57,28 @@ def init_db():
                 parent_entity_id  TEXT,
                 scenario_of       TEXT,
                 metadata          TEXT,
+                tags              TEXT,
+                notes             TEXT,
+                pinned            INTEGER NOT NULL DEFAULT 0,
+                deleted_at        TEXT,
                 created_at        TEXT NOT NULL,
                 updated_at        TEXT NOT NULL
             )
         """)
+        # Idempotent additive migrations for installs predating these columns.
+        for col, ddl in (
+            ("tags",        "ALTER TABLE entities ADD COLUMN tags TEXT"),
+            ("notes",       "ALTER TABLE entities ADD COLUMN notes TEXT"),
+            ("pinned",      "ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"),
+            ("deleted_at",  "ALTER TABLE entities ADD COLUMN deleted_at TEXT"),
+        ):
+            if not _column_exists(c, "entities", col):
+                c.execute(ddl)
+
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_parent ON entities(parent_entity_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(pinned)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_entity ON messages(entity_id)")
 
         # Entity edges — typed relationships between entities. W3C PROV-O
@@ -145,6 +161,10 @@ def _row_to_entity(r) -> dict:
         "parent_entity_id": r["parent_entity_id"],
         "scenario_of": r["scenario_of"],
         "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+        "tags": json.loads(r["tags"]) if r["tags"] else [],
+        "notes": r["notes"],
+        "pinned": bool(r["pinned"]) if r["pinned"] is not None else False,
+        "deleted_at": r["deleted_at"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
     }
@@ -156,13 +176,109 @@ def get_entity(entity_id: str) -> Optional[dict]:
         return _row_to_entity(r) if r else None
 
 
-def list_entities(*, exclude_workspace: bool = False) -> list[dict]:
-    q = "SELECT * FROM entities"
+def list_entities(
+    *,
+    exclude_workspace: bool = False,
+    include_archived: bool = True,
+    type_filter: Optional[str] = None,
+    title_query: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict]:
+    q = "SELECT * FROM entities WHERE 1=1"
+    args: list = []
     if exclude_workspace:
-        q += " WHERE id != 'workspace'"
-    q += " ORDER BY created_at"
+        q += " AND id != 'workspace'"
+    if not include_archived:
+        q += " AND status != 'archived'"
+    if type_filter:
+        q += " AND type = ?"
+        args.append(type_filter)
+    if title_query:
+        q += " AND lower(title) LIKE ?"
+        args.append(f"%{title_query.lower()}%")
+    q += " ORDER BY pinned DESC, created_at"
+    if limit is not None:
+        q += " LIMIT ? OFFSET ?"
+        args.append(int(limit)); args.append(int(offset))
     with _conn() as c:
-        return [_row_to_entity(r) for r in c.execute(q).fetchall()]
+        return [_row_to_entity(r) for r in c.execute(q, args).fetchall()]
+
+
+def count_entities(
+    *,
+    include_archived: bool = True,
+    type_filter: Optional[str] = None,
+    title_query: Optional[str] = None,
+) -> int:
+    q = "SELECT COUNT(*) AS n FROM entities WHERE id != 'workspace'"
+    args: list = []
+    if not include_archived:
+        q += " AND status != 'archived'"
+    if type_filter:
+        q += " AND type = ?"; args.append(type_filter)
+    if title_query:
+        q += " AND lower(title) LIKE ?"; args.append(f"%{title_query.lower()}%")
+    with _conn() as c:
+        return c.execute(q, args).fetchone()["n"]
+
+
+def update_entity(entity_id: str, **fields) -> Optional[dict]:
+    """
+    Partial update. Accepted fields: title, notes, tags, pinned, status.
+    Other keys are silently ignored. Returns the updated entity, or None
+    if it doesn't exist.
+    """
+    allowed = {"title", "notes", "tags", "pinned", "status"}
+    sets = []
+    args = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k == "tags" and isinstance(v, list):
+            sets.append("tags = ?"); args.append(json.dumps(v))
+        elif k == "pinned":
+            sets.append("pinned = ?"); args.append(1 if v else 0)
+        else:
+            sets.append(f"{k} = ?"); args.append(v)
+    if not sets:
+        return get_entity(entity_id)
+    sets.append("updated_at = ?"); args.append(_utcnow())
+    args.append(entity_id)
+    with _conn() as c:
+        cur = c.execute(f"UPDATE entities SET {', '.join(sets)} WHERE id = ?", args)
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    return get_entity(entity_id)
+
+
+def archive_entity(entity_id: str) -> Optional[dict]:
+    """Soft-delete: mark as archived and record deleted_at."""
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE entities SET status='archived', deleted_at=?, updated_at=? "
+            "WHERE id = ? AND id != 'workspace'",
+            (now, now, entity_id),
+        )
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    return get_entity(entity_id)
+
+
+def restore_entity(entity_id: str) -> Optional[dict]:
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE entities SET status='active', deleted_at=NULL, updated_at=? WHERE id = ?",
+            (now, entity_id),
+        )
+        c.commit()
+        if cur.rowcount == 0:
+            return None
+    return get_entity(entity_id)
 
 
 # ---------- Edges ----------

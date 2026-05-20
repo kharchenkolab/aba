@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -16,6 +16,9 @@ from db import (
     list_entities,
     get_entity,
     create_entity,
+    update_entity,
+    archive_entity,
+    restore_entity,
     add_edge,
     edges_from,
     edges_to,
@@ -50,9 +53,25 @@ def startup():
 # ---------- Entities ----------
 
 @app.get("/api/entities")
-def entities_list():
-    """Project tree feed. Workspace root is included as the first row."""
-    return list_entities()
+def entities_list(
+    q: str | None = None,
+    type: str | None = None,
+    include_archived: bool = True,
+    limit: int | None = None,
+    offset: int = 0,
+):
+    """
+    Project tree feed. Workspace root is included unless filtered out.
+    Pagination via limit/offset; left None by default so small projects
+    don't pay any cost.
+    """
+    return list_entities(
+        title_query=q,
+        type_filter=type,
+        include_archived=include_archived,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/api/entities/{entity_id}")
@@ -61,6 +80,83 @@ def entities_get(entity_id: str):
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
     return e
+
+
+class EntityPatch(BaseModel):
+    title: str | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
+    pinned: bool | None = None
+    status: str | None = None
+
+
+@app.patch("/api/entities/{entity_id}")
+def entities_patch(entity_id: str, req: EntityPatch):
+    """Update title, notes, tags, pinned, or status."""
+    if entity_id == WORKSPACE_ID:
+        # Allow updating workspace title only; status/pin/notes/tags ignored.
+        if req.title:
+            updated = update_entity(entity_id, title=req.title)
+            if updated:
+                return updated
+        return get_entity(entity_id)
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    # status whitelist
+    if "status" in fields and fields["status"] not in (
+        "active", "running", "superseded", "failed", "archived",
+    ):
+        raise HTTPException(400, f"invalid status: {fields['status']}")
+    updated = update_entity(entity_id, **fields)
+    if not updated:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return updated
+
+
+@app.delete("/api/entities/{entity_id}")
+def entities_delete(entity_id: str):
+    """Soft-delete (status='archived'). Workspace cannot be deleted."""
+    if entity_id == WORKSPACE_ID:
+        raise HTTPException(400, "workspace cannot be deleted")
+    updated = archive_entity(entity_id)
+    if not updated:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return updated
+
+
+@app.post("/api/entities/{entity_id}/restore")
+def entities_restore(entity_id: str):
+    updated = restore_entity(entity_id)
+    if not updated:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return updated
+
+
+@app.get("/api/entities/{entity_id}/download")
+def entities_download(entity_id: str):
+    """Stream the underlying artifact (figure PNG or dataset file)."""
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    if not e.get("artifact_path"):
+        raise HTTPException(400, "entity has no artifact to download")
+    path_str = e["artifact_path"]
+    # Figures stored as URLs like /artifacts/abc.png — translate to disk.
+    if path_str.startswith("/artifacts/"):
+        from config import ARTIFACTS_DIR
+        path = ARTIFACTS_DIR / Path(path_str).name
+    else:
+        path = Path(path_str)
+    if not path.exists():
+        raise HTTPException(404, "artifact file is missing on disk")
+    # Suggest a reasonable filename based on the entity's title.
+    base = e["title"].replace("/", "_").strip()
+    suffix = path.suffix or ""
+    download_name = f"{base}{suffix}" if base else path.name
+    return FileResponse(
+        path,
+        filename=download_name,
+        media_type=None,  # let starlette guess
+    )
 
 
 @app.get("/api/entities/{entity_id}/messages")
