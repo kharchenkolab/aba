@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
+import AnnotatedFigure from './AnnotatedFigure'
 import './FocusCanvas.css'
+
+interface Annotation { image: string; note: string }
 
 interface Props {
   entity: Entity | null
   entities: Entity[]
   onChange: () => void
   onFocus: (id: string) => void
+  onAnnotate?: (a: Annotation) => void
 }
 
 interface TablePreview {
@@ -28,7 +32,7 @@ type PromoteMode =
   | { kind: 'finding-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -152,6 +156,8 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
       <div className="focus__body">
         {compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
+          : entity.type === 'figure' && onAnnotate
+          ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} />
           : renderBody(entity, preview, entities, onFocus, onChange)}
       </div>
       <div className="focus__meta">

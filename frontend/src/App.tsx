@@ -12,8 +12,11 @@ import { useEntities } from './useEntities'
 export default function App() {
   const [view, setView] = useState<'home' | 'workspace'>('home')
   const [focusedId, setFocusedId] = useState<string>('workspace')
+  const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const { entities, refresh } = useEntities()
-  const { messages, streaming, streamMsg, sendMessage } = useChat(focusedId, refresh)
+  const { messages, streaming, streamMsg, sendMessage } = useChat(
+    focusedId, refresh, annotation, () => setAnnotation(null),
+  )
 
   const focused = entities.find(e => e.id === focusedId) ?? null
 
@@ -45,6 +48,7 @@ export default function App() {
           entities={entities}
           onChange={refresh}
           onFocus={setFocusedId}
+          onAnnotate={setAnnotation}
         />
         <ChatPane
           messages={messages}
@@ -52,6 +56,8 @@ export default function App() {
           streamMsg={streamMsg}
           onSend={sendMessage}
           focusedEntity={focused}
+          annotation={annotation}
+          onClearAnnotation={() => setAnnotation(null)}
         />
       </div>
       <AdvisorRail focusedId={focusedId} focusedType={focused?.type} />

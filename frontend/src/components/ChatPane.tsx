@@ -11,6 +11,8 @@ interface Props {
   streamMsg: DisplayMessage | null
   onSend: (text: string) => void
   focusedEntity: Entity | null
+  annotation?: { image: string; note: string } | null
+  onClearAnnotation?: () => void
 }
 
 export default function ChatPane({
@@ -19,6 +21,8 @@ export default function ChatPane({
   streamMsg,
   onSend,
   focusedEntity,
+  annotation,
+  onClearAnnotation,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [traceVisible, setTraceVisible] = useState(false)
@@ -92,6 +96,13 @@ export default function ChatPane({
         {traceVisible && <TracePanel messages={messages} streamMsg={streamMsg} />}
       </div>
 
+      {annotation && (
+        <div className="annot-attached">
+          <img src={`data:image/png;base64,${annotation.image}`} alt="marked region" />
+          <span>Region marked — it'll be sent with your next message.</span>
+          <button onClick={onClearAnnotation} title="Remove">×</button>
+        </div>
+      )}
       <Composer onSend={onSend} disabled={streaming} />
     </div>
   )
