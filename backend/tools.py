@@ -58,6 +58,27 @@ TOOL_SCHEMAS = [
         }
     },
     {
+        "name": "create_scenario",
+        "description": (
+            "Create a scenario variant of a figure by re-running its analysis "
+            "with a modification the user described (e.g. 'cap mt_fraction at "
+            "0.10', 'exclude sample S4'). Use this AFTER the user confirms a "
+            "'what if' proposal. Pass the baseline figure's id, a short "
+            "description of the change, and the modified Python code (start "
+            "from the baseline's producing code and apply the change). The "
+            "variant appears beside the baseline with a Compare toggle."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "baseline_id": {"type": "string", "description": "id of the baseline figure"},
+                "description": {"type": "string", "description": "short label for the change"},
+                "code": {"type": "string", "description": "modified Python code that saves a .png"},
+            },
+            "required": ["baseline_id", "description", "code"],
+        },
+    },
+    {
         "name": "get_provenance",
         "description": (
             "Get the upstream provenance of an entity — what data and analyses "
@@ -423,6 +444,36 @@ def get_dependents(input_: dict) -> dict:
     return {"text": dependents_text(eid), "graph": neighborhood(eid)["downstream"]}
 
 
+def create_scenario(input_: dict) -> dict:
+    from scenarios import create_scenario_variant
+    from provenance import downstream
+    try:
+        variant = create_scenario_variant(
+            baseline_id=input_.get("baseline_id", ""),
+            description=input_.get("description", ""),
+            code=input_.get("code"),
+        )
+    except (ValueError, RuntimeError) as e:
+        return {"error": str(e)}
+    # Surface baseline dependents the user may want to revisit under the scenario.
+    dependents = downstream(input_.get("baseline_id", ""))
+    review = [d for d in dependents if d["type"] in ("result", "finding", "claim")]
+    return {
+        "scenario": {"id": variant["id"], "title": variant["title"]},
+        "dependents_to_review": [
+            {"id": d["id"], "type": d["type"], "title": d["title"]} for d in review
+        ],
+        "note": (
+            "Scenario created. " + (
+                f"{len(review)} downstream "
+                f"{'entity references' if len(review)==1 else 'entities reference'} "
+                f"the baseline — consider whether they still hold under this "
+                f"scenario." if review else "No downstream results to review."
+            )
+        ),
+    }
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -430,6 +481,7 @@ EXECUTORS = {
     "inspect_upload": inspect_upload,
     "get_provenance": get_provenance,
     "get_dependents": get_dependents,
+    "create_scenario": create_scenario,
 }
 
 def execute_tool(name: str, input_: dict) -> str:
