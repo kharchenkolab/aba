@@ -38,6 +38,16 @@ _TOOL_META: dict[str, dict] = {
         ),
         "example": "Inspect the file I just uploaded.",
     },
+    "get_provenance": {
+        "category": "Provenance",
+        "summary": "Trace what data and analyses an entity was derived from.",
+        "example": "How did I get this figure?",
+    },
+    "get_dependents": {
+        "category": "Provenance",
+        "summary": "Find what would need recomputing if an entity changed.",
+        "example": "If I change this QC cutoff, what else is affected?",
+    },
     "run_python": {
         "category": "Sandbox",
         "summary": (
@@ -117,7 +127,7 @@ def registry() -> dict:
 
     # Group by category, preserve a sensible order.
     order = [
-        "Workspace", "Sandbox", "Analysis flow", "Result chain",
+        "Workspace", "Sandbox", "Provenance", "Analysis flow", "Result chain",
         "Single-cell", "Bulk RNA-seq", "Other",
     ]
     cats: dict[str, list] = {c: [] for c in order}
