@@ -1,8 +1,8 @@
 .vresizer {
   position: relative;
-  height: 7px;
+  height: 12px;
   flex: 0 0 auto;
-  background: var(--bg);
+  background: var(--bg-soft);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   cursor: row-resize;
@@ -11,24 +11,37 @@
   justify-content: center;
 }
 .vresizer:hover { background: var(--tree-active-bg); }
+
+/* Always-visible horizontal grip (dotted). */
 .vresizer__grip {
-  width: 36px; height: 3px; border-radius: 2px;
-  background: var(--border);
+  width: 40px;
+  height: 2px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(
+    to right, var(--text-4) 0 2px, transparent 2px 4px
+  );
+  opacity: 0.55;
 }
-.vresizer:hover .vresizer__grip { background: var(--accent); }
+.vresizer:hover .vresizer__grip { opacity: 1; }
+
+/* Always-visible collapse tab on the right. */
 .vresizer__toggle {
   position: absolute;
-  right: 10px;
+  right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  width: 22px; height: 16px;
+  width: 26px;
+  height: 18px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--bg);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
   cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
-.vresizer__toggle:hover { background: var(--tree-active-bg); color: var(--text); }
+.vresizer__toggle:hover { background: var(--accent); color: #fff; border-color: var(--accent); }

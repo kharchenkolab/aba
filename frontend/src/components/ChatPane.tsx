@@ -15,6 +15,7 @@ interface Props {
   onClearAnnotation?: () => void
   prefill?: string
   onPrefillConsumed?: () => void
+  composerFocus?: number
 }
 
 export default function ChatPane({
@@ -27,6 +28,7 @@ export default function ChatPane({
   onClearAnnotation,
   prefill,
   onPrefillConsumed,
+  composerFocus,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [traceVisible, setTraceVisible] = useState(false)
@@ -104,12 +106,13 @@ export default function ChatPane({
       {annotation && (
         <div className="annot-attached">
           <img src={`data:image/png;base64,${annotation.image}`} alt="marked region" />
-          <span>Region marked — it'll be sent with your next message.</span>
+          <span>Region attached — ask about it (e.g. "what's here?"). Stays until you clear it.</span>
           <button onClick={onClearAnnotation} title="Remove">×</button>
         </div>
       )}
       <Composer onSend={onSend} disabled={streaming}
-                prefill={prefill} onPrefillConsumed={onPrefillConsumed} />
+                prefill={prefill} onPrefillConsumed={onPrefillConsumed}
+                focusSignal={composerFocus} />
     </div>
   )
 }

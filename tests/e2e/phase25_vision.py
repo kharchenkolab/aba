@@ -114,8 +114,8 @@ def drive(fport: int) -> int:
         page.wait_for_function("() => !document.querySelector('.composer__input').disabled", timeout=120000)
 
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".annot__hl", timeout=3000)
-        page.locator(".annot__hl").click()
+        page.wait_for_selector(".annot__tb-btn", timeout=3000)
+        page.locator(".annot__tb-btn").click()
         wrap = page.locator(".annot__wrap"); box = wrap.bounding_box()
         # Circle the right-tail outlier region (~0.08–0.12 on x).
         page.mouse.move(box["x"] + box["width"] * 0.72, box["y"] + box["height"] * 0.45)
@@ -123,7 +123,7 @@ def drive(fport: int) -> int:
         page.mouse.move(box["x"] + box["width"] * 0.93, box["y"] + box["height"] * 0.78, steps=8)
         page.mouse.up()
         page.wait_for_selector(".annot__svg", timeout=2000)
-        page.locator(".annot__attach").click()
+        page.locator(".annot__tb-btn--go").click()
         page.wait_for_selector(".annot-attached", timeout=3000)
 
         comp.fill("what stands out about the region I circled?")

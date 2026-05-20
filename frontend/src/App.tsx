@@ -11,7 +11,6 @@ import HResizer from './components/HResizer'
 import { useChat } from './useChat'
 import { useEntities } from './useEntities'
 
-const FOCUS_MIN = 92      // collapsed: header + a sliver
 const FOCUS_DEFAULT = 320
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
@@ -25,6 +24,11 @@ export default function App() {
   const [advisorW, setAdvisorW] = useState(260)
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false)
   const [prefill, setPrefill] = useState('')
+  const [composerFocus, setComposerFocus] = useState(0)
+  const attachAnnotation = (a: { image: string; note: string }) => {
+    setAnnotation(a)
+    setComposerFocus(n => n + 1)   // jump the cursor to the composer
+  }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const { entities, refresh } = useEntities()
   const { messages, streaming, streamMsg, sendMessage } = useChat(
@@ -47,7 +51,7 @@ export default function App() {
   }
 
   const gridCols =
-    `var(--w-rail) ${treeCollapsed ? 0 : treeW}px 6px 1fr 6px ${advisorCollapsed ? 0 : advisorW}px`
+    `var(--w-rail) ${treeCollapsed ? 0 : treeW}px 14px 1fr 14px ${advisorCollapsed ? 0 : advisorW}px`
 
   return (
     <div className="app app--workspace" style={{ gridTemplateColumns: gridCols }}>
@@ -72,13 +76,13 @@ export default function App() {
             entities={entities}
             onChange={refresh}
             onFocus={setFocusedId}
-            onAnnotate={setAnnotation}
+            onAnnotate={attachAnnotation}
           />
         </div>
         <VResizer
-          collapsed={focusH <= FOCUS_MIN + 4}
-          onDrag={dy => setFocusH(h => Math.min(window.innerHeight * 0.78, Math.max(FOCUS_MIN, h + dy)))}
-          onToggle={() => setFocusH(h => (h <= FOCUS_MIN + 4 ? FOCUS_DEFAULT : FOCUS_MIN))}
+          collapsed={focusH < 8}
+          onDrag={dy => setFocusH(h => Math.min(window.innerHeight * 0.78, Math.max(0, h + dy)))}
+          onToggle={() => setFocusH(h => (h < 8 ? FOCUS_DEFAULT : 0))}
         />
         <ChatPane
           messages={messages}
@@ -90,6 +94,7 @@ export default function App() {
           onClearAnnotation={() => setAnnotation(null)}
           prefill={prefill}
           onPrefillConsumed={() => setPrefill('')}
+          composerFocus={composerFocus}
         />
       </div>
       <HResizer
