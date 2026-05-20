@@ -376,6 +376,15 @@ def entities_edges(entity_id: str):
     }
 
 
+@app.get("/api/entities/{entity_id}/provenance")
+def entities_provenance(entity_id: str):
+    """Upstream/downstream neighborhood for the canvas Provenance panel."""
+    if not get_entity(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    from provenance import neighborhood
+    return neighborhood(entity_id)
+
+
 # ---------- Scenarios ----------
 
 class ScenarioRequest(BaseModel):

@@ -151,6 +151,8 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
         )}
       </div>
 
+      <ProvenancePanel entity={entity} onFocus={onFocus} />
+
       {promote?.kind === 'figure-to-result' && (
         <PromoteDialog
           title={`Promote "${entity.title}" to a result`}
@@ -481,6 +483,68 @@ function renderBody(
         <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
       )
   }
+}
+
+interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }
+
+function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: string) => void }) {
+  const [data, setData] = useState<{ upstream: ProvNode[]; downstream: ProvNode[] } | null>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    setData(null)
+    if (entity.type === 'workspace') return
+    let cancelled = false
+    fetch(`/api/entities/${encodeURIComponent(entity.id)}/provenance`)
+      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+      .then(d => { if (!cancelled) setData(d) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [entity.id, entity.type])
+
+  const up = data?.upstream ?? []
+  const down = data?.downstream ?? []
+  if (up.length === 0 && down.length === 0) return null
+
+  return (
+    <div className={`prov ${open ? 'prov--open' : ''}`}>
+      <button className="prov__toggle" onClick={() => setOpen(v => !v)}>
+        <span className="prov__chev">{open ? '▾' : '▸'}</span>
+        Provenance
+        <span className="prov__counts">
+          {up.length > 0 && `${up.length} up`}
+          {up.length > 0 && down.length > 0 && ' · '}
+          {down.length > 0 && `${down.length} down`}
+        </span>
+      </button>
+      {open && (
+        <div className="prov__cols">
+          <div className="prov__col">
+            <div className="prov__col-head">Made from</div>
+            {up.length === 0 && <div className="prov__empty">— nothing upstream</div>}
+            {up.map(n => (
+              <button key={n.id} className="prov__row" onClick={() => onFocus(n.id)}
+                      style={{ paddingLeft: 8 + (n.depth - 1) * 12 }}>
+                <span className={`focus__type focus__type--${n.type}`}>{n.type}</span>
+                <span className="prov__title">{n.title}</span>
+              </button>
+            ))}
+          </div>
+          <div className="prov__col">
+            <div className="prov__col-head">Used by</div>
+            {down.length === 0 && <div className="prov__empty">— nothing downstream</div>}
+            {down.map(n => (
+              <button key={n.id} className="prov__row" onClick={() => onFocus(n.id)}
+                      style={{ paddingLeft: 8 + (n.depth - 1) * 12 }}>
+                <span className={`focus__type focus__type--${n.type}`}>{n.type}</span>
+                <span className="prov__title">{n.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function FindingBody({

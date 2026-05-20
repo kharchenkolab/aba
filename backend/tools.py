@@ -58,6 +58,33 @@ TOOL_SCHEMAS = [
         }
     },
     {
+        "name": "get_provenance",
+        "description": (
+            "Get the upstream provenance of an entity — what data and analyses "
+            "it was derived from. Use this to answer 'how did I get this?' / "
+            "'what data was used to make this figure?'. Pass an entity id "
+            "(e.g. the focused entity's id)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+    },
+    {
+        "name": "get_dependents",
+        "description": (
+            "Get the downstream dependents of an entity — what would need to be "
+            "reconsidered or recomputed if this entity changed. Use this to "
+            "answer 'if I change this, what else is affected?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+    },
+    {
         "name": "run_python",
         "description": (
             "Execute Python code in a sandboxed subprocess. "
@@ -384,11 +411,25 @@ def _fmt_size(n: int) -> str:
     return f"{n/1024/1024/1024:.1f} GB"
 
 
+def get_provenance(input_: dict) -> dict:
+    from provenance import provenance_text, neighborhood
+    eid = input_.get("entity_id", "")
+    return {"text": provenance_text(eid), "graph": neighborhood(eid)["upstream"]}
+
+
+def get_dependents(input_: dict) -> dict:
+    from provenance import dependents_text, neighborhood
+    eid = input_.get("entity_id", "")
+    return {"text": dependents_text(eid), "graph": neighborhood(eid)["downstream"]}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
     "run_python": run_python,
     "inspect_upload": inspect_upload,
+    "get_provenance": get_provenance,
+    "get_dependents": get_dependents,
 }
 
 def execute_tool(name: str, input_: dict) -> str:
