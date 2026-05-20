@@ -148,6 +148,14 @@ async def stream_response(
                 for ent in new_entities:
                     yield sse({"type": "entity_registered", "entity": ent})
 
+                # Methodologist reviews the run's methods, asynchronously.
+                if new_entities and analysis_ctx.get("analysis_id"):
+                    from advisors import methodologist_review
+                    aid = analysis_ctx["analysis_id"]
+                    asyncio.get_event_loop().run_in_executor(
+                        None, methodologist_review, aid
+                    )
+
                 yield sse({"type": "tool_result", "name": tool_name, "result": result_obj})
 
                 tool_result_blocks.append({
