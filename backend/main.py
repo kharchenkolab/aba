@@ -31,6 +31,8 @@ from promote import (
     promote_findings_to_claim,
 )
 from scenarios import create_scenario_variant
+from advisors import skeptic_review
+from db import list_advisor_notes
 
 
 app = FastAPI()
@@ -262,12 +264,23 @@ class PromoteFindingsRequest(BaseModel):
 
 
 @app.post("/api/entities/{figure_id}/promote-to-result")
-def promote_to_result(figure_id: str, req: PromoteFigureRequest):
+async def promote_to_result(figure_id: str, req: PromoteFigureRequest):
     try:
         rid = promote_figure_to_result(figure_id, req.interpretation, req.title)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Fire the Skeptic asynchronously so the user gets the result back
+    # promptly. The note shows up when they next reload the advisor rail
+    # (or when the focus changes — the rail re-fetches).
+    asyncio.get_event_loop().run_in_executor(None, skeptic_review, rid)
     return get_entity(rid)
+
+
+@app.get("/api/entities/{entity_id}/advisor-notes")
+def entities_advisor_notes(entity_id: str):
+    if not get_entity(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return list_advisor_notes(entity_id)
 
 
 @app.post("/api/findings")
