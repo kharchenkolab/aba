@@ -98,6 +98,21 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON entity_edges(source_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON entity_edges(target_id)")
 
+        # Advisor notes — agent-authored remarks attached to a focused entity.
+        # See aba_arch2.md §2.4: Methodologist, Skeptic, Explorer, Stylist.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_notes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id    TEXT NOT NULL,
+                advisor      TEXT NOT NULL,
+                text         TEXT NOT NULL,
+                metadata     TEXT,
+                status       TEXT NOT NULL DEFAULT 'active',
+                created_at   TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_notes_entity ON advisor_notes(entity_id)")
+
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
         if not row:
@@ -279,6 +294,44 @@ def restore_entity(entity_id: str) -> Optional[dict]:
         if cur.rowcount == 0:
             return None
     return get_entity(entity_id)
+
+
+# ---------- Advisor notes ----------
+
+def add_advisor_note(entity_id: str, advisor: str, text: str,
+                     metadata: Optional[dict] = None) -> int:
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO advisor_notes (entity_id, advisor, text, metadata, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (entity_id, advisor, text,
+             json.dumps(metadata) if metadata else None, now),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def list_advisor_notes(entity_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, entity_id, advisor, text, metadata, status, created_at "
+            "FROM advisor_notes WHERE entity_id = ? AND status = 'active' "
+            "ORDER BY id",
+            (entity_id,),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "entity_id": r["entity_id"],
+            "advisor": r["advisor"],
+            "text": r["text"],
+            "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+            "status": r["status"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
 # ---------- Edges ----------
