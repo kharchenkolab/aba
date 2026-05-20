@@ -55,18 +55,28 @@ export default function AnnotatedFigure({ entity, onAttach }: Props) {
     if (mode === 'highlight') setStroke(s => [...s, p])
     else setBox(b => (b ? [b[0], p] : [p, p]))
   }
-  function up() { setDrawing(false) }
+  function up() {
+    setDrawing(false)
+    // Auto-attach as soon as a mark is finished — no separate "attach" step.
+    const finished = (mode === 'highlight' && stroke.length > 1) || (mode === 'box' && !!box)
+    if (finished) attach()
+  }
 
   const hasMark = (mode === 'highlight' && stroke.length > 1) || (mode === 'box' && !!box)
 
   async function attach() {
-    if (!hasMark || !imgRef.current) return
+    if (!imgRef.current) return
     const natural = new Image()
     natural.crossOrigin = 'anonymous'
     natural.src = imgRef.current.src
     await natural.decode().catch(() => {})
-    const W = natural.naturalWidth || imgRef.current.width
-    const H = natural.naturalHeight || imgRef.current.height
+    const nW = natural.naturalWidth || imgRef.current.width
+    const nH = natural.naturalHeight || imgRef.current.height
+    // Downsample aggressively (~512px wide) — the highlight is thick and the
+    // model only needs the gross plot shape + the mark, so this keeps the
+    // vision payload (and tokens) small.
+    const scale = nW > 512 ? 512 / nW : 1
+    const W = Math.round(nW * scale), H = Math.round(nH * scale)
     const canvas = document.createElement('canvas')
     canvas.width = W; canvas.height = H
     const ctx = canvas.getContext('2d')!
@@ -74,7 +84,7 @@ export default function AnnotatedFigure({ entity, onAttach }: Props) {
     ctx.fillStyle = PINK
     ctx.strokeStyle = PINK
     if (mode === 'highlight') {
-      ctx.lineWidth = Math.max(14, W / 28)
+      ctx.lineWidth = Math.max(12, W / 28)
       ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
       stroke.forEach((p, i) => (i ? ctx.lineTo(p.x * W, p.y * H) : ctx.moveTo(p.x * W, p.y * H)))
@@ -87,9 +97,8 @@ export default function AnnotatedFigure({ entity, onAttach }: Props) {
     const b64 = canvas.toDataURL('image/png').split(',')[1]
     onAttach({
       image: b64,
-      note: `The user highlighted a region of the figure "${entity.title}" — it is marked in translucent pink on the attached image. Answer about the highlighted region specifically.`,
+      note: `The user highlighted a region of the figure "${entity.title}" — it is marked in translucent pink on the attached image. Answer about the highlighted region specifically (the user may refer to it as "here" or "the highlighted area").`,
     })
-    setMarking(false)
   }
 
   // SVG overlay geometry (in 0–100 viewBox units)
@@ -101,29 +110,6 @@ export default function AnnotatedFigure({ entity, onAttach }: Props) {
 
   return (
     <div className="annot">
-      <div className="annot__bar">
-        <button
-          className={`annot__hl ${marking ? 'annot__hl--on' : ''}`}
-          onClick={() => { setMarking(m => !m); if (marking) clearMark() }}
-          title="Highlighter — mark a region to ask Guide about"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/>
-          </svg>
-          Highlight
-        </button>
-        {marking && (
-          <>
-            <span className="annot__sep" />
-            <button className={`annot__tool ${mode === 'highlight' ? 'is-on' : ''}`}
-                    onClick={() => { setMode('highlight'); clearMark() }}>marker</button>
-            <button className={`annot__tool ${mode === 'box' ? 'is-on' : ''}`}
-                    onClick={() => { setMode('box'); clearMark() }}>box</button>
-            {hasMark && <button className="annot__attach" onClick={attach}>Attach to chat →</button>}
-            {hasMark && <button className="annot__tool" onClick={clearMark}>clear</button>}
-          </>
-        )}
-      </div>
       <div
         className={`annot__wrap ${marking ? 'annot__wrap--marking' : ''}`}
         ref={wrapRef}
@@ -138,6 +124,42 @@ export default function AnnotatedFigure({ entity, onAttach }: Props) {
               : <rect x={bx} y={by} width={bw} height={bh} fill={PINK} />}
           </svg>
         )}
+
+        {/* Compact toolbar overlaid on the figure's top-right. */}
+        <div className="annot__tb">
+          <button
+            className={`annot__tb-btn ${marking ? 'annot__tb-btn--on' : ''}`}
+            onClick={() => { setMarking(m => !m); if (marking) clearMark() }}
+            title="Highlight a region to ask Guide about it"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/>
+            </svg>
+          </button>
+          {marking && (
+            <>
+              <button className={`annot__tb-btn ${mode === 'highlight' ? 'annot__tb-btn--sel' : ''}`}
+                      title="Freehand marker"
+                      onClick={() => { setMode('highlight'); clearMark() }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                  <path d="M4 18 Q9 6 14 13 T20 8" />
+                </svg>
+              </button>
+              <button className={`annot__tb-btn ${mode === 'box' ? 'annot__tb-btn--sel' : ''}`}
+                      title="Box"
+                      onClick={() => { setMode('box'); clearMark() }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                  <rect x="4" y="6" width="16" height="12" rx="1.5" />
+                </svg>
+              </button>
+              {hasMark && (
+                <button className="annot__tb-btn" title="Clear mark" onClick={clearMark}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

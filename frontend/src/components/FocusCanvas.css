@@ -430,29 +430,36 @@
 .prov__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Spatial reference (Phase 25) */
-.annot { display: flex; flex-direction: column; gap: 8px; }
-.annot__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.annot__hl {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--text-2); cursor: pointer;
-}
-.annot__hl:hover { background: #fdf2f8; border-color: #f9a8d4; color: #be185d; }
-.annot__hl--on { background: #fce7f3; border-color: #f472b6; color: #be185d; }
-.annot__sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
-.annot__tool {
-  font-size: 11px; padding: 4px 9px; border-radius: 5px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--text-3); cursor: pointer;
-}
-.annot__tool.is-on { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
-.annot__attach {
-  font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px;
-  border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer;
-}
+.annot { display: flex; flex-direction: column; }
 .annot__wrap { position: relative; display: inline-block; align-self: flex-start; max-width: 100%; }
 .annot__wrap--marking { cursor: crosshair; }
 .annot__wrap--marking img { user-select: none; }
 .annot__svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* Compact toolbar overlaid on the figure's top-right corner. */
+.annot__tb {
+  position: absolute;
+  top: 8px; right: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(2px);
+}
+.annot__tb-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; border-radius: 6px;
+  color: var(--text-3); cursor: pointer;
+}
+.annot__tb-btn:hover { background: var(--tree-active-bg); color: var(--text); }
+.annot__tb-btn--on { background: #fce7f3; color: #be185d; }
+.annot__tb-btn--sel { background: #fce7f3; color: #be185d; }
+.annot__tb-btn--go { background: var(--accent); color: #fff; }
+.annot__tb-btn--go:hover { background: #4c1d95; color: #fff; }
 
 .annot-attached {
   display: flex; align-items: center; gap: 10px;

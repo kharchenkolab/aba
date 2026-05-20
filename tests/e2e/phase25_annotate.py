@@ -106,8 +106,8 @@ def drive(fport: int) -> int:
 
         # Focus the figure → AnnotatedFigure renders with a Mark button.
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".annot__hl", timeout=3000)
-        page.locator(".annot__hl").click()  # enter marking
+        page.wait_for_selector(".annot__tb-btn", timeout=3000)
+        page.locator(".annot__tb-btn").click()  # enter marking
         page.wait_for_selector(".annot__wrap--marking", timeout=2000)
 
         # Drag a circle across the figure.
@@ -120,11 +120,10 @@ def drive(fport: int) -> int:
         page.wait_for_selector(".annot__svg", timeout=2000)
         page.screenshot(path=str(SHOT_DIR / "01_marked.png"), full_page=True)
 
-        # Attach → chip appears.
-        page.locator(".annot__attach").click()
+        # Finishing the stroke auto-attaches — no separate button.
         page.wait_for_selector(".annot-attached", timeout=3000)
         page.screenshot(path=str(SHOT_DIR / "02_attached.png"), full_page=True)
-        print("✓ region marked and attached to chat")
+        print("✓ region auto-attached on draw (no attach button)")
 
         # Send a question → the mark stays attached (sticky) for follow-ups.
         comp.fill("what's in this region?")

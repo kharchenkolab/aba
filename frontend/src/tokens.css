@@ -19,11 +19,13 @@
   --text-4: #9aa0a8;
 
   --accent: #3b66ff;
-  --guide: #3b66ff;
-  --metho: #f08a3a;
-  --skeptic: #15a36a;
-  --explorer: #15a36a;
-  --stylist: #5a4dff;
+  /* Agent palette — each advisor a distinct hue; Guide is green (the
+     primary voice), kept clear of the user's purple. */
+  --guide: #12a150;      /* green */
+  --metho: #f08a3a;      /* amber */
+  --skeptic: #e0506a;    /* rose — the challenger */
+  --explorer: #0ea5e9;   /* sky — discovery */
+  --stylist: #8b5cf6;    /* violet */
 
   --warn-bg: #fff7eb;
   --warn-bd: #f5d6a3;
