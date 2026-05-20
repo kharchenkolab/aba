@@ -25,6 +25,10 @@ interface Props {
   embedded?: boolean
   /** Compact peek variant (chat about an entity, narrow). */
   compact?: boolean
+  entities?: Entity[]
+  onPin?: (id: string, pinned: boolean) => void
+  keptKeys?: Set<string>
+  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
 }
 
 export default function ChatPane({
@@ -43,6 +47,10 @@ export default function ChatPane({
   onRetry,
   embedded,
   compact,
+  entities,
+  onPin,
+  keptKeys,
+  onKeepMessage,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [traceVisible, setTraceVisible] = useState(false)
@@ -127,6 +135,10 @@ export default function ChatPane({
                 onAnnotate={onAnnotate}
                 annotClear={annotClear}
                 onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
+                entities={entities}
+                onPin={onPin}
+                keptKeys={keptKeys}
+                onKeepMessage={onKeepMessage}
               />
             ))}
           </div>

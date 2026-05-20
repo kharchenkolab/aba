@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { DisplayMessage, Block } from '../types'
+import type { DisplayMessage, Block, Entity } from '../types'
 import HighlightableImage from './HighlightableImage'
 import { AgentAvatar } from './icons'
 import './Message.css'
@@ -65,7 +65,7 @@ function toolRunningLabel(name: string) {
  * tool_result into a single indicator that resolves spinner → green check.
  * Tool indicators are hidden when `collapseTools` is set (older messages).
  */
-function renderBlocks(blocks: Block[], collapseTools: boolean, onAnnotate?: (a: Annotation) => void, clearSignal?: number, onRetry?: () => void) {
+function renderBlocks(blocks: Block[], collapseTools: boolean, onAnnotate?: (a: Annotation) => void, clearSignal?: number, onRetry?: () => void, entities?: Entity[]) {
   const out: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
@@ -85,8 +85,12 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onAnnotate?: (a: 
         </div>,
       )
     } else if (b.type === 'image') {
+      // Title from the registered figure/table entity, if any. (Pin/keep now
+      // lives in the per-message toolbar, not here.)
+      const ent = entities?.find(e => e.artifact_path === b.url && (e.type === 'figure' || e.type === 'table'))
       out.push(
         <div key={i} className="msg-image">
+          {ent && <div className="msg-image__head"><span className="msg-image__title">{ent.title}</span></div>}
           {onAnnotate
             ? <HighlightableImage src={b.url} label={b.alt} onAttach={onAnnotate} hoverToolbar className="msg-image__img" clearSignal={clearSignal} />
             : <img className="msg-image__img" src={b.url} alt={b.alt ?? 'plot'} />}
@@ -133,11 +137,24 @@ interface Props {
   annotClear?: number
   /** Regenerate this (failed) turn — shown as a retry button on error blocks. */
   onRetry?: () => void
+  /** Entities (to resolve chat figures) + pin toggle for the capture gesture. */
+  entities?: Entity[]
+  onPin?: (id: string, pinned: boolean) => void
+  /** Keep (pin) a non-entity message as a snapshot, keyed by content. */
+  keptKeys?: Set<string>
+  onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
 }
 
 const TRACE_TYPES = new Set(['tool_start', 'tool_result', 'image'])
 
-export default function Message({ message, isStreaming, hideToolBlocks, collapseTools, onAnnotate, annotClear, onRetry }: Props) {
+// Stable content hash so a pinned text message can be matched on reload.
+function msgKey(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return 'm' + (h >>> 0).toString(36)
+}
+
+export default function Message({ message, isStreaming, hideToolBlocks, collapseTools, onAnnotate, annotClear, onRetry, entities, onPin, keptKeys, onKeepMessage }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   const visibleBlocks = hideToolBlocks
@@ -150,8 +167,30 @@ export default function Message({ message, isStreaming, hideToolBlocks, collapse
   const canCollapse = !!collapseTools && !isStreaming && !hideToolBlocks && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, isUser ? undefined : onAnnotate, annotClear, onRetry)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, isUser ? undefined : onAnnotate, annotClear, onRetry, entities)
   if (rendered.length === 0 && !isStreaming) return null
+
+  // Pin target: a figure/table message pins its entity (navigable); any other
+  // message is snapshotted as a kept note (keyed by content).
+  const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
+  const imageUrls = message.blocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
+  const figureEnt = imageUrls.length
+    ? entities?.find(e => e.artifact_path === imageUrls[0] && (e.type === 'figure' || e.type === 'table'))
+    : undefined
+  const key = msgKey(message.role + '|' + msgText + '|' + imageUrls.join(','))
+  const pinned = figureEnt ? figureEnt.pinned : !!keptKeys?.has(key)
+  const canPin = !isStreaming && (!!figureEnt || msgText.length > 0) && (!!onPin || !!onKeepMessage)
+  // Optimistic pin state: flip instantly on click, reconcile when the server
+  // state (via refreshed entities) catches up.
+  const [optimistic, setOptimistic] = useState<boolean | null>(null)
+  useEffect(() => { setOptimistic(null) }, [pinned])
+  const shownPinned = optimistic ?? pinned
+  function togglePin() {
+    const next = !shownPinned
+    setOptimistic(next)
+    if (figureEnt) onPin?.(figureEnt.id, next)
+    else onKeepMessage?.(key, msgText, imageUrls, next)
+  }
 
   return (
     <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'}`}>
@@ -164,25 +203,31 @@ export default function Message({ message, isStreaming, hideToolBlocks, collapse
           {isStreaming && <span className="cursor-blink">▌</span>}
         </div>
       </div>
-      {canCollapse && (
-        <button
-          className={`msg__steps-toggle ${showSteps ? 'msg__steps-toggle--on' : ''}`}
-          onClick={() => setShowSteps(s => !s)}
-          title={showSteps ? 'Hide steps' : `Show ${stepCount} step${stepCount > 1 ? 's' : ''} Guide took`}
-        >
-          {showSteps ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-              <path d="M3 3l18 18" strokeLinecap="round"/>
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-            </svg>
-          )}
-          <span className="msg__steps-count">{stepCount}</span>
-        </button>
-      )}
+
+      {/* Uniform per-message toolbar: eye (steps) hover-reveals; pin stays. */}
+      <div className="msg__tools">
+        {canCollapse && (
+          <button
+            className={`msg__tool msg__tool--hover ${showSteps ? 'msg__tool--on' : ''}`}
+            onClick={() => setShowSteps(s => !s)}
+            title={showSteps ? 'Hide steps' : `Show ${stepCount} step${stepCount > 1 ? 's' : ''} Guide took`}
+          >
+            {showSteps
+              ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18" strokeLinecap="round"/></svg>
+              : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>}
+            <span className="msg__tool-num">{stepCount}</span>
+          </button>
+        )}
+        {canPin && (
+          <button
+            className={`msg__tool msg__tool--pin ${shownPinned ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
+            onClick={togglePin}
+            title={shownPinned ? 'Pinned — click to unpin' : 'Pin to keep this in the project'}
+          >
+            <svg viewBox="0 0 24 24" fill={shownPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
+          </button>
+        )}
+      </div>
     </div>
   )
 }

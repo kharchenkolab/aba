@@ -95,6 +95,60 @@ def remove_result_from_finding(finding_id: str, result_id: str) -> dict:
     return get_entity(finding_id)  # type: ignore[return-value]
 
 
+def create_finding_from_draft(
+    title: str,
+    summary: str,
+    evidence_ids: Optional[list[str]] = None,
+    caveats: Optional[list[dict]] = None,
+    status: str = "candidate",
+) -> str:
+    """Create a structured finding directly (selection-to-finding / M3).
+
+    Evidence may be any entity (figure/table/result) — not just results — so
+    a finding can be crystallized straight from chat before promotion.
+    """
+    evidence_ids = evidence_ids or []
+    fid = create_entity(
+        entity_type="finding",
+        title=(title.strip()[:120] or "Untitled finding"),
+        metadata={
+            "text": summary, "summary": summary,
+            "supporting_results": evidence_ids,
+            "evidence": evidence_ids,
+            "caveats": caveats or [],
+            "maturity": status,
+        },
+    )
+    for eid in evidence_ids:
+        if get_entity(eid):
+            add_edge(fid, eid, "supports", {"direction": "finding-supported-by-evidence"})
+            add_edge(fid, eid, "wasDerivedFrom")
+    return fid
+
+
+def set_finding_fields(
+    finding_id: str,
+    summary: Optional[str] = None,
+    caveats: Optional[list[dict]] = None,
+    status: Optional[str] = None,
+    title: Optional[str] = None,
+) -> dict:
+    """Edit a finding's structured fields (M7 finding view)."""
+    f = get_entity(finding_id)
+    if not f or f["type"] != "finding":
+        raise ValueError("finding not found")
+    meta = dict(f.get("metadata") or {})
+    if summary is not None:
+        meta["summary"] = summary; meta["text"] = summary
+    if caveats is not None:
+        meta["caveats"] = caveats
+    if status is not None:
+        meta["maturity"] = status
+    update_entity(finding_id, metadata=meta,
+                  **({"title": title.strip()[:120]} if title else {}))
+    return get_entity(finding_id)  # type: ignore[return-value]
+
+
 def promote_findings_to_claim(
     finding_ids: list[str],
     text: str,

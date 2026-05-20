@@ -75,6 +75,29 @@ export default function App() {
   }
   const openEntity = (id: string) => { setFocusedId(id); setPosture('entity') }
 
+  // Pin/unpin a figure entity to keep it in the project (chat capture).
+  const pinEntity = (id: string, pinned: boolean) => {
+    fetch(`/api/entities/${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }).then(() => refresh()).catch(() => {})
+  }
+  // Keep any (non-entity) message as a snapshot note, keyed by content.
+  const keepMessage = (key: string, text: string, image_urls: string[]) => {
+    fetch('/api/messages/pin', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, text, image_urls }),
+    }).then(() => refresh()).catch(() => {})
+  }
+  // Keys of currently-kept message notes (to reflect pin state in chat).
+  // Only active notes count — an archived (unpinned) note must not keep the
+  // chat pin button lit.
+  const keptKeys = new Set(
+    entities
+      .filter(e => e.type === 'note' && e.status === 'active' && (e.metadata?.source_key as string))
+      .map(e => e.metadata!.source_key as string),
+  )
+
   if (view === 'home') {
     return (
       <div className="app app--home">
@@ -107,6 +130,10 @@ export default function App() {
       onRetry={retryLast}
       embedded
       compact={compact}
+      entities={entities}
+      onPin={pinEntity}
+      keptKeys={keptKeys}
+      onKeepMessage={(key, text, image_urls) => keepMessage(key, text, image_urls)}
     />
   )
 

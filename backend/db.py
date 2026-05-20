@@ -775,6 +775,20 @@ def append_message(
         return cur.lastrowid
 
 
+def find_kept_note(source_key: str) -> Optional[str]:
+    """Return the id of an active kept-note snapshot for this message key."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, metadata FROM entities WHERE type='note' "
+            "AND status='active' AND deleted_at IS NULL"
+        ).fetchall()
+    for r in rows:
+        m = json.loads(r["metadata"]) if r["metadata"] else {}
+        if m.get("source_key") == source_key:
+            return r["id"]
+    return None
+
+
 def search(q: str, limit: int = 25) -> dict:
     """Faceted search across the firehose: entities (title/notes) + message
     text snippets. Lexical (LIKE) for now; FTS/semantic can replace later."""

@@ -85,9 +85,10 @@ interface TreeItemProps {
   focused: boolean
   onClick: () => void
   onChange: () => void
+  inPinned?: boolean
 }
 
-function TreeItem({ entity, focused, onClick, onChange }: TreeItemProps) {
+function TreeItem({ entity, focused, onClick, onChange, inPinned }: TreeItemProps) {
   const statusIcon = STATUS_ICON[entity.status]
   return (
     <div
@@ -101,8 +102,12 @@ function TreeItem({ entity, focused, onClick, onChange }: TreeItemProps) {
       </svg>
       <span className="tree__item-label">
         <span className="tree__title-line">
-          {entity.pinned && <span className="tree__pin">★</span>}
-          {entity.title}
+          {/* Red pin marks a pinned entity (matches the chat pin); redundant
+              inside the Pinned panel. */}
+          {entity.pinned && !inPinned && (
+            <svg className="tree__pin" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
+          )}
+          <span className="tree__item-title">{entity.title}</span>
         </span>
         <span className="meta">
           {statusIcon && <span className={`tree__status tree__status--${entity.status}`}>{statusIcon}</span>}
@@ -123,11 +128,14 @@ function TreeItem({ entity, focused, onClick, onChange }: TreeItemProps) {
   )
 }
 
+const SECTION_CAP = 8   // items shown per section before "show all"
+
 export default function ProjectTree({ entities, focusedId, onFocus, onChange }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(() => loadCollapsed())
+  const [showAll, setShowAll] = useState<Record<string, boolean>>({})
 
   useEffect(() => { saveCollapsed(collapsed) }, [collapsed])
 
@@ -205,25 +213,30 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
         )}
       </div>
 
+      <div className="tree__scroll">
       {pinned.length > 0 && (
         <section className="tree__section">
           <div className="tree__section-head open">
-            <svg className="icon" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-              <path d="M10 2l2.5 5 5.5.8-4 3.9.9 5.4L10 14.8 5.1 17l.9-5.4-4-3.9 5.5-.8L10 2z" />
-            </svg>
+            <svg className="tree__pin icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
             Pinned
             <span className="tree__count">{pinned.length}</span>
           </div>
           <div className="tree__items">
-            {pinned.map(e => (
+            {(showAll.Pinned ? pinned : pinned.slice(0, SECTION_CAP)).map(e => (
               <TreeItem
                 key={e.id}
                 entity={e}
                 focused={focusedId === e.id}
                 onClick={() => onFocus(e.id)}
                 onChange={onChange}
+                inPinned
               />
             ))}
+            {pinned.length > SECTION_CAP && (
+              <button className="tree__more" onClick={() => setShowAll(s => ({ ...s, Pinned: !s.Pinned }))}>
+                {showAll.Pinned ? 'Show less' : `+${pinned.length - SECTION_CAP} more`}
+              </button>
+            )}
           </div>
         </section>
       )}
@@ -231,6 +244,8 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
       {SECTIONS.map(section => {
         const items = visible.filter(e => section.types.includes(e.type) && !e.pinned)
         const isCollapsed = !!collapsed[section.label]
+        const expanded = !!showAll[section.label]
+        const shown = expanded ? items : items.slice(0, SECTION_CAP)
         return (
           <section key={section.label} className="tree__section">
             <div
@@ -248,7 +263,7 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
             </div>
             {!isCollapsed && items.length > 0 && (
               <div className="tree__items">
-                {items.map(e => (
+                {shown.map(e => (
                   <TreeItem
                     key={e.id}
                     entity={e}
@@ -257,11 +272,18 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
                     onChange={onChange}
                   />
                 ))}
+                {items.length > SECTION_CAP && (
+                  <button className="tree__more"
+                          onClick={() => setShowAll(s => ({ ...s, [section.label]: !s[section.label] }))}>
+                    {expanded ? 'Show less' : `+${items.length - SECTION_CAP} more`}
+                  </button>
+                )}
               </div>
             )}
           </section>
         )
       })}
+      </div>
 
       <div className="tree__footer">
         <label className="tree__toggle">

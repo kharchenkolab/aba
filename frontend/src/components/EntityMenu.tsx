@@ -22,7 +22,22 @@ type Editing =
 export default function EntityMenu({ entity, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  // Position the popover with fixed coords from the trigger so it floats free
+  // of any overflow-hidden ancestor (e.g. the rounded tree section cards).
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - 200) })
+    }
+    setOpen(v => !v); setEditing(null)
+  }
+  const popStyle = pos
+    ? { position: 'fixed' as const, top: pos.top, left: pos.left, right: 'auto' as const }
+    : undefined
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -74,14 +89,15 @@ export default function EntityMenu({ entity, onChange }: Props) {
   return (
     <div className="entity-menu" ref={ref} onClick={e => e.stopPropagation()}>
       <button
+        ref={btnRef}
         className="entity-menu__btn"
-        onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
+        onClick={e => { e.stopPropagation(); toggle() }}
         title="More actions"
       >
         ⋯
       </button>
       {open && !editing && (
-        <div className="entity-menu__pop">
+        <div className="entity-menu__pop" style={popStyle}>
           <button onClick={() => setEditing({ kind: 'rename' })}>Rename…</button>
           <button onClick={() => setEditing({ kind: 'notes' })}>Edit notes…</button>
           <button onClick={() => setEditing({ kind: 'tags' })}>Edit tags…</button>
@@ -100,6 +116,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
         <EditOne
           label="Rename"
           value={entity.title}
+          style={popStyle}
           onCancel={() => setEditing(null)}
           onSubmit={v => patch({ title: v })}
         />
@@ -109,6 +126,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
           label="Notes"
           value={entity.notes ?? ''}
           placeholder="A short note for future-you…"
+          style={popStyle}
           onCancel={() => setEditing(null)}
           onSubmit={v => patch({ notes: v })}
         />
@@ -117,6 +135,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
         <EditOne
           label="Tags (comma-separated)"
           value={entity.tags.join(', ')}
+          style={popStyle}
           onCancel={() => setEditing(null)}
           onSubmit={v => patch({
             tags: v.split(',').map(s => s.trim()).filter(Boolean),
@@ -128,14 +147,15 @@ export default function EntityMenu({ entity, onChange }: Props) {
 }
 
 function EditOne({
-  label, value, onCancel, onSubmit,
+  label, value, onCancel, onSubmit, style,
 }: {
   label: string; value: string;
   onCancel: () => void; onSubmit: (v: string) => void;
+  style?: React.CSSProperties;
 }) {
   const [v, setV] = useState(value)
   return (
-    <div className="entity-menu__pop entity-menu__edit">
+    <div className="entity-menu__pop entity-menu__edit" style={style}>
       <div className="entity-menu__label">{label}</div>
       <input
         className="entity-menu__input"
@@ -156,14 +176,15 @@ function EditOne({
 }
 
 function EditMulti({
-  label, value, placeholder, onCancel, onSubmit,
+  label, value, placeholder, onCancel, onSubmit, style,
 }: {
   label: string; value: string; placeholder?: string;
   onCancel: () => void; onSubmit: (v: string) => void;
+  style?: React.CSSProperties;
 }) {
   const [v, setV] = useState(value)
   return (
-    <div className="entity-menu__pop entity-menu__edit">
+    <div className="entity-menu__pop entity-menu__edit" style={style}>
       <div className="entity-menu__label">{label}</div>
       <textarea
         className="entity-menu__textarea"
