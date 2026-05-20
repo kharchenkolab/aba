@@ -54,10 +54,22 @@ function renderBlock(block: Block, i: number) {
 interface Props {
   message: DisplayMessage
   isStreaming?: boolean
+  /** When true, omit tool_start/tool_result/image blocks — they belong in
+   *  the side TracePanel instead. */
+  hideToolBlocks?: boolean
 }
 
-export default function Message({ message, isStreaming }: Props) {
+const TRACE_TYPES = new Set(['tool_start', 'tool_result', 'image'])
+
+export default function Message({ message, isStreaming, hideToolBlocks }: Props) {
   const isUser = message.role === 'user'
+  const visibleBlocks = hideToolBlocks
+    ? message.blocks.filter(b => !TRACE_TYPES.has(b.type))
+    : message.blocks
+
+  // If hiding tool blocks would result in an empty assistant turn (the
+  // turn was pure tool-orchestration), don't render the bubble at all.
+  if (visibleBlocks.length === 0 && !isStreaming) return null
 
   return (
     <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'}`}>
@@ -76,7 +88,7 @@ export default function Message({ message, isStreaming }: Props) {
           {!isUser && <span className="msg__badge">APP</span>}
         </div>
         <div className="msg__content">
-          {message.blocks.map((b, i) => renderBlock(b, i))}
+          {visibleBlocks.map((b, i) => renderBlock(b, i))}
           {isStreaming && <span className="cursor-blink">▌</span>}
         </div>
       </div>
