@@ -64,15 +64,21 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
   return display
 }
 
+interface Annotation { image: string; note: string }
+
 export function useChat(
   focusEntityId: string,
   onEntityRegistered?: () => void,
+  annotation?: Annotation | null,
+  clearAnnotation?: () => void,
 ) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
+  const annotationRef = useRef(annotation)
+  annotationRef.current = annotation
 
   // Load the project's conversation once on mount. The chat thread is
   // workspace-level — focus changes do NOT swap the conversation.
@@ -105,11 +111,18 @@ export function useChat(
       const streamingBlocks: Block[] = []
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
 
+      const annot = annotationRef.current
+      if (annot) clearAnnotation?.()
+
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, focus_entity_id: focusEntityId }),
+          body: JSON.stringify({
+            text,
+            focus_entity_id: focusEntityId,
+            ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
+          }),
         })
         if (!res.body) throw new Error('No response body')
         const reader = res.body.getReader()

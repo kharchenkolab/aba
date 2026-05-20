@@ -428,3 +428,36 @@
 }
 .prov__row:hover { background: var(--tree-active-bg); }
 .prov__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Spatial reference (Phase 25) */
+.annot { display: flex; flex-direction: column; gap: 8px; }
+.annot__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.annot__btn {
+  font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-2); cursor: pointer;
+}
+.annot__btn:hover { background: var(--tree-active-bg); }
+.annot__btn--on { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+.annot__tool {
+  font-size: 11px; padding: 4px 9px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-3); cursor: pointer;
+}
+.annot__tool.is-on { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
+.annot__attach {
+  font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px;
+  border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer;
+}
+.annot__wrap { position: relative; display: inline-block; align-self: flex-start; max-width: 100%; }
+.annot__wrap--marking { cursor: crosshair; }
+.annot__wrap--marking img { user-select: none; }
+.annot__svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+.annot-attached {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 12px 8px; padding: 6px 10px;
+  background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px;
+  font-size: 12px; color: #b91c1c;
+}
+.annot-attached img { height: 40px; border-radius: 4px; border: 1px solid #fca5a5; }
+.annot-attached span { flex: 1; }
+.annot-attached button { border: none; background: none; color: #b91c1c; font-size: 16px; cursor: pointer; }

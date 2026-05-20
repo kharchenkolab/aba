@@ -231,6 +231,10 @@ class ChatRequest(BaseModel):
     # The entity the user is *focused on* (chip / canvas). Used to augment
     # the model's context. The chat thread itself is always project-level.
     focus_entity_id: str = WORKSPACE_ID
+    # Spatial reference (Phase 25): base64 PNG of the figure with the user's
+    # annotation composited on, plus a short note describing the gesture.
+    annotation_image: str | None = None
+    annotation_note: str | None = None
 
 
 @app.post("/api/chat")
@@ -239,7 +243,12 @@ async def chat(req: ChatRequest):
         raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
 
     async def event_stream():
-        async for chunk in stream_response(req.text, focus_entity_id=req.focus_entity_id):
+        async for chunk in stream_response(
+            req.text,
+            focus_entity_id=req.focus_entity_id,
+            annotation_image=req.annotation_image,
+            annotation_note=req.annotation_note,
+        ):
             yield chunk
 
     return StreamingResponse(

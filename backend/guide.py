@@ -2,7 +2,7 @@ import json
 import asyncio
 from typing import AsyncGenerator
 
-from config import SYSTEM_PROMPT
+from config import SYSTEM_PROMPT, FAKE_SESSION
 from db import (
     append_message, get_messages, get_entity, WORKSPACE_ID,
     log_context_assembly, session_assembly_summary,
@@ -29,6 +29,8 @@ async def stream_response(
     user_text: str,
     *,
     focus_entity_id: str = WORKSPACE_ID,
+    annotation_image: str | None = None,
+    annotation_note: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Append user message to the workspace thread, run the Guide loop, stream SSE.
@@ -41,9 +43,30 @@ async def stream_response(
     turn_index = 0
 
     user_blocks = [{"type": "text", "text": user_text}]
+    if annotation_note:
+        # Persist a small marker so later turns know a region was discussed
+        # (we don't store the image itself — it'd bloat the DB).
+        user_blocks.append({"type": "text", "text": f"[{annotation_note}]"})
     append_message("user", user_blocks,
                    entity_id=WORKSPACE_ID, focus_entity_id=focus_entity_id)
     history = get_messages(WORKSPACE_ID)
+
+    # Vision: inject the annotated figure into the last user turn for THIS
+    # call only (not persisted). Skipped in fake mode (no vision).
+    if annotation_image and not FAKE_SESSION and history:
+        history = list(history)
+        last = history[-1]
+        history[-1] = {
+            **last,
+            "content": list(last["content"]) + [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": annotation_image,
+                },
+            }],
+        }
 
     focus_text, fields_preloaded = focus_preamble_with_fields(focus_entity_id)
     system = focus_text + SYSTEM_PROMPT
