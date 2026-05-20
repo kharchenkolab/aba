@@ -56,7 +56,48 @@
   align-self: flex-start;
 }
 
-.focus__dataset { display: flex; flex-direction: column; gap: 6px; }
+.focus__dataset { display: flex; flex-direction: column; gap: 10px; }
+.focus__rows    { display: flex; flex-direction: column; gap: 4px; }
+
+.focus__preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+.focus__preview-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.focus__preview-table th,
+.focus__preview-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.focus__preview-table th {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  background: var(--tree-active-bg);
+  position: sticky;
+  top: 0;
+}
+.focus__preview-table td em { color: var(--text-4); font-style: normal; }
+.focus__preview-foot {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-4);
+  border-top: 1px solid var(--border);
+  background: #fafafb;
+}
 .focus__row {
   display: flex;
   gap: 10px;

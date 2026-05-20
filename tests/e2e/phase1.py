@@ -196,8 +196,10 @@ def drive_browser(frontend_port: int) -> int:
             "() => document.querySelector('.focus-chip')?.classList.contains('focus-chip--active')",
             timeout=2000,
         )
+        # Wait for the CSV preview to populate so the screenshot is meaningful.
+        page.wait_for_selector(".focus__preview-table", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "02_dataset_focused.png"), full_page=True)
-        print("✓ dataset focused — chat scope changed, focus canvas shows metadata")
+        print("✓ dataset focused — focus chip + preview table rendered")
 
         # Step 3: ask for the histogram. The fake fixture's turn 1 produces it.
         composer = page.locator(".composer__input")

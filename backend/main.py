@@ -68,6 +68,43 @@ def entities_clear_messages(entity_id: str):
     return {"ok": True}
 
 
+@app.get("/api/entities/{entity_id}/preview")
+def entities_preview(entity_id: str, limit: int = 20):
+    """
+    Return a lightweight preview for an entity's artifact.
+
+    Currently supported types:
+      - dataset (CSV/TSV): first N rows + column names + total row count.
+    Returns {"kind": "table", "columns": [...], "rows": [[...], ...], "total_rows": N}
+    or {"kind": "none"} if no preview is available.
+    """
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+
+    if e["type"] == "dataset" and e["artifact_path"]:
+        path = Path(e["artifact_path"])
+        if path.suffix.lower() in (".csv", ".tsv") and path.exists():
+            try:
+                import pandas as pd
+                sep = "," if path.suffix.lower() == ".csv" else "\t"
+                df = pd.read_csv(path, sep=sep, nrows=limit)
+                # Get total row count without re-reading the whole frame.
+                with path.open("r") as f:
+                    total = sum(1 for _ in f) - 1
+                return {
+                    "kind": "table",
+                    "columns": [str(c) for c in df.columns],
+                    "rows": df.astype(object).where(df.notna(), None).values.tolist(),
+                    "total_rows": max(total, 0),
+                    "shown": min(limit, len(df)),
+                }
+            except Exception as ex:  # noqa: BLE001
+                return {"kind": "error", "error": str(ex)}
+
+    return {"kind": "none"}
+
+
 # ---------- Chat ----------
 
 class ChatRequest(BaseModel):
