@@ -301,6 +301,24 @@ function WorkspaceCanvas({
           ? 'no data uploaded yet.'
           : `${datasetCount} dataset${datasetCount === 1 ? '' : 's'} in this project.`}
       </div>
+      <div className="workspace__add" style={{ marginTop: 6 }}>
+        <button
+          className="workspace__file-btn"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              const r = await fetch('/api/narratives', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: 'New manuscript section', text: '' }),
+              })
+              if (r.ok) { const n = await r.json(); onChange(); onFocus(n.id) }
+            } finally { setBusy(false) }
+          }}
+        >
+          + New manuscript section
+        </button>
+      </div>
     </div>
   )
 }
@@ -498,12 +516,72 @@ function renderBody(
     }
 
     case 'table':
+      return <TableBody entity={e} />
+
     case 'narrative':
+      return <NarrativeBody entity={e} onChange={onChange} />
+
     default:
       return (
         <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
       )
   }
+}
+
+function TableBody({ entity }: { entity: Entity }) {
+  const [preview, setPreview] = useState<Preview | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/entities/${encodeURIComponent(entity.id)}/preview?limit=30`)
+      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+      .then((p: Preview) => { if (!cancelled) setPreview(p) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [entity.id])
+  if (preview?.kind !== 'table') return <p className="focus__placeholder">Loading table…</p>
+  return (
+    <div className="focus__preview-wrap">
+      <table className="focus__preview-table">
+        <thead><tr>{preview.columns.map(c => <th key={c}>{c}</th>)}</tr></thead>
+        <tbody>
+          {preview.rows.map((row, i) => (
+            <tr key={i}>{row.map((v, j) => <td key={j}>{v == null ? <em>·</em> : String(v)}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="focus__preview-foot">showing {preview.shown} of {preview.total_rows} rows</div>
+    </div>
+  )
+}
+
+function NarrativeBody({ entity, onChange }: { entity: Entity; onChange: () => void }) {
+  const [text, setText] = useState((entity.metadata?.text as string) ?? '')
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { setText((entity.metadata?.text as string) ?? ''); setDirty(false) }, [entity.id])
+
+  async function save() {
+    const meta = { ...(entity.metadata ?? {}), text }
+    await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
+    })
+    setDirty(false); onChange()
+  }
+  return (
+    <div className="focus__narrative">
+      <textarea
+        className="focus__narrative-text"
+        value={text}
+        placeholder="Write this manuscript section. Reference claims and findings as you build the argument…"
+        onChange={e => { setText(e.target.value); setDirty(true) }}
+        rows={10}
+      />
+      <div className="focus__narrative-bar">
+        {dirty ? <button className="focus__promote" onClick={save}>Save</button>
+               : <span className="focus__placeholder">Saved. The Stylist reviews on focus.</span>}
+      </div>
+    </div>
+  )
 }
 
 function HistoryDrawer({

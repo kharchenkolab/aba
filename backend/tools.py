@@ -210,11 +210,20 @@ def run_python(input_: dict) -> dict:
             shutil.move(str(png), str(dest))
             plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
 
+        # Collect any CSV files produced (output tables).
+        tables = []
+        for csv in tmp_dir.glob("*.csv"):
+            dest_name = f"{uuid.uuid4().hex}.csv"
+            dest = ARTIFACTS_DIR / dest_name
+            shutil.move(str(csv), str(dest))
+            tables.append({"url": f"/artifacts/{dest_name}", "original_name": csv.name})
+
         return {
             "stdout": result.stdout[:4000] if result.stdout else "",
             "stderr": result.stderr[:2000] if result.stderr else "",
             "returncode": result.returncode,
-            "plots": plots
+            "plots": plots,
+            "tables": tables,
         }
     except subprocess.TimeoutExpired:
         return {"error": f"Code execution timed out ({timeout_s}s limit)"}

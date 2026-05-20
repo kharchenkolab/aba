@@ -9,6 +9,7 @@ __pycache__/
 .env
 backend/aba.db
 backend/artifacts/*.png
+backend/artifacts/*.csv
 backend/knowhow/context_policy/
 frontend/dist/
 
