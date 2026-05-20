@@ -18,7 +18,12 @@ export default function App() {
   return (
     <div className="app">
       <Rail />
-      <ProjectTree entities={entities} focusedId={focusedId} onFocus={setFocusedId} />
+      <ProjectTree
+        entities={entities}
+        focusedId={focusedId}
+        onFocus={setFocusedId}
+        onChange={refresh}
+      />
       <div className="main">
         <FocusCanvas
           entity={focused}

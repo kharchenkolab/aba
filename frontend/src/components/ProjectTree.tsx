@@ -1,13 +1,15 @@
+import { useState, useEffect } from 'react'
 import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
+import EntityMenu from './EntityMenu'
 
 interface Props {
   entities: Entity[]
   focusedId: string
   onFocus: (id: string) => void
+  onChange: () => void
 }
 
-// Tree section spec: which entity types belong, and a presentation label.
 const SECTIONS: { label: string; types: EntityType[]; iconPath: string }[] = [
   {
     label: 'Data',
@@ -53,21 +55,43 @@ const TYPE_ICONS: Record<EntityType, string> = {
   narrative: 'M5 3h10v14H5z',
 }
 
-function TreeItem({
-  entity,
-  focused,
-  onClick,
-  indent = 0,
-}: {
+const STATUS_ICON: Record<string, string> = {
+  running: '▶',
+  superseded: '↺',
+  failed: '⚠',
+  archived: '📦',
+}
+
+const COLLAPSE_KEY = 'aba:tree-collapsed'
+
+function loadCollapsed(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function saveCollapsed(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state))
+  } catch {
+    /* quota / disabled storage — fine */
+  }
+}
+
+interface TreeItemProps {
   entity: Entity
   focused: boolean
   onClick: () => void
-  indent?: number
-}) {
+  onChange: () => void
+}
+
+function TreeItem({ entity, focused, onClick, onChange }: TreeItemProps) {
+  const statusIcon = STATUS_ICON[entity.status]
   return (
     <div
-      className={`tree__item ${focused ? 'is-active' : ''}`}
-      style={{ paddingLeft: 14 + indent * 14 }}
+      className={`tree__item ${focused ? 'is-active' : ''} ${entity.status === 'archived' ? 'is-archived' : ''}`}
       onClick={onClick}
       data-entity-id={entity.id}
       data-entity-type={entity.type}
@@ -76,24 +100,53 @@ function TreeItem({
         <path d={TYPE_ICONS[entity.type]} />
       </svg>
       <span className="tree__item-label">
-        {entity.title}
+        <span className="tree__title-line">
+          {entity.pinned && <span className="tree__pin">★</span>}
+          {entity.title}
+        </span>
         <span className="meta">
+          {statusIcon && <span className={`tree__status tree__status--${entity.status}`}>{statusIcon}</span>}
           <span className="dot" />
           {entity.type}
+          {entity.tags.length > 0 && (
+            <>
+              {entity.tags.slice(0, 2).map(t => (
+                <span key={t} className="tree__tag">{t}</span>
+              ))}
+              {entity.tags.length > 2 && <span className="tree__tag-extra">+{entity.tags.length - 2}</span>}
+            </>
+          )}
         </span>
       </span>
+      <EntityMenu entity={entity} onChange={onChange} />
     </div>
   )
 }
 
-export default function ProjectTree({ entities, focusedId, onFocus }: Props) {
-  const byParent: Record<string, Entity[]> = {}
-  for (const e of entities) {
-    const k = e.parent_entity_id ?? ''
-    ;(byParent[k] ??= []).push(e)
+export default function ProjectTree({ entities, focusedId, onFocus, onChange }: Props) {
+  const [query, setQuery] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(() => loadCollapsed())
+
+  useEffect(() => { saveCollapsed(collapsed) }, [collapsed])
+
+  function toggle(section: string) {
+    setCollapsedState(s => ({ ...s, [section]: !s[section] }))
   }
 
   const workspace = entities.find(e => e.id === 'workspace')
+
+  // Apply search + archived filter client-side. Server-side same path will
+  // be used when projects exceed ~hundreds of entities.
+  const q = query.trim().toLowerCase()
+  const filterFn = (e: Entity) => {
+    if (e.id === 'workspace') return false
+    if (!showArchived && e.status === 'archived') return false
+    if (q && !e.title.toLowerCase().includes(q)) return false
+    return true
+  }
+  const visible = entities.filter(filterFn)
+  const pinned = visible.filter(e => e.pinned)
 
   return (
     <aside className="tree">
@@ -107,21 +160,63 @@ export default function ProjectTree({ entities, focusedId, onFocus }: Props) {
         </svg>
       </div>
 
+      <div className="tree__search">
+        <svg width="13" height="13" viewBox="0 0 20 20" fill="currentColor" className="tree__search-icon">
+          <path d="M9 3a6 6 0 014.5 9.9l3.3 3.3-1.4 1.4-3.3-3.3A6 6 0 119 3zm0 2a4 4 0 100 8 4 4 0 000-8z" />
+        </svg>
+        <input
+          className="tree__search-input"
+          placeholder="Search…"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+        {query && (
+          <button className="tree__search-clear" onClick={() => setQuery('')} title="Clear">×</button>
+        )}
+      </div>
+
+      {pinned.length > 0 && (
+        <section className="tree__section">
+          <div className="tree__section-head open">
+            <svg className="icon" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 2l2.5 5 5.5.8-4 3.9.9 5.4L10 14.8 5.1 17l.9-5.4-4-3.9 5.5-.8L10 2z" />
+            </svg>
+            Pinned
+            <span className="tree__count">{pinned.length}</span>
+          </div>
+          <div className="tree__items">
+            {pinned.map(e => (
+              <TreeItem
+                key={e.id}
+                entity={e}
+                focused={focusedId === e.id}
+                onClick={() => onFocus(e.id)}
+                onChange={onChange}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       {SECTIONS.map(section => {
-        const items = entities.filter(e => section.types.includes(e.type))
+        const items = visible.filter(e => section.types.includes(e.type) && !e.pinned)
+        const isCollapsed = !!collapsed[section.label]
         return (
           <section key={section.label} className="tree__section">
-            <div className="tree__section-head open">
+            <div
+              className={`tree__section-head ${isCollapsed ? '' : 'open'}`}
+              onClick={() => toggle(section.label)}
+            >
               <svg className="icon" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
                 <path d={section.iconPath} />
               </svg>
               {section.label}
               <span className="tree__count">{items.length || ''}</span>
               <svg className="chev ml-auto" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M5 8l5 5 5-5z" />
+                <path d={isCollapsed ? 'M8 5l5 5-5 5z' : 'M5 8l5 5 5-5z'} />
               </svg>
             </div>
-            {items.length > 0 && (
+            {!isCollapsed && items.length > 0 && (
               <div className="tree__items">
                 {items.map(e => (
                   <TreeItem
@@ -129,6 +224,7 @@ export default function ProjectTree({ entities, focusedId, onFocus }: Props) {
                     entity={e}
                     focused={focusedId === e.id}
                     onClick={() => onFocus(e.id)}
+                    onChange={onChange}
                   />
                 ))}
               </div>
@@ -136,6 +232,17 @@ export default function ProjectTree({ entities, focusedId, onFocus }: Props) {
           </section>
         )
       })}
+
+      <div className="tree__footer">
+        <label className="tree__toggle">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={e => setShowArchived(e.target.checked)}
+          />
+          show archived
+        </label>
+      </div>
     </aside>
   )
 }

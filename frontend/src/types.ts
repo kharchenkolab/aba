@@ -66,6 +66,10 @@ export interface Entity {
   parent_entity_id: string | null
   scenario_of: string | null
   metadata: Record<string, unknown> | null
+  tags: string[]
+  notes: string | null
+  pinned: boolean
+  deleted_at: string | null
   created_at: string
   updated_at: string
 }
