@@ -111,6 +111,30 @@ def register_artifacts_from_tool_result(
             if rec:
                 new_records.append(rec)
 
+    # Output CSVs → table entities.
+    tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
+    if tool_name == "run_python" and tables:
+        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
+        producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
+        for t in tables:
+            original_name = t.get("original_name") or "table.csv"
+            title = _title_from_code(producing_code) or original_name
+            eid = create_entity(
+                entity_type="table",
+                title=title,
+                artifact_path=t.get("url"),
+                producing_code=producing_code,
+                parent_entity_id=analysis_id,
+                metadata={"original_name": original_name},
+            )
+            add_edge(eid, analysis_id, "wasGeneratedBy")
+            focused = focused_entity_id or WORKSPACE_ID
+            if focused != WORKSPACE_ID:
+                add_edge(eid, focused, "wasDerivedFrom")
+            rec = get_entity(eid)
+            if rec:
+                new_records.append(rec)
+
     return new_records
 
 

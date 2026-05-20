@@ -1,0 +1,3 @@
+# Produces a CSV output → registered as a table entity.
+{"blocks": [{"type": "text", "text": "Computing a per-sample QC summary table."}, {"type": "tool_use", "name": "run_python", "input": {"code": "# Per-sample QC summary\nimport pandas as pd\ndf = pd.read_csv(f'{DATA_DIR}/cells.csv')\nsummary = df.groupby('sample').agg(n_cells=('cell_id','count'), mean_mt=('mt_fraction','mean'), mean_genes=('n_genes','mean')).reset_index()\nsummary.to_csv('qc_summary.csv', index=False)\nprint(summary.to_string())"}}]}
+{"blocks": [{"type": "text", "text": "Per-sample QC summary table is ready — it's under FIGURES/tables in the tree."}]}

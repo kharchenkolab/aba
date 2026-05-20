@@ -201,8 +201,14 @@ def entities_preview(entity_id: str, limit: int = 20):
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
 
-    if e["type"] == "dataset" and e["artifact_path"]:
-        path = Path(e["artifact_path"])
+    if e["type"] in ("dataset", "table") and e["artifact_path"]:
+        raw = e["artifact_path"]
+        # Tables are stored as /artifacts/<id>.csv; datasets as disk paths.
+        if raw.startswith("/artifacts/"):
+            from config import ARTIFACTS_DIR
+            path = ARTIFACTS_DIR / Path(raw).name
+        else:
+            path = Path(raw)
         if path.suffix.lower() in (".csv", ".tsv") and path.exists():
             try:
                 import pandas as pd
@@ -371,6 +377,21 @@ def create_claim(req: PromoteFindingsRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return get_entity(cid)
+
+
+class NarrativeRequest(BaseModel):
+    title: str
+    text: str = ""
+
+
+@app.post("/api/narratives")
+def create_narrative(req: NarrativeRequest):
+    eid = create_entity(
+        entity_type="narrative",
+        title=req.title or "Untitled section",
+        metadata={"text": req.text},
+    )
+    return get_entity(eid)
 
 
 class FindingResultRequest(BaseModel):
