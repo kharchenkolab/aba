@@ -41,7 +41,7 @@ from db import (
 )
 from adaptive import append_to_policy
 from tools_registry import registry as tools_registry
-from db import list_jobs, get_job
+from db import list_jobs, get_job, figure_history
 from jobs import start_worker, cancel_job
 
 
@@ -392,6 +392,14 @@ def entities_edges(entity_id: str):
         "outgoing": edges_from(entity_id),
         "incoming": edges_to(entity_id),
     }
+
+
+@app.get("/api/entities/{entity_id}/history")
+def entities_history(entity_id: str):
+    """Version chain for a figure (newest first)."""
+    if not get_entity(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return figure_history(entity_id)
 
 
 @app.get("/api/entities/{entity_id}/provenance")
