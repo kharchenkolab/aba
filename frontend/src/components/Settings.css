@@ -1,0 +1,84 @@
+.settings-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+}
+.settings {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 720px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  padding: 22px 24px 18px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+}
+.settings__head { display: flex; align-items: center; gap: 12px; }
+.settings__head h2 { margin: 0; font-size: 17px; font-weight: 600; flex: 1; }
+.settings__close {
+  background: none; border: none;
+  font-size: 22px; line-height: 1;
+  color: var(--text-3); cursor: pointer; padding: 4px 8px;
+}
+.settings__close:hover { color: var(--text); }
+.settings__hint {
+  margin: 6px 0 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.settings__empty {
+  padding: 30px;
+  text-align: center;
+  color: var(--text-4);
+  font-size: 13px;
+}
+.settings__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.suggestion {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fafafb;
+}
+.suggestion__head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.suggestion__type {
+  background: #ede9fe; color: #5b21b6;
+  padding: 1px 8px; border-radius: 9999px;
+  font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.suggestion__trigger { color: var(--text-4); }
+.suggestion__date    { color: var(--text-4); margin-left: auto; }
+.suggestion__text {
+  margin: 6px 0 10px;
+  font-size: 13px; line-height: 1.5;
+  color: var(--text);
+}
+.suggestion__actions {
+  display: flex; justify-content: flex-end; gap: 6px;
+}
+.suggestion__actions button {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px; font-weight: 500;
+  cursor: pointer;
+}
+.suggestion__reject:hover { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+.suggestion__approve {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+.suggestion__approve:hover { background: #4c1d95; border-color: #4c1d95; }

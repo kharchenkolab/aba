@@ -99,12 +99,6 @@ export default function AdvisorRail({ focusedId }: Props) {
         )
       })}
 
-      <div className="adv-footer">
-        <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" style={{ color: 'var(--text-4)' }}>
-          <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm1 11H9v-2h2v2zm0-4H9V7h2v2z"/>
-        </svg>
-        Team settings
-      </div>
     </aside>
   )
 }

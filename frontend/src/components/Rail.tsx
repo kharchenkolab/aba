@@ -1,7 +1,28 @@
-import React from 'react'
+import { useEffect, useState } from 'react'
+import Settings from './Settings'
 import './Rail.css'
 
 export default function Rail() {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    async function tick() {
+      try {
+        const r = await fetch('/api/context-suggestions?status=pending')
+        if (r.ok) {
+          const ns = await r.json()
+          if (!cancelled) setPendingCount(ns.length)
+        }
+      } catch { /* ignore */ }
+    }
+    tick()
+    // Refresh briskly while Settings is open; idle otherwise.
+    const interval = setInterval(tick, settingsOpen ? 1500 : 8000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [settingsOpen])
+
   return (
     <aside className="rail">
       <div className="rail__brand">
@@ -36,10 +57,16 @@ export default function Rail() {
         </a>
       </nav>
 
-      <div className="rail__user">
+      <button
+        className="rail__user"
+        onClick={() => setSettingsOpen(true)}
+        title="Account & settings"
+      >
         <div className="rail__avatar">PP</div>
         <span>Peter</span>
-      </div>
+        {pendingCount > 0 && <span className="rail__badge">{pendingCount}</span>}
+      </button>
+      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
     </aside>
   )
 }

@@ -9,6 +9,7 @@ __pycache__/
 .env
 backend/aba.db
 backend/artifacts/*.png
+backend/knowhow/context_policy/
 frontend/dist/
 
 # Vendored BioMNI reference clone (kept as a working copy for code reading)
