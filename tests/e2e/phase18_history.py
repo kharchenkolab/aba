@@ -93,6 +93,8 @@ def drive(fport: int) -> int:
         br = p.chromium.launch(headless=True)
         page = br.new_context(viewport={"width": 1500, "height": 950}).new_page()
         page.goto(f"http://127.0.0.1:{fport}/", wait_until="networkidle")
+        page.locator('button[title="Workspace"]').click()
+        page.wait_for_timeout(150)
         page.locator(f'[data-entity-id="{ds["id"]}"]').click()
         page.wait_for_selector(".focus__preview-table", timeout=5000)
         comp = page.locator(".composer__input")

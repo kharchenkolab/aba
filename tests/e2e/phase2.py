@@ -149,6 +149,8 @@ def drive(frontend_port: int) -> int:
         ctx = browser.new_context(viewport={"width": 1500, "height": 900})
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{frontend_port}/", wait_until="networkidle")
+        page.locator('button[title="Workspace"]').click()
+        page.wait_for_timeout(150)
 
         page.locator(f'[data-entity-id="{dataset["id"]}"]').click()
 
