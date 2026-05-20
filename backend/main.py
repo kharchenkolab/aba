@@ -39,7 +39,7 @@ from db import (
     list_context_suggestions,
     update_context_suggestion_status,
 )
-from adaptive import append_to_policy
+from adaptive import append_to_policy, run_probe
 from tools_registry import registry as tools_registry
 from db import list_jobs, get_job, figure_history, list_events
 from jobs import start_worker, cancel_job
@@ -566,6 +566,19 @@ def jobs_cancel(job_id: str):
     if not ok:
         raise HTTPException(400, "job not found or not cancellable")
     return get_job(job_id)
+
+
+@app.post("/api/run-probe")
+async def trigger_probe():
+    """
+    Run one pop-quiz probe (§3.6). Normally a background cron; exposed as an
+    endpoint so it can be triggered on demand / tested. Non-blocking work
+    runs in a thread.
+    """
+    report = await asyncio.get_event_loop().run_in_executor(None, run_probe)
+    if report is None:
+        return {"ran": False, "reason": "no probeable entities yet"}
+    return {"ran": True, **report}
 
 
 @app.get("/api/events")
