@@ -137,7 +137,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus }: Pro
       <div className="focus__body">
         {compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
-          : renderBody(entity, preview, entities, onFocus)}
+          : renderBody(entity, preview, entities, onFocus, onChange)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -360,6 +360,7 @@ function renderBody(
   preview: Preview | null,
   entities: Entity[],
   onFocus: (id: string) => void,
+  onChange: () => void,
 ) {
   switch (e.type) {
     case 'figure':
@@ -447,26 +448,10 @@ function renderBody(
       )
     }
 
-    case 'finding': {
-      const text = (e.metadata?.text as string) ?? ''
-      const supportingIds = (e.metadata?.supporting_results as string[]) ?? []
-      const supportingEnts = supportingIds
-        .map(id => entities.find(x => x.id === id))
-        .filter((x): x is Entity => !!x)
+    case 'finding':
       return (
-        <div className="focus__abstract">
-          <p className="focus__interpretation">{text}</p>
-          {supportingEnts.length > 0 && (
-            <div className="focus__chain">
-              <div className="focus__chain-head">SUPPORTING RESULTS</div>
-              {supportingEnts.map(s => (
-                <EntityRow key={s.id} ent={s} onClick={() => onFocus(s.id)} />
-              ))}
-            </div>
-          )}
-        </div>
+        <FindingBody finding={e} entities={entities} onFocus={onFocus} onChange={onChange} />
       )
-    }
 
     case 'claim': {
       const text = (e.metadata?.text as string) ?? ''
@@ -496,6 +481,90 @@ function renderBody(
         <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
       )
   }
+}
+
+function FindingBody({
+  finding, entities, onFocus, onChange,
+}: {
+  finding: Entity
+  entities: Entity[]
+  onFocus: (id: string) => void
+  onChange: () => void
+}) {
+  const [picking, setPicking] = useState(false)
+  const text = (finding.metadata?.text as string) ?? ''
+  const supportingIds = (finding.metadata?.supporting_results as string[]) ?? []
+  const supportingEnts = supportingIds
+    .map(id => entities.find(x => x.id === id))
+    .filter((x): x is Entity => !!x)
+
+  const candidates = entities.filter(
+    e => e.type === 'result' && !supportingIds.includes(e.id) && e.status !== 'archived',
+  )
+
+  async function addResult(resultId: string) {
+    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/add-result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result_id: resultId }),
+    })
+    setPicking(false)
+    onChange()
+  }
+
+  async function removeResult(resultId: string) {
+    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/remove-result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result_id: resultId }),
+    })
+    onChange()
+  }
+
+  return (
+    <div className="focus__abstract">
+      <p className="focus__interpretation">{text}</p>
+      <div className="focus__chain">
+        <div className="focus__chain-head">
+          SUPPORTING RESULTS
+          <button
+            className="focus__chain-add"
+            onClick={() => setPicking(v => !v)}
+            disabled={candidates.length === 0}
+            title={candidates.length === 0 ? 'No other results to add' : 'Add a supporting result'}
+          >
+            + Add
+          </button>
+        </div>
+        {supportingEnts.length === 0 && (
+          <div className="focus__placeholder">No supporting results yet.</div>
+        )}
+        {supportingEnts.map(s => (
+          <div key={s.id} className="focus__chain-row-wrap">
+            <EntityRow ent={s} onClick={() => onFocus(s.id)} />
+            <button
+              className="focus__chain-remove"
+              onClick={() => removeResult(s.id)}
+              title="Remove from finding"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {picking && (
+          <div className="focus__picker">
+            <div className="focus__picker-head">Add a result</div>
+            {candidates.map(c => (
+              <button key={c.id} className="focus__picker-row" onClick={() => addResult(c.id)}>
+                <span className="focus__type focus__type--result">result</span>
+                {c.title}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function EntityRow({ ent, onClick }: { ent: Entity; onClick: () => void }) {

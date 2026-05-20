@@ -280,7 +280,7 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
     Other keys are silently ignored. Returns the updated entity, or None
     if it doesn't exist.
     """
-    allowed = {"title", "notes", "tags", "pinned", "status"}
+    allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path"}
     sets = []
     args = []
     for k, v in fields.items():
@@ -288,6 +288,8 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
             continue
         if k == "tags" and isinstance(v, list):
             sets.append("tags = ?"); args.append(json.dumps(v))
+        elif k == "metadata":
+            sets.append("metadata = ?"); args.append(json.dumps(v) if v is not None else None)
         elif k == "pinned":
             sets.append("pinned = ?"); args.append(1 if v else 0)
         else:
@@ -476,6 +478,15 @@ def add_edge(source_id: str, target_id: str, rel_type: str,
             "VALUES (?, ?, ?, ?, ?)",
             (source_id, target_id, rel_type,
              json.dumps(metadata) if metadata else None, now),
+        )
+        c.commit()
+
+
+def remove_edge(source_id: str, target_id: str, rel_type: str) -> None:
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM entity_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
+            (source_id, target_id, rel_type),
         )
         c.commit()
 

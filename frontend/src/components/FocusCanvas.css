@@ -213,6 +213,54 @@
 .focus__chain-title { flex: 1; font-weight: 500; }
 .focus__chain-arrow { color: var(--text-4); font-size: 12px; }
 
+.focus__chain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.focus__chain-add {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  cursor: pointer;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.focus__chain-add:hover:not(:disabled) { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
+.focus__chain-add:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.focus__chain-row-wrap { display: flex; align-items: center; gap: 6px; }
+.focus__chain-row-wrap .focus__chain-row { flex: 1; }
+.focus__chain-remove {
+  border: none; background: transparent;
+  color: var(--text-4); font-size: 16px; line-height: 1;
+  cursor: pointer; padding: 4px 6px; border-radius: 4px;
+}
+.focus__chain-remove:hover { background: #fef2f2; color: #b91c1c; }
+
+.focus__picker {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fafafb;
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.focus__picker-head {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-4); padding: 4px 6px;
+}
+.focus__picker-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px; border: none; background: transparent;
+  border-radius: 5px; cursor: pointer; text-align: left;
+  font-size: 13px; color: var(--text);
+}
+.focus__picker-row:hover { background: var(--tree-active-bg); }
+
 .focus__body { display: flex; flex-direction: column; gap: 10px; }
 
 .focus__figure {

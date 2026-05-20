@@ -29,6 +29,8 @@ from promote import (
     promote_figure_to_result,
     promote_results_to_finding,
     promote_findings_to_claim,
+    add_result_to_finding,
+    remove_result_from_finding,
 )
 from scenarios import create_scenario_variant
 from advisors import skeptic_review
@@ -339,6 +341,26 @@ def create_claim(req: PromoteFindingsRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return get_entity(cid)
+
+
+class FindingResultRequest(BaseModel):
+    result_id: str
+
+
+@app.post("/api/findings/{finding_id}/add-result")
+def finding_add_result(finding_id: str, req: FindingResultRequest):
+    try:
+        return add_result_to_finding(finding_id, req.result_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/findings/{finding_id}/remove-result")
+def finding_remove_result(finding_id: str, req: FindingResultRequest):
+    try:
+        return remove_result_from_finding(finding_id, req.result_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/entities/{entity_id}/edges")
