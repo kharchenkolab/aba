@@ -148,6 +148,15 @@ async def stream_response(
                 for ent in new_entities:
                     yield sse({"type": "entity_registered", "entity": ent})
 
+                # create_scenario builds its entity inside the tool — surface it
+                # to the tree as an entity_registered event.
+                if tool_name == "create_scenario" and isinstance(result_obj, dict) \
+                        and result_obj.get("scenario"):
+                    from db import get_entity as _ge
+                    ent = _ge(result_obj["scenario"]["id"])
+                    if ent:
+                        yield sse({"type": "entity_registered", "entity": ent})
+
                 # Methodologist reviews the run's methods, asynchronously.
                 if new_entities and analysis_ctx.get("analysis_id"):
                     from advisors import methodologist_review

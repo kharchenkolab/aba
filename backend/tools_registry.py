@@ -84,12 +84,14 @@ _SKILLS = [
         "knowhow_doc": "backend/knowhow/bulk_rnaseq_de.md",
     },
     {
-        "name": "create_scenario_variant",
+        "name": "create_scenario",
         "category": "Analysis flow",
         "summary": (
             "Re-run a figure's producing code with parameter changes the "
             "user describes (e.g. 'cap mt_fraction at 0.10'); the variant "
-            "appears alongside the baseline with a Compare toggle."
+            "appears alongside the baseline with a Compare toggle, and "
+            "downstream results that reference the baseline are surfaced "
+            "for review."
         ),
         "example": "What if we used a tighter QC cutoff?",
         "knowhow_doc": None,
