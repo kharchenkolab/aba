@@ -6,6 +6,13 @@
   background: var(--bg);
 }
 
+/* Focus context chip(s) above the composer (M1). */
+.composer-wrap { flex-shrink: 0; }
+.composer-wrap .composer-chips {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  padding: 8px 14px 0;
+}
+
 .chat-tabs {
   display: flex;
   align-items: center;
