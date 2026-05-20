@@ -40,6 +40,29 @@
   cursor: default;
 }
 
+.trace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 12px;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.trace-toggle:hover { background: var(--tree-active-bg); }
+.trace-toggle--on {
+  color: #5b21b6;
+  border-color: #c4b5fd;
+  background: #ede9fe;
+}
+
 .focus-chip {
   margin-left: auto;
   font-size: 11px;
@@ -58,6 +81,25 @@
   background: #ede9fe;
   color: #5b21b6;
   border-color: #ddd6fe;
+}
+
+.chat-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+.chat-main {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-pane--split .chat-main {
+  flex: 1 1 60%;
+}
+.chat-pane--split .trace {
+  flex: 1 1 40%;
+  min-width: 0;
 }
 
 .chat-scroll {
