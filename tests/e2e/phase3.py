@@ -160,7 +160,7 @@ def drive(frontend_port: int) -> int:
         page.wait_for_selector(".focus__figure", timeout=3000)
         page.screenshot(path=str(SHOT_DIR / "01_figure_focused.png"), full_page=True)
 
-        page.locator(".focus__promote").click()
+        page.locator("button:has-text('Promote to result')").click()
         page.wait_for_selector(".promote-dialog", timeout=2000)
         page.locator(".promote-dialog__textarea").fill(
             "Sample S4 has elevated mt_fraction (~0.13), well above the other samples — likely doublet contamination.",
@@ -174,7 +174,7 @@ def drive(frontend_port: int) -> int:
         print("✓ figure promoted to result; evidence chain visible")
 
         # Lift the result to a finding.
-        page.locator(".focus__promote").click()
+        page.locator("button:has-text('Lift to finding')").click()
         page.wait_for_selector(".promote-dialog", timeout=2000)
         page.locator(".promote-dialog__textarea").fill(
             "Sample-level QC consistently flags donor S4 across multiple per-cell metrics.",
@@ -186,7 +186,7 @@ def drive(frontend_port: int) -> int:
         print("✓ result lifted to finding; supporting results visible")
 
         # Lift the finding to a claim.
-        page.locator(".focus__promote").click()
+        page.locator("button:has-text('Lift to claim')").click()
         page.wait_for_selector(".promote-dialog", timeout=2000)
         page.locator(".promote-dialog__textarea").fill(
             "Sample S4 must be excluded from downstream analysis due to consistent QC failures.",
