@@ -126,6 +126,7 @@ function TreeItem({ entity, focused, onClick, onChange }: TreeItemProps) {
 export default function ProjectTree({ entities, focusedId, onFocus, onChange }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
+  const [editingTitle, setEditingTitle] = useState(false)
   const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(() => loadCollapsed())
 
   useEffect(() => { saveCollapsed(collapsed) }, [collapsed])
@@ -150,17 +151,43 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
   }
   const visible = entities.filter(filterFn)
   const pinned = visible.filter(e => e.pinned)
+  const projectTitle = workspace?.title ?? 'Workspace'
+
+  async function renameProject(name: string) {
+    const t = name.trim()
+    setEditingTitle(false)
+    if (!t || t === projectTitle) return
+    await fetch('/api/entities/workspace', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: t }),
+    })
+    onChange()
+  }
 
   return (
     <aside className="tree">
-      <div
-        className={`tree__head ${focusedId === 'workspace' ? 'is-active' : ''}`}
-        onClick={() => onFocus('workspace')}
-      >
-        {workspace?.title ?? 'Workspace'}
-        <svg className="chev" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-          <path d="M5 8l5 5 5-5z" />
-        </svg>
+      <div className={`tree__head ${focusedId === 'workspace' ? 'is-active' : ''}`}>
+        {editingTitle ? (
+          <input
+            className="tree__head-input"
+            defaultValue={projectTitle}
+            autoFocus
+            onBlur={e => renameProject(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') renameProject((e.target as HTMLInputElement).value)
+              if (e.key === 'Escape') setEditingTitle(false)
+            }}
+            onClick={e => e.stopPropagation()}
+          />
+        ) : (
+          <>
+            <span className="tree__head-title" onClick={() => onFocus('workspace')}>
+              {projectTitle}
+            </span>
+            <button className="tree__head-edit" title="Rename project"
+                    onClick={e => { e.stopPropagation(); setEditingTitle(true) }}>✎</button>
+          </>
+        )}
       </div>
 
       <div className="tree__search">

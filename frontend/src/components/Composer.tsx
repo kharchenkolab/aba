@@ -1,15 +1,27 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import type { KeyboardEvent } from 'react'
 import './Composer.css'
 
 interface Props {
   onSend: (text: string) => void
   disabled: boolean
+  prefill?: string
+  onPrefillConsumed?: () => void
 }
 
-export default function Composer({ onSend, disabled }: Props) {
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed }: Props) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // When an advisor's "Try it" prefills the composer, drop the text in and
+  // focus — the user can edit or just hit Enter.
+  useEffect(() => {
+    if (prefill) {
+      setValue(prefill)
+      textareaRef.current?.focus()
+      onPrefillConsumed?.()
+    }
+  }, [prefill, onPrefillConsumed])
 
   function handleKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {

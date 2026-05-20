@@ -630,7 +630,9 @@ def home_summary():
     )
     first = created[0]["created_at"] if created else None
     last = max((e["updated_at"] for e in ents), default=None)
+    ws = get_entity(WORKSPACE_ID)
     return {
+        "project_title": ws["title"] if ws else "Workspace",
         "counts": counts,
         "n_datasets": counts.get("dataset", 0),
         "started_at": first,

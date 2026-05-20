@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './Home.css'
 
 interface Summary {
+  project_title: string
   counts: Record<string, number>
   n_datasets: number
   started_at: string | null
@@ -112,7 +113,7 @@ export default function Home({ onOpenWorkspace, onEntitiesChanged, onFocus }: Pr
       ) : (
         <div className="home__dash">
           <div className="home__dash-head">
-            <h1>Macrophage Pilot</h1>
+            <h1>{summary?.project_title || 'Workspace'}</h1>
             <button className="home__open" onClick={onOpenWorkspace}>Open workspace →</button>
           </div>
           <div className="home__grid">

@@ -24,10 +24,11 @@ export default function App() {
   const [treeCollapsed, setTreeCollapsed] = useState(false)
   const [advisorW, setAdvisorW] = useState(260)
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false)
+  const [prefill, setPrefill] = useState('')
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const { entities, refresh } = useEntities()
   const { messages, streaming, streamMsg, sendMessage } = useChat(
-    focusedId, refresh, annotation, () => setAnnotation(null),
+    focusedId, refresh, annotation,
   )
 
   const focused = entities.find(e => e.id === focusedId) ?? null
@@ -87,6 +88,8 @@ export default function App() {
           focusedEntity={focused}
           annotation={annotation}
           onClearAnnotation={() => setAnnotation(null)}
+          prefill={prefill}
+          onPrefillConsumed={() => setPrefill('')}
         />
       </div>
       <HResizer
@@ -96,7 +99,7 @@ export default function App() {
         onToggle={() => setAdvisorCollapsed(c => !c)}
       />
       {advisorCollapsed ? <div /> : (
-        <AdvisorRail focusedId={focusedId} focusedType={focused?.type} />
+        <AdvisorRail focusedId={focusedId} focusedType={focused?.type} onTry={setPrefill} />
       )}
     </div>
   )

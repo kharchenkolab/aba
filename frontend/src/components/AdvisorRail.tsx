@@ -36,10 +36,12 @@ function Avatar({ color, name }: { color: string; name: string }) {
 interface Props {
   focusedId: string
   focusedType?: string
+  onTry?: (text: string) => void
 }
 
-export default function AdvisorRail({ focusedId, focusedType }: Props) {
+export default function AdvisorRail({ focusedId, focusedType, onTry }: Props) {
   const [notes, setNotes] = useState<AdvisorNote[]>([])
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -90,28 +92,43 @@ export default function AdvisorRail({ focusedId, focusedType }: Props) {
       {ADVISORS.map(adv => {
         const advNotes = notesByAdvisor[adv.key] ?? []
         const hasNotes = advNotes.length > 0
+        const isOpen = expanded === adv.key
         return (
           <div
             key={adv.key}
             className={`adv-row ${adv.active ? 'adv-row--active' : ''} ${hasNotes ? 'adv-row--has-notes' : ''}`}
           >
-            <Avatar color={adv.color} name={adv.name} />
-            <div className="adv-info">
-              <div className="adv-name">{adv.name}</div>
-              <div className={`adv-status ${adv.active ? 'adv-status--online' : ''}`}>
-                {adv.active && <span className="dot-green" />}
-                {hasNotes ? `${advNotes.length} note${advNotes.length === 1 ? '' : 's'}` : adv.status}
+            <button
+              className="adv-rowhead"
+              onClick={() => hasNotes && setExpanded(o => (o === adv.key ? null : adv.key))}
+              style={{ cursor: hasNotes ? 'pointer' : 'default' }}
+            >
+              <div className="adv-avatar-wrap">
+                <Avatar color={adv.color} name={adv.name} />
+                {hasNotes && <span className="adv-bulb" title="Has an idea">💡</span>}
               </div>
-              {hasNotes && (
-                <div className="adv-notes">
-                  {advNotes.map(n => (
-                    <div key={n.id} className="adv-note">
-                      <p className="adv-note-text">{n.text}</p>
-                    </div>
-                  ))}
+              <div className="adv-info">
+                <div className="adv-name">{adv.name}</div>
+                <div className={`adv-status ${adv.active ? 'adv-status--online' : ''}`}>
+                  {adv.active && <span className="dot-green" />}
+                  {hasNotes
+                    ? `${advNotes.length} idea${advNotes.length === 1 ? '' : 's'} — ${isOpen ? 'hide' : 'view'}`
+                    : adv.status}
                 </div>
-              )}
-            </div>
+              </div>
+            </button>
+            {hasNotes && isOpen && (
+              <div className="adv-notes">
+                {advNotes.map(n => (
+                  <div key={n.id} className="adv-note">
+                    <p className="adv-note-text">{n.text}</p>
+                    {onTry && (
+                      <button className="adv-try" onClick={() => onTry(n.text)}>Try it →</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )
       })}

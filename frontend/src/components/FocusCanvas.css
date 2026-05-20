@@ -432,12 +432,14 @@
 /* Spatial reference (Phase 25) */
 .annot { display: flex; flex-direction: column; gap: 8px; }
 .annot__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.annot__btn {
+.annot__hl {
+  display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg); color: var(--text-2); cursor: pointer;
 }
-.annot__btn:hover { background: var(--tree-active-bg); }
-.annot__btn--on { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+.annot__hl:hover { background: #fdf2f8; border-color: #f9a8d4; color: #be185d; }
+.annot__hl--on { background: #fce7f3; border-color: #f472b6; color: #be185d; }
+.annot__sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
 .annot__tool {
   font-size: 11px; padding: 4px 9px; border-radius: 5px;
   border: 1px solid var(--border); background: var(--bg); color: var(--text-3); cursor: pointer;

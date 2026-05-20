@@ -13,6 +13,8 @@ interface Props {
   focusedEntity: Entity | null
   annotation?: { image: string; note: string } | null
   onClearAnnotation?: () => void
+  prefill?: string
+  onPrefillConsumed?: () => void
 }
 
 export default function ChatPane({
@@ -23,6 +25,8 @@ export default function ChatPane({
   focusedEntity,
   annotation,
   onClearAnnotation,
+  prefill,
+  onPrefillConsumed,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [traceVisible, setTraceVisible] = useState(false)
@@ -104,7 +108,8 @@ export default function ChatPane({
           <button onClick={onClearAnnotation} title="Remove">×</button>
         </div>
       )}
-      <Composer onSend={onSend} disabled={streaming} />
+      <Composer onSend={onSend} disabled={streaming}
+                prefill={prefill} onPrefillConsumed={onPrefillConsumed} />
     </div>
   )
 }
