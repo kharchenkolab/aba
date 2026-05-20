@@ -106,8 +106,8 @@ def drive(fport: int) -> int:
 
         # Focus the figure → AnnotatedFigure renders with a Mark button.
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".annot__btn", timeout=3000)
-        page.locator(".annot__btn").click()  # enter marking
+        page.wait_for_selector(".annot__hl", timeout=3000)
+        page.locator(".annot__hl").click()  # enter marking
         page.wait_for_selector(".annot__wrap--marking", timeout=2000)
 
         # Drag a circle across the figure.
@@ -126,11 +126,17 @@ def drive(fport: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "02_attached.png"), full_page=True)
         print("✓ region marked and attached to chat")
 
-        # Send a question → chip clears.
+        # Send a question → the mark stays attached (sticky) for follow-ups.
         comp.fill("what's in this region?")
         comp.press("Enter")
-        page.wait_for_selector(".annot-attached", state="detached", timeout=10000)
-        print("✓ annotation sent with the message and cleared")
+        page.wait_for_function(
+            "() => !document.querySelector('.composer__input').disabled", timeout=15000)
+        assert page.locator(".annot-attached").count() == 1, "annotation should stay attached"
+        print("✓ annotation sent and stays attached for follow-ups (sticky)")
+        # Clear it explicitly via the chip ×.
+        page.locator(".annot-attached button").click()
+        page.wait_for_selector(".annot-attached", state="detached", timeout=3000)
+        print("✓ chip × clears the annotation")
         br.close()
     print("\nscreenshots:")
     for s in sorted(SHOT_DIR.glob("*.png")): print(f"  {s.relative_to(ROOT)}")

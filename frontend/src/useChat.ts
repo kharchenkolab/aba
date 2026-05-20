@@ -70,7 +70,6 @@ export function useChat(
   focusEntityId: string,
   onEntityRegistered?: () => void,
   annotation?: Annotation | null,
-  clearAnnotation?: () => void,
 ) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -111,8 +110,9 @@ export function useChat(
       const streamingBlocks: Block[] = []
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
 
+      // Sticky: the marked region stays attached across follow-up messages
+      // so the agent retains it; the user clears it explicitly via the chip.
       const annot = annotationRef.current
-      if (annot) clearAnnotation?.()
 
       try {
         const res = await fetch('/api/chat', {

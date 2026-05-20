@@ -155,11 +155,12 @@ def drive(frontend_port: int) -> int:
         page.wait_for_selector(".focus__type--result", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "01_promoted.png"), full_page=True)
 
-        # Wait for Skeptic's note to appear in the right-side rail.
+        # Wait for Skeptic's idea badge in the right-side rail, then expand it.
         page.wait_for_selector(".adv-row--has-notes", timeout=10000)
+        page.locator(".adv-row--has-notes .adv-rowhead").first.click()
         page.wait_for_selector(".adv-note-text", timeout=2000)
         page.screenshot(path=str(SHOT_DIR / "02_skeptic_note.png"), full_page=True)
-        print("✓ Skeptic note landed on the focused result")
+        print("✓ Skeptic idea badge appeared; expanded to read the note")
 
         note_text = page.locator(".adv-note-text").first.inner_text()
         assert "Skeptic" in note_text or "outlier" in note_text.lower()

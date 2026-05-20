@@ -161,3 +161,15 @@
   background: var(--ok);
   display: inline-block;
 }
+
+.tree__head-title { flex: 1; cursor: pointer; }
+.tree__head-edit {
+  border: none; background: none; color: var(--text-4); cursor: pointer;
+  font-size: 12px; padding: 0 4px; opacity: 0;
+}
+.tree__head:hover .tree__head-edit { opacity: 1; }
+.tree__head-edit:hover { color: var(--accent); }
+.tree__head-input {
+  flex: 1; font-size: 13px; font-weight: 700; font-family: inherit;
+  border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; outline: none;
+}

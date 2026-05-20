@@ -114,8 +114,8 @@ def drive(fport: int) -> int:
         page.wait_for_function("() => !document.querySelector('.composer__input').disabled", timeout=120000)
 
         page.locator('[data-entity-type="figure"]').first.click()
-        page.wait_for_selector(".annot__btn", timeout=3000)
-        page.locator(".annot__btn").click()
+        page.wait_for_selector(".annot__hl", timeout=3000)
+        page.locator(".annot__hl").click()
         wrap = page.locator(".annot__wrap"); box = wrap.bounding_box()
         # Circle the right-tail outlier region (~0.08–0.12 on x).
         page.mouse.move(box["x"] + box["width"] * 0.72, box["y"] + box["height"] * 0.45)
