@@ -444,6 +444,61 @@
 .prov__row:hover { background: var(--tree-active-bg); }
 .prov__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ===== Finding view (M7) ===== */
+.fv { display: flex; flex-direction: column; gap: 4px; }
+.fv-ladder { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.fv-step {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 500; font-family: var(--mono);
+  padding: 3px 9px; border-radius: 9999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-3);
+  cursor: pointer; text-transform: capitalize;
+}
+.fv-step__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
+.fv-step.is-done { color: var(--ok); border-color: var(--ok-bg); }
+.fv-step.is-done .fv-step__dot { background: var(--ok); }
+.fv-step.is-current { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); font-weight: 600; }
+.fv-step.is-current .fv-step__dot { background: var(--accent); }
+
+.fv-section-label {
+  font-size: 9.5px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  margin: 12px 0 6px; display: flex; align-items: center; gap: 8px;
+}
+.fv-edit { margin-left: auto; font-size: 11px; color: var(--accent); cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.fv-edit:disabled { color: var(--text-4); cursor: default; }
+.fv-summary {
+  font-size: 13px; line-height: 1.55; color: var(--text);
+  padding: 12px 14px; background: var(--surface-2);
+  border-left: 3px solid var(--accent); border-radius: 4px; cursor: text;
+}
+.fv-summary-edit {
+  width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13px; line-height: 1.55;
+  padding: 12px 14px; border: 1px solid var(--accent-border); border-left: 3px solid var(--accent);
+  border-radius: 4px; outline: none; resize: vertical;
+}
+.fv-caveat {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; line-height: 1.45; color: var(--text);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.fv-caveat svg { width: 12px; height: 12px; color: var(--warn-fg); flex-shrink: 0; margin-top: 2px; }
+.fv-caveat__text { flex: 1; }
+.fv-caveat__src { font-size: 9.5px; color: var(--text-3); font-family: var(--mono); }
+.fv-caveat__x { color: var(--text-4); cursor: pointer; font-size: 14px; line-height: 1; }
+.fv-caveat__x:hover { color: var(--red); }
+.fv-caveat-add { display: flex; gap: 6px; margin-top: 8px; }
+.fv-caveat-add input {
+  flex: 1; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border);
+  border-radius: 6px; outline: none; font-family: inherit;
+}
+.fv-caveat-add input:focus { border-color: var(--accent); }
+.fv-caveat-add button {
+  font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+}
+.fv-caveat-add button:disabled { opacity: 0.45; cursor: default; }
+
 /* Compact peek variant (chat-first rail) — trim chrome for the narrow column. */
 .focus--compact { font-size: 12.5px; }
 .focus--compact .focus__header { padding: 12px 14px 8px; }

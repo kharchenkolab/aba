@@ -281,6 +281,80 @@ def messages_list():
     return get_messages(WORKSPACE_ID)
 
 
+@app.get("/api/entities/{entity_id}/suggest-interpretation")
+def suggest_interpretation(entity_id: str):
+    """Best-guess interpretation for promoting a figure → result: reuse the
+    interpretation Guide already gave in chat (the assistant text right after
+    the figure's tool result). Zero extra tokens."""
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    art = e.get("artifact_path")
+    msgs = get_messages(WORKSPACE_ID)
+
+    def asst_text(m):
+        if m["role"] != "assistant":
+            return ""
+        return " ".join(b.get("text", "") for b in m["content"]
+                        if isinstance(b, dict) and b.get("type") == "text").strip()
+
+    # Locate the message whose tool_result produced this figure.
+    prod_idx = None
+    for i, m in enumerate(msgs):
+        for blk in m["content"]:
+            if not isinstance(blk, dict):
+                continue
+            if blk.get("type") == "tool_result":
+                try:
+                    plots = (json.loads(blk["content"]) or {}).get("plots") or []
+                    if any(p.get("url") == art for p in plots):
+                        prod_idx = i
+                except Exception:
+                    pass
+            elif blk.get("type") == "image" and blk.get("url") == art:
+                prod_idx = i
+
+    text = ""
+    if prod_idx is not None:
+        for j in range(prod_idx, min(prod_idx + 4, len(msgs))):  # the interpreting turn follows
+            t = asst_text(msgs[j])
+            if t:
+                text = t
+                break
+    if not text:  # fallback: most recent assistant text
+        for m in reversed(msgs):
+            t = asst_text(m)
+            if t:
+                text = t
+                break
+    return {"text": text[:400]}
+
+
+class PinMessageRequest(BaseModel):
+    key: str                       # stable content hash from the client
+    text: str = ""
+    title: str = ""
+    image_urls: list[str] = []
+
+
+@app.post("/api/messages/pin")
+def pin_message(req: PinMessageRequest):
+    """Keep any chat message: snapshot it as a lightweight 'note' entity that
+    shows in the Pinned shelf. Toggles by content key (idempotent)."""
+    from db import find_kept_note, update_entity
+    existing = find_kept_note(req.key)
+    if existing:
+        update_entity(existing, status="archived")   # unpin
+        return {"pinned": False}
+    title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
+    eid = create_entity(
+        entity_type="note", title=title,
+        metadata={"source_key": req.key, "text": req.text, "image_urls": req.image_urls},
+    )
+    update_entity(eid, pinned=True, notes=req.text[:500])
+    return {"pinned": True, "id": eid}
+
+
 @app.get("/api/search")
 def search_endpoint(q: str = "", limit: int = 25):
     """Faceted search across entities + chat snippets (M9 fallback recovery)."""
@@ -426,6 +500,64 @@ def create_narrative(req: NarrativeRequest):
 
 class FindingResultRequest(BaseModel):
     result_id: str
+
+
+class DraftFindingRequest(BaseModel):
+    text: str = ""                 # concatenated text of the selected messages
+    title_hint: str = ""           # e.g. the first user message in the selection
+    image_urls: list[str] = []     # figure/plot urls seen in the selection
+
+
+@app.post("/api/findings/draft")
+def draft_finding(req: DraftFindingRequest):
+    """Selection-to-finding draft (M3). Heuristic for now (no tokens): title
+    from the ask, summary from the discussion, evidence resolved from the
+    figures referenced in the selection. The user reviews before saving."""
+    from db import list_entities as _le
+    text = req.text.strip()
+    first = (req.title_hint or text).strip().split("\n")[0]
+    title = (first[:80] + ("…" if len(first) > 80 else "")) or "Untitled finding"
+    summary = text[:600] + ("…" if len(text) > 600 else "")
+    urls = set(req.image_urls or [])
+    evidence = []
+    if urls:
+        for e in _le():
+            if e.get("artifact_path") in urls and e["type"] in ("figure", "table"):
+                evidence.append({"id": e["id"], "type": e["type"], "title": e["title"]})
+    return {"title": title, "summary": summary, "evidence": evidence, "caveats": []}
+
+
+class CreateFindingRequest(BaseModel):
+    title: str
+    summary: str = ""
+    evidence_ids: list[str] = []
+    caveats: list[dict] = []
+    status: str = "candidate"
+
+
+@app.post("/api/findings/from-draft")
+def create_finding_endpoint(req: CreateFindingRequest):
+    from promote import create_finding_from_draft
+    fid = create_finding_from_draft(req.title, req.summary, req.evidence_ids,
+                                    req.caveats, req.status)
+    return get_entity(fid)
+
+
+class FindingFieldsRequest(BaseModel):
+    summary: str | None = None
+    caveats: list[dict] | None = None
+    status: str | None = None
+    title: str | None = None
+
+
+@app.post("/api/findings/{finding_id}/fields")
+def finding_fields(finding_id: str, req: FindingFieldsRequest):
+    from promote import set_finding_fields
+    try:
+        return set_finding_fields(finding_id, summary=req.summary,
+                                  caveats=req.caveats, status=req.status, title=req.title)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.post("/api/findings/{finding_id}/add-result")

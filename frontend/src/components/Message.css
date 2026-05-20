@@ -8,23 +8,40 @@
 
 /* Per-message "show the steps Guide took" eye toggle. Quiet until the
    message is hovered; stays visible once toggled on. */
-.msg__steps-toggle {
+/* Uniform per-message toolbar (top-right). Consistent small buttons:
+   contextual ones (eye) hover-reveal; pin stays visible. */
+.msg__tools {
   position: absolute;
   top: 5px; right: 10px;
-  display: flex; align-items: center; gap: 3px;
-  padding: 2px 6px;
+  display: flex; align-items: center; gap: 4px;
+}
+.msg__tool {
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  height: 20px; min-width: 20px; padding: 0 5px;
   border-radius: 9999px;
   color: var(--text-4);
   background: var(--bg);
   border: 1px solid var(--panel-bd);
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
-.msg:hover .msg__steps-toggle,
-.msg__steps-toggle--on { opacity: 1; }
-.msg__steps-toggle:hover { color: var(--text-2); }
-.msg__steps-toggle--on { color: var(--guide); border-color: var(--guide); }
-.msg__steps-count { font-size: 10px; font-weight: 600; line-height: 1; }
+.msg__tool svg { width: 13px; height: 13px; }
+.msg__tool:hover { color: var(--text-2); }
+.msg__tool-num { font-size: 10px; font-weight: 600; line-height: 1; }
+/* Hover-reveal tools (eye): hidden until the message is hovered or active. */
+.msg__tool--hover { opacity: 0; }
+.msg:hover .msg__tool--hover,
+.msg__tool--on { opacity: 1; }
+.msg__tool--on { color: var(--guide); border-color: var(--guide); }
+/* Pin: hover-reveal when unpinned; always-on with a red icon when pinned. */
+.msg__tool--pin:hover { color: var(--accent); border-color: var(--accent-border); }
+.msg__tool--pinned {
+  opacity: 1;
+  color: var(--red);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+.msg__tool--pinned:hover { color: var(--red); }
 /* User turns get subtle shading so the eye can scan who said what without
    name labels or big padding. */
 .msg--user { background: var(--bg-soft); }
@@ -133,6 +150,23 @@
   white-space: pre-wrap; word-break: break-word; overflow-x: auto;
 }
 .msg-image { margin: 6px 0; }
+.msg-image__head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 2px 6px;
+}
+.msg-image__title {
+  font-size: 11.5px; font-weight: 500; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.pin-btn {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  padding: 3px 9px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  font-size: 10.5px; font-weight: 500; color: var(--text-2); cursor: pointer;
+}
+.pin-btn svg { width: 11px; height: 11px; }
+.pin-btn:hover { background: var(--surface-2); color: var(--text); }
+.pin-btn.pinned { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
 .msg-image img {
   max-width: 100%;
   max-height: 420px;

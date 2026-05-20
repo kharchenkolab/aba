@@ -1,12 +1,32 @@
 .tree {
   background: var(--tree-bg);
   border-right: 1px solid var(--tree-border);
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 10px 10px 0;
 }
+/* Only the section list scrolls; head/search/footer stay put. Scales to
+   numerous items without the column running off the bottom. */
+.tree__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.tree__more {
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 11px; font-weight: 500;
+  color: var(--accent);
+  background: transparent; border: none; cursor: pointer;
+  border-radius: 6px;
+}
+.tree__more:hover { background: var(--bg-soft); }
+.tree__head, .tree__search { flex-shrink: 0; }
 
 .tree__head {
   display: flex;
@@ -116,8 +136,9 @@
 .tree__status--superseded { color: #d97706; }
 
 .tree__footer {
-  margin-top: auto;
-  padding: 10px 6px 12px;
+  flex-shrink: 0;
+  padding: 8px 6px 10px;
+  border-top: 1px solid var(--tree-border);
 }
 .tree__toggle {
   display: flex;
@@ -153,14 +174,26 @@
 .tree__item.is-active .icon { color: var(--accent); }
 .tree__item.is-archived { opacity: 0.55; }
 .tree__item.is-archived .tree__item-label { text-decoration: line-through; }
-.tree__title-line { display: flex; align-items: center; gap: 4px; }
-.tree__pin { color: #d97706; font-size: 11px; }
+.tree__title-line { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.tree__pin { color: var(--red); flex-shrink: 0; margin-top: 2px; }
+/* Clamp long titles (e.g. kept-note sentences) so they don't run off the card. */
+.tree__item-title {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.3;
+  word-break: break-word;
+}
 
 .tree__item-label {
   display: flex;
   flex-direction: column;
   gap: 1px;
   line-height: 1.3;
+  flex: 1;
+  min-width: 0;
 }
 
 .meta {

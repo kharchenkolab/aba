@@ -180,8 +180,12 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
       {promote?.kind === 'figure-to-result' && (
         <PromoteDialog
           title={`Promote "${entity.title}" to a result`}
-          prompt="What does this figure tell you? One or two lines, in your own voice."
+          prompt="What does this figure tell you? One or two lines, in your own voice. (Pre-filled with Guide's read — edit freely.)"
           placeholder="Sample S4 has mt_fraction 0.13, ~3× higher than other samples — likely doublet contamination."
+          suggest={async () => {
+            const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}/suggest-interpretation`)
+            return r.ok ? (await r.json()).text ?? '' : ''
+          }}
           onCancel={() => setPromote(null)}
           onSubmit={doFigurePromote}
         />
@@ -479,6 +483,14 @@ function renderBody(
         <FindingBody finding={e} entities={entities} onFocus={onFocus} onChange={onChange} />
       )
 
+    case 'note':
+      return (
+        <div className="focus__abstract">
+          <p className="focus__interpretation">{(e.metadata?.text as string) ?? e.notes ?? e.title}</p>
+          <p className="focus__placeholder">Kept from the conversation.</p>
+        </div>
+      )
+
     case 'claim': {
       const text = (e.metadata?.text as string) ?? ''
       const findIds = (e.metadata?.supporting_findings as string[]) ?? []
@@ -710,6 +722,10 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
   )
 }
 
+const MATURITY = ['draft', 'candidate', 'checked', 'manuscript'] as const
+
+interface Caveat { text: string; source?: string }
+
 function FindingBody({
   finding, entities, onFocus, onChange,
 }: {
@@ -718,77 +734,120 @@ function FindingBody({
   onFocus: (id: string) => void
   onChange: () => void
 }) {
+  const meta = finding.metadata ?? {}
   const [picking, setPicking] = useState(false)
-  const text = (finding.metadata?.text as string) ?? ''
-  const supportingIds = (finding.metadata?.supporting_results as string[]) ?? []
-  const supportingEnts = supportingIds
-    .map(id => entities.find(x => x.id === id))
-    .filter((x): x is Entity => !!x)
+  const [summary, setSummary] = useState((meta.summary as string) ?? (meta.text as string) ?? '')
+  const [editingSummary, setEditingSummary] = useState(false)
+  const [newCaveat, setNewCaveat] = useState('')
 
+  useEffect(() => {
+    setSummary((finding.metadata?.summary as string) ?? (finding.metadata?.text as string) ?? '')
+  }, [finding.id])
+
+  const status = (meta.maturity as string) ?? 'candidate'
+  const caveats: Caveat[] = (meta.caveats as Caveat[]) ?? []
+  // Evidence = explicit evidence list (figures/tables) ∪ supporting results.
+  const evIds = Array.from(new Set([
+    ...((meta.evidence as string[]) ?? []),
+    ...((meta.supporting_results as string[]) ?? []),
+  ]))
+  const evidenceEnts = evIds.map(id => entities.find(x => x.id === id)).filter((x): x is Entity => !!x)
   const candidates = entities.filter(
-    e => e.type === 'result' && !supportingIds.includes(e.id) && e.status !== 'archived',
+    e => e.type === 'result' && !evIds.includes(e.id) && e.status !== 'archived',
   )
 
-  async function addResult(resultId: string) {
-    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/add-result`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ result_id: resultId }),
+  async function patch(body: Record<string, unknown>) {
+    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/fields`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })
-    setPicking(false)
     onChange()
   }
-
+  async function addResult(resultId: string) {
+    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/add-result`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result_id: resultId }),
+    })
+    setPicking(false); onChange()
+  }
   async function removeResult(resultId: string) {
     await fetch(`/api/findings/${encodeURIComponent(finding.id)}/remove-result`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ result_id: resultId }),
     })
     onChange()
+  }
+  function addCaveat() {
+    const t = newCaveat.trim()
+    if (!t) return
+    patch({ caveats: [...caveats, { text: t, source: 'user' }] })
+    setNewCaveat('')
+  }
+  function removeCaveat(i: number) {
+    patch({ caveats: caveats.filter((_, j) => j !== i) })
   }
 
   return (
-    <div className="focus__abstract">
-      <p className="focus__interpretation">{text}</p>
-      <div className="focus__chain">
-        <div className="focus__chain-head">
-          SUPPORTING RESULTS
-          <button
-            className="focus__chain-add"
-            onClick={() => setPicking(v => !v)}
-            disabled={candidates.length === 0}
-            title={candidates.length === 0 ? 'No other results to add' : 'Add a supporting result'}
-          >
-            + Add
-          </button>
-        </div>
-        {supportingEnts.length === 0 && (
-          <div className="focus__placeholder">No supporting results yet.</div>
-        )}
-        {supportingEnts.map(s => (
-          <div key={s.id} className="focus__chain-row-wrap">
-            <EntityRow ent={s} onClick={() => onFocus(s.id)} />
-            <button
-              className="focus__chain-remove"
-              onClick={() => removeResult(s.id)}
-              title="Remove from finding"
-            >
-              ×
+    <div className="fv">
+      {/* Maturity ladder */}
+      <div className="fv-ladder">
+        {MATURITY.map((m, i) => {
+          const done = MATURITY.indexOf(status as typeof MATURITY[number]) > i
+          const cur = status === m
+          return (
+            <button key={m} className={`fv-step ${done ? 'is-done' : ''} ${cur ? 'is-current' : ''}`}
+                    onClick={() => patch({ status: m })} title={`Mark ${m}`}>
+              <span className="fv-step__dot" />{m}
             </button>
-          </div>
-        ))}
-        {picking && (
-          <div className="focus__picker">
-            <div className="focus__picker-head">Add a result</div>
-            {candidates.map(c => (
-              <button key={c.id} className="focus__picker-row" onClick={() => addResult(c.id)}>
-                <span className="focus__type focus__type--result">result</span>
-                {c.title}
-              </button>
-            ))}
-          </div>
-        )}
+          )
+        })}
+      </div>
+
+      {/* Summary (editable) */}
+      <div className="fv-section-label">Summary <button className="fv-edit" onClick={() => setEditingSummary(v => !v)}>{editingSummary ? 'done' : 'edit'}</button></div>
+      {editingSummary ? (
+        <textarea className="fv-summary-edit" value={summary} autoFocus rows={4}
+          onChange={e => setSummary(e.target.value)}
+          onBlur={() => { setEditingSummary(false); if (summary !== (meta.summary ?? meta.text)) patch({ summary }) }} />
+      ) : (
+        <p className="fv-summary" onClick={() => setEditingSummary(true)}>{summary || <em className="focus__placeholder">Click to add a summary…</em>}</p>
+      )}
+
+      {/* Evidence */}
+      <div className="fv-section-label">Evidence ({evidenceEnts.length})
+        <button className="fv-edit" onClick={() => setPicking(v => !v)} disabled={candidates.length === 0}>+ add</button>
+      </div>
+      {evidenceEnts.length === 0 && <div className="focus__placeholder">No evidence linked yet.</div>}
+      {evidenceEnts.map(s => (
+        <div key={s.id} className="focus__chain-row-wrap">
+          <EntityRow ent={s} onClick={() => onFocus(s.id)} />
+          <button className="focus__chain-remove" onClick={() => removeResult(s.id)} title="Remove from finding">×</button>
+        </div>
+      ))}
+      {picking && (
+        <div className="focus__picker">
+          <div className="focus__picker-head">Add a result</div>
+          {candidates.map(c => (
+            <button key={c.id} className="focus__picker-row" onClick={() => addResult(c.id)}>
+              <span className="focus__type focus__type--result">result</span>{c.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Caveats */}
+      <div className="fv-section-label">Caveats ({caveats.length})</div>
+      {caveats.map((c, i) => (
+        <div key={i} className="fv-caveat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          <span className="fv-caveat__text">{c.text}</span>
+          {c.source && <span className="fv-caveat__src">{c.source}</span>}
+          <button className="fv-caveat__x" onClick={() => removeCaveat(i)} title="Remove caveat">×</button>
+        </div>
+      ))}
+      <div className="fv-caveat-add">
+        <input value={newCaveat} placeholder="Add a caveat…" onChange={e => setNewCaveat(e.target.value)}
+               onKeyDown={e => { if (e.key === 'Enter') addCaveat() }} />
+        <button onClick={addCaveat} disabled={!newCaveat.trim()}>Add</button>
       </div>
     </div>
   )

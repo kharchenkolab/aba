@@ -183,9 +183,11 @@ def drive(frontend_port: int) -> int:
         )
         page.locator(".promote-dialog__btn--primary").click()
         page.wait_for_selector(".focus__type--finding", timeout=5000)
-        page.wait_for_selector(".focus__chain", timeout=2000)
+        # Finding view (M7): maturity ladder + the promoted result as evidence.
+        page.wait_for_selector(".fv-ladder", timeout=2000)
+        page.wait_for_selector(".fv .focus__chain-row", timeout=2000)
         page.screenshot(path=str(SHOT_DIR / "04_finding_focused.png"), full_page=True)
-        print("✓ result lifted to finding; supporting results visible")
+        print("✓ result lifted to finding; evidence visible in finding view")
 
         # Lift the finding to a claim.
         page.locator("button:has-text('Lift to claim')").click()

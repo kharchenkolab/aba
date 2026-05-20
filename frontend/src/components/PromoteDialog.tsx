@@ -15,11 +15,14 @@ interface Props {
   prompt: string
   onCancel: () => void
   onSubmit: (text: string) => Promise<void>
+  /** Optional async pre-fill (e.g. Guide's interpretation of the figure). */
+  suggest?: () => Promise<string>
 }
 
-export default function PromoteDialog({ title, placeholder, prompt, onCancel, onSubmit }: Props) {
+export default function PromoteDialog({ title, placeholder, prompt, onCancel, onSubmit, suggest }: Props) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [suggesting, setSuggesting] = useState(!!suggest)
   const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
@@ -29,6 +32,17 @@ export default function PromoteDialog({ title, placeholder, prompt, onCancel, on
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [onCancel])
+
+  // Pre-fill with Guide's best guess (editable). Only seeds if untouched.
+  useEffect(() => {
+    if (!suggest) return
+    let cancelled = false
+    suggest()
+      .then(s => { if (!cancelled && s) setText(t => (t ? t : s)) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSuggesting(false) })
+    return () => { cancelled = true }
+  }, [suggest])
 
   async function submit() {
     if (!text.trim() || busy) return
@@ -48,7 +62,7 @@ export default function PromoteDialog({ title, placeholder, prompt, onCancel, on
         <p className="promote-dialog__prompt">{prompt}</p>
         <textarea
           className="promote-dialog__textarea"
-          placeholder={placeholder}
+          placeholder={suggesting ? 'Reading Guide’s interpretation…' : placeholder}
           value={text}
           onChange={e => setText(e.target.value)}
           autoFocus
