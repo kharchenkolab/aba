@@ -91,3 +91,12 @@
   cursor: pointer;
 }
 .adv-footer:hover { background: var(--bg-soft); }
+.adv-footer__badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 9999px;
+}

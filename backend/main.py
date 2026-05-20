@@ -32,7 +32,12 @@ from promote import (
 )
 from scenarios import create_scenario_variant
 from advisors import skeptic_review
-from db import list_advisor_notes
+from db import (
+    list_advisor_notes,
+    list_context_suggestions,
+    update_context_suggestion_status,
+)
+from adaptive import append_to_policy
 
 
 app = FastAPI()
@@ -281,6 +286,40 @@ def entities_advisor_notes(entity_id: str):
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
     return list_advisor_notes(entity_id)
+
+
+# ---------- Adaptive context (§3.6) ----------
+
+@app.get("/api/context-suggestions")
+def context_suggestions(status: str = "pending"):
+    """List context-policy suggestions awaiting review (or any status)."""
+    return list_context_suggestions(status=status)
+
+
+class SuggestionAction(BaseModel):
+    action: str  # 'approve' | 'reject'
+
+
+@app.post("/api/context-suggestions/{sid}/action")
+def context_suggestion_action(sid: int, req: SuggestionAction):
+    """
+    Apply a reviewer action to a suggestion:
+      approve → status='promoted' + append to the per-type policy file
+      reject  → status='rejected'
+    """
+    if req.action not in ("approve", "reject"):
+        raise HTTPException(400, "action must be 'approve' or 'reject'")
+    # Fetch current suggestion to know the entity_type for policy append.
+    pending = [s for s in list_context_suggestions(status=None) if s["id"] == sid]
+    if not pending:
+        raise HTTPException(404, f"suggestion {sid} not found")
+    suggestion = pending[0]
+    if req.action == "approve":
+        append_to_policy(suggestion["entity_type"], suggestion["suggestion"])
+        update_context_suggestion_status(sid, "promoted")
+    else:
+        update_context_suggestion_status(sid, "rejected")
+    return {"ok": True}
 
 
 @app.post("/api/findings")

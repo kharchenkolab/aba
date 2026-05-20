@@ -72,11 +72,33 @@
   align-items: center;
   gap: 4px;
   padding-top: 12px;
+  padding-bottom: 4px;
   border-top: 1px solid rgba(255,255,255,0.1);
   width: 100%;
   font-size: 9px;
   font-weight: 500;
   color: var(--rail-fg-muted);
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+.rail__user:hover { background: rgba(255,255,255,0.06); color: var(--rail-fg); }
+.rail__user .rail__badge {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  min-width: 14px;
+  text-align: center;
 }
 .rail__avatar {
   width: 30px; height: 30px;

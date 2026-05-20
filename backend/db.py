@@ -113,6 +113,42 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_notes_entity ON advisor_notes(entity_id)")
 
+        # Context assemblies — one row per Guide turn, capturing what was
+        # loaded into context and how much extra retrieval the agent had
+        # to do mid-session. Feeds the §3.6 reflection loop.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS context_assemblies (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id              TEXT,
+                turn_index              INTEGER,
+                focus_entity_id         TEXT,
+                focus_entity_type       TEXT,
+                fields_preloaded        TEXT,
+                tool_calls              TEXT,
+                n_tool_calls            INTEGER NOT NULL DEFAULT 0,
+                turn_text_len           INTEGER NOT NULL DEFAULT 0,
+                created_at              TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies(session_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_assemblies_focus  ON context_assemblies(focus_entity_id)")
+
+        # Suggestions surfaced from end-of-session reflection (and probes,
+        # eventually). Reviewable in the settings page; once approved,
+        # appended to a per-entity-type policy file.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS context_suggestions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   TEXT,
+                entity_type  TEXT,
+                trigger      TEXT,
+                suggestion   TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                created_at   TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_sugg_status ON context_suggestions(status)")
+
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
         if not row:
@@ -310,6 +346,99 @@ def add_advisor_note(entity_id: str, advisor: str, text: str,
         )
         c.commit()
         return cur.lastrowid
+
+
+def log_context_assembly(
+    session_id: str,
+    turn_index: int,
+    focus_entity_id: Optional[str],
+    focus_entity_type: Optional[str],
+    fields_preloaded: list[str],
+    tool_calls: list[str],
+    turn_text_len: int,
+) -> int:
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO context_assemblies "
+            "(session_id, turn_index, focus_entity_id, focus_entity_type, "
+            " fields_preloaded, tool_calls, n_tool_calls, turn_text_len, "
+            " created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id, turn_index, focus_entity_id, focus_entity_type,
+                json.dumps(fields_preloaded), json.dumps(tool_calls),
+                len(tool_calls), turn_text_len, now,
+            ),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def session_assembly_summary(session_id: str) -> dict:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n_turns, SUM(n_tool_calls) AS total_tool_calls, "
+            "MAX(turn_index) AS last_turn FROM context_assemblies "
+            "WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return {
+        "session_id": session_id,
+        "n_turns": row["n_turns"] or 0,
+        "total_tool_calls": row["total_tool_calls"] or 0,
+        "last_turn": row["last_turn"],
+    }
+
+
+def add_context_suggestion(
+    session_id: str,
+    entity_type: Optional[str],
+    trigger: str,
+    suggestion: str,
+) -> int:
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO context_suggestions "
+            "(session_id, entity_type, trigger, suggestion, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, entity_type, trigger, suggestion, now),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def list_context_suggestions(status: Optional[str] = "pending") -> list[dict]:
+    q = "SELECT * FROM context_suggestions"
+    args: list = []
+    if status:
+        q += " WHERE status = ?"; args.append(status)
+    q += " ORDER BY id DESC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "session_id": r["session_id"],
+            "entity_type": r["entity_type"],
+            "trigger": r["trigger"],
+            "suggestion": r["suggestion"],
+            "status": r["status"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def update_context_suggestion_status(suggestion_id: int, status: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE context_suggestions SET status = ? WHERE id = ?",
+            (status, suggestion_id),
+        )
+        c.commit()
+        return cur.rowcount > 0
 
 
 def list_advisor_notes(entity_id: str) -> list[dict]:
