@@ -3,12 +3,14 @@ import type { DisplayMessage, Entity } from '../types'
 import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
 import Composer from './Composer'
-import TracePanel from './TracePanel'
+import ErrorBoundary from './ErrorBoundary'
 import './ChatPane.css'
 
 interface Props {
   messages: DisplayMessage[]
   streaming: boolean
+  /** True while a thread's history is being fetched — suppress the empty-state. */
+  loading?: boolean
   streamMsg: DisplayMessage | null
   onSend: (text: string) => void
   focusedEntity: Entity | null
@@ -29,11 +31,21 @@ interface Props {
   onPin?: (id: string, pinned: boolean) => void
   keptKeys?: Set<string>
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
+  /** Selection→Claim: make a claim from a highlighted span of the conversation. */
+  onClaimFromSelection?: (text: string) => void
+  /** Highlight mode, lifted so the canvas header can own the toggle (chat-first).
+   *  Falls back to internal state when not provided (legacy non-embedded use). */
+  highlighting?: boolean
+  onHighlightingChange?: (on: boolean) => void
+  /** Cold-start starter prompts (from the Guide's orientation). Shown above the
+   *  composer until the user starts talking; clicking one sends it. */
+  starters?: string[]
 }
 
 export default function ChatPane({
   messages,
   streaming,
+  loading,
   streamMsg,
   onSend,
   focusedEntity,
@@ -51,9 +63,35 @@ export default function ChatPane({
   onPin,
   keptKeys,
   onKeepMessage,
+  onClaimFromSelection,
+  highlighting: highlightingProp,
+  onHighlightingChange,
+  starters,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [traceVisible, setTraceVisible] = useState(false)
+  const [hlLocal, setHlLocal] = useState(false)
+  const highlighting = highlightingProp ?? hlLocal
+  const setHighlighting = (on: boolean) => (onHighlightingChange ?? setHlLocal)(on)
+  const [anyDrawing, setAnyDrawing] = useState(false)
+  const [extraFocus, setExtraFocus] = useState(0)   // bump to focus the composer (plan "Adjust")
+  const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null)
+
+  // Selection→Claim: when the user highlights a span of the conversation, offer
+  // to crystallize it into a claim (ui3 P3).
+  useEffect(() => {
+    if (!onClaimFromSelection) return
+    function onUp() {
+      const s = window.getSelection()
+      const text = s?.toString().trim() ?? ''
+      const node = s && s.rangeCount ? s.anchorNode : null
+      const host = node?.nodeType === 3 ? node.parentElement : (node as Element | null)
+      if (!text || text.length < 8 || !host || !scrollRef.current?.contains(host)) { setSel(null); return }
+      const r = s!.getRangeAt(0).getBoundingClientRect()
+      setSel({ text, x: r.left + r.width / 2, y: r.top })
+    }
+    document.addEventListener('mouseup', onUp)
+    return () => document.removeEventListener('mouseup', onUp)
+  }, [onClaimFromSelection])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -65,27 +103,31 @@ export default function ChatPane({
   const scoped = !!focusedEntity && focusedEntity.type !== 'workspace'
   const focusChipText = scoped ? `${focusedEntity!.type} · ${focusedEntity!.title}` : 'Workspace'
 
+  const hlBtn = (
+    <button
+      type="button"
+      className={`hl-toggle ${highlighting ? 'hl-toggle--on' : ''}`}
+      onClick={() => setHighlighting(!highlighting)}
+      title={highlighting ? 'Cancel highlight' : 'Highlight a region of any message to ask Guide about it'}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="#fde047" stroke="#a16207" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
+    </button>
+  )
+
   return (
-    <div className={`chat-pane ${traceVisible ? 'chat-pane--split' : ''} ${embedded ? 'chat-pane--embedded' : ''}`}>
+    <div className={`chat-pane ${embedded ? 'chat-pane--embedded' : ''}`}>
       {embedded ? (
-        <div className="panel-head">
-          <div className="panel-head-title primary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            {compact ? 'Chat about this' : 'Thread chat'}
+        // Compact peek (entity-first): a slim label so the user knows this chat
+        // is scoped to the open entity. Chat-first primary gets NO header — the
+        // conversation flows directly; the highlighter lives in the canvas head.
+        compact ? (
+          <div className="panel-head">
+            <div className="panel-head-title primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Chat about this
+            </div>
           </div>
-          <div className="panel-head-actions">
-            <span className="panel-head-sub">{all.length} msg</span>
-            <button
-              type="button"
-              className={`trace-toggle ${traceVisible ? 'trace-toggle--on' : ''}`}
-              onClick={() => setTraceVisible(v => !v)}
-              title="Show or hide the agent's inner loop"
-            >
-              <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor"><path d="M3 5h14v2H3zM3 9h14v2H3zM3 13h10v2H3z" /></svg>
-              Trace
-            </button>
-          </div>
-        </div>
+        ) : null
       ) : (
         <div className="chat-tabs">
           {AGENTS.map((a, i) => (
@@ -100,51 +142,75 @@ export default function ChatPane({
               {a.name}
             </span>
           ))}
-          <button
-            type="button"
-            className={`trace-toggle ${traceVisible ? 'trace-toggle--on' : ''}`}
-            onClick={() => setTraceVisible(v => !v)}
-            title="Show or hide the agent's inner loop"
-          >
-            <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor"><path d="M3 5h14v2H3zM3 9h14v2H3zM3 13h10v2H3z" /></svg>
-            Trace
-          </button>
           <span className={`focus-chip ${scoped ? 'focus-chip--active' : ''}`}>{focusChipText}</span>
+          {hlBtn}
         </div>
       )}
 
       <div className="chat-body">
         <div className="chat-main">
           <div className="chat-scroll" ref={scrollRef}>
-            {all.length === 0 && (
+            {all.length === 0 && !loading && (
               <div className="chat-empty">
                 <p>
                   {focusedEntity && focusedEntity.type !== 'workspace'
-                    ? `Ask Guide about this ${focusedEntity.type}.`
+                    ? `Ask Guide about this ${focusedEntity.type === 'analysis' ? 'run' : focusedEntity.type}.`
                     : 'Ask Guide about your data.'}
                 </p>
               </div>
             )}
             {all.map((m, i) => (
+              <ErrorBoundary key={m.id} label="message"
+                fallback={reset => (
+                  <div className="errbound">
+                    <span className="errbound__text">This message couldn’t be displayed.</span>
+                    <button className="errbound__retry" onClick={reset}>Retry</button>
+                  </div>
+                )}>
               <Message
                 key={m.id}
                 message={m}
                 isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
-                hideToolBlocks={traceVisible}
                 collapseTools={i !== all.length - 1}
                 onAnnotate={onAnnotate}
+                highlighting={highlighting}
+                anyDrawing={anyDrawing}
+                onDrawingChange={setAnyDrawing}
+                onHighlightDone={() => setHighlighting(false)}
                 annotClear={annotClear}
                 onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
                 entities={entities}
                 onPin={onPin}
                 keptKeys={keptKeys}
                 onKeepMessage={onKeepMessage}
+                planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
+                onPlanGo={() => onSend('Go ahead with the plan as proposed.')}
+                onPlanAdjust={() => setExtraFocus(n => n + 1)}
               />
+              </ErrorBoundary>
             ))}
+            {starters && starters.length > 0 && !all.some(m => m.role === 'user') && (
+              <div className="chat-starters">
+                {starters.map((s, i) => (
+                  <button key={i} className="chat-starter" disabled={streaming}
+                          onClick={() => onSend(`${s} — plan it first.`)}
+                          title="Ask the Guide to do this (it'll show a plan first)">
+                    <span className="chat-starter__spark">✦</span>{s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-        {traceVisible && <TracePanel messages={messages} streamMsg={streamMsg} />}
       </div>
+
+      {sel && onClaimFromSelection && (
+        <button className="chat-claim-sel" style={{ left: Math.max(90, sel.x), top: Math.max(56, sel.y - 38) }}
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { onClaimFromSelection(sel.text); window.getSelection()?.removeAllRanges(); setSel(null) }}>
+          ✦ Claim from selection
+        </button>
+      )}
 
       {annotation && (
         <div className="annot-attached">
@@ -154,17 +220,9 @@ export default function ChatPane({
         </div>
       )}
       <div className="composer-wrap">
-        {embedded && scoped && (
-          <div className="composer-chips">
-            <span className="chip">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-              {focusedEntity!.type} · {focusedEntity!.title}
-            </span>
-          </div>
-        )}
         <Composer onSend={onSend} disabled={streaming}
                   prefill={prefill} onPrefillConsumed={onPrefillConsumed}
-                  focusSignal={composerFocus} />
+                  focusSignal={(composerFocus ?? 0) + extraFocus} />
       </div>
     </div>
   )

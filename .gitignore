@@ -18,3 +18,10 @@ frontend/dist/
 
 # E2E test outputs
 tests/e2e/screenshots/
+
+# Per-project databases (multi-project registry)
+backend/projects/
+
+# Large local-only assets (kept out of git)
+misc/ui3/*.png
+eval/audits/vendor/

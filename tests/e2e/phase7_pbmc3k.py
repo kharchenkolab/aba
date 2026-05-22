@@ -181,10 +181,12 @@ def drive(frontend_port: int) -> int:
         page.wait_for_selector(".focus__figure", timeout=5000)
         page.screenshot(path=str(SHOT_DIR / "03_last_figure.png"), full_page=True)
 
-        # Trace on to see the inner loop.
-        page.locator(".trace-toggle").click()
-        page.wait_for_selector(".trace-card", timeout=5000)
-        page.screenshot(path=str(SHOT_DIR / "04_trace.png"), full_page=True)
+        # Reveal the script behind a tool step (per-cell disclosure).
+        toggle = page.locator(".tool-line__script-toggle").first
+        if toggle.count():
+            toggle.click()
+            page.wait_for_selector(".tool-line__code", timeout=5000)
+        page.screenshot(path=str(SHOT_DIR / "04_script.png"), full_page=True)
 
         # Ask a follow-up about cluster identity.
         composer.fill("what cell type is the largest cluster?")

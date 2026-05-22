@@ -96,7 +96,7 @@ def drive(fport: int) -> int:
         page = br.new_context(viewport={"width": 1500, "height": 950}).new_page()
         page.goto(f"http://127.0.0.1:{fport}/", wait_until="networkidle")
         # Workspace
-        page.locator('button[title="Workspace"]').click()
+        page.locator('button[title="Project"]').click()
         page.locator(f'[data-entity-id="{ds["id"]}"]').click()
         page.wait_for_selector(".focus__preview-table", timeout=5000)
         comp = page.locator(".composer__input")
@@ -125,6 +125,12 @@ def drive(fport: int) -> int:
         page.screenshot(path=str(SHOT_DIR / "02_attached.png"), full_page=True)
         print("✓ region auto-attached on draw (no attach button)")
 
+        # Once focus is established (the red chip appears), marking mode exits;
+        # the drawn mark itself stays on the figure until the chip is cleared.
+        page.wait_for_selector(".entity-surface .annot__wrap--marking", state="detached", timeout=2000)
+        assert page.locator(".entity-surface .annot__svg").count() == 1, "drawn mark should remain visible"
+        print("✓ marking mode auto-exits once the focus chip appears")
+
         # Send a question → the mark stays attached (sticky) for follow-ups.
         comp.fill("what's in this region?")
         comp.press("Enter")
@@ -139,30 +145,34 @@ def drive(fport: int) -> int:
         page.wait_for_selector(".entity-surface .annot__svg", state="detached", timeout=3000)
         print("✓ chip × clears the annotation and erases the figure mark")
 
-        # --- In-chat figure highlighting -----------------------------------
-        # The same control rides on figures rendered in the chat. Its gutter
-        # badge is quiet until the figure is hovered.
-        chat_fig = page.locator(".chat-scroll .msg-image .annot__row").first
-        chat_fig.scroll_into_view_if_needed()
-        chat_fig.hover()
-        badge = chat_fig.locator(".annot__tb-btn").first
-        badge.click()                                   # enter marking
-        chat_wrap = chat_fig.locator(".annot__wrap")
-        page.wait_for_selector(".chat-scroll .annot__wrap--marking", timeout=2000)
-        cb = chat_wrap.bounding_box()
-        page.mouse.move(cb["x"] + cb["width"] * 0.4, cb["y"] + cb["height"] * 0.4)
+        # --- In-chat highlighting (any cell) --------------------------------
+        # The highlighter is a single toggle in the chat header now. Turning it
+        # on shows a draw surface only on the cell under the cursor; the cell you
+        # draw on captures it and is rasterized + attached.
+        page.locator(".hl-toggle").click()
+        msg = page.locator(".chat-scroll .msg--guide").last
+        # No overlay until a cell is hovered (it's not shown on every cell).
+        assert page.locator(".msg__hl").count() == 0, "draw surface should not show before hover"
+        msg.hover()
+        page.wait_for_selector(".msg--guide .msg__hl", timeout=2000)
+        assert page.locator(".msg__hl").count() == 1, "only the hovered cell shows the draw surface"
+        ov = msg.locator(".msg__hl"); cb = ov.bounding_box()
+        page.mouse.move(cb["x"] + cb["width"] * 0.2, cb["y"] + cb["height"] * 0.5)
         page.mouse.down()
-        page.mouse.move(cb["x"] + cb["width"] * 0.7, cb["y"] + cb["height"] * 0.6, steps=8)
+        page.mouse.move(cb["x"] + cb["width"] * 0.8, cb["y"] + cb["height"] * 0.5, steps=10)
         page.mouse.up()
-        page.wait_for_selector(".annot-attached", timeout=3000)
+        page.wait_for_selector(".annot-attached", timeout=8000)  # rasterize + attach
         page.screenshot(path=str(SHOT_DIR / "03_chat_highlight.png"), full_page=True)
-        print("✓ in-chat figure highlight auto-attaches")
+        print("✓ in-chat cell highlight rasterizes + attaches")
 
-        # Clearing the chip erases the chat figure's mark too.
+        # Highlight mode should exit automatically once a cell is captured.
+        assert page.locator(".hl-toggle--on").count() == 0, "highlight mode should turn off after capture"
+        assert page.locator(".msg__hl").count() == 0, "draw overlays should clear after capture"
+        print("✓ highlight mode exits after capture")
+
         page.locator(".annot-attached button").click()
         page.wait_for_selector(".annot-attached", state="detached", timeout=3000)
-        page.wait_for_selector(".chat-scroll .annot__svg", state="detached", timeout=3000)
-        print("✓ chip × erases the in-chat mark")
+        print("✓ chip × clears the attached highlight")
         br.close()
     print("\nscreenshots:")
     for s in sorted(SHOT_DIR.glob("*.png")): print(f"  {s.relative_to(ROOT)}")

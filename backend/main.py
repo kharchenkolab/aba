@@ -1,8 +1,9 @@
 import asyncio
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,8 +21,10 @@ from db import (
     archive_entity,
     restore_entity,
     add_edge,
+    remove_edge,
     edges_from,
     edges_to,
+    gen_entity_id,
     WORKSPACE_ID,
 )
 from guide import stream_response
@@ -60,8 +63,54 @@ app.mount("/artifacts", StaticFiles(directory=str(ARTIFACTS_DIR)), name="artifac
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    import projects
+    projects.init()          # picks/creates the active project + init_db
     start_worker()
+
+
+# ---------- Projects ----------
+
+class ProjectRequest(BaseModel):
+    name: str = ""
+
+
+@app.get("/api/projects")
+def projects_list():
+    import projects
+    return projects.list_projects()
+
+
+@app.get("/api/projects/current")
+def projects_current():
+    import projects
+    return {"current": projects.current()}
+
+
+@app.post("/api/projects")
+def projects_create(req: ProjectRequest):
+    import projects
+    return projects.create_project(req.name)
+
+
+@app.post("/api/projects/{pid}/open")
+def projects_open(pid: str):
+    import projects
+    projects.set_current(pid)
+    return {"current": projects.current()}
+
+
+@app.patch("/api/projects/{pid}")
+def projects_rename(pid: str, req: ProjectRequest):
+    import projects
+    projects.rename_project(pid, req.name)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{pid}")
+def projects_delete(pid: str):
+    import projects
+    projects.delete_project(pid)
+    return {"current": projects.current()}
 
 
 # ---------- Entities ----------
@@ -102,6 +151,8 @@ class EntityPatch(BaseModel):
     tags: list[str] | None = None
     pinned: bool | None = None
     status: str | None = None
+    interpretation: str | None = None   # one-line caption on a Result (merged into metadata)
+    thread_id: str | None = None        # re-home a Result to another thread (merged into metadata)
 
 
 @app.patch("/api/entities/{entity_id}")
@@ -111,10 +162,23 @@ def entities_patch(entity_id: str, req: EntityPatch):
         # Allow updating workspace title only; status/pin/notes/tags ignored.
         if req.title:
             updated = update_entity(entity_id, title=req.title)
+            import projects
+            projects.rename_project(projects.current(), req.title)  # keep Home registry in sync
             if updated:
                 return updated
         return get_entity(entity_id)
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    # interpretation / thread_id are Result metadata, not top-level columns.
+    meta_updates = {}
+    for k in ("interpretation", "thread_id"):
+        if k in fields:
+            meta_updates[k] = fields.pop(k)
+    if meta_updates:
+        ent = get_entity(entity_id)
+        if not ent:
+            raise HTTPException(404, f"Entity {entity_id} not found")
+        merged = {**(ent.get("metadata") or {}), **meta_updates}
+        fields["metadata"] = merged
     # status whitelist
     if "status" in fields and fields["status"] not in (
         "active", "running", "superseded", "failed", "archived",
@@ -242,8 +306,11 @@ def entities_preview(entity_id: str, limit: int = 20, offset: int = 0):
 class ChatRequest(BaseModel):
     text: str
     # The entity the user is *focused on* (chip / canvas). Used to augment
-    # the model's context. The chat thread itself is always project-level.
+    # the model's context.
     focus_entity_id: str = WORKSPACE_ID
+    # The thread (line of inquiry) this turn belongs to. "default" = the
+    # implicit default thread (small projects never name one).
+    thread_id: str = "default"
     # Spatial reference (Phase 25): base64 PNG of the figure with the user's
     # annotation composited on, plus a short note describing the gesture.
     annotation_image: str | None = None
@@ -262,6 +329,7 @@ async def chat(req: ChatRequest):
         async for chunk in stream_response(
             req.text,
             focus_entity_id=req.focus_entity_id,
+            thread_id=req.thread_id,
             annotation_image=req.annotation_image,
             annotation_note=req.annotation_note,
             retry=req.retry,
@@ -276,9 +344,280 @@ async def chat(req: ChatRequest):
 
 
 @app.get("/api/messages")
-def messages_list():
-    """The project's running conversation (workspace thread)."""
-    return get_messages(WORKSPACE_ID)
+def messages_list(thread_id: str | None = None):
+    """The project's conversation. `thread_id` scopes to one thread
+    ("default" = the default thread, materialized or not); omitted = all."""
+    if thread_id == "default":
+        from db import find_default_thread
+        thread_id = find_default_thread() or "default"   # real id if materialized
+    return get_messages(WORKSPACE_ID, thread_id=thread_id)
+
+
+# ---------- Threads (v3 lines of inquiry) ----------
+
+class ThreadRequest(BaseModel):
+    title: str = ""
+    question: str = ""
+    question_source: str | None = None   # 'user' when the user typed the question
+
+
+class ThreadPatch(BaseModel):
+    title: str | None = None
+    question: str | None = None
+    open_questions: list[dict] | None = None
+    lifecycle: str | None = None
+
+
+@app.get("/api/threads")
+def threads_list():
+    from db import list_threads
+    return list_threads()
+
+
+@app.post("/api/threads")
+def threads_create(req: ThreadRequest):
+    from db import create_thread
+    tid = create_thread(req.title, req.question)
+    # A user-typed question is user-owned — keep the Guide from silently
+    # rewriting it later.
+    if req.question and req.question_source:
+        ent = get_entity(tid)
+        meta = dict(ent.get("metadata") or {})
+        meta["question_source"] = req.question_source
+        update_entity(tid, metadata=meta)
+    return get_entity(tid)
+
+
+@app.patch("/api/threads/{tid}")
+def threads_patch(tid: str, req: ThreadPatch):
+    ent = get_entity(tid)
+    if not ent or ent["type"] != "thread":
+        raise HTTPException(404, f"Thread {tid} not found")
+    meta = dict(ent.get("metadata") or {})
+    fields: dict = {}
+    if req.title is not None:
+        fields["title"] = req.title
+    if req.question is not None:
+        meta["question"] = req.question
+    if req.open_questions is not None:
+        meta["open_questions"] = req.open_questions
+    if req.lifecycle is not None:
+        meta["lifecycle"] = req.lifecycle
+    fields["metadata"] = meta
+    return update_entity(tid, **fields)
+
+
+# ---- thread open questions (component CRUD) ----
+
+class OpenQRequest(BaseModel):
+    text: str = ""
+    source: str = "user"
+
+
+class OpenQPatch(BaseModel):
+    text: str | None = None
+    status: str | None = None      # open | parked | answered | promoted
+
+
+def _thread_or_404(tid: str) -> dict:
+    ent = get_entity(tid)
+    if not ent or ent["type"] != "thread":
+        raise HTTPException(404, f"Thread {tid} not found")
+    return ent
+
+
+def _save_oqs(tid: str, ent: dict, oqs: list):
+    meta = dict(ent.get("metadata") or {})
+    meta["open_questions"] = oqs
+    update_entity(tid, metadata=meta)
+
+
+@app.post("/api/threads/{tid}/open-questions")
+def oq_add(tid: str, req: OpenQRequest):
+    from db import gen_entity_id
+    ent = _thread_or_404(tid)
+    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
+    oq = {"id": gen_entity_id("oq"), "text": req.text.strip(),
+          "status": "open", "source": req.source,
+          "at": datetime.now(timezone.utc).isoformat()}
+    oqs.append(oq)
+    _save_oqs(tid, ent, oqs)
+    return oq
+
+
+@app.patch("/api/threads/{tid}/open-questions/{oqid}")
+def oq_patch(tid: str, oqid: str, req: OpenQPatch):
+    ent = _thread_or_404(tid)
+    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
+    found = None
+    for o in oqs:
+        if o.get("id") == oqid:
+            if req.text is not None:
+                o["text"] = req.text.strip()
+            if req.status is not None:
+                o["status"] = req.status
+            found = o
+    if not found:
+        raise HTTPException(404, "open question not found")
+    _save_oqs(tid, ent, oqs)
+    return found
+
+
+@app.delete("/api/threads/{tid}/open-questions/{oqid}")
+def oq_delete(tid: str, oqid: str):
+    ent = _thread_or_404(tid)
+    oqs = [o for o in ((ent.get("metadata") or {}).get("open_questions") or [])
+           if o.get("id") != oqid]
+    _save_oqs(tid, ent, oqs)
+    return {"ok": True}
+
+
+@app.post("/api/threads/{tid}/open-questions/{oqid}/promote")
+def oq_promote(tid: str, oqid: str):
+    """Promote an open question into its own thread (title + question seeded
+    from the OQ); mark the source OQ promoted and link it."""
+    from db import create_thread
+    ent = _thread_or_404(tid)
+    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
+    oq = next((o for o in oqs if o.get("id") == oqid), None)
+    if not oq:
+        raise HTTPException(404, "open question not found")
+    text = oq["text"]
+    new_tid = create_thread(text[:60], text)
+    oq["status"] = "promoted"
+    oq["promoted_to"] = new_tid
+    _save_oqs(tid, ent, oqs)
+    return {"thread": get_entity(new_tid), "open_question": oq}
+
+
+# ---------- Proactive proposals (Phase D) ----------
+
+class EvaluateRequest(BaseModel):
+    trigger: str = "post_turn"
+
+
+@app.get("/api/threads/{tid}/proposals")
+def thread_proposals(tid: str, status: str = "pending"):
+    from db import list_proposals
+    rtid = _resolve_thread(tid)
+    return list_proposals(thread_id=rtid, status=(status or None))
+
+
+@app.post("/api/threads/{tid}/evaluate")
+def thread_evaluate(tid: str, req: EvaluateRequest):
+    """Run the proposal detectors for a thread on demand (used by the
+    thread-open event trigger). Post-turn evaluation is fired from guide.py."""
+    from proposals import evaluate_thread
+    from db import list_proposals
+    rtid = _resolve_thread(tid)
+    evaluate_thread(rtid, req.trigger)
+    return list_proposals(thread_id=rtid, status="pending")
+
+
+@app.post("/api/threads/{tid}/orient")
+def thread_orient(tid: str):
+    """Cold-start orientation: the Guide summarizes the project's data + suggests
+    next steps as an opening message. Idempotent — no-ops once the thread has a
+    conversation or has already been oriented."""
+    from orientation import orient_thread
+    rtid = _resolve_thread(tid)
+    result = orient_thread(rtid)
+    return {"oriented": bool(result), "result": result}
+
+
+@app.post("/api/proposals/{pid}/accept")
+def proposal_accept(pid: int):
+    from proposals import accept_proposal
+    try:
+        return accept_proposal(pid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/proposals/{pid}/dismiss")
+def proposal_dismiss(pid: int):
+    from proposals import dismiss_proposal
+    return dismiss_proposal(pid)
+
+
+@app.post("/api/proposals/{pid}/undo")
+def proposal_undo(pid: int):
+    from proposals import undo_proposal
+    try:
+        return undo_proposal(pid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+# ---------- Runs (analysis runs) ----------
+
+class PinOutputRequest(BaseModel):
+    kind: str = "figure"
+    label: str = ""
+    thumb: str | None = None
+    href: str | None = None
+    size: str | None = None
+    interpretation: str = ""
+
+
+def _run_or_404(rid: str) -> dict:
+    e = get_entity(rid)
+    if not e or e["type"] != "analysis":
+        raise HTTPException(404, f"Run {rid} not found")
+    return e
+
+
+@app.post("/api/runs/{rid}/cancel")
+def run_cancel(rid: str):
+    e = _run_or_404(rid)
+    meta = dict(e.get("metadata") or {})
+    run = dict(meta.get("run") or {})
+    run["status"] = "cancelled"
+    run["finished_at"] = _now()
+    meta["run"] = run
+    return update_entity(rid, metadata=meta)
+
+
+@app.post("/api/runs/{rid}/pin-output")
+def run_pin_output(rid: str, req: PinOutputRequest):
+    """Pin one of a run's outputs into the thread as a Result. Plots/tables we
+    can render are kept with their thumbnail; everything else is a *reference*
+    (origin=external + href) — we don't host a copy."""
+    run = _run_or_404(rid)
+    tid = (run.get("metadata") or {}).get("thread_id")
+    etype = "table" if req.kind == "table" else "figure"
+    is_img = bool(req.thumb) and req.thumb.lower().rsplit(".", 1)[-1] in ("png", "jpg", "jpeg", "svg", "webp", "gif")
+    eid = create_entity(
+        entity_type=etype, title=req.label or "result",
+        artifact_path=(req.thumb if is_img else None),
+        metadata={"thread_id": tid, "origin": "external", "interpretation": req.interpretation,
+                  "source_run": rid, "href": req.href, "out_kind": req.kind})
+    update_entity(eid, pinned=True)
+    add_edge(eid, rid, "produced_by")
+    return get_entity(eid)
+
+
+class RegisterDatasetRequest(BaseModel):
+    label: str = ""
+    path: str | None = None       # filesystem path / href the bundle lives at
+    size: str | None = None
+    summary: str = ""
+
+
+@app.post("/api/runs/{rid}/register-dataset")
+def run_register_dataset(rid: str, req: RegisterDatasetRequest):
+    """Lift a run's PRIMARY artifact (e.g. a processed-data bundle) into a
+    first-class Dataset entity — by reference: we record where it lives, we do
+    not host a copy. Once registered it feeds downstream runs like any dataset."""
+    run = _run_or_404(rid)
+    tid = (run.get("metadata") or {}).get("thread_id")
+    eid = create_entity(
+        entity_type="dataset", title=req.label or "dataset",
+        metadata={"thread_id": tid, "origin": "external", "by_reference": True,
+                  "ref_path": req.path, "size_label": req.size, "summary": req.summary,
+                  "source_run": rid})
+    add_edge(eid, rid, "produced_by")
+    return get_entity(eid)
 
 
 @app.get("/api/entities/{entity_id}/suggest-interpretation")
@@ -335,21 +674,27 @@ class PinMessageRequest(BaseModel):
     text: str = ""
     title: str = ""
     image_urls: list[str] = []
+    thread_id: str = "default"     # the note belongs to the current thread
 
 
 @app.post("/api/messages/pin")
 def pin_message(req: PinMessageRequest):
     """Keep any chat message: snapshot it as a lightweight 'note' entity that
-    shows in the Pinned shelf. Toggles by content key (idempotent)."""
+    shows in the thread's pinned shelf. Toggles by content key (idempotent)."""
     from db import find_kept_note, update_entity
     existing = find_kept_note(req.key)
     if existing:
         update_entity(existing, status="archived")   # unpin
         return {"pinned": False}
+    tid = req.thread_id
+    if tid == "default":
+        from db import get_or_create_default_thread
+        tid = get_or_create_default_thread()
     title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
     eid = create_entity(
         entity_type="note", title=title,
-        metadata={"source_key": req.key, "text": req.text, "image_urls": req.image_urls},
+        metadata={"source_key": req.key, "text": req.text,
+                  "image_urls": req.image_urls, "thread_id": tid, "origin": "internal"},
     )
     update_entity(eid, pinned=True, notes=req.text[:500])
     return {"pinned": True, "id": eid}
@@ -360,6 +705,238 @@ def search_endpoint(q: str = "", limit: int = 25):
     """Faceted search across entities + chat snippets (M9 fallback recovery)."""
     from db import search as _search
     return _search(q, limit=limit)
+
+
+# ---------- Claims (v3 — the rigor core) ----------
+
+CONFIDENCE = ("preliminary", "supported", "validated", "contested", "refuted")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _claim_or_404(cid: str) -> dict:
+    ent = get_entity(cid)
+    if not ent or ent["type"] != "claim":
+        raise HTTPException(404, f"Claim {cid} not found")
+    return ent
+
+
+def _save_claim(cid: str, ent: dict, updates: dict) -> dict:
+    meta = dict(ent.get("metadata") or {})
+    meta.update(updates)
+    return update_entity(cid, metadata=meta)
+
+
+def _resolve_thread(thread_id: str) -> str:
+    if thread_id == "default":
+        from db import get_or_create_default_thread
+        return get_or_create_default_thread()
+    return thread_id
+
+
+class ClaimRequest(BaseModel):
+    statement: str = ""
+    evidence_ids: list[str] = []
+    thread_id: str = "default"
+    negative: bool = False
+
+
+class ClaimPatch(BaseModel):
+    statement: str | None = None
+    negative: bool | None = None
+
+
+class EvidenceRequest(BaseModel):
+    result_id: str
+
+
+class CaveatRequest(BaseModel):
+    text: str = ""
+    source: str = "user"
+
+
+class CaveatPatch(BaseModel):
+    text: str | None = None
+    dismissed: bool | None = None
+    rationale: str | None = None
+
+
+class AltRequest(BaseModel):
+    text: str = ""
+    source: str = "user"
+
+
+class AltPatch(BaseModel):
+    text: str | None = None
+    status: str | None = None       # open | dismissed
+    rationale: str | None = None
+
+
+class StatusRequest(BaseModel):
+    to: str
+    reason: str = ""
+
+
+@app.post("/api/claims")
+def claim_create(req: ClaimRequest):
+    tid = _resolve_thread(req.thread_id)
+    stmt = req.statement.strip() or "Untitled claim"
+    cid = create_entity(
+        entity_type="claim", title=stmt[:80],
+        metadata={"statement": stmt, "negative": req.negative,
+                  "evidence_ids": list(req.evidence_ids), "caveats": [], "alternatives": [],
+                  "confidence": "preliminary", "thread_id": tid,
+                  "status_log": [{"from": None, "to": "preliminary", "reason": "created",
+                                  "actor": "user", "at": _now()}]})
+    for rid in req.evidence_ids:
+        add_edge(cid, rid, "supports")
+    return get_entity(cid)
+
+
+@app.patch("/api/claims/{cid}")
+def claim_patch(cid: str, req: ClaimPatch):
+    ent = _claim_or_404(cid)
+    upd: dict = {}
+    if req.statement is not None:
+        upd["statement"] = req.statement.strip()
+    if req.negative is not None:
+        upd["negative"] = req.negative
+    _save_claim(cid, ent, upd)
+    if req.statement is not None:
+        update_entity(cid, title=req.statement.strip()[:80])
+    return get_entity(cid)
+
+
+@app.post("/api/claims/{cid}/evidence")
+def claim_add_evidence(cid: str, req: EvidenceRequest):
+    ent = _claim_or_404(cid)
+    ev = list((ent.get("metadata") or {}).get("evidence_ids") or [])
+    if req.result_id not in ev:
+        ev.append(req.result_id)
+        add_edge(cid, req.result_id, "supports")
+    return _save_claim(cid, ent, {"evidence_ids": ev})
+
+
+@app.delete("/api/claims/{cid}/evidence/{rid}")
+def claim_del_evidence(cid: str, rid: str):
+    ent = _claim_or_404(cid)
+    ev = [x for x in ((ent.get("metadata") or {}).get("evidence_ids") or []) if x != rid]
+    remove_edge(cid, rid, "supports")
+    return _save_claim(cid, ent, {"evidence_ids": ev})
+
+
+@app.post("/api/claims/{cid}/caveats")
+def claim_add_caveat(cid: str, req: CaveatRequest):
+    ent = _claim_or_404(cid)
+    cavs = list((ent.get("metadata") or {}).get("caveats") or [])
+    cav = {"id": gen_entity_id("cav"), "text": req.text.strip(),
+           "source": req.source, "dismissed": False, "at": _now()}
+    cavs.append(cav)
+    _save_claim(cid, ent, {"caveats": cavs})
+    return cav
+
+
+@app.patch("/api/claims/{cid}/caveats/{caid}")
+def claim_patch_caveat(cid: str, caid: str, req: CaveatPatch):
+    ent = _claim_or_404(cid)
+    cavs = list((ent.get("metadata") or {}).get("caveats") or [])
+    found = None
+    for c in cavs:
+        if c.get("id") == caid:
+            if req.text is not None:
+                c["text"] = req.text.strip()
+            if req.dismissed is not None:
+                c["dismissed"] = req.dismissed
+            if req.rationale is not None:
+                c["rationale"] = req.rationale
+            found = c
+    if not found:
+        raise HTTPException(404, "caveat not found")
+    _save_claim(cid, ent, {"caveats": cavs})
+    return found
+
+
+@app.delete("/api/claims/{cid}/caveats/{caid}")
+def claim_del_caveat(cid: str, caid: str):
+    ent = _claim_or_404(cid)
+    cavs = [c for c in ((ent.get("metadata") or {}).get("caveats") or []) if c.get("id") != caid]
+    _save_claim(cid, ent, {"caveats": cavs})
+    return {"ok": True}
+
+
+@app.post("/api/claims/{cid}/alternatives")
+def claim_add_alt(cid: str, req: AltRequest):
+    ent = _claim_or_404(cid)
+    alts = list((ent.get("metadata") or {}).get("alternatives") or [])
+    alt = {"id": gen_entity_id("alt"), "text": req.text.strip(),
+           "source": req.source, "status": "open", "at": _now()}
+    alts.append(alt)
+    _save_claim(cid, ent, {"alternatives": alts})
+    return alt
+
+
+@app.patch("/api/claims/{cid}/alternatives/{aid}")
+def claim_patch_alt(cid: str, aid: str, req: AltPatch):
+    ent = _claim_or_404(cid)
+    alts = list((ent.get("metadata") or {}).get("alternatives") or [])
+    found = None
+    for a in alts:
+        if a.get("id") == aid:
+            if req.text is not None:
+                a["text"] = req.text.strip()
+            if req.status is not None:
+                a["status"] = req.status
+            if req.rationale is not None:
+                a["rationale"] = req.rationale
+            found = a
+    if not found:
+        raise HTTPException(404, "alternative not found")
+    _save_claim(cid, ent, {"alternatives": alts})
+    return found
+
+
+@app.post("/api/claims/{cid}/alternatives/{aid}/promote")
+def claim_promote_alt(cid: str, aid: str):
+    """Promote a competing explanation into its own claim, in the same thread."""
+    ent = _claim_or_404(cid)
+    meta = ent.get("metadata") or {}
+    alts = list(meta.get("alternatives") or [])
+    alt = next((a for a in alts if a.get("id") == aid), None)
+    if not alt:
+        raise HTTPException(404, "alternative not found")
+    new = claim_create(ClaimRequest(statement=alt["text"], thread_id=meta.get("thread_id", "default")))
+    alt["status"] = "promoted"
+    alt["promoted_to"] = new["id"]
+    _save_claim(cid, ent, {"alternatives": alts})
+    return {"claim": new, "alternative": alt}
+
+
+@app.delete("/api/claims/{cid}/alternatives/{aid}")
+def claim_del_alt(cid: str, aid: str):
+    ent = _claim_or_404(cid)
+    alts = [a for a in ((ent.get("metadata") or {}).get("alternatives") or []) if a.get("id") != aid]
+    _save_claim(cid, ent, {"alternatives": alts})
+    return {"ok": True}
+
+
+@app.post("/api/claims/{cid}/status")
+def claim_status(cid: str, req: StatusRequest):
+    if req.to not in CONFIDENCE:
+        raise HTTPException(400, f"invalid confidence: {req.to}")
+    ent = _claim_or_404(cid)
+    meta = dict(ent.get("metadata") or {})
+    frm = meta.get("confidence")
+    # Rigor guard: can't mint a 'validated' claim without a robustness note.
+    if req.to == "validated" and not req.reason.strip():
+        raise HTTPException(400, "validated requires a robustness note (reason)")
+    log = list(meta.get("status_log") or [])
+    log.append({"from": frm, "to": req.to, "reason": req.reason.strip(),
+                "actor": "user", "at": _now()})
+    meta["confidence"] = req.to
+    meta["status_log"] = log
+    return update_entity(cid, metadata=meta)
 
 
 # ---------- Promotion / result chain ----------
@@ -658,6 +1235,41 @@ async def upload(file: UploadFile = File(...)):
         artifact_path=str(dest),
         metadata={"size_bytes": size, "original_name": file.filename},
     )
+    # The "data added" reaction (Guide orientation) is driven by the frontend via
+    # POST /api/threads/:id/orient after the upload lands — one synchronous source,
+    # so the client can reload the chat + chips and there's no duplicate-post race.
+    return get_entity(eid)
+
+
+@app.post("/api/results/external")
+async def upload_external_result(
+    file: UploadFile = File(...),
+    thread_id: str = Form("default"),
+    interpretation: str = Form(""),
+):
+    """Bring in an external result (a gel, a wet-lab readout, a figure from
+    another tool) as a first-class, pinned Result — identical to an internal
+    one in the UI, with origin recorded for provenance."""
+    if not file.filename:
+        raise HTTPException(400, "filename missing")
+    dest = _unique_path(ARTIFACTS_DIR / Path(file.filename).name)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    tid = thread_id
+    if tid == "default":
+        from db import get_or_create_default_thread
+        tid = get_or_create_default_thread()
+    eid = create_entity(
+        entity_type="figure", title=Path(file.filename).stem,
+        artifact_path=f"/artifacts/{dest.name}",
+        metadata={"original_name": file.filename, "origin": "external",
+                  "thread_id": tid, "interpretation": interpretation},
+    )
+    update_entity(eid, pinned=True)
+    # Data-upload event trigger (Phase D): new evidence may overlap a run behind
+    # active claims → N+1 proposal.
+    from proposals import evaluate_thread
+    evaluate_thread(tid, "data_upload")
     return get_entity(eid)
 
 

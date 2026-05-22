@@ -1,0 +1,69 @@
+.runview { display: flex; flex-direction: column; gap: 12px; }
+
+.runview__titlerow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.runview__title { font-size: 19px; font-weight: 700; color: var(--text); margin: 0; cursor: text; line-height: 1.3; min-width: 0; }
+.runview__title:hover { color: var(--accent); }
+.runview__titlerow .run-pill { flex: none; align-self: center; }
+.runview__title-input {
+  font-size: 19px; font-weight: 700; color: var(--text); flex: 1; min-width: 0; box-sizing: border-box;
+  border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--page);
+}
+
+/* Status + controls band */
+.runview__band { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.runview__spacer { flex: 1; }
+.run-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 3px 11px; border-radius: 9999px; }
+.run-pill--queued    { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+.run-pill--running   { color: #1d4ed8; background: #dbeafe; }
+.run-pill--succeeded { color: #15803d; background: #dcfce7; }
+.run-pill--failed    { color: #b91c1c; background: #fee2e2; }
+.run-pill--cancelled { color: var(--text-4); background: var(--tree-active-bg); }
+.run-pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: run-pulse 1.2s ease-in-out infinite; }
+@keyframes run-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+.runview__meta { font-size: 12.5px; color: var(--text-2); font-family: var(--mono); }
+.runview__meta--dim { color: var(--text-4); font-size: 11.5px; }
+.runview__act { border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer; }
+.runview__act:hover { background: var(--tree-active-bg); color: var(--text); }
+.runview__act--danger { color: #b91c1c; border-color: #fecaca; }
+.runview__act--danger:hover { background: #fee2e2; }
+
+/* Detail toggles */
+.runview__toggles { display: flex; gap: 4px; }
+.runview__toggles button {
+  border: none; background: none; color: var(--text-3); font-size: 12px; cursor: pointer;
+  padding: 3px 9px; border-radius: 6px;
+}
+.runview__toggles button:hover { background: var(--tree-active-bg); color: var(--text); }
+.runview__toggles button.is-on { background: var(--tree-active-bg); color: var(--accent); font-weight: 600; }
+.runview__pre {
+  margin: 0; padding: 10px 12px; background: var(--code-bg, #f4f4f4); color: var(--text);
+  border-radius: 8px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-x: auto; max-height: 260px; overflow-y: auto;
+}
+.runview__pre--err { background: #fef2f2; color: #b91c1c; }
+.runview__chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.run-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font-size: 12.5px; padding: 5px 11px; border-radius: 8px; cursor: pointer; }
+.run-chip:hover:not(:disabled) { background: var(--tree-active-bg); border-color: var(--accent-border); color: var(--text); }
+.run-chip:disabled { cursor: default; opacity: 0.8; }
+
+/* State cards (queued / running / failed) */
+.runview__state { padding: 14px 16px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg); }
+.runview__state--queued { border-color: #bfdbfe; background: #f8fbff; }
+.runview__state--failed { border-color: #fecaca; background: #fef5f5; }
+.runview__state-head { font-size: 14px; font-weight: 600; color: var(--text); }
+.runview__state-sub { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+
+/* Outputs — the focus for a completed run */
+.runview__outputs-head { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 8px; }
+.runview__outputs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.run-out {
+  display: flex; align-items: center; gap: 10px; text-decoration: none;
+  border: 1px solid var(--border); background: var(--bg); border-radius: 10px; padding: 11px 13px;
+  cursor: pointer; color: var(--text);
+}
+.run-out:hover:not(.run-out--static) { border-color: var(--accent-border); box-shadow: var(--shadow); }
+.run-out__icon { flex: none; color: var(--text-3); }
+.run-out__main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.run-out__label { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-out__sub { font-size: 11px; color: var(--text-4); }
+.run-out__ext { color: var(--accent); font-size: 13px; flex: none; }
+.run-out--static { cursor: default; }

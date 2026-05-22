@@ -5,6 +5,8 @@
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--main-bg);
+  overflow-y: auto;        /* scroll long entities (claims, findings, …) */
+  min-height: 0;
 }
 
 .focus--empty {
@@ -547,9 +549,18 @@
   background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px;
   font-size: 12px; color: #b91c1c;
 }
-.annot-attached img { height: 40px; border-radius: 4px; border: 1px solid #fca5a5; }
-.annot-attached span { flex: 1; }
-.annot-attached button { border: none; background: none; color: #b91c1c; font-size: 16px; cursor: pointer; }
+/* Fixed thumbnail regardless of the captured cell's aspect ratio, so the
+   chip text + close button always fit. */
+.annot-attached img {
+  width: 52px; height: 38px; flex-shrink: 0;
+  object-fit: cover; object-position: top left;
+  border-radius: 4px; border: 1px solid #fca5a5; background: #fff;
+}
+.annot-attached span { flex: 1; min-width: 0; }
+.annot-attached button {
+  flex-shrink: 0; border: none; background: none; color: #b91c1c;
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
 
 .focus__narrative { display: flex; flex-direction: column; gap: 8px; }
 .focus__narrative-text {

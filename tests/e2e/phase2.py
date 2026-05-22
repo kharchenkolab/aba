@@ -1,10 +1,9 @@
 """
-Phase 2 e2e: two-stream chat — toggle the trace panel on, see tool cards
-render in their own column, with main chat continuing to show natural-
-language replies.
+Phase 2 e2e: per-cell tool steps. The Trace panel is gone; instead each
+message renders its tool steps inline, and a run_python step exposes a
+"Show script" disclosure that reveals the exact code.
 
-Reuses the Phase-1 fixture, since the same tool call produces a trace step
-either way; the difference is just rendering.
+Reuses the Phase-1 fixture, since the same tool call produces the step.
 """
 from __future__ import annotations
 
@@ -149,7 +148,7 @@ def drive(frontend_port: int) -> int:
         ctx = browser.new_context(viewport={"width": 1500, "height": 900})
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{frontend_port}/", wait_until="networkidle")
-        page.locator('button[title="Workspace"]').click()
+        page.locator('button[title="Project"]').click()
         page.wait_for_timeout(150)
 
         page.locator(f'[data-entity-id="{dataset["id"]}"]').click()
@@ -164,32 +163,29 @@ def drive(frontend_port: int) -> int:
             timeout=10000,
         )
 
-        # Toggle trace ON.
-        page.locator(".trace-toggle").click()
-        page.wait_for_selector(".trace", timeout=2000)
-        page.screenshot(path=str(SHOT_DIR / "01_trace_on.png"), full_page=True)
-        print("✓ trace panel visible, tool card rendered")
+        # The Trace panel was removed; the inner-loop detail now lives per cell.
+        assert page.locator(".trace-toggle").count() == 0, "Trace toggle should be gone"
 
-        # Expand the first trace card to verify code + plot are present.
-        first_card = page.locator(".trace-card").first
-        # The most recent in-flight card auto-expands; older ones collapse.
-        # In our fixture only one tool call exists and it's done, so expand it.
-        if first_card.locator(".trace-card__body").count() == 0:
-            first_card.locator(".trace-card__header").click()
-        page.wait_for_selector(".trace-card__code", timeout=2000)
-        page.wait_for_selector(".trace-card__plot", timeout=2000)
-        page.screenshot(path=str(SHOT_DIR / "02_trace_expanded.png"), full_page=True)
-        print("✓ trace card shows code + plot")
+        # The latest message shows its tool steps inline. A run_python step
+        # carries a "Show script" disclosure.
+        page.wait_for_selector(".tool-line", timeout=3000)
+        page.screenshot(path=str(SHOT_DIR / "01_steps_inline.png"), full_page=True)
+        print("✓ tool steps render inline on the latest message")
 
-        # Toggle trace OFF — main stream comes back to full width.
-        page.locator(".trace-toggle").click()
-        page.wait_for_selector(".trace", state="detached", timeout=2000)
-        page.screenshot(path=str(SHOT_DIR / "03_trace_off.png"), full_page=True)
-        print("✓ trace panel closed, layout reflows to full main column")
+        toggle = page.locator(".tool-line__script-toggle").first
+        assert toggle.count() >= 1, "expected a Show script disclosure on the run_python step"
+        toggle.click()
+        page.wait_for_selector(".tool-line__code", timeout=2000)
+        code_text = page.locator(".tool-line__code").first.inner_text()
+        assert len(code_text.strip()) > 0, "script disclosure should reveal code"
+        page.screenshot(path=str(SHOT_DIR / "02_script_shown.png"), full_page=True)
+        print("✓ Show script reveals the run_python code")
 
-        # DOM assertions
-        assert page.locator(".chat-pane--split").count() == 0, \
-            "expected split class removed when trace off"
+        # Toggle it back off.
+        toggle.click()
+        page.wait_for_selector(".tool-line__code", state="detached", timeout=2000)
+        page.screenshot(path=str(SHOT_DIR / "03_script_hidden.png"), full_page=True)
+        print("✓ Hide script collapses the code again")
 
         browser.close()
 

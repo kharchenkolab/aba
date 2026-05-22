@@ -36,10 +36,31 @@
   border: 1px solid var(--accent-border);
   padding: 2px 7px; border-radius: 9999px;
 }
+.canvas-back {
+  flex: none; border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
+  font-size: 12px; padding: 3px 10px; border-radius: 9999px; cursor: pointer;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.canvas-back:hover { background: var(--tree-active-bg); color: var(--text); }
+.canvas-inventory {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
+  font-size: 12px; padding: 4px 11px; border-radius: 9999px; cursor: pointer;
+}
+.canvas-inventory:hover { background: var(--tree-active-bg); color: var(--text); }
+.canvas-hl {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
+  font-size: 12px; padding: 3px 10px; border-radius: 9999px; cursor: pointer;
+}
+.canvas-hl:hover { background: var(--tree-active-bg); color: var(--text); }
+.canvas-hl.is-on { border-color: #fde047; background: #fef9c3; color: var(--text); }
 .canvas-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 .canvas-body { flex: 1; min-height: 0; padding: 14px 18px; overflow: hidden; }
 .split { display: grid; gap: 14px; height: 100%; min-height: 0; }
+.thread-context { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.thread-context > .surface-panel { flex: 1; min-height: 0; }   /* shelf / preview fills below the brief */
 .split--chat, .split--entity { grid-template-columns: 1fr 384px; }
 
 /* chat pane fills its surface-panel */

@@ -1,0 +1,63 @@
+.claim { display: flex; flex-direction: column; gap: 12px; }
+.claim--compact { gap: 6px; }
+
+.claim__statement { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.4; margin: 0; }
+.claim--compact .claim__statement { font-size: 13.5px; font-weight: 500; }
+.claim__statement--editable { cursor: text; }
+.claim__statement-input {
+  width: 100%; box-sizing: border-box; font-size: 15px; font-weight: 600; color: var(--text);
+  border: 1px solid var(--accent); border-radius: 8px; padding: 6px 9px; background: var(--page);
+}
+.claim__compact-meta { font-size: 11.5px; color: var(--text-4); font-family: var(--mono); }
+
+/* status ladder */
+.claim__status { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.claim__status-sep { color: var(--text-4); }
+.claim__pill {
+  font-size: 11px; padding: 2px 10px; border-radius: 9999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-3); text-transform: capitalize;
+}
+.claim__pill:hover { background: var(--tree-active-bg); }
+.claim__pill.is-on { font-weight: 700; color: #fff; }
+.claim__pill--preliminary.is-on { background: var(--text-3); border-color: var(--text-3); }
+.claim__pill--supported.is-on { background: var(--accent); border-color: var(--accent); }
+.claim__pill--validated.is-on { background: var(--ok, #16a34a); border-color: var(--ok, #16a34a); }
+.claim__pill--contested.is-on { background: var(--warn-fg, #b45309); border-color: var(--warn-fg, #b45309); }
+.claim__pill--refuted.is-on { background: var(--red, #dc2626); border-color: var(--red, #dc2626); }
+
+.claim__transition { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
+.claim__transition input { flex: 1; min-width: 160px; border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; font-size: 12.5px; background: var(--page); }
+.claim__btn { font-size: 11.5px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); cursor: pointer; color: var(--text-2); }
+.claim__btn:hover:not(:disabled) { background: var(--tree-active-bg); }
+.claim__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.claim__section { border-top: 1px solid var(--panel-bd-soft, var(--border)); padding-top: 8px; }
+.claim__section-label { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 6px; }
+.claim__empty { font-size: 12px; color: var(--text-4); font-style: italic; }
+
+.claim__ev { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.claim__ev-title { flex: 1; color: var(--accent); cursor: pointer; }
+.claim__ev-title:hover { text-decoration: underline; }
+
+.claim__item { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; font-size: 13px; color: var(--text-2); }
+.claim__item-text { flex: 1; line-height: 1.4; }
+.claim__item.is-dismissed .claim__item-text, .claim__item.is-dismissed .claim__item-text *,
+.claim__item.is-promoted .claim__item-text { color: var(--text-4); }
+.claim__src { color: var(--text-4); font-style: italic; }
+.claim__rationale { color: var(--text-4); font-style: italic; }
+.claim__item-actions { display: flex; gap: 1px; }
+.claim__item-actions button { width: 22px; height: 22px; border: none; background: none; border-radius: 5px; cursor: pointer; color: var(--text-4); font-size: 12px; }
+.claim__item-actions button:hover { background: var(--tree-active-bg); color: var(--text-2); }
+
+.claim__x { border: none; background: none; cursor: pointer; color: var(--text-4); font-size: 13px; border-radius: 5px; width: 20px; height: 20px; }
+.claim__x:hover { background: var(--tree-active-bg); color: var(--text-2); }
+.claim__add { background: none; border: none; cursor: pointer; color: var(--accent); font-size: 12.5px; padding: 2px 0; text-align: left; }
+.claim__add-ev { display: flex; flex-direction: column; gap: 2px; }
+.claim__add-ev-item { text-align: left; background: none; border: none; cursor: pointer; color: var(--text-2); font-size: 12.5px; padding: 3px 6px; border-radius: 5px; }
+.claim__add-ev-item:hover { background: var(--tree-active-bg); }
+.claim__input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; background: var(--page); margin-top: 4px; }
+
+.claim__log { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
+.claim__log-to { font-family: var(--mono); color: var(--text-2); white-space: nowrap; }
+.claim__log-reason { flex: 1; color: var(--text-3); }
+.claim__log-meta { font-size: 10.5px; color: var(--text-4); white-space: nowrap; }

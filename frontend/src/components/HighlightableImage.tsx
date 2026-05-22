@@ -1,6 +1,6 @@
 /**
  * An image you can highlight on: a compact highlighter toolbar overlaid
- * top-right, freehand-marker + box modes in thick fluorescent pink.
+ * top-right, freehand-marker + box modes in thick highlighter yellow.
  * Finishing a mark auto-attaches the composited (downsampled) image via
  * onAttach — no entity lookup needed; the conversation already has the
  * context for whatever was just plotted.
@@ -18,17 +18,34 @@ interface Props {
   /** Hide the toolbar until the image is hovered (for chat figures). */
   hoverToolbar?: boolean
   className?: string
-  /** Increment to erase the drawn mark (e.g. the chat chip was cleared). */
+  /** Increment to erase the drawn mark AND exit marking (chat chip cleared). */
   clearSignal?: number
+  /** Increment to erase just the drawn mark, staying in marking mode. */
+  clearMarkSignal?: number
+  /** Controlled marking mode — when provided, an external button owns the
+   * on/off toggle (e.g. a modal header), so we hide our own primary toggle. */
+  marking?: boolean
+  onMarkingChange?: (m: boolean) => void
+  /** Controlled draw mode (freehand vs box). */
+  mode?: Mode
+  onModeChange?: (m: Mode) => void
+  /** Show the built-in primary highlighter toggle (default true). */
+  showToggle?: boolean
+  /** Render no toolbar gutter at all — the host supplies the controls. */
+  hideToolbar?: boolean
 }
 
-const PINK = 'rgba(236, 72, 153, 0.40)'
+const HILITE = 'rgba(253, 224, 71, 0.55)'   // highlighter yellow
 type Mode = 'highlight' | 'box'
 type Pt = { x: number; y: number }
 
-export default function HighlightableImage({ src, onAttach, label, hoverToolbar, className, clearSignal }: Props) {
-  const [marking, setMarking] = useState(false)
-  const [mode, setMode] = useState<Mode>('highlight')
+export default function HighlightableImage({ src, onAttach, label, hoverToolbar, className, clearSignal, clearMarkSignal, marking: markingProp, onMarkingChange, mode: modeProp, onModeChange, showToggle = true, hideToolbar }: Props) {
+  const [markingState, setMarkingState] = useState(false)
+  const marking = markingProp ?? markingState
+  const setMarking = (v: boolean) => { onMarkingChange ? onMarkingChange(v) : setMarkingState(v) }
+  const [modeState, setModeState] = useState<Mode>('highlight')
+  const mode = modeProp ?? modeState
+  const setMode = (m: Mode) => { onModeChange ? onModeChange(m) : setModeState(m) }
   const [stroke, setStroke] = useState<Pt[]>([])
   const [box, setBox] = useState<Pt[] | null>(null)
   const [drawing, setDrawing] = useState(false)
@@ -39,6 +56,11 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
   useEffect(() => {
     if (clearSignal) { setStroke([]); setBox(null); setMarking(false) }
   }, [clearSignal])
+
+  // Erase just the drawn mark (host's clear / mode-switch), staying in marking.
+  useEffect(() => {
+    if (clearMarkSignal) { setStroke([]); setBox(null) }
+  }, [clearMarkSignal])
 
   function norm(e: React.MouseEvent): Pt {
     const r = wrapRef.current!.getBoundingClientRect()
@@ -81,7 +103,7 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
     canvas.width = W; canvas.height = H
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(natural, 0, 0, W, H)
-    ctx.fillStyle = PINK; ctx.strokeStyle = PINK
+    ctx.fillStyle = HILITE; ctx.strokeStyle = HILITE
     if (mode === 'highlight') {
       ctx.lineWidth = Math.max(12, W / 28); ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
@@ -96,8 +118,11 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
     const what = label ? `the figure "${label}"` : 'the figure shown in the conversation'
     onAttach({
       image: b64,
-      note: `The user highlighted a region of ${what} — marked in translucent pink on the attached image. Answer about the highlighted region specifically (they may refer to it as "here" or "the highlighted area").`,
+      note: `The user highlighted a region of ${what} — marked in translucent yellow on the attached image. Answer about the highlighted region specifically (they may refer to it as "here" or "the highlighted area").`,
     })
+    // Focus is now established (the red chip appears) — leave marking mode. The
+    // drawn mark stays on the figure until the chip is cleared (clearSignal).
+    setMarking(false)
   }
 
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
@@ -117,24 +142,27 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
         {hasMark && (
           <svg className="annot__svg" viewBox="0 0 100 100" preserveAspectRatio="none">
             {mode === 'highlight'
-              ? <polyline points={strokePts} fill="none" stroke={PINK} strokeWidth="16"
+              ? <polyline points={strokePts} fill="none" stroke={HILITE} strokeWidth="16"
                           strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-              : <rect x={bx} y={by} width={bw} height={bh} fill={PINK} />}
+              : <rect x={bx} y={by} width={bw} height={bh} fill={HILITE} />}
           </svg>
         )}
       </div>
       {/* Vertical badge gutter to the right of the figure — first action is
           the highlighter; more artifact actions can stack here later. */}
+      {!hideToolbar && (showToggle || marking) && (
       <div className="annot__tb">
+        {showToggle && (
         <button
           className={`annot__tb-btn ${marking ? 'annot__tb-btn--on' : ''}`}
-          onClick={() => { setMarking(m => !m); if (marking) clearMark() }}
+          onClick={() => { if (marking) clearMark(); setMarking(!marking) }}
           title="Highlight a region to ask Guide about it"
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="#fde047" stroke="#ca8a04" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/>
           </svg>
         </button>
+        )}
         {marking && (
           <>
             <button className={`annot__tb-btn ${mode === 'highlight' ? 'annot__tb-btn--sel' : ''}`}
@@ -153,6 +181,7 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
           </>
         )}
       </div>
+      )}
     </div>
   )
 }

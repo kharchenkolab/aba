@@ -2,58 +2,32 @@ import { useState, useEffect } from 'react'
 import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
+import { EntityGlyph } from './icons'
 
 interface Props {
   entities: Entity[]
   focusedId: string
   onFocus: (id: string) => void
   onChange: () => void
+  currentThread: string
+  onSelectThread: (id: string) => void
+  onOpenOverview: () => void
+  onOpenThreadOverview: (id: string) => void
 }
 
-const SECTIONS: { label: string; types: EntityType[]; iconPath: string }[] = [
-  {
-    label: 'Data',
-    types: ['dataset'],
-    iconPath: 'M3 5a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5z',
-  },
-  {
-    label: 'Analyses',
-    types: ['analysis'],
-    iconPath: 'M3 12l3-6 4 8 3-5 4 7H3z',
-  },
-  {
-    label: 'Figures',
-    types: ['figure', 'table'],
-    iconPath: 'M3 4h14v12H3zM5 7h10v2H5zM5 11h6v2H5z',
-  },
-  {
-    label: 'Results',
-    types: ['result'],
-    iconPath: 'M10 3a7 7 0 100 14 7 7 0 000-14zm-1 11l-3-3 1.4-1.4L9 11.2l4.6-4.6L15 8l-6 6z',
-  },
-  {
-    label: 'Findings',
-    types: ['finding'],
-    iconPath: 'M10 2L5 7v6l5 5 5-5V7l-5-5zm0 2.4L13.6 8H6.4L10 4.4z',
-  },
-  {
-    label: 'Manuscript',
-    types: ['claim', 'narrative'],
-    iconPath: 'M6 2h8l4 4v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z',
-  },
+// Rail top-level sections, per ui3 P8: Datasets · Threads · Claims · Manuscript.
+// (Threads have their own switcher above.) Figures/tables are thread artifacts —
+// they live in the per-thread pinned shelf + inventory, not as a rail dump.
+// Legacy `result`/`finding` types were dropped in entity-model v3. Every section
+// below is hidden when empty (progressive disclosure — a fresh project shows
+// almost nothing).
+const SECTIONS: { label: string; types: EntityType[]; icon: string }[] = [
+  // Inquiry first (Threads has its own switcher above), then Claims, then data
+  // last — mirrors the project-overview column order.
+  { label: 'Claims', types: ['claim'], icon: 'claim' },
+  { label: 'Manuscript', types: ['narrative'], icon: 'narrative' },
+  { label: 'Data', types: ['dataset'], icon: 'dataset' },
 ]
-
-const TYPE_ICONS: Record<EntityType, string> = {
-  workspace: '',
-  dataset: 'M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4z',
-  analysis: 'M3 12l3-6 4 8 3-5 4 7H3z',
-  figure: 'M3 4h14v12H3zM5 7h10v2H5zM5 11h6v2H5z',
-  table: 'M3 4h14v3H3zM3 9h14v3H3zM3 14h14v3H3z',
-  result: 'M10 3a7 7 0 100 14 7 7 0 000-14z',
-  finding: 'M10 3a7 7 0 100 14 7 7 0 000-14z',
-  claim: 'M5 3h10v14H5z',
-  narrative: 'M5 3h10v14H5z',
-}
 
 const STATUS_ICON: Record<string, string> = {
   running: '▶',
@@ -97,9 +71,7 @@ function TreeItem({ entity, focused, onClick, onChange, inPinned }: TreeItemProp
       data-entity-id={entity.id}
       data-entity-type={entity.type}
     >
-      <svg className="icon" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-        <path d={TYPE_ICONS[entity.type]} />
-      </svg>
+      <EntityGlyph className="icon" name={entity.type} />
       <span className="tree__item-label">
         <span className="tree__title-line">
           {/* Red pin marks a pinned entity (matches the chat pin); redundant
@@ -111,8 +83,11 @@ function TreeItem({ entity, focused, onClick, onChange, inPinned }: TreeItemProp
         </span>
         <span className="meta">
           {statusIcon && <span className={`tree__status tree__status--${entity.status}`}>{statusIcon}</span>}
-          <span className="dot" />
-          {entity.type}
+          {entity.type === 'claim' && entity.metadata?.confidence ? (
+            <span className={`tree__confidence tree__confidence--${entity.metadata.confidence}`}>{String(entity.metadata.confidence)}</span>
+          ) : (
+            <><span className="dot" />{entity.type}</>
+          )}
           {entity.tags.length > 0 && (
             <>
               {entity.tags.slice(0, 2).map(t => (
@@ -130,7 +105,7 @@ function TreeItem({ entity, focused, onClick, onChange, inPinned }: TreeItemProp
 
 const SECTION_CAP = 8   // items shown per section before "show all"
 
-export default function ProjectTree({ entities, focusedId, onFocus, onChange }: Props) {
+export default function ProjectTree({ entities, focusedId, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -158,8 +133,18 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
     return true
   }
   const visible = entities.filter(filterFn)
-  const pinned = visible.filter(e => e.pinned)
+  // Named threads only; the default thread is represented by the "Main thread"
+  // chip (selects the 'default' alias), not a duplicate named row.
+  const threads = entities.filter(e => e.type === 'thread' && e.status !== 'archived' && !e.metadata?.is_default)
   const projectTitle = workspace?.title ?? 'Workspace'
+
+  async function newThread() {
+    const r = await fetch('/api/threads', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New investigation' }),
+    })
+    if (r.ok) { const t = await r.json(); onChange(); onSelectThread(t.id) }
+  }
 
   async function renameProject(name: string) {
     const t = name.trim()
@@ -194,6 +179,10 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
             </span>
             <button className="tree__head-edit" title="Rename project"
                     onClick={e => { e.stopPropagation(); setEditingTitle(true) }}>✎</button>
+            <button className="tree__head-overview" title="Project overview — all items, by status"
+                    onClick={e => { e.stopPropagation(); onOpenOverview() }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
+            </button>
           </>
         )}
       </div>
@@ -214,35 +203,36 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
       </div>
 
       <div className="tree__scroll">
-      {pinned.length > 0 && (
-        <section className="tree__section">
-          <div className="tree__section-head open">
-            <svg className="tree__pin icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
-            Pinned
-            <span className="tree__count">{pinned.length}</span>
-          </div>
-          <div className="tree__items">
-            {(showAll.Pinned ? pinned : pinned.slice(0, SECTION_CAP)).map(e => (
-              <TreeItem
-                key={e.id}
-                entity={e}
-                focused={focusedId === e.id}
-                onClick={() => onFocus(e.id)}
-                onChange={onChange}
-                inPinned
-              />
-            ))}
-            {pinned.length > SECTION_CAP && (
-              <button className="tree__more" onClick={() => setShowAll(s => ({ ...s, Pinned: !s.Pinned }))}>
-                {showAll.Pinned ? 'Show less' : `+${pinned.length - SECTION_CAP} more`}
+      {/* Thread switcher — the current line of inquiry scopes the chat. */}
+      <section className="tree__section tree__threads">
+        <div className="tree__section-head open">
+          <svg className="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+          Threads
+          <button className="tree__new-thread" title="New investigation"
+                  onClick={newThread}>+</button>
+        </div>
+        <div className="tree__items">
+          {[{ id: 'default', title: 'Main thread', q: '' },
+            ...threads.map(t => ({ id: t.id, title: t.title, q: (t.metadata?.question as string) || '' }))
+          ].map(t => (
+            <div key={t.id} className={`tree__thread-row ${currentThread === t.id ? 'is-current' : ''}`}>
+              <button className="tree__thread" onClick={() => onSelectThread(t.id)} title={t.q}>{t.title}</button>
+              <button className="tree__thread-ov" title="Thread overview — all items by status"
+                      onClick={e => { e.stopPropagation(); onOpenThreadOverview(t.id) }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
               </button>
-            )}
-          </div>
-        </section>
-      )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* The flat "Pinned" tray is superseded by the per-thread pinned shelf
+          (the chat-first right peek); pinned items live under their thread. */}
 
       {SECTIONS.map(section => {
-        const items = visible.filter(e => section.types.includes(e.type) && !e.pinned)
+        const items = visible.filter(e => section.types.includes(e.type))
+        // Progressive disclosure: a section with nothing in it doesn't exist yet.
+        if (items.length === 0) return null
         const isCollapsed = !!collapsed[section.label]
         const expanded = !!showAll[section.label]
         const shown = expanded ? items : items.slice(0, SECTION_CAP)
@@ -252,9 +242,7 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange }: 
               className={`tree__section-head ${isCollapsed ? '' : 'open'}`}
               onClick={() => toggle(section.label)}
             >
-              <svg className="icon" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-                <path d={section.iconPath} />
-              </svg>
+              <EntityGlyph className="icon" name={section.icon} />
               {section.label}
               <span className="tree__count">{items.length || ''}</span>
               <svg className="chev ml-auto" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">

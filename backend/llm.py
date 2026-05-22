@@ -41,12 +41,22 @@ class _RealStream:
         self._stream = None
 
     def __enter__(self):
+        # Prompt caching: mark the large static prefix (system + tools) and the
+        # conversation prefix so repeated turns re-read them cheaply instead of
+        # re-charging full input each time. Up to 4 breakpoints; we use 3.
+        system = [{"type": "text", "text": self._system,
+                   "cache_control": {"type": "ephemeral"}}]
+        tools = self._tools
+        if tools:
+            tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
+        messages = [{"role": m["role"], "content": m["content"]} for m in self._history]
+        if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \
+                and isinstance(messages[-1]["content"][-1], dict):
+            c = messages[-1]["content"]
+            messages[-1] = {**messages[-1],
+                            "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
         self._cm = self._client.messages.stream(
-            model=MODEL,
-            max_tokens=4096,
-            system=self._system,
-            tools=self._tools,
-            messages=[{"role": m["role"], "content": m["content"]} for m in self._history],
+            model=MODEL, max_tokens=4096, system=system, tools=tools, messages=messages,
         )
         self._stream = self._cm.__enter__()
         return self

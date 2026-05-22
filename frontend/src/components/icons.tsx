@@ -28,6 +28,60 @@ export function agentColor(key: AgentKey): string {
   return AGENTS.find(a => a.key === key)?.color ?? 'var(--text-3)'
 }
 
+/** Stroked entity/section glyphs, recovered from the original mockup sprite
+ *  (mockup/icons.svg: i-db, i-thread, i-fig, i-doc, …). Replaces the old filled
+ *  square paths so the rail matches the design screenshots. Inherits color. */
+export function EntityGlyph({ name, size = 14, className }: { name: string; size?: number; className?: string }) {
+  const svg = {
+    className, width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', strokeWidth: 1.6,
+    strokeLinejoin: 'round' as const, strokeLinecap: 'round' as const,
+  }
+  switch (name) {
+    case 'dataset':
+    case 'db':
+      return (
+        <svg {...svg}>
+          <ellipse cx="12" cy="6" rx="7" ry="2.4" />
+          <path d="M5 6v6c0 1.3 3.1 2.4 7 2.4s7-1.1 7-2.4V6" />
+          <path d="M5 12v6c0 1.3 3.1 2.4 7 2.4s7-1.1 7-2.4v-6" />
+        </svg>
+      )
+    case 'thread':
+      return <svg {...svg}><path d="M4 12a8 8 0 1 1 16 0c0 4-3 7-7 7H4l2-3a8 8 0 0 1-2-4Z" /></svg>
+    case 'figure':
+    case 'fig':
+      return (
+        <svg {...svg}>
+          <path d="M4 19V5M4 19h16" />
+          <path d="M7 16V11M11 16V8M15 16V12M19 16V7" />
+        </svg>
+      )
+    case 'table':
+      return (
+        <svg {...svg}>
+          <rect x="4" y="4" width="16" height="16" rx="1.5" />
+          <path d="M4 9h16M4 14h16M10 4v16" />
+        </svg>
+      )
+    case 'analysis':
+    case 'run':
+      return <svg {...svg}><path d="M5 4l5 4-5 4M12 14h7" /></svg>
+    case 'claim':
+      return <svg {...svg}><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.2l1-5.8L3.5 9.2l5.9-.9z" /></svg>
+    case 'narrative':
+    case 'doc':
+      return (
+        <svg {...svg}>
+          <path d="M6 3h9l5 5v13H6z" />
+          <path d="M14 3v6h6M9 13h6M9 17h6" />
+        </svg>
+      )
+    default:
+      return <svg {...svg}><circle cx="12" cy="12" r="8" /></svg>
+  }
+}
+
 /** Distinct line-glyph per agent (paths from the original mockup). */
 export function AgentGlyph({ agent, size = 15 }: { agent: AgentKey; size?: number }) {
   const svg = { width: size, height: size, viewBox: '0 0 24 24' }
