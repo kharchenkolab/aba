@@ -204,27 +204,52 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange, cu
 
       <div className="tree__scroll">
       {/* Thread switcher — the current line of inquiry scopes the chat. */}
-      <section className="tree__section tree__threads">
-        <div className="tree__section-head open">
-          <svg className="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
-          Threads
-          <button className="tree__new-thread" title="New investigation"
-                  onClick={newThread}>+</button>
-        </div>
-        <div className="tree__items">
-          {[{ id: 'default', title: 'Main thread', q: '' },
-            ...threads.map(t => ({ id: t.id, title: t.title, q: (t.metadata?.question as string) || '' }))
-          ].map(t => (
-            <div key={t.id} className={`tree__thread-row ${currentThread === t.id ? 'is-current' : ''}`}>
-              <button className="tree__thread" onClick={() => onSelectThread(t.id)} title={t.q}>{t.title}</button>
-              <button className="tree__thread-ov" title="Thread overview — all items by status"
-                      onClick={e => { e.stopPropagation(); onOpenThreadOverview(t.id) }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
-              </button>
+      {(() => {
+        const threadList = [
+          { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
+          ...threads.map(t => ({
+            id: t.id, title: t.title, q: (t.metadata?.question as string) || '',
+            lifecycle: (t.metadata?.lifecycle as string) || 'open',
+          })),
+        ]
+        const tCollapsed = !!collapsed['Threads']
+        const tExpanded = !!showAll['Threads']
+        const tShown = tExpanded ? threadList : threadList.slice(0, SECTION_CAP)
+        return (
+          <section className="tree__section tree__threads">
+            <div className="tree__section-head open" onClick={() => toggle('Threads')}>
+              <svg className="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+              Threads
+              <span className="tree__count">{threadList.length}</span>
+              <button className="tree__new-thread" title="New investigation"
+                      onClick={e => { e.stopPropagation(); newThread() }}>+</button>
+              <svg className="chev" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+                <path d={tCollapsed ? 'M8 5l5 5-5 5z' : 'M5 8l5 5 5-5z'} />
+              </svg>
             </div>
-          ))}
-        </div>
-      </section>
+            {!tCollapsed && (
+              <div className="tree__items">
+                {tShown.map(t => (
+                  <div key={t.id} className={`tree__thread-row ${currentThread === t.id ? 'is-current' : ''} ${t.lifecycle !== 'open' ? 'is-' + t.lifecycle : ''}`}>
+                    <button className="tree__thread" onClick={() => onSelectThread(t.id)} title={t.q}>{t.title}</button>
+                    {t.lifecycle !== 'open' && <span className={`tree__lc tree__lc--${t.lifecycle}`}>{t.lifecycle === 'concluded' ? 'done' : 'parked'}</span>}
+                    <button className="tree__thread-ov" title="Thread overview — all items by status"
+                            onClick={e => { e.stopPropagation(); onOpenThreadOverview(t.id) }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
+                    </button>
+                  </div>
+                ))}
+                {threadList.length > SECTION_CAP && (
+                  <button className="tree__more"
+                          onClick={() => setShowAll(s => ({ ...s, Threads: !s.Threads }))}>
+                    {tExpanded ? 'Show less' : `+${threadList.length - SECTION_CAP} more`}
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        )
+      })()}
 
       {/* The flat "Pinned" tray is superseded by the per-thread pinned shelf
           (the chat-first right peek); pinned items live under their thread. */}

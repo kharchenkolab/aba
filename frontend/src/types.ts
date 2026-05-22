@@ -71,6 +71,16 @@ export type EntityType =
   | 'claim'
   | 'narrative'
 
+/** A panel within a kept Result (observation). Figures/tables/values reference
+ *  a cell entity by id; text panels carry inline prose. */
+export interface ResultMember {
+  id: string
+  kind: 'figure' | 'table' | 'value' | 'text'
+  ref?: string
+  text?: string
+  caption?: string
+}
+
 export interface Entity {
   id: string
   type: EntityType

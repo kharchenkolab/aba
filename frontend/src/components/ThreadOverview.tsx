@@ -46,7 +46,8 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   }
   const keep = (e: Entity) => matches(text(e)) && passes(e)
 
-  const pinned = entities.filter(e => (e.type === 'figure' || e.type === 'table') && e.pinned && inThread(e) && e.status !== 'archived')
+  const pinned = entities.filter(e => (e.type === 'figure' || e.type === 'table' || e.type === 'result') && e.pinned && inThread(e) && e.status !== 'archived')
+  const byId = new Map(entities.map(e => [e.id, e]))
   const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived')
   const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived')
   const oqs: OpenQ[] = ((thread.metadata?.open_questions as OpenQ[]) ?? [])
@@ -72,7 +73,16 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   }
 
   // --- rows ---
-  const thumbOf = (e: Entity) => (e.type === 'figure' && e.artifact_path && IMG.test(e.artifact_path)) ? e.artifact_path : undefined
+  const thumbOf = (e: Entity): string | undefined => {
+    if (e.type === 'figure' && e.artifact_path && IMG.test(e.artifact_path)) return e.artifact_path
+    if (e.type === 'result') {
+      const members = (e.metadata?.members as { kind: string; ref?: string }[]) ?? []
+      const ref = members.find(m => m.kind === 'figure')?.ref
+      const cell = ref ? byId.get(ref) : undefined
+      return cell?.artifact_path && IMG.test(cell.artifact_path) ? cell.artifact_path : undefined
+    }
+    return undefined
+  }
   const eRow = (e: Entity, tone?: Tone) => (
     <OverviewRow key={e.id} icon={e.type} label={e.title}
       thumb={thumbOf(e)} sub={(e.metadata?.interpretation as string) || undefined}
@@ -113,7 +123,9 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   const pinnedGroups: OvGroup[] = [
     { label: 'Evidence', rows: pinned.filter(e => citedIds.has(e.id) && keep(e)).map(e => eRow(e)) },
     { label: 'Not yet used', rows: pinned.filter(e => !citedIds.has(e.id) && e.status !== 'superseded' && keep(e)).map(e => eRow(e)) },
-    { label: 'Superseded', tone: 'retired', rows: pinned.filter(e => e.status === 'superseded' && keep(e)).map(e => eRow(e, 'retired')) },
+    // The group already scopes to superseded, so don't re-apply the status
+    // filter (which excludes superseded under 'active') — only honor search.
+    { label: 'Superseded', tone: 'retired', rows: pinned.filter(e => e.status === 'superseded' && matches(text(e))).map(e => eRow(e, 'retired')) },
   ]
   const runStatus = (e: Entity) => ((e.metadata?.run as { status?: string })?.status)
     || (e.status === 'running' ? 'running' : e.status === 'failed' ? 'failed' : 'succeeded')
@@ -157,7 +169,14 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   ]
 
   const question = (thread.metadata?.question as string) || ''
+  const lifecycle = (thread.metadata?.lifecycle as string) || 'open'
   const CHIPS: Filter[] = ['attention', 'active', 'contested', 'all']
+  const setLifecycle = async (lc: string) => {
+    await fetch(`/api/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lifecycle: lc }),
+    }).catch(() => {})
+    onChange()
+  }
 
   return (
     <div className="overview">
@@ -170,6 +189,12 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
             <span><b>{runs.length}</b> Runs</span>
             <span><b>{claims.length}</b> Claims</span>
             <span><b>{oqs.length}</b> Open Qs</span>
+            <span className="overview__lc">
+              {['open', 'parked', 'concluded'].map(s => (
+                <button key={s} className={`overview__lc-btn ${lifecycle === s ? 'is-on' : ''}`}
+                        onClick={() => setLifecycle(s)} title={`Mark thread ${s}`}>{s}</button>
+              ))}
+            </span>
           </div>
         </div>
         <input className="overview__search" placeholder="Search this thread…"
