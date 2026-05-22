@@ -12,12 +12,10 @@ This is the Phase-1 implementation:
 """
 from __future__ import annotations
 import re
+from pathlib import Path
 from typing import Optional
 
-from db import (
-    create_entity, get_entity, add_edge, update_entity,
-    find_active_figure_by_title, WORKSPACE_ID,
-)
+from db import create_entity, get_entity, add_edge, WORKSPACE_ID
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
@@ -84,16 +82,16 @@ def register_artifacts_from_tool_result(
     if tool_name == "run_python" and plots:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
-        for p in plots:
+        multi = len(plots) > 1
+        for i, p in enumerate(plots):
             url = p.get("url")
             original_name = p.get("original_name") or "figure.png"
-            title = _title_from_code(producing_code) or original_name
+            title = _figure_title(producing_code, original_name, i, multi)
 
-            # Version history: if an active figure with this exact title
-            # already exists, this is a revision — supersede the old one and
-            # link a wasRevisionOf edge.
-            prior = find_active_figure_by_title(title)
-
+            # Every plot is its own figure. We deliberately do NOT auto-supersede
+            # by title — that conflated distinct plots (and silently retired
+            # pinned ones). Version chains (wasRevisionOf) are a future, EXPLICIT
+            # concern (lineage model), not inferred from a matching title.
             eid = create_entity(
                 entity_type="figure",
                 title=title,
@@ -102,9 +100,6 @@ def register_artifacts_from_tool_result(
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name, **res_meta},
             )
-            if prior and prior["id"] != eid:
-                update_entity(prior["id"], status="superseded")
-                add_edge(eid, prior["id"], "wasRevisionOf")
             # PROV-O edges: figure wasGeneratedBy the analysis;
             # the analysis used the focused entity (if any).
             add_edge(eid, analysis_id, "wasGeneratedBy")
@@ -158,6 +153,23 @@ _GENERIC_COMMENTS = {
     "create a plot", "create plot", "create histogram", "create the histogram",
     "make figure", "make a figure", "make a histogram",
 }
+
+_GENERIC_STEMS = {"out", "output", "figure", "fig", "plot", "image", "img", "result"}
+
+
+def _figure_title(code: str, original_name: str, idx: int, multi: bool) -> str:
+    """Display title for a produced figure. The code-derived title is the same
+    for every plot in one run (it scans the whole block), so when a run emits
+    several plots we disambiguate — by the saved filename stem if it's
+    meaningful, otherwise a 1-based index — so siblings don't collide."""
+    base = _title_from_code(code) or Path(original_name).stem
+    if not multi:
+        return base
+    stem = Path(original_name).stem
+    if stem and stem.lower() not in _GENERIC_STEMS and stem.lower() != base.lower():
+        return f"{base} — {stem}"
+    return f"{base} ({idx + 1})"
+
 
 def _title_from_code(code: str) -> Optional[str]:
     """
