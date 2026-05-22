@@ -174,7 +174,7 @@ def drive_browser(frontend_port: int) -> int:
         print("✓ initial page loaded")
 
         # App opens on the Home view; enter the workspace to reach the chat.
-        page.locator('button[title="Workspace"]').click()
+        page.locator('button[title="Project"]').click()
         composer = page.locator(".composer__input")
         composer.wait_for(state="visible", timeout=5000)
         composer.fill("what files do we have?")

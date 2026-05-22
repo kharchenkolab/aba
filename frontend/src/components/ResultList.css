@@ -1,0 +1,107 @@
+.rl { display: flex; flex-direction: column; gap: 16px; }
+.rl-group__head {
+  font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-4); margin-bottom: 8px;
+}
+.rl-group__n { background: var(--tree-active-bg); border-radius: 9999px; padding: 0 6px; margin-left: 4px; }
+
+/* Plot thumbnail grid */
+.rl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.rl-plot { display: flex; flex-direction: column; gap: 4px; }
+.rl-plot__frame {
+  position: relative; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; overflow: hidden; display: flex; align-items: center; justify-content: center;
+}
+.rl-plot__img { width: 100%; height: 100%; object-fit: cover; }
+.rl-plot__noimg { color: var(--text-4); }
+.rl-plot__label { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* File / table rows */
+.rl-rows { display: flex; flex-direction: column; gap: 3px; }
+.rl-row {
+  display: flex; align-items: center; gap: 9px; text-decoration: none;
+  padding: 6px 9px; border-radius: 7px; color: var(--text-2); font-size: 12.5px;
+}
+.rl-row:hover { background: var(--tree-active-bg); color: var(--text); }
+.rl-row__icon { flex: none; color: var(--text-4); }
+.rl-row__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-row__size { font-size: 11px; color: var(--text-4); font-family: var(--mono); }
+.rl-row__ext { color: var(--accent); font-size: 12px; }
+
+/* Per-item pin + chat — quiet, revealed on hover */
+.rl-acts { display: inline-flex; gap: 2px; }
+.rl-plot__frame .rl-acts {
+  position: absolute; top: 5px; right: 5px; opacity: 0; transition: opacity 0.1s;
+  background: rgba(255,255,255,0.92); border-radius: 7px; padding: 1px;
+}
+.rl-plot__frame:hover .rl-acts { opacity: 1; }
+.rl-row .rl-acts { opacity: 0; transition: opacity 0.1s; }
+.rl-row:hover .rl-acts { opacity: 1; }
+.rl-act {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
+  border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px;
+}
+.rl-act:hover { background: var(--tree-active-bg); color: var(--accent); }
+.rl-act--hl.is-on { background: #fef9c3; }
+.rl-act--sm { width: 22px; height: 22px; }
+.rl-act.is-sel { background: #fef9c3; color: #a16207; }
+.rl-modal__sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; flex: none; }
+
+.rl-browse { font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.rl-browse:hover { text-decoration: underline; }
+.rl-plot__frame { cursor: pointer; }
+
+/* Primary artifact — the headline output (often a dataset path-reference) */
+.rl-primary {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 13px; border: 1px solid var(--border-strong); border-radius: 10px;
+  background: var(--bg-soft);
+}
+.rl-primary__icon { color: var(--accent); flex: none; }
+.rl-primary__text { flex: 1; min-width: 0; }
+.rl-primary__label { font-size: 13px; font-weight: 600; color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-primary__sub { font-size: 11px; color: var(--text-4); margin-top: 1px; }
+.rl-primary__act {
+  flex: none; font-size: 12px; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--accent-border, var(--border)); background: var(--bg); color: var(--accent);
+  padding: 4px 10px; border-radius: 7px;
+}
+.rl-primary__act:hover { background: var(--tree-active-bg); }
+.rl-primary__open { flex: none; font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.rl-primary__open:hover { text-decoration: underline; }
+
+/* Bulk long-tail — collapsed by default */
+.rl-bulk { border-top: 1px solid var(--border); padding-top: 10px; }
+.rl-bulk__head {
+  display: flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer;
+  font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4);
+  padding: 0;
+}
+.rl-bulk__head:hover { color: var(--text-2); }
+.rl-bulk__chev { font-size: 9px; }
+.rl-bulk__body { padding: 8px 2px 0; display: flex; flex-direction: column; gap: 6px; }
+.rl-bulk__note { font-size: 12px; color: var(--text-3); font-family: var(--mono); }
+.rl-bulk__note--dim { color: var(--text-4); font-family: inherit; font-style: italic; }
+
+/* Preview modal */
+.rl-modal {
+  position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; padding: 40px;
+}
+.rl-modal__box { background: var(--bg); border-radius: 12px; max-width: 90vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+.rl-modal__head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.rl-modal__title { flex: 1; font-size: 13.5px; font-weight: 600; color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-modal__head .rl-acts { opacity: 1; }
+.rl-modal__btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px;
+  border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 6px; flex: none;
+}
+.rl-modal__btn:hover { background: var(--tree-active-bg); color: var(--accent); }
+.rl-modal__btn.is-on { color: var(--accent); background: var(--tree-active-bg); }
+.rl-modal__open { font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.rl-modal__open:hover { text-decoration: underline; }
+.rl-modal__x { border: none; background: none; font-size: 20px; line-height: 1; color: var(--text-3); cursor: pointer; padding: 0 4px; }
+.rl-modal__x:hover { color: var(--text); }
+.rl-modal__body { overflow: auto; padding: 14px; display: flex; align-items: center; justify-content: center; }
+.rl-modal__img { max-width: 100%; max-height: 76vh; object-fit: contain; }
+.rl-modal__noimg { color: var(--text-4); font-size: 13px; padding: 40px; }

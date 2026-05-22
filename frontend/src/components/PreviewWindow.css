@@ -1,0 +1,31 @@
+.pw { position: fixed; inset: 0; display: flex; flex-direction: column; background: #111; }
+.pw--empty, .pw__noimg { color: #aaa; font: 14px system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100%; }
+
+.pw__bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: #1c1c1f; border-bottom: 1px solid #333; color: #eee;
+}
+.pw__title {
+  flex: 1; min-width: 0; font: 600 13px ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pw__btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 28px; border: 1px solid #3a3a3f; background: #26262a; color: #ddd;
+  border-radius: 7px; cursor: pointer;
+}
+.pw__btn:hover { background: #303036; border-color: #4a4a52; }
+.pw__btn--hl.is-on { background: #4a4520; border-color: #6b6320; }
+.pw__btn--sm { width: 26px; height: 26px; }
+.pw__btn.is-sel { background: #4a4520; border-color: #6b6320; color: #fde047; }
+.pw__modes { display: inline-flex; align-items: center; gap: 5px; }
+.pw__sep { width: 1px; height: 18px; background: #3a3a3f; margin: 0 3px; }
+
+.pw__body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: auto; }
+.pw__img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+.pw__toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: rgba(20,20,22,0.95); color: #d1fae5; border: 1px solid #2f3a34;
+  font: 12.5px system-ui, sans-serif; padding: 7px 14px; border-radius: 9px;
+}

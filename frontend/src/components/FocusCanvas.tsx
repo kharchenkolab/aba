@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from './AnnotatedFigure'
+import ClaimView from './ClaimView'
+import RunView from './RunView'
+import ThreadHeader from './ThreadHeader'
 import './FocusCanvas.css'
 
 interface Annotation { image: string; note: string }
@@ -11,10 +14,15 @@ interface Props {
   entities: Entity[]
   onChange: () => void
   onFocus: (id: string) => void
+  onSelectThread?: (id: string) => void
   onAnnotate?: (a: Annotation) => void
   annotClear?: number
   /** Compact peek variant (chat-first): trim meta + provenance for the rail. */
   compact?: boolean
+  /** Hand a request to the Guide (e.g. a Run's Re-run / Discuss → chat). */
+  onAsk?: (text: string) => void
+  /** "Chat" gesture on a run output — bring the plot (with its image) into chat. */
+  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
 }
 
 interface TablePreview {
@@ -30,12 +38,10 @@ interface ErrorPreview { kind: 'error'; error: string }
 type Preview = TablePreview | NonePreview | ErrorPreview
 
 type PromoteMode =
-  | { kind: 'figure-to-result' }
-  | { kind: 'result-to-finding' }
-  | { kind: 'finding-to-claim' }
+  | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnnotate, annotClear, compact }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -56,44 +62,17 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
     return <WorkspaceCanvas entities={entities} onChange={onChange} onFocus={onFocus} />
   }
 
-  async function doFigurePromote(text: string) {
-    const r = await fetch(
-      `/api/entities/${encodeURIComponent(entity!.id)}/promote-to-result`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ interpretation: text }),
-      },
-    )
-    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
-    const created: Entity = await r.json()
-    setPromote(null)
-    onChange()
-    onFocus(created.id)
-  }
-
-  async function doResultPromote(text: string) {
-    // Phase-3 simple form: a finding from this single result. Multi-result
-    // findings come from the finding's own canvas after creation (P3.4).
-    const r = await fetch('/api/findings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ result_ids: [entity!.id], text }),
-    })
-    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
-    const created: Entity = await r.json()
-    setPromote(null)
-    onChange()
-    onFocus(created.id)
-  }
-
-  async function doFindingPromote(text: string) {
+  // Create a claim from this result (figure/table), citing it as evidence. In
+  // entity-model v3 figures/tables ARE results, and the gesture is figure→Claim
+  // directly (the old figure→result→finding→claim chain is gone).
+  async function doFigureClaim(text: string) {
+    const tid = (entity!.metadata?.thread_id as string) || 'default'
     const r = await fetch('/api/claims', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ finding_ids: [entity!.id], text }),
+      body: JSON.stringify({ statement: text, evidence_ids: [entity!.id], thread_id: tid }),
     })
-    if (!r.ok) throw new Error(`promote failed: ${r.status} ${await r.text()}`)
+    if (!r.ok) throw new Error(`claim failed: ${r.status} ${await r.text()}`)
     const created: Entity = await r.json()
     setPromote(null)
     onChange()
@@ -123,6 +102,9 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
 
   return (
     <div className={`focus ${compact ? 'focus--compact' : ''}`}>
+      {/* Runs render their own title/status/controls header (RunView); skip the
+          generic one to avoid a duplicate type pill + title. */}
+      {entity.type !== 'analysis' && (
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
@@ -153,15 +135,18 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
         )}
         {renderActionButton(entity, setPromote)}
       </div>
+      )}
       {historyOpen && entity.type === 'figure' && (
         <HistoryDrawer entity={entity} onFocus={onFocus} onClose={() => setHistoryOpen(false)} />
       )}
       <div className="focus__body">
-        {compareOn && baseline && entity.type === 'figure'
+        {entity.type === 'thread'
+          ? <ThreadHeader thread={entity} full onChange={onChange} onSwitchThread={onSelectThread ?? onFocus} />
+          : compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderBody(entity, preview, entities, onFocus, onChange)}
+          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -175,37 +160,19 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onAnn
         )}
       </div>
 
-      {!compact && <ProvenancePanel entity={entity} onFocus={onFocus} />}
+      {!compact && entity.type !== 'analysis' && <ProvenancePanel entity={entity} onFocus={onFocus} />}
 
-      {promote?.kind === 'figure-to-result' && (
+      {promote?.kind === 'figure-to-claim' && (
         <PromoteDialog
-          title={`Promote "${entity.title}" to a result`}
-          prompt="What does this figure tell you? One or two lines, in your own voice. (Pre-filled with Guide's read — edit freely.)"
-          placeholder="Sample S4 has mt_fraction 0.13, ~3× higher than other samples — likely doublet contamination."
+          title={`Create a claim from "${entity.title}"`}
+          prompt="State the claim this result supports — keep it sharp, it can be challenged later. (Pre-filled with Guide's read — edit freely.)"
+          placeholder="Proneural-marker-high cells form a stable subpopulation, not a transitional state."
           suggest={async () => {
             const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}/suggest-interpretation`)
             return r.ok ? (await r.json()).text ?? '' : ''
           }}
           onCancel={() => setPromote(null)}
-          onSubmit={doFigurePromote}
-        />
-      )}
-      {promote?.kind === 'result-to-finding' && (
-        <PromoteDialog
-          title={`Lift "${entity.title}" into a finding`}
-          prompt="A finding is the synthesis across one or more results. State it crisply."
-          placeholder="Sample-level QC consistently flags donor S4 across mt_fraction and viability metrics."
-          onCancel={() => setPromote(null)}
-          onSubmit={doResultPromote}
-        />
-      )}
-      {promote?.kind === 'finding-to-claim' && (
-        <PromoteDialog
-          title={`Lift "${entity.title}" into a claim`}
-          prompt="A claim is publishable — keep it sharp. It can be challenged later."
-          placeholder="Sample S4 must be excluded from downstream analysis due to consistent QC failures."
-          onCancel={() => setPromote(null)}
-          onSubmit={doFindingPromote}
+          onSubmit={doFigureClaim}
         />
       )}
       {promote?.kind === 'scenario' && (
@@ -360,44 +327,28 @@ function renderActionButton(
   entity: Entity,
   setPromote: (m: PromoteMode | null) => void,
 ) {
-  if (entity.type === 'figure') {
+  // Figures/tables (results) → create a claim citing them. Figures also get the
+  // "What if…" scenario gesture.
+  if (entity.type === 'figure' || entity.type === 'table' || entity.type === 'result') {
     return (
       <div className="focus__actions">
+        {entity.type === 'figure' && (
+          <button
+            className="focus__promote"
+            onClick={() => setPromote({ kind: 'scenario' })}
+            title="Create a scenario variant by modifying this figure's parameters"
+          >
+            ⤴ What if…
+          </button>
+        )}
         <button
-          className="focus__promote"
-          onClick={() => setPromote({ kind: 'scenario' })}
-          title="Create a scenario variant by modifying this figure's parameters"
+          className="focus__promote focus__promote--claim"
+          onClick={() => setPromote({ kind: 'figure-to-claim' })}
+          title="Draft a claim supported by this result"
         >
-          ⤴ What if…
-        </button>
-        <button
-          className="focus__promote"
-          onClick={() => setPromote({ kind: 'figure-to-result' })}
-          title="Capture an interpretation of this figure as a result"
-        >
-          ↑ Promote to result
+          ✦ Create a claim
         </button>
       </div>
-    )
-  }
-  if (entity.type === 'result') {
-    return (
-      <button
-        className="focus__promote"
-        onClick={() => setPromote({ kind: 'result-to-finding' })}
-      >
-        ↑ Lift to finding
-      </button>
-    )
-  }
-  if (entity.type === 'finding') {
-    return (
-      <button
-        className="focus__promote"
-        onClick={() => setPromote({ kind: 'finding-to-claim' })}
-      >
-        ↑ Lift to claim
-      </button>
     )
   }
   return null
@@ -409,6 +360,9 @@ function renderBody(
   entities: Entity[],
   onFocus: (id: string) => void,
   onChange: () => void,
+  compact?: boolean,
+  onAsk?: (t: string) => void,
+  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void,
 ) {
   switch (e.type) {
     case 'figure':
@@ -451,15 +405,8 @@ function renderBody(
       )
 
     case 'analysis':
-      return (
-        <div className="focus__analysis">
-          <p className="focus__placeholder">
-            A run that produced one or more artifacts.
-            {e.producing_params && ` Params: ${JSON.stringify(e.producing_params)}.`}
-          </p>
-          {e.producing_code && <pre className="focus__code">{e.producing_code}</pre>}
-        </div>
-      )
+      return <RunView run={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />
+
 
     case 'result': {
       const interpretation = (e.metadata?.interpretation as string) ?? ''
@@ -491,26 +438,8 @@ function renderBody(
         </div>
       )
 
-    case 'claim': {
-      const text = (e.metadata?.text as string) ?? ''
-      const findIds = (e.metadata?.supporting_findings as string[]) ?? []
-      const findEnts = findIds
-        .map(id => entities.find(x => x.id === id))
-        .filter((x): x is Entity => !!x)
-      return (
-        <div className="focus__abstract">
-          <p className="focus__interpretation">{text}</p>
-          {findEnts.length > 0 && (
-            <div className="focus__chain">
-              <div className="focus__chain-head">SUPPORTING FINDINGS</div>
-              {findEnts.map(f => (
-                <EntityRow key={f.id} ent={f} onClick={() => onFocus(f.id)} />
-              ))}
-            </div>
-          )}
-        </div>
-      )
-    }
+    case 'claim':
+      return <ClaimView claim={e} entities={entities} onFocus={onFocus} onChange={onChange} compact={compact} />
 
     case 'table':
       return <PreviewTable entityId={e.id} pageSize={25} />

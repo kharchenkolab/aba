@@ -84,6 +84,30 @@ def _build(entity_id: Optional[str]) -> tuple[str, list[str]]:
         lines.append(f"User notes: {e['notes']}")
         fields.append("notes")
 
+    # For an analysis RUN, surface what it is and — importantly — what it
+    # produced, so the Guide can connect a question about a specific output
+    # (e.g. "look at qc_S10.png") to this run without the user re-explaining.
+    if e["type"] == "analysis":
+        run = (e.get("metadata") or {}).get("run") or {}
+        bits = []
+        if run.get("status"):
+            bits.append(f"status {run['status']}")
+        if run.get("executor"):
+            bits.append(f"executor {run['executor']}" + (f" on {run['where']}" if run.get("where") else ""))
+        if bits:
+            lines.append("This is an analysis run — " + ", ".join(bits) + ".")
+            fields.append("run_meta")
+        if run.get("command"):
+            cmd = run["command"].strip()
+            lines.append("Command: " + (cmd[:300] + " …" if len(cmd) > 300 else cmd))
+            fields.append("run_command")
+        labels = [o.get("label", "") for o in (run.get("outputs") or []) if o.get("label")]
+        if labels:
+            lines.append("Outputs produced by this run: " + ", ".join(labels[:30]) + ".")
+            fields.append("run_outputs")
+        if (run.get("bulk") or {}).get("count"):
+            lines.append(f"(plus {run['bulk']['count']} bulk files, not individually listed).")
+
     lines.append(
         "When the user asks questions, answer in the context of this entity. "
         "Do not require the user to re-identify which entity they mean."

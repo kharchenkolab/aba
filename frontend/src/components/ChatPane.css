@@ -50,28 +50,52 @@
 /* Colour stays on the icon; quiet tabs keep their glyph hue but dim slightly. */
 .chat-tab--quiet .chat-tab__icon { opacity: 0.7; }
 
-.trace-toggle {
+.hl-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-left: 12px;
-  padding: 0 10px;
+  justify-content: center;
+  width: 28px;
   height: 28px;
+  margin-left: 8px;
+  flex: none;
   border-radius: var(--r-sm);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-3);
   background: transparent;
   border: 1px solid var(--border);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background 0.1s, border-color 0.1s;
 }
-.trace-toggle:hover { background: var(--tree-active-bg); }
-.trace-toggle--on {
-  color: #5b21b6;
-  border-color: #c4b5fd;
-  background: #ede9fe;
+.hl-toggle:hover { background: var(--tree-active-bg); }
+.hl-toggle--on {
+  border-color: #fde047;
+  background: #fef9c3;
 }
+
+.chat-starters {
+  display: flex; flex-wrap: wrap; gap: 7px;
+  margin: 2px 0 10px; padding: 0 18px 0 52px;   /* indent to align under the message body */
+}
+.chat-starter {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--accent-border, var(--border)); background: var(--accent-soft, var(--bg));
+  color: var(--accent); font-size: 12.5px; font-weight: 500;
+  padding: 5px 12px; border-radius: 9999px; cursor: pointer; text-align: left;
+  transition: background 0.1s, border-color 0.1s;
+}
+.chat-starter:hover { background: var(--accent); color: #fff; }
+.chat-starter:hover .chat-starter__spark { color: #fff; }
+.chat-starter:disabled { opacity: 0.5; cursor: default; }
+.chat-starter__spark { color: var(--accent); font-size: 11px; }
+
+.panel-head--bare { padding: 6px 10px; min-height: 0; border-bottom: none; }
+.panel-head--bare .panel-head-actions { margin-left: auto; }
+
+.chat-claim-sel {
+  position: fixed; transform: translateX(-50%); z-index: 60;
+  background: var(--accent); color: #fff; border: none; border-radius: 9999px;
+  font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22); white-space: nowrap;
+}
+.chat-claim-sel:hover { background: #4338ca; }
 
 .focus-chip {
   margin-left: auto;

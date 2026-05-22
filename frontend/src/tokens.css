@@ -29,8 +29,8 @@
   /* Warm stone text ramp — readable secondary (text-2/3), muted meta (text-4). */
   --text: #1c1917;
   --text-2: #57534e;
-  --text-3: #78716c;
-  --text-4: #a8a29e;
+  --text-3: #6b645f;     /* AA on white + #f5f5f4 */
+  --text-4: #6f6862;     /* muted but AA-legible (incl. on #f5f5f4 / #fafaf9) */
 
   --accent: #4f46e5;          /* indigo */
   --accent-2: #6366f1;

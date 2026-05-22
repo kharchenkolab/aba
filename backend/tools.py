@@ -12,7 +12,7 @@ from config import DATA_DIR, ARTIFACTS_DIR
 TOOL_SCHEMAS = [
     {
         "name": "list_data_files",
-        "description": "List all CSV files available in the data folder. Returns filenames and sizes.",
+        "description": "List the datasets in THIS project (the project's Data facet). Returns each dataset's filename and size. This is the data the user has added to this project — reason about these, not the wider filesystem.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -141,17 +141,54 @@ TOOL_SCHEMAS = [
             },
             "required": ["code"]
         }
+    },
+    {
+        "name": "present_plan",
+        "description": (
+            "Present a short plan to the user BEFORE doing multi-step analysis or "
+            "exploration, and PAUSE for their go-ahead. Give an ordered list of "
+            "concise steps you intend to take. The user sees the plan with Go / "
+            "Adjust controls; do not run the steps until they respond. Use this "
+            "for larger or non-obvious work; skip it for small, single-step requests."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Optional short title for the plan."},
+                "steps": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Ordered, concise steps you intend to take.",
+                },
+                "rationale": {"type": "string", "description": "Optional one-line why / what the user gets."},
+            },
+            "required": ["steps"]
+        }
     }
 ]
 
 # ---------- Executors ----------
 
 def list_data_files(_input: dict) -> dict:
+    """The project's datasets — the Data facet, NOT the global data folder. Data
+    files are stored globally (content-addressed) but each project only *contains*
+    the datasets registered as entities in its DB, so we list those."""
+    from pathlib import Path as _Path
+    from db import list_entities
     files = []
-    for p in sorted(DATA_DIR.glob("*.csv")):
-        files.append({"filename": p.name, "size_bytes": p.stat().st_size})
+    for e in list_entities(include_archived=False):
+        if e.get("type") != "dataset":
+            continue
+        path = e.get("artifact_path")
+        name = _Path(path).name if path else e.get("title", "")
+        size = None
+        try:
+            if path and _Path(path).exists():
+                size = _Path(path).stat().st_size
+        except Exception:
+            pass
+        files.append({"filename": name, "size_bytes": size, "title": e.get("title")})
     if not files:
-        return {"files": [], "message": "No CSV files found in the data folder."}
+        return {"files": [], "message": "This project has no datasets yet — ask the user to upload one."}
     return {"files": files}
 
 
@@ -492,6 +529,14 @@ def create_scenario(input_: dict) -> dict:
     }
 
 
+def present_plan(input_: dict) -> dict:
+    """No-op server-side: the plan is surfaced to the UI and the turn halts in
+    guide.py. The result just acknowledges so the conversation stays well-formed."""
+    return {"status": "presented",
+            "note": "Plan shown to the user with Go / Adjust controls. Stop here and "
+                    "wait for their decision before executing the steps."}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -500,6 +545,7 @@ EXECUTORS = {
     "get_provenance": get_provenance,
     "get_dependents": get_dependents,
     "create_scenario": create_scenario,
+    "present_plan": present_plan,
 }
 
 def execute_tool(name: str, input_: dict) -> str:

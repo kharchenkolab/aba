@@ -1,0 +1,3 @@
+# Guide presents a plan (turn 1, halts), then executes after the user's go-ahead (turn 2).
+{"blocks": [{"type": "text", "text": "This is a multi-step run — let me lay out a plan first."}, {"type": "tool_use", "name": "present_plan", "input": {"title": "scRNA-seq QC + first-pass clustering", "rationale": "Standard scanpy pipeline; ~1 min.", "steps": ["Load the dataset and compute per-cell QC metrics", "Filter low-quality cells (n_genes ≥ 200, mt < 0.20)", "Normalize, log1p, and select highly-variable genes", "PCA → neighbors → UMAP → Leiden clusters", "Plot the UMAP coloured by cluster"]}}]}
+{"blocks": [{"type": "text", "text": "Done — ran the full pipeline. The UMAP shows 4 well-separated clusters; markers look clean."}]}

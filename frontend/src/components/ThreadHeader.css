@@ -1,0 +1,50 @@
+/* Thread brief — compact in the right column, full in the center. */
+.brief {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  padding: 12px 14px; flex: none; display: flex; flex-direction: column; gap: 10px;
+}
+.brief--full { border: none; padding: 0; gap: 14px; }
+.brief--empty { padding: 10px 14px; }
+.brief__cta {
+  background: none; border: none; cursor: pointer; padding: 0; text-align: left;
+  font-size: 12.5px; color: var(--text-4); font-style: italic;
+}
+.brief__cta:hover { color: var(--accent); }
+
+.brief__head { display: flex; align-items: flex-start; gap: 8px; }
+.brief__q { flex: 1; font-size: 13.5px; color: var(--text-2); cursor: text; line-height: 1.45; }
+.brief--full .brief__q { font-size: 15px; color: var(--text); }
+.brief__q-label { display: block; font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 3px; }
+.brief__q-empty { color: var(--text-4); font-style: italic; }
+.brief__suggested { margin-left: 8px; font-size: 10px; color: var(--accent); font-family: var(--mono); }
+.brief__q-input {
+  width: 100%; box-sizing: border-box; font-size: 13.5px; color: var(--text);
+  border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; background: var(--page);
+}
+.brief__full {
+  flex: none; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text-4); cursor: pointer; font-size: 13px;
+}
+.brief__full:hover { background: var(--tree-active-bg); color: var(--text-2); }
+
+.brief__lifecycle { display: flex; gap: 3px; }
+.brief__lc {
+  font-size: 11px; padding: 2px 9px; border: 1px solid var(--border); background: var(--bg);
+  color: var(--text-4); border-radius: 9999px; cursor: pointer; text-transform: capitalize;
+}
+.brief__lc:hover { background: var(--tree-active-bg); }
+.brief__lc.is-on { background: var(--tree-active-bg); color: var(--text); border-color: var(--accent-border); font-weight: 600; }
+
+.brief__oqs-label { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 6px; }
+.brief__count { background: var(--tree-active-bg); border-radius: 9999px; padding: 1px 7px; margin-left: 4px; }
+.brief__oq { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); padding: 3px 2px; border-radius: 5px; }
+.brief__oq:hover { background: var(--page); }
+.brief__oq-text { flex: 1; }
+.brief__oq.is-answered .brief__oq-text { text-decoration: line-through; color: var(--text-4); }
+.brief__oq.is-parked .brief__oq-text { color: var(--text-4); }
+.brief__oq.is-promoted .brief__oq-text { color: var(--text-4); font-style: italic; }
+.brief__oq-actions { display: flex; gap: 1px; opacity: 0; }
+.brief__oq:hover .brief__oq-actions { opacity: 1; }
+.brief__oq-actions button { width: 22px; height: 22px; border: none; background: none; border-radius: 5px; cursor: pointer; color: var(--text-4); font-size: 12px; line-height: 1; }
+.brief__oq-actions button:hover { background: var(--tree-active-bg); color: var(--text-2); }
+.brief__oq-add { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; background: var(--page); color: var(--text); margin-top: 5px; }

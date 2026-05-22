@@ -225,17 +225,15 @@ def drive_live(frontend_port: int) -> int:
         )
         page.screenshot(path=str(SHOT_DIR / "03_followup.png"), full_page=True)
 
-        # Toggle trace on to see the inner loop the live model produced.
-        page.locator(".trace-toggle").click()
-        page.wait_for_selector(".trace-card", timeout=3000)
-        page.screenshot(path=str(SHOT_DIR / "04_trace_on.png"), full_page=True)
+        # Reveal the script behind a tool step the live model produced.
+        toggle = page.locator(".tool-line__script-toggle").first
+        if toggle.count():
+            toggle.click()
+            page.wait_for_selector(".tool-line__code", timeout=3000)
+        page.screenshot(path=str(SHOT_DIR / "04_script.png"), full_page=True)
 
         # Phase 4 acceptance: scenario via LLM-rewrite. The "What if…" button
         # is on figures only; the current focus is the figure we made earlier.
-        # Toggle trace off so the canvas is the main view, then trigger
-        # "What if…".
-        page.locator(".trace-toggle").click()
-        page.wait_for_selector(".trace", state="detached", timeout=2000)
         page.locator("button:has-text('What if')").click()
         page.wait_for_selector(".promote-dialog", timeout=2000)
         page.locator(".promote-dialog__textarea").fill(

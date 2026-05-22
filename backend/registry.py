@@ -68,12 +68,17 @@ def register_artifacts_from_tool_result(
     result_obj: dict,
     focused_entity_id: Optional[str],
     analysis_ctx: dict,
+    thread_id: Optional[str] = None,
 ) -> list[dict]:
     """
     Inspect a tool result; register any artifacts as entities.
     Returns the new entity records (full row dicts, ready to send via SSE).
+
+    `thread_id` (v3) tags each Result with its home thread + origin=internal,
+    stored in metadata so the per-thread pinned shelf can filter on it.
     """
     new_records: list[dict] = []
+    res_meta = {"thread_id": thread_id, "origin": "internal"} if thread_id else {"origin": "internal"}
 
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
     if tool_name == "run_python" and plots:
@@ -95,7 +100,7 @@ def register_artifacts_from_tool_result(
                 artifact_path=url,
                 producing_code=producing_code,
                 parent_entity_id=analysis_id,
-                metadata={"original_name": original_name},
+                metadata={"original_name": original_name, **res_meta},
             )
             if prior and prior["id"] != eid:
                 update_entity(prior["id"], status="superseded")
@@ -125,7 +130,7 @@ def register_artifacts_from_tool_result(
                 artifact_path=t.get("url"),
                 producing_code=producing_code,
                 parent_entity_id=analysis_id,
-                metadata={"original_name": original_name},
+                metadata={"original_name": original_name, **res_meta},
             )
             add_edge(eid, analysis_id, "wasGeneratedBy")
             focused = focused_entity_id or WORKSPACE_ID

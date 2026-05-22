@@ -44,6 +44,10 @@ def init_db():
             c.execute("ALTER TABLE messages ADD COLUMN entity_id TEXT NOT NULL DEFAULT 'workspace'")
         if not _column_exists(c, "messages", "focus_entity_id"):
             c.execute("ALTER TABLE messages ADD COLUMN focus_entity_id TEXT")
+        # v3: messages belong to a thread (line of inquiry). NULL = the default
+        # thread (small projects never create a named one).
+        if not _column_exists(c, "messages", "thread_id"):
+            c.execute("ALTER TABLE messages ADD COLUMN thread_id TEXT")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS entities (
@@ -190,6 +194,31 @@ def init_db():
                 enabled  INTEGER NOT NULL DEFAULT 1
             )
         """)
+
+        # Proactive proposals (Phase D). The Guide/advisors notice something and
+        # propose an action (draft a claim, set a question, file an OQ). Every
+        # proposal is attributed, dismissible, reversible, and de-duplicated by
+        # `signature` across ALL statuses — a dismissed proposal does not re-nag
+        # until the underlying world changes (a new signature).
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS proposals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id   TEXT,
+                kind        TEXT NOT NULL,
+                advisor     TEXT NOT NULL DEFAULT 'guide',
+                headline    TEXT NOT NULL,
+                body        TEXT,
+                payload     TEXT,
+                signature   TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                result_id   TEXT,
+                undo_data   TEXT,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_prop_thread ON proposals(thread_id, status)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_prop_sig ON proposals(signature)")
 
         # Bootstrap workspace entity.
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
@@ -493,13 +522,19 @@ def update_context_suggestion_status(suggestion_id: int, status: str) -> bool:
         return cur.rowcount > 0
 
 
+# Global default-disabled tools (comma-separated names), e.g. to keep the Guide's
+# context minimal while skills/tooling aren't being tested. Per-project settings
+# layer on top. Set ABA_DISABLED_TOOLS="inspect_upload,create_scenario,..." .
+_GLOBAL_DISABLED = {t.strip() for t in os.environ.get("ABA_DISABLED_TOOLS", "").split(",") if t.strip()}
+
+
 def get_disabled_tools() -> set[str]:
     with _conn() as c:
         try:
             rows = c.execute("SELECT name FROM tool_settings WHERE enabled=0").fetchall()
         except sqlite3.OperationalError:
-            return set()
-    return {r["name"] for r in rows}
+            return set(_GLOBAL_DISABLED)
+    return {r["name"] for r in rows} | _GLOBAL_DISABLED
 
 
 def set_tool_enabled(name: str, enabled: bool) -> None:
@@ -635,6 +670,102 @@ def list_advisor_notes(entity_id: str) -> list[dict]:
     ]
 
 
+# ---------- Proposals (Phase D) ----------
+
+def _row_to_proposal(r) -> dict:
+    return {
+        "id": r["id"],
+        "thread_id": r["thread_id"],
+        "kind": r["kind"],
+        "advisor": r["advisor"],
+        "headline": r["headline"],
+        "body": r["body"],
+        "payload": json.loads(r["payload"]) if r["payload"] else None,
+        "signature": r["signature"],
+        "status": r["status"],
+        "result_id": r["result_id"],
+        "undo_data": json.loads(r["undo_data"]) if r["undo_data"] else None,
+        "created_at": r["created_at"],
+        "updated_at": r["updated_at"],
+    }
+
+
+def proposal_signature_exists(signature: str) -> bool:
+    """Dedup gate: has this exact proposal ever been raised (any status)? We
+    suppress re-raising across pending/accepted/dismissed so a dismissed idea
+    doesn't re-nag until the world changes (which yields a new signature)."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM proposals WHERE signature = ? LIMIT 1", (signature,)
+        ).fetchone()
+    return row is not None
+
+
+def add_proposal(*, thread_id: Optional[str], kind: str, headline: str,
+                 signature: str, advisor: str = "guide", body: str = "",
+                 payload: Optional[dict] = None) -> Optional[int]:
+    """Insert a pending proposal. Returns None (no-op) if an identical-signature
+    proposal already exists."""
+    if proposal_signature_exists(signature):
+        return None
+    now = _utcnow()
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO proposals (thread_id, kind, advisor, headline, body, "
+            "payload, signature, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (thread_id, kind, advisor, headline, body,
+             json.dumps(payload) if payload else None, signature, now, now),
+        )
+        c.commit()
+        pid = cur.lastrowid
+    log_event("proposal", entity_id=thread_id, title=headline,
+              detail={"kind": kind, "advisor": advisor})
+    return pid
+
+
+def list_proposals(thread_id: Optional[str] = None,
+                   status: Optional[str] = "pending") -> list[dict]:
+    q = "SELECT * FROM proposals"
+    conds, args = [], []
+    if thread_id is not None:
+        conds.append("thread_id = ?"); args.append(thread_id)
+    if status is not None:
+        conds.append("status = ?"); args.append(status)
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY id DESC"
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [_row_to_proposal(r) for r in rows]
+
+
+def get_proposal(pid: int) -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM proposals WHERE id = ?", (pid,)).fetchone()
+    return _row_to_proposal(row) if row else None
+
+
+def update_proposal(pid: int, *, status: Optional[str] = None,
+                    result_id: Optional[str] = None,
+                    undo_data: Optional[dict] = None) -> bool:
+    sets, args = [], []
+    if status is not None:
+        sets.append("status = ?"); args.append(status)
+    if result_id is not None:
+        sets.append("result_id = ?"); args.append(result_id)
+    if undo_data is not None:
+        sets.append("undo_data = ?"); args.append(json.dumps(undo_data))
+    if not sets:
+        return False
+    sets.append("updated_at = ?"); args.append(_utcnow())
+    args.append(pid)
+    with _conn() as c:
+        cur = c.execute(f"UPDATE proposals SET {', '.join(sets)} WHERE id = ?", args)
+        c.commit()
+        return cur.rowcount > 0
+
+
 # ---------- Edges ----------
 
 def add_edge(source_id: str, target_id: str, rel_type: str,
@@ -756,23 +887,69 @@ def append_message(
     *,
     entity_id: str = WORKSPACE_ID,
     focus_entity_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
 ) -> int:
     """
-    Append a message to a thread.
+    Append a message to the project conversation.
 
-    Most messages live on the WORKSPACE_ID thread (the project's running
-    conversation). `focus_entity_id` records which entity the user was
-    looking at when this message was sent — used to highlight or filter
-    later, never to switch the conversation thread.
+    `focus_entity_id` records which entity the user was looking at when this
+    message was sent. `thread_id` is the line of inquiry it belongs to (v3);
+    NULL means the default thread.
     """
     ts = _utcnow()
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO messages (entity_id, focus_entity_id, role, content, ts) VALUES (?, ?, ?, ?, ?)",
-            (entity_id, focus_entity_id, role, json.dumps(content_blocks), ts),
+            "INSERT INTO messages (entity_id, focus_entity_id, thread_id, role, content, ts) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (entity_id, focus_entity_id, thread_id, role, json.dumps(content_blocks), ts),
         )
         c.commit()
         return cur.lastrowid
+
+
+def create_thread(title: str, question: str = "") -> str:
+    """A thread is an entity (type='thread') carrying the line-of-inquiry fields
+    in metadata: question, open_questions[], lifecycle (open|parked|concluded)."""
+    return create_entity(
+        entity_type="thread", title=title or "Untitled investigation",
+        metadata={"question": question, "open_questions": [], "lifecycle": "open"},
+    )
+
+
+def list_threads() -> list[dict]:
+    return list_entities(type_filter="thread", include_archived=False)
+
+
+def find_default_thread() -> Optional[str]:
+    """The project's default thread entity (metadata.is_default), or None if it
+    hasn't been materialized yet."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, metadata FROM entities WHERE type='thread' "
+            "AND deleted_at IS NULL AND status != 'archived'"
+        ).fetchall()
+    for r in rows:
+        m = json.loads(r["metadata"]) if r["metadata"] else {}
+        if m.get("is_default"):
+            return r["id"]
+    return None
+
+
+def get_or_create_default_thread() -> str:
+    """Lazily materialize the default thread into a real entity and adopt any
+    previously unthreaded messages. Lets 'Main' graduate (gain a header) instead
+    of being a permanent headerless bucket."""
+    tid = find_default_thread()
+    if tid:
+        return tid
+    tid = create_entity(
+        entity_type="thread", title="Main thread",
+        metadata={"question": "", "open_questions": [], "lifecycle": "open", "is_default": True},
+    )
+    with _conn() as c:
+        c.execute("UPDATE messages SET thread_id = ? WHERE thread_id IS NULL", (tid,))
+        c.commit()
+    return tid
 
 
 def find_kept_note(source_key: str) -> Optional[str]:
@@ -832,12 +1009,24 @@ def search(q: str, limit: int = 25) -> dict:
     return {"entities": entities, "messages": messages}
 
 
-def get_messages(entity_id: str = WORKSPACE_ID) -> list[dict]:
+def get_messages(entity_id: str = WORKSPACE_ID, thread_id: Optional[str] = None) -> list[dict]:
+    """Conversation for a project. `thread_id`:
+      - None        → all messages (default; preserves single-conversation reads);
+      - "default"   → only the default thread (thread_id IS NULL);
+      - "<thr_id>"  → that specific thread.
+    """
+    where = "entity_id = ?"
+    params: list = [entity_id]
+    if thread_id == "default":
+        where += " AND thread_id IS NULL"
+    elif thread_id is not None:
+        where += " AND thread_id = ?"
+        params.append(thread_id)
     with _conn() as c:
         rows = c.execute(
-            "SELECT role, content, ts, focus_entity_id FROM messages "
-            "WHERE entity_id = ? ORDER BY id",
-            (entity_id,),
+            f"SELECT role, content, ts, focus_entity_id, thread_id FROM messages "
+            f"WHERE {where} ORDER BY id",
+            params,
         ).fetchall()
     return [
         {
@@ -845,6 +1034,7 @@ def get_messages(entity_id: str = WORKSPACE_ID) -> list[dict]:
             "content": json.loads(r["content"]),
             "ts": r["ts"],
             "focus_entity_id": r["focus_entity_id"],
+            "thread_id": r["thread_id"],
         }
         for r in rows
     ]

@@ -2,9 +2,11 @@ import json
 import asyncio
 from typing import AsyncGenerator
 
-from config import SYSTEM_PROMPT, FAKE_SESSION
+from config import FAKE_SESSION
+from conditioning import build_system
 from db import (
-    append_message, get_messages, get_entity, WORKSPACE_ID,
+    append_message, get_messages, get_entity, update_entity, WORKSPACE_ID,
+    get_or_create_default_thread,
     log_context_assembly, session_assembly_summary,
     add_context_suggestion,
 )
@@ -24,6 +26,38 @@ open_stream = make_open_stream()
 # concept (multi-message) can come later.
 def _api_messages(history: list) -> list:
     return [{"role": m["role"], "content": m["content"]} for m in history]
+
+
+def _repair_tool_pairs(messages: list) -> list:
+    """Anthropic requires every assistant `tool_use` to be followed by a user
+    message containing the matching `tool_result`. An interrupted run (crash,
+    transient error, client disconnect) can persist a `tool_use` without its
+    result, which then poisons every subsequent request. Repair the history
+    in-flight by injecting a synthetic tool_result for any unmatched tool_use."""
+    out = [dict(m, content=list(m.get("content") or [])) for m in messages]
+    i = 0
+    while i < len(out):
+        m = out[i]
+        if m["role"] == "assistant":
+            tool_ids = [b["id"] for b in m["content"]
+                        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")]
+            if tool_ids:
+                nxt = out[i + 1] if i + 1 < len(out) else None
+                present = set()
+                if nxt and nxt["role"] == "user":
+                    present = {b.get("tool_use_id") for b in nxt["content"]
+                               if isinstance(b, dict) and b.get("type") == "tool_result"}
+                missing = [tid for tid in tool_ids if tid not in present]
+                if missing:
+                    synth = [{"type": "tool_result", "tool_use_id": tid,
+                              "content": "[tool result unavailable — the run was interrupted]"}
+                             for tid in missing]
+                    if nxt and nxt["role"] == "user":
+                        nxt["content"] = synth + nxt["content"]
+                    else:
+                        out.insert(i + 1, {"role": "user", "content": synth})
+        i += 1
+    return out
 
 
 # Transient API conditions worth retrying: 429 (rate limit), 5xx, 529
@@ -52,10 +86,53 @@ def _friendly_error(exc: Exception) -> str:
     return "Something went wrong talking to the model. Please try again."
 
 
+def _thread_context(thread_id: str | None) -> str:
+    """Tell the Guide what's already KEPT in this thread — pinned results (the
+    evidence, including those pinned from analysis-run outputs) and claims — so
+    it can refer to them instead of acting as if it only sees raw data files."""
+    if not thread_id:
+        return ""
+    from db import list_entities
+    pinned, claims = [], []
+    for e in list_entities(include_archived=False):
+        m = e.get("metadata") or {}
+        if m.get("thread_id") != thread_id:
+            continue
+        if e.get("type") in ("figure", "table") and e.get("pinned"):
+            interp = (m.get("interpretation") or "").strip()
+            pinned.append(f"- {e.get('title', '')}" + (f" — {interp}" if interp else ""))
+        elif e.get("type") == "claim":
+            claims.append(f"- {m.get('statement') or e.get('title')} ({m.get('confidence', 'preliminary')})")
+    if not pinned and not claims:
+        return ""
+    out = ["### Kept in this thread"]
+    if pinned:
+        out.append("Pinned results (this thread's evidence — refer to these directly; "
+                   "they may be figures/tables produced by analysis runs):")
+        out += pinned[:20]
+    if claims:
+        out.append("Claims so far:")
+        out += claims[:20]
+    return "\n".join(out) + "\n\n"
+
+
+def _derive_thread_title(text: str) -> str:
+    """Heuristic thread title from the opening message (no LLM — Phase 1).
+    LLM-quality naming is deferred to Phase 4."""
+    t = " ".join((text or "").strip().split())
+    for sep in (". ", "? ", "! ", "\n"):
+        if sep in t:
+            t = t.split(sep)[0]
+            break
+    t = t[:48].rstrip()
+    return (t[:1].upper() + t[1:]) if t else "Investigation"
+
+
 async def stream_response(
     user_text: str,
     *,
     focus_entity_id: str = WORKSPACE_ID,
+    thread_id: str = "default",
     annotation_image: str | None = None,
     annotation_note: str | None = None,
     retry: bool = False,
@@ -73,6 +150,10 @@ async def stream_response(
 
     session_id = new_session_id()
     turn_index = 0
+    # Threads are real lines of inquiry: the Guide reasons within the current
+    # thread, not the whole project firehose. "default" resolves to (and
+    # materializes) the project's default thread entity.
+    store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
 
     if not retry:
         user_blocks = [{"type": "text", "text": user_text}]
@@ -80,9 +161,25 @@ async def stream_response(
             # Persist a small marker so later turns know a region was discussed
             # (we don't store the image itself — it'd bloat the DB).
             user_blocks.append({"type": "text", "text": f"[{annotation_note}]"})
-        append_message("user", user_blocks,
-                       entity_id=WORKSPACE_ID, focus_entity_id=focus_entity_id)
-    history = get_messages(WORKSPACE_ID)
+        append_message("user", user_blocks, entity_id=WORKSPACE_ID,
+                       focus_entity_id=focus_entity_id, thread_id=store_tid)
+    history = get_messages(WORKSPACE_ID, thread_id=store_tid)
+
+    # Seed a freshly created thread's title + question from its opening message
+    # (heuristic; LLM-quality suggestion is Phase D). Both stay user-editable.
+    if not retry and store_tid and len(history) == 1:
+        thr = get_entity(store_tid)
+        if thr:
+            fields: dict = {}
+            if thr.get("title") in ("New investigation", "Untitled investigation"):
+                fields["title"] = _derive_thread_title(user_text)
+            meta = dict(thr.get("metadata") or {})
+            if not meta.get("question"):
+                meta["question"] = " ".join(user_text.strip().split())[:200]
+                meta["question_source"] = "guide"
+                fields["metadata"] = meta
+            if fields:
+                update_entity(store_tid, **fields)
 
     # Vision: inject the annotated figure into the last user turn for THIS
     # call only (not persisted). Skipped in fake mode (no vision).
@@ -101,21 +198,25 @@ async def stream_response(
             }],
         }
 
+    # Capability set for this turn (disabled tools are neither offered nor
+    # advertised), then assemble the system prompt from composable blocks.
+    from db import get_disabled_tools
+    disabled = get_disabled_tools()
+    active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+
     focus_text, fields_preloaded = focus_preamble_with_fields(focus_entity_id)
-    system = focus_text + SYSTEM_PROMPT
+    system = focus_text + _thread_context(store_tid) + build_system(active_tools)
     entity_id = WORKSPACE_ID
 
     focus_ent = get_entity(focus_entity_id) if focus_entity_id else None
     focus_type = focus_ent["type"] if focus_ent else None
 
     analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}
+    usage_in = usage_out = usage_cr = usage_cw = 0   # Guide tokens this turn (+cache read/write)
 
     try:
         while True:
-            llm_history = effective_history(WORKSPACE_ID, history)
-            from db import get_disabled_tools
-            disabled = get_disabled_tools()
-            active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+            llm_history = _repair_tool_pairs(effective_history(WORKSPACE_ID, history))
 
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. We only retry
@@ -135,6 +236,12 @@ async def stream_response(
                                     emitted = True
                                     yield sse({"type": "delta", "text": delta.text})
                         final_msg = stream.get_final_message()
+                    if getattr(final_msg, "usage", None):
+                        u = final_msg.usage
+                        usage_in += u.input_tokens or 0
+                        usage_out += u.output_tokens or 0
+                        usage_cr += getattr(u, "cache_read_input_tokens", 0) or 0
+                        usage_cw += getattr(u, "cache_creation_input_tokens", 0) or 0
                     break
                 except Exception as e:
                     if emitted or attempt >= max_retries or not _is_transient(e):
@@ -163,8 +270,8 @@ async def stream_response(
                     })
                     tool_calls_this_turn.append(block.name)
 
-            append_message("assistant", assistant_blocks,
-                           entity_id=entity_id, focus_entity_id=focus_entity_id)
+            append_message("assistant", assistant_blocks, entity_id=entity_id,
+                           focus_entity_id=focus_entity_id, thread_id=store_tid)
 
             # Log this turn's context assembly.
             log_context_assembly(
@@ -178,17 +285,42 @@ async def stream_response(
             )
             turn_index += 1
 
-            history = get_messages(entity_id)
+            history = get_messages(entity_id, thread_id=store_tid)
 
             if final_msg.stop_reason != "tool_use":
                 break
 
             tool_result_blocks = []
+            halt_for_plan = False
             for block in final_msg.content:
                 if block.type != "tool_use":
                     continue
                 tool_name = block.name
                 tool_input = block.input
+
+                # present_plan: surface the plan to the UI and HALT the turn —
+                # the user approves ("go") or adjusts, and their next message
+                # resumes. We still record an ack tool_result so history stays
+                # well-formed (no dangling tool_use).
+                if tool_name == "present_plan":
+                    inp = tool_input if isinstance(tool_input, dict) else {}
+                    raw_steps = inp.get("steps")
+                    if isinstance(raw_steps, list):
+                        steps = [str(s) for s in raw_steps if str(s).strip()]
+                    elif isinstance(raw_steps, str) and raw_steps.strip():
+                        steps = [ln.strip() for ln in raw_steps.splitlines() if ln.strip()]
+                    else:
+                        steps = []
+                    yield sse({"type": "plan", "title": inp.get("title"),
+                               "steps": steps, "rationale": inp.get("rationale")})
+                    ack = {"status": "presented",
+                           "note": "Plan shown to the user with Go/Adjust controls. "
+                                   "Wait for their decision before executing."}
+                    tool_result_blocks.append({"type": "tool_result", "tool_use_id": block.id,
+                                               "content": json.dumps(ack)})
+                    halt_for_plan = True
+                    continue
+
                 yield sse({"type": "tool_start", "name": tool_name, "input": tool_input})
 
                 # Background path: submit a job and return immediately.
@@ -226,6 +358,7 @@ async def stream_response(
                     result_obj=result_obj,
                     focused_entity_id=focus_entity_id,
                     analysis_ctx=analysis_ctx,
+                    thread_id=store_tid,
                 )
                 for ent in new_entities:
                     yield sse({"type": "entity_registered", "entity": ent})
@@ -259,6 +392,11 @@ async def stream_response(
                            entity_id=entity_id, focus_entity_id=focus_entity_id)
             history = get_messages(entity_id)
 
+            # A presented plan ends the turn: stop and wait for the user's
+            # Go/Adjust rather than executing the steps now.
+            if halt_for_plan:
+                break
+
         # End-of-session reflection.
         summary = session_assembly_summary(session_id)
         suggestion = maybe_reflect(
@@ -278,10 +416,23 @@ async def stream_response(
                        "trigger": "end_of_session",
                        "entity_type": focus_type})
 
+        # Proactive proposals (Phase D): evaluate the thread *after* the turn,
+        # off the response path (non-blocking, delayed). The frontend polls
+        # /api/threads/:id/proposals and surfaces any new ones in context.
+        if store_tid:
+            from proposals import evaluate_thread
+            asyncio.get_event_loop().run_in_executor(
+                None, evaluate_thread, store_tid, "post_turn"
+            )
+
+        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                   "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})
 
     except Exception as e:
         print(f"[guide] stream_response failed: {type(e).__name__}: {e}")
         yield sse({"type": "error", "text": _friendly_error(e),
                    "detail": f"{type(e).__name__}: {e}"})
+        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                   "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})

@@ -16,8 +16,16 @@ export interface ToolResultBlock {
   name: string
   result: Record<string, unknown>
 }
+/** A plan the Guide presented before multi-step work — rendered as a card with
+ *  Go / Adjust while it's the latest message and awaiting the user's decision. */
+export interface PlanBlock {
+  type: 'plan'
+  title?: string
+  steps: string[]
+  rationale?: string
+}
 
-export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock
+export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock | PlanBlock
 
 export interface DisplayMessage {
   id: string
@@ -33,6 +41,7 @@ export interface ToolResultEvent  { type: 'tool_result'; name: string; result: R
 export interface DoneEvent        { type: 'done' }
 export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
 export interface NoticeEvent      { type: 'notice';      text: string }
+export interface PlanEvent        { type: 'plan'; title?: string; steps: string[]; rationale?: string }
 
 export interface EntityRegisteredEvent {
   type: 'entity_registered'
@@ -47,6 +56,7 @@ export type SSEEvent =
   | DoneEvent
   | ErrorEvent
   | NoticeEvent
+  | PlanEvent
 
 // ---------- Entities ----------
 

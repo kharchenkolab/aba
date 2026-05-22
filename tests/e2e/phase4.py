@@ -148,7 +148,7 @@ def drive(frontend_port: int) -> int:
         ctx = browser.new_context(viewport={"width": 1500, "height": 900})
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{frontend_port}/", wait_until="networkidle")
-        page.locator('button[title="Workspace"]').click()
+        page.locator('button[title="Project"]').click()
         page.wait_for_timeout(150)
 
         page.locator(f'[data-entity-id="{dataset["id"]}"]').click()
@@ -184,7 +184,7 @@ def drive(frontend_port: int) -> int:
 
         # Trigger a refresh of the tree, then click the scenario.
         page.reload(wait_until="networkidle")
-        page.locator('button[title="Workspace"]').click()  # reload resets to Home view
+        page.locator('button[title="Project"]').click()  # reload resets to Home view
         page.wait_for_timeout(150)
         page.locator(f'[data-entity-id="{scenario["id"]}"]').click()
         page.wait_for_selector(".focus__figure", timeout=5000)
