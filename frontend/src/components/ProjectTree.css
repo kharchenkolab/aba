@@ -105,7 +105,7 @@
 .tree__head.is-active { background: var(--tree-active-bg); }
 
 .tree__count {
-  margin-left: auto;
+  margin-left: 6px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-3);
@@ -116,7 +116,22 @@
   min-width: 18px;
   text-align: center;
 }
-.tree__section-head .chev { margin-left: 6px; }
+/* Count sits right after the label; the collapse chevron goes to the far right. */
+.tree__section-head .chev { margin-left: auto; }
+/* In the Threads header the chevron sits just right of the "+" (which holds the
+   auto margin), not pushed to the far edge. */
+.tree__threads .tree__section-head .chev { margin-left: 4px; }
+
+/* Thread lifecycle in the rail: parked/concluded threads are dimmed and tagged. */
+.tree__thread-row.is-parked .tree__thread,
+.tree__thread-row.is-concluded .tree__thread { color: var(--text-4); }
+.tree__thread-row.is-concluded .tree__thread { text-decoration: line-through; text-decoration-color: var(--text-4); }
+.tree__lc {
+  flex: none; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 0 5px; border-radius: 9999px; margin-right: 2px;
+}
+.tree__lc--parked { background: #fef3c7; color: #b45309; }
+.tree__lc--concluded { background: var(--surface-3, #e7e5e4); color: var(--text-3); }
 
 .tree__search {
   display: flex;

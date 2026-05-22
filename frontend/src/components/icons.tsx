@@ -67,6 +67,8 @@ export function EntityGlyph({ name, size = 14, className }: { name: string; size
     case 'analysis':
     case 'run':
       return <svg {...svg}><path d="M5 4l5 4-5 4M12 14h7" /></svg>
+    case 'result':   // stacked layers — a kept observation (one or more panels)
+      return <svg {...svg}><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></svg>
     case 'claim':
       return <svg {...svg}><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.2l1-5.8L3.5 9.2l5.9-.9z" /></svg>
     case 'narrative':

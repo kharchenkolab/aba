@@ -15,7 +15,6 @@ interface Props {
 
 type Editing =
   | { kind: 'rename' }
-  | { kind: 'notes' }
   | { kind: 'tags' }
   | null
 
@@ -99,11 +98,13 @@ export default function EntityMenu({ entity, onChange }: Props) {
       {open && !editing && (
         <div className="entity-menu__pop" style={popStyle}>
           <button onClick={() => setEditing({ kind: 'rename' })}>Rename…</button>
-          <button onClick={() => setEditing({ kind: 'notes' })}>Edit notes…</button>
           <button onClick={() => setEditing({ kind: 'tags' })}>Edit tags…</button>
-          <button onClick={() => patch({ pinned: !entity.pinned })}>
-            {entity.pinned ? 'Unpin' : 'Pin'}
-          </button>
+          {/* Pin is an evidence gesture — meaningless for datasets. */}
+          {entity.type !== 'dataset' && (
+            <button onClick={() => patch({ pinned: !entity.pinned })}>
+              {entity.pinned ? 'Unpin' : 'Pin'}
+            </button>
+          )}
           {canDownload && <button onClick={download}>Download…</button>}
           {isArchived ? (
             <button onClick={restore}>Restore</button>
@@ -119,16 +120,6 @@ export default function EntityMenu({ entity, onChange }: Props) {
           style={popStyle}
           onCancel={() => setEditing(null)}
           onSubmit={v => patch({ title: v })}
-        />
-      )}
-      {open && editing?.kind === 'notes' && (
-        <EditMulti
-          label="Notes"
-          value={entity.notes ?? ''}
-          placeholder="A short note for future-you…"
-          style={popStyle}
-          onCancel={() => setEditing(null)}
-          onSubmit={v => patch({ notes: v })}
         />
       )}
       {open && editing?.kind === 'tags' && (
@@ -175,33 +166,3 @@ function EditOne({
   )
 }
 
-function EditMulti({
-  label, value, placeholder, onCancel, onSubmit, style,
-}: {
-  label: string; value: string; placeholder?: string;
-  onCancel: () => void; onSubmit: (v: string) => void;
-  style?: React.CSSProperties;
-}) {
-  const [v, setV] = useState(value)
-  return (
-    <div className="entity-menu__pop entity-menu__edit" style={style}>
-      <div className="entity-menu__label">{label}</div>
-      <textarea
-        className="entity-menu__textarea"
-        value={v}
-        placeholder={placeholder}
-        onChange={e => setV(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Escape') onCancel()
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(v)
-        }}
-        rows={4}
-        autoFocus
-      />
-      <div className="entity-menu__buttons">
-        <button onClick={onCancel}>Cancel</button>
-        <button onClick={() => onSubmit(v)} className="entity-menu__primary">Save</button>
-      </div>
-    </div>
-  )
-}

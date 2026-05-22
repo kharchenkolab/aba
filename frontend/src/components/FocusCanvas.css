@@ -316,6 +316,13 @@
 }
 
 .focus__dataset { display: flex; flex-direction: column; gap: 10px; }
+.focus__dataset-desc {
+  width: 100%; box-sizing: border-box; resize: none; overflow: hidden; min-height: 36px;
+  border: 1px solid transparent; border-radius: 8px; padding: 7px 9px;
+  font-size: 13.5px; line-height: 1.45; color: var(--text); background: var(--bg-soft); font-family: inherit;
+}
+.focus__dataset-desc::placeholder { color: var(--text-4); }
+.focus__dataset-desc:focus { outline: none; border-color: var(--accent); background: var(--bg); }
 .focus__rows    { display: flex; flex-direction: column; gap: 4px; }
 
 .focus__preview-wrap {

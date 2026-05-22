@@ -4,6 +4,7 @@ import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from './AnnotatedFigure'
 import ClaimView from './ClaimView'
 import RunView from './RunView'
+import ResultView from './ResultView'
 import ThreadHeader from './ThreadHeader'
 import './FocusCanvas.css'
 
@@ -79,18 +80,23 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
     onFocus(created.id)
   }
 
-  async function doScenario(description: string) {
-    const r = await fetch(
-      `/api/entities/${encodeURIComponent(entity!.id)}/create-scenario`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description }),
-      },
-    )
-    if (!r.ok) throw new Error(`scenario failed: ${r.status} ${await r.text()}`)
+  // Start a Result (kept observation) seeded with this figure/table; opens it so
+  // the user can add a reading, more panels, or notes. Deliberate grouping —
+  // never the pin gesture.
+  async function groupIntoResult() {
+    const e = entity!
+    const tid = (e.metadata?.thread_id as string) || 'default'
+    const r = await fetch('/api/results', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        thread_id: tid, title: e.title,
+        interpretation: (e.metadata?.interpretation as string) || '',
+        members: [{ kind: e.type === 'table' ? 'table' : 'figure', ref: e.id }],
+      }),
+    })
+    if (!r.ok) return
     const created: Entity = await r.json()
-    setPromote(null)
     onChange()
     onFocus(created.id)
   }
@@ -102,9 +108,9 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
 
   return (
     <div className={`focus ${compact ? 'focus--compact' : ''}`}>
-      {/* Runs render their own title/status/controls header (RunView); skip the
-          generic one to avoid a duplicate type pill + title. */}
-      {entity.type !== 'analysis' && (
+      {/* Runs and Results render their own title header; skip the generic one
+          to avoid a duplicate type pill + title. */}
+      {entity.type !== 'analysis' && entity.type !== 'result' && (
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
@@ -133,7 +139,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
             </svg>
           </button>
         )}
-        {renderActionButton(entity, setPromote)}
+        {renderActionButton(entity, setPromote, groupIntoResult)}
       </div>
       )}
       {historyOpen && entity.type === 'figure' && (
@@ -160,7 +166,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
         )}
       </div>
 
-      {!compact && entity.type !== 'analysis' && <ProvenancePanel entity={entity} onFocus={onFocus} />}
+      {!compact && entity.type !== 'analysis' && entity.type !== 'result' && <ProvenancePanel entity={entity} onFocus={onFocus} />}
 
       {promote?.kind === 'figure-to-claim' && (
         <PromoteDialog
@@ -173,15 +179,6 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           }}
           onCancel={() => setPromote(null)}
           onSubmit={doFigureClaim}
-        />
-      )}
-      {promote?.kind === 'scenario' && (
-        <PromoteDialog
-          title={`Scenario from "${entity.title}"`}
-          prompt="Describe the variation you want to try. Guide will modify the producing code and run it. The new figure will sit alongside this one with a Compare toggle."
-          placeholder="What if we cap n_genes at 2500? — or — exclude sample S4 — or — use mt_fraction cutoff 0.10"
-          onCancel={() => setPromote(null)}
-          onSubmit={doScenario}
         />
       )}
     </div>
@@ -323,22 +320,39 @@ function renderCompareBody(scenario: Entity, baseline: Entity) {
   )
 }
 
+// One optional description for a dataset, editable inline under the title.
+// (Replaces the hidden "Edit notes…" menu item — this is where it belongs.)
+function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: () => void }) {
+  const [val, setVal] = useState(entity.notes ?? '')
+  useEffect(() => { setVal(entity.notes ?? '') }, [entity.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const save = () => {
+    if ((val ?? '') === (entity.notes ?? '')) return
+    fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }),
+    }).then(() => onChange()).catch(() => {})
+  }
+  return (
+    <textarea className="focus__dataset-desc" value={val} rows={1} placeholder="Add a description… (what this dataset is, where it came from)"
+      onChange={e => setVal(e.target.value)} onBlur={save} />
+  )
+}
+
 function renderActionButton(
   entity: Entity,
   setPromote: (m: PromoteMode | null) => void,
+  onGroup?: () => void,
 ) {
-  // Figures/tables (results) → create a claim citing them. Figures also get the
-  // "What if…" scenario gesture.
+  // Figures/tables → group into a Result (deliberate), and draft a claim.
   if (entity.type === 'figure' || entity.type === 'table' || entity.type === 'result') {
     return (
       <div className="focus__actions">
-        {entity.type === 'figure' && (
+        {(entity.type === 'figure' || entity.type === 'table') && onGroup && (
           <button
             className="focus__promote"
-            onClick={() => setPromote({ kind: 'scenario' })}
-            title="Create a scenario variant by modifying this figure's parameters"
+            onClick={onGroup}
+            title="Start a Result (observation) from this — then add a reading, more panels, or notes"
           >
-            ⤴ What if…
+            ⊞ Group into a result
           </button>
         )}
         <button
@@ -375,6 +389,7 @@ function renderBody(
     case 'dataset':
       return (
         <div className="focus__dataset">
+          <DatasetDescription entity={e} onChange={onChange} />
           <div className="focus__rows">
             <div className="focus__row">
               <span className="focus__row-label">file</span>
@@ -406,6 +421,9 @@ function renderBody(
 
     case 'analysis':
       return <RunView run={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />
+
+    case 'result':
+      return <ResultView result={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />
 
 
     case 'result': {

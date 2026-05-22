@@ -18,13 +18,26 @@ interface Props {
   onClaimFrom: (resultId: string) => void
 }
 
-const KEEPABLE = new Set(['figure', 'table', 'note'])
+const KEEPABLE = new Set(['figure', 'table', 'note', 'result'])
+const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
+
+interface Member { kind: string; ref?: string }
 
 export default function PinnedShelf({ entities, threadId, threads, onChange, onFocus, onClaimFrom }: Props) {
-  // Everything kept in this thread — figures, tables, and kept message notes.
+  // Everything kept in this thread — figures, tables, kept notes, and Results.
   const pins = entities.filter(e =>
     e.pinned && KEEPABLE.has(e.type) && e.status !== 'archived'
     && !!threadId && e.metadata?.thread_id === threadId)
+  const byId = new Map(entities.map(e => [e.id, e]))
+  // A Result's cover thumb + panel count come from its members.
+  const coverOf = (e: Entity): { cover?: string; panels?: number } => {
+    if (e.type !== 'result') return {}
+    const members = (e.metadata?.members as Member[]) ?? []
+    const figRef = members.find(m => m.kind === 'figure')?.ref
+    const cell = figRef ? byId.get(figRef) : undefined
+    const cover = cell?.artifact_path && IMG.test(cell.artifact_path) ? cell.artifact_path : undefined
+    return { cover, panels: members.length }
+  }
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function uploadExternal(f: File) {
@@ -57,16 +70,17 @@ export default function PinnedShelf({ entities, threadId, threads, onChange, onF
             evidence you build claims from.
           </div>
         )}
-        {pins.map(p => (
-          <PinRow key={p.id} pin={p} threads={threads} onChange={onChange} onFocus={onFocus} onClaimFrom={onClaimFrom} />
-        ))}
+        {pins.map(p => {
+          const { cover, panels } = coverOf(p)
+          return <PinRow key={p.id} pin={p} cover={cover} panels={panels} threads={threads} onChange={onChange} onFocus={onFocus} onClaimFrom={onClaimFrom} />
+        })}
       </div>
     </div>
   )
 }
 
-function PinRow({ pin, threads, onChange, onFocus, onClaimFrom }:
-  { pin: Entity; threads: Entity[]; onChange: () => void; onFocus: (id: string) => void; onClaimFrom: (id: string) => void }) {
+function PinRow({ pin, cover, panels, threads, onChange, onFocus, onClaimFrom }:
+  { pin: Entity; cover?: string; panels?: number; threads: Entity[]; onChange: () => void; onFocus: (id: string) => void; onClaimFrom: (id: string) => void }) {
   const isNote = pin.type === 'note'
   const interp = (pin.metadata?.interpretation as string) ?? ''
   const noteText = (pin.metadata?.text as string) ?? ''
@@ -96,11 +110,13 @@ function PinRow({ pin, threads, onChange, onFocus, onClaimFrom }:
 
   return (
     <div className={`pin-row ${isNote ? 'pin-row--note' : ''}`}>
-      {pin.artifact_path && (
-        <img className="pin-row__thumb" src={pin.artifact_path} alt={pin.title} onClick={() => onFocus(pin.id)} />
+      {(cover ?? pin.artifact_path) && (
+        <img className="pin-row__thumb" src={cover ?? pin.artifact_path!} alt={pin.title} onClick={() => onFocus(pin.id)} />
       )}
       <div className="pin-row__body">
-        <div className="pin-row__title" onClick={() => onFocus(pin.id)} title={pin.title}>{pin.title}</div>
+        <div className="pin-row__title" onClick={() => onFocus(pin.id)} title={pin.title}>
+          {pin.title}{panels && panels > 1 ? <span className="pin-row__panels"> · {panels} panels</span> : null}
+        </div>
         {isNote ? (
           <div className="pin-row__note-text">{noteText}</div>
         ) : editing ? (

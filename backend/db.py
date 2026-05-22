@@ -381,6 +381,77 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
     return get_entity(entity_id)
 
 
+# ---------- Result (kept observation) member management ----------
+# A `result` entity is a kept grouping: metadata.members is an ordered list of
+# panels, each {id, kind: figure|table|value|text, ref?, text?, caption?}. The
+# single-cell case (one member) is the common one; results grow deliberately.
+
+def _result_members(e: dict) -> list:
+    return list(((e.get("metadata") or {}).get("members")) or [])
+
+
+def _save_members(result_id: str, members: list) -> Optional[dict]:
+    e = get_entity(result_id)
+    if not e or e["type"] != "result":
+        return None
+    meta = dict(e.get("metadata") or {})
+    meta["members"] = members
+    return update_entity(result_id, metadata=meta)
+
+
+def add_result_member(result_id: str, *, kind: str, ref: Optional[str] = None,
+                      text: Optional[str] = None, caption: str = "",
+                      at: Optional[int] = None) -> Optional[dict]:
+    """Append (or insert at `at`) a panel. Figures/tables/values carry a `ref`
+    to the cell entity; text panels carry inline `text`."""
+    e = get_entity(result_id)
+    if not e or e["type"] != "result":
+        return None
+    members = _result_members(e)
+    member = {"id": gen_entity_id("m"), "kind": kind, "caption": caption}
+    if ref:
+        member["ref"] = ref
+    if text is not None:
+        member["text"] = text
+    if at is None or at < 0 or at > len(members):
+        members.append(member)
+    else:
+        members.insert(at, member)
+    return _save_members(result_id, members)
+
+
+def remove_result_member(result_id: str, member_id: str) -> Optional[dict]:
+    e = get_entity(result_id)
+    if not e or e["type"] != "result":
+        return None
+    members = [m for m in _result_members(e) if m.get("id") != member_id]
+    return _save_members(result_id, members)
+
+
+def update_result_member(result_id: str, member_id: str, **fields) -> Optional[dict]:
+    e = get_entity(result_id)
+    if not e or e["type"] != "result":
+        return None
+    members = _result_members(e)
+    for m in members:
+        if m.get("id") == member_id:
+            for k in ("caption", "text"):
+                if k in fields and fields[k] is not None:
+                    m[k] = fields[k]
+    return _save_members(result_id, members)
+
+
+def reorder_result_members(result_id: str, ordered_ids: list) -> Optional[dict]:
+    e = get_entity(result_id)
+    if not e or e["type"] != "result":
+        return None
+    by_id = {m.get("id"): m for m in _result_members(e)}
+    members = [by_id[i] for i in ordered_ids if i in by_id]
+    # keep any not mentioned (defensive) at the end, original order
+    members += [m for m in _result_members(e) if m.get("id") not in set(ordered_ids)]
+    return _save_members(result_id, members)
+
+
 def archive_entity(entity_id: str) -> Optional[dict]:
     """Soft-delete: mark as archived and record deleted_at."""
     now = _utcnow()
