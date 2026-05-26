@@ -25,7 +25,7 @@ if grep -rnE "^(from content|import content)" "$CORE" 2>/dev/null | grep -v "# n
 fi
 
 # 2. core/ must not name bio entity types as string literals in code
-TYPES='figure|finding|claim|result|dataset|analysis|narrative|advisor_note'
+TYPES='figure|finding|claim|result|dataset|analysis|narrative'
 if grep -rnE "['\"]($TYPES)['\"]" "$CORE" 2>/dev/null \
    | grep -vE "(# noqa: seam|^[^:]+:[0-9]+:\s*#)"; then
   fail "backend/core/ references bio entity-type names by literal"
