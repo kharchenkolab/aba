@@ -72,10 +72,13 @@ def _counts(path) -> dict:
 
 
 def _park_scratch() -> None:
-    """No active project: point db.DB_PATH at a throwaway DB so db.* calls don't
-    crash. The scratch DB is never registered, so it never shows on Home."""
+    """No active project: point the DB connection at a throwaway DB so db.*
+    calls don't crash. The scratch DB is never registered, so it never
+    shows on Home."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    db.DB_PATH = SCRATCH
+    from core.graph import _schema
+    _schema.set_db_path(SCRATCH)
+    db.DB_PATH = SCRATCH        # also keep the legacy shim attribute in sync
     _state["current"] = None
     db.init_db()
 
@@ -96,7 +99,9 @@ def init() -> None:
 def set_current(pid: str) -> None:
     if SINGLE:
         return
-    db.DB_PATH = _db_file(pid)
+    from core.graph import _schema
+    _schema.set_db_path(_db_file(pid))
+    db.DB_PATH = _db_file(pid)  # legacy shim attribute
     _state["current"] = pid
     db.init_db()          # idempotent — ensures tables exist
     _touch(pid)
