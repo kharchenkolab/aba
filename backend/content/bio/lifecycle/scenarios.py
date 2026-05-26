@@ -16,7 +16,7 @@ from typing import Optional
 from config import API_KEY, MODEL, FAKE_SESSION
 from db import create_entity, get_entity, add_edge
 from tools import execute_tool
-from registry import _title_from_code
+from content.bio.lifecycle.registry import _title_from_code
 
 
 _REWRITE_SYSTEM = (

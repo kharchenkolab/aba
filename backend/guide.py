@@ -13,7 +13,7 @@ from db import (
 from tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
 from context import focus_preamble_with_fields
-from registry import register_artifacts_from_tool_result
+from content.bio.lifecycle.registry import register_artifacts_from_tool_result
 from adaptive import new_session_id, maybe_reflect
 from core.jobs.runner import submit_python_job
 from core.summarize.rolling import effective_history
@@ -420,7 +420,7 @@ async def stream_response(
         # off the response path (non-blocking, delayed). The frontend polls
         # /api/threads/:id/proposals and surfaces any new ones in context.
         if store_tid:
-            from proposals import evaluate_thread
+            from content.bio.proposals.scheduler import evaluate_thread
             asyncio.get_event_loop().run_in_executor(
                 None, evaluate_thread, store_tid, "post_turn"
             )

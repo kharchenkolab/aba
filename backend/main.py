@@ -32,14 +32,14 @@ from db import (
     WORKSPACE_ID,
 )
 from guide import stream_response
-from promote import (
+from content.bio.lifecycle.promote import (
     promote_figure_to_result,
     promote_results_to_finding,
     promote_findings_to_claim,
     add_result_to_finding,
     remove_result_from_finding,
 )
-from scenarios import create_scenario_variant
+from content.bio.lifecycle.scenarios import create_scenario_variant
 from advisors import skeptic_review, explorer_suggest, stylist_review
 from db import (
     list_advisor_notes,
@@ -514,7 +514,7 @@ def thread_proposals(tid: str, status: str = "pending"):
 def thread_evaluate(tid: str, req: EvaluateRequest):
     """Run the proposal detectors for a thread on demand (used by the
     thread-open event trigger). Post-turn evaluation is fired from guide.py."""
-    from proposals import evaluate_thread
+    from content.bio.proposals.scheduler import evaluate_thread
     from db import list_proposals
     rtid = _resolve_thread(tid)
     evaluate_thread(rtid, req.trigger)
@@ -526,7 +526,7 @@ def thread_orient(tid: str):
     """Cold-start orientation: the Guide summarizes the project's data + suggests
     next steps as an opening message. Idempotent — no-ops once the thread has a
     conversation or has already been oriented."""
-    from orientation import orient_thread
+    from content.bio.lifecycle.orientation import orient_thread
     rtid = _resolve_thread(tid)
     result = orient_thread(rtid)
     return {"oriented": bool(result), "result": result}
@@ -534,7 +534,7 @@ def thread_orient(tid: str):
 
 @app.post("/api/proposals/{pid}/accept")
 def proposal_accept(pid: int):
-    from proposals import accept_proposal
+    from content.bio.proposals.scheduler import accept_proposal
     try:
         return accept_proposal(pid)
     except ValueError as e:
@@ -543,13 +543,13 @@ def proposal_accept(pid: int):
 
 @app.post("/api/proposals/{pid}/dismiss")
 def proposal_dismiss(pid: int):
-    from proposals import dismiss_proposal
+    from content.bio.proposals.scheduler import dismiss_proposal
     return dismiss_proposal(pid)
 
 
 @app.post("/api/proposals/{pid}/undo")
 def proposal_undo(pid: int):
-    from proposals import undo_proposal
+    from content.bio.proposals.scheduler import undo_proposal
     try:
         return undo_proposal(pid)
     except ValueError as e:
@@ -1197,7 +1197,7 @@ class CreateFindingRequest(BaseModel):
 
 @app.post("/api/findings/from-draft")
 def create_finding_endpoint(req: CreateFindingRequest):
-    from promote import create_finding_from_draft
+    from content.bio.lifecycle.promote import create_finding_from_draft
     fid = create_finding_from_draft(req.title, req.summary, req.evidence_ids,
                                     req.caveats, req.status)
     return get_entity(fid)
@@ -1212,7 +1212,7 @@ class FindingFieldsRequest(BaseModel):
 
 @app.post("/api/findings/{finding_id}/fields")
 def finding_fields(finding_id: str, req: FindingFieldsRequest):
-    from promote import set_finding_fields
+    from content.bio.lifecycle.promote import set_finding_fields
     try:
         return set_finding_fields(finding_id, summary=req.summary,
                                   caveats=req.caveats, status=req.status, title=req.title)
@@ -1351,7 +1351,7 @@ async def upload_external_result(
     update_entity(eid, pinned=True)
     # Data-upload event trigger (Phase D): new evidence may overlap a run behind
     # active claims → N+1 proposal.
-    from proposals import evaluate_thread
+    from content.bio.proposals.scheduler import evaluate_thread
     evaluate_thread(tid, "data_upload")
     return get_entity(eid)
 

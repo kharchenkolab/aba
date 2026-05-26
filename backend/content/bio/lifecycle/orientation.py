@@ -15,7 +15,7 @@ from typing import Optional
 
 from db import (get_messages, get_entity, update_entity, append_message,
                 list_entities, WORKSPACE_ID, get_or_create_default_thread)
-from proposals import _ask_json
+from content.bio.proposals.scheduler import _ask_json
 
 _SYSTEM = (
     "You are the Guide, reacting to a dataset in a scientist's project. From the "
