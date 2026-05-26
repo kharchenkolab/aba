@@ -11,12 +11,12 @@ from db import (
     add_context_suggestion,
 )
 from tools import TOOL_SCHEMAS, execute_tool
-from llm import make_open_stream
+from core.llm import make_open_stream
 from context import focus_preamble_with_fields
 from registry import register_artifacts_from_tool_result
 from adaptive import new_session_id, maybe_reflect
-from jobs import submit_python_job
-from summarize import effective_history
+from core.jobs.runner import submit_python_job
+from core.summarize.rolling import effective_history
 
 open_stream = make_open_stream()
 
