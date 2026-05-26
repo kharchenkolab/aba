@@ -3,7 +3,7 @@ import asyncio
 from typing import AsyncGenerator
 
 from config import FAKE_SESSION
-from conditioning import build_system
+from content.bio.prompts.build import build_system
 from db import (
     append_message, get_messages, get_entity, update_entity, WORKSPACE_ID,
     get_or_create_default_thread,
