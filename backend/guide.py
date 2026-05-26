@@ -15,6 +15,8 @@ from core.llm import make_open_stream
 from core.manifest.assembler import build_manifest, render_focus_preamble
 import content.bio.cards  # noqa: F401  — registers per-type card builders
 from core.hooks.dispatcher import dispatch
+from core.runtime.turn import Turn, TurnState, gen_run_id
+from core.runtime.checkpoint import checkpoint
 from content.bio.lifecycle.adaptive import new_session_id
 # Bio modules registering hook handlers at import — keep these imports even
 # though their names aren't used directly: the side effect is registration.
@@ -127,6 +129,19 @@ async def stream_response(
 
     session_id = new_session_id()
     turn_index = 0
+    # Turn checkpointing (Pass E): create a Turn row at the start; update
+    # state through transitions; mark DONE/FAILED at the end. Lets resume-
+    # after-restart see what was in flight. The state machine itself is
+    # still the while-loop below; Pass F drives it explicitly off TurnState.
+    turn = Turn(
+        run_id=gen_run_id(),
+        session_id=session_id,
+        turn_index=0,
+        agent_spec_name="guide",
+        state=TurnState.GENERATING,
+        focus_entity_id=focus_entity_id,
+        thread_id=thread_id,
+    )
     # Threads are real lines of inquiry: the Guide reasons within the current
     # thread, not the whole project firehose. "default" resolves to (and
     # materializes) the project's default thread entity.
@@ -197,9 +212,12 @@ async def stream_response(
 
     analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}
     usage_in = usage_out = usage_cr = usage_cw = 0   # Guide tokens this turn (+cache read/write)
+    turn.thread_id = store_tid
+    checkpoint(turn)  # initial Turn row before the loop runs
 
     try:
         while True:
+            turn.transition(TurnState.GENERATING); checkpoint(turn)
             llm_history = _repair_tool_pairs(effective_history(WORKSPACE_ID, history))
 
             # Open + consume the stream, retrying transient API failures
@@ -268,12 +286,16 @@ async def stream_response(
                 turn_text_len=len(text_out),
             )
             turn_index += 1
+            turn.turn_index = turn_index
+            turn.usage_in = usage_in; turn.usage_out = usage_out
+            turn.usage_cache_read = usage_cr; turn.usage_cache_write = usage_cw
 
             history = get_messages(entity_id, thread_id=store_tid)
 
             if final_msg.stop_reason != "tool_use":
                 break
 
+            turn.transition(TurnState.EXECUTING_TOOLS); checkpoint(turn)
             tool_result_blocks = []
             halt_for_plan = False
             for block in final_msg.content:
@@ -377,11 +399,15 @@ async def stream_response(
             # A presented plan ends the turn: stop and wait for the user's
             # Go/Adjust rather than executing the steps now.
             if halt_for_plan:
+                turn.transition(TurnState.AWAITING_USER)
+                turn.pending_user_signal = "plan"
+                checkpoint(turn)
                 break
 
         # End-of-turn hooks: reflection (bio.adaptive) + proposals
         # evaluation (bio.proposals.scheduler). Handlers may set
         # ctx['suggestion']; if they do, surface as an SSE event.
+        turn.transition(TurnState.SUMMARIZING); checkpoint(turn)
         summary = session_assembly_summary(session_id)
         stop_ctx = {
             "session_id": session_id,
@@ -404,12 +430,18 @@ async def stream_response(
                        "trigger": "end_of_session",
                        "entity_type": focus_type})
 
+        if turn.state != TurnState.AWAITING_USER:
+            turn.transition(TurnState.DONE)
+            checkpoint(turn)
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
                    "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})
 
     except Exception as e:
         print(f"[guide] stream_response failed: {type(e).__name__}: {e}")
+        turn.error = {"type": type(e).__name__, "message": str(e)}
+        turn.transition(TurnState.FAILED)
+        checkpoint(turn)
         yield sse({"type": "error", "text": _friendly_error(e),
                    "detail": f"{type(e).__name__}: {e}"})
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,

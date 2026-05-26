@@ -1542,6 +1542,25 @@ def events_list(limit: int = 50, offset: int = 0):
     return list_events(limit=limit, offset=offset)
 
 
+@app.get("/api/turns")
+def turns_list(limit: int = 50):
+    """Recent Turn checkpoints (arch3_plan.md Pass E). For diagnostic
+    inspection; the resume endpoint lives at /api/turns/{run_id}/resume
+    once the full state-machine extraction (Pass F) lands."""
+    from core.runtime.checkpoint import list_recent_turns
+    return list_recent_turns(limit=limit)
+
+
+@app.get("/api/turns/{run_id}")
+def turn_get(run_id: str):
+    """Single-Turn lookup — what state was the loop in, what's pending."""
+    from core.runtime.checkpoint import load_turn
+    t = load_turn(run_id)
+    if t is None:
+        raise HTTPException(404, "no such run")
+    return t.to_row()
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
