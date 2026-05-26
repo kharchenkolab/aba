@@ -9,7 +9,7 @@ import { useState } from 'react'
 import type { Entity } from '../types'
 import './ThreadHeader.css'
 
-interface OQ { id: string; text: string; status: string; source?: string }
+interface OQ { id: string; text: string; status: string; source?: string; answer?: string }
 
 interface Props {
   thread: Entity
@@ -28,6 +28,12 @@ export default function ThreadHeader({ thread, onChange, onSwitchThread, onOpenF
   const question = (meta.question as string) ?? ''
   const [editingQ, setEditingQ] = useState(false)
   const [newOQ, setNewOQ] = useState('')
+  // Inline answer capture: clicking ✓ reveals an input under the question
+  // instead of immediately patching status. Keeps the answer text alongside
+  // the resolution so future readers see *what* was concluded, not just that
+  // it was.
+  const [answering, setAnswering] = useState<string | null>(null)
+  const [answerText, setAnswerText] = useState('')
   const openCount = oqs.filter(o => o.status === 'open').length
 
   const api = `/api/threads/${encodeURIComponent(thread.id)}`
@@ -92,15 +98,45 @@ export default function ThreadHeader({ thread, onChange, onSwitchThread, onOpenF
       <div className="brief__oqs">
         <div className="brief__oqs-label">Open questions <span className="brief__count">{openCount}</span></div>
         {oqs.map(o => (
-          <div key={o.id} className={`brief__oq is-${o.status}`}>
-            <span className="brief__oq-text">{o.text}</span>
-            <span className="brief__oq-actions">
-              {o.status !== 'answered' && o.status !== 'promoted' && <button onClick={() => patchOQ(o.id, { status: 'answered' })} title="Mark answered">✓</button>}
-              {o.status === 'open' && <button onClick={() => patchOQ(o.id, { status: 'parked' })} title="Park">❙❙</button>}
-              {(o.status === 'parked' || o.status === 'answered') && <button onClick={() => patchOQ(o.id, { status: 'open' })} title="Reopen">↺</button>}
-              {o.status !== 'promoted' && <button onClick={() => promoteOQ(o.id)} title="Promote to its own thread">➦</button>}
-              <button onClick={() => delOQ(o.id)} title="Remove">×</button>
-            </span>
+          <div key={o.id} className={`brief__oq-wrap is-${o.status}`}>
+            <div className={`brief__oq is-${o.status}`}>
+              {o.status === 'parked' && <span className="brief__oq-tag brief__oq-tag--parked">parked</span>}
+              <span className="brief__oq-text">{o.text}</span>
+              <span className="brief__oq-actions">
+                {o.status !== 'answered' && o.status !== 'promoted' && (
+                  <button
+                    onClick={() => { setAnswering(o.id); setAnswerText(o.answer ?? '') }}
+                    title="Mark answered"
+                  >✓</button>
+                )}
+                {o.status === 'open' && <button onClick={() => patchOQ(o.id, { status: 'parked' })} title="Park">❙❙</button>}
+                {(o.status === 'parked' || o.status === 'answered') && <button onClick={() => patchOQ(o.id, { status: 'open' })} title="Reopen">↺</button>}
+                {o.status !== 'promoted' && <button onClick={() => promoteOQ(o.id)} title="Promote to its own thread">➦</button>}
+                <button onClick={() => delOQ(o.id)} title="Remove">×</button>
+              </span>
+            </div>
+            {answering === o.id && (
+              <input
+                className="brief__oq-answer-input"
+                autoFocus
+                value={answerText}
+                onChange={e => setAnswerText(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const a = answerText.trim()
+                    patchOQ(o.id, { status: 'answered', answer: a })
+                    setAnswering(null); setAnswerText('')
+                  } else if (e.key === 'Escape') {
+                    setAnswering(null); setAnswerText('')
+                  }
+                }}
+                onBlur={() => { setAnswering(null); setAnswerText('') }}
+                placeholder="Answer (Enter to save, Esc to skip)"
+              />
+            )}
+            {o.status === 'answered' && o.answer && answering !== o.id && (
+              <div className="brief__oq-answer">{o.answer}</div>
+            )}
           </div>
         ))}
         <input className="brief__oq-add" value={newOQ} onChange={e => setNewOQ(e.target.value)}

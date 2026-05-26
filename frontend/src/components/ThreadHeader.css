@@ -37,14 +37,36 @@
 
 .brief__oqs-label { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 6px; }
 .brief__count { background: var(--tree-active-bg); border-radius: 9999px; padding: 1px 7px; margin-left: 4px; }
+.brief__oq-wrap { display: flex; flex-direction: column; gap: 3px; }
+/* Parked questions read as a quieter group: their wrapper is dim and slightly
+   inset, so they don't compete with active open ones. */
+.brief__oq-wrap.is-parked { opacity: 0.85; }
 .brief__oq { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); padding: 3px 2px; border-radius: 5px; }
 .brief__oq:hover { background: var(--page); }
 .brief__oq-text { flex: 1; }
 .brief__oq.is-answered .brief__oq-text { text-decoration: line-through; color: var(--text-4); }
-.brief__oq.is-parked .brief__oq-text { color: var(--text-4); }
+.brief__oq.is-parked .brief__oq-text { color: var(--text-4); font-style: italic; }
 .brief__oq.is-promoted .brief__oq-text { color: var(--text-4); font-style: italic; }
+.brief__oq-tag {
+  flex: none; font-size: 9.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.4px;
+  font-weight: 600; padding: 1px 6px; border-radius: 9999px;
+}
+.brief__oq-tag--parked { background: #fef3c7; color: #b45309; }
 .brief__oq-actions { display: flex; gap: 1px; opacity: 0; }
 .brief__oq:hover .brief__oq-actions { opacity: 1; }
 .brief__oq-actions button { width: 22px; height: 22px; border: none; background: none; border-radius: 5px; cursor: pointer; color: var(--text-4); font-size: 12px; line-height: 1; }
 .brief__oq-actions button:hover { background: var(--tree-active-bg); color: var(--text-2); }
 .brief__oq-add { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; background: var(--page); color: var(--text); margin-top: 5px; }
+/* Inline answer capture under a question being marked answered. */
+.brief__oq-answer-input {
+  width: 100%; box-sizing: border-box; margin: 2px 0 4px 18px;
+  border: 1px solid var(--accent); border-radius: 6px; padding: 5px 8px;
+  font-size: 12.5px; background: var(--page); color: var(--text);
+}
+.brief__oq-answer-input:focus { outline: none; }
+/* Resolved answer shown under a struck-through question. */
+.brief__oq-answer {
+  margin: 0 0 2px 18px; padding: 3px 8px 3px 10px;
+  border-left: 2px solid var(--accent-border, var(--border));
+  font-size: 12px; color: var(--text-3); line-height: 1.4;
+}
