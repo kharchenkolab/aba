@@ -114,7 +114,7 @@ def run_probe() -> dict | None:
     Returns a small report dict, or None if there's nothing to probe.
     """
     from db import list_entities, add_context_suggestion
-    from provenance import upstream
+    from core.graph.provenance import upstream
     from context import focus_preamble
 
     # Find a recent figure/result with at least one upstream entity.
