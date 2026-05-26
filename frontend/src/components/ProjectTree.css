@@ -2,11 +2,14 @@
   position: relative;
   z-index: 2;
   background: #fff;
-  border-right: 1px solid #d8dee8;
+  border: 1px solid #cfd8e3;
+  border-radius: 12px;
   overflow: visible;
   display: flex;
   flex-direction: column;
-  padding: 88px 10px 0;
+  padding: 0;
+  margin: 0 0 14px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
 }
 /* Only the section list scrolls; head/search/footer stay put. Scales to
    numerous items without the column running off the bottom. */
@@ -15,7 +18,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0 -10px;
+  margin: 0;
   padding: 0;
 }
 .tree__more {
@@ -34,33 +37,21 @@
 }
 
 .tree__project-plate {
-  position: absolute;
+  position: relative;
   z-index: 5;
-  top: 6px;
-  left: calc(-1 * var(--w-rail) - 4px);
-  width: calc(100% + var(--w-rail) - 8px);
-  height: 66px;
+  flex-shrink: 0;
+  width: 100%;
+  min-height: 50px;
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  padding: 10px 10px;
-  border: 1px solid #cbd8e3;
-  border-radius: 10px;
-  background: #eef4f8;
+  padding: 9px 16px 8px 9px;
+  border: none;
+  border-bottom: 1px solid #cfd8e3;
+  border-radius: 11px 11px 0 0;
+  background: #e2edf5;
   color: #1e293b;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 6px 14px rgba(15, 23, 42, 0.05);
-}
-.tree__project-logo {
-  width: 38px;
-  height: 38px;
-  border: 1px solid #d8e2ea;
-  border-radius: 8px;
-  background: #fff;
-  color: #0f766e;
-  display: grid;
-  place-items: center;
-  padding: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 .tree__project-copy {
   width: 100%;
@@ -69,6 +60,12 @@
   gap: 2px;
   text-align: left;
   justify-self: stretch;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .tree__project-kicker {
   color: #64748b;
@@ -80,7 +77,7 @@
 }
 .tree__project-title {
   color: #1e293b;
-  font-size: 14.5px;
+  font-size: 14px;
   line-height: 1.12;
   font-weight: 850;
   white-space: nowrap;
@@ -89,7 +86,7 @@
 }
 .tree__project-overview {
   position: absolute;
-  right: 10px;
+  right: 16px;
   top: 50%;
   transform: translateY(-50%);
   width: 22px;
@@ -103,23 +100,22 @@
   padding: 0;
   opacity: 0;
   transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
-  box-shadow: -10px 0 12px #eef4f8;
+  box-shadow: -10px 0 12px #e2edf5;
 }
-.tree__project-logo:hover,
 .tree__project-copy:hover,
 .tree__project-overview:hover {
   border-color: #94a3b8;
   color: #0f766e;
 }
 .tree__project-overview:hover {
-  box-shadow: -10px 0 12px #eef4f8;
+  box-shadow: -10px 0 12px #e2edf5;
 }
 .tree__project-plate:hover .tree__project-overview,
 .tree__project-plate:focus-within .tree__project-overview {
   opacity: 1;
 }
 
-/* Attempt 52 section index: title strip, filters, and framed table rows. */
+/* Section index: a header, filters, and rows on one continuous white surface. */
 .tree__index {
   background: #fff;
   --section-color: #0f766e;
@@ -152,19 +148,18 @@
   --section-border: #cbd5e1;
 }
 .tree__index-head {
-  padding: 0 12px;
+  padding: 16px 9px 8px;
 }
 .tree__title-row {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 22px;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
-  border: 1px solid #dfe5ee;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  background: #fbfcfe;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #fff;
 }
 .tree__tab-badge {
   min-width: 0;
@@ -212,14 +207,13 @@
   background: var(--section-soft);
 }
 .tree__filter-row {
-  margin: 0 12px;
+  margin: 0 9px;
   display: flex;
   gap: 5px;
   flex-wrap: wrap;
-  padding: 9px 9px 8px;
-  border: 1px solid #dfe5ee;
-  border-top: none;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 8px 0 14px;
+  border: none;
+  border-bottom: 1px solid #dfe5ee;
   background: #fff;
 }
 .tree__filter-row button {
@@ -244,10 +238,9 @@
   font-weight: 750;
 }
 .tree__index-list {
-  margin: 0 12px 12px;
+  margin: 0 9px 14px;
   padding: 2px 0 0;
-  border: 1px solid #dfe5ee;
-  border-top: none;
+  border: none;
   background: #fff;
   overflow: hidden;
 }

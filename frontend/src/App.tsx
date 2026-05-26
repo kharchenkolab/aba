@@ -427,7 +427,6 @@ export default function App() {
           currentThread={threadId}
           onSelectThread={selectThread}
           onOpenOverview={() => setOverview(true)}
-          onOpenProjectList={() => navigate('home')}
           onOpenThreadOverview={openThreadOverview}
         />
       )}
