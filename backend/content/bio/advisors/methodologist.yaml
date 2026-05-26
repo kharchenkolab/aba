@@ -1,0 +1,12 @@
+name: methodologist
+role: advisor
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/methodologist.md
+manifest_role: methodologist
+tool_allowlist: []
+streaming: false
+halts_allowed: false
+max_iterations: 1
+timeout_s: 60
+fake_text: |
+  [Methodologist, fake mode] The pipeline order looks standard. One flag: confirm highly_variable_genes ran on raw counts if you used the seurat_v3 flavor — running it post-log1p changes the selection.

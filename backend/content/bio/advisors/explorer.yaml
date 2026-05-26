@@ -1,0 +1,12 @@
+name: explorer
+role: advisor
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/explorer.md
+manifest_role: explorer
+tool_allowlist: []
+streaming: false
+halts_allowed: false
+max_iterations: 1
+timeout_s: 60
+fake_text: |
+  [Explorer, fake mode] You haven't looked at how the metrics vary by condition yet — a per-condition split of mt_fraction and n_genes might reveal a batch effect worth ruling out before clustering.

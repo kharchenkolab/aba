@@ -1,0 +1,12 @@
+name: skeptic
+role: advisor
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/skeptic.md
+manifest_role: skeptic
+tool_allowlist: []
+streaming: false
+halts_allowed: false
+max_iterations: 1
+timeout_s: 60
+fake_text: |
+  [Skeptic, fake mode] One immediate concern: a single outlier sample drives the interpretation — confirm that excluding it doesn't dissolve the effect. The cluster size is small; a permutation test or a hold-out check would strengthen the claim.
