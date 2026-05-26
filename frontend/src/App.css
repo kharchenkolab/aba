@@ -6,6 +6,10 @@
   overflow: hidden;
 }
 .app > * { min-height: 0; min-width: 0; overflow: hidden; }
+.app--workspace > .rail,
+.app--workspace > .tree {
+  overflow: visible;
+}
 
 /* Home view: rail + a single full-width Home panel. */
 .app--home {
@@ -20,7 +24,7 @@
 }
 .canvas-head {
   flex-shrink: 0;
-  padding: 10px 18px;
+  padding: 10px 18px 10px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -57,7 +61,7 @@
 .canvas-hl.is-on { border-color: #fde047; background: #fef9c3; color: var(--text); }
 .canvas-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-.canvas-body { flex: 1; min-height: 0; padding: 14px 18px; overflow: hidden; }
+.canvas-body { flex: 1; min-height: 0; padding: 14px 18px 14px 8px; overflow: hidden; }
 .split { display: grid; gap: 14px; height: 100%; min-height: 0; }
 .thread-context { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .thread-context > .surface-panel { flex: 1; min-height: 0; }   /* shelf / preview fills below the brief */

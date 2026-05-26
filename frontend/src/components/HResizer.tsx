@@ -41,7 +41,7 @@ export default function HResizer({ onDrag, onToggle, collapsed, side = 'left' }:
 
   return (
     <div
-      className="hresizer"
+      className={`hresizer ${collapsed ? 'hresizer--collapsed' : ''}`}
       onMouseDown={e => {
         dragging.current = true
         lastX.current = e.clientX

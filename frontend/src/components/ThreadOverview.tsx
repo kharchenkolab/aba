@@ -34,7 +34,23 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   const [pinnedDialog, setPinnedDialog] = useState(false)
   const q = query.trim().toLowerCase()
 
-  const inThread = (e: Entity) => e.metadata?.thread_id === threadId
+  const byId = new Map(entities.map(e => [e.id, e]))
+  const evidenceRefs = (e: Entity) => [
+    ...((e.metadata?.evidence_ids as string[] | undefined) ?? []),
+    ...((e.metadata?.supporting_findings as string[] | undefined) ?? []),
+    ...((e.metadata?.evidence as string[] | undefined) ?? []),
+    ...((e.metadata?.supporting_results as string[] | undefined) ?? []),
+    ...(((e.metadata?.members as { ref?: string }[] | undefined) ?? []).map(m => m.ref).filter((ref): ref is string => !!ref)),
+  ]
+  const inThread = (e: Entity, seen = new Set<string>()): boolean => {
+    if (e.metadata?.thread_id === threadId) return true
+    if (seen.has(e.id)) return false
+    seen.add(e.id)
+    return evidenceRefs(e).some(id => {
+      const ref = byId.get(id)
+      return !!ref && inThread(ref, seen)
+    })
+  }
   const text = (e: Entity) => (e.metadata?.statement as string) || (e.metadata?.interpretation as string) || e.title
   const matches = (s: string) => !q || s.toLowerCase().includes(q)
   const passes = (e: Entity) => {
@@ -47,13 +63,19 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   const keep = (e: Entity) => matches(text(e)) && passes(e)
 
   const pinned = entities.filter(e => (e.type === 'figure' || e.type === 'table' || e.type === 'result') && e.pinned && inThread(e) && e.status !== 'archived')
-  const byId = new Map(entities.map(e => [e.id, e]))
   const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived')
   const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived')
   const oqs: OpenQ[] = ((thread.metadata?.open_questions as OpenQ[]) ?? [])
 
   const citedIds = new Set<string>()
-  for (const c of claims) for (const id of ((c.metadata?.evidence_ids as string[]) ?? [])) citedIds.add(id)
+  const addCited = (id: string, seen = new Set<string>()) => {
+    if (seen.has(id)) return
+    seen.add(id)
+    citedIds.add(id)
+    const ref = byId.get(id)
+    if (ref) evidenceRefs(ref).forEach(child => addCited(child, seen))
+  }
+  for (const c of claims) for (const id of ((c.metadata?.evidence_ids as string[]) ?? [])) addCited(id)
 
   // --- mutations ---
   const jpost = (path: string, body?: unknown) =>
