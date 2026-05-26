@@ -148,7 +148,18 @@ export function AgentAvatar({ agent, size = 24 }: { agent: AgentKey; size?: numb
 
 // ---------- Left-rail icons (from the mockup) ----------
 
-export type RailIconName = 'brand' | 'home' | 'projects' | 'skills' | 'queues' | 'alerts'
+export type RailIconName =
+  | 'brand'
+  | 'home'
+  | 'projects'
+  | 'skills'
+  | 'queues'
+  | 'alerts'
+  | 'threads'
+  | 'claims'
+  | 'data'
+  | 'runs'
+  | 'files'
 
 export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: number }) {
   const svg = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
@@ -195,6 +206,40 @@ export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: numbe
         <svg {...svg}>
           <path d="M6 17V11a6 6 0 1 1 12 0v6l1.5 2.5h-15Z" strokeWidth="1.8" strokeLinejoin="round" />
           <path d="M10 21a2 2 0 0 0 4 0" strokeWidth="1.8" />
+        </svg>
+      )
+    case 'threads':
+      return (
+        <svg {...svg}>
+          <path d="M21 15a4 4 0 0 1-4 4H8l-5 4v-8a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M8 11V6a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v7" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'claims':
+      return (
+        <svg {...svg}>
+          <path d="M9 11l3 3L22 4" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'data':
+      return (
+        <svg {...svg}>
+          <ellipse cx="12" cy="5" rx="8" ry="3" strokeWidth="1.8" />
+          <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" strokeWidth="1.8" />
+          <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" strokeWidth="1.8" />
+        </svg>
+      )
+    case 'runs':
+      return (
+        <svg {...svg}>
+          <path d="M5 3l14 9-14 9V3Z" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'files':
+      return (
+        <svg {...svg}>
+          <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" strokeWidth="1.8" strokeLinejoin="round" />
         </svg>
       )
   }

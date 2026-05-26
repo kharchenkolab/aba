@@ -6,6 +6,10 @@
   overflow: hidden;
 }
 .app > * { min-height: 0; min-width: 0; overflow: hidden; }
+.app--workspace > .rail,
+.app--workspace > .tree {
+  overflow: visible;
+}
 
 /* Home view: rail + a single full-width Home panel. */
 .app--home {

@@ -1,10 +1,12 @@
 .tree {
-  background: var(--tree-bg);
-  border-right: 1px solid var(--tree-border);
-  overflow: hidden;
+  position: relative;
+  z-index: 2;
+  background: #fff;
+  border-right: 1px solid #d8dee8;
+  overflow: visible;
   display: flex;
   flex-direction: column;
-  padding: 10px 10px 0;
+  padding: 88px 10px 0;
 }
 /* Only the section list scrolls; head/search/footer stay put. Scales to
    numerous items without the column running off the bottom. */
@@ -13,8 +15,8 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0 -4px;
-  padding: 0 4px;
+  margin: 0 -10px;
+  padding: 0;
 }
 .tree__more {
   width: 100%;
@@ -26,7 +28,382 @@
   border-radius: 6px;
 }
 .tree__more:hover { background: var(--bg-soft); }
-.tree__head, .tree__search { flex-shrink: 0; }
+.tree__head, .tree__search {
+  display: none;
+  flex-shrink: 0;
+}
+
+.tree__project-plate {
+  position: absolute;
+  z-index: 5;
+  top: 6px;
+  left: calc(-1 * var(--w-rail) - 4px);
+  width: calc(100% + var(--w-rail) - 8px);
+  height: 66px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 4px;
+  align-items: center;
+  padding: 10px 10px;
+  border: 1px solid #cbd8e3;
+  border-radius: 10px;
+  background: #eef4f8;
+  color: #1e293b;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 6px 14px rgba(15, 23, 42, 0.05);
+}
+.tree__project-logo {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #d8e2ea;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f766e;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.tree__project-copy {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  justify-self: stretch;
+}
+.tree__project-kicker {
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.tree__project-title {
+  color: #1e293b;
+  font-size: 14.5px;
+  line-height: 1.12;
+  font-weight: 850;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree__project-overview {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+  box-shadow: -10px 0 12px #eef4f8;
+}
+.tree__project-logo:hover,
+.tree__project-copy:hover,
+.tree__project-overview:hover {
+  border-color: #94a3b8;
+  color: #0f766e;
+}
+.tree__project-overview:hover {
+  box-shadow: -10px 0 12px #eef4f8;
+}
+.tree__project-plate:hover .tree__project-overview,
+.tree__project-plate:focus-within .tree__project-overview {
+  opacity: 1;
+}
+
+/* Attempt 52 section index: title strip, filters, and framed table rows. */
+.tree__index {
+  background: #fff;
+  --section-color: #0f766e;
+  --section-soft: #f0fdfa;
+  --section-active: #ccfbf1;
+  --section-border: #99f6e4;
+}
+.tree__index--claims {
+  --section-color: #6d28d9;
+  --section-soft: #f5f3ff;
+  --section-active: #ede9fe;
+  --section-border: #c4b5fd;
+}
+.tree__index--data {
+  --section-color: #0891b2;
+  --section-soft: #ecfeff;
+  --section-active: #cffafe;
+  --section-border: #67e8f9;
+}
+.tree__index--runs {
+  --section-color: #b45309;
+  --section-soft: #fffbeb;
+  --section-active: #fde68a;
+  --section-border: #fbbf24;
+}
+.tree__index--files {
+  --section-color: #64748b;
+  --section-soft: #f8fafc;
+  --section-active: #e2e8f0;
+  --section-border: #cbd5e1;
+}
+.tree__index-head {
+  padding: 0 12px;
+}
+.tree__title-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid #dfe5ee;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: #fbfcfe;
+}
+.tree__tab-badge {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--section-color);
+  font-size: 13px;
+  font-weight: 850;
+}
+.tree__tab-badge svg {
+  flex: 0 0 auto;
+}
+.tree__pill {
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: #fff;
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 750;
+}
+.tree__pill--green {
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-soft);
+}
+.tree__add-button {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid #d8dee8;
+  background: #fff;
+  color: var(--section-color);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+}
+.tree__add-button:hover {
+  border-color: var(--section-border);
+  background: var(--section-soft);
+}
+.tree__filter-row {
+  margin: 0 12px;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 9px 9px 8px;
+  border: 1px solid #dfe5ee;
+  border-top: none;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+.tree__filter-row button {
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: #667085;
+  font-size: 10px;
+  background: #fff;
+  line-height: 1.1;
+  cursor: pointer;
+}
+.tree__filter-row button:hover {
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-soft);
+}
+.tree__filter-row button.is-on {
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-soft);
+  font-weight: 750;
+}
+.tree__index-list {
+  margin: 0 12px 12px;
+  padding: 2px 0 0;
+  border: 1px solid #dfe5ee;
+  border-top: none;
+  background: #fff;
+  overflow: hidden;
+}
+.tree__section-label {
+  padding: 10px 10px 5px;
+  font-size: 10px;
+  font-weight: 850;
+  color: #98a2b3;
+  text-transform: uppercase;
+}
+.tree__index-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  align-items: center;
+  padding: 9px 8px 9px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+}
+.tree__index-row:last-child {
+  border-bottom: none;
+}
+.tree__index-row:hover {
+  background: #fbfcfe;
+}
+.tree__index-row.is-current {
+  background: var(--section-active);
+  box-shadow: inset 5px 0 0 var(--section-color);
+  border-color: var(--section-border);
+}
+.tree__index-row.is-current .tree__index-title {
+  color: #0f172a;
+  font-weight: 850;
+}
+.tree__index-row.is-warning:not(.is-current),
+.tree__index-row.is-parked:not(.is-current) {
+  background: #fffaf2;
+}
+.tree__index-row.is-concluded .tree__index-title {
+  color: var(--text-4);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-4);
+}
+.tree__index-main {
+  min-width: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+  cursor: pointer;
+}
+.tree__index-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.tree__index-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.3;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.tree__index-glyph {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #667085;
+}
+.tree__index-meta {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  color: #667085;
+  font-size: 10px;
+}
+.tree__overview-button {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid #d8dee8;
+  background: #fff;
+  color: #475467;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+  overflow: hidden;
+  box-shadow: -10px 0 12px #fff;
+}
+.tree__overview-icon {
+  width: 12px;
+  height: 12px;
+  stroke-linecap: round;
+}
+.tree__index-row:hover .tree__overview-button,
+.tree__overview-button:hover {
+  opacity: 1;
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-soft);
+  box-shadow: -10px 0 12px color-mix(in srgb, var(--section-soft) 88%, #fff);
+}
+.tree__index-row .entity-menu {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  justify-content: center;
+  margin-left: 0;
+  width: 22px;
+  overflow: visible;
+}
+.tree__index-row .entity-menu__btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #fff;
+  opacity: 0;
+  box-shadow: -10px 0 12px #fff;
+}
+.tree__index-row:hover .entity-menu__btn {
+  opacity: 1;
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-soft);
+  box-shadow: -10px 0 12px color-mix(in srgb, var(--section-soft) 88%, #fff);
+}
+.tree__index-row .entity-menu__btn:hover {
+  color: var(--section-color);
+  border-color: var(--section-border);
+  background: var(--section-active);
+}
+.state-tag--active {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.state-tag--muted {
+  background: #f3f4f6;
+  color: #667085;
+}
 
 .tree__head {
   display: flex;
@@ -68,6 +445,12 @@
 .tree__section-head:hover { background: var(--bg-soft); }
 .tree__section-head .icon { color: var(--text-3); }
 .tree__section-head .ml-auto { margin-left: auto; }
+.tree__section-head--static {
+  cursor: default;
+}
+.tree__section-head--static:hover {
+  background: transparent;
+}
 
 /* Thread switcher */
 .tree__new-thread {
@@ -197,6 +580,11 @@
 .tree__toggle input { margin: 0; }
 
 .tree__items { padding: 2px 6px 7px; }
+.tree__empty {
+  padding: 10px 8px 12px;
+  font-size: 12px;
+  color: var(--text-4);
+}
 
 .tree__item {
   position: relative;
@@ -254,6 +642,13 @@
   border-radius: 50%;
   background: var(--ok);
   display: inline-block;
+}
+
+/* The project identity now lives in the rail-spanning plate. Keep the legacy
+   title/search wiring available in JSX, but remove it from the left column. */
+.tree > .tree__head,
+.tree > .tree__search {
+  display: none;
 }
 
 .tree__head-title { flex: 1; cursor: pointer; }
