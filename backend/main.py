@@ -50,7 +50,7 @@ from db import (
 from adaptive import append_to_policy, run_probe
 from tools_registry import registry as tools_registry
 from db import list_jobs, get_job, figure_history, list_events
-from jobs import start_worker, cancel_job
+from core.jobs.runner import start_worker, cancel_job
 
 
 app = FastAPI()
