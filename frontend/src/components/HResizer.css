@@ -1,20 +1,25 @@
 .hresizer {
   position: relative;
   flex: 0 0 auto;
-  background: var(--tree-bg, var(--bg-soft));
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  background: #fff;
+  border-left: 1px solid #d8dee8;
+  border-right: 1px solid #d8dee8;
   cursor: col-resize;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.hresizer:hover { background: var(--tree-active-bg); }
+.hresizer:hover { background: #f8fafc; }
+.hresizer--collapsed {
+  background: #f8fafc;
+  border-left-color: #d8dee8;
+  border-right-color: transparent;
+}
 
 /* Always-visible vertical grip (dotted), so the divider reads as a handle. */
 .hresizer__grip {
-  width: 2px;
-  height: 28px;
+  width: 1px;
+  height: 26px;
   border-radius: 1px;
   background: repeating-linear-gradient(
     to bottom, var(--text-4) 0 2px, transparent 2px 4px
@@ -22,18 +27,21 @@
   opacity: 0.55;
 }
 .hresizer:hover .hresizer__grip { opacity: 1; }
+.hresizer--collapsed .hresizer__grip {
+  opacity: 0;
+}
 
 /* Always-visible collapse tab pinned near the top of the divider. */
 .hresizer__toggle {
   position: absolute;
-  top: 10px;
+  top: 88px;
   left: 50%;
   transform: translateX(-50%);
   width: 18px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
+  height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1;
@@ -43,4 +51,9 @@
   justify-content: center;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
-.hresizer__toggle:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.hresizer__toggle:hover { background: #eef4f8; color: #0f766e; border-color: #99f6e4; }
+.hresizer--collapsed .hresizer__toggle {
+  left: 0;
+  width: 18px;
+  height: 54px;
+}

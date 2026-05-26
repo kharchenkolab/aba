@@ -1,33 +1,74 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import type { ReactNode } from 'react'
 import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
-import { EntityGlyph } from './icons'
+import { RailIcon, type RailIconName } from './icons'
+
+type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'files'
 
 interface Props {
   entities: Entity[]
   focusedId: string
+  activeSection: ProjectSection
   onFocus: (id: string) => void
   onChange: () => void
   currentThread: string
   onSelectThread: (id: string) => void
   onOpenOverview: () => void
+  onOpenProjectList: () => void
   onOpenThreadOverview: (id: string) => void
 }
 
-// Rail top-level sections, per ui3 P8: Datasets · Threads · Claims · Manuscript.
-// (Threads have their own switcher above.) Figures/tables are thread artifacts —
-// they live in the per-thread pinned shelf + inventory, not as a rail dump.
-// Legacy `result`/`finding` types were dropped in entity-model v3. Every section
-// below is hidden when empty (progressive disclosure — a fresh project shows
-// almost nothing).
-const SECTIONS: { label: string; types: EntityType[]; icon: string }[] = [
-  // Inquiry first (Threads has its own switcher above), then Claims, then data
-  // last — mirrors the project-overview column order.
-  { label: 'Claims', types: ['claim'], icon: 'claim' },
-  { label: 'Manuscript', types: ['narrative'], icon: 'narrative' },
-  { label: 'Data', types: ['dataset'], icon: 'dataset' },
-]
+const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
+  label: string
+  types: EntityType[]
+  icon: RailIconName
+  empty: string
+  sectionLabel: string
+  filters: string[]
+}> = {
+  claims: {
+    label: 'Claims',
+    types: ['claim'],
+    icon: 'claims',
+    empty: 'No claims yet.',
+    sectionLabel: 'Active claims',
+    filters: ['Active', 'Contested', 'All'],
+  },
+  data: {
+    label: 'Data',
+    types: ['dataset'],
+    icon: 'data',
+    empty: 'No datasets yet.',
+    sectionLabel: 'Active datasets',
+    filters: ['Active', 'Imported', 'All'],
+  },
+  runs: {
+    label: 'Runs',
+    types: ['analysis'],
+    icon: 'runs',
+    empty: 'No runs yet.',
+    sectionLabel: 'Recent runs',
+    filters: ['Active', 'Attention', 'Complete', 'All'],
+  },
+  files: {
+    label: 'Files',
+    types: ['figure', 'table', 'result', 'note', 'narrative'],
+    icon: 'files',
+    empty: 'No files or outputs yet.',
+    sectionLabel: 'Project files',
+    filters: ['All', 'Figures', 'Tables'],
+  },
+}
+
+const DEFAULT_FILTERS: Record<ProjectSection, string> = {
+  threads: 'Active',
+  claims: 'Active',
+  data: 'Active',
+  runs: 'Active',
+  files: 'All',
+}
 
 const STATUS_ICON: Record<string, string> = {
   running: '▶',
@@ -36,87 +77,25 @@ const STATUS_ICON: Record<string, string> = {
   archived: '📦',
 }
 
-const COLLAPSE_KEY = 'aba:tree-collapsed'
+const SECTION_CAP = 8   // items shown per section before "show all"
 
-function loadCollapsed(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}')
-  } catch {
-    return {}
-  }
-}
-
-function saveCollapsed(state: Record<string, boolean>) {
-  try {
-    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state))
-  } catch {
-    /* quota / disabled storage — fine */
-  }
-}
-
-interface TreeItemProps {
-  entity: Entity
-  focused: boolean
-  onClick: () => void
-  onChange: () => void
-  inPinned?: boolean
-}
-
-function TreeItem({ entity, focused, onClick, onChange, inPinned }: TreeItemProps) {
-  const statusIcon = STATUS_ICON[entity.status]
+function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { className?: string; size?: number }) {
   return (
-    <div
-      className={`tree__item ${focused ? 'is-active' : ''} ${entity.status === 'archived' ? 'is-archived' : ''}`}
-      onClick={onClick}
-      data-entity-id={entity.id}
-      data-entity-type={entity.type}
-    >
-      <EntityGlyph className="icon" name={entity.type} />
-      <span className="tree__item-label">
-        <span className="tree__title-line">
-          {/* Red pin marks a pinned entity (matches the chat pin); redundant
-              inside the Pinned panel. */}
-          {entity.pinned && !inPinned && (
-            <svg className="tree__pin" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
-          )}
-          <span className="tree__item-title">{entity.title}</span>
-        </span>
-        <span className="meta">
-          {statusIcon && <span className={`tree__status tree__status--${entity.status}`}>{statusIcon}</span>}
-          {entity.type === 'claim' && entity.metadata?.confidence ? (
-            <span className={`tree__confidence tree__confidence--${entity.metadata.confidence}`}>{String(entity.metadata.confidence)}</span>
-          ) : (
-            <><span className="dot" />{entity.type}</>
-          )}
-          {entity.tags.length > 0 && (
-            <>
-              {entity.tags.slice(0, 2).map(t => (
-                <span key={t} className="tree__tag">{t}</span>
-              ))}
-              {entity.tags.length > 2 && <span className="tree__tag-extra">+{entity.tags.length - 2}</span>}
-            </>
-          )}
-        </span>
-      </span>
-      <EntityMenu entity={entity} onChange={onChange} />
-    </div>
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+      <rect x="4" y="4" width="6" height="6" rx="1.5" />
+      <rect x="14" y="4" width="6" height="6" rx="1.5" />
+      <rect x="4" y="14" width="6" height="6" rx="1.5" />
+      <path d="M14 17h6M17 14v6" />
+    </svg>
   )
 }
 
-const SECTION_CAP = 8   // items shown per section before "show all"
-
-export default function ProjectTree({ entities, focusedId, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
+export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenProjectList, onOpenThreadOverview }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
-  const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(() => loadCollapsed())
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
-
-  useEffect(() => { saveCollapsed(collapsed) }, [collapsed])
-
-  function toggle(section: string) {
-    setCollapsedState(s => ({ ...s, [section]: !s[section] }))
-  }
+  const [sectionFilters, setSectionFilters] = useState<Record<ProjectSection, string>>(DEFAULT_FILTERS)
 
   const workspace = entities.find(e => e.id === 'workspace')
 
@@ -133,6 +112,7 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange, cu
     return true
   }
   const visible = entities.filter(filterFn)
+  const byId = new Map(entities.map(e => [e.id, e]))
   // Named threads only; the default thread is represented by the "Main thread"
   // chip (selects the 'default' alias), not a duplicate named row.
   const threads = entities.filter(e => e.type === 'thread' && e.status !== 'archived' && !e.metadata?.is_default)
@@ -157,8 +137,124 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange, cu
     onChange()
   }
 
+  const activeEntityRows = visible.filter(e => e.status !== 'archived')
+  const threadEntityFor = (id: string) => id === 'default'
+    ? entities.find(e => e.type === 'thread' && !!e.metadata?.is_default)
+    : entities.find(e => e.id === id && e.type === 'thread')
+  const evidenceRefs = (e: Entity) => [
+    ...((e.metadata?.evidence_ids as string[] | undefined) ?? []),
+    ...((e.metadata?.supporting_findings as string[] | undefined) ?? []),
+    ...((e.metadata?.evidence as string[] | undefined) ?? []),
+    ...((e.metadata?.supporting_results as string[] | undefined) ?? []),
+    ...(((e.metadata?.members as { ref?: string }[] | undefined) ?? []).map(m => m.ref).filter((ref): ref is string => !!ref)),
+  ]
+  const belongsToThread = (e: Entity, canonicalId: string, seen = new Set<string>()): boolean => {
+    if (e.metadata?.thread_id === canonicalId) return true
+    if (seen.has(e.id)) return false
+    seen.add(e.id)
+    return evidenceRefs(e).some(id => {
+      const ref = byId.get(id)
+      return !!ref && belongsToThread(ref, canonicalId, seen)
+    })
+  }
+  const countForThread = (id: string, predicate: (e: Entity) => boolean) => {
+    const threadEntity = threadEntityFor(id)
+    const canonicalId = threadEntity?.id ?? id
+    return activeEntityRows.filter(e => belongsToThread(e, canonicalId) && predicate(e)).length
+  }
+  const firstText = (...values: unknown[]) => values.find(v => typeof v === 'string' && v.trim()) as string | undefined
+  const countLabel = (n: number, singular: string, plural = `${singular}s`) => n > 0 ? `${n} ${n === 1 ? singular : plural}` : ''
+  const runOutputMeta = (entity: Entity) => {
+    const run = (entity.metadata?.run ?? {}) as { outputs?: { kind?: string }[]; bulk?: { count?: number } }
+    const outputs = run.outputs ?? []
+    const plots = outputs.filter(o => o.kind === 'figure' || o.kind === 'view').length
+    const tables = outputs.filter(o => o.kind === 'table').length
+    const files = outputs.filter(o => o.kind === 'file').length + (run.bulk?.count ?? 0)
+    return [
+      countLabel(plots, 'plot'),
+      countLabel(tables, 'table'),
+      countLabel(files, 'file'),
+      outputs.length === 0 && !run.bulk?.count ? firstText(entity.metadata?.summary, entity.metadata?.text, entity.notes) : '',
+    ].filter(Boolean)
+  }
+  const entityMeta = (entity: Entity) => {
+    const meta: ReactNode[] = []
+    const statusIcon = STATUS_ICON[entity.status]
+    const appendText = (values: (string | undefined)[]) => {
+      values.filter((value): value is string => !!value).forEach((value, i) => meta.push(<span key={`text-${i}`}>{value}</span>))
+    }
+    if (entity.type === 'dataset') {
+      const description = firstText(entity.metadata?.description, entity.metadata?.summary, entity.metadata?.text, entity.notes, entity.metadata?.source, entity.metadata?.path)
+      if (description) meta.push(<span key="description">{description}</span>)
+    } else if (entity.type === 'analysis') {
+      appendText(runOutputMeta(entity))
+    } else if (entity.type === 'claim' && entity.metadata?.confidence) {
+      meta.push(
+        <span key="confidence" className={`state-tag state-tag--confidence tree__confidence--${entity.metadata.confidence}`}>
+          {String(entity.metadata.confidence)}
+        </span>,
+      )
+    } else if (entity.status && entity.status !== 'active') {
+      meta.push(<span key="status" className="state-tag state-tag--muted">{statusIcon ? `${statusIcon} ` : ''}{entity.status}</span>)
+    }
+    if (entity.pinned) meta.push(<span key="pinned">pinned</span>)
+    entity.tags.slice(0, 2).forEach(tag => meta.push(<span key={tag}>{tag}</span>))
+    return meta
+  }
+  const selectFilter = (section: ProjectSection, filter: string) => {
+    setSectionFilters(s => ({ ...s, [section]: filter }))
+    setShowAll(s => ({ ...s, [`${section}:${filter}`]: false }))
+  }
+  const threadMatchesFilter = (thread: { id: string; lifecycle: string }, filter: string) => {
+    const attentionCount = countForThread(thread.id, e =>
+      e.status === 'failed' ||
+      e.status === 'running' ||
+      (e.type === 'claim' && ['contested', 'refuted'].includes(String(e.metadata?.confidence ?? ''))),
+    )
+    switch (filter) {
+      case 'Attention': return thread.lifecycle !== 'open' || attentionCount > 0
+      case 'All': return true
+      case 'Active':
+      default: return thread.lifecycle === 'open'
+    }
+  }
+  const entityMatchesFilter = (entity: Entity, section: Exclude<ProjectSection, 'threads'>, filter: string) => {
+    if (filter === 'All') return true
+    if (section === 'claims') {
+      if (filter === 'Contested') return ['contested', 'refuted'].includes(String(entity.metadata?.confidence ?? '')) || entity.status === 'failed'
+      return entity.status === 'active'
+    }
+    if (section === 'data') {
+      if (filter === 'Imported') return !!entity.artifact_path || !!entity.metadata?.source || !!entity.metadata?.path
+      return entity.status === 'active'
+    }
+    if (section === 'runs') {
+      if (filter === 'Attention') return entity.status === 'failed' || entity.status === 'running'
+      if (filter === 'Complete') return entity.status === 'active' || entity.status === 'completed'
+      return entity.status === 'active' || entity.status === 'running'
+    }
+    if (section === 'files') {
+      if (filter === 'Figures') return entity.type === 'figure'
+      if (filter === 'Tables') return entity.type === 'table'
+    }
+    return true
+  }
+
   return (
     <aside className="tree">
+      <div className="tree__project-plate">
+        <button className="tree__project-logo" title="Project selection" onClick={onOpenProjectList}>
+          <RailIcon name="brand" size={28} />
+        </button>
+        <button className="tree__project-copy" title="Focus project" onClick={() => onFocus('workspace')}>
+          <span className="tree__project-kicker">Project</span>
+          <span className="tree__project-title">{projectTitle}</span>
+        </button>
+        <button className="tree__project-overview" title="Project overview — all items, by status"
+                onClick={e => { e.stopPropagation(); onOpenOverview() }}>
+          <OverviewIcon />
+        </button>
+      </div>
       <div className={`tree__head ${focusedId === 'workspace' ? 'is-active' : ''}`}>
         {editingTitle ? (
           <input
@@ -181,7 +277,7 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange, cu
                     onClick={e => { e.stopPropagation(); setEditingTitle(true) }}>✎</button>
             <button className="tree__head-overview" title="Project overview — all items, by status"
                     onClick={e => { e.stopPropagation(); onOpenOverview() }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
+              <OverviewIcon size={14} />
             </button>
           </>
         )}
@@ -203,99 +299,136 @@ export default function ProjectTree({ entities, focusedId, onFocus, onChange, cu
       </div>
 
       <div className="tree__scroll">
-      {/* Thread switcher — the current line of inquiry scopes the chat. */}
-      {(() => {
-        const threadList = [
-          { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
-          ...threads.map(t => ({
-            id: t.id, title: t.title, q: (t.metadata?.question as string) || '',
-            lifecycle: (t.metadata?.lifecycle as string) || 'open',
-          })),
-        ]
-        const tCollapsed = !!collapsed['Threads']
-        const tExpanded = !!showAll['Threads']
-        const tShown = tExpanded ? threadList : threadList.slice(0, SECTION_CAP)
-        return (
-          <section className="tree__section tree__threads">
-            <div className="tree__section-head open" onClick={() => toggle('Threads')}>
-              <svg className="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
-              Threads
-              <span className="tree__count">{threadList.length}</span>
-              <button className="tree__new-thread" title="New investigation"
-                      onClick={e => { e.stopPropagation(); newThread() }}>+</button>
-              <svg className="chev" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-                <path d={tCollapsed ? 'M8 5l5 5-5 5z' : 'M5 8l5 5 5-5z'} />
-              </svg>
-            </div>
-            {!tCollapsed && (
-              <div className="tree__items">
-                {tShown.map(t => (
-                  <div key={t.id} className={`tree__thread-row ${currentThread === t.id ? 'is-current' : ''} ${t.lifecycle !== 'open' ? 'is-' + t.lifecycle : ''}`}>
-                    <button className="tree__thread" onClick={() => onSelectThread(t.id)} title={t.q}>{t.title}</button>
-                    {t.lifecycle !== 'open' && <span className={`tree__lc tree__lc--${t.lifecycle}`}>{t.lifecycle === 'concluded' ? 'done' : 'parked'}</span>}
-                    <button className="tree__thread-ov" title="Thread overview — all items by status"
-                            onClick={e => { e.stopPropagation(); onOpenThreadOverview(t.id) }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
+        {activeSection === 'threads' ? (() => {
+          const threadList = [
+            { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
+            ...threads.map(t => ({
+              id: t.id, title: t.title, q: (t.metadata?.question as string) || '',
+              lifecycle: (t.metadata?.lifecycle as string) || 'open',
+            })),
+          ]
+          const threadFilter = sectionFilters.threads
+          const filteredThreads = threadList.filter(t => threadMatchesFilter(t, threadFilter))
+          const showKey = `threads:${threadFilter}`
+          const tExpanded = !!showAll[showKey]
+          const tShown = tExpanded ? filteredThreads : filteredThreads.slice(0, SECTION_CAP)
+          return (
+            <section className="tree__index tree__index--threads">
+              <div className="tree__index-head">
+                <div className="tree__title-row">
+                  <span className="tree__tab-badge">
+                    <RailIcon name="threads" size={17} />
+                    Threads
+                    <span className="tree__pill tree__pill--green">{threadList.length}</span>
+                  </span>
+                  <button className="tree__add-button" title="New investigation" onClick={newThread}>+</button>
+                </div>
+              </div>
+              <div className="tree__filter-row" aria-label="Thread filters">
+                {['Active', 'Attention', 'All'].map(filter => (
+                  <button key={filter} className={threadFilter === filter ? 'is-on' : ''} onClick={() => selectFilter('threads', filter)}>
+                    {filter}
+                  </button>
+                ))}
+              </div>
+              <div className="tree__index-list">
+                <div className="tree__section-label">{threadFilter} questions</div>
+                {tShown.map(t => {
+                  const claimCount = countForThread(t.id, e => e.type === 'claim')
+                  const runCount = countForThread(t.id, e => e.type === 'analysis')
+                  const pinnedCount = countForThread(t.id, e => !!e.pinned)
+                  const isCurrent = currentThread === t.id
+                  return (
+                    <div
+                      key={t.id}
+                      className={`tree__index-row ${isCurrent ? 'is-current' : ''} ${t.lifecycle !== 'open' ? `is-${t.lifecycle}` : ''}`}
+                      onClick={() => onSelectThread(t.id)}
+                    >
+                      <button className="tree__index-main" title={t.q}>
+                        <span className="tree__index-title">{t.title}</span>
+                        <span className="tree__index-meta">
+                          {t.lifecycle !== 'open' && <span className="state-tag state-tag--muted">{t.lifecycle}</span>}
+                          {claimCount > 0 && <span>{claimCount} {claimCount === 1 ? 'claim' : 'claims'}</span>}
+                          {pinnedCount > 0 && <span>{pinnedCount} pinned</span>}
+                          {runCount > 0 && <span>{runCount} {runCount === 1 ? 'run' : 'runs'}</span>}
+                          {!claimCount && !runCount && !pinnedCount && t.q && <span>question brief</span>}
+                        </span>
+                      </button>
+                      <button
+                        className="tree__overview-button"
+                        title="Thread overview — all items by status"
+                        onClick={e => { e.stopPropagation(); onOpenThreadOverview(t.id) }}
+                      >
+                        <OverviewIcon />
+                      </button>
+                    </div>
+                  )}
+                )}
+                {filteredThreads.length === 0 && <div className="tree__empty">No questions match this filter.</div>}
+                {filteredThreads.length > SECTION_CAP && (
+                  <button className="tree__more"
+                          onClick={() => setShowAll(s => ({ ...s, [showKey]: !s[showKey] }))}>
+                    {tExpanded ? 'Show less' : `+${filteredThreads.length - SECTION_CAP} more`}
+                  </button>
+                )}
+              </div>
+            </section>
+          )
+        })() : (() => {
+          const section = SECTION_CONFIG[activeSection]
+          const items = visible.filter(e => section.types.includes(e.type))
+          const sectionFilter = sectionFilters[activeSection]
+          const filteredItems = items.filter(e => entityMatchesFilter(e, activeSection, sectionFilter))
+          const showKey = `${activeSection}:${sectionFilter}`
+          const expanded = !!showAll[showKey]
+          const shown = expanded ? filteredItems : filteredItems.slice(0, SECTION_CAP)
+          return (
+            <section className={`tree__index tree__index--${activeSection}`}>
+              <div className="tree__index-head">
+                <div className="tree__title-row">
+                  <span className="tree__tab-badge">
+                    <RailIcon name={section.icon} size={17} />
+                    {section.label}
+                    <span className="tree__pill tree__pill--green">{items.length}</span>
+                  </span>
+                </div>
+              </div>
+              <div className="tree__filter-row" aria-label={`${section.label} filters`}>
+                {section.filters.map(filter => (
+                  <button key={filter} className={sectionFilter === filter ? 'is-on' : ''} onClick={() => selectFilter(activeSection, filter)}>
+                    {filter}
+                  </button>
+                ))}
+              </div>
+              <div className="tree__index-list">
+                <div className="tree__section-label">{sectionFilter === 'All' ? section.sectionLabel : `${sectionFilter} ${section.label.toLowerCase()}`}</div>
+                {filteredItems.length === 0 ? (
+                  <div className="tree__empty">{items.length === 0 ? section.empty : 'No items match this filter.'}</div>
+                ) : shown.map(e => (
+                  <div
+                    key={e.id}
+                    className={`tree__index-row tree__index-row--entity ${focusedId === e.id ? 'is-current' : ''} ${e.status === 'failed' || e.status === 'running' ? 'is-warning' : ''}`}
+                    onClick={() => onFocus(e.id)}
+                    data-entity-id={e.id}
+                    data-entity-type={e.type}
+                  >
+                    <button className="tree__index-main">
+                      <span className="tree__index-title">{e.title}</span>
+                      <span className="tree__index-meta">{entityMeta(e)}</span>
                     </button>
+                    <EntityMenu entity={e} onChange={onChange} />
                   </div>
                 ))}
-                {threadList.length > SECTION_CAP && (
+                {filteredItems.length > SECTION_CAP && (
                   <button className="tree__more"
-                          onClick={() => setShowAll(s => ({ ...s, Threads: !s.Threads }))}>
-                    {tExpanded ? 'Show less' : `+${threadList.length - SECTION_CAP} more`}
+                          onClick={() => setShowAll(s => ({ ...s, [showKey]: !s[showKey] }))}>
+                    {expanded ? 'Show less' : `+${filteredItems.length - SECTION_CAP} more`}
                   </button>
                 )}
               </div>
-            )}
-          </section>
-        )
-      })()}
-
-      {/* The flat "Pinned" tray is superseded by the per-thread pinned shelf
-          (the chat-first right peek); pinned items live under their thread. */}
-
-      {SECTIONS.map(section => {
-        const items = visible.filter(e => section.types.includes(e.type))
-        // Progressive disclosure: a section with nothing in it doesn't exist yet.
-        if (items.length === 0) return null
-        const isCollapsed = !!collapsed[section.label]
-        const expanded = !!showAll[section.label]
-        const shown = expanded ? items : items.slice(0, SECTION_CAP)
-        return (
-          <section key={section.label} className="tree__section">
-            <div
-              className={`tree__section-head ${isCollapsed ? '' : 'open'}`}
-              onClick={() => toggle(section.label)}
-            >
-              <EntityGlyph className="icon" name={section.icon} />
-              {section.label}
-              <span className="tree__count">{items.length || ''}</span>
-              <svg className="chev ml-auto" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
-                <path d={isCollapsed ? 'M8 5l5 5-5 5z' : 'M5 8l5 5 5-5z'} />
-              </svg>
-            </div>
-            {!isCollapsed && items.length > 0 && (
-              <div className="tree__items">
-                {shown.map(e => (
-                  <TreeItem
-                    key={e.id}
-                    entity={e}
-                    focused={focusedId === e.id}
-                    onClick={() => onFocus(e.id)}
-                    onChange={onChange}
-                  />
-                ))}
-                {items.length > SECTION_CAP && (
-                  <button className="tree__more"
-                          onClick={() => setShowAll(s => ({ ...s, [section.label]: !s[section.label] }))}>
-                    {expanded ? 'Show less' : `+${items.length - SECTION_CAP} more`}
-                  </button>
-                )}
-              </div>
-            )}
-          </section>
-        )
-      })}
+            </section>
+          )
+        })()}
       </div>
 
       <div className="tree__footer">
