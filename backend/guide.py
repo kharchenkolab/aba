@@ -10,7 +10,7 @@ from db import (
     log_context_assembly, session_assembly_summary,
     add_context_suggestion,
 )
-from tools import TOOL_SCHEMAS, execute_tool
+from content.bio.tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
 from context import focus_preamble_with_fields
 from content.bio.lifecycle.registry import register_artifacts_from_tool_result
