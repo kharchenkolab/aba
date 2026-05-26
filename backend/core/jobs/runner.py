@@ -24,7 +24,10 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR, ARTIFACTS_DIR
 from db import create_job, get_job, update_job
-from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+# Pass-A transitional violation: this becomes a post-tool hook handler
+# in Pass D (arch3_plan.md §4 Pass D). For now jobs/runner.py calls into
+# bio directly; the hook indirection lands with the dispatcher.
+from content.bio.lifecycle.registry import register_artifacts_from_tool_result  # noqa: seam
 
 
 _QUEUE: "asyncio.Queue[str]" = asyncio.Queue()
