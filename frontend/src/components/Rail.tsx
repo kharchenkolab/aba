@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import Settings from './Settings'
-import Skills from './Skills'
 import { RailIcon } from './icons'
 import './Rail.css'
 
@@ -25,7 +24,6 @@ interface Props {
 
 export default function Rail({ view, onNavigate, collapsed = false, projectTitle, sectionCounts, activeSection = 'threads', onProjectSection }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [skillsOpen, setSkillsOpen] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
 
   useEffect(() => {
@@ -53,15 +51,18 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
   ]
 
   return (
-    <aside className={`rail ${view === 'workspace' ? 'rail--project' : ''} ${collapsed ? 'rail--collapsed' : ''}`}>
+    <aside className={`rail ${view === 'workspace' ? 'rail--project' : 'rail--home'} ${collapsed ? 'rail--collapsed' : ''}`}>
       {view === 'home' && (
-        <div className="rail__brand">
-          <div className="rail__brand-icon"><RailIcon name="brand" size={34} /></div>
-          <span>Vienna<br/>Biocenter</span>
-        </div>
+        <button
+          className="rail__home-brand"
+          title="Vienna Biocenter project selection"
+          onClick={() => onNavigate('home')}
+        >
+          <RailIcon name="brand" size={28} />
+        </button>
       )}
 
-      {view === 'workspace' && collapsed && (
+      {view === 'workspace' && (
         <button
           className="rail__collapsed-brand"
           title={`Project selection${projectTitle ? ` — ${projectTitle}` : ''}`}
@@ -90,36 +91,7 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
           ))}
         </nav>
       ) : (
-        <nav className="rail__nav">
-          <button
-            className={`rail__nav-item rail__nav-item--btn ${view === 'home' ? 'rail__nav-item--active' : ''}`}
-            title="Home"
-            onClick={() => onNavigate('home')}
-          >
-            <RailIcon name="home" />
-            <span>Home</span>
-          </button>
-          <button
-            className="rail__nav-item rail__nav-item--btn"
-            title="Project"
-            onClick={() => onNavigate('workspace')}
-          >
-            <RailIcon name="projects" />
-            <span>Project</span>
-          </button>
-          <button
-            className="rail__nav-item rail__nav-item--btn"
-            title="Skills — tools and pipelines Guide can drive"
-            onClick={() => setSkillsOpen(true)}
-          >
-            <RailIcon name="skills" />
-            <span>Skills</span>
-          </button>
-          <a className="rail__nav-item" title="Alerts">
-            <RailIcon name="alerts" />
-            <span>Alerts</span>
-          </a>
-        </nav>
+        <div className="rail__home-spacer" aria-hidden="true" />
       )}
 
       <button
@@ -132,7 +104,6 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
         {pendingCount > 0 && <span className="rail__badge">{pendingCount}</span>}
       </button>
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
-      {skillsOpen && <Skills onClose={() => setSkillsOpen(false)} />}
     </aside>
   )
 }

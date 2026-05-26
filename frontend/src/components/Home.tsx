@@ -44,11 +44,26 @@ type Modal =
   | { kind: 'delete'; pid: string; name: string }
   | null
 
-const COUNT_ORDER = ['dataset', 'figure', 'table', 'result', 'finding', 'claim']
 const CARD_ORDER = ['thread', 'claim', 'figure', 'dataset']  // shown on project cards
+const HOME_STATS = [
+  { key: 'thread', label: 'threads' },
+  { key: 'claim', label: 'claims' },
+  { key: 'dataset', label: 'datasets' },
+  { key: 'runs', label: 'runs' },
+  { key: 'files', label: 'files' },
+]
 const EVENT_LABEL: Record<string, string> = {
   entity_created: 'created', scenario_created: 'scenario',
   advisor_note: 'advisor note', suggestion_logged: 'suggestion',
+}
+
+function projectCount(counts: Record<string, number>, key: string): number {
+  if (key === 'runs') return counts.analysis ?? counts.run ?? 0
+  if (key === 'files') {
+    return ['figure', 'table', 'result', 'note', 'narrative']
+      .reduce((sum, t) => sum + (counts[t] ?? 0), 0)
+  }
+  return counts[key] ?? 0
 }
 
 function baseName(fn: string): string {
@@ -73,12 +88,20 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   }, [onProjectsChanged])
   useEffect(() => { load() }, [load])
 
-  async function open(id: string) {
-    setBusy(true)
+  async function selectProject(id: string) {
+    if (projects?.find(p => p.id === id)?.current) return
+    const prev = projects
+    setProjects(ps => ps?.map(p => ({ ...p, current: p.id === id })) ?? ps)
+    setMenuFor(null)
     try {
-      await fetch(`/api/projects/${encodeURIComponent(id)}/open`, { method: 'POST' })
-      onEnter()
-    } finally { setBusy(false) }
+      const opened = await fetch(`/api/projects/${encodeURIComponent(id)}/open`, { method: 'POST' })
+      if (!opened.ok) throw new Error('project open failed')
+      const sr = await fetch('/api/home-summary')
+      if (sr.ok) setSummary(await sr.json())
+      onProjectsChanged?.()
+    } catch {
+      setProjects(prev)
+    }
   }
   async function submitCreate(name: string, file: File | null) {
     setBusy(true)
@@ -123,15 +146,9 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const list = projects ?? []
   const startCreate = () => setModal({ kind: 'create', name: 'Untitled project', file: null })
   const current = list.find(p => p.current) ?? null
-  // Most-recent first, so the top cards surface the projects you're likely to
-  // jump back to.
-  const others = list.filter(p => !p.current)
-    .sort((a, b) => (b.last_touched || '').localeCompare(a.last_touched || ''))
   const q = query.trim().toLowerCase()
-  const matchOthers = q ? others.filter(p => p.name.toLowerCase().includes(q)) : others
-  // No query: up to 3 rich cards on top, the rest as a compact list below.
-  const cards = matchOthers.slice(0, 3)
-  const rest = matchOthers.slice(3)
+  const projectMatches = q ? list.filter(p => p.name.toLowerCase().includes(q)) : list
+  const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
 
   const menu = (p: Project) => (
     <>
@@ -173,22 +190,26 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
         </div>
       ) : (
         <div className="home__hub">
-          <div className="home__bar">
-            <span className="home__bar-label">{others.length > 0 ? `${list.length} projects` : ''}</span>
+          <div className="home__selector-head">
+            <div>
+              <span className="home__kicker">Vienna Biocenter</span>
+              <h1>Projects</h1>
+            </div>
             <div className="home__hub-actions">
               <button className="home__btn" disabled={busy} onClick={trySample}>✦ Try a sample</button>
               <button className="home__btn home__btn--primary" disabled={busy} onClick={startCreate}>+ New project</button>
             </div>
           </div>
 
-          <div className={`home__cols ${others.length > 0 ? 'has-side' : ''}`}>
+          <div className={`home__cols ${list.length > 1 ? 'has-side' : ''}`}>
             {/* Main column — current project detail */}
-            <div className="home__main">
+            <div className="home__main home__panel home__panel--current">
               <div className="home__cur-head">
                 <div className="home__cur-titles">
+                  <span className="home__kicker">Current project</span>
                   <h1>{current?.name ?? summary?.project_title ?? 'Project'}</h1>
-                  {summary?.last_touched && (
-                    <span className="home__muted">Last touched {rel(summary.last_touched)}</span>
+                  {(current?.last_touched || summary?.last_touched) && (
+                    <span className="home__muted">Last touched {rel(current?.last_touched ?? summary!.last_touched!)}</span>
                   )}
                 </div>
                 <div className="home__cur-actions">
@@ -197,107 +218,86 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 </div>
               </div>
 
-              <div className="home__panel">
-                <div className="home__panel-head">Project</div>
-                <div className="home__stats">
-                  {COUNT_ORDER.filter(t => summary?.counts[t]).map(t => (
-                    <div key={t} className="home__stat">
-                      <span className="home__stat-n">{summary?.counts[t]}</span>
-                      <span className="home__stat-t">{t}{(summary?.counts[t] ?? 0) > 1 ? 's' : ''}</span>
+              <div className="home__stats">
+                {HOME_STATS.map(stat => (
+                  <div key={stat.key} className="home__stat">
+                    <span className="home__stat-n">{projectCount(currentCounts, stat.key)}</span>
+                    <span className="home__stat-t">{stat.label}</span>
+                  </div>
+                ))}
+                {Object.keys(summary?.counts ?? {}).length === 0 && !current && (
+                  <div className="home__muted">Empty — open the project to add data.</div>
+                )}
+              </div>
+
+              <div className="home__current-body">
+                <div className="home__section">
+                  <div className="home__panel-head">Recent activity</div>
+                  {(summary?.recent_events.length ?? 0) === 0 ? (
+                    <div className="home__muted">No activity yet.</div>
+                  ) : (
+                    <div className="home__events">
+                      {summary?.recent_events.map(ev => (
+                        <button key={ev.id} className="home__event" onClick={onEnter}>
+                          <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
+                          <span className="home__event-title">{ev.title ?? ''}</span>
+                          <span className="home__event-date">{rel(ev.ts)}</span>
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                  {Object.keys(summary?.counts ?? {}).length === 0 && (
-                    <div className="home__muted">Empty — open the project to add data.</div>
+                  )}
+                </div>
+
+                <div className="home__section home__section--attention">
+                  <div className="home__panel-head">Attention</div>
+                  <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
+                  <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
+                  <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
+                  <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
+                  {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
+                   !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
+                    <div className="home__muted">Nothing needs your attention.</div>
                   )}
                 </div>
               </div>
-
-              <div className="home__panel">
-                <div className="home__panel-head">Attention</div>
-                <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
-                <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
-                <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
-                <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
-                {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
-                 !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
-                  <div className="home__muted">Nothing needs your attention.</div>
-                )}
-              </div>
-
-              <div className="home__panel">
-                <div className="home__panel-head">Recent activity</div>
-                {(summary?.recent_events.length ?? 0) === 0 ? (
-                  <div className="home__muted">No activity yet.</div>
-                ) : (
-                  <div className="home__events">
-                    {summary?.recent_events.map(ev => (
-                      <button key={ev.id} className="home__event" onClick={onEnter}>
-                        <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
-                        <span className="home__event-title">{ev.title ?? ''}</span>
-                        <span className="home__event-date">{rel(ev.ts)}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
 
-            {/* Side column — other projects (only when there are any) */}
-            {others.length > 0 && (
-              <aside className="home__side">
-                {others.length > 3 && (
+            {/* Side column — project list */}
+            {list.length > 1 && (
+              <aside className="home__side home__panel">
+                <div className="home__side-head">
+                  <div>
+                    <span className="home__kicker">Project list</span>
+                    <h2>All projects</h2>
+                  </div>
                   <input className="home__side-search" placeholder="Filter projects…"
                          value={query} onChange={e => setQuery(e.target.value)} />
-                )}
-                {matchOthers.length === 0 ? (
+                </div>
+                {projectMatches.length === 0 ? (
                   <div className="home__muted">No matches.</div>
                 ) : (
-                  <>
-                    {/* Up to 3 rich cards */}
-                    <div className="home__pcards">
-                      {cards.map(p => {
-                        const stats = CARD_ORDER.filter(t => p.counts[t])
-                        return (
-                          <div key={p.id} className="home__pcard" role="button" onClick={() => open(p.id)}>
-                            <div className="home__pcard-head">
-                              <span className="home__pcard-name">{p.name}</span>
-                              {menu(p)}
-                            </div>
-                            <div className="home__pcard-stats">
-                              {stats.length ? stats.map(t => (
-                                <span key={t} className="home__pcard-stat">
-                                  <b>{p.counts[t]}</b> {t}{p.counts[t] > 1 ? 's' : ''}
-                                </span>
-                              )) : <span className="home__muted">empty</span>}
-                            </div>
-                            <div className="home__pcard-foot">Last touched {rel(p.last_touched)}</div>
+                  <div className="home__side-list">
+                    {projectMatches.map(p => {
+                      const stats = CARD_ORDER.filter(t => p.counts[t])
+                      return (
+                        <div
+                          key={p.id}
+                          className={`home__side-item ${p.current ? 'is-current' : ''}`}
+                          role="button"
+                          onClick={() => selectProject(p.id)}
+                        >
+                          <div className="home__side-item-head">
+                            <span className="home__side-item-name">{p.name}</span>
+                            {menu(p)}
                           </div>
-                        )
-                      })}
-                    </div>
-                    {/* The rest as a compact list */}
-                    {rest.length > 0 && (
-                      <>
-                        <div className="home__side-subhead">Other projects</div>
-                        <div className="home__side-list">
-                          {rest.map(p => {
-                            const counts = CARD_ORDER.filter(t => p.counts[t]).map(t => `${p.counts[t]} ${t.charAt(0)}`)
-                            return (
-                              <div key={p.id} className="home__side-item" role="button" onClick={() => open(p.id)}>
-                                <div className="home__side-item-head">
-                                  <span className="home__side-item-name">{p.name}</span>
-                                  {menu(p)}
-                                </div>
-                                <div className="home__side-item-meta">
-                                  {counts.length ? counts.join(' · ') : 'empty'} · {rel(p.last_touched)}
-                                </div>
-                              </div>
-                            )
-                          })}
+                          <div className="home__side-item-meta">
+                            {stats.length ? stats.map(t => `${p.counts[t]} ${t}${p.counts[t] > 1 ? 's' : ''}`).join(' · ') : 'empty'}
+                          </div>
+                          <div className="home__side-item-foot">{p.current ? 'Current project' : `Last touched ${rel(p.last_touched)}`}</div>
                         </div>
-                      </>
-                    )}
-                  </>
+                      )
+                    })}
+                  </div>
                 )}
               </aside>
             )}

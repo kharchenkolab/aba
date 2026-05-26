@@ -1,23 +1,22 @@
 .hresizer {
   position: relative;
   flex: 0 0 auto;
-  background: #fff;
-  border-left: 1px solid #d8dee8;
-  border-right: 1px solid #d8dee8;
+  background: transparent;
+  border-left: none;
+  border-right: none;
   cursor: col-resize;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.hresizer:hover { background: #f8fafc; }
+.hresizer:hover { background: transparent; }
 .hresizer--collapsed {
-  background: #f8fafc;
-  border-left-color: #d8dee8;
-  border-right-color: transparent;
+  background: transparent;
 }
 
 /* Always-visible vertical grip (dotted), so the divider reads as a handle. */
 .hresizer__grip {
+  display: none;
   width: 1px;
   height: 26px;
   border-radius: 1px;
@@ -34,10 +33,10 @@
 /* Always-visible collapse tab pinned near the top of the divider. */
 .hresizer__toggle {
   position: absolute;
-  top: 88px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  width: 18px;
+  transform: translate(-50%, -50%);
+  width: 28px;
   height: 44px;
   border: 1px solid #cbd5e1;
   border-radius: 999px;
@@ -53,7 +52,7 @@
 }
 .hresizer__toggle:hover { background: #eef4f8; color: #0f766e; border-color: #99f6e4; }
 .hresizer--collapsed .hresizer__toggle {
-  left: 0;
-  width: 18px;
+  left: 50%;
+  width: 28px;
   height: 54px;
 }

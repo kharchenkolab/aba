@@ -16,7 +16,6 @@ interface Props {
   currentThread: string
   onSelectThread: (id: string) => void
   onOpenOverview: () => void
-  onOpenProjectList: () => void
   onOpenThreadOverview: (id: string) => void
 }
 
@@ -90,7 +89,7 @@ function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { classN
   )
 }
 
-export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenProjectList, onOpenThreadOverview }: Props) {
+export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -243,9 +242,6 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   return (
     <aside className="tree">
       <div className="tree__project-plate">
-        <button className="tree__project-logo" title="Project selection" onClick={onOpenProjectList}>
-          <RailIcon name="brand" size={28} />
-        </button>
         <button className="tree__project-copy" title="Focus project" onClick={() => onFocus('workspace')}>
           <span className="tree__project-kicker">Project</span>
           <span className="tree__project-title">{projectTitle}</span>
