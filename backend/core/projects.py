@@ -19,7 +19,10 @@ from pathlib import Path
 
 import db
 
-BASE = Path(__file__).parent
+# BASE is backend/ — the projects/ data dir lives there, beside artifacts/
+# and data/, not under core/. (Pre-Pass-A this was Path(__file__).parent
+# from backend/projects.py.)
+BASE = Path(__file__).parent.parent
 # Override with ABA_PROJECTS_DIR to isolate the registry (tests, eval audits).
 PROJECTS_DIR = Path(os.environ.get("ABA_PROJECTS_DIR") or (BASE / "projects"))
 REGISTRY = PROJECTS_DIR / "registry.json"
