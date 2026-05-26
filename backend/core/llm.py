@@ -181,7 +181,9 @@ def make_open_stream():
     if FAKE_SESSION:
         path = Path(FAKE_SESSION)
         if not path.is_absolute():
-            path = Path(__file__).parent.parent / FAKE_SESSION
+            # Pre-Pass-A this resolved relative to workspace root from
+            # backend/llm.py; now backend/core/llm.py needs one more parent.
+            path = Path(__file__).parent.parent.parent / FAKE_SESSION
         return _fake_factory(path)
     return _real_factory()
 
