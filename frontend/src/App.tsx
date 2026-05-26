@@ -20,6 +20,7 @@ import type { Entity } from './types'
 
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
+type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'files'
 
 // Display label for an entity type — note `analysis` reads as "Run" (the v3
 // "analysis run"), avoiding confusion with the thread/investigation idea.
@@ -53,6 +54,7 @@ function entityLabel(e: Entity | null): string {
 
 export default function App() {
   const [view, setView] = useState<'home' | 'workspace'>('home')
+  const [projectSection, setProjectSection] = useState<ProjectSection>('threads')
   const [focusedId, setFocusedId] = useState<string>('workspace')
   const [posture, setPosture] = useState<Posture>('chat')
   const [highlighting, setHighlighting] = useState(false)
@@ -330,7 +332,19 @@ export default function App() {
     )
   }
 
-  const gridCols = `var(--w-rail) ${treeCollapsed ? 0 : treeW}px 14px 1fr`
+  const gridCols = `var(--w-rail) ${treeCollapsed ? 0 : treeW}px ${treeCollapsed ? 8 : 10}px 1fr`
+  const activeEntities = entities.filter(e => e.status !== 'archived' && e.status !== 'superseded')
+  const sectionCounts = {
+    threads: 1 + activeEntities.filter(e => e.type === 'thread' && !e.metadata?.is_default).length,
+    claims: activeEntities.filter(e => e.type === 'claim').length,
+    data: activeEntities.filter(e => e.type === 'dataset').length,
+    runs: activeEntities.filter(e => e.type === 'analysis').length,
+    files: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type)).length,
+  }
+  const openProjectSection = (section: ProjectSection) => {
+    setProjectSection(section)
+    if (treeCollapsed) setTreeCollapsed(false)
+  }
 
   const chatPane = (compact: boolean) => (
     <ChatPane
@@ -393,11 +407,21 @@ export default function App() {
 
   return (
     <div className="app app--workspace" style={{ gridTemplateColumns: gridCols }}>
-      <Rail onEntitiesChanged={refresh} view={view} onNavigate={navigate} />
+      <Rail
+        onEntitiesChanged={refresh}
+        view={view}
+        onNavigate={navigate}
+        collapsed={treeCollapsed}
+        projectTitle={projectName}
+        sectionCounts={sectionCounts}
+        activeSection={projectSection}
+        onProjectSection={openProjectSection}
+      />
       {treeCollapsed ? <div /> : (
         <ProjectTree
           entities={entities}
           focusedId={focusedId}
+          activeSection={projectSection}
           onFocus={goToEntity}
           onChange={refresh}
           currentThread={threadId}
