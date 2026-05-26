@@ -220,3 +220,36 @@ def stylist_review(narrative_id: str) -> Optional[dict]:
     note_id = add_advisor_note(narrative_id, advisor="stylist", text=text,
                                metadata={"trigger": "narrative_focus"})
     return {"id": note_id, "entity_id": narrative_id, "advisor": "stylist", "text": text}
+
+
+# ---------- Hook handlers ----------
+# Pass D: methodologist auto-trigger on analysis-complete (was inline in
+# guide.py). Will move to bio/advisors/methodologist.py in Pass F when the
+# advisors module is reshaped.
+
+import asyncio as _asyncio
+from core.hooks.dispatcher import register as _register_hook
+
+
+def _on_post_tool_methodologist(ctx: dict) -> None:
+    """When new entities were registered AND we know which analysis they
+    belong to, fire the Methodologist review asynchronously."""
+    if not ctx.get("new_entities"):
+        return
+    analysis_ctx = ctx.get("analysis_ctx") or {}
+    aid = analysis_ctx.get("analysis_id")
+    if not aid:
+        return
+    # Run-in-executor — the review is a non-streaming Haiku call that we
+    # don't want to block the agent loop on.
+    try:
+        loop = _asyncio.get_event_loop()
+        loop.run_in_executor(None, methodologist_review, aid)
+    except RuntimeError:
+        # No running loop (e.g. called outside async context) — run inline.
+        methodologist_review(aid)
+
+
+# Priority 20 so artifact-registration (priority 10) runs first; we depend
+# on its analysis_ctx['analysis_id'] mutation.
+_register_hook("on_post_tool", _on_post_tool_methodologist, priority=20)

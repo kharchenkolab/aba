@@ -192,3 +192,36 @@ def _title_from_code(code: str) -> Optional[str]:
             continue
         return body[:80]
     return None
+
+
+# ---------- Hook handlers ----------
+# Pass D: bio registers itself as a post-tool hook so guide.py doesn't have
+# to know about artifact registration.
+
+from core.hooks.dispatcher import register as _register_hook
+
+
+def _on_post_tool_register_artifacts(ctx: dict) -> None:
+    """ctx fields: tool_name, tool_input, result_obj, focus_entity_id,
+    analysis_ctx, thread_id. Appends to ctx['new_entities']."""
+    new = register_artifacts_from_tool_result(
+        tool_name=ctx["tool_name"],
+        tool_input=ctx["tool_input"],
+        result_obj=ctx["result_obj"],
+        focused_entity_id=ctx["focus_entity_id"],
+        analysis_ctx=ctx["analysis_ctx"],
+        thread_id=ctx.get("thread_id"),
+    )
+    ctx.setdefault("new_entities", []).extend(new)
+
+
+_register_hook("on_post_tool", _on_post_tool_register_artifacts, priority=10)
+
+
+def _on_job_complete_register_artifacts(ctx: dict) -> None:
+    """Background-job completion: register the produced artifacts.
+    Same shape as on_post_tool — the same handler logic works."""
+    _on_post_tool_register_artifacts(ctx)
+
+
+_register_hook("on_job_complete", _on_job_complete_register_artifacts, priority=10)
