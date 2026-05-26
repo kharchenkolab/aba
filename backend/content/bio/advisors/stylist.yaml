@@ -1,0 +1,12 @@
+name: stylist
+role: advisor
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/stylist.md
+manifest_role: stylist
+tool_allowlist: []
+streaming: false
+halts_allowed: false
+max_iterations: 1
+timeout_s: 60
+fake_text: |
+  [Stylist, fake mode] This sentence is carrying two claims at once; splitting it would make each easier to support and cite.
