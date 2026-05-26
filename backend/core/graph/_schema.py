@@ -219,6 +219,29 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_prop_thread ON proposals(thread_id, status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_prop_sig ON proposals(signature)")
 
+        # Runs — Turn checkpoints (arch3_plan.md Pass E). One row per agent
+        # turn (Guide or advisor); state transitions upsert via run_id. Lets
+        # resume-after-restart happen without _repair_tool_pairs heuristics.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id          TEXT PRIMARY KEY,
+                session_id      TEXT,
+                turn_index      INTEGER,
+                agent_spec_name TEXT,
+                state           TEXT,
+                focus_entity_id TEXT,
+                thread_id       TEXT,
+                pending_blob    TEXT,        -- JSON: pending_tool_calls + final_message
+                error_blob      TEXT,        -- JSON: ErrorDetail
+                usage_blob      TEXT,        -- JSON: usage counters
+                started_at      TEXT,
+                updated_at      TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at)")
+
         # Bootstrap workspace entity (opaque type 'workspace' — the seam-check
         # tolerates this because workspace is not a bio entity kind).
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()
