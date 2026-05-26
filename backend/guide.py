@@ -12,9 +12,10 @@ from db import (
 )
 from content.bio.tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
-from context import focus_preamble_with_fields
+from core.manifest.assembler import build_manifest, render_focus_preamble
+import content.bio.cards  # noqa: F401  — registers per-type card builders
 from content.bio.lifecycle.registry import register_artifacts_from_tool_result
-from adaptive import new_session_id, maybe_reflect
+from content.bio.lifecycle.adaptive import new_session_id, maybe_reflect
 from core.jobs.runner import submit_python_job
 from core.summarize.rolling import effective_history
 
@@ -84,36 +85,6 @@ def _friendly_error(exc: Exception) -> str:
     if "timeout" in s or "connection" in s:
         return "Lost the connection to the model. Please try again."
     return "Something went wrong talking to the model. Please try again."
-
-
-def _thread_context(thread_id: str | None) -> str:
-    """Tell the Guide what's already KEPT in this thread — pinned results (the
-    evidence, including those pinned from analysis-run outputs) and claims — so
-    it can refer to them instead of acting as if it only sees raw data files."""
-    if not thread_id:
-        return ""
-    from db import list_entities
-    pinned, claims = [], []
-    for e in list_entities(include_archived=False):
-        m = e.get("metadata") or {}
-        if m.get("thread_id") != thread_id:
-            continue
-        if e.get("type") in ("figure", "table") and e.get("pinned"):
-            interp = (m.get("interpretation") or "").strip()
-            pinned.append(f"- {e.get('title', '')}" + (f" — {interp}" if interp else ""))
-        elif e.get("type") == "claim":
-            claims.append(f"- {m.get('statement') or e.get('title')} ({m.get('confidence', 'preliminary')})")
-    if not pinned and not claims:
-        return ""
-    out = ["### Kept in this thread"]
-    if pinned:
-        out.append("Pinned results (this thread's evidence — refer to these directly; "
-                   "they may be figures/tables produced by analysis runs):")
-        out += pinned[:20]
-    if claims:
-        out.append("Claims so far:")
-        out += claims[:20]
-    return "\n".join(out) + "\n\n"
 
 
 def _derive_thread_title(text: str) -> str:
@@ -204,8 +175,15 @@ async def stream_response(
     disabled = get_disabled_tools()
     active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
 
-    focus_text, fields_preloaded = focus_preamble_with_fields(focus_entity_id)
-    system = focus_text + _thread_context(store_tid) + build_system(active_tools)
+    manifest = build_manifest(
+        session_id=session_id,
+        turn_index=turn_index,
+        focus_entity_id=focus_entity_id,
+        thread_id=store_tid,
+    )
+    focus_text, fields_preloaded = render_focus_preamble(manifest)
+    thread_text = manifest.thread.text if manifest.thread else ""
+    system = focus_text + thread_text + build_system(active_tools)
     entity_id = WORKSPACE_ID
 
     focus_ent = get_entity(focus_entity_id) if focus_entity_id else None

@@ -115,7 +115,8 @@ def run_probe() -> dict | None:
     """
     from db import list_entities, add_context_suggestion
     from core.graph.provenance import upstream
-    from context import focus_preamble
+    from core.manifest.assembler import build_manifest, render_focus_preamble
+    import content.bio.cards  # noqa: F401 — ensure builders are registered
 
     # Find a recent figure/result with at least one upstream entity.
     candidates = [
@@ -146,7 +147,10 @@ def run_probe() -> dict | None:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=API_KEY)
-            system = focus_preamble(target["id"]) + (
+            _m = build_manifest(session_id='probe', turn_index=0,
+                                focus_entity_id=target["id"], thread_id=None)
+            _focus_text, _ = render_focus_preamble(_m)
+            system = _focus_text + (
                 "You are answering a self-check question from your loaded "
                 "context only. Do not speculate; if you don't know, say so."
             )
