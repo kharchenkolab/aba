@@ -1259,7 +1259,7 @@ def entities_provenance(entity_id: str):
     """Upstream/downstream neighborhood for the canvas Provenance panel."""
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    from provenance import neighborhood
+    from core.graph.provenance import neighborhood
     return neighborhood(entity_id)
 
 

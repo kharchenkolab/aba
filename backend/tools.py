@@ -488,20 +488,20 @@ def _fmt_size(n: int) -> str:
 
 
 def get_provenance(input_: dict) -> dict:
-    from provenance import provenance_text, neighborhood
+    from core.graph.provenance import provenance_text, neighborhood
     eid = input_.get("entity_id", "")
     return {"text": provenance_text(eid), "graph": neighborhood(eid)["upstream"]}
 
 
 def get_dependents(input_: dict) -> dict:
-    from provenance import dependents_text, neighborhood
+    from core.graph.provenance import dependents_text, neighborhood
     eid = input_.get("entity_id", "")
     return {"text": dependents_text(eid), "graph": neighborhood(eid)["downstream"]}
 
 
 def create_scenario(input_: dict) -> dict:
     from scenarios import create_scenario_variant
-    from provenance import downstream
+    from core.graph.provenance import downstream
     try:
         variant = create_scenario_variant(
             baseline_id=input_.get("baseline_id", ""),
