@@ -25,7 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator, List, Dict, Any
 
-from config import API_KEY, MODEL, SYSTEM_PROMPT, FAKE_SESSION
+from core.config import API_KEY, MODEL, FAKE_SESSION
 
 
 # ---------- Real provider ----------
@@ -74,7 +74,7 @@ class _RealStream:
 def _real_factory():
     import anthropic
     client = anthropic.Anthropic(api_key=API_KEY)
-    def open_stream(history, tools, system: str = SYSTEM_PROMPT):
+    def open_stream(history, tools, system: str = ""):
         return _RealStream(client, history, tools, system)
     return open_stream
 
