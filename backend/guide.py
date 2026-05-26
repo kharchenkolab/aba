@@ -14,8 +14,14 @@ from content.bio.tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
 from core.manifest.assembler import build_manifest, render_focus_preamble
 import content.bio.cards  # noqa: F401  — registers per-type card builders
-from content.bio.lifecycle.registry import register_artifacts_from_tool_result
-from content.bio.lifecycle.adaptive import new_session_id, maybe_reflect
+from core.hooks.dispatcher import dispatch
+from content.bio.lifecycle.adaptive import new_session_id
+# Bio modules registering hook handlers at import — keep these imports even
+# though their names aren't used directly: the side effect is registration.
+import content.bio.lifecycle.registry  # noqa: F401  — on_post_tool: register artifacts
+import advisors  # noqa: F401          — on_post_tool: methodologist trigger
+import content.bio.lifecycle.adaptive  # noqa: F401  — on_stop: maybe_reflect
+import content.bio.proposals.scheduler  # noqa: F401 — on_stop: evaluate_thread
 from core.jobs.runner import submit_python_job
 from core.summarize.rolling import effective_history
 
@@ -330,33 +336,31 @@ async def stream_response(
                 )
                 result_obj = json.loads(result_str)
 
-                new_entities = register_artifacts_from_tool_result(
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    result_obj=result_obj,
-                    focused_entity_id=focus_entity_id,
-                    analysis_ctx=analysis_ctx,
-                    thread_id=store_tid,
-                )
-                for ent in new_entities:
+                # Post-tool hook: bio's registry handler adds new entities
+                # under ctx['new_entities']; advisors' methodologist handler
+                # may fire the Methodologist asynchronously.
+                hook_ctx = {
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                    "result_obj": result_obj,
+                    "focus_entity_id": focus_entity_id,
+                    "analysis_ctx": analysis_ctx,
+                    "thread_id": store_tid,
+                    "new_entities": [],
+                }
+                dispatch("on_post_tool", hook_ctx)
+                for ent in hook_ctx["new_entities"]:
                     yield sse({"type": "entity_registered", "entity": ent})
 
                 # create_scenario builds its entity inside the tool — surface it
-                # to the tree as an entity_registered event.
+                # to the tree as an entity_registered event. (The scenario tool
+                # doesn't go through the artifact registrar, so this stays inline.)
                 if tool_name == "create_scenario" and isinstance(result_obj, dict) \
                         and result_obj.get("scenario"):
                     from db import get_entity as _ge
                     ent = _ge(result_obj["scenario"]["id"])
                     if ent:
                         yield sse({"type": "entity_registered", "entity": ent})
-
-                # Methodologist reviews the run's methods, asynchronously.
-                if new_entities and analysis_ctx.get("analysis_id"):
-                    from advisors import methodologist_review
-                    aid = analysis_ctx["analysis_id"]
-                    asyncio.get_event_loop().run_in_executor(
-                        None, methodologist_review, aid
-                    )
 
                 yield sse({"type": "tool_result", "name": tool_name, "result": result_obj})
 
@@ -375,33 +379,30 @@ async def stream_response(
             if halt_for_plan:
                 break
 
-        # End-of-session reflection.
+        # End-of-turn hooks: reflection (bio.adaptive) + proposals
+        # evaluation (bio.proposals.scheduler). Handlers may set
+        # ctx['suggestion']; if they do, surface as an SSE event.
         summary = session_assembly_summary(session_id)
-        suggestion = maybe_reflect(
-            session_id=session_id,
-            focus_entity_type=focus_type,
-            total_tool_calls=summary["total_tool_calls"],
-            history=history,
-        )
-        if suggestion:
+        stop_ctx = {
+            "session_id": session_id,
+            "focus_entity_type": focus_type,
+            "focus_entity_id": focus_entity_id,
+            "total_tool_calls": summary["total_tool_calls"],
+            "history": history,
+            "thread_id": store_tid,
+            "suggestion": None,
+        }
+        dispatch("on_stop", stop_ctx)
+        if stop_ctx.get("suggestion"):
             add_context_suggestion(
                 session_id=session_id,
                 entity_type=focus_type,
                 trigger="end_of_session",
-                suggestion=suggestion,
+                suggestion=stop_ctx["suggestion"],
             )
             yield sse({"type": "suggestion_logged",
                        "trigger": "end_of_session",
                        "entity_type": focus_type})
-
-        # Proactive proposals (Phase D): evaluate the thread *after* the turn,
-        # off the response path (non-blocking, delayed). The frontend polls
-        # /api/threads/:id/proposals and surfaces any new ones in context.
-        if store_tid:
-            from content.bio.proposals.scheduler import evaluate_thread
-            asyncio.get_event_loop().run_in_executor(
-                None, evaluate_thread, store_tid, "post_turn"
-            )
 
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
                    "cache_read": usage_cr, "cache_write": usage_cw})

@@ -24,10 +24,7 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR, ARTIFACTS_DIR
 from db import create_job, get_job, update_job
-# Pass-A transitional violation: this becomes a post-tool hook handler
-# in Pass D (arch3_plan.md §4 Pass D). For now jobs/runner.py calls into
-# bio directly; the hook indirection lands with the dispatcher.
-from content.bio.lifecycle.registry import register_artifacts_from_tool_result  # noqa: seam
+from core.hooks.dispatcher import dispatch
 
 
 _QUEUE: "asyncio.Queue[str]" = asyncio.Queue()
@@ -139,15 +136,16 @@ async def _run_one(job_id: str) -> None:
                        log_tail=log_tail, finished_at=_utcnow())
             return
 
-        # Register artifacts under the captured focus context.
-        analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}
-        register_artifacts_from_tool_result(
-            tool_name="run_python",
-            tool_input={"code": code},
-            result_obj=result_obj,
-            focused_entity_id=focus_entity_id,
-            analysis_ctx=analysis_ctx,
-        )
+        # Register artifacts via the on_job_complete hook (bio handler).
+        dispatch("on_job_complete", {
+            "tool_name": "run_python",
+            "tool_input": {"code": code},
+            "result_obj": result_obj,
+            "focus_entity_id": focus_entity_id,
+            "analysis_ctx": {"analysis_id": None, "turn_index": 0},
+            "thread_id": None,
+            "new_entities": [],
+        })
         update_job(job_id, status="done", log_tail=log_tail, finished_at=_utcnow())
     except Exception as e:  # noqa: BLE001
         update_job(job_id, status="failed", error=str(e), finished_at=_utcnow())

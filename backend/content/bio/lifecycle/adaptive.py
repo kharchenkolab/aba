@@ -182,7 +182,8 @@ def run_probe() -> dict | None:
 
 
 def policy_path_for(entity_type: str | None) -> Path:
-    base = Path(__file__).parent / "knowhow" / "context_policy"
+    # knowhow lives at bio/knowhow/, not bio/lifecycle/knowhow.
+    base = Path(__file__).parent.parent / "knowhow" / "context_policy"
     base.mkdir(parents=True, exist_ok=True)
     safe = (entity_type or "workspace").replace("/", "_")
     return base / f"{safe}.md"
@@ -205,3 +206,25 @@ def policy_for(entity_type: str | None) -> str:
     if path.exists():
         return path.read_text()
     return ""
+
+
+# ---------- Hook handlers ----------
+# Pass D: end-of-turn reflection registered as an on_stop hook.
+
+from core.hooks.dispatcher import register as _register_hook
+
+
+def _on_stop_reflect(ctx: dict) -> None:
+    """ctx: session_id, focus_entity_type, total_tool_calls, history.
+    On suggestion, ctx['suggestion'] is set so guide can emit the SSE event."""
+    suggestion = maybe_reflect(
+        session_id=ctx["session_id"],
+        focus_entity_type=ctx.get("focus_entity_type"),
+        total_tool_calls=ctx.get("total_tool_calls") or 0,
+        history=ctx.get("history") or [],
+    )
+    if suggestion:
+        ctx["suggestion"] = suggestion
+
+
+_register_hook("on_stop", _on_stop_reflect, priority=10)
