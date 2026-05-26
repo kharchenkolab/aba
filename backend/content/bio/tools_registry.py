@@ -7,7 +7,7 @@ follow biology domain naming where applicable, with a few generic ones
 ("workspace", "data") for ABA-native plumbing.
 """
 from __future__ import annotations
-from tools import TOOL_SCHEMAS
+from content.bio.tools import TOOL_SCHEMAS
 from db import get_disabled_tools
 
 
