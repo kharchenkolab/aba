@@ -67,7 +67,7 @@ app.mount("/artifacts", StaticFiles(directory=str(ARTIFACTS_DIR)), name="artifac
 
 @app.on_event("startup")
 def startup():
-    import projects
+    from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
 
@@ -80,39 +80,39 @@ class ProjectRequest(BaseModel):
 
 @app.get("/api/projects")
 def projects_list():
-    import projects
+    from core import projects
     return projects.list_projects()
 
 
 @app.get("/api/projects/current")
 def projects_current():
-    import projects
+    from core import projects
     return {"current": projects.current()}
 
 
 @app.post("/api/projects")
 def projects_create(req: ProjectRequest):
-    import projects
+    from core import projects
     return projects.create_project(req.name)
 
 
 @app.post("/api/projects/{pid}/open")
 def projects_open(pid: str):
-    import projects
+    from core import projects
     projects.set_current(pid)
     return {"current": projects.current()}
 
 
 @app.patch("/api/projects/{pid}")
 def projects_rename(pid: str, req: ProjectRequest):
-    import projects
+    from core import projects
     projects.rename_project(pid, req.name)
     return {"ok": True}
 
 
 @app.delete("/api/projects/{pid}")
 def projects_delete(pid: str):
-    import projects
+    from core import projects
     projects.delete_project(pid)
     return {"current": projects.current()}
 
@@ -166,7 +166,7 @@ def entities_patch(entity_id: str, req: EntityPatch):
         # Allow updating workspace title only; status/pin/notes/tags ignored.
         if req.title:
             updated = update_entity(entity_id, title=req.title)
-            import projects
+            from core import projects
             projects.rename_project(projects.current(), req.title)  # keep Home registry in sync
             if updated:
                 return updated
