@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR, ARTIFACTS_DIR
 from db import create_job, get_job, update_job
-from registry import register_artifacts_from_tool_result
+from content.bio.lifecycle.registry import register_artifacts_from_tool_result
 
 
 _QUEUE: "asyncio.Queue[str]" = asyncio.Queue()

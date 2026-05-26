@@ -500,7 +500,7 @@ def get_dependents(input_: dict) -> dict:
 
 
 def create_scenario(input_: dict) -> dict:
-    from scenarios import create_scenario_variant
+    from content.bio.lifecycle.scenarios import create_scenario_variant
     from core.graph.provenance import downstream
     try:
         variant = create_scenario_variant(
