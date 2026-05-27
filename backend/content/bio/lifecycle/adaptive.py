@@ -190,23 +190,61 @@ def policy_path_for(entity_type: str | None) -> Path:
     return base / f"{safe}.md"
 
 
+def _dedupe_bullets(text: str) -> str:
+    """Drop repeat `- ...` bullets (keeping first occurrence). Preserves
+    everything else (header, blank lines, non-bullet content). Comparison
+    strips surrounding whitespace so trivially-different copies collapse."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("- "):
+            body = s[2:].strip()
+            if body in seen:
+                continue
+            seen.add(body)
+        out.append(line)
+    rendered = "\n".join(out)
+    return rendered + ("\n" if text.endswith("\n") else "")
+
+
 def append_to_policy(entity_type: str | None, suggestion: str) -> Path:
-    """Append a promoted suggestion to the per-type policy file."""
+    """Promote a suggestion into the per-type policy file. Idempotent —
+    a second promotion of the same text is a no-op (also rewrites the
+    file deduped if historical duplicates were sitting in there)."""
     path = policy_path_for(entity_type)
+    s = (suggestion or "").strip()
+    if not s:
+        return path
     existed = path.exists()
-    with path.open("a") as f:
-        if not existed:
-            f.write(f"# Context policy: {entity_type or 'workspace'}\n\n")
-        f.write(f"- {suggestion.strip()}\n")
+    current = path.read_text() if existed else ""
+    present = {
+        line.strip()[2:].strip()
+        for line in current.splitlines()
+        if line.strip().startswith("- ")
+    }
+    if s in present:
+        # Already promoted — opportunistically clean any historical
+        # duplication so the model stops seeing the repeat.
+        cleaned = _dedupe_bullets(current)
+        if cleaned != current:
+            path.write_text(cleaned)
+        return path
+    header = f"# Context policy: {entity_type or 'workspace'}\n\n" if not existed else ""
+    new_text = header + current.rstrip("\n") + ("\n" if current else "") + f"- {s}\n"
+    path.write_text(_dedupe_bullets(new_text))
     return path
 
 
 def policy_for(entity_type: str | None) -> str:
-    """Read the per-type policy if one exists, returning '' otherwise."""
+    """Read the per-type policy if one exists, returning '' otherwise.
+    Returns a deduped view — historical duplicates in the on-disk file
+    are collapsed in-memory so the model never sees the repeat. Doesn't
+    rewrite the file (writes are reserved for explicit promotions)."""
     path = policy_path_for(entity_type)
-    if path.exists():
-        return path.read_text()
-    return ""
+    if not path.exists():
+        return ""
+    return _dedupe_bullets(path.read_text())
 
 
 # ---------- Hook handlers ----------
