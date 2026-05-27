@@ -77,6 +77,15 @@ def _conventions(_tools: list[dict]) -> str:
     return ("### File conventions\n\n" + body) if body else ""
 
 
+def _skills_index(_tools: list[dict]) -> str:
+    """B2: per-turn skills catalog (names + 1-line descriptions). The
+    agent uses `read_skill(name)` to expand the body on demand. Empty
+    until bio.skills register at import time; the registry returns ''
+    in that case, which the assembler drops."""
+    from core.skills import skills_index_block
+    return skills_index_block()
+
+
 _BLOCKS: tuple[_Block, ...] = (
     _Block("identity",     None,                   None,             _md("identity.md")),
     _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
@@ -84,6 +93,9 @@ _BLOCKS: tuple[_Block, ...] = (
     _Block("scenarios",    frozenset({"primary"}), "create_scenario", _md("scenarios.md")),
     _Block("behavior",     None,                   None,             _md("behavior.md")),
     _Block("conventions",  None,                   None,             _conventions),
+    # Skills index — primary only, gated on read_skill so a deployment
+    # that doesn't enable the tool also doesn't advertise the catalog.
+    _Block("skills",       frozenset({"primary"}), "read_skill",     _skills_index),
     _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
 )
 
