@@ -27,11 +27,11 @@ import json as _json
 from typing import Optional
 
 from config import FAKE_SESSION, API_KEY, MODEL
-from db import (
-    add_proposal, get_proposal, update_proposal, proposal_signature_exists,
-    list_proposals, get_entity, update_entity, create_entity, add_edge,
-    gen_entity_id, archive_entity, get_messages, list_entities, WORKSPACE_ID,
-)
+from core.graph._schema import gen_entity_id, WORKSPACE_ID
+from core.graph.edges import add_edge
+from core.graph.entities import get_entity, update_entity, create_entity, archive_entity, list_entities
+from core.graph.messages import get_messages
+from core.graph.proposals_store import add_proposal, get_proposal, update_proposal, proposal_signature_exists, list_proposals
 
 KINDS = ("title", "question", "convergence", "subquestion", "return_wrap", "nplus1")
 

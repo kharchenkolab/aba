@@ -8,7 +8,7 @@ follow biology domain naming where applicable, with a few generic ones
 """
 from __future__ import annotations
 from content.bio.tools import TOOL_SCHEMAS
-from db import get_disabled_tools
+from core.graph.tool_settings import get_disabled_tools
 
 
 def _by_name(name: str) -> dict | None:

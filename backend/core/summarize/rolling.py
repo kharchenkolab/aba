@@ -14,7 +14,7 @@ import json
 import sqlite3
 
 from config import API_KEY, MODEL, FAKE_SESSION
-import db
+from core.graph._schema import _conn, _utcnow
 
 SUMMARY_THRESHOLD = 30   # only summarize once the thread exceeds this
 RECENT_KEEP = 12         # always send this many recent messages verbatim
@@ -22,7 +22,7 @@ REGEN_STEP = 8           # regenerate the summary every N new old-messages
 
 
 def _ensure_table():
-    with db._conn() as c:
+    with _conn() as c:
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversation_summaries (
                 entity_id    TEXT PRIMARY KEY,
@@ -36,7 +36,7 @@ def _ensure_table():
 
 def _get(entity_id: str) -> tuple[int, str] | None:
     _ensure_table()
-    with db._conn() as c:
+    with _conn() as c:
         try:
             r = c.execute(
                 "SELECT covered, summary FROM conversation_summaries WHERE entity_id=?",
@@ -49,12 +49,12 @@ def _get(entity_id: str) -> tuple[int, str] | None:
 
 def _put(entity_id: str, covered: int, summary: str):
     _ensure_table()
-    with db._conn() as c:
+    with _conn() as c:
         c.execute(
             "INSERT INTO conversation_summaries (entity_id, covered, summary, updated_at) "
             "VALUES (?, ?, ?, ?) ON CONFLICT(entity_id) DO UPDATE SET "
             "covered=excluded.covered, summary=excluded.summary, updated_at=excluded.updated_at",
-            (entity_id, covered, summary, db._utcnow()),
+            (entity_id, covered, summary, _utcnow()),
         )
         c.commit()
 

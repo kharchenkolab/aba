@@ -4,12 +4,11 @@ from typing import AsyncGenerator
 
 from config import FAKE_SESSION
 from content.bio.prompts.build import build_system
-from db import (
-    append_message, get_messages, get_entity, update_entity, WORKSPACE_ID,
-    get_or_create_default_thread,
-    log_context_assembly, session_assembly_summary,
-    add_context_suggestion,
-)
+from core.graph._schema import WORKSPACE_ID
+from core.graph.audit import log_context_assembly, session_assembly_summary, add_context_suggestion
+from core.graph.entities import get_entity, update_entity
+from core.graph.messages import append_message, get_messages
+from core.graph.threads import get_or_create_default_thread
 from content.bio.tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
 from core.manifest.assembler import build_manifest, render_focus_preamble
@@ -192,7 +191,7 @@ async def stream_response(
 
     # Capability set for this turn (disabled tools are neither offered nor
     # advertised), then assemble the system prompt from composable blocks.
-    from db import get_disabled_tools
+    from core.graph.tool_settings import get_disabled_tools
     disabled = get_disabled_tools()
     active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
 
@@ -379,7 +378,7 @@ async def stream_response(
                 # doesn't go through the artifact registrar, so this stays inline.)
                 if tool_name == "create_scenario" and isinstance(result_obj, dict) \
                         and result_obj.get("scenario"):
-                    from db import get_entity as _ge
+                    from core.graph.entities import get_entity as _ge
                     ent = _ge(result_obj["scenario"]["id"])
                     if ent:
                         yield sse({"type": "entity_registered", "entity": ent})

@@ -113,7 +113,8 @@ def run_probe() -> dict | None:
 
     Returns a small report dict, or None if there's nothing to probe.
     """
-    from db import list_entities, add_context_suggestion
+    from core.graph.audit import add_context_suggestion
+    from core.graph.entities import list_entities
     from core.graph.provenance import upstream
     from core.manifest.assembler import build_manifest, render_focus_preamble
     import content.bio.cards  # noqa: F401 — ensure builders are registered

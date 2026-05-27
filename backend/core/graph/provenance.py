@@ -8,7 +8,8 @@ Edge direction convention (set in registry.py / promote.py):
     - downstream of X = follow INCOMING edges from their sources
 """
 from __future__ import annotations
-from db import get_entity, edges_from, edges_to
+from core.graph.edges import edges_from, edges_to
+from core.graph.entities import get_entity
 
 
 def _node(entity_id: str) -> dict | None:

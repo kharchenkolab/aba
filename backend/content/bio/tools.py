@@ -173,7 +173,7 @@ def list_data_files(_input: dict) -> dict:
     files are stored globally (content-addressed) but each project only *contains*
     the datasets registered as entities in its DB, so we list those."""
     from pathlib import Path as _Path
-    from db import list_entities
+    from core.graph.entities import list_entities
     files = []
     for e in list_entities(include_archived=False):
         if e.get("type") != "dataset":
