@@ -121,23 +121,18 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
     }
     const b64 = canvas.toDataURL('image/png').split(',')[1]
     const what = label ? `the figure "${label}"` : 'the figure'
-    // Strong directive — placed FIRST in the user message by the backend
-    // so the model's attention is set BEFORE it reads the question. The
-    // model has shown a tendency to describe the broader plot when this
-    // note is buried; phrasing it as an explicit attention scope (with
-    // a "DO NOT" guard) makes the boundary unmissable.
+    // First-person, suggestive note. Placed first in the user message so
+    // it primes the answer toward the marked region, but phrased as a
+    // hint rather than a directive — the model still uses judgment.
     const shape =
       mode === 'highlight'
-        ? 'a translucent yellow freehand mark (a circle, line, or squiggle)'
+        ? 'a translucent yellow mark (a circle, line, or squiggle)'
         : 'a translucent yellow rectangle'
     const note =
-      `[ATTENTION SCOPE — the user has marked a region of interest.]\n` +
-      `${what} in the attached image has ${shape} drawn on it. Answer ONLY about ` +
-      `what is inside or directly under the yellow mark. DO NOT describe the rest of the ` +
-      `figure unless the user explicitly asks for context or comparison. If the marked ` +
-      `region is ambiguous to you, say so and ask the user to be more specific — do NOT ` +
-      `fall back to describing the broader plot. The user may refer to this region as ` +
-      `"here", "this", or "the highlighted area".`
+      `I drew ${shape} on ${what} in the attached image to flag a specific region. ` +
+      `When answering, please focus on what's in or near the mark. If it isn't clear ` +
+      `what I'm pointing at, just ask. I may refer to that region as "here" or ` +
+      `"the highlighted area".`
     onAttach({ image: b64, note })
     // Focus is now established (the red chip appears) — leave marking mode. The
     // drawn mark stays on the figure until the chip is cleared (clearSignal).
