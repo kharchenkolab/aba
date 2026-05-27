@@ -4,19 +4,32 @@
   font-style: italic;
 }
 
+/* Belt-and-braces: pin the path / meta strip even if some ancestor
+   scrolls instead of the body. Within the table viewer it sits flush
+   above the column-name row so the two read as one header block. */
+.viewer--table .viewer__head {
+  position: sticky; top: 0; z-index: 3;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
 .table-body {
   display: flex; flex-direction: column;
-  padding: 8px 12px 20px;
+  padding: 0;             /* table butts right up under the head */
   overflow: auto;
 }
 
 .table-viewer {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
   font-family: var(--mono);
+  width: max-content;
+  min-width: 100%;
 }
 .table-viewer th, .table-viewer td {
-  border: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: 3px 8px;
   text-align: left;
   vertical-align: top;
@@ -25,18 +38,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.table-viewer th {
+.table-viewer th:last-child, .table-viewer td:last-child { border-right: none; }
+
+.table-viewer thead th {
   background: var(--bg-soft, #f6f5f3);
   font-weight: 600;
   color: var(--text-2);
-  position: sticky; top: 0;
-  z-index: 1;
+  /* Stick directly under viewer__head — reads as one header block. */
+  position: sticky; top: 0; z-index: 2;
+  box-shadow: 0 1px 0 var(--border);
 }
-.table-viewer tr:nth-child(even) td {
+
+.table-viewer tbody tr:nth-child(even) td {
   background: var(--bg-soft, #f6f5f3);
 }
 
 .table-viewer__more {
   display: flex; align-items: center;
-  margin-top: 14px;
+  padding: 12px 14px;
 }
