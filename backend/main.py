@@ -1598,11 +1598,23 @@ async def turn_resume(run_id: str, req: ResumeRequest):
     thread_id = t.thread_id or "default"
     user_text = req.user_text or ""
 
+    # #160: if this resume is the user clicking Go on a plan, transition
+    # the plan from validated → executing now, and thread plan_entity_id
+    # forward so the follow-up turn can mark it completed/failed on exit.
+    plan_eid = t.plan_entity_id if t.pending_user_signal == "plan" else None
+    if plan_eid:
+        try:
+            from content.bio.lifecycle.plans import set_plan_lifecycle
+            set_plan_lifecycle(plan_eid, "executing")
+        except Exception:  # noqa: BLE001
+            pass    # never block resume on a lifecycle update
+
     async def event_stream():
         async for chunk in stream_response(
             user_text,
             focus_entity_id=focus_eid,
             thread_id=thread_id,
+            plan_entity_id=plan_eid,
         ):
             yield chunk
 

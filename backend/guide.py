@@ -131,6 +131,7 @@ async def stream_response(
     annotation_image: str | None = None,
     annotation_note: str | None = None,
     retry: bool = False,
+    plan_entity_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Append user message to the workspace thread, run the Guide loop, stream SSE.
@@ -164,6 +165,7 @@ async def stream_response(
         state=TurnState.GENERATING,
         focus_entity_id=focus_entity_id,
         thread_id=thread_id,
+        plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
     )
     # Threads are real lines of inquiry: the Guide reasons within the current
     # thread, not the whole project firehose. "default" resolves to (and
@@ -389,6 +391,9 @@ async def stream_response(
                             "plan_lifecycle": "validated",
                         },
                     )
+                    # #160: stash on the Turn row so the resume endpoint can
+                    # find which plan to transition when the user clicks Go.
+                    turn.plan_entity_id = plan_eid
                     yield sse({"type": "plan", "entity_id": plan_eid, **plan.to_dict()})
                     ack = {
                         "status": "presented",
@@ -550,6 +555,14 @@ async def stream_response(
         if turn.state != TurnState.AWAITING_USER:
             turn.transition(TurnState.DONE)
             checkpoint(turn)
+            # #160: if this turn was driving a plan's execution, mark the
+            # plan completed. Idempotent + safe on a missing entity.
+            if turn.plan_entity_id:
+                try:
+                    from content.bio.lifecycle.plans import set_plan_lifecycle
+                    set_plan_lifecycle(turn.plan_entity_id, "completed")
+                except Exception:  # noqa: BLE001
+                    pass    # plan-tracking is best-effort; never block normal completion
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
                    "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})
@@ -559,6 +572,12 @@ async def stream_response(
         turn.error = {"type": type(e).__name__, "message": str(e)}
         turn.transition(TurnState.FAILED)
         checkpoint(turn)
+        if turn.plan_entity_id:
+            try:
+                from content.bio.lifecycle.plans import set_plan_lifecycle
+                set_plan_lifecycle(turn.plan_entity_id, "failed")
+            except Exception:  # noqa: BLE001
+                pass
         yield sse({"type": "error", "text": _friendly_error(e),
                    "detail": f"{type(e).__name__}: {e}"})
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
