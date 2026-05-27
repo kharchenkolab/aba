@@ -111,6 +111,24 @@ export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
   const tree = useMemo(() => buildTree(items), [items])
   const totalSize = items.reduce((s, it) => s + (it.size ?? 0), 0)
 
+  const [materializeMsg, setMaterializeMsg] = useState<string | null>(null)
+  async function materialize() {
+    setMaterializeMsg('Building folder…')
+    try {
+      const pid = await (await fetch('/api/projects/current')).json().then(d => d.current)
+      if (!pid) { setMaterializeMsg('No active project.'); return }
+      const r = await fetch(`/api/projects/${encodeURIComponent(pid)}/materialize?clean=true`, { method: 'POST' })
+      const d = await r.json()
+      const path = d.out_dir as string
+      const linked = d.linked ?? 0, copied = d.copied ?? 0, missing = d.missing ?? 0
+      setMaterializeMsg(
+        `Built ${path}: ${linked} linked, ${copied} copied${missing ? `, ${missing} missing` : ''}.`,
+      )
+    } catch (e) {
+      setMaterializeMsg(`Failed: ${String(e)}`)
+    }
+  }
+
   function toggle(path: string) {
     setCollapsed(prev => {
       const next = new Set(prev)
@@ -201,11 +219,19 @@ export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
             href={folderDownloadUrl('')}
             title="Download the whole tree as .zip"
             download
-          >⬇ all</a>
+          >⬇ zip</a>
+          <button
+            className="files__head-action"
+            onClick={materialize}
+            title="Build a navigable folder on disk (symlinks to canonical artifacts)"
+          >▤ folder</button>
         </div>
         <div className="files__totals">
           {items.length} files · {fmtSize(totalSize)}
         </div>
+        {materializeMsg && (
+          <div className="files__notice">{materializeMsg}</div>
+        )}
       </div>
       <div className="files__body">
         {error && <div className="files__error">Couldn't load files: {error}</div>}
