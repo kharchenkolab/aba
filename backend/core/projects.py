@@ -17,7 +17,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import db
+from core.graph import _schema as _schema_mod
+from core.graph._schema import init_db
+from core.graph.entities import update_entity
 
 # BASE is backend/ — the projects/ data dir lives there, beside artifacts/
 # and data/, not under core/. (Pre-Pass-A this was Path(__file__).parent
@@ -76,18 +78,16 @@ def _park_scratch() -> None:
     calls don't crash. The scratch DB is never registered, so it never
     shows on Home."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    from core.graph import _schema
-    _schema.set_db_path(SCRATCH)
-    db.DB_PATH = SCRATCH        # also keep the legacy shim attribute in sync
+    _schema_mod.set_db_path(SCRATCH)
     _state["current"] = None
-    db.init_db()
+    init_db()
 
 
 def init() -> None:
     """Startup: in test mode just init the harness DB; otherwise resume the most
     recent project, or park on scratch when there are none (true empty state)."""
     if SINGLE:
-        db.init_db()
+        init_db()
         return
     reg = _load()
     if not reg:
@@ -99,11 +99,9 @@ def init() -> None:
 def set_current(pid: str) -> None:
     if SINGLE:
         return
-    from core.graph import _schema
-    _schema.set_db_path(_db_file(pid))
-    db.DB_PATH = _db_file(pid)  # legacy shim attribute
+    _schema_mod.set_db_path(_db_file(pid))
     _state["current"] = pid
-    db.init_db()          # idempotent — ensures tables exist
+    init_db()          # idempotent — ensures tables exist
     _touch(pid)
 
 
@@ -124,7 +122,7 @@ def _touch(pid: str) -> None:
 def list_projects() -> list:
     if SINGLE:
         return [{"id": "single", "name": "Project", "created_at": _now(),
-                 "last_touched": _now(), "current": True, "counts": _counts(db.DB_PATH)}]
+                 "last_touched": _now(), "current": True, "counts": _counts(_schema_mod.DB_PATH)}]
     cur = _state["current"]
     return [{**p, "current": p["id"] == cur, "counts": _counts(_db_file(p["id"]))}
             for p in _load()]
@@ -140,7 +138,7 @@ def create_project(name: str) -> dict:
     reg.append(entry)
     _save(reg)
     set_current(pid)
-    db.update_entity("workspace", title=entry["name"])   # in-project title = project name
+    update_entity("workspace", title=entry["name"])  # in-project title = project name
     return {**entry, "current": True, "counts": {}}
 
 

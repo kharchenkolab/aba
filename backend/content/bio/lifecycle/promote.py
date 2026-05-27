@@ -8,7 +8,8 @@ provenance walk works the same as for run-generated artifacts).
 from __future__ import annotations
 from typing import Optional
 
-from db import create_entity, get_entity, update_entity, add_edge, remove_edge
+from core.graph.edges import add_edge, remove_edge
+from core.graph.entities import create_entity, get_entity, update_entity
 
 
 def promote_figure_to_result(

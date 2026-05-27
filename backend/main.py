@@ -10,27 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config import ARTIFACTS_DIR, DATA_DIR
-from db import (
-    init_db,
-    get_messages,
-    clear_messages,
-    list_entities,
-    get_entity,
-    create_entity,
-    update_entity,
-    archive_entity,
-    restore_entity,
-    add_edge,
-    remove_edge,
-    edges_from,
-    edges_to,
-    gen_entity_id,
-    add_result_member,
-    remove_result_member,
-    update_result_member,
-    reorder_result_members,
-    WORKSPACE_ID,
-)
+from content.bio.graph.result_members import add_result_member, remove_result_member, update_result_member, reorder_result_members
+from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
+from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
+from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity
+from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
 from content.bio.lifecycle.promote import (
     promote_figure_to_result,
@@ -41,15 +25,12 @@ from content.bio.lifecycle.promote import (
 )
 from content.bio.lifecycle.scenarios import create_scenario_variant
 from advisors import skeptic_review, explorer_suggest, stylist_review
-from db import (
-    list_advisor_notes,
-    set_advisor_note_status,
-    list_context_suggestions,
-    update_context_suggestion_status,
-)
+from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status
 from content.bio.lifecycle.adaptive import append_to_policy, run_probe
 from content.bio.tools_registry import registry as tools_registry
-from db import list_jobs, get_job, figure_history, list_events
+from content.bio.graph.figure_history import figure_history
+from core.graph.audit import list_events
+from core.graph.jobs import list_jobs, get_job
 from core.jobs.runner import start_worker, cancel_job
 
 
@@ -352,7 +333,7 @@ def messages_list(thread_id: str | None = None):
     """The project's conversation. `thread_id` scopes to one thread
     ("default" = the default thread, materialized or not); omitted = all."""
     if thread_id == "default":
-        from db import find_default_thread
+        from core.graph.threads import find_default_thread
         thread_id = find_default_thread() or "default"   # real id if materialized
     return get_messages(WORKSPACE_ID, thread_id=thread_id)
 
@@ -374,13 +355,13 @@ class ThreadPatch(BaseModel):
 
 @app.get("/api/threads")
 def threads_list():
-    from db import list_threads
+    from core.graph.threads import list_threads
     return list_threads()
 
 
 @app.post("/api/threads")
 def threads_create(req: ThreadRequest):
-    from db import create_thread
+    from core.graph.threads import create_thread
     tid = create_thread(req.title, req.question)
     # A user-typed question is user-owned — keep the Guide from silently
     # rewriting it later.
@@ -439,7 +420,7 @@ def _save_oqs(tid: str, ent: dict, oqs: list):
 
 @app.post("/api/threads/{tid}/open-questions")
 def oq_add(tid: str, req: OpenQRequest):
-    from db import gen_entity_id
+    from core.graph._schema import gen_entity_id
     ent = _thread_or_404(tid)
     oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
     oq = {"id": gen_entity_id("oq"), "text": req.text.strip(),
@@ -483,7 +464,7 @@ def oq_delete(tid: str, oqid: str):
 def oq_promote(tid: str, oqid: str):
     """Promote an open question into its own thread (title + question seeded
     from the OQ); mark the source OQ promoted and link it."""
-    from db import create_thread
+    from core.graph.threads import create_thread
     ent = _thread_or_404(tid)
     oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
     oq = next((o for o in oqs if o.get("id") == oqid), None)
@@ -505,7 +486,7 @@ class EvaluateRequest(BaseModel):
 
 @app.get("/api/threads/{tid}/proposals")
 def thread_proposals(tid: str, status: str = "pending"):
-    from db import list_proposals
+    from core.graph.proposals_store import list_proposals
     rtid = _resolve_thread(tid)
     return list_proposals(thread_id=rtid, status=(status or None))
 
@@ -515,7 +496,7 @@ def thread_evaluate(tid: str, req: EvaluateRequest):
     """Run the proposal detectors for a thread on demand (used by the
     thread-open event trigger). Post-turn evaluation is fired from guide.py."""
     from content.bio.proposals.scheduler import evaluate_thread
-    from db import list_proposals
+    from core.graph.proposals_store import list_proposals
     rtid = _resolve_thread(tid)
     evaluate_thread(rtid, req.trigger)
     return list_proposals(thread_id=rtid, status="pending")
@@ -764,14 +745,15 @@ class PinMessageRequest(BaseModel):
 def pin_message(req: PinMessageRequest):
     """Keep any chat message: snapshot it as a lightweight 'note' entity that
     shows in the thread's pinned shelf. Toggles by content key (idempotent)."""
-    from db import find_kept_note, update_entity
+    from content.bio.graph.search import find_kept_note
+    from core.graph.entities import update_entity
     existing = find_kept_note(req.key)
     if existing:
         update_entity(existing, status="archived")   # unpin
         return {"pinned": False}
     tid = req.thread_id
     if tid == "default":
-        from db import get_or_create_default_thread
+        from core.graph.threads import get_or_create_default_thread
         tid = get_or_create_default_thread()
     title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
     eid = create_entity(
@@ -786,7 +768,7 @@ def pin_message(req: PinMessageRequest):
 @app.get("/api/search")
 def search_endpoint(q: str = "", limit: int = 25):
     """Faceted search across entities + chat snippets (M9 fallback recovery)."""
-    from db import search as _search
+    from content.bio.graph.search import search as _search
     return _search(q, limit=limit)
 
 
@@ -814,7 +796,7 @@ def _save_claim(cid: str, ent: dict, updates: dict) -> dict:
 
 def _resolve_thread(thread_id: str) -> str:
     if thread_id == "default":
-        from db import get_or_create_default_thread
+        from core.graph.threads import get_or_create_default_thread
         return get_or_create_default_thread()
     return thread_id
 
@@ -1173,7 +1155,7 @@ def draft_finding(req: DraftFindingRequest):
     """Selection-to-finding draft (M3). Heuristic for now (no tokens): title
     from the ask, summary from the discussion, evidence resolved from the
     figures referenced in the selection. The user reviews before saving."""
-    from db import list_entities as _le
+    from core.graph.entities import list_entities as _le
     text = req.text.strip()
     first = (req.title_hint or text).strip().split("\n")[0]
     title = (first[:80] + ("…" if len(first) > 80 else "")) or "Untitled finding"
@@ -1340,7 +1322,7 @@ async def upload_external_result(
         shutil.copyfileobj(file.file, f)
     tid = thread_id
     if tid == "default":
-        from db import get_or_create_default_thread
+        from core.graph.threads import get_or_create_default_thread
         tid = get_or_create_default_thread()
     eid = create_entity(
         entity_type="figure", title=Path(file.filename).stem,
@@ -1438,7 +1420,7 @@ class ToolEnabledRequest(BaseModel):
 
 @app.post("/api/tools/{name}/enabled")
 def tools_set_enabled(name: str, req: ToolEnabledRequest):
-    from db import set_tool_enabled
+    from core.graph.tool_settings import set_tool_enabled
     set_tool_enabled(name, req.enabled)
     return {"name": name, "enabled": req.enabled}
 

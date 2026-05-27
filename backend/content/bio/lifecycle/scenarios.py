@@ -14,7 +14,8 @@ import json
 from typing import Optional
 
 from config import API_KEY, MODEL, FAKE_SESSION
-from db import create_entity, get_entity, add_edge
+from core.graph.edges import add_edge
+from core.graph.entities import create_entity, get_entity
 from content.bio.tools import execute_tool
 from content.bio.lifecycle.registry import _title_from_code
 

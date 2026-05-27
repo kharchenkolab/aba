@@ -15,7 +15,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from db import create_entity, get_entity, add_edge, WORKSPACE_ID
+from core.graph._schema import WORKSPACE_ID
+from core.graph.edges import add_edge
+from core.graph.entities import create_entity, get_entity
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:

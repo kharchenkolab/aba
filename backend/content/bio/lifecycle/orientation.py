@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from db import (get_messages, get_entity, update_entity, append_message,
-                list_entities, WORKSPACE_ID, get_or_create_default_thread)
+from core.graph._schema import WORKSPACE_ID
+from core.graph.entities import get_entity, update_entity, list_entities
+from core.graph.messages import get_messages, append_message
+from core.graph.threads import get_or_create_default_thread
 from content.bio.proposals.scheduler import _ask_json
 
 _SYSTEM = (

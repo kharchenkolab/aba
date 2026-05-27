@@ -15,7 +15,9 @@ change here.
 from __future__ import annotations
 from typing import Optional
 
-from db import get_entity, add_advisor_note, list_advisor_notes, edges_to
+from core.graph.audit import add_advisor_note, list_advisor_notes
+from core.graph.edges import edges_to
+from core.graph.entities import get_entity
 from core.runtime.agent import get_agent_spec, run_advisor_one_shot
 # Load all advisor specs at import time.
 import content.bio.advisors  # noqa: F401
