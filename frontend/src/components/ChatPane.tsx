@@ -319,16 +319,11 @@ export default function ChatPane({
               disabled={false}
               streaming={streaming}
               onSteer={onSteer}
+              onStop={onStop}
               prefill={prefill}
               onPrefillConsumed={onPrefillConsumed}
               focusSignal={(composerFocus ?? 0) + extraFocus}
             />
-            {streaming && onStop && (
-              <button type="button" className="stop-btn" onClick={onStop} title="Stop the current turn (kills running work, drops queue)">
-                <span className="stop-btn__icon">■</span>
-                <span className="stop-btn__label">Stop</span>
-              </button>
-            )}
           </div>
         )}
       </div>

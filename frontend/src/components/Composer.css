@@ -49,3 +49,22 @@
 }
 .composer__send:hover:not(:disabled) { background: #2a55ee; }
 .composer__send:disabled { opacity: 0.4; cursor: default; }
+
+/* Stop button — appears inside the composer box next to the Send arrow
+   while the agent is responding. Icon-only, sized to match Send. */
+.composer__stop {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: var(--red, #dc2626);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-right: 4px;
+  transition: background 0.15s;
+}
+.composer__stop:hover { background: #b91c1c; }

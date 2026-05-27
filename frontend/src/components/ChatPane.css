@@ -257,31 +257,11 @@
 }
 .approval-bar__btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Stop-the-turn button — visible only while streaming. The composer
-   stays visible so the user can queue the next message; Stop is a
-   small affordance on top. */
+/* Wrapper around composer + queue chip — just a layout container now
+   that Stop lives inside the composer__box itself. */
 .composer-with-stop {
   position: relative;
 }
-.stop-btn {
-  position: absolute;
-  top: -36px;
-  right: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--red, #dc2626);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  padding: 5px 12px;
-  font: 600 11.5px var(--sans);
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
-  transition: background 120ms;
-}
-.stop-btn:hover { background: #b91c1c; }
-.stop-btn__icon { font-size: 9px; line-height: 1; }
 
 /* Queue chip — appears above composer when user committed a follow-up
    while the agent was still responding. */

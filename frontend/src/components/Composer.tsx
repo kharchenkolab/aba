@@ -19,9 +19,12 @@ interface Props {
   streaming?: boolean
   /** Cmd/Ctrl+Enter while streaming = "Steer": cancel + send. */
   onSteer?: (text: string) => void
+  /** Stop button rendered inside the composer box. Visible only while
+   *  streaming. Icon-only, sits next to the Send arrow. */
+  onStop?: () => void
 }
 
-export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer }: Props) {
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop }: Props) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -125,6 +128,19 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           onKeyDown={handleKey}
           rows={1}
         />
+        {streaming && onStop && (
+          <button
+            type="button"
+            className="composer__stop"
+            onClick={onStop}
+            title="Stop the current turn (kills running work, drops queue)"
+            aria-label="Stop"
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="3" y="3" width="10" height="10" rx="1.5" />
+            </svg>
+          </button>
+        )}
         <button
           className="composer__send"
           onClick={submit}
