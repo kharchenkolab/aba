@@ -273,9 +273,16 @@
 }
 .drawer-fab:hover { background: var(--tree-active-bg); color: var(--text); }
 .drawer-fab.is-open { background: var(--accent); color: #fff; border-color: var(--accent); }
-/* Make the right-column containers position-relative so the FAB anchors. */
+/* Make the right-column containers position-relative so the FAB anchors.
+   For entity-first the surface-panel has overflow:hidden, so we anchor
+   to an outer .chat-peek-anchor instead. */
 .split--chat .thread-context,
-.split--entity .chat-peek { position: relative; }
+.split--entity .chat-peek-anchor { position: relative; }
+.split--entity .chat-peek-anchor {
+  display: flex; flex-direction: column;
+  min-height: 0; min-width: 0; overflow: visible;
+}
+.split--entity .chat-peek-anchor > .surface-panel { flex: 1; min-height: 0; }
 
 .drawer-overlay {
   position: fixed;

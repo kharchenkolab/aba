@@ -548,9 +548,12 @@ export default function App() {
             ) : (
               <>
                 {entityPanel(true)}
-                <div className="surface-panel chat-peek">
+                {/* Wrapper has overflow: visible so the FAB at top:-10px
+                    right:-10px is NOT clipped by surface-panel's
+                    overflow: hidden. */}
+                <div className="chat-peek-anchor">
                   {drawerToggle}
-                  {chatPane(true)}
+                  <div className="surface-panel chat-peek">{chatPane(true)}</div>
                 </div>
               </>
             )}
