@@ -98,24 +98,89 @@ def filter_tools_by_allowlist(tools: list[dict], allowlist: tuple[str, ...]) -> 
     return [t for t in tools if t.get("name") in keep]
 
 
-def run_advisor_one_shot(spec: AgentSpec, *, user_prompt: str, max_tokens: int = 400) -> str:
+def run_advisor_one_shot(
+    spec: AgentSpec,
+    *,
+    user_prompt: str,
+    max_tokens: int = 400,
+    parent_run_id: Optional[str] = None,
+    focus_entity_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+) -> str:
     """Single-shot advisor turn — non-streaming, no tools. Mirrors the
     one-shot pattern in today's advisors.py:_ask but driven by an
     AgentSpec instead of hardcoded constants.
+
+    B4: every invocation gets a persisted Turn row linked to its parent
+    Guide turn via parent_run_id, so /api/turns lists advisor runs
+    alongside Guide turns and the UI can navigate parent ↔ child. The
+    state machine is degenerate (GENERATING → DONE/FAILED) because the
+    Anthropic call is synchronous + non-tool-using, but the persistence
+    + observability is the win.
+
+    Cancellation of an in-flight advisor isn't supported yet — the
+    underlying messages.create() is a blocking call. When advisors move
+    to streaming + tools (Tier C), real cancellation lands.
 
     The full Agent(spec).run() with streaming + tools + state-machine
     coordination is the next milestone (deferred); this one-shot covers
     every existing advisor today.
     """
     from core.config import API_KEY, FAKE_SESSION
-    if FAKE_SESSION and spec.fake_text:
-        return spec.fake_text
-    import anthropic
-    client = anthropic.Anthropic(api_key=API_KEY)
-    msg = client.messages.create(
-        model=spec.model,
-        max_tokens=max_tokens,
-        system=spec.system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+    from core.runtime.turn import Turn, TurnState, gen_run_id
+    from core.runtime.checkpoint import checkpoint
+
+    # B4: allocate a Turn row at GENERATING. session_id rides the parent
+    # for parent-grouped /api/turns views; if there's no parent (e.g. a
+    # standalone advisor probe), use the advisor's own run_id as session.
+    run_id = gen_run_id()
+    turn = Turn(
+        run_id=run_id,
+        session_id=parent_run_id or run_id,
+        turn_index=0,
+        agent_spec_name=spec.name,
+        state=TurnState.GENERATING,
+        focus_entity_id=focus_entity_id,
+        thread_id=thread_id,
+        parent_run_id=parent_run_id,
     )
-    return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
+    try:
+        checkpoint(turn)
+    except Exception:  # noqa: BLE001
+        # Persistence is best-effort — never block the actual advisor call
+        # on a Turn write failure (e.g. DB still warming on startup).
+        pass
+
+    try:
+        if FAKE_SESSION and spec.fake_text:
+            text = spec.fake_text
+        else:
+            import anthropic
+            client = anthropic.Anthropic(api_key=API_KEY)
+            msg = client.messages.create(
+                model=spec.model,
+                max_tokens=max_tokens,
+                system=spec.system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            text = "".join(
+                b.text for b in msg.content if getattr(b, "type", None) == "text"
+            ).strip()
+            # Record usage so /api/turns/{id} surfaces token spend.
+            if getattr(msg, "usage", None):
+                turn.usage_in  = getattr(msg.usage, "input_tokens", 0) or 0
+                turn.usage_out = getattr(msg.usage, "output_tokens", 0) or 0
+        turn.transition(TurnState.DONE)
+    except Exception as e:  # noqa: BLE001
+        turn.error = {"type": type(e).__name__, "message": str(e)}
+        turn.transition(TurnState.FAILED)
+        try:
+            checkpoint(turn)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    try:
+        checkpoint(turn)
+    except Exception:  # noqa: BLE001
+        pass
+    return text

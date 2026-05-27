@@ -33,14 +33,26 @@ def load_turn(run_id: str) -> Optional[Turn]:
 
 
 def list_recent_turns(limit: int = 50) -> list[dict]:
-    """For /api/turns (diagnostic): the recent run roster."""
+    """For /api/turns (diagnostic): the recent run roster. Includes
+    parent_run_id (B4) extracted from the pending blob so the UI can
+    indent sub-agent runs under their parent without a second round-trip."""
+    import json
     with _conn() as c:
         rows = c.execute(
             "SELECT run_id, session_id, turn_index, agent_spec_name, state, "
-            "       focus_entity_id, thread_id, started_at, updated_at "
+            "       focus_entity_id, thread_id, pending_blob, started_at, updated_at "
             "FROM runs ORDER BY updated_at DESC LIMIT ?", (limit,)
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            pend = json.loads(d.pop("pending_blob") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            pend = {}
+        d["parent_run_id"] = pend.get("parent_run_id")
+        out.append(d)
+    return out
 
 
 def reap_stale_turns() -> int:

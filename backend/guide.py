@@ -463,6 +463,9 @@ async def stream_response(
                     "analysis_ctx": analysis_ctx,
                     "thread_id": store_tid,
                     "new_entities": [],
+                    # B4: hand the Guide's run_id to handlers so async-fired
+                    # advisor turns (Methodologist) can record parent_run_id.
+                    "parent_run_id": turn.run_id,
                 }
                 dispatch("on_post_tool", hook_ctx)
                 for ent in hook_ctx["new_entities"]:

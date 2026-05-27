@@ -12,11 +12,19 @@ from core.graph.entities import get_entity
 from core.runtime.agent import get_agent_spec, run_advisor_one_shot
 
 
-def _run(advisor_name: str, prompt: str, max_tokens: int = 400) -> Optional[str]:
+def _run(advisor_name: str, prompt: str, max_tokens: int = 400,
+         *, parent_run_id: Optional[str] = None,
+         focus_entity_id: Optional[str] = None,
+         thread_id: Optional[str] = None) -> Optional[str]:
     spec = get_agent_spec(advisor_name)
     if spec is None:
         return None
-    return run_advisor_one_shot(spec, user_prompt=prompt, max_tokens=max_tokens)
+    return run_advisor_one_shot(
+        spec, user_prompt=prompt, max_tokens=max_tokens,
+        parent_run_id=parent_run_id,
+        focus_entity_id=focus_entity_id,
+        thread_id=thread_id,
+    )
 
 
 def _build_skeptic_prompt(result: dict) -> str:
@@ -49,11 +57,14 @@ def _build_skeptic_prompt(result: dict) -> str:
     return "\n".join(bits)
 
 
-def skeptic_review(result_id: str) -> Optional[dict]:
+def skeptic_review(result_id: str, *,
+                   parent_run_id: Optional[str] = None,
+                   thread_id: Optional[str] = None) -> Optional[dict]:
     result = get_entity(result_id)
     if not result or result["type"] != "result":
         return None
-    text = _run("skeptic", _build_skeptic_prompt(result))
+    text = _run("skeptic", _build_skeptic_prompt(result),
+                parent_run_id=parent_run_id, focus_entity_id=result_id, thread_id=thread_id)
     if text is None:
         return None
     note_id = add_advisor_note(
@@ -63,7 +74,9 @@ def skeptic_review(result_id: str) -> Optional[dict]:
     return {"id": note_id, "entity_id": result_id, "advisor": "skeptic", "text": text}
 
 
-def methodologist_review(analysis_id: str) -> Optional[dict]:
+def methodologist_review(analysis_id: str, *,
+                         parent_run_id: Optional[str] = None,
+                         thread_id: Optional[str] = None) -> Optional[dict]:
     e = get_entity(analysis_id)
     if not e or e["type"] != "analysis":
         return None
@@ -77,7 +90,8 @@ def methodologist_review(analysis_id: str) -> Optional[dict]:
         f"Analysis: {e['title']}\n\nProducing code:\n```python\n{code}\n```\n\n"
         "Review the methodology. What's the most important thing to check?"
     )
-    text = _run("methodologist", prompt)
+    text = _run("methodologist", prompt,
+                parent_run_id=parent_run_id, focus_entity_id=analysis_id, thread_id=thread_id)
     if text is None:
         return None
     note_id = add_advisor_note(analysis_id, advisor="methodologist", text=text,
@@ -85,7 +99,9 @@ def methodologist_review(analysis_id: str) -> Optional[dict]:
     return {"id": note_id, "entity_id": analysis_id, "advisor": "methodologist", "text": text}
 
 
-def explorer_suggest(dataset_id: str) -> Optional[dict]:
+def explorer_suggest(dataset_id: str, *,
+                     parent_run_id: Optional[str] = None,
+                     thread_id: Optional[str] = None) -> Optional[dict]:
     e = get_entity(dataset_id)
     if not e or e["type"] != "dataset":
         return None
@@ -104,7 +120,8 @@ def explorer_suggest(dataset_id: str) -> Optional[dict]:
         f"Dataset: {e['title']}\nColumns: {cols or 'unknown'}\n\n"
         "Suggest one high-value analysis the scientist hasn't done yet."
     )
-    text = _run("explorer", prompt)
+    text = _run("explorer", prompt,
+                parent_run_id=parent_run_id, focus_entity_id=dataset_id, thread_id=thread_id)
     if text is None:
         return None
     note_id = add_advisor_note(dataset_id, advisor="explorer", text=text,
@@ -112,7 +129,9 @@ def explorer_suggest(dataset_id: str) -> Optional[dict]:
     return {"id": note_id, "entity_id": dataset_id, "advisor": "explorer", "text": text}
 
 
-def stylist_review(narrative_id: str) -> Optional[dict]:
+def stylist_review(narrative_id: str, *,
+                   parent_run_id: Optional[str] = None,
+                   thread_id: Optional[str] = None) -> Optional[dict]:
     e = get_entity(narrative_id)
     if not e or e["type"] != "narrative":
         return None
@@ -120,7 +139,8 @@ def stylist_review(narrative_id: str) -> Optional[dict]:
     if not text_in:
         return None
     prompt = f"Passage:\n{text_in}\n\nWhat's the one change that would most improve it?"
-    text = _run("stylist", prompt)
+    text = _run("stylist", prompt,
+                parent_run_id=parent_run_id, focus_entity_id=narrative_id, thread_id=thread_id)
     if text is None:
         return None
     note_id = add_advisor_note(narrative_id, advisor="stylist", text=text,
