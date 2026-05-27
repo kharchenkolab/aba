@@ -1637,6 +1637,47 @@ def manifest_preview(focus_entity_id: str | None = None, thread_id: str | None =
     return {"manifest": m.to_dict()}
 
 
+@app.get("/api/files/tree")
+def files_tree(include_archived: bool = False):
+    """Virtual files view (files.md §6). Lists every artifact-bearing
+    entity in the active project, computed display_path attached, ready
+    for the frontend to render as a folder tree.
+
+    Each item: {entity_id, type, title, display_path, artifact_path?,
+    size? (bytes if on disk), created_at, status}.
+    """
+    import os
+    from core.files.registry import display_path_for
+    # Ensure layout computers are registered (bio side wires them).
+    import content.bio  # noqa: F401
+    items = []
+    for e in list_entities(include_archived=include_archived):
+        if e["type"] == "workspace":
+            continue
+        dp = display_path_for(e)
+        size = None
+        artifact = e.get("artifact_path")
+        if artifact and artifact.startswith("/artifacts/"):
+            disk_path = ARTIFACTS_DIR / Path(artifact).name
+            try:
+                size = disk_path.stat().st_size
+            except OSError:
+                size = None
+        items.append({
+            "entity_id": e["id"],
+            "type": e["type"],
+            "title": e["title"],
+            "status": e["status"],
+            "display_path": dp,
+            "artifact_path": artifact,
+            "size": size,
+            "created_at": e["created_at"],
+            "pinned": e.get("pinned", False),
+        })
+    items.sort(key=lambda x: x["display_path"])
+    return {"items": items}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

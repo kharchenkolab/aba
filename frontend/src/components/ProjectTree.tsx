@@ -4,6 +4,7 @@ import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
 import { RailIcon, type RailIconName } from './icons'
+import FilesView from './FilesView'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
@@ -304,7 +305,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       </div>
 
       <div className="tree__scroll">
-        {activeSection === 'threads' ? (() => {
+        {activeSection === 'files' ? (
+          <FilesView focusedId={focusedId} onFocus={onFocus} reloadKey={entities.length} />
+        ) : activeSection === 'threads' ? (() => {
           const threadList = [
             { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
             ...threads.map(t => ({
