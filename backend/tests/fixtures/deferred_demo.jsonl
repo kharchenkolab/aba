@@ -1,0 +1,4 @@
+# P2 #4 acceptance: model calls a tool that returns deferred (turn 1, halts);
+# webhook posts the real result; model continues (turn 2).
+{"blocks": [{"type": "text", "text": "Kicking off the long thing."}, {"type": "tool_use", "name": "_deferred_demo", "input": {"id": "demo-1"}}]}
+{"blocks": [{"type": "text", "text": "Got the result, summarizing."}]}
