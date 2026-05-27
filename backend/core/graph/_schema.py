@@ -92,10 +92,13 @@ def init_db():
             )
         """)
         for col, ddl in (
-            ("tags",        "ALTER TABLE entities ADD COLUMN tags TEXT"),
-            ("notes",       "ALTER TABLE entities ADD COLUMN notes TEXT"),
-            ("pinned",      "ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"),
-            ("deleted_at",  "ALTER TABLE entities ADD COLUMN deleted_at TEXT"),
+            ("tags",         "ALTER TABLE entities ADD COLUMN tags TEXT"),
+            ("notes",        "ALTER TABLE entities ADD COLUMN notes TEXT"),
+            ("pinned",       "ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"),
+            ("deleted_at",   "ALTER TABLE entities ADD COLUMN deleted_at TEXT"),
+            # F3 (files.md): derived display path from title + conventions.
+            # Idempotent; recomputed by bio.graph.display.recompute_display_path.
+            ("display_path", "ALTER TABLE entities ADD COLUMN display_path TEXT"),
         ):
             if not _column_exists(c, "entities", col):
                 c.execute(ddl)

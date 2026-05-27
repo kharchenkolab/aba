@@ -48,6 +48,11 @@ def create_entity(
 
 
 def _row_to_entity(r) -> dict:
+    # display_path may be absent on rows from older schemas — tolerate.
+    try:
+        dp = r["display_path"]
+    except (KeyError, IndexError):
+        dp = None
     return {
         "id": r["id"],
         "type": r["type"],
@@ -62,6 +67,7 @@ def _row_to_entity(r) -> dict:
         "tags": json.loads(r["tags"]) if r["tags"] else [],
         "notes": r["notes"],
         "pinned": bool(r["pinned"]) if r["pinned"] is not None else False,
+        "display_path": dp,
         "deleted_at": r["deleted_at"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
@@ -124,7 +130,7 @@ def count_entities(
 def update_entity(entity_id: str, **fields) -> Optional[dict]:
     """Partial update. Accepted fields: title, notes, tags, pinned, status,
     metadata, artifact_path. Other keys silently ignored."""
-    allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path"}
+    allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path", "display_path"}
     sets = []
     args = []
     for k, v in fields.items():

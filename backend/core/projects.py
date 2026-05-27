@@ -103,6 +103,13 @@ def set_current(pid: str) -> None:
     _state["current"] = pid
     init_db()          # idempotent — ensures tables exist
     _touch(pid)
+    # F3: backfill display_path for any entity in this project that
+    # predates the column / bio's layout computers. Cheap; idempotent.
+    try:
+        from content.bio.graph.display import backfill_missing_display_paths
+        backfill_missing_display_paths()
+    except Exception:  # noqa: BLE001
+        pass           # never block project switch on a backfill failure
 
 
 def current() -> str | None:

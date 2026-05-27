@@ -137,7 +137,17 @@ def register_artifacts_from_tool_result(
             if rec:
                 new_records.append(rec)
 
-    return new_records
+    # F3: persist display_path for everything we just registered. Re-fetch
+    # afterwards so the new value flows back to the caller (and the SSE
+    # entity_registered event the UI consumes).
+    from content.bio.graph.display import recompute_display_path
+    refreshed = []
+    for rec in new_records:
+        recompute_display_path(rec["id"])
+        latest = get_entity(rec["id"])
+        if latest:
+            refreshed.append(latest)
+    return refreshed
 
 
 _TITLE_PATTERNS = [
