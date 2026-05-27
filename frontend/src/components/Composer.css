@@ -28,7 +28,9 @@
   color: var(--text);
   background: transparent;
   min-height: 22px;
-  max-height: 160px;
+  /* Max-height is set inline by the auto-grow hook (vh-relative); leave
+     CSS open so a big paste can actually surface. overflow-y: auto so
+     once the cap is hit, the textarea scrolls internally. */
   overflow-y: auto;
 }
 .composer__input::placeholder { color: var(--text-4); }
