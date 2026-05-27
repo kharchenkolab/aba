@@ -75,6 +75,36 @@ describe('useUrlState — parsing', () => {
     expect(result.current.section).toBe('threads')
     expect(result.current.threadId).toBe('T')
   })
+
+  it('parses /files/e/<eid> as section=files + entity (no file open)', () => {
+    // Regression: previously this URL was misparsed as filePath='e/<eid>',
+    // and FileCanvas tried to fetch that path → 404 ("Viewer lookup
+    // failed"). It happens when the user clicks the Files tab while an
+    // entity is focused.
+    const { result } = renderHook(() => useUrlState(), { wrapper: wrap('/p/X/files/e/res_abc') })
+    expect(result.current.section).toBe('files')
+    expect(result.current.filePath).toBe('')
+    expect(result.current.focusedId).toBe('res_abc')
+  })
+
+  it('parses /files/t/<tid> as section=files + thread (no file open)', () => {
+    const { result } = renderHook(() => useUrlState(), { wrapper: wrap('/p/X/files/t/T/e/E') })
+    expect(result.current.section).toBe('files')
+    expect(result.current.filePath).toBe('')
+    expect(result.current.threadId).toBe('T')
+    expect(result.current.focusedId).toBe('E')
+  })
+
+  it('files path that LOOKS like a normal segment but isn\'t reserved still parses as filePath', () => {
+    // "threads" is a section name (consumed as a section before /files/),
+    // not a reserved nav word. After /files/, only t/e/overview/inventory
+    // are reserved.
+    const { result } = renderHook(() => useUrlState(), {
+      wrapper: wrap('/p/X/files/threads/01_foo/README.md'),
+    })
+    expect(result.current.section).toBe('files')
+    expect(result.current.filePath).toBe('threads/01_foo/README.md')
+  })
 })
 
 describe('useUrlState — setters', () => {
