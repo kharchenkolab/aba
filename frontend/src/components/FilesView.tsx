@@ -121,27 +121,15 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
     }
   }
 
-  // Click handler for file rows. The discriminator is whether the row
-  // represents the file's own identity (an entity that IS that file —
-  // figure, table, claim, dataset) or just shares an entity_id for
-  // provenance (READMEs describe their container; synthesized text
-  // members reference a result).
+  // The Files tab is file-viewer focused. Any file click — regardless
+  // of whether the file's bytes are entity-backed — goes through the
+  // viewer dispatcher (FileCanvas), which picks the right viewer based
+  // on content (image, markdown, code, table, external launcher, …).
   //
-  // - kind === 'readme'        → always FileCanvas (a README is the
-  //                              container's description, not the entity).
-  // - file without entity_id   → FileCanvas.
-  // - file with entity_id      → onFocus (rich app view in FocusCanvas).
-  //
-  // Folders use a different handler — see the folder branch below.
+  // Folders go through a different handler in the folder branch below:
+  // a folder backed by a container entity focuses that entity (rich
+  // FocusCanvas view); a folder without entity backing just expands.
   function activate(node: TreeNode) {
-    if (node.kind === 'readme') {
-      if (onViewFile) onViewFile(node)
-      return
-    }
-    if (node.entity_id) {
-      onFocus(node.entity_id)
-      return
-    }
     if (onViewFile) onViewFile(node)
   }
 
