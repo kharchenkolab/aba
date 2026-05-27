@@ -136,17 +136,14 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
             title="Stop the current turn (kills running work, drops queue)"
             aria-label="Stop"
           >
-            {/* Traffic-style stop-sign octagon — clean filled shape with
-                a thin white outer border, rounded line joins so the
-                corners read soft at small sizes. */}
-            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-              <polygon
-                points="8.5,2 15.5,2 22,8.5 22,15.5 15.5,22 8.5,22 2,15.5 2,8.5"
-                fill="currentColor"
-                stroke="#fff"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
+            {/* Prohibition / "no" symbol — red circle ring with a
+                diagonal slash through it. Universally read as "stop /
+                not allowed". */}
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9.5"
+                      fill="none" stroke="currentColor" strokeWidth="2.5" />
+              <line x1="5.3" y1="5.3" x2="18.7" y2="18.7"
+                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
             </svg>
           </button>
         )}
