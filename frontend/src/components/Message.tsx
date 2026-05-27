@@ -169,9 +169,12 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
     } else if (b.type === 'error') {
       out.push(<ErrorLine key={i} text={b.text} detail={b.detail} onRetry={onRetry} />)
     } else if (b.type === 'notice') {
+      // Spinner only while the message is still streaming — terminal
+      // notices like '(cancelled)' that get committed after streaming
+      // ends shouldn't keep spinning.
       out.push(
         <div key={i} className="msg-notice">
-          <span className="tool-spinner" />
+          {isStreaming && <span className="tool-spinner" />}
           <span>{b.text}</span>
         </div>,
       )
