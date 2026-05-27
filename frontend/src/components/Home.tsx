@@ -33,7 +33,7 @@ interface Summary {
 
 interface Props {
   /** Reload entities + chat for the (now-active) project and enter its view. */
-  onEnter: () => void
+  onEnter: (pid: string) => void
   /** Notify the shell that the project set changed (so it can re-gate nav). */
   onProjectsChanged?: () => void
 }
@@ -106,23 +106,25 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   async function submitCreate(name: string, file: File | null) {
     setBusy(true)
     try {
-      await fetch('/api/projects', {
+      const r = await fetch('/api/projects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim() || 'Untitled project' }),
       })
+      const created = await r.json() as { id: string }
       if (file) { const f = new FormData(); f.append('file', file); await fetch('/api/upload', { method: 'POST', body: f }) }
-      setModal(null); onEnter()
+      setModal(null); onEnter(created.id)
     } finally { setBusy(false) }
   }
   async function trySample() {
     setBusy(true)
     try {
-      await fetch('/api/projects', {
+      const r = await fetch('/api/projects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'Sample project' }),
       })
+      const created = await r.json() as { id: string }
       await fetch('/api/sample-project', { method: 'POST' })
-      onEnter()
+      onEnter(created.id)
     } finally { setBusy(false) }
   }
   async function submitRename(pid: string, name: string) {
@@ -214,7 +216,8 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 </div>
                 <div className="home__cur-actions">
                   {current && menu(current)}
-                  <button className="home__btn home__btn--primary" disabled={busy} onClick={onEnter}>Open project →</button>
+                  <button className="home__btn home__btn--primary" disabled={busy || !current}
+                          onClick={() => current && onEnter(current.id)}>Open project →</button>
                 </div>
               </div>
 
@@ -238,7 +241,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                   ) : (
                     <div className="home__events">
                       {summary?.recent_events.map(ev => (
-                        <button key={ev.id} className="home__event" onClick={onEnter}>
+                        <button key={ev.id} className="home__event" onClick={() => current && onEnter(current.id)}>
                           <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
                           <span className="home__event-title">{ev.title ?? ''}</span>
                           <span className="home__event-date">{rel(ev.ts)}</span>

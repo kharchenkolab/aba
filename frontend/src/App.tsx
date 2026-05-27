@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useUrlState } from './useUrlState'
 import './App.css'
 import Rail from './components/Rail'
 import ProjectTree from './components/ProjectTree'
@@ -56,9 +57,22 @@ function entityLabel(e: Entity | null): string {
 }
 
 export default function App() {
-  const [view, setView] = useState<'home' | 'workspace'>('home')
+  // Phase 1 routing: URL is canonical for project / thread / focused entity.
+  // The legacy variable names (focusedId, threadId, view, projectKey) are
+  // preserved so the dozens of existing call sites don't churn — but their
+  // values now come from / write to the URL via useUrlState.
+  const url = useUrlState()
+  const focusedId   = url.focusedId
+  const setFocusedId = url.setFocus
+  const threadId    = url.threadId
+  const setThreadId = url.setThread
+  const view: 'home' | 'workspace' = url.isHome ? 'home' : 'workspace'
+  // Remount-key for the chat thread: changes whenever the URL project changes,
+  // forcing useChat to discard in-flight stream + refetch the new project's
+  // conversation. '_home' just keeps the key non-empty when no project.
+  const projectKey = url.pid ?? '_home'
+
   const [projectSection, setProjectSection] = useState<ProjectSection>('threads')
-  const [focusedId, setFocusedId] = useState<string>('workspace')
   // Synthesized / non-entity file currently viewed in the central column
   // (e.g., a README clicked from the Files tab). When set, the entity
   // panel renders FileCanvas instead of FocusCanvas; clearing it (or
@@ -81,9 +95,7 @@ export default function App() {
   }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
-  const [projectKey, setProjectKey] = useState(0)
   const [hasProject, setHasProject] = useState(true)
-  const [threadId, setThreadId] = useState('default')   // current line of inquiry
   const [inventory, setInventory] = useState(false)     // thread inventory mode (P9)
   const [overview, setOverview] = useState(false)       // project overview mode (P8)
   const [chatReload, setChatReload] = useState(0)       // bump to refetch the thread's messages
@@ -98,25 +110,52 @@ export default function App() {
   }
   useEffect(() => { refreshCurrent() }, [])
 
-  // Enter the (already server-side active) project: reset focus, reload its
-  // entities + chat thread, and switch to the workspace view.
-  const enterProject = () => {
-    setFocusedId('workspace')
+  // Bootstrap: if landing at "/" with a server-side current project, route
+  // directly into it so reload / first-visit puts you back where you were.
+  useEffect(() => {
+    if (!url.isHome) return
+    fetch('/api/projects/current')
+      .then(r => r.json())
+      .then(d => { if (d.current) url.setProject(d.current) })
+      .catch(() => {})
+    // Only on initial home landing; subsequent navigations are URL-driven.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // URL pid changed: sync the server-side current project, reset transient
+  // UI state, and refresh entities. Idempotent — a no-op when pid matches
+  // the server already.
+  useEffect(() => {
+    if (!url.pid) return
     setPosture('chat')
     setAnnotation(null)
-    setThreadId('default')      // new project starts on its default thread
     setInventory(false)
-    setProjectKey(k => k + 1)   // remounts the chat thread for the new project
-    refresh()
-    refreshCurrent()
-    setView('workspace')
-  }
+    fetch('/api/projects/current')
+      .then(r => r.json())
+      .then(d => {
+        if (d.current !== url.pid) {
+          return fetch(`/api/projects/${encodeURIComponent(url.pid!)}/open`, { method: 'POST' })
+        }
+      })
+      .then(() => { refresh(); refreshCurrent() })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url.pid])
+
+  // Enter a project picked in Home: pure navigation; the useEffect above
+  // does the server sync + state reset.
+  const enterProject = (pid: string) => { url.setProject(pid) }
 
   // Rail nav: there's no project to open in the true empty state, so the
   // "Project" item falls back to Home until one exists.
-  const navigate = (v: 'home' | 'workspace') => {
-    if (v === 'workspace' && !hasProject) { setView('home'); return }
-    setView(v)
+  const goToView = (v: 'home' | 'workspace') => {
+    if (v === 'home') { url.goHome(); return }
+    if (!hasProject) { url.goHome(); return }
+    // 'workspace' with no specific pid yet — fetch current and route into it
+    fetch('/api/projects/current')
+      .then(r => r.json())
+      .then(d => { if (d.current) url.setProject(d.current) })
+      .catch(() => {})
   }
 
   // Cmd/Ctrl-K opens fallback search.
@@ -345,7 +384,7 @@ export default function App() {
   if (view === 'home') {
     return (
       <div className="app app--home">
-        <Rail onEntitiesChanged={refresh} view={view} onNavigate={navigate} />
+        <Rail onEntitiesChanged={refresh} view={view} onNavigate={goToView} />
         <Home onEnter={enterProject} onProjectsChanged={refreshCurrent} />
       </div>
     )
@@ -455,7 +494,7 @@ export default function App() {
       <Rail
         onEntitiesChanged={refresh}
         view={view}
-        onNavigate={navigate}
+        onNavigate={goToView}
         collapsed={treeCollapsed}
         projectTitle={projectName}
         sectionCounts={sectionCounts}
