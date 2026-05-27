@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot } from './types'
 
 type RawMsg = { role: string; content: unknown[]; ts?: string }
 
@@ -93,6 +93,7 @@ export function useChat(
   const [streaming, setStreaming] = useState(false)
   const [loading, setLoading] = useState(false)   // fetching a thread's history
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
+  const [manifest, setManifest] = useState<ManifestSnapshot | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -217,6 +218,10 @@ export function useChat(
             } else if (ev.type === 'plan') {
               streamingBlocks.push({ type: 'plan', title: ev.title, steps: asSteps(ev.steps), rationale: ev.rationale })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+            } else if (ev.type === 'manifest') {
+              // T2.4: drawer sidecar. The model only ever sees the rendered
+              // system string; the JSON here is for visibility/inspection.
+              setManifest(ev.manifest)
             } else if (ev.type === 'entity_registered') {
               onERRef.current?.()
             } else if (ev.type === 'done') {
@@ -277,5 +282,5 @@ export function useChat(
     await runStream({ retry: true })
   }, [streaming, runStream, loadMessages])
 
-  return { messages, streaming, streamMsg, sendMessage, retryLast, loading }
+  return { messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest }
 }

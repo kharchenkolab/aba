@@ -11,6 +11,7 @@ import PostureToggle, { type Posture } from './components/PostureToggle'
 import SearchModal from './components/SearchModal'
 import ThreadHeader from './components/ThreadHeader'
 import PinnedShelf from './components/PinnedShelf'
+import Drawer from './components/Drawer'
 import ThreadOverview from './components/ThreadOverview'
 import ProjectOverview from './components/ProjectOverview'
 import { useProposals, ProposalCard, UndoToast } from './components/Proposals'
@@ -121,9 +122,10 @@ export default function App() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
-  const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading } = useChat(
+  const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   // Cold-start orientation: when a thread has data but no conversation yet, ask
   // the Guide to post an opening summary + next steps. Idempotent server-side;
@@ -543,6 +545,24 @@ export default function App() {
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)}
                    onPick={openEntity} />
       <UndoToast undoable={undoable} onUndo={undoProposal} onClose={clearUndo} />
+
+      {/* T2.4 Drawer: slides in from the right; toggled by the FAB. */}
+      {drawerOpen && (
+        <div className="drawer-overlay">
+          <Drawer
+            manifest={manifest}
+            threadId={threadId === 'default' ? (currentThread?.id ?? null) : threadId}
+            onClose={() => setDrawerOpen(false)}
+          />
+        </div>
+      )}
+      <button
+        className={`drawer-fab ${drawerOpen ? 'is-open' : ''}`}
+        onClick={() => setDrawerOpen(o => !o)}
+        title="Show what the agent is seeing this turn"
+      >
+        ⓘ
+      </button>
     </div>
   )
 }

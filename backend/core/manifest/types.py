@@ -51,3 +51,28 @@ class Manifest:
         if self.focus is None:
             return []
         return list(self.focus.fields_loaded)
+
+    def to_dict(self) -> dict:
+        """JSON-serializable snapshot for the SSE sidecar / drawer UI."""
+        return {
+            "session_id": self.session_id,
+            "turn_index": self.turn_index,
+            "focus": (
+                {
+                    "entity_id": self.focus.entity_id,
+                    "entity_type": self.focus.entity_type,
+                    "title": self.focus.title,
+                    "status": self.focus.status,
+                    "text": self.focus.text,
+                    "fields_loaded": list(self.focus.fields_loaded),
+                }
+                if self.focus
+                else None
+            ),
+            "thread": (
+                {"thread_id": self.thread.thread_id, "text": self.thread.text}
+                if self.thread
+                else None
+            ),
+            "policy_text": self.policy_text,
+        }

@@ -221,6 +221,12 @@ async def stream_response(
     turn.thread_id = store_tid
     checkpoint(turn)  # initial Turn row before the loop runs
 
+    # Drawer sidecar: send the structured Manifest snapshot to the client
+    # so the right-rail drawer can render what the agent is currently
+    # seeing. The model only ever consumes the rendered system string;
+    # this is a UI-only stream.
+    yield sse({"type": "manifest", "manifest": manifest.to_dict()})
+
     try:
         while True:
             turn.transition(TurnState.GENERATING); checkpoint(turn)
@@ -290,6 +296,7 @@ async def stream_response(
                 fields_preloaded=fields_preloaded,
                 tool_calls=tool_calls_this_turn,
                 turn_text_len=len(text_out),
+                manifest=manifest.to_dict(),
             )
             turn_index += 1
             turn.turn_index = turn_index
