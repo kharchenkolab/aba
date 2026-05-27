@@ -1692,6 +1692,64 @@ def files_tree(include_archived: bool = False):
     return {"items": items}
 
 
+@app.get("/api/files/download")
+def files_download_zip(path: str = ""):
+    """Stream a ZIP of every file under the given display-path prefix
+    (files.md §6 + F4). Empty path = the whole tree.
+
+    Items inside the zip are laid out using display_path so the
+    recipient sees the same folder tree the in-app Files view shows.
+    """
+    import io
+    import zipfile
+    from core.files.materialize import _resolve_artifact_disk_path
+    from core.files.registry import display_path_for
+    # Normalize path: strip leading/trailing slashes for matching.
+    prefix = path.strip("/")
+    matched: list[tuple[str, Path]] = []
+    for e in list_entities(include_archived=False):
+        if e["type"] == "workspace":
+            continue
+        rel = e.get("display_path") or display_path_for(e)
+        if rel.endswith("/"):
+            continue  # directory entities — covered by their members
+        if prefix and not rel.startswith(prefix):
+            continue
+        artifact = e.get("artifact_path")
+        if not artifact:
+            continue
+        src = _resolve_artifact_disk_path(artifact)
+        if src and src.exists():
+            matched.append((rel, src))
+    if not matched:
+        raise HTTPException(404, f"no downloadable files at {path!r}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel, src in matched:
+            zf.write(src, arcname=rel)
+    buf.seek(0)
+    fname = (prefix.rstrip("/").rsplit("/", 1)[-1] or "files") + ".zip"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/api/projects/{pid}/materialize")
+def project_materialize(pid: str, clean: bool = False, include_archived: bool = False):
+    """Build projects/<pid>/files/ as a navigable folder tree on disk
+    (files.md §8). Symlinks where supported, copies on systems that
+    can't. Idempotent — running it twice converges.
+    """
+    from core.files.materialize import materialize_tree
+    from core import projects
+    out = projects.PROJECTS_DIR / pid / "files"
+    summary = materialize_tree(out, include_archived=include_archived, clean=clean)
+    return summary
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

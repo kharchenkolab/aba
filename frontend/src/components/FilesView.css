@@ -76,3 +76,16 @@
   color: var(--text-4);
 }
 .files__error { color: #b91c1c; font-style: normal; }
+
+.files__notice {
+  font-size: 11px; color: var(--text-3);
+  padding: 6px 8px; background: var(--bg-soft, #f6f5f3);
+  border: 1px solid var(--border); border-radius: 4px;
+  margin: 4px 6px 6px;
+  word-break: break-all;
+  font-family: var(--mono);
+}
+button.files__head-action {
+  cursor: pointer;
+  font-family: inherit;
+}
