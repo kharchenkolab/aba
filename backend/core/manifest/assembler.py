@@ -140,8 +140,16 @@ def build_manifest(
     turn_index: int,
     focus_entity_id: Optional[str] = None,
     thread_id: Optional[str] = None,
+    role: str = "primary",
 ) -> Manifest:
     """Compose the Manifest for one Guide (or advisor) turn.
+
+    `role` (A3) selects the audience: "primary" gets focus + thread +
+    policy; advisor roles get focus + policy only (no thread firehose).
+    Today the structural difference is small — Manifest doesn't yet
+    encode different recent-activity windows by role — but the
+    parameter is plumbed so future passes (B-tier) can narrow context
+    per role without changing call sites.
 
     Does not touch tools, knowledge files, memory, or skills — those
     slots get filled by the system-prompt assembler at render time.
@@ -149,9 +157,11 @@ def build_manifest(
     focus, policy_text = _build_focus(focus_entity_id)
 
     thread: ThreadContext | None = None
-    if thread_id:
+    if thread_id and role == "primary":
         # Bio owns the thread-context text shape (pinned figures, claims).
         # Deferred import to avoid pulling bio at module-load time.
+        # Advisors don't get the thread firehose — they're invoked for
+        # a focused critique, not to drive a conversation forward.
         from content.bio.cards.thread import render_thread_context  # noqa: seam
         text = render_thread_context(thread_id)
         thread = ThreadContext(thread_id=thread_id, text=text)

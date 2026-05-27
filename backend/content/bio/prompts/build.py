@@ -1,11 +1,13 @@
 """Bio system-prompt assembler.
 
-Composes per-turn system prompts from markdown blocks in this directory
-plus a dynamic capabilities block built from the active tool set.
+Composes per-turn system prompts from a declared list of blocks. Each
+block knows (a) which roles it applies to and (b) which tool, if any,
+must be active for it to render. This lets `build_system(active_tools,
+role=...)` deliver a primary-Guide prompt with recipes / scenarios /
+plan_first, an advisor prompt with just identity + behavior, etc.
 
-Order: identity → capabilities(active_tools) → recipes → [scenarios] →
-behavior → [plan_first]. The bracketed blocks drop when their gating
-tool is absent (disabled tools yield a tighter prompt).
+A3 (agent_conditioning_plan.md): per-role manifest filtering. The role
+defaults to "primary" for the existing Guide call site.
 
 In Pass C this is wrapped by core/manifest/system_prompt_assembler.py,
 which composes Manifest.knowledge_text from prompt + memory + policy.
@@ -13,8 +15,10 @@ For now bio owns the assembly directly; the assembler call site in
 guide.py imports `build_system` from here.
 """
 from __future__ import annotations
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable, Optional
 
 _HERE = Path(__file__).parent
 _BIO_ROOT = _HERE.parent  # backend/content/bio/
@@ -37,6 +41,8 @@ def _bio_doc(relpath: str) -> str:
 def _capabilities_block(active_tools: list[dict]) -> str:
     """Dynamic block — list each active tool's name + first sentence of its
     description. Stays in code because it composes runtime state, not text."""
+    if not active_tools:
+        return ""
     lines = ["Your tools (use them directly for routine reads — don't ask permission):"]
     for t in active_tools:
         desc = " ".join((t.get("description") or "").split())
@@ -45,21 +51,58 @@ def _capabilities_block(active_tools: list[dict]) -> str:
     return "\n".join(lines) + "\n\n" + _prompt("sandbox_libs.md")
 
 
-def build_system(active_tools: list[dict]) -> str:
-    """Assemble the Guide's system prompt for this turn."""
+@dataclass(frozen=True)
+class _Block:
+    """One slot in the system prompt.
+
+    roles=None  → applies to every role
+    roles={"primary"} → only the streaming, halt-capable Guide gets it
+    required_tool=None → render unconditionally (subject to role)
+    required_tool="present_plan" → only when that tool is in active_tools
+    render(active_tools) → returns the block text, or "" to skip
+    """
+    name:          str
+    roles:         Optional[frozenset[str]]
+    required_tool: Optional[str]
+    render:        Callable[[list[dict]], str]
+
+
+def _md(name: str) -> Callable[[list[dict]], str]:
+    """Closure that ignores active_tools and returns a static .md file."""
+    return lambda _tools: _prompt(name)
+
+
+def _conventions(_tools: list[dict]) -> str:
+    body = _bio_doc("conventions.md")
+    return ("### File conventions\n\n" + body) if body else ""
+
+
+_BLOCKS: tuple[_Block, ...] = (
+    _Block("identity",     None,                   None,             _md("identity.md")),
+    _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
+    _Block("recipes",      frozenset({"primary"}), None,             _md("recipes.md")),
+    _Block("scenarios",    frozenset({"primary"}), "create_scenario", _md("scenarios.md")),
+    _Block("behavior",     None,                   None,             _md("behavior.md")),
+    _Block("conventions",  None,                   None,             _conventions),
+    _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
+)
+
+
+def build_system(active_tools: list[dict], role: str = "primary") -> str:
+    """Assemble a role-appropriate system prompt for this turn.
+
+    role defaults to "primary" (the Guide). Advisor roles (e.g.
+    "skeptic", "methodologist") get a trimmed prompt — no recipes,
+    no scenarios, no plan_first, and no capabilities listing when
+    they have no tools."""
     names = {t["name"] for t in active_tools}
-    blocks = [
-        _prompt("identity.md"),
-        _capabilities_block(active_tools),
-        _prompt("recipes.md"),
-    ]
-    if "create_scenario" in names:
-        blocks.append(_prompt("scenarios.md"))
-    blocks.append(_prompt("behavior.md"))
-    # File conventions — drives generated titles + future display paths.
-    conventions = _bio_doc("conventions.md")
-    if conventions:
-        blocks.append("### File conventions\n\n" + conventions)
-    if "present_plan" in names:
-        blocks.append(_prompt("plan_first.md"))
-    return "\n\n".join(blocks)
+    parts: list[str] = []
+    for blk in _BLOCKS:
+        if blk.roles is not None and role not in blk.roles:
+            continue
+        if blk.required_tool is not None and blk.required_tool not in names:
+            continue
+        text = blk.render(active_tools)
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
