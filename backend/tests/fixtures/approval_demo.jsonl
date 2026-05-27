@@ -1,0 +1,4 @@
+# P1 #3 acceptance: model calls a flagged tool (turn 1, halts on approval),
+# then continues after the user approves (turn 2).
+{"blocks": [{"type": "text", "text": "I'll list the data files."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "Got the file list, proceeding."}]}

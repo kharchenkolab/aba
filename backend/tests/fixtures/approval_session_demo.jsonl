@@ -1,0 +1,5 @@
+# Halt once (first call to flagged tool), approve_session, then call again
+# in the same session — second call should NOT re-halt.
+{"blocks": [{"type": "text", "text": "Step 1."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "Step 2 — another call."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "All done."}]}

@@ -93,6 +93,24 @@ export interface PendingClarification {
   question: string
 }
 
+/** P1 #3 — the Guide paused on a per-tool approval. Tool with
+ *  approval_policy != 'never' won't run until the user explicitly says
+ *  so. Rare by design (the bar is "real money / hard-to-reverse"). */
+export interface ApprovalPendingEvent {
+  type: 'approval_pending'
+  tool_name: string
+  summary: string
+  tool_use_id: string
+  run_id: string
+  policy: string
+}
+export interface PendingApproval {
+  runId: string
+  toolName: string
+  summary: string
+  policy: string
+}
+
 /** Structured per-turn context (T2.4 Drawer). Mirrors core.manifest.types.Manifest.to_dict(). */
 export interface ManifestSnapshot {
   session_id: string
@@ -128,6 +146,7 @@ export type SSEEvent =
   | PlanEvent
   | ManifestEvent
   | ClarificationPendingEvent
+  | ApprovalPendingEvent
 
 // ---------- Entities ----------
 

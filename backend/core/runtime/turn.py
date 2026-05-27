@@ -52,6 +52,8 @@ class Turn:
     pending_tool_calls: list[dict] = field(default_factory=list)
     pending_tool_ids: list[str] = field(default_factory=list)   # in-flight tool_use ids (A1)
     pending_user_signal: Optional[str] = None      # plan | clarify | approval
+    pending_approval: Optional[dict] = None         # P1#3: held tool awaiting user approval
+                                                   #   {tool_name, tool_input, tool_use_id, policy}
     final_message:    Optional[dict] = None
     error:            Optional[dict] = None
     usage_in:         int = 0
@@ -83,6 +85,7 @@ class Turn:
                 "entity_id":     self.entity_id,
                 "parent_run_id": self.parent_run_id,
                 "plan_entity_id": self.plan_entity_id,
+                "pending_approval": self.pending_approval,
             }),
             "error_blob":      json.dumps(self.error) if self.error else None,
             "usage_blob":      json.dumps({
@@ -114,6 +117,7 @@ class Turn:
             entity_id=pend.get("entity_id"),
             parent_run_id=pend.get("parent_run_id"),
             plan_entity_id=pend.get("plan_entity_id"),
+            pending_approval=pend.get("pending_approval"),
             error=json.loads(row["error_blob"]) if row["error_blob"] else None,
             usage_in=usage.get("input", 0),
             usage_out=usage.get("output", 0),
