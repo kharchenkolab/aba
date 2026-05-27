@@ -1792,6 +1792,90 @@ def viewers_for_node(
     }
 
 
+@app.get("/api/files/raw")
+def files_raw(path: str, offset: int = 0, max_lines: int = 200):
+    """Stream a chunk of a file's text content (viewers.md fallback —
+    powers CSV/TSV/JSON/text viewers in the frontend).
+
+    `offset` and `max_lines` paginate through the file by line. Caps
+    apply to the response size (~256 KB max payload) so this is safe
+    against huge files. Returns:
+      {lines: [...], offset, next_offset, total_lines_seen, eof,
+       truncated, encoding}
+    """
+    import content.bio  # noqa: F401
+    from content.bio.files.tree import build_files_tree, find_node
+    from core.files.materialize import _resolve_artifact_disk_path
+
+    tree = build_files_tree(include_archived=False)
+    node = find_node(tree, path)
+    if node is None:
+        raise HTTPException(404, f"no node at {path!r}")
+
+    # Synthesized / inline content is easy — slice the embedded text.
+    inline = node.get("content") or node.get("synthesized_content")
+    if inline is not None:
+        all_lines = inline.splitlines()
+        end = min(offset + max(1, min(max_lines, 5000)), len(all_lines))
+        chunk = all_lines[offset:end]
+        return {
+            "lines": chunk, "offset": offset, "next_offset": end,
+            "total_lines_seen": len(all_lines), "eof": end >= len(all_lines),
+            "truncated": False, "encoding": "utf-8", "source": "inline",
+        }
+
+    artifact = node.get("artifact_path")
+    src = _resolve_artifact_disk_path(artifact)
+    if src is None or not src.exists():
+        raise HTTPException(404, f"file content missing on disk: {artifact}")
+
+    # Hard cap: refuse pulls > 256 KB of text. Lines may run long.
+    cap_chars = 256 * 1024
+    n = max(1, min(max_lines, 5000))
+    chunk: list[str] = []
+    chars = 0
+    line_no = 0
+    eof = False
+    truncated = False
+    try:
+        with src.open("rb") as f:
+            for raw in f:
+                line_no += 1
+                if line_no <= offset:
+                    continue
+                try:
+                    s = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    s = raw.decode("latin-1", errors="replace")
+                s = s.rstrip("\n").rstrip("\r")
+                if chars + len(s) > cap_chars:
+                    truncated = True
+                    break
+                chunk.append(s)
+                chars += len(s) + 1
+                if len(chunk) >= n:
+                    break
+            else:
+                eof = True
+            # Distinguish "we hit max_lines" from "real EOF".
+            if not eof and not truncated and len(chunk) < n:
+                eof = True
+    except OSError as e:
+        raise HTTPException(500, f"read failed: {e}")
+
+    next_offset = offset + len(chunk)
+    return {
+        "lines": chunk,
+        "offset": offset,
+        "next_offset": next_offset,
+        "total_lines_seen": line_no,
+        "eof": eof,
+        "truncated": truncated,
+        "encoding": "utf-8",
+        "source": "disk",
+    }
+
+
 class AiSummaryRequest(BaseModel):
     path: str | None = None
     entity_id: str | None = None

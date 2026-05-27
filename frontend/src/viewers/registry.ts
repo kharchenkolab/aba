@@ -14,12 +14,14 @@ import MarkdownCanvas from './MarkdownCanvas'
 import TextCanvas from './TextCanvas'
 import CodeCanvas from './CodeCanvas'
 import ImageCanvas from './ImageCanvas'
+import TableViewer from './TableViewer'
 
 export const VIEWERS: Record<string, ViewerComponent> = {
   MarkdownCanvas,
   TextCanvas,
   CodeCanvas,
   ImageCanvas,
+  TableViewer,
   // The entity-typed viewers (FigureView, ClaimView, ResultView, etc.)
   // still live inside FocusCanvas today; clicking an entity-backed
   // file routes through onFocus(entity_id) as before. V2 will hoist
