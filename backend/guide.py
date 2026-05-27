@@ -206,20 +206,27 @@ async def stream_response(
         }
 
     # Capability set for this turn (disabled tools are neither offered nor
-    # advertised), then assemble the system prompt from composable blocks.
+    # advertised). A3: also pass through the spec's tool_allowlist so the
+    # capabilities list and the tools sent to the LLM match the agent's
+    # declared role. For the Guide (allowlist ('*',)) this is a no-op.
     from core.graph.tool_settings import get_disabled_tools
+    from core.runtime.agent import filter_tools_by_allowlist
     disabled = get_disabled_tools()
     active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+    if spec is not None:
+        active_tools = filter_tools_by_allowlist(active_tools, spec.tool_allowlist)
 
+    guide_role = spec.manifest_role if spec else "primary"
     manifest = build_manifest(
         session_id=session_id,
         turn_index=turn_index,
         focus_entity_id=focus_entity_id,
         thread_id=store_tid,
+        role=guide_role,
     )
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
-    system = focus_text + thread_text + build_system(active_tools)
+    system = focus_text + thread_text + build_system(active_tools, role=guide_role)
     entity_id = WORKSPACE_ID
 
     focus_ent = get_entity(focus_entity_id) if focus_entity_id else None

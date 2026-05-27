@@ -81,6 +81,23 @@ def list_agent_specs() -> list[str]:
     return sorted(_SPECS)
 
 
+def filter_tools_by_allowlist(tools: list[dict], allowlist: tuple[str, ...]) -> list[dict]:
+    """Respect AgentSpec.tool_allowlist:
+      ()          → no tools (advisor with no tool access)
+      ("*",)      → all tools pass through
+      ("a","b")   → only tools whose name is in the set
+
+    The Guide's spec uses ('*',); the existing one-shot advisors use ()
+    today (they don't call tools). A future advisor that needs e.g.
+    only `query_db` would set tool_allowlist: ['query_db']."""
+    if not allowlist:
+        return []
+    if "*" in allowlist:
+        return list(tools)
+    keep = set(allowlist)
+    return [t for t in tools if t.get("name") in keep]
+
+
 def run_advisor_one_shot(spec: AgentSpec, *, user_prompt: str, max_tokens: int = 400) -> str:
     """Single-shot advisor turn — non-streaming, no tools. Mirrors the
     one-shot pattern in today's advisors.py:_ask but driven by an
