@@ -113,8 +113,17 @@ function parse(pathname: string): Parsed {
     section = parts[i] as Section
     i += 1
     if (section === 'files' && i < parts.length) {
-      filePath = parts.slice(i).map(decodeURIComponent).join('/')
-      return { pid, section, tid, eid, scene, filePath }
+      // Don't greedily consume the rest as a file path if the next
+      // segment is a reserved nav word (t/e/overview/inventory). The
+      // URL /p/X/files/e/<eid> means "Files tab, entity focused, no
+      // file open" — not "the file at path 'e/<eid>'".
+      const next = parts[i]
+      const isReserved = next === 't' || next === 'e' || next === 'overview' || next === 'inventory'
+      if (!isReserved) {
+        filePath = parts.slice(i).map(decodeURIComponent).join('/')
+        return { pid, section, tid, eid, scene, filePath }
+      }
+      // Fall through to normal t/e/scene scanning below.
     }
   }
 
