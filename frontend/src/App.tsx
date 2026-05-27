@@ -407,6 +407,19 @@ export default function App() {
     />
   )
 
+  // ⓘ — opens the Manifest drawer. Rendered inside the right column so
+  // it sticks above the column's top-right corner (chat-first: above the
+  // Questions panel; entity-first: above the chat peek).
+  const drawerToggle = (
+    <button
+      className={`drawer-fab ${drawerOpen ? 'is-open' : ''}`}
+      onClick={() => setDrawerOpen(o => !o)}
+      title="Show what the agent is seeing this turn"
+    >
+      ⓘ
+    </button>
+  )
+
   return (
     <div className="app app--workspace" style={{ gridTemplateColumns: gridCols }}>
       <Rail
@@ -517,6 +530,7 @@ export default function App() {
               <>
                 <div className="surface-panel primary chat-primary">{chatPane(false)}</div>
                 <div className="thread-context">
+                  {drawerToggle}
                   {currentThread && (
                     <ThreadHeader thread={currentThread} onChange={refresh} onSwitchThread={selectThread}
                                   onOpenFull={() => openEntity(currentThread.id)} />
@@ -534,7 +548,10 @@ export default function App() {
             ) : (
               <>
                 {entityPanel(true)}
-                <div className="surface-panel chat-peek">{chatPane(true)}</div>
+                <div className="surface-panel chat-peek">
+                  {drawerToggle}
+                  {chatPane(true)}
+                </div>
               </>
             )}
           </div>
@@ -546,7 +563,9 @@ export default function App() {
                    onPick={openEntity} />
       <UndoToast undoable={undoable} onUndo={undoProposal} onClose={clearUndo} />
 
-      {/* T2.4 Drawer: slides in from the right; toggled by the FAB. */}
+      {/* T2.4 Drawer: slides in from the right when the toggle is clicked.
+          The toggle (ⓘ) lives inside the right column so it floats above
+          that column's top-right corner. */}
       {drawerOpen && (
         <div className="drawer-overlay">
           <Drawer
@@ -557,13 +576,6 @@ export default function App() {
           />
         </div>
       )}
-      <button
-        className={`drawer-fab ${drawerOpen ? 'is-open' : ''}`}
-        onClick={() => setDrawerOpen(o => !o)}
-        title="Show what the agent is seeing this turn"
-      >
-        ⓘ
-      </button>
     </div>
   )
 }
