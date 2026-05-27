@@ -1630,8 +1630,85 @@ def admin_purge_orphan_fills():
     call repeatedly (no-op on a clean DB). Uses the backend's own
     connection so it doesn't violate the never-touch-live-DB rule."""
     from core.runtime.checkpoint import purge_orphan_fill_messages
-    deleted = purge_orphan_fill_messages()
-    return {"deleted": deleted}
+    n = purge_orphan_fill_messages()
+    return {"touched": n}
+
+
+# ----- Skills (B2 read API) -----
+# Skill catalog is registered at import time by bio/skills/__init__.py.
+# The model reads it via the read_skill tool; the drawer reads it via
+# these endpoints so the user can see what procedures the agent can run.
+
+@app.get("/api/skills")
+def skills_list():
+    """All registered skills, name + description + small metadata.
+    Bodies are excluded so the response stays cheap; fetch one via
+    /api/skills/{name}."""
+    from core.skills import list_skills
+    return [
+        {
+            "name": s.name,
+            "description": s.description,
+            "when_to_use": s.when_to_use,
+            "requires_tools": list(s.requires_tools),
+            "produces": list(s.produces),
+            "resource_profile": s.resource_profile,
+        }
+        for s in list_skills()
+    ]
+
+
+@app.get("/api/skills/{name}")
+def skill_get(name: str):
+    """Full skill including the markdown body."""
+    from core.skills import get_skill
+    s = get_skill(name)
+    if s is None:
+        raise HTTPException(404, f"skill {name!r} not registered")
+    return {
+        "name": s.name,
+        "description": s.description,
+        "when_to_use": s.when_to_use,
+        "requires_tools": list(s.requires_tools),
+        "produces": list(s.produces),
+        "resource_profile": s.resource_profile,
+        "parameter_schema": s.parameter_schema,
+        "body": s.body,
+    }
+
+
+# ----- Memory (B3 read API) -----
+# Per-project memory/ directory. Reads here; writes stay model-only via
+# the write_memory tool (UI may eventually surface its own editor, but
+# the source of truth is the per-project markdown files).
+
+@app.get("/api/memory")
+def memory_list():
+    """Index + entry list for the current project's memory directory.
+    Entries omit bodies; fetch one via /api/memory/{name}."""
+    from core.memory import list_memories, read_memory_index
+    return {
+        "index": read_memory_index(),
+        "entries": [
+            {"name": e.name, "type": e.type, "description": e.description}
+            for e in list_memories()
+        ],
+    }
+
+
+@app.get("/api/memory/{name}")
+def memory_get(name: str):
+    """Full memory body + metadata."""
+    from core.memory import read_memory
+    e = read_memory(name)
+    if e is None:
+        raise HTTPException(404, f"memory {name!r} not found")
+    return {
+        "name": e.name,
+        "type": e.type,
+        "description": e.description,
+        "body": e.body,
+    }
 
 
 @app.get("/api/threads/{tid}/manifest")
