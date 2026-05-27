@@ -35,7 +35,10 @@ interface Props {
   hideToolbar?: boolean
 }
 
-const HILITE = 'rgba(253, 224, 71, 0.55)'   // highlighter yellow
+// Highlighter yellow at higher opacity so the mark survives downscaling
+// to 512px wide for vision input — too transparent and it blends into
+// dense scatter plots, and the model misses the cue.
+const HILITE = 'rgba(253, 224, 71, 0.85)'
 type Mode = 'highlight' | 'box'
 type Pt = { x: number; y: number }
 
@@ -105,7 +108,9 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
     ctx.drawImage(natural, 0, 0, W, H)
     ctx.fillStyle = HILITE; ctx.strokeStyle = HILITE
     if (mode === 'highlight') {
-      ctx.lineWidth = Math.max(12, W / 28); ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+      // Wider stroke for vision: at W=512 this is ~22px, comfortably
+      // visible even after the model's image-processing downsamples.
+      ctx.lineWidth = Math.max(16, W / 22); ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
       stroke.forEach((p, i) => (i ? ctx.lineTo(p.x * W, p.y * H) : ctx.moveTo(p.x * W, p.y * H)))
       ctx.stroke()
@@ -116,17 +121,23 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
     }
     const b64 = canvas.toDataURL('image/png').split(',')[1]
     const what = label ? `the figure "${label}"` : 'the figure'
-    // First-person, mode-aware note. Reads as the user speaking, so the
-    // model treats it as a directive, not metadata. Mentions the exact
-    // shape (stroke vs box) so the model knows what to look for.
+    // Strong directive — placed FIRST in the user message by the backend
+    // so the model's attention is set BEFORE it reads the question. The
+    // model has shown a tendency to describe the broader plot when this
+    // note is buried; phrasing it as an explicit attention scope (with
+    // a "DO NOT" guard) makes the boundary unmissable.
     const shape =
       mode === 'highlight'
-        ? 'a yellow freehand mark (likely a circle, line, or squiggle)'
-        : 'a yellow box'
+        ? 'a translucent yellow freehand mark (a circle, line, or squiggle)'
+        : 'a translucent yellow rectangle'
     const note =
-      `I drew ${shape} on ${what} in the attached image to point at a specific region — ` +
-      `focus your answer there. The mark is translucent yellow; the underlying figure shows through. ` +
-      `I may refer to that region as "here" or "the highlighted area".`
+      `[ATTENTION SCOPE — the user has marked a region of interest.]\n` +
+      `${what} in the attached image has ${shape} drawn on it. Answer ONLY about ` +
+      `what is inside or directly under the yellow mark. DO NOT describe the rest of the ` +
+      `figure unless the user explicitly asks for context or comparison. If the marked ` +
+      `region is ambiguous to you, say so and ask the user to be more specific — do NOT ` +
+      `fall back to describing the broader plot. The user may refer to this region as ` +
+      `"here", "this", or "the highlighted area".`
     onAttach({ image: b64, note })
     // Focus is now established (the red chip appears) — leave marking mode. The
     // drawn mark stays on the figure until the chip is cleared (clearSignal).
