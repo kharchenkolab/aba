@@ -551,6 +551,7 @@ export default function App() {
         <div className="drawer-overlay">
           <Drawer
             manifest={manifest}
+            focusEntityId={focusedId}
             threadId={threadId === 'default' ? (currentThread?.id ?? null) : threadId}
             onClose={() => setDrawerOpen(false)}
           />
