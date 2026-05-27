@@ -154,7 +154,8 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 }
 
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void,
-                      planActive?: boolean, onPlanGo?: () => void, onPlanAdjust?: () => void) {
+                      planActive?: boolean, onPlanGo?: () => void, onPlanAdjust?: () => void,
+                      isStreaming?: boolean) {
   const out: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
@@ -293,7 +294,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
