@@ -1,6 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { KeyboardEvent } from 'react'
 import './Composer.css'
+
+// Auto-grow cap as a fraction of viewport height — a 4k paste should
+// surface, not vanish into a 160px scrollbox. Min keeps it sensible
+// when the window is shorter than expected.
+const MAX_GROW_PX = () => Math.max(180, Math.floor(window.innerHeight * 0.45))
 
 interface Props {
   onSend: (text: string) => void
@@ -60,17 +65,29 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     if (!text || disabled) return
     onSend(text)
     setValue('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
   }
 
-  function handleInput() {
+  // Auto-grow on every value change — covers typing, paste, prefill,
+  // programmatic clear, and resize-triggered recompute. Runs before
+  // paint so the user never sees the textarea snap.
+  useLayoutEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
     ta.style.height = 'auto'
-    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'
-  }
+    ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
+  }, [value])
+
+  // Recompute the cap on viewport resize (the max is vh-relative).
+  useEffect(() => {
+    function onResize() {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.style.height = 'auto'
+      ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   return (
     <div className="composer">
@@ -82,7 +99,6 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={handleKey}
-          onInput={handleInput}
           disabled={disabled}
           rows={1}
         />
