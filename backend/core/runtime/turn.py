@@ -48,6 +48,7 @@ class Turn:
     thread_id:        Optional[str] = None
     entity_id:        Optional[str] = None         # message-log scope (typically WORKSPACE_ID)
     parent_run_id:    Optional[str] = None         # B4: sub-agent runs link back to their parent Guide turn
+    plan_entity_id:   Optional[str] = None         # #160: links the turn to the plan whose lifecycle it drives
     pending_tool_calls: list[dict] = field(default_factory=list)
     pending_tool_ids: list[str] = field(default_factory=list)   # in-flight tool_use ids (A1)
     pending_user_signal: Optional[str] = None      # plan | clarify | approval
@@ -81,6 +82,7 @@ class Turn:
                 "final_message": self.final_message,
                 "entity_id":     self.entity_id,
                 "parent_run_id": self.parent_run_id,
+                "plan_entity_id": self.plan_entity_id,
             }),
             "error_blob":      json.dumps(self.error) if self.error else None,
             "usage_blob":      json.dumps({
@@ -111,6 +113,7 @@ class Turn:
             final_message=pend.get("final_message"),
             entity_id=pend.get("entity_id"),
             parent_run_id=pend.get("parent_run_id"),
+            plan_entity_id=pend.get("plan_entity_id"),
             error=json.loads(row["error_blob"]) if row["error_blob"] else None,
             usage_in=usage.get("input", 0),
             usage_out=usage.get("output", 0),
