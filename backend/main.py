@@ -1653,88 +1653,81 @@ def manifest_preview(focus_entity_id: str | None = None, thread_id: str | None =
 
 @app.get("/api/files/tree")
 def files_tree(include_archived: bool = False):
-    """Virtual files view (files.md §6). Lists every artifact-bearing
-    entity in the active project, computed display_path attached, ready
-    for the frontend to render as a folder tree.
+    """Virtual files view — the nested project hierarchy (files.md §3.3).
+    Threads → runs/results/claims, runs → child files, results → member
+    files. Multi-rooted: the same canonical artifact may appear at
+    multiple paths.
 
-    Each item: {entity_id, type, title, display_path, artifact_path?,
-    size? (bytes if on disk), created_at, status}.
+    Each node carries `kind` (root/folder/file/readme), `name`, `path`,
+    `entity_id` + `entity_type` (when backed by an entity), and either
+    `children` (folders) or content metadata (files). READMEs carry
+    their rendered Markdown inline so the UI shows the same prose the
+    materialized tree would have.
     """
-    import os
-    from core.files.registry import display_path_for
-    # Ensure layout computers are registered (bio side wires them).
-    import content.bio  # noqa: F401
-    items = []
-    for e in list_entities(include_archived=include_archived):
-        if e["type"] == "workspace":
-            continue
-        dp = display_path_for(e)
-        size = None
-        artifact = e.get("artifact_path")
-        if artifact and artifact.startswith("/artifacts/"):
-            disk_path = ARTIFACTS_DIR / Path(artifact).name
-            try:
-                size = disk_path.stat().st_size
-            except OSError:
-                size = None
-        items.append({
-            "entity_id": e["id"],
-            "type": e["type"],
-            "title": e["title"],
-            "status": e["status"],
-            "display_path": dp,
-            "artifact_path": artifact,
-            "size": size,
-            "created_at": e["created_at"],
-            "pinned": e.get("pinned", False),
-        })
-    items.sort(key=lambda x: x["display_path"])
-    return {"items": items}
+    import content.bio  # noqa: F401 — ensure builders register
+    from content.bio.files.tree import build_files_tree
+    return build_files_tree(include_archived=include_archived)
 
 
 @app.get("/api/files/download")
 def files_download_zip(path: str = ""):
-    """Stream a ZIP of every file under the given display-path prefix
-    (files.md §6 + F4). Empty path = the whole tree.
+    """Stream a ZIP of every file under the given tree path.
 
-    Items inside the zip are laid out using display_path so the
-    recipient sees the same folder tree the in-app Files view shows.
+    Walks the nested files-tree (the same one /api/files/tree returns),
+    finds the node at `path` (empty = root), and zips every file +
+    readme beneath it. Real artifacts are added with their on-disk
+    mtime preserved; synthesized files (READMEs, claim .md, etc.) get
+    the entity's created_at as the zip-entry mtime.
     """
     import io
     import zipfile
+    import datetime
+    import content.bio  # noqa: F401 — register builders
+    from content.bio.files.tree import build_files_tree, find_node, iter_files
     from core.files.materialize import _resolve_artifact_disk_path
-    from core.files.registry import display_path_for
-    # Normalize path: strip leading/trailing slashes for matching.
-    prefix = path.strip("/")
-    matched: list[tuple[str, Path]] = []
-    for e in list_entities(include_archived=False):
-        if e["type"] == "workspace":
-            continue
-        rel = e.get("display_path") or display_path_for(e)
-        if rel.endswith("/"):
-            continue  # directory entities — covered by their members
-        if prefix and not rel.startswith(prefix):
-            continue
-        artifact = e.get("artifact_path")
-        if not artifact:
-            continue
-        src = _resolve_artifact_disk_path(artifact)
-        if src and src.exists():
-            matched.append((rel, src))
-    if not matched:
-        raise HTTPException(404, f"no downloadable files at {path!r}")
+
+    tree = build_files_tree(include_archived=False)
+    node = find_node(tree, path)
+    if node is None:
+        raise HTTPException(404, f"no node at {path!r}")
+    leaves = iter_files(node)
+    if not leaves:
+        raise HTTPException(404, f"no files under {path!r}")
+
+    base = (node.get("path") or "").rstrip("/")
+    base_prefix_len = len(base) + 1 if base else 0
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel, src in matched:
-            zf.write(src, arcname=rel)
+        for leaf in leaves:
+            arcname = leaf["path"][base_prefix_len:] if base_prefix_len else leaf["path"]
+            mtime = leaf.get("mtime")
+            if leaf["kind"] == "readme":
+                _write_zip_text(zf, arcname, leaf.get("content", ""), mtime)
+            elif leaf.get("synthesized"):
+                _write_zip_text(zf, arcname, leaf.get("synthesized_content") or "", mtime)
+            elif leaf.get("artifact_path"):
+                src = _resolve_artifact_disk_path(leaf["artifact_path"])
+                if src and src.exists():
+                    zf.write(src, arcname=arcname)  # preserves source mtime
     buf.seek(0)
-    fname = (prefix.rstrip("/").rsplit("/", 1)[-1] or "files") + ".zip"
+    fname = (base.rsplit("/", 1)[-1] or "files") + ".zip"
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+def _write_zip_text(zf, arcname: str, content: str, mtime: float | None) -> None:
+    """Add synthesized text content to a zip with the given mtime."""
+    import zipfile, datetime
+    info = zipfile.ZipInfo(filename=arcname)
+    if mtime is not None:
+        dt = datetime.datetime.fromtimestamp(mtime)
+        info.date_time = (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    zf.writestr(info, content)
 
 
 @app.post("/api/projects/{pid}/materialize")
