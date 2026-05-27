@@ -136,14 +136,28 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
             title="Stop the current turn (kills running work, drops queue)"
             aria-label="Stop"
           >
-            {/* Prohibition / "no" symbol — red circle ring with a
-                diagonal slash through it. Universally read as "stop /
-                not allowed". */}
-            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9.5"
-                      fill="none" stroke="currentColor" strokeWidth="2.5" />
-              <line x1="5.3" y1="5.3" x2="18.7" y2="18.7"
-                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            {/* Octagonal stop sign — solid red octagon, thin white
+                border (mimics the real sign), white "STOP" wordmark
+                centered. Bold + condensed letter spacing so it stays
+                legible at ~22 px. */}
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+              <polygon
+                points="7.5,1 16.5,1 23,7.5 23,16.5 16.5,23 7.5,23 1,16.5 1,7.5"
+                fill="currentColor"
+                stroke="#fff"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+              <text
+                x="12" y="12.3"
+                textAnchor="middle"
+                dominantBaseline="central"
+                fill="#fff"
+                fontFamily="-apple-system, system-ui, sans-serif"
+                fontWeight="900"
+                fontSize="6"
+                letterSpacing="-0.3"
+              >STOP</text>
             </svg>
           </button>
         )}
