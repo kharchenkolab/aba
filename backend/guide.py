@@ -194,13 +194,15 @@ async def stream_response(
     store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
 
     if not retry:
-        user_blocks = [{"type": "text", "text": user_text}]
+        # Note-FIRST ordering: when the user attached a highlight, lead
+        # with the meta-note so the model's attention is framed by the
+        # highlight before it reads the question. Without this ordering
+        # the model treats the highlight as an afterthought and answers
+        # about the broader plot.
+        user_blocks: list[dict] = []
         if annotation_note:
-            # The frontend already phrases the note as first-person user
-            # speech ("I drew a yellow circle…"). Persist it plain so the
-            # model treats it as a directive on this turn and as durable
-            # context on later turns (when the image itself is gone).
             user_blocks.append({"type": "text", "text": annotation_note})
+        user_blocks.append({"type": "text", "text": user_text})
         append_message("user", user_blocks, entity_id=WORKSPACE_ID,
                        focus_entity_id=focus_entity_id, thread_id=store_tid)
     history = get_messages(WORKSPACE_ID, thread_id=store_tid)
@@ -223,20 +225,27 @@ async def stream_response(
 
     # Vision: inject the annotated figure into the last user turn for THIS
     # call only (not persisted). Skipped in fake mode (no vision).
+    # Place the image between the leading meta-note and the user's
+    # question (persisted order: [note, user_text]) → final block order:
+    # [note, image, user_text]. The model reads "I marked X" → sees X →
+    # then the question, framed by the highlight.
     if annotation_image and not FAKE_SESSION and history:
         history = list(history)
         last = history[-1]
-        history[-1] = {
-            **last,
-            "content": list(last["content"]) + [{
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": annotation_image,
-                },
-            }],
-        }
+        content = list(last["content"])
+        # Insert before the LAST text block (the user's actual question).
+        # If there's no preceding note for some reason, falls back to
+        # appending at the end.
+        insert_at = len(content) - 1 if len(content) >= 2 else len(content)
+        content.insert(insert_at, {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": annotation_image,
+            },
+        })
+        history[-1] = {**last, "content": content}
 
     # Capability set for this turn (disabled tools are neither offered nor
     # advertised). A3: also pass through the spec's tool_allowlist so the
