@@ -33,6 +33,8 @@ export interface UrlState {
   setFocus:   (eid: string) => void
   setThread:  (tid: string) => void
   setProject: (pid: string | null) => void
+  /** Combined: switch thread + focus in one navigation (single history entry). */
+  setThreadAndFocus: (tid: string, eid: string) => void
   /** Convenience: jump to home (the project picker). */
   goHome:     () => void
 }
@@ -84,6 +86,11 @@ export function useUrlState(): UrlState {
     const path = buildPath(newPid, 'default', 'workspace')
     if (path !== location.pathname) navigate(path)
   }
+  const setThreadAndFocus = (newTid: string, newEid: string) => {
+    if (!pid) return
+    const path = buildPath(pid, newTid, newEid)
+    if (path !== location.pathname) navigate(path)
+  }
   const goHome = () => {
     if (location.pathname !== '/') navigate('/')
   }
@@ -93,6 +100,6 @@ export function useUrlState(): UrlState {
     focusedId: eid,
     threadId:  tid,
     isHome:    pid === null,
-    setFocus, setThread, setProject, goHome,
+    setFocus, setThread, setProject, setThreadAndFocus, goHome,
   }
 }

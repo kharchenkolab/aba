@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useUrlState } from './useUrlState'
 import './App.css'
 import Rail from './components/Rail'
@@ -109,6 +110,27 @@ export default function App() {
       .catch(() => {})
   }
   useEffect(() => { refreshCurrent() }, [])
+
+  // Back / Forward / deep-link recovery: transient UI modes (posture,
+  // viewedFile, inventory, overview) were set as side effects of the same
+  // actions that mutated the URL. Without a re-sync, Back unwinds the URL
+  // (focusedId / threadId) but leaves these modes frozen, so the columns
+  // and tabs read stale. On every pathname change, clear the transient
+  // modes and re-derive posture from the new (focus, viewedFile).
+  const location = useLocation()
+  useEffect(() => {
+    setViewedFile(null)
+    setInventory(false)
+    setOverview(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
+  useEffect(() => {
+    // posture follows focus: entity-first when something is focused (or a
+    // file is being viewed); chat-first otherwise. PostureToggle can still
+    // override manually within a given URL state.
+    setPosture((focusedId !== 'workspace' || viewedFile) ? 'entity' : 'chat')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedId, viewedFile])
 
   // Bootstrap: if landing at "/" with a server-side current project, route
   // directly into it so reload / first-visit puts you back where you were.
@@ -236,16 +258,18 @@ export default function App() {
 
   // Navigate to a claim *in its own context*: switch to its home thread (so the
   // chat peek shows the right conversation) and open it entity-first to work on.
+  // Use setThreadAndFocus so the URL switch is a single navigation (one Back
+  // entry, no intermediate flash).
   const openClaim = (id: string) => {
     exitModes()
     const c = entities.find(e => e.id === id)
     const home = c?.metadata?.thread_id as string | undefined
+    let newTid = threadId
     if (home) {
       const homeEnt = entities.find(e => e.id === home)
-      setThreadId(homeEnt?.metadata?.is_default ? 'default' : home)
+      newTid = homeEnt?.metadata?.is_default ? 'default' : home
     }
-    setFocusedId(id)
-    setPosture('entity')
+    url.setThreadAndFocus(newTid, id)
   }
   // Rail/list/shelf click router: everything opens in the CENTER (entity-first),
   // with the chat moving to the right peek and "← Back to thread" as the exit.
