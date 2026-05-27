@@ -4,6 +4,7 @@ Cheap (~10ms with SQLite WAL); call on every state change. Loading is a
 single row read; load_turn() yields a fully-rehydrated Turn or None.
 """
 from __future__ import annotations
+import json
 from typing import Optional
 
 from core.graph._schema import _conn
@@ -84,33 +85,82 @@ def reap_stale_turns() -> int:
         )
         c.commit()
         n = cur.rowcount or 0
-    # Independent of Turn rows, scan the message log for orphaned
-    # tool_use blocks and write synthetic tool_results so the next
-    # Anthropic call doesn't 400. Handles legacy DBs from before Turn
-    # tracking existed.
+    # Sweep up any duplicate orphan-fill rows that accumulated under
+    # the prior (buggy) reaper which appended a fill at the end of the
+    # messages table for every middle orphan on every run. Idempotent
+    # on a clean DB.
+    purge_orphan_fill_messages()
+    # Independent of Turn rows, scan the message log for trailing
+    # orphans and append a synthetic user message so the next Anthropic
+    # call doesn't 400. Middle orphans are skipped here — the
+    # request-time shim handles them in-memory at the correct position.
     repair_orphaned_tool_use_in_messages()
     return n
 
 
+ORPHAN_FILL_MARKER = "[tool result unavailable — the run was interrupted"
+
+
+def _synthetic_tool_result(tool_use_id: str) -> dict:
+    """The shape of a fill block. JSON-content so the frontend can
+    structurally detect+hide it (legacy plain-string fills are still
+    matched via ORPHAN_FILL_MARKER for back-compat)."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps({
+            "status": "interrupted",
+            "note": "The previous tool call did not complete (run was interrupted).",
+        }),
+    }
+
+
+def _is_orphan_fill_block(b) -> bool:
+    """Recognize fill blocks in any historical format: new JSON shape
+    (status=='interrupted') or legacy string (starts with the marker)."""
+    if not isinstance(b, dict) or b.get("type") != "tool_result":
+        return False
+    c = b.get("content")
+    if isinstance(c, str):
+        if c.startswith(ORPHAN_FILL_MARKER):
+            return True
+        # New format: JSON-encoded
+        try:
+            j = json.loads(c)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return isinstance(j, dict) and j.get("status") == "interrupted"
+    return False
+
+
 def repair_orphaned_tool_use_in_messages() -> int:
-    """Scan the project's message log for assistant tool_use blocks
-    that aren't followed by a user tool_result with the matching id.
-    For each gap, append a synthetic user message with the missing
-    tool_results.
+    """Scan the project's message log for *trailing* orphans — assistant
+    messages with tool_use blocks where no user message follows at all
+    in the thread — and append a synthetic user message with fill blocks
+    for each missing id. The synthesized content is JSON-encoded so the
+    frontend can hide it.
 
-    Idempotent — running it twice is a no-op the second time.
+    **Middle orphans** (assistant_with_tool_use → assistant_without_fill
+    inside the thread) are intentionally NOT patched here. Appending a
+    fill at the end of the table doesn't actually satisfy the Anthropic
+    API contract (which parses messages in order), so the appended row
+    is useless from the API's perspective and just clutters the UI.
+    The request-time shim `_ensure_tool_pair_completeness` in guide.py
+    handles middle orphans in memory at the correct position before
+    sending to the model.
 
-    Returns the number of synthetic user messages inserted.
+    Idempotent on trailing-orphan case: once the fill row exists, the
+    next pass sees no missing ids.
+
+    Returns the number of synthetic user messages appended.
     """
-    import json
+    import json as _json
     with _conn() as c:
         rows = c.execute(
             "SELECT id, entity_id, thread_id, role, content "
             "FROM messages ORDER BY id"
         ).fetchall()
 
-    # Group by (entity_id, thread_id) — message history flows per-thread
-    # within a project DB.
     by_thread: dict[tuple, list[dict]] = {}
     for r in rows:
         key = (r["entity_id"], r["thread_id"])
@@ -120,63 +170,71 @@ def repair_orphaned_tool_use_in_messages() -> int:
 
     inserted = 0
     for (entity_id, thread_id), msgs in by_thread.items():
-        i = 0
-        while i < len(msgs):
-            m = msgs[i]
-            if m["role"] == "assistant":
-                try:
-                    blocks = json.loads(m["content"])
-                except (json.JSONDecodeError, TypeError):
-                    blocks = []
-                tool_ids = [
-                    b.get("id") for b in blocks
-                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
-                ]
-                if tool_ids:
-                    # Look at the next message: it should be a user message
-                    # carrying tool_result blocks for each id.
-                    nxt = msgs[i + 1] if i + 1 < len(msgs) else None
-                    present: set = set()
-                    if nxt and nxt["role"] == "user":
-                        try:
-                            nxt_blocks = json.loads(nxt["content"])
-                        except (json.JSONDecodeError, TypeError):
-                            nxt_blocks = []
-                        present = {
-                            b.get("tool_use_id") for b in nxt_blocks
-                            if isinstance(b, dict) and b.get("type") == "tool_result"
-                        }
-                    missing = [tid for tid in tool_ids if tid not in present]
-                    if missing:
-                        synth = [{
-                            "type": "tool_result",
-                            "tool_use_id": tid,
-                            "content": "[tool result unavailable — the run was interrupted; system synthesized this so the message log stays well-formed]",
-                        } for tid in missing]
-                        if nxt and nxt["role"] == "user":
-                            # Prepend synthetic results to the existing user
-                            # message so positional ordering is preserved.
-                            with _conn() as c:
-                                c.execute(
-                                    "UPDATE messages SET content=? WHERE id=?",
-                                    (json.dumps(synth + nxt_blocks), nxt["id"]),
-                                )
-                                c.commit()
-                        else:
-                            # No following user message — append one. Safe
-                            # at startup / project-switch when nothing else
-                            # writes concurrently.
-                            with _conn() as c:
-                                c.execute(
-                                    "INSERT INTO messages "
-                                    "(entity_id, focus_entity_id, thread_id, role, content, ts) "
-                                    "VALUES (?, ?, ?, 'user', ?, ?)",
-                                    (entity_id, None, thread_id, json.dumps(synth), _now()),
-                                )
-                                c.commit()
-                        inserted += 1
-            i += 1
+        # Only repair if the LAST message in the thread is an assistant
+        # with unresolved tool_use blocks. Middle orphans are skipped —
+        # the request-time shim handles them at the correct position.
+        if not msgs:
+            continue
+        last = msgs[-1]
+        if last["role"] != "assistant":
+            continue
+        try:
+            blocks = _json.loads(last["content"])
+        except (_json.JSONDecodeError, TypeError):
+            continue
+        tool_ids = [
+            b.get("id") for b in blocks
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+        ]
+        if not tool_ids:
+            continue
+        synth = [_synthetic_tool_result(tid) for tid in tool_ids]
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO messages "
+                "(entity_id, focus_entity_id, thread_id, role, content, ts) "
+                "VALUES (?, ?, ?, 'user', ?, ?)",
+                (entity_id, None, thread_id, _json.dumps(synth), _now()),
+            )
+            c.commit()
+        inserted += 1
     return inserted
+
+
+def purge_orphan_fill_messages() -> int:
+    """One-shot cleanup: delete user messages whose content consists
+    ENTIRELY of orphan-fill tool_result blocks. The request-time shim
+    regenerates the in-memory fill when actually needed; the rows are
+    pure clutter (and cost prompt tokens on every history read).
+
+    Conservative — only deletes when EVERY block in the message is an
+    orphan-fill marker; mixed user messages are left alone.
+
+    Returns the number of rows deleted.
+    """
+    import json as _json
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, content FROM messages WHERE role='user'"
+        ).fetchall()
+
+    delete_ids: list[int] = []
+    for r in rows:
+        try:
+            blocks = _json.loads(r["content"])
+        except (_json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(blocks, list) or not blocks:
+            continue
+        if all(_is_orphan_fill_block(b) for b in blocks):
+            delete_ids.append(r["id"])
+
+    if not delete_ids:
+        return 0
+    with _conn() as c:
+        c.executemany("DELETE FROM messages WHERE id=?", [(i,) for i in delete_ids])
+        c.commit()
+    return len(delete_ids)
 
 
 def _now() -> str:

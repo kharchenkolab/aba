@@ -66,8 +66,16 @@ def _ensure_tool_pair_completeness(messages: list) -> list:
                                if isinstance(b, dict) and b.get("type") == "tool_result"}
                 missing = [tid for tid in tool_ids if tid not in present]
                 if missing:
+                    # JSON-encoded content matches the persistent reaper's
+                    # shape, so the frontend filter recognizes both via
+                    # ORPHAN_FILL_MARKER / status=='interrupted'.
+                    import json as _json
+                    interrupted = _json.dumps({
+                        "status": "interrupted",
+                        "note": "The previous tool call did not complete (run was interrupted).",
+                    })
                     synth = [{"type": "tool_result", "tool_use_id": tid,
-                              "content": "[tool result unavailable — the run was interrupted]"}
+                              "content": interrupted}
                              for tid in missing]
                     if nxt and nxt["role"] == "user":
                         nxt["content"] = synth + nxt["content"]
