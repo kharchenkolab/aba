@@ -1,0 +1,78 @@
+/* FilesView — virtual file tree view in the project rail's Files tab. */
+.tree__index--files .files__body {
+  display: flex; flex-direction: column;
+  padding: 4px 4px 16px;
+  font-size: 12.5px;
+}
+
+.files__totals {
+  font-size: 10.5px; color: var(--text-4);
+  padding: 0 6px 6px;
+}
+
+.files__row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  min-height: 22px;
+}
+.files__row:hover { background: var(--tree-active-bg); }
+.files__row.is-current { background: var(--tree-active-bg); color: var(--text); }
+
+.files__chev {
+  width: 14px; height: 14px;
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: var(--text-4); font-size: 10px; line-height: 1;
+}
+.files__chev--blank { cursor: default; }
+.files__chev:hover { color: var(--text-2); }
+
+.files__icon { font-size: 12px; flex-shrink: 0; }
+.files__icon--folder { color: var(--accent); }
+
+.files__name {
+  flex: 1; min-width: 0;
+  text-align: left;
+  border: none; background: none; padding: 0; cursor: default;
+  color: var(--text-2); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.files__name--clickable { cursor: pointer; }
+.files__name--clickable:hover { color: var(--accent); }
+.files__row.is-current .files__name { color: var(--text); font-weight: 500; }
+
+.files__size {
+  font-size: 10.5px; font-family: var(--mono); color: var(--text-4);
+  flex-shrink: 0;
+}
+
+.files__spacer { flex: 1; }
+
+.files__action {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-4);
+  text-decoration: none;
+  font-size: 11px;
+}
+.files__action:hover { background: var(--bg); color: var(--accent); }
+
+.files__head-action {
+  margin-left: auto;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  text-decoration: none;
+}
+.files__head-action:hover { background: var(--tree-active-bg); color: var(--text); border-color: var(--accent-border, var(--border)); }
+
+.files__empty, .files__error {
+  padding: 12px 8px; font-size: 12px; font-style: italic;
+  color: var(--text-4);
+}
+.files__error { color: #b91c1c; font-style: normal; }
