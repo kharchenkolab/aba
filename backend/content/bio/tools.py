@@ -145,24 +145,63 @@ TOOL_SCHEMAS = [
     {
         "name": "present_plan",
         "description": (
-            "Present a short plan to the user BEFORE doing multi-step analysis or "
-            "exploration, and PAUSE for their go-ahead. Give an ordered list of "
-            "concise steps you intend to take. The user sees the plan with Go / "
-            "Adjust controls; do not run the steps until they respond. Use this "
-            "for larger or non-obvious work; skip it for small, single-step requests."
+            "Present a structured plan to the user BEFORE doing multi-step analysis "
+            "or exploration, and PAUSE for their go-ahead. The user sees the plan "
+            "with Go / Adjust controls — do not run the steps until they respond.\n\n"
+            "Use the structured form when the work is non-trivial: each step is an "
+            "object with title (required), optional description, expected_outputs, "
+            "skill (the reusable procedure name, if any), and parameters. "
+            "For tiny / one-shot plans you may pass `steps` as a list of strings "
+            "and they'll be coerced to {title}. Always include `assumptions` for "
+            "anything you're taking for granted (defaults, modality, etc.) — the "
+            "user can correct them before Go."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Optional short title for the plan."},
-                "steps": {
-                    "type": "array", "items": {"type": "string"},
-                    "description": "Ordered, concise steps you intend to take.",
+                "title": {"type": "string", "description": "Short title for the plan."},
+                "summary": {
+                    "type": "string",
+                    "description": "One-line synopsis of what the plan produces.",
                 },
-                "rationale": {"type": "string", "description": "Optional one-line why / what the user gets."},
+                "steps": {
+                    "type": "array",
+                    "description": (
+                        "Ordered steps. Each item is preferably an object: "
+                        "{title, description?, expected_outputs?, skill?, parameters?}. "
+                        "A plain string is accepted and coerced to {title}."
+                    ),
+                    "items": {
+                        "type": ["object", "string"],
+                        "properties": {
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "expected_outputs": {
+                                "type": "array", "items": {"type": "string"},
+                            },
+                            "skill": {
+                                "type": "string",
+                                "description": (
+                                    "Name of a reusable procedure this step invokes "
+                                    "(e.g. 'scrna-qc-thresholds'). Leave blank for "
+                                    "ad-hoc inline work."
+                                ),
+                            },
+                            "parameters": {"type": "object"},
+                        },
+                    },
+                },
+                "assumptions": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "What you're taking for granted (defaults, modality, scope).",
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "Optional one-line why / what the user gets.",
+                },
             },
-            "required": ["steps"]
-        }
+            "required": ["steps"],
+        },
     }
 ]
 

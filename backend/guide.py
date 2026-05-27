@@ -323,18 +323,18 @@ async def stream_response(
                 # well-formed (no dangling tool_use).
                 if tool_name == "present_plan":
                     inp = tool_input if isinstance(tool_input, dict) else {}
-                    raw_steps = inp.get("steps")
-                    if isinstance(raw_steps, list):
-                        steps = [str(s) for s in raw_steps if str(s).strip()]
-                    elif isinstance(raw_steps, str) and raw_steps.strip():
-                        steps = [ln.strip() for ln in raw_steps.splitlines() if ln.strip()]
-                    else:
-                        steps = []
-                    yield sse({"type": "plan", "title": inp.get("title"),
-                               "steps": steps, "rationale": inp.get("rationale")})
-                    ack = {"status": "presented",
-                           "note": "Plan shown to the user with Go/Adjust controls. "
-                                   "Wait for their decision before executing."}
+                    # T2.5: normalize the new structured shape (objects with
+                    # title/skill/etc.) and run the validator. Concerns ride
+                    # along on the SSE event so the user sees them inline.
+                    from core.planning.validator import normalize_plan, validate_plan
+                    plan = validate_plan(normalize_plan(inp))
+                    yield sse({"type": "plan", **plan.to_dict()})
+                    ack = {
+                        "status": "presented",
+                        "note": "Plan shown to the user with Go/Adjust controls. "
+                                "Wait for their decision before executing.",
+                        "concerns": [c.to_dict() for c in plan.concerns],
+                    }
                     tool_result_blocks.append({"type": "tool_result", "tool_use_id": block.id,
                                                "content": json.dumps(ack)})
                     halt_for_plan = True

@@ -88,15 +88,61 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   block: Extract<Block, { type: 'plan' }>
   active: boolean; onGo?: () => void; onAdjust?: () => void
 }) {
+  // T2.5: steps can be strings (legacy) or PlanStepShape objects with
+  // title/description/expected_outputs/skill/parameters.
+  const steps = (Array.isArray(block.steps) ? block.steps : []) as (
+    string | { n?: number; title: string; description?: string; expected_outputs?: string[]; skill?: string | null; parameters?: Record<string, unknown> }
+  )[]
+  const concerns = block.concerns ?? []
+  const planConcerns = concerns.filter(c => c.step_n == null)
+  const stepConcerns = (n: number) => concerns.filter(c => c.step_n === n)
   return (
     <div className="plan-card">
       <div className="plan-card__head">
         <span className="plan-card__spark">✦</span>{block.title || 'Plan'}
       </div>
+      {block.summary && <div className="plan-card__summary">{block.summary}</div>}
       {block.rationale && <div className="plan-card__why">{block.rationale}</div>}
+      {block.assumptions && block.assumptions.length > 0 && (
+        <div className="plan-card__assumptions">
+          <div className="plan-card__assumptions-label">Assumptions</div>
+          <ul>{block.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+        </div>
+      )}
       <ol className="plan-card__steps">
-        {(Array.isArray(block.steps) ? block.steps : []).map((s, i) => <li key={i}>{String(s)}</li>)}
+        {steps.map((s, i) => {
+          const n = typeof s === 'object' && s.n ? s.n : i + 1
+          const title = typeof s === 'string' ? s : s.title
+          const desc = typeof s === 'object' ? s.description : undefined
+          const outs = typeof s === 'object' ? s.expected_outputs : undefined
+          const skill = typeof s === 'object' ? s.skill : undefined
+          const myConcerns = stepConcerns(n)
+          return (
+            <li key={i} className="plan-card__step">
+              <div className="plan-card__step-title">
+                {title}
+                {skill && <span className="plan-card__skill" title="reusable skill">{skill}</span>}
+              </div>
+              {desc && <div className="plan-card__step-desc">{desc}</div>}
+              {outs && outs.length > 0 && (
+                <div className="plan-card__outs">
+                  → {outs.join(', ')}
+                </div>
+              )}
+              {myConcerns.map((c, j) => (
+                <div key={j} className={`plan-card__concern plan-card__concern--${c.level}`}>
+                  {c.level === 'warn' ? '⚠' : c.level === 'error' ? '⛔' : '·'} {c.message}
+                </div>
+              ))}
+            </li>
+          )
+        })}
       </ol>
+      {planConcerns.map((c, j) => (
+        <div key={j} className={`plan-card__concern plan-card__concern--${c.level}`}>
+          {c.level === 'warn' ? '⚠' : c.level === 'error' ? '⛔' : '·'} {c.message}
+        </div>
+      ))}
       {active && (
         <div className="plan-card__actions">
           <button className="plan-card__go" onClick={onGo}>Go</button>
