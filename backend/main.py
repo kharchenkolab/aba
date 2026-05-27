@@ -1623,6 +1623,17 @@ def turn_cancel(run_id: str, req: ResumeRequest):
     return {"ok": ok, "run_id": run_id}
 
 
+@app.post("/api/admin/purge_orphan_fills")
+def admin_purge_orphan_fills():
+    """One-shot cleanup for the buggy-reaper duplication: removes user
+    messages whose content is entirely orphan-fill tool_results. Safe to
+    call repeatedly (no-op on a clean DB). Uses the backend's own
+    connection so it doesn't violate the never-touch-live-DB rule."""
+    from core.runtime.checkpoint import purge_orphan_fill_messages
+    deleted = purge_orphan_fill_messages()
+    return {"deleted": deleted}
+
+
 @app.get("/api/threads/{tid}/manifest")
 def thread_latest_manifest(tid: str):
     """Drawer fallback (T2.4): most-recent persisted Manifest snapshot

@@ -40,9 +40,19 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
         })
       }
     } else if (block.type === 'tool_result') {
+      // Orphan-fill tool_results (from a crashed prior turn) shouldn't
+      // appear in the visible chat. Two historical formats:
+      //   - new: JSON {status:'interrupted', note:...}
+      //   - legacy: plain string starting with the marker
+      const raw = block.content
+      if (typeof raw === 'string' && raw.startsWith('[tool result unavailable')) {
+        continue
+      }
       try {
-        const parsed = JSON.parse(block.content as string)
-        if (parsed && parsed.status === 'presented') continue   // present_plan ack — the plan card already shows it
+        const parsed = JSON.parse(raw as string)
+        if (parsed && parsed.status === 'interrupted') continue   // orphan-fill (new format)
+        if (parsed && parsed.status === 'presented') continue     // present_plan ack — the plan card already shows it
+        if (parsed && parsed.status === 'asked') continue         // ask_clarification ack — the mini-composer already shows it
         blocks.push({ type: 'tool_result', name: '(result)', result: parsed })
         if (parsed.plots && Array.isArray(parsed.plots)) {
           for (const p of parsed.plots) {
@@ -50,7 +60,7 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
           }
         }
       } catch {
-        blocks.push({ type: 'text', text: String(block.content) })
+        blocks.push({ type: 'text', text: String(raw) })
       }
     }
   }
