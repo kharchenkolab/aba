@@ -86,6 +86,13 @@ def _skills_index(_tools: list[dict]) -> str:
     return skills_index_block()
 
 
+def _memory_index(_tools: list[dict]) -> str:
+    """B3: per-project memory index (typed files). Returns '' when no
+    memories exist yet — so a fresh project shows no memory header."""
+    from core.memory import memory_index_block
+    return memory_index_block()
+
+
 _BLOCKS: tuple[_Block, ...] = (
     _Block("identity",     None,                   None,             _md("identity.md")),
     _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
@@ -96,6 +103,10 @@ _BLOCKS: tuple[_Block, ...] = (
     # Skills index — primary only, gated on read_skill so a deployment
     # that doesn't enable the tool also doesn't advertise the catalog.
     _Block("skills",       frozenset({"primary"}), "read_skill",     _skills_index),
+    # Memory index — primary only, gated on read_memory. Always rendered
+    # for primary turns when the tool is on; the block itself returns ''
+    # when no memories exist, which the assembler drops.
+    _Block("memory",       frozenset({"primary"}), "read_memory",    _memory_index),
     _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
 )
 

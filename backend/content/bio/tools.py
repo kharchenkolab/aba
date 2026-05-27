@@ -204,6 +204,44 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "read_memory",
+        "description": (
+            "Load the body of a named project memory. The system prompt shows a "
+            "small index of memories that exist — call this to expand one. "
+            "Returns the body, or an error if the name isn't in the index."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Memory name (slug from the index)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "write_memory",
+        "description": (
+            "Persist a project-local memory the next session should see. Use when "
+            "the user states a fact / preference / constraint you'd otherwise have "
+            "to re-derive (a control sample id, a domain convention, who's on the "
+            "project). Pick the right `type`: user (about the user's role/goals), "
+            "feedback (how to work — guidance, corrections), project (the work — "
+            "deadlines, decisions, motivations), reference (where to look in "
+            "external systems). Overwrite an existing memory by reusing its name. "
+            "Don't write what's already in the codebase, git, or another memory."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":        {"type": "string", "description": "Short, kebab-case slug — the index key."},
+                "type":        {"type": "string", "enum": ["user", "feedback", "project", "reference"]},
+                "description": {"type": "string", "description": "One-line summary for the index."},
+                "body":        {"type": "string", "description": "The memory content (markdown)."},
+            },
+            "required": ["name", "type", "body"],
+        },
+    },
+    {
         "name": "read_skill",
         "description": (
             "Load the full body (procedure / recipe) of a registered skill by name. "
@@ -617,6 +655,49 @@ def present_plan(input_: dict) -> dict:
                     "wait for their decision before executing the steps."}
 
 
+def read_memory_tool(input_: dict) -> dict:
+    from core.memory import read_memory as _rm, list_memories
+    name = (input_.get("name") or "").strip() if isinstance(input_, dict) else ""
+    if not name:
+        return {"status": "error", "note": "read_memory needs a non-empty `name`."}
+    e = _rm(name)
+    if e is None:
+        avail = [m.name for m in list_memories()]
+        return {
+            "status": "unknown_memory",
+            "note": f"No memory named {name!r}. Available: {', '.join(avail) or '(none)'}.",
+        }
+    return {
+        "status": "ok",
+        "name": e.name,
+        "type": e.type,
+        "description": e.description,
+        "body": e.body,
+    }
+
+
+def write_memory_tool(input_: dict) -> dict:
+    from core.memory import write_memory as _wm, MEMORY_TYPES
+    if not isinstance(input_, dict):
+        return {"status": "error", "note": "write_memory needs an object input."}
+    name = (input_.get("name") or "").strip()
+    body = input_.get("body") or ""
+    typ  = (input_.get("type") or "").strip()
+    desc = (input_.get("description") or "").strip()
+    if not name:
+        return {"status": "error", "note": "write_memory needs `name`."}
+    if not body.strip():
+        return {"status": "error", "note": "write_memory needs `body`."}
+    if typ not in MEMORY_TYPES:
+        return {"status": "error",
+                "note": f"`type` must be one of {list(MEMORY_TYPES)}; got {typ!r}."}
+    try:
+        e = _wm(name=name, body=body, type=typ, description=desc)
+    except Exception as ex:  # noqa: BLE001
+        return {"status": "error", "note": str(ex)}
+    return {"status": "ok", "name": e.name, "type": e.type, "description": e.description}
+
+
 def read_skill(input_: dict) -> dict:
     """Return the body of a registered skill, or an error if absent."""
     from core.skills import get_skill
@@ -663,6 +744,8 @@ EXECUTORS = {
     "present_plan": present_plan,
     "ask_clarification": ask_clarification,
     "read_skill": read_skill,
+    "read_memory": read_memory_tool,
+    "write_memory": write_memory_tool,
 }
 
 def execute_tool(name: str, input_: dict) -> str:
