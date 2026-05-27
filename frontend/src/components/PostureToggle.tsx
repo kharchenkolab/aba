@@ -17,6 +17,8 @@ interface Props {
 export default function PostureToggle({ posture, onChange, entityLabel = 'Entity' }: Props) {
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
+      // Don't grab modified keypresses — Ctrl/Cmd-C is COPY, not switch-to-chat.
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       const ae = document.activeElement as HTMLElement | null
       const tag = ae?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable) return

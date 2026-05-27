@@ -1,0 +1,12 @@
+name: file_summarizer
+role: advisor
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/file_summarizer.md
+manifest_role: file_summarizer
+tool_allowlist: []
+streaming: false
+halts_allowed: false
+max_iterations: 1
+timeout_s: 30
+fake_text: |
+  [Summary, fake mode] This file is the project's mechanical README for the active container — a short prose introduction generated from the entity graph's metadata. It mirrors what the in-tree files view shows: counts of threads/datasets/results, a links section pointing to subfolders, and a footer note. Useful as a quick orientation for a new collaborator before diving into the actual artifacts.

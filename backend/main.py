@@ -1792,6 +1792,89 @@ def viewers_for_node(
     }
 
 
+class AiSummaryRequest(BaseModel):
+    path: str | None = None
+    entity_id: str | None = None
+
+
+@app.post("/api/files/ai-summary")
+def file_ai_summary(req: AiSummaryRequest):
+    """AI fallback viewer (viewers.md §6.1). Reads up to 4 KB of the
+    file's content (or metadata for binaries), hands it to the
+    file_summarizer Agent, returns Markdown.
+
+    For now: no cache, no PHI gate, no cost cap — those land alongside
+    the consent UX. Cheap to call; an explicit user click each time.
+    """
+    import content.bio  # noqa: F401 — registrations
+    from core.files.materialize import _resolve_artifact_disk_path
+    from content.bio.files.tree import build_files_tree, find_node
+    from core.runtime.agent import get_agent_spec, run_advisor_one_shot
+
+    # Resolve the file: path-first, then entity_id.
+    inline_text: str | None = None
+    artifact: str | None = None
+    name = ""
+    if req.path:
+        tree = build_files_tree(include_archived=False)
+        node = find_node(tree, req.path)
+        if node is None:
+            raise HTTPException(404, f"no node at {req.path!r}")
+        name = node.get("name") or ""
+        inline_text = node.get("content") or node.get("synthesized_content") or None
+        artifact = node.get("artifact_path")
+    elif req.entity_id:
+        e = get_entity(req.entity_id)
+        if not e:
+            raise HTTPException(404, f"no entity {req.entity_id}")
+        name = e.get("title") or e["id"]
+        artifact = e.get("artifact_path")
+    else:
+        raise HTTPException(400, "supply either path or entity_id")
+
+    peek_chars = 4000
+    peek = ""
+    file_size = None
+    if inline_text:
+        peek = inline_text[:peek_chars]
+    elif artifact:
+        src = _resolve_artifact_disk_path(artifact)
+        if src and src.exists():
+            try:
+                file_size = src.stat().st_size
+            except OSError:
+                pass
+            if src.suffix.lower() in {
+                ".md", ".markdown", ".txt", ".log", ".py", ".r", ".sh", ".sql",
+                ".yaml", ".yml", ".json", ".ts", ".tsx", ".js", ".jsx", ".csv", ".tsv",
+            }:
+                try:
+                    peek = src.read_text(errors="replace")[:peek_chars]
+                except OSError:
+                    peek = ""
+
+    spec = get_agent_spec("file_summarizer")
+    if spec is None:
+        return {
+            "markdown": f"_No file_summarizer agent registered._\n\nFile: `{name}` ({file_size or 'unknown'} bytes).",
+            "agent": None,
+        }
+
+    prompt_parts = [f"Filename: `{name}`"]
+    if file_size is not None:
+        prompt_parts.append(f"Size on disk: {file_size} bytes.")
+    if not peek:
+        prompt_parts.append("(Binary or unreadable file — no text peek available.)")
+    else:
+        prompt_parts.append("Content peek (first 4 KB):")
+        prompt_parts.append("```")
+        prompt_parts.append(peek)
+        prompt_parts.append("```")
+
+    text = run_advisor_one_shot(spec, user_prompt="\n".join(prompt_parts), max_tokens=400)
+    return {"markdown": text, "agent": "file_summarizer"}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react'
 import type { FileNode, ViewersResponse } from './types'
 import { VIEWERS, hasViewer } from './registry'
+import './FileCanvas.css'
 
 interface Props {
   node: FileNode
@@ -27,13 +28,15 @@ export default function FileCanvas({ node, onFocus, onClose }: Props) {
   useEffect(() => {
     let cancelled = false
     setResp(null); setErr(null)
-    // Resolve the viewer set. For synthesized files we already have
-    // enough information locally to pick a viewer; the round-trip
-    // keeps the dispatch consistent and gives us alternates for the
-    // future right-click menu.
-    const q = node.entity_id
-      ? `entity_id=${encodeURIComponent(node.entity_id)}`
-      : `path=${encodeURIComponent(node.path)}`
+    // Prefer path-based lookup. The backend walks the tree and returns
+    // viewers matched on file context (extension, MIME, synthesized
+    // flag) — not just entity-type. A README under a thread has
+    // entity_id pointing at the thread; an entity_id lookup would
+    // return thread-only viewers (and the file-tree-y .md viewer would
+    // be missed).
+    const q = node.path
+      ? `path=${encodeURIComponent(node.path)}`
+      : `entity_id=${encodeURIComponent(node.entity_id || '')}`
     fetch(`/api/viewers/for?${q}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
       .then(d => { if (!cancelled) setResp(d as ViewersResponse) })
@@ -54,16 +57,80 @@ export default function FileCanvas({ node, onFocus, onClose }: Props) {
     return <div className="viewer__empty" style={{ padding: 16 }}>Loading viewer…</div>
   }
   if (!picked) {
-    // No canvas-mode viewer applies — fall back to a download link.
-    return (
-      <div className="viewer__empty" style={{ padding: 16 }}>
-        <p>No in-app viewer for <code>{node.path}</code>.</p>
-        {resp.download_url && (
-          <p><a href={resp.download_url} download>⬇ Download the file</a></p>
-        )}
-      </div>
-    )
+    return <NoViewerFallback node={node} resp={resp} />
   }
   const Component = VIEWERS[picked.component!]
   return <Component node={node} viewer={picked} onFocus={onFocus} onClose={onClose} />
+}
+
+
+/** Shown when no in-app canvas viewer applies for a file. Surfaces the
+ *  download, any external launchers, and the AI summary / visualize
+ *  fallbacks — so the user always has a way forward. */
+function NoViewerFallback({ node, resp }: { node: FileNode; resp: ViewersResponse }) {
+  const [summary, setSummary] = useState<string | null>(null)
+  const [pending, setPending] = useState<'summary' | 'visualize' | null>(null)
+  const [aiErr, setAiErr] = useState<string | null>(null)
+
+  const externals = resp.viewers.filter(v => v.mode === 'external')
+  const hasAiSummary = !!resp.viewers.find(v => v.id === 'ai-summary')
+  const hasAiVisualize = !!resp.viewers.find(v => v.id === 'ai-visualize')
+
+  async function askSummary() {
+    setPending('summary'); setAiErr(null); setSummary(null)
+    try {
+      const r = await fetch('/api/files/ai-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(node.path ? { path: node.path } : { entity_id: node.entity_id }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d?.detail || `${r.status}`)
+      setSummary(d.markdown as string)
+    } catch (e) {
+      setAiErr(String(e))
+    } finally {
+      setPending(null)
+    }
+  }
+
+  return (
+    <article className="viewer viewer--fallback">
+      <header className="viewer__head">
+        <span className="viewer__path">{node.path}</span>
+      </header>
+      <div className="viewer__body" style={{ padding: 18, maxWidth: 720 }}>
+        <p style={{ color: 'var(--text-3)' }}>
+          No in-app viewer for this file type yet.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {resp.download_url && (
+            <a className="viewer__action" href={resp.download_url} download>⬇ Download</a>
+          )}
+          {externals.map(v => (
+            <span key={v.id} className="viewer__action viewer__action--disabled" title="External launcher not yet wired">
+              {v.label} (external)
+            </span>
+          ))}
+          {hasAiSummary && (
+            <button className="viewer__action viewer__action--ai" onClick={askSummary} disabled={pending === 'summary'}>
+              {pending === 'summary' ? '… asking Guide' : '✦ Ask Guide to summarize'}
+            </button>
+          )}
+          {hasAiVisualize && (
+            <span className="viewer__action viewer__action--disabled" title="AI visualize lands in V4">
+              ✦ Ask Guide to visualize (soon)
+            </span>
+          )}
+        </div>
+        {aiErr && <div className="viewer__error" style={{ marginTop: 12 }}>{aiErr}</div>}
+        {summary && (
+          <div className="viewer__ai-summary">
+            <div className="viewer__ai-summary-label">Guide says</div>
+            <pre className="viewer__ai-summary-body">{summary}</pre>
+          </div>
+        )}
+      </div>
+    </article>
+  )
 }
