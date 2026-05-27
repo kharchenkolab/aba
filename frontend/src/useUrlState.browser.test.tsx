@@ -25,77 +25,66 @@ function useUrlAndPath() {
 
 describe('useUrlState under BrowserRouter (production code path)', () => {
   beforeEach(() => {
-    // Reset window.location between tests so each starts at '/'.
     window.history.pushState(null, '', '/')
   })
 
   it('reflects initial pathname from window.location', () => {
-    window.history.pushState(null, '', '/p/X/runs')
+    window.history.pushState(null, '', '/p/X/t/T/e/E')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    expect(result.current.pathname).toBe('/p/X/runs')
-    expect(result.current.url.section).toBe('runs')
+    expect(result.current.pathname).toBe('/p/X/t/T/e/E')
+    expect(result.current.url.threadId).toBe('T')
+    expect(result.current.url.focusedId).toBe('E')
   })
 
-  it('setSection navigates and the hook re-renders', () => {
-    window.history.pushState(null, '', '/p/X')
+  it('setFocus navigates and the hook re-renders', () => {
+    window.history.pushState(null, '', '/p/X/t/T')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    expect(result.current.pathname).toBe('/p/X')
-    expect(result.current.url.section).toBe('threads')
-
-    act(() => result.current.url.setSection('runs'))
-    expect(result.current.pathname).toBe('/p/X/runs')
-    expect(result.current.url.section).toBe('runs')
-    expect(window.location.pathname).toBe('/p/X/runs')
-
-    act(() => result.current.url.setSection('claims'))
-    expect(result.current.pathname).toBe('/p/X/claims')
-    expect(window.location.pathname).toBe('/p/X/claims')
+    act(() => result.current.url.setFocus('E'))
+    expect(result.current.pathname).toBe('/p/X/t/T/e/E')
+    expect(window.location.pathname).toBe('/p/X/t/T/e/E')
   })
 
   it('window.history.back() triggers a re-render via popstate', async () => {
     window.history.pushState(null, '', '/p/X')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    act(() => result.current.url.setSection('runs'))
-    expect(result.current.pathname).toBe('/p/X/runs')
+    act(() => result.current.url.setThread('T'))
+    expect(result.current.pathname).toBe('/p/X/t/T')
 
     await act(async () => {
       window.history.back()
-      // Allow popstate to flush.
       await new Promise(r => setTimeout(r, 0))
     })
     expect(window.location.pathname).toBe('/p/X')
     expect(result.current.pathname).toBe('/p/X')
-    expect(result.current.url.section).toBe('threads')
+    expect(result.current.url.threadId).toBe('default')
   })
 
-  it('Back from /p/X/runs/e/Y clears focus + keeps section', async () => {
-    window.history.pushState(null, '', '/p/X/runs')
+  it('Back from /p/X/t/T/e/Y clears focus, keeps thread', async () => {
+    window.history.pushState(null, '', '/p/X/t/T')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
     act(() => result.current.url.setFocus('Y'))
-    expect(result.current.pathname).toBe('/p/X/runs/e/Y')
-    expect(result.current.url.focusedId).toBe('Y')
+    expect(result.current.pathname).toBe('/p/X/t/T/e/Y')
 
     await act(async () => {
       window.history.back()
       await new Promise(r => setTimeout(r, 0))
     })
-    expect(result.current.pathname).toBe('/p/X/runs')
-    expect(result.current.url.section).toBe('runs')
+    expect(result.current.pathname).toBe('/p/X/t/T')
+    expect(result.current.url.threadId).toBe('T')
     expect(result.current.url.focusedId).toBe('workspace')
   })
 
-  it('multiple setSection calls each push to window.history', async () => {
+  it('Back from /p/X/files/foo.csv unwinds the file', async () => {
     window.history.pushState(null, '', '/p/X')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    act(() => result.current.url.setSection('runs'))
-    act(() => result.current.url.setSection('claims'))
-    act(() => result.current.url.setSection('data'))
+    act(() => result.current.url.setFilePath('foo.csv'))
+    expect(result.current.pathname).toBe('/p/X/files/foo.csv')
 
-    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
-    expect(result.current.pathname).toBe('/p/X/claims')
-    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
-    expect(result.current.pathname).toBe('/p/X/runs')
-    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
+    await act(async () => {
+      window.history.back()
+      await new Promise(r => setTimeout(r, 0))
+    })
     expect(result.current.pathname).toBe('/p/X')
+    expect(result.current.url.filePath).toBe('')
   })
 })

@@ -87,9 +87,34 @@ export default function App() {
   // conversation. '_home' just keeps the key non-empty when no project.
   const projectKey = url.pid ?? '_home'
 
-  // Phase 2: section + scene + viewedFile path all come from the URL.
-  const projectSection = url.section as ProjectSection
-  const setProjectSection = (s: ProjectSection) => url.setSection(s)
+  // Rail tab is local state (Option 3): tab clicks are filter changes,
+  // not navigations, so they don't pollute history. Persisted per-project
+  // so flipping back to a project remembers your last tab.
+  const [projectSection, setProjectSectionRaw] = useState<ProjectSection>(() => {
+    const stored = url.pid ? localStorage.getItem(`aba_section:${url.pid}`) : null
+    return (stored as ProjectSection) || 'threads'
+  })
+  const setProjectSection = (s: ProjectSection) => {
+    setProjectSectionRaw(s)
+    if (url.pid) localStorage.setItem(`aba_section:${url.pid}`, s)
+  }
+  // Auto-snap rule: when the URL enters a file-open state, force the rail
+  // to Files so the user sees the file tree alongside the open file. This
+  // is the only URL → rail sync; tab clicks never sync the other way.
+  useEffect(() => {
+    if (url.filePath && projectSection !== 'files') {
+      setProjectSection('files')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url.filePath])
+  // When the URL pid changes (project switch), reload the saved tab.
+  useEffect(() => {
+    if (!url.pid) return
+    const stored = localStorage.getItem(`aba_section:${url.pid}`)
+    if (stored && stored !== projectSection) setProjectSectionRaw(stored as ProjectSection)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url.pid])
+
   const overview  = url.scene === 'overview'
   const inventory = url.scene === 'inventory'
   const setOverview  = (on: boolean) => url.setScene(on ? 'overview'  : null)
