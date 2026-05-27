@@ -1,102 +1,127 @@
 /**
  * URL ↔ app-state bridge.
  *
- * The URL is canonical for things that change the *content* the user is
- * looking at:
- *   - project id           → /p/<pid>
- *   - thread id            → /t/<tid>      (default = the implicit default thread)
- *   - focused entity id    → /e/<eid>      (default = workspace, i.e. no focus)
- *   - scene                → /overview     (project-wide) or /inventory (per-thread)
- *   - open file            → /files/<path> (FilesView opens a file in the center)
+ * The URL is canonical for: project, rail section (tab), thread, focused
+ * entity, scene, and open-file path. Setters preserve other pieces.
  *
- * Rail tab (threads / claims / data / runs / results / files) is NOT a URL
- * state — it's a filter on the rail list, owned by App.tsx as React state.
- * This avoids cluttering history with cosmetic filter changes; every Back
- * is a real content change.
+ * # Tab → item coalesce
  *
- * Legacy URLs that included a section segment (e.g. /p/X/runs/e/Y) are
- * still parsed — the section name is consumed and dropped, so bookmarks
- * from Phase 2 continue to land on the right entity.
+ * Tab clicks push a history entry. But clicking an item RIGHT AFTER a
+ * tab click — within COALESCE_WINDOW_MS — REPLACES that tab entry, so the
+ * combined "I flipped to Runs and clicked a run" is a single Back step
+ * back to where the user started exploring, not two.
  *
- * Routes recognized (canonical):
- *   /                                       → home
- *   /p/<pid>                                → project
- *   /p/<pid>/t/<tid>                        → + thread
- *   /p/<pid>/t/<tid>/e/<eid>                → + thread + entity
- *   /p/<pid>/t/<tid>/inventory              → scene: thread inventory
- *   /p/<pid>/e/<eid>                        → + entity (no thread)
- *   /p/<pid>/files/<file-path>              → file open in center
- *   /p/<pid>/overview                       → scene: project overview
+ * Without this rule, Back from a focused item leaves the rail stranded
+ * on the tab the user just visited, which the user perceives as
+ * inconsistent: the center reverted but the rail didn't.
  *
- * Legacy (tolerated, parsed identically minus the section name):
- *   /p/<pid>/<section>[/t/<tid>][/e/<eid>]  → section dropped
+ * Other navigations (thread switch, file open, scene change) reset the
+ * flag — only an item-focus immediately following a tab click coalesces.
+ *
+ * # Grammar
+ *
+ *   /                                                       home
+ *   /p/<pid>                                                project (default section = threads)
+ *   /p/<pid>/<section>                                      section explicit
+ *   /p/<pid>/<section>/t/<tid>                              + thread
+ *   /p/<pid>/<section>/t/<tid>/e/<eid>                      + thread + entity
+ *   /p/<pid>/<section>/t/<tid>/inventory                    scene: thread inventory
+ *   /p/<pid>/<section>/e/<eid>                              + entity (no thread)
+ *   /p/<pid>/files/<file-path>                              file open in center
+ *   /p/<pid>/overview                                       scene: project overview
+ *   /p/<pid>/t/<tid>...                                     legacy: section = threads
  */
 import { useLocation, useNavigate } from 'react-router-dom'
 
-export type Scene = 'overview' | 'inventory' | null
+export type Section = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
+export type Scene   = 'overview' | 'inventory' | null
 
-const KNOWN_SECTIONS = new Set(['threads', 'claims', 'data', 'runs', 'results', 'files'])
+const SECTIONS: readonly Section[] = ['threads', 'claims', 'data', 'runs', 'results', 'files']
+const DEFAULT_SECTION: Section = 'threads'
+const COALESCE_WINDOW_MS = 1500
+
+/* Module-level flag: was the most recent navigation a tab click that's
+ * still eligible for coalescing? Set by setSection, cleared by other
+ * setters and on timeout. The flag is intentionally not React state —
+ * it's a transient signal between two synchronous click handlers, not
+ * something the UI ever reads. */
+let _lastWasTabChange = false
+let _coalesceTimer: ReturnType<typeof setTimeout> | null = null
+function markTabChange() {
+  _lastWasTabChange = true
+  if (_coalesceTimer) clearTimeout(_coalesceTimer)
+  _coalesceTimer = setTimeout(() => { _lastWasTabChange = false }, COALESCE_WINDOW_MS)
+}
+function consumeCoalesce(): boolean {
+  const v = _lastWasTabChange
+  _lastWasTabChange = false
+  if (_coalesceTimer) { clearTimeout(_coalesceTimer); _coalesceTimer = null }
+  return v
+}
+function clearCoalesce() {
+  _lastWasTabChange = false
+  if (_coalesceTimer) { clearTimeout(_coalesceTimer); _coalesceTimer = null }
+}
 
 export interface UrlState {
-  pid:           string | null
-  threadId:      string              // 'default' = implicit default thread
-  focusedId:     string              // 'workspace' = no entity focused
-  scene:         Scene
-  /** Path of the file currently open in the center (FilesView opens a file)
-   *  or '' if no file is open. */
-  filePath:      string
-  isHome:        boolean
+  pid:          string | null
+  section:      Section
+  threadId:     string
+  focusedId:    string
+  scene:        Scene
+  filePath:     string
+  isHome:       boolean
 
   setFocus:           (eid: string) => void
   setThread:          (tid: string) => void
   setProject:         (pid: string | null) => void
+  setSection:         (section: Section) => void
   setFilePath:        (path: string) => void
   setScene:           (scene: Scene) => void
-  /** Combined: thread + focus in one navigation (single history entry). */
   setThreadAndFocus:  (tid: string, eid: string) => void
-  /** Combined: any subset of URL pieces in one navigation. */
-  setNav:             (next: Partial<Pick<UrlState, 'threadId' | 'focusedId' | 'scene' | 'filePath'>>) => void
+  setNav:             (next: Partial<Pick<UrlState, 'section' | 'threadId' | 'focusedId' | 'scene' | 'filePath'>>) => void
   goHome:             () => void
 }
 
 interface Parsed {
   pid:      string | null
+  section:  Section
   tid:      string
   eid:      string
   scene:    Scene
   filePath: string
 }
 
+function isSection(s: string): s is Section {
+  return (SECTIONS as readonly string[]).includes(s)
+}
+
 function parse(pathname: string): Parsed {
   const parts = pathname.split('/').filter(Boolean)
   if (parts.length === 0 || parts[0] !== 'p' || !parts[1]) {
-    return { pid: null, tid: 'default', eid: 'workspace', scene: null, filePath: '' }
+    return { pid: null, section: DEFAULT_SECTION, tid: 'default', eid: 'workspace', scene: null, filePath: '' }
   }
   const pid = decodeURIComponent(parts[1])
   let i = 2
+  let section: Section = DEFAULT_SECTION
   let scene: Scene = null
   let filePath = ''
   let tid = 'default'
   let eid = 'workspace'
 
-  // Tolerate a section segment right after pid. 'files' is special — it
-  // captures the rest of the URL as the file path. Other section names
-  // (threads/claims/runs/...) are consumed and dropped (legacy Phase-2 URLs).
-  if (i < parts.length && KNOWN_SECTIONS.has(parts[i])) {
-    const seg = parts[i]
+  if (i < parts.length && isSection(parts[i])) {
+    section = parts[i] as Section
     i += 1
-    if (seg === 'files' && i < parts.length) {
+    if (section === 'files' && i < parts.length) {
       filePath = parts.slice(i).map(decodeURIComponent).join('/')
-      return { pid, tid, eid, scene, filePath }
+      return { pid, section, tid, eid, scene, filePath }
     }
   }
 
-  // Project-overview scene — mutually exclusive with everything else.
   if (i < parts.length && parts[i] === 'overview') {
-    return { pid, tid, eid, scene: 'overview', filePath: '' }
+    return { pid, section, tid, eid, scene: 'overview', filePath: '' }
   }
 
-  // /t/<tid> [ /inventory ] [ /e/<eid> ] in any order; scan tolerantly.
   while (i < parts.length) {
     const seg = parts[i]
     if (seg === 't' && parts[i + 1]) { tid = decodeURIComponent(parts[i + 1]); i += 2 }
@@ -104,20 +129,19 @@ function parse(pathname: string): Parsed {
     else if (seg === 'inventory') { scene = 'inventory'; i += 1 }
     else { i += 1 }
   }
-  return { pid, tid, eid, scene, filePath }
+  return { pid, section, tid, eid, scene, filePath }
 }
 
 function buildPath(p: Parsed): string {
   if (!p.pid) return '/'
-  // A file-open URL is its own shape (no t/e segments are meaningful).
-  if (p.filePath) {
+  if (p.section === 'files' && p.filePath) {
     return `/p/${encodeURIComponent(p.pid)}/files/${p.filePath.split('/').map(encodeURIComponent).join('/')}`
   }
-  // Project overview replaces thread + entity.
   if (p.scene === 'overview') {
     return `/p/${encodeURIComponent(p.pid)}/overview`
   }
   const segs: string[] = ['p', encodeURIComponent(p.pid)]
+  if (p.section !== DEFAULT_SECTION) segs.push(p.section)
   if (p.tid && p.tid !== 'default') segs.push('t', encodeURIComponent(p.tid))
   if (p.eid && p.eid !== 'workspace') segs.push('e', encodeURIComponent(p.eid))
   if (p.scene === 'inventory') segs.push('inventory')
@@ -129,43 +153,82 @@ export function useUrlState(): UrlState {
   const navigate = useNavigate()
   const parsed = parse(location.pathname)
 
-  const go = (next: Parsed) => {
+  const go = (next: Parsed, opts?: { replace?: boolean }) => {
     const path = buildPath(next)
-    if (path !== location.pathname) navigate(path)
+    if (path !== location.pathname) navigate(path, { replace: !!opts?.replace })
   }
 
-  // Focus / thread changes implicitly drop any active scene — opening an
-  // entity or switching threads is a scene transition.
-  const setFocus           = (eid: string) => parsed.pid && go({ ...parsed, eid, scene: null })
-  const setThread          = (tid: string) => parsed.pid && go({ ...parsed, tid, eid: 'workspace', scene: null })
-  const setProject         = (pid: string | null) => go({
-    pid, tid: 'default', eid: 'workspace', scene: null, filePath: '',
-  })
-  const setFilePath        = (path: string) => parsed.pid && go({
-    ...parsed, filePath: path, tid: 'default', eid: 'workspace', scene: null,
-  })
-  const setScene           = (scene: Scene) => parsed.pid && go({ ...parsed, scene })
-  const setThreadAndFocus  = (tid: string, eid: string) => parsed.pid && go({ ...parsed, tid, eid, scene: null })
-  const setNav             = (next: Partial<Pick<UrlState, 'threadId' | 'focusedId' | 'scene' | 'filePath'>>) => {
+  // setSection: tab click. Pushes, but marks the change as eligible for
+  // coalesce — if setFocus fires within COALESCE_WINDOW_MS, that focus
+  // will REPLACE this entry instead of pushing.
+  const setSection = (section: Section) => {
     if (!parsed.pid) return
+    markTabChange()
+    go({ ...parsed, section, filePath: '', scene: null })
+  }
+
+  // setFocus: item click. Replaces if the previous navigation was a tab
+  // click within the coalesce window. Otherwise pushes normally.
+  const setFocus = (eid: string) => {
+    if (!parsed.pid) return
+    const coalesce = consumeCoalesce()
+    go({ ...parsed, eid, scene: null }, { replace: coalesce })
+  }
+
+  // Everything else clears the flag — only tab→item coalesces.
+  const setThread = (tid: string) => {
+    if (!parsed.pid) return
+    clearCoalesce()
+    go({ ...parsed, tid, eid: 'workspace', scene: null })
+  }
+  const setProject = (pid: string | null) => {
+    clearCoalesce()
+    go({ pid, section: DEFAULT_SECTION, tid: 'default', eid: 'workspace', scene: null, filePath: '' })
+  }
+  const setFilePath = (path: string) => {
+    if (!parsed.pid) return
+    clearCoalesce()
+    go({ ...parsed, section: 'files', filePath: path, tid: 'default', eid: 'workspace', scene: null })
+  }
+  const setScene = (scene: Scene) => {
+    if (!parsed.pid) return
+    clearCoalesce()
+    go({ ...parsed, scene })
+  }
+  const setThreadAndFocus = (tid: string, eid: string) => {
+    if (!parsed.pid) return
+    clearCoalesce()
+    go({ ...parsed, tid, eid, scene: null })
+  }
+  const setNav = (next: Partial<Pick<UrlState, 'section' | 'threadId' | 'focusedId' | 'scene' | 'filePath'>>) => {
+    if (!parsed.pid) return
+    clearCoalesce()
     go({
       ...parsed,
+      section:  next.section  ?? parsed.section,
       tid:      next.threadId ?? parsed.tid,
       eid:      next.focusedId ?? parsed.eid,
       scene:    next.scene    !== undefined ? next.scene    : parsed.scene,
       filePath: next.filePath !== undefined ? next.filePath : parsed.filePath,
     })
   }
-  const goHome             = () => { if (location.pathname !== '/') navigate('/') }
+  const goHome = () => {
+    clearCoalesce()
+    if (location.pathname !== '/') navigate('/')
+  }
 
   return {
     pid:       parsed.pid,
+    section:   parsed.section,
     threadId:  parsed.tid,
     focusedId: parsed.eid,
     scene:     parsed.scene,
     filePath:  parsed.filePath,
     isHome:    parsed.pid === null,
-    setFocus, setThread, setProject, setFilePath, setScene,
+    setFocus, setThread, setProject, setSection, setFilePath, setScene,
     setThreadAndFocus, setNav, goHome,
   }
 }
+
+// Exposed for tests only — let tests reset the coalesce state between cases.
+export const _resetCoalesceForTesting = clearCoalesce
