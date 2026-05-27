@@ -204,6 +204,25 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "read_skill",
+        "description": (
+            "Load the full body (procedure / recipe) of a registered skill by name. "
+            "The system prompt shows you a one-line description for each skill — call "
+            "this when you've decided to use one and need the step-by-step details. "
+            "Returns the markdown body, or an error if the name isn't registered."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name as shown in the skills index, e.g. 'scrna-qc-clustering'.",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "ask_clarification",
         "description": (
             "PAUSE the turn and ask the user ONE specific clarifying question that "
@@ -598,6 +617,31 @@ def present_plan(input_: dict) -> dict:
                     "wait for their decision before executing the steps."}
 
 
+def read_skill(input_: dict) -> dict:
+    """Return the body of a registered skill, or an error if absent."""
+    from core.skills import get_skill
+    name = (input_.get("name") or "").strip() if isinstance(input_, dict) else ""
+    if not name:
+        return {"status": "error", "note": "read_skill needs a non-empty `name`."}
+    spec = get_skill(name)
+    if spec is None:
+        from core.skills import list_skills
+        avail = [s.name for s in list_skills()]
+        return {
+            "status": "unknown_skill",
+            "note": f"No skill named {name!r}. Available: {', '.join(avail) or '(none)'}.",
+        }
+    return {
+        "status": "ok",
+        "name": spec.name,
+        "description": spec.description,
+        "when_to_use": spec.when_to_use,
+        "requires_tools": list(spec.requires_tools),
+        "produces": list(spec.produces),
+        "body": spec.body,
+    }
+
+
 def ask_clarification(input_: dict) -> dict:
     """No-op server-side, like present_plan. The actual halt + SSE emission
     happens in guide.py's tool-dispatch branch; this stub exists so
@@ -618,6 +662,7 @@ EXECUTORS = {
     "create_scenario": create_scenario,
     "present_plan": present_plan,
     "ask_clarification": ask_clarification,
+    "read_skill": read_skill,
 }
 
 def execute_tool(name: str, input_: dict) -> str:
