@@ -46,7 +46,9 @@ class Turn:
     state:            TurnState
     focus_entity_id:  Optional[str] = None
     thread_id:        Optional[str] = None
+    entity_id:        Optional[str] = None         # message-log scope (typically WORKSPACE_ID)
     pending_tool_calls: list[dict] = field(default_factory=list)
+    pending_tool_ids: list[str] = field(default_factory=list)   # in-flight tool_use ids (A1)
     pending_user_signal: Optional[str] = None      # plan | clarify | approval
     final_message:    Optional[dict] = None
     error:            Optional[dict] = None
@@ -73,8 +75,10 @@ class Turn:
             "thread_id":       self.thread_id,
             "pending_blob":    json.dumps({
                 "pending_tool_calls": self.pending_tool_calls,
+                "pending_tool_ids":  self.pending_tool_ids,
                 "pending_user_signal": self.pending_user_signal,
                 "final_message": self.final_message,
+                "entity_id":     self.entity_id,
             }),
             "error_blob":      json.dumps(self.error) if self.error else None,
             "usage_blob":      json.dumps({
@@ -100,8 +104,10 @@ class Turn:
             focus_entity_id=row["focus_entity_id"],
             thread_id=row["thread_id"],
             pending_tool_calls=pend.get("pending_tool_calls") or [],
+            pending_tool_ids=pend.get("pending_tool_ids") or [],
             pending_user_signal=pend.get("pending_user_signal"),
             final_message=pend.get("final_message"),
+            entity_id=pend.get("entity_id"),
             error=json.loads(row["error_blob"]) if row["error_blob"] else None,
             usage_in=usage.get("input", 0),
             usage_out=usage.get("output", 0),

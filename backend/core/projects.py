@@ -110,6 +110,14 @@ def set_current(pid: str) -> None:
         backfill_missing_display_paths()
     except Exception:  # noqa: BLE001
         pass           # never block project switch on a backfill failure
+    # A1: reap stale Turn rows + repair any orphaned tool_use in the
+    # newly-opened project's message log. Idempotent; safe to run on
+    # every project switch.
+    try:
+        from core.runtime.checkpoint import reap_stale_turns
+        reap_stale_turns()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def current() -> str | None:
