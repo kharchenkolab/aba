@@ -137,10 +137,17 @@ async def stream_response(
 
     session_id = new_session_id()
     turn_index = 0
+    # A2: Guide is now spec-driven. The YAML at bio/advisors/guide.yaml
+    # declares the model + role + halt/streaming flags. Full loop-body
+    # extraction into Agent.run() is deferred; for now the spec is
+    # consulted for model + role only, while the loop body stays here.
+    from core.runtime.agent import get_agent_spec
+    spec = get_agent_spec("guide")
+    guide_model = spec.model if spec else None    # falls back to MODEL default
+
     # Turn checkpointing (Pass E): create a Turn row at the start; update
     # state through transitions; mark DONE/FAILED at the end. Lets resume-
-    # after-restart see what was in flight. The state machine itself is
-    # still the while-loop below; Pass F drives it explicitly off TurnState.
+    # after-restart see what was in flight.
     turn = Turn(
         run_id=gen_run_id(),
         session_id=session_id,
@@ -250,7 +257,7 @@ async def stream_response(
             while True:
                 emitted = False
                 try:
-                    with open_stream(llm_history, active_tools, system) as stream:
+                    with open_stream(llm_history, active_tools, system, model=guide_model) as stream:
                         for event in stream:
                             if event.type == "content_block_delta":
                                 delta = event.delta

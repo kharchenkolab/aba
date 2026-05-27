@@ -32,11 +32,12 @@ from core.config import API_KEY, MODEL, FAKE_SESSION
 
 class _RealStream:
     """Adapter around anthropic's streaming context manager — same shape we use."""
-    def __init__(self, client, history, tools, system: str):
+    def __init__(self, client, history, tools, system: str, model: str):
         self._client = client
         self._history = history
         self._tools = tools
         self._system = system
+        self._model = model
         self._cm = None
         self._stream = None
 
@@ -56,7 +57,7 @@ class _RealStream:
             messages[-1] = {**messages[-1],
                             "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
         self._cm = self._client.messages.stream(
-            model=MODEL, max_tokens=4096, system=system, tools=tools, messages=messages,
+            model=self._model, max_tokens=4096, system=system, tools=tools, messages=messages,
         )
         self._stream = self._cm.__enter__()
         return self
@@ -74,8 +75,8 @@ class _RealStream:
 def _real_factory():
     import anthropic
     client = anthropic.Anthropic(api_key=API_KEY)
-    def open_stream(history, tools, system: str = ""):
-        return _RealStream(client, history, tools, system)
+    def open_stream(history, tools, system: str = "", model: str | None = None):
+        return _RealStream(client, history, tools, system, model or MODEL)
     return open_stream
 
 
@@ -156,7 +157,7 @@ def _fake_factory(path: Path):
         turns.append(json.loads(line))
     cursor = {"i": 0}
 
-    def open_stream(history, tools, system: str = ""):  # noqa: ARG001
+    def open_stream(history, tools, system: str = "", model: str | None = None):  # noqa: ARG001
         i = cursor["i"]
         if i >= len(turns):
             # Stream ran out — emit a polite final turn so the loop terminates.
