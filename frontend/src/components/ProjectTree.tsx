@@ -306,10 +306,11 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
         )}
       </div>
 
+      {activeSection === 'files' ? (
+        <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length} />
+      ) : (
       <div className="tree__scroll">
-        {activeSection === 'files' ? (
-          <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length} />
-        ) : activeSection === 'threads' ? (() => {
+        {activeSection === 'threads' ? (() => {
           const threadList = [
             { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
             ...threads.map(t => ({
@@ -440,6 +441,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
           )
         })()}
       </div>
+      )}
 
       <div className="tree__footer">
         <label className="tree__toggle">

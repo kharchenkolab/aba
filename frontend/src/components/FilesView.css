@@ -1,113 +1,399 @@
-/* FilesView — virtual file tree view in the project rail's Files tab. */
-.tree__index--files .files__body {
-  display: flex; flex-direction: column;
-  padding: 4px 4px 16px;
-  font-size: 12.5px;
+/* FilesView — virtual file tree view in the project rail's Files tab.
+   Layout adapts to its own inline-size via container queries:
+   narrow rail = name + download only; wider rail reveals Type / Size
+   columns and a column-header row (mockup: misc/aspects.md). */
+
+.files-view {
+  container-type: inline-size;
+  container-name: filesview;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
-.files__totals {
-  font-size: 10.5px; color: var(--text-4);
-  padding: 0 6px 6px;
+/* ===== Header ===== */
+.files__head {
+  padding: 10px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--panel-bd-soft);
+}
+
+.files__title-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.files__title-row .tree__tab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.files__title-row .tree__tab-badge svg {
+  color: var(--section-color);
+}
+
+.files__head-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-4);
+  font-weight: 500;
+  /* Hidden when narrow; revealed in wide mode. */
+  display: none;
+}
+
+.files__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.files__icon-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  text-decoration: none;
+  padding: 0;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.files__icon-btn:hover {
+  background: var(--section-soft, var(--surface-2));
+  color: var(--section-color, var(--text));
+  border-color: var(--section-border, var(--border));
+}
+
+/* ===== View toggle (Tree / List) ===== */
+.files__view-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 1px;
+  margin-right: 4px;
+}
+.files__view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: 500 11px var(--sans);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 120ms, color 120ms;
+}
+.files__view-btn:hover { color: var(--text); }
+.files__view-btn.is-on {
+  background: var(--bg);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(28,25,23,0.06);
+}
+.files__view-label {
+  /* Hidden in narrow mode; revealed when there's room. */
+  display: none;
+}
+
+/* ===== Search ===== */
+.files__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 24px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: border-color 120ms, background 120ms;
+}
+.files__search:focus-within {
+  border-color: var(--accent-border);
+  background: var(--bg);
+}
+.files__search > svg:first-child {
+  position: absolute;
+  left: 9px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-4);
+  pointer-events: none;
+}
+.files__search-input {
+  flex: 1; min-width: 0;
+  border: none; background: transparent; outline: none;
+  font: 12px var(--sans);
+  color: var(--text);
+  padding: 0;
+}
+.files__search-input::placeholder { color: var(--text-4); }
+.files__search-clear {
+  width: 16px; height: 16px;
+  border: none; background: transparent;
+  color: var(--text-4); cursor: pointer;
+  font-size: 16px; line-height: 1;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 3px;
+}
+.files__search-clear:hover { color: var(--text); background: var(--surface-3); }
+
+/* ===== Column header (only visible in wide mode) ===== */
+.files__column-head {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 32px;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-4);
+  background: var(--bg);
+  border-bottom: 1px solid var(--panel-bd-soft);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.files__col--name { flex: 1; min-width: 0; }
+.files__col--type { width: 110px; flex-shrink: 0; }
+.files__col--size { width: 60px; flex-shrink: 0; text-align: right; }
+.files__col--act { width: 28px; flex-shrink: 0; }
+
+/* ===== Body / Rows ===== */
+.files__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 4px 6px;
+  font-size: 12px;
 }
 
 .files__row {
-  display: flex; align-items: center; gap: 5px;
-  padding: 3px 6px;
-  border-radius: 5px;
-  min-height: 22px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 0;
+  border-radius: 4px;
+  min-height: 20px;
 }
-.files__row:hover { background: var(--tree-active-bg); }
-.files__row.is-current { background: var(--tree-active-bg); color: var(--text); }
+.files__row:hover { background: var(--surface-2); }
+.files__row.is-current {
+  background: var(--tree-active-bg);
+  color: var(--text);
+}
+.files__row.is-current::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 3px; bottom: 3px;
+  width: 2.5px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
 
 .files__chev {
-  width: 14px; height: 14px;
-  border: none; background: none; padding: 0; cursor: pointer;
-  color: var(--text-4); font-size: 10px; line-height: 1;
+  flex-shrink: 0;
+  width: 12px; height: 16px;
+  border: none; background: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  color: var(--text-4);
 }
 .files__chev--blank { cursor: default; }
 .files__chev:hover { color: var(--text-2); }
 
-.files__icon { font-size: 12px; flex-shrink: 0; }
+.files__icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  width: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .files__icon--folder { color: var(--accent); }
+.files__icon--clickable {
+  cursor: pointer; border: none; background: none; padding: 0;
+}
+.files__icon--clickable:hover { transform: scale(1.08); }
 
 .files__name {
   flex: 1; min-width: 0;
   text-align: left;
-  border: none; background: none; padding: 0; cursor: default;
-  color: var(--text-2); font-size: 12px;
+  border: none; background: none; padding: 0;
+  cursor: default;
+  color: var(--text-2);
+  font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* In list mode, .files__name holds two stacked spans (filename + parent path). */
+.files__row--list .files__name {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 0; line-height: 1.2;
+}
+
+.files__row--up {
+  border-bottom: 1px dashed var(--panel-bd-soft);
+  margin-bottom: 2px;
+  background: var(--bg);
+}
+.files__row--up .files__icon { color: var(--text-3); font-size: 11px; }
+.files__row--up .files__name-main { color: var(--text-2); font-weight: 600; }
+.files__name-main {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  width: 100%;
+}
+.files__name-path {
+  font-size: 10px;
+  color: var(--text-4);
+  font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  width: 100%;
+  display: none;   /* shown in wide mode via container query */
 }
 .files__name--clickable { cursor: pointer; }
 .files__name--clickable:hover { color: var(--accent); }
-.files__row.is-current .files__name { color: var(--text); font-weight: 500; }
+.files__name--folder { font-weight: 600; color: var(--text); }
+.files__row.is-current .files__name { color: var(--text); font-weight: 600; }
 
-.files__size {
-  font-size: 10.5px; font-family: var(--mono); color: var(--text-4);
+/* Type & size — hidden in narrow mode, revealed by the container query. */
+.files__type, .files__size {
+  display: none;
   flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.files__spacer { flex: 1; }
+.files__type {
+  width: 110px;
+}
+.files__size {
+  width: 60px;
+  text-align: right;
+  font-family: var(--mono);
+}
+.files__size--dash { color: var(--text-4); opacity: 0.5; }
 
 .files__action {
   flex-shrink: 0;
-  width: 18px; height: 18px;
+  width: 20px; height: 20px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 4px;
   color: var(--text-4);
   text-decoration: none;
-  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms, background 120ms, color 120ms;
 }
-.files__action:hover { background: var(--bg); color: var(--accent); }
-
-.files__head-action {
-  margin-left: auto;
-  padding: 2px 7px;
-  font-size: 11px;
-  color: var(--text-3);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  text-decoration: none;
+.files__row:hover .files__action,
+.files__row.is-current .files__action {
+  opacity: 1;
 }
-.files__head-action:hover { background: var(--tree-active-bg); color: var(--text); border-color: var(--accent-border, var(--border)); }
+.files__action:hover {
+  background: var(--surface-3);
+  color: var(--accent);
+}
+.files__action--ghost { pointer-events: none; opacity: 0; }
 
+.files__children {
+  /* No background — relies on indent. */
+}
+
+/* ===== Empty / error / notice ===== */
 .files__empty, .files__error {
-  padding: 12px 8px; font-size: 12px; font-style: italic;
+  padding: 16px 12px;
+  font-size: 12px;
+  font-style: italic;
   color: var(--text-4);
+  text-align: center;
 }
-.files__error { color: #b91c1c; font-style: normal; }
+.files__error { color: var(--red); font-style: normal; }
 
 .files__notice {
-  font-size: 11px; color: var(--text-3);
-  padding: 6px 8px; background: var(--bg-soft, #f6f5f3);
-  border: 1px solid var(--border); border-radius: 4px;
-  margin: 4px 6px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 6px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
   word-break: break-all;
   font-family: var(--mono);
 }
-button.files__head-action {
-  cursor: pointer;
-  font-family: inherit;
+
+/* ===== Footer ===== */
+.files__footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+  border-top: 1px solid var(--panel-bd-soft);
+  background: var(--bg);
+  font-size: 10.5px;
+  color: var(--text-4);
+}
+.files__footer-size {
+  font-family: var(--mono);
+  font-weight: 500;
 }
 
-/* Readme inline expand */
+/* ===== Wide mode (container query) =====
+   At ≥ 360px the panel switches from a compact list to a tabular layout
+   with Type / Size columns and a column header row. */
+@container filesview (min-width: 360px) {
+  .files__head-meta { display: inline-block; }
+  .files__column-head { display: flex; }
+  .files__view-label { display: inline; }
+
+  .files__type {
+    display: inline-block;
+  }
+  .files__size {
+    display: inline-block;
+  }
+  .files__name-path { display: block; }
+
+  /* Trim row padding now that we're showing columns; let download be ever-present so it doesn't jump on hover. */
+  .files__row { padding-right: 10px; }
+  .files__action {
+    opacity: 0.4;
+  }
+  .files__row:hover .files__action { opacity: 1; }
+}
+
+/* ===== Even wider mode — give Type column more breathing room. ===== */
+@container filesview (min-width: 460px) {
+  .files__col--type, .files__type { width: 140px; }
+  .files__col--size, .files__size { width: 72px; }
+}
+
+/* ===== Readme legacy bits (kept for back-compat with older trees). ===== */
 .files__readme { display: flex; flex-direction: column; }
-.files__row--readme { color: var(--text-3); }
-.files__name--readme { color: var(--text-3); font-style: italic; }
+.files__row--readme .files__name { color: var(--text-3); font-style: italic; }
 .files__readme-body {
-  margin: 2px 0 6px 24px;
+  margin: 2px 0 6px 28px;
   padding: 8px 11px;
   font-family: var(--mono); font-size: 11px;
   line-height: 1.5;
-  background: var(--page, #faf9f6); border: 1px solid var(--border);
+  background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 5px;
   white-space: pre-wrap;
   color: var(--text-2);
   max-height: 320px; overflow-y: auto;
 }
-.files__name--folder { font-weight: 500; color: var(--text-2); }
-.files__icon--clickable {
-  cursor: pointer; border: none; background: none; padding: 0;
-  font-size: 12px;
-}
-.files__icon--clickable:hover { transform: scale(1.1); }
