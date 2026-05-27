@@ -36,19 +36,21 @@ def _api_messages(history: list) -> list:
     return [{"role": m["role"], "content": m["content"]} for m in history]
 
 
-def _repair_tool_pairs(messages: list) -> list:
-    """Anthropic requires every assistant `tool_use` to be followed by a user
-    message containing the matching `tool_result`. An interrupted run (crash,
-    transient error, client disconnect) can persist a `tool_use` without its
-    result, which then poisons every subsequent request. Repair the history
-    in-flight by injecting a synthetic tool_result for any unmatched tool_use.
+def _ensure_tool_pair_completeness(messages: list) -> list:
+    """In-memory safety net for the Anthropic API contract that every
+    assistant `tool_use` block must be followed by a user `tool_result`
+    for the same id.
 
-    Safety net retained as of T1.3 — Pass E added Turn checkpointing and
-    startup-time reaping of stale Turns, but the per-tool_use_id resolution
-    needed to retire this function fully requires the Turn row to record
-    individual tool_use_ids (future enhancement). For now both mechanisms
-    coexist: Turn state shows what happened at the run level; this repair
-    shim keeps the message history Anthropic-API-clean."""
+    A1 made the Turn state machine track pending_tool_ids and the
+    reaper writes synthetic tool_results to the message log for crashes
+    that left trailing orphans (the common case). This shim still
+    handles 'middle orphans' — adjacent assistant→assistant messages in
+    seeded/legacy history where the result was never written between
+    them. The append-only messages table can't cleanly insert in the
+    middle; doing the patch in-memory at request time is the pragmatic
+    answer.
+
+    Idempotent; doesn't mutate the input list."""
     out = [dict(m, content=list(m.get("content") or [])) for m in messages]
     i = 0
     while i < len(out):
@@ -219,6 +221,7 @@ async def stream_response(
     analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}
     usage_in = usage_out = usage_cr = usage_cw = 0   # Guide tokens this turn (+cache read/write)
     turn.thread_id = store_tid
+    turn.entity_id = entity_id   # message-log scope for the reaper
     checkpoint(turn)  # initial Turn row before the loop runs
 
     # Drawer sidecar: send the structured Manifest snapshot to the client
@@ -230,7 +233,12 @@ async def stream_response(
     try:
         while True:
             turn.transition(TurnState.GENERATING); checkpoint(turn)
-            llm_history = _repair_tool_pairs(effective_history(WORKSPACE_ID, history))
+            # Request-time safety net for middle-orphan history (assistant
+            # → assistant without an intervening user). The Turn reaper
+            # handles trailing orphans; this catches the rest.
+            llm_history = _ensure_tool_pair_completeness(
+                effective_history(WORKSPACE_ID, history)
+            )
 
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. We only retry
@@ -308,6 +316,13 @@ async def stream_response(
             if final_msg.stop_reason != "tool_use":
                 break
 
+            # Record every tool_use id we're about to dispatch so the
+            # reaper can synthesize matching tool_results if the process
+            # dies mid-loop (A1). Ids are popped as each tool finishes.
+            turn.pending_tool_ids = [
+                b.id for b in final_msg.content
+                if b.type == "tool_use" and getattr(b, "id", None)
+            ]
             turn.transition(TurnState.EXECUTING_TOOLS); checkpoint(turn)
             tool_result_blocks = []
             halt_for_plan = False
@@ -407,6 +422,10 @@ async def stream_response(
 
             append_message("user", tool_result_blocks,
                            entity_id=entity_id, focus_entity_id=focus_entity_id)
+            # All this iteration's tool_uses have matching tool_results in
+            # the message log now — clear the in-flight set (A1).
+            turn.pending_tool_ids = []
+            checkpoint(turn)
             history = get_messages(entity_id)
 
             # A presented plan ends the turn: stop and wait for the user's
