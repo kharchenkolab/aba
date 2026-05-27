@@ -111,3 +111,25 @@
   background: var(--accent); color: white; border-color: var(--accent);
 }
 .suggestion__approve:hover { background: #4c1d95; border-color: #4c1d95; }
+
+/* #161 — bulk action bar above the per-row suggestion list */
+.settings__bulkbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0 8px;
+}
+.settings__bulk-reject {
+  font: 500 11.5px var(--sans);
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.settings__bulk-reject:hover {
+  background: var(--red-soft, #fef2f2);
+  color: var(--red, #b91c1c);
+  border-color: var(--red-border, #fecaca);
+}

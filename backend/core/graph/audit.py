@@ -182,11 +182,29 @@ def add_context_suggestion(
         return cur.lastrowid
 
 
-def list_context_suggestions(status: Optional[str] = "pending") -> list[dict]:
+def list_context_suggestions(
+    status: Optional[str] = "pending",
+    max_age_days: Optional[int] = 14,
+) -> list[dict]:
+    """List suggestions, optionally scoped to a status.
+
+    `max_age_days`: items older than this many days are excluded by
+    default (so the drawer / rail badge silently auto-stale once they
+    age out, avoiding the 'two-week-old reflection sitting unactioned
+    forever' pattern). Pass None to include every age.
+    """
+    import datetime as _dt
     q = "SELECT * FROM context_suggestions"
+    clauses: list[str] = []
     args: list = []
     if status:
-        q += " WHERE status = ?"; args.append(status)
+        clauses.append("status = ?"); args.append(status)
+    if max_age_days is not None:
+        cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                  - _dt.timedelta(days=max_age_days)).isoformat()
+        clauses.append("created_at >= ?"); args.append(cutoff)
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
     q += " ORDER BY id DESC"
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
@@ -212,3 +230,15 @@ def update_context_suggestion_status(suggestion_id: int, status: str) -> bool:
         )
         c.commit()
         return cur.rowcount > 0
+
+
+def reject_all_pending_suggestions() -> int:
+    """Bulk 'reject all pending' — flips every pending row to rejected.
+    Returns the count touched. Used by the drawer's 'Reject all' button
+    when the user wants to wipe the queue without per-row clicking."""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE context_suggestions SET status = 'rejected' WHERE status = 'pending'"
+        )
+        c.commit()
+        return cur.rowcount or 0

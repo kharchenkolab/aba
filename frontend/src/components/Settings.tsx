@@ -61,6 +61,13 @@ export default function Settings({ onClose }: Props) {
     refresh()
   }
 
+  async function rejectAll() {
+    if (pending.length === 0) return
+    if (!window.confirm(`Reject all ${pending.length} pending suggestion${pending.length === 1 ? '' : 's'}?`)) return
+    await fetch('/api/context-suggestions/reject-all', { method: 'POST' })
+    refresh()
+  }
+
   return (
     <div className="settings-backdrop" onClick={onClose}>
       <div className="settings" onClick={e => e.stopPropagation()}>
@@ -88,12 +95,20 @@ export default function Settings({ onClose }: Props) {
             <p className="settings__hint">
               After complex sessions, Guide reflects on what context would have helped.
               Approve to append to the per-entity-type policy injected into future
-              system prompts. Reject to discard.
+              system prompts. Reject to discard. Suggestions older than 14 days
+              auto-stale; review them sooner if you want to keep them.
             </p>
             {pending.length === 0 ? (
               <div className="settings__empty">No pending suggestions.</div>
             ) : (
               <div className="settings__list">
+                {pending.length > 1 && (
+                  <div className="settings__bulkbar">
+                    <button onClick={rejectAll} className="settings__bulk-reject">
+                      Reject all ({pending.length})
+                    </button>
+                  </div>
+                )}
                 {pending.map(s => (
                   <div key={s.id} className="suggestion">
                     <div className="suggestion__head">

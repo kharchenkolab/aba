@@ -25,7 +25,7 @@ from content.bio.lifecycle.promote import (
 )
 from content.bio.lifecycle.scenarios import create_scenario_variant
 from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
-from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status
+from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status, reject_all_pending_suggestions
 from content.bio.lifecycle.adaptive import append_to_policy, run_probe
 from content.bio.tools_registry import registry as tools_registry
 from content.bio.graph.figure_history import figure_history
@@ -1101,9 +1101,16 @@ async def entities_advise(entity_id: str):
 # ---------- Adaptive context (§3.6) ----------
 
 @app.get("/api/context-suggestions")
-def context_suggestions(status: str = "pending"):
-    """List context-policy suggestions awaiting review (or any status)."""
-    return list_context_suggestions(status=status)
+def context_suggestions(status: str = "pending", max_age_days: int = 14):
+    """List context-policy suggestions awaiting review (or any status).
+
+    `max_age_days` defaults to 14 — older pending items auto-stale out
+    of the badge / list so they don't sit in the drawer forever. Pass
+    0 (or any non-positive) to include every age."""
+    return list_context_suggestions(
+        status=status,
+        max_age_days=max_age_days if max_age_days > 0 else None,
+    )
 
 
 class SuggestionAction(BaseModel):
@@ -1120,7 +1127,8 @@ def context_suggestion_action(sid: int, req: SuggestionAction):
     if req.action not in ("approve", "reject"):
         raise HTTPException(400, "action must be 'approve' or 'reject'")
     # Fetch current suggestion to know the entity_type for policy append.
-    pending = [s for s in list_context_suggestions(status=None) if s["id"] == sid]
+    # Pass max_age_days=None so we can act on stale items too.
+    pending = [s for s in list_context_suggestions(status=None, max_age_days=None) if s["id"] == sid]
     if not pending:
         raise HTTPException(404, f"suggestion {sid} not found")
     suggestion = pending[0]
@@ -1130,6 +1138,13 @@ def context_suggestion_action(sid: int, req: SuggestionAction):
     else:
         update_context_suggestion_status(sid, "rejected")
     return {"ok": True}
+
+
+@app.post("/api/context-suggestions/reject-all")
+def context_suggestion_reject_all():
+    """Bulk-reject every pending suggestion (any age). One click instead
+    of N. Returns the count rejected."""
+    return {"rejected": reject_all_pending_suggestions()}
 
 
 @app.post("/api/findings")
