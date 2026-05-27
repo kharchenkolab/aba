@@ -62,6 +62,15 @@ def startup():
             print(f"[startup] reaped {n} stale Turn row(s) from previous process")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] reap_stale_turns failed: {e}")
+    # F3: backfill display_path for any entity created before the column
+    # existed (or before bio's layout computers were registered).
+    try:
+        from content.bio.graph.display import backfill_missing_display_paths
+        n = backfill_missing_display_paths()
+        if n:
+            print(f"[startup] backfilled display_path for {n} entit{'y' if n == 1 else 'ies'}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] display_path backfill failed: {e}")
 
 
 # ---------- Projects ----------
@@ -181,6 +190,11 @@ def entities_patch(entity_id: str, req: EntityPatch):
     ):
         raise HTTPException(400, f"invalid status: {fields['status']}")
     updated = update_entity(entity_id, **fields)
+    # F3: re-derive display_path when the title changes (or first time).
+    if updated and "title" in fields:
+        from content.bio.graph.display import recompute_display_path
+        recompute_display_path(entity_id)
+        updated = get_entity(entity_id)
     if not updated:
         raise HTTPException(404, f"Entity {entity_id} not found")
     return updated
