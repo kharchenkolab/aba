@@ -132,17 +132,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedId, viewedFile])
 
-  // Bootstrap: if landing at "/" with a server-side current project, route
-  // directly into it so reload / first-visit puts you back where you were.
-  useEffect(() => {
-    if (!url.isHome) return
-    fetch('/api/projects/current')
-      .then(r => r.json())
-      .then(d => { if (d.current) url.setProject(d.current) })
-      .catch(() => {})
-    // Only on initial home landing; subsequent navigations are URL-driven.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Root URL ("/") = the project selector. We deliberately do NOT auto-
+  // redirect into the server-side current project; that would flash the
+  // user past Home on every fresh tab. Reload of /p/<pid> preserves the
+  // URL on its own; Home is the explicit re-entry point.
 
   // URL pid changed: sync the server-side current project, reset transient
   // UI state, and refresh entities. Idempotent — a no-op when pid matches

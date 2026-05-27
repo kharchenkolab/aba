@@ -166,6 +166,13 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     </>
   )
 
+  // First-render guard: projects===null means /api/projects hasn't resolved
+  // yet. Without this, we'd flash the zero-project "three cards" empty state
+  // for one frame before the real list arrives. Skeleton-empty until loaded.
+  if (projects === null) {
+    return <div className="home home--loading" />
+  }
+
   return (
     <div className="home" onClick={() => setMenuFor(null)}>
       {list.length === 0 ? (
