@@ -36,9 +36,10 @@ def _generic_card(entity: dict) -> tuple[str, list[str]]:
     import json
     fields: list[str] = ["type", "title"]
     e = entity
+    article = "an" if (e['type'][:1].lower() in "aeiou") else "a"
     lines = [
         "### Currently focused",
-        f"The user is looking at a {e['type']} titled \"{e['title']}\" (id: {e['id']}).",
+        f"The user is looking at {article} {e['type']} titled \"{e['title']}\" (id: {e['id']}).",
     ]
     if e.get("status") and e["status"] != "active":
         lines.append(f"Status: {e['status']}.")

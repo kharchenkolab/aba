@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.config import ARTIFACTS_DIR
-from core.files.registry import slugify, ext_from_artifact
+from core.files.registry import slugify, ext_from_artifact, name_with_ext
 from core.graph.entities import list_entities
 from core.graph.edges import edges_to
 
@@ -62,13 +62,15 @@ def _file_meta(e: dict) -> dict:
 
 
 def _leaf_name(e: dict) -> str:
-    """Filename for a leaf entity. Uses title slug + extension lookup."""
+    """Filename for a leaf entity. Uses title slug + extension lookup;
+    name_with_ext skips an already-present suffix so a title like
+    'sample_cells_15.csv' doesn't become 'sample_cells_15.csv.csv'."""
     slug = slugify(e.get("title") or e.get("id") or "untitled")
     t = e.get("type") or ""
     if t in PROSE_EXTS:
-        return f"{slug}{PROSE_EXTS[t]}"
+        return name_with_ext(slug, PROSE_EXTS[t])
     ext = ext_from_artifact(e, default=".bin")
-    return f"{slug}{ext}"
+    return name_with_ext(slug, ext)
 
 
 def _folder_slug(e: dict) -> str:

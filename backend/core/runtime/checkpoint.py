@@ -202,39 +202,49 @@ def repair_orphaned_tool_use_in_messages() -> int:
 
 
 def purge_orphan_fill_messages() -> int:
-    """One-shot cleanup: delete user messages whose content consists
-    ENTIRELY of orphan-fill tool_result blocks. The request-time shim
-    regenerates the in-memory fill when actually needed; the rows are
-    pure clutter (and cost prompt tokens on every history read).
+    """Cleanup: remove orphan-fill clutter from the message log.
 
-    Conservative — only deletes when EVERY block in the message is an
-    orphan-fill marker; mixed user messages are left alone.
+    Two passes:
+      1. Pure-fill user messages → delete the row entirely.
+      2. Mixed user messages (fill + other blocks) → rewrite content
+         with the fills stripped. The request-time shim regenerates the
+         in-memory fill before any API call, so dropping the persisted
+         fill is safe (the model never sees an unresolved tool_use).
 
-    Returns the number of rows deleted.
+    Returns the count of rows touched (deleted + rewritten).
     """
-    import json as _json
     with _conn() as c:
         rows = c.execute(
             "SELECT id, content FROM messages WHERE role='user'"
         ).fetchall()
 
     delete_ids: list[int] = []
+    rewrites: list[tuple[str, int]] = []
     for r in rows:
         try:
-            blocks = _json.loads(r["content"])
-        except (_json.JSONDecodeError, TypeError):
+            blocks = json.loads(r["content"])
+        except (json.JSONDecodeError, TypeError):
             continue
         if not isinstance(blocks, list) or not blocks:
             continue
-        if all(_is_orphan_fill_block(b) for b in blocks):
+        has_fill = any(_is_orphan_fill_block(b) for b in blocks)
+        if not has_fill:
+            continue
+        kept = [b for b in blocks if not _is_orphan_fill_block(b)]
+        if not kept:
             delete_ids.append(r["id"])
+        elif len(kept) != len(blocks):
+            rewrites.append((json.dumps(kept), r["id"]))
 
-    if not delete_ids:
+    if not delete_ids and not rewrites:
         return 0
     with _conn() as c:
-        c.executemany("DELETE FROM messages WHERE id=?", [(i,) for i in delete_ids])
+        if delete_ids:
+            c.executemany("DELETE FROM messages WHERE id=?", [(i,) for i in delete_ids])
+        if rewrites:
+            c.executemany("UPDATE messages SET content=? WHERE id=?", rewrites)
         c.commit()
-    return len(delete_ids)
+    return len(delete_ids) + len(rewrites)
 
 
 def _now() -> str:

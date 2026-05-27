@@ -60,6 +60,17 @@ def ext_from_artifact(entity: dict, default: str = "") -> str:
     return name[dot:] if dot >= 0 else default
 
 
+def name_with_ext(slug: str, ext: str) -> str:
+    """Compose a file name from a slug + extension, avoiding the duplicate-
+    suffix bug (`sample_cells_15.csv.csv`). slugify() preserves dots, so
+    a dataset whose title ends in `.csv` already carries the extension,
+    and naively appending again doubles it up. Idempotent and case-
+    insensitive: matches `.CSV` vs `.csv` too."""
+    if ext and slug.lower().endswith(ext.lower()):
+        return slug
+    return slug + ext
+
+
 def _generic_path(entity: dict) -> str:
     """Fallback layout for unregistered types: {type}s/{title_slug}.ext"""
     t = entity.get("type") or "entity"
