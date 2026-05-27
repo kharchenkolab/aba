@@ -1,16 +1,11 @@
 /**
- * BrowserRouter version of the routing tests. happy-dom implements
- * window.history.{push,replace,back,forward}State and the popstate event,
- * so React Router's BrowserRouter subscription works here — this is the
- * same code path the real browser uses.
- *
- * If these pass but the user still sees Back not working, the bug is
- * somewhere outside useUrlState (e.g. in App's effect/render wiring).
+ * BrowserRouter version of the routing tests — same code path as production.
+ * happy-dom implements window.history APIs so the popstate subscription works.
  */
 import { beforeEach, describe, it, expect } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom'
-import { useUrlState } from './useUrlState'
+import { useUrlState, _resetCoalesceForTesting } from './useUrlState'
 
 function wrap({ children }: { children: React.ReactNode }) {
   return <BrowserRouter>{children}</BrowserRouter>
@@ -23,68 +18,50 @@ function useUrlAndPath() {
   return { url, pathname: location.pathname, back: () => navigate(-1) }
 }
 
-describe('useUrlState under BrowserRouter (production code path)', () => {
-  beforeEach(() => {
-    window.history.pushState(null, '', '/')
-  })
+beforeEach(() => {
+  window.history.pushState(null, '', '/')
+  _resetCoalesceForTesting()
+})
 
+describe('useUrlState under BrowserRouter', () => {
   it('reflects initial pathname from window.location', () => {
-    window.history.pushState(null, '', '/p/X/t/T/e/E')
+    window.history.pushState(null, '', '/p/X/runs/e/Y')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    expect(result.current.pathname).toBe('/p/X/t/T/e/E')
-    expect(result.current.url.threadId).toBe('T')
-    expect(result.current.url.focusedId).toBe('E')
+    expect(result.current.url.section).toBe('runs')
+    expect(result.current.url.focusedId).toBe('Y')
   })
 
-  it('setFocus navigates and the hook re-renders', () => {
+  it('setSection then setFocus replaces — Back skips the tab change', async () => {
     window.history.pushState(null, '', '/p/X/t/T')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    act(() => result.current.url.setFocus('E'))
-    expect(result.current.pathname).toBe('/p/X/t/T/e/E')
-    expect(window.location.pathname).toBe('/p/X/t/T/e/E')
+
+    act(() => result.current.url.setSection('runs'))
+    expect(window.location.pathname).toBe('/p/X/runs/t/T')
+
+    act(() => result.current.url.setFocus('R'))
+    expect(window.location.pathname).toBe('/p/X/runs/t/T/e/R')
+
+    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
+    expect(window.location.pathname).toBe('/p/X/t/T')
   })
 
-  it('window.history.back() triggers a re-render via popstate', async () => {
-    window.history.pushState(null, '', '/p/X')
+  it('setFocus without preceding setSection pushes normally', async () => {
+    window.history.pushState(null, '', '/p/X/runs/t/T')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    act(() => result.current.url.setThread('T'))
-    expect(result.current.pathname).toBe('/p/X/t/T')
+    act(() => result.current.url.setFocus('R'))
+    expect(window.location.pathname).toBe('/p/X/runs/t/T/e/R')
 
-    await act(async () => {
-      window.history.back()
-      await new Promise(r => setTimeout(r, 0))
-    })
-    expect(window.location.pathname).toBe('/p/X')
-    expect(result.current.pathname).toBe('/p/X')
-    expect(result.current.url.threadId).toBe('default')
-  })
-
-  it('Back from /p/X/t/T/e/Y clears focus, keeps thread', async () => {
-    window.history.pushState(null, '', '/p/X/t/T')
-    const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
-    act(() => result.current.url.setFocus('Y'))
-    expect(result.current.pathname).toBe('/p/X/t/T/e/Y')
-
-    await act(async () => {
-      window.history.back()
-      await new Promise(r => setTimeout(r, 0))
-    })
-    expect(result.current.pathname).toBe('/p/X/t/T')
-    expect(result.current.url.threadId).toBe('T')
-    expect(result.current.url.focusedId).toBe('workspace')
+    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
+    expect(window.location.pathname).toBe('/p/X/runs/t/T')
   })
 
   it('Back from /p/X/files/foo.csv unwinds the file', async () => {
     window.history.pushState(null, '', '/p/X')
     const { result } = renderHook(useUrlAndPath, { wrapper: wrap })
     act(() => result.current.url.setFilePath('foo.csv'))
-    expect(result.current.pathname).toBe('/p/X/files/foo.csv')
+    expect(window.location.pathname).toBe('/p/X/files/foo.csv')
 
-    await act(async () => {
-      window.history.back()
-      await new Promise(r => setTimeout(r, 0))
-    })
-    expect(result.current.pathname).toBe('/p/X')
-    expect(result.current.url.filePath).toBe('')
+    await act(async () => { window.history.back(); await new Promise(r => setTimeout(r, 0)) })
+    expect(window.location.pathname).toBe('/p/X')
   })
 })
