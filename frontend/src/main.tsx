@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
 import './tokens.css'
 import App from './App.tsx'
 import PreviewWindow from './components/PreviewWindow'
@@ -19,7 +20,7 @@ createRoot(document.getElementById('root')!).render(
         <button onClick={() => window.location.reload()}>Reload</button>
       </div>
     )}>
-      {isPreview ? <PreviewWindow /> : <App />}
+      {isPreview ? <PreviewWindow /> : <BrowserRouter><App /></BrowserRouter>}
     </ErrorBoundary>
   </StrictMode>,
 )
