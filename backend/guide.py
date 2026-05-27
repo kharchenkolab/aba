@@ -41,7 +41,14 @@ def _repair_tool_pairs(messages: list) -> list:
     message containing the matching `tool_result`. An interrupted run (crash,
     transient error, client disconnect) can persist a `tool_use` without its
     result, which then poisons every subsequent request. Repair the history
-    in-flight by injecting a synthetic tool_result for any unmatched tool_use."""
+    in-flight by injecting a synthetic tool_result for any unmatched tool_use.
+
+    Safety net retained as of T1.3 — Pass E added Turn checkpointing and
+    startup-time reaping of stale Turns, but the per-tool_use_id resolution
+    needed to retire this function fully requires the Turn row to record
+    individual tool_use_ids (future enhancement). For now both mechanisms
+    coexist: Turn state shows what happened at the run level; this repair
+    shim keeps the message history Anthropic-API-clean."""
     out = [dict(m, content=list(m.get("content") or [])) for m in messages]
     i = 0
     while i < len(out):

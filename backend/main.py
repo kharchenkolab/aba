@@ -51,6 +51,17 @@ def startup():
     from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
+    # Pass-E follow-up: any Turn rows in GENERATING/EXECUTING_TOOLS/
+    # SUMMARIZING state are from a process that didn't survive; they
+    # cannot be resumed (stream + tool dispatch are in-memory). Mark
+    # them FAILED so the UI doesn't show stale "in-flight" turns.
+    try:
+        from core.runtime.checkpoint import reap_stale_turns
+        n = reap_stale_turns()
+        if n:
+            print(f"[startup] reaped {n} stale Turn row(s) from previous process")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] reap_stale_turns failed: {e}")
 
 
 # ---------- Projects ----------
@@ -1541,6 +1552,51 @@ def turn_get(run_id: str):
     if t is None:
         raise HTTPException(404, "no such run")
     return t.to_row()
+
+
+class ResumeRequest(BaseModel):
+    user_text: str = ""
+
+
+@app.post("/api/turns/{run_id}/resume")
+def turn_resume(run_id: str, req: ResumeRequest):
+    """Resume an AWAITING_USER turn by handing it the next user message.
+
+    Today this is a thin wrapper over the regular chat flow — the user's
+    message goes into the same thread; a new Turn is created that picks
+    up the conversation. The Turn-level state machine that drives a
+    resumed run from EXECUTING_TOOLS / GENERATING is future work
+    (depends on tracking individual tool_use_ids in the Turn row).
+
+    Returns the prior Turn's snapshot + a chat redirect hint.
+    """
+    from core.runtime.checkpoint import load_turn
+    t = load_turn(run_id)
+    if t is None:
+        raise HTTPException(404, "no such run")
+    if t.state.value != "awaiting_user":
+        raise HTTPException(
+            409,
+            f"Turn is in state {t.state.value!r}; only awaiting_user can be resumed today.",
+        )
+    return {
+        "ok": True,
+        "prior": t.to_row(),
+        "resumed_via": "chat",
+        "thread_id": t.thread_id,
+        "focus_entity_id": t.focus_entity_id,
+        "user_text": req.user_text,
+    }
+
+
+@app.post("/api/turns/{run_id}/cancel")
+def turn_cancel(run_id: str, req: ResumeRequest):
+    """Mark an in-flight Turn FAILED (reason from user_text, optional).
+    Idempotent; safe on already-done/failed turns (returns ok=False)."""
+    from core.runtime.checkpoint import cancel_turn
+    reason = req.user_text.strip() or "user cancelled"
+    ok = cancel_turn(run_id, reason=reason)
+    return {"ok": ok, "run_id": run_id}
 
 
 @app.get("/api/health")
