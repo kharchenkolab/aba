@@ -75,7 +75,16 @@ export interface PlanEvent {
   steps: (PlanStepShape | string)[]
   concerns?: PlanConcern[]
 }
-export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot }
+export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot; run_id?: string }
+
+/** P-cancel — Guide loop saw a user cancellation. SSE event emitted
+ *  just before the turn closes; UI uses it to render a "(cancelled)"
+ *  notice instead of treating it as a normal completion. */
+export interface CancelledEvent {
+  type:   'cancelled'
+  reason: string
+  run_id: string
+}
 
 /** B1 — the Guide paused the turn on ask_clarification. The UI shows the
  *  one-line question with an inline answer input that posts to
@@ -147,6 +156,7 @@ export type SSEEvent =
   | ManifestEvent
   | ClarificationPendingEvent
   | ApprovalPendingEvent
+  | CancelledEvent
 
 // ---------- Entities ----------
 

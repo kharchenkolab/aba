@@ -1,0 +1,6 @@
+# Cancel test: model calls run_python with infinite loop. We cancel
+# while the subprocess is running; the next scripted turn is what the
+# model would say after seeing the cancelled result (never reached if
+# cancel works correctly — turn ends FAILED).
+{"blocks": [{"type": "text", "text": "Running the analysis."}, {"type": "tool_use", "name": "run_python", "input": {"code": "while True: pass", "timeout_s": 30}}]}
+{"blocks": [{"type": "text", "text": "(never reached)"}]}

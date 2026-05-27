@@ -223,7 +223,7 @@ export default function App() {
   }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
           pendingClarification, answerClarification,
-          pendingApproval, respondApproval } = useChat(
+          pendingApproval, respondApproval, stopTurn } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -498,6 +498,7 @@ export default function App() {
       onAnswerClarification={answerClarification}
       pendingApproval={pendingApproval}
       onRespondApproval={respondApproval}
+      onStop={stopTurn}
     />
   )
 

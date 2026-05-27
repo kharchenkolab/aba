@@ -10,6 +10,7 @@ run_coroutine_threadsafe provides.
 """
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -43,11 +44,31 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-def _submit(coro):
-    """Run a coroutine on the background loop and wait for its result."""
+def _submit(coro, cancel_token=None):
+    """Run a coroutine on the background loop and wait for its result.
+    When a cancel_token is supplied, register fut.cancel as an
+    interrupter — Stop will cancel the underlying asyncio task, which
+    surfaces as CancelledError here and gets translated to a structured
+    cancelled status the model can react to.
+
+    Forward-looking: this is the seam every MCP-served tool flows
+    through. When the protocol's cancellation notification matures,
+    add `session.send_notification('cancelled', ...)` inside the
+    interrupter; the call signature here doesn't change."""
     loop = _ensure_loop()
     fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    return fut.result()
+    unregister = None
+    if cancel_token is not None:
+        unregister = cancel_token.register(lambda: fut.cancel())
+    try:
+        return fut.result()
+    except (asyncio.CancelledError, concurrent.futures.CancelledError):
+        return {"status": "cancelled",
+                "note": f"MCP call cancelled by user "
+                        f"({cancel_token.reason if cancel_token else 'cancelled'})."}
+    finally:
+        if unregister is not None:
+            unregister()
 
 
 def start_all(config_path: Optional[Path] = None) -> None:
@@ -117,15 +138,20 @@ def is_mcp_tool(name: str) -> bool:
                 and any(t.name == name for t in h.tools))
 
 
-def call(name: str, arguments: dict, timeout_s: Optional[int] = None) -> dict:
-    """Sync dispatch from execute_tool. Blocks on the background loop."""
+def call(name: str, arguments: dict, timeout_s: Optional[int] = None,
+         cancel_token=None) -> dict:
+    """Sync dispatch from execute_tool. Blocks on the background loop.
+    cancel_token (optional) — if the user hits Stop, the underlying
+    asyncio task is cancelled; this returns a {status:'cancelled'}
+    result that the model can react to."""
     if ":" not in name:
         return {"status": "error", "note": f"MCP tool names must be 'server:tool'; got {name!r}"}
     server, raw = name.split(":", 1)
     h = _handles.get(server)
     if h is None:
         return {"status": "error", "note": f"No MCP server named {server!r}"}
-    return _submit(h.call_tool(raw, arguments, timeout_s=timeout_s))
+    return _submit(h.call_tool(raw, arguments, timeout_s=timeout_s),
+                   cancel_token=cancel_token)
 
 
 def status() -> dict[str, Any]:
