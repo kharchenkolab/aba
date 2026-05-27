@@ -51,6 +51,12 @@ interface Props {
   onRespondApproval?: (action: 'approve' | 'approve_session' | 'reject') => void
   /** Stop the current turn (cancel + kill any running work). */
   onStop?: () => void
+  /** Currently-queued message (set when user hits Enter while streaming). */
+  queuedMessage?: string | null
+  /** Drop the queued message without sending. */
+  onDropQueue?: () => void
+  /** Steer — cancel current turn AND send `text` as the replacement. */
+  onSteer?: (text: string) => void
 }
 
 export default function ChatPane({
@@ -83,6 +89,9 @@ export default function ChatPane({
   pendingApproval,
   onRespondApproval,
   onStop,
+  queuedMessage,
+  onDropQueue,
+  onSteer,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -282,11 +291,40 @@ export default function ChatPane({
           </form>
         ) : (
           <div className="composer-with-stop">
-            <Composer onSend={onSend} disabled={streaming}
-                      prefill={prefill} onPrefillConsumed={onPrefillConsumed}
-                      focusSignal={(composerFocus ?? 0) + extraFocus} />
+            {/* Queue chip — shown above the composer when the user has
+                committed a follow-up while the agent is still
+                responding. Cancel drops it; "Send now" fires Steer
+                (cancel + send) so the queue runs immediately. */}
+            {queuedMessage && (
+              <div className="queue-chip">
+                <span className="queue-chip__label">Queued:</span>
+                <span className="queue-chip__text">{queuedMessage}</span>
+                <div className="queue-chip__actions">
+                  {streaming && onSteer && (
+                    <button className="queue-chip__send" onClick={() => onSteer(queuedMessage)}
+                            title="Stop the current turn and send this now">
+                      Send now
+                    </button>
+                  )}
+                  {onDropQueue && (
+                    <button className="queue-chip__cancel" onClick={onDropQueue} title="Drop the queued message">
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            <Composer
+              onSend={onSend}
+              disabled={false}
+              streaming={streaming}
+              onSteer={onSteer}
+              prefill={prefill}
+              onPrefillConsumed={onPrefillConsumed}
+              focusSignal={(composerFocus ?? 0) + extraFocus}
+            />
             {streaming && onStop && (
-              <button type="button" className="stop-btn" onClick={onStop} title="Stop the current turn (kills running work)">
+              <button type="button" className="stop-btn" onClick={onStop} title="Stop the current turn (kills running work, drops queue)">
                 <span className="stop-btn__icon">■</span>
                 <span className="stop-btn__label">Stop</span>
               </button>

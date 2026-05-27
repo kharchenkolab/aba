@@ -282,3 +282,50 @@
 }
 .stop-btn:hover { background: #b91c1c; }
 .stop-btn__icon { font-size: 9px; line-height: 1; }
+
+/* Queue chip — appears above composer when user committed a follow-up
+   while the agent was still responding. */
+.queue-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 0 14px 6px;
+  border: 1px solid var(--accent-border, #c7e2f0);
+  background: var(--accent-soft, #f0f7fb);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.queue-chip__label {
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.queue-chip__text {
+  flex: 1; min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-chip__actions {
+  display: flex; gap: 6px; flex-shrink: 0;
+}
+.queue-chip__send,
+.queue-chip__cancel {
+  border: none;
+  border-radius: 5px;
+  padding: 3px 10px;
+  font: 500 11.5px var(--sans);
+  cursor: pointer;
+}
+.queue-chip__send {
+  background: var(--accent);
+  color: white;
+}
+.queue-chip__send:hover { background: #2a55ee; }
+.queue-chip__cancel {
+  background: transparent;
+  color: var(--text-3);
+}
+.queue-chip__cancel:hover { color: var(--red, #dc2626); }
