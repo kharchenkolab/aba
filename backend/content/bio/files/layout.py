@@ -77,6 +77,13 @@ def note_path(e: dict) -> str:
     return f"notes/{slugify(e.get('title') or 'note')}.md"
 
 
+def plan_path(e: dict) -> str:
+    # Plans are .md prose under their thread (the tree composer places
+    # them under threads/T/plans/NN_slug.md; this is the fallback
+    # display_path for plans that aren't thread-scoped).
+    return f"plans/{slugify(e.get('title') or 'plan')}.md"
+
+
 register_layout_computer("figure", figure_path)
 register_layout_computer("table", table_path)
 register_layout_computer("dataset", dataset_path)
@@ -87,3 +94,4 @@ register_layout_computer("claim", claim_path)
 register_layout_computer("narrative", narrative_path)
 register_layout_computer("finding", finding_path)
 register_layout_computer("note", note_path)
+register_layout_computer("plan", plan_path)

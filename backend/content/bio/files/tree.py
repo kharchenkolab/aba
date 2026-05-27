@@ -30,6 +30,7 @@ RESULT_TYPES = {"result"}
 RUN_TYPES = {"analysis"}
 THREAD_TYPES = {"thread"}
 FINDING_TYPES = {"finding"}
+PLAN_TYPES = {"plan"}
 
 # Where a leaf lives under a run by default (subdir name → entity type).
 RUN_SUBDIRS = {"figure": "figures", "table": "tables"}
@@ -108,6 +109,55 @@ def _prose_node(e: dict, *, path: str) -> dict:
         "synthesized": True,
         "status": e.get("status"),
     }
+
+
+def _plan_markdown(plan_entity: dict) -> str:
+    """Render a plan entity's structured body as .md prose. Mirrors
+    _claim_markdown's role: produces durable, browsable text that a user
+    (or future agent) can read independently of the SSE event log."""
+    meta = plan_entity.get("metadata") or {}
+    plan = meta.get("plan") or {}
+    lifecycle = meta.get("plan_lifecycle") or "validated"
+    lines = [f"# {plan.get('title') or plan_entity.get('title') or 'Plan'}", ""]
+    lines.append(f"**Lifecycle:** {lifecycle}")
+    lines.append("")
+    if plan.get("summary"):
+        lines.append(str(plan["summary"]).strip())
+        lines.append("")
+    if plan.get("rationale"):
+        lines.append("**Why this approach:** " + str(plan["rationale"]).strip())
+        lines.append("")
+    if plan.get("assumptions"):
+        lines.append("## Assumptions")
+        for a in plan["assumptions"]:
+            lines.append(f"- {a}")
+        lines.append("")
+    steps = plan.get("steps") or []
+    if steps:
+        lines.append("## Steps")
+        for s in steps:
+            n = s.get("n", "?")
+            title = s.get("title") or f"step {n}"
+            skill = s.get("skill")
+            head = f"{n}. **{title}**" + (f" — `{skill}`" if skill else "")
+            lines.append(head)
+            if s.get("description"):
+                lines.append(f"   {s['description']}")
+            outs = s.get("expected_outputs") or []
+            if outs:
+                lines.append("   Expected outputs: " + ", ".join(outs))
+            lines.append("")
+    concerns = plan.get("concerns") or []
+    if concerns:
+        lines.append("## Validator concerns")
+        for c in concerns:
+            level = c.get("level", "info").upper()
+            step_n = c.get("step_n")
+            scope = f"step {step_n}" if step_n else "plan"
+            lines.append(f"- *[{level}]* ({scope}) {c.get('message', '')}")
+        lines.append("")
+    lines.append(f"<!-- entity {plan_entity.get('id')} -->")
+    return "\n".join(lines) + "\n"
 
 
 def _claim_markdown(claim: dict) -> str:
@@ -401,6 +451,32 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                         "synthesized_content": md,
                     })
                 t_folder["children"].append(claims_folder)
+
+            # Plans in this thread (synthesized .md). Lifecycle (validated,
+            # executing, completed, …) lives in metadata.plan_lifecycle;
+            # the file shows the proposed steps + concerns as durable prose.
+            plans = in_thread(thread["id"], PLAN_TYPES)
+            if plans:
+                plans_folder = _folder("plans", path=f"{t_path}/plans")
+                for plan_e, pi, p_seg in _add_numbered_children(plans_folder, plans):
+                    placed_in_thread.add(plan_e["id"])
+                    p_path = f"{t_path}/plans/{p_seg}.md"
+                    md = _plan_markdown(plan_e)
+                    plans_folder["children"].append({
+                        "kind": "file",
+                        "name": f"{p_seg}.md",
+                        "path": p_path,
+                        "entity_id": plan_e["id"],
+                        "entity_type": "plan",
+                        "title": plan_e.get("title"),
+                        "artifact_path": None,
+                        "size": len(md.encode("utf-8")),
+                        "mtime": _entity_mtime(plan_e),
+                        "synthesized": True,
+                        "synthesized_kind": "plan",
+                        "synthesized_content": md,
+                    })
+                t_folder["children"].append(plans_folder)
 
             # Misc thread-scoped entities (notes, narratives) that aren't
             # otherwise placed.
