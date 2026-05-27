@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval } from './types'
 
 type RawMsg = { role: string; content: unknown[]; ts?: string }
 
@@ -117,6 +117,9 @@ export function useChat(
   // B1 — when the Guide pauses on ask_clarification, the UI shows an
   // inline mini-composer. Cleared when the resume turn starts streaming.
   const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(null)
+  // P1 #3 — when a flagged tool needs user approval before running. By
+  // design rare; the bar should be "real money / hard-to-reverse only".
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -162,13 +165,13 @@ export function useChat(
   //    /api/turns/{runId}/resume, which inherits thread+focus from the
   //    prior turn and drives a fresh Turn forward.
   const runStream = useCallback(
-    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string }) => {
+    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject' }) => {
       const myGen = genRef.current
       const ac = new AbortController()
       abortRef.current = ac
       setStreaming(true)
       // A resume implicitly accepts whatever pending question/plan we were on.
-      if (opts.resumeRunId) setPendingClarification(null)
+      if (opts.resumeRunId) { setPendingClarification(null); setPendingApproval(null) }
       const assistantId = `a-${Date.now()}`
       const streamingBlocks: Block[] = []
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
@@ -185,7 +188,10 @@ export function useChat(
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               signal: ac.signal,
-              body: JSON.stringify({ user_text: opts.text ?? '' }),
+              body: JSON.stringify({
+                user_text: opts.text ?? '',
+                ...(opts.approvalAction ? { action: opts.approvalAction } : {}),
+              }),
             })
           : await fetch('/api/chat', {
               method: 'POST',
@@ -272,6 +278,16 @@ export function useChat(
               streamingBlocks.push({ type: 'notice', text: `?  ${ev.question}` })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               setPendingClarification({ runId: ev.run_id, question: ev.question })
+            } else if (ev.type === 'approval_pending') {
+              // P1 #3 — a flagged tool wants explicit approval before running.
+              // Rare by design; the ApprovalBar surfaces the tool name + a
+              // short summary of what it's about to do.
+              streamingBlocks.push({ type: 'notice', text: `Approve ${ev.tool_name}? ${ev.summary}` })
+              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              setPendingApproval({
+                runId: ev.run_id, toolName: ev.tool_name,
+                summary: ev.summary, policy: ev.policy,
+              })
             } else if (ev.type === 'manifest') {
               // T2.4: drawer sidecar. The model only ever sees the rendered
               // system string; the JSON here is for visibility/inspection.
@@ -350,8 +366,20 @@ export function useChat(
     [streaming, pendingClarification, runStream],
   )
 
+  // P1 #3 — respond to a pending tool approval. The held tool runs (or
+  // gets a rejection result) in the resume endpoint; the new turn then
+  // streams normally with the result already in history.
+  const respondApproval = useCallback(
+    async (action: 'approve' | 'approve_session' | 'reject') => {
+      if (streaming || !pendingApproval) return
+      await runStream({ resumeRunId: pendingApproval.runId, approvalAction: action })
+    },
+    [streaming, pendingApproval, runStream],
+  )
+
   return {
     messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest,
     pendingClarification, answerClarification,
+    pendingApproval, respondApproval,
   }
 }

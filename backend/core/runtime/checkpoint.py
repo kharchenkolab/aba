@@ -133,6 +133,26 @@ def _is_orphan_fill_block(b) -> bool:
     return False
 
 
+def _threads_with_pending_approval() -> set[str | None]:
+    """Thread ids whose latest Turn row is paused on user approval.
+    Used by the orphan-fill reaper to skip patching held tool_uses —
+    the resume endpoint writes the real result on approve/reject."""
+    out: set[str | None] = set()
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT thread_id, pending_blob FROM runs "
+            "WHERE state='awaiting_user' AND pending_blob IS NOT NULL"
+        ).fetchall()
+    for r in rows:
+        try:
+            pend = json.loads(r["pending_blob"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if pend.get("pending_user_signal") == "approval":
+            out.add(r["thread_id"])
+    return out
+
+
 def repair_orphaned_tool_use_in_messages() -> int:
     """Scan the project's message log for *trailing* orphans — assistant
     messages with tool_use blocks where no user message follows at all
@@ -168,8 +188,18 @@ def repair_orphaned_tool_use_in_messages() -> int:
             "id": r["id"], "role": r["role"], "content": r["content"],
         })
 
+    # P1 #3 — turns that are legitimately paused on user approval also
+    # have an unresolved trailing assistant tool_use (the held tool). We
+    # must NOT patch those — the resume endpoint will write the real
+    # tool_result when the user decides. Skip threads whose latest Turn
+    # row is AWAITING_USER with pending_user_signal='approval'.
+    # Phase 2 will add the same rule for AWAITING_TOOL_RESULT.
+    held_thread_ids = _threads_with_pending_approval()
+
     inserted = 0
     for (entity_id, thread_id), msgs in by_thread.items():
+        if thread_id in held_thread_ids:
+            continue
         # Only repair if the LAST message in the thread is an assistant
         # with unresolved tool_use blocks. Middle orphans are skipped —
         # the request-time shim handles them at the correct position.

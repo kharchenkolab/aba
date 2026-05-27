@@ -222,7 +222,8 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
-          pendingClarification, answerClarification } = useChat(
+          pendingClarification, answerClarification,
+          pendingApproval, respondApproval } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -495,6 +496,8 @@ export default function App() {
       starters={compact ? undefined : (currentThread?.metadata?.orient_steps as string[] | undefined)}
       pendingClarification={pendingClarification}
       onAnswerClarification={answerClarification}
+      pendingApproval={pendingApproval}
+      onRespondApproval={respondApproval}
     />
   )
 

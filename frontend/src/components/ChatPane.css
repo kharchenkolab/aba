@@ -201,3 +201,58 @@
   color: var(--text-4);
   font-size: 13px;
 }
+
+/* P1 #3 — pending-tool-approval bar (rare; only fires for flagged tools). */
+.approval-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 2px solid var(--accent);
+  background: var(--accent-soft, #f5fafd);
+}
+.approval-bar__q {
+  font: 500 12.5px/1.45 var(--sans);
+  color: var(--text);
+}
+.approval-bar__q code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.approval-bar__sum {
+  color: var(--text-3);
+  font-size: 11.5px;
+  display: block;
+  margin-top: 3px;
+  word-break: break-word;
+}
+.approval-bar__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.approval-bar__btn {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: 600 12px var(--sans);
+  cursor: pointer;
+}
+.approval-bar__btn--reject {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.approval-bar__btn--approve {
+  background: var(--accent);
+  color: white;
+}
+.approval-bar__btn--always {
+  background: var(--bg);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.approval-bar__btn:disabled { opacity: 0.5; cursor: not-allowed; }

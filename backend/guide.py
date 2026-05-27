@@ -111,6 +111,27 @@ def _friendly_error(exc: Exception) -> str:
     return "Something went wrong talking to the model. Please try again."
 
 
+def _summarize_tool_input(tool_name: str, tool_input) -> str:
+    """One-line summary of a tool's input for the approval bar. Tools with
+    opaque inputs (run_python's code blob) get a per-tool shape; others
+    get a truncated JSON repr."""
+    if not isinstance(tool_input, dict):
+        return repr(tool_input)[:200]
+    if tool_name == "run_python":
+        code = (tool_input.get("code") or "").strip()
+        n_lines = code.count("\n") + 1 if code else 0
+        head = code.splitlines()[0][:120] if code else ""
+        return f"{n_lines} line{'s' if n_lines != 1 else ''} of Python — first line: {head!r}"
+    parts = []
+    for k, v in tool_input.items():
+        s = repr(v)
+        if len(s) > 80:
+            s = s[:77] + "…"
+        parts.append(f"{k}={s}")
+    out = ", ".join(parts)
+    return out[:300] + ("…" if len(out) > 300 else "")
+
+
 def _derive_thread_title(text: str) -> str:
     """Heuristic thread title from the opening message (no LLM — Phase 1).
     LLM-quality naming is deferred to Phase 4."""
@@ -436,6 +457,39 @@ async def stream_response(
                     pending_halt_signal = "clarify"
                     continue
 
+                # P1 #3 — per-tool approval gate. If the tool's schema declares
+                # an `approval_policy` other than 'never' (default), and the
+                # user hasn't already approved it this session, HALT here so
+                # the UI can ask. The held tool is stashed on the Turn row
+                # (pending_approval) and executed by the resume endpoint
+                # after the user approves/rejects. The model NEVER sees an
+                # auto-approval — every approval is the user's explicit choice.
+                from core.runtime.approval import needs_approval
+                tool_schema = next((t for t in active_tools if t["name"] == tool_name), None)
+                policy = tool_schema.get("approval_policy") if tool_schema else None
+                if needs_approval(policy, store_tid or "default", tool_name):
+                    # Don't write a tool_result block — the held tool_use stays
+                    # unresolved until resume, same as Phase 2 deferred. The
+                    # reaper skip-rule for pending_user_signal='approval'
+                    # prevents the orphan-fill scanner from marking it dead.
+                    turn.pending_approval = {
+                        "tool_name": tool_name,
+                        "tool_input": tool_input if isinstance(tool_input, dict) else {},
+                        "tool_use_id": block.id,
+                        "policy": policy,
+                    }
+                    summary = _summarize_tool_input(tool_name, tool_input)
+                    yield sse({
+                        "type": "approval_pending",
+                        "tool_name": tool_name,
+                        "summary": summary,
+                        "tool_use_id": block.id,
+                        "run_id": turn.run_id,
+                        "policy": policy,
+                    })
+                    pending_halt_signal = "approval"
+                    break    # stop processing further tool_use blocks this turn
+
                 yield sse({"type": "tool_start", "name": tool_name, "input": tool_input})
 
                 # Background path: submit a job and return immediately.
@@ -461,9 +515,19 @@ async def stream_response(
                     })
                     continue
 
+                # P1 #5 — pass per-turn context to executors that consult it
+                # (read_skill checks active_tools for skill-tool linkage).
+                # Most executors ignore ctx; execute_tool peeks at the
+                # signature and forwards conditionally.
+                tool_ctx = {
+                    "active_tools": active_tools,
+                    "thread_id": store_tid,
+                    "focus_entity_id": focus_entity_id,
+                    "session_id": session_id,
+                }
                 loop = asyncio.get_event_loop()
                 result_str = await loop.run_in_executor(
-                    None, execute_tool, tool_name, tool_input
+                    None, execute_tool, tool_name, tool_input, tool_ctx
                 )
                 result_obj = json.loads(result_str)
 
@@ -504,11 +568,20 @@ async def stream_response(
                     "content": result_str,
                 })
 
-            append_message("user", tool_result_blocks,
-                           entity_id=entity_id, focus_entity_id=focus_entity_id)
+            # Skip writing an empty user message — happens when the FIRST
+            # tool_use this iteration triggered an approval halt and nothing
+            # ran. The held tool_use stays unresolved; the resume endpoint
+            # writes its result. Reaper skip-rule (pending_user_signal=
+            # 'approval') prevents orphan-fill from clobbering it.
+            if tool_result_blocks:
+                append_message("user", tool_result_blocks,
+                               entity_id=entity_id, focus_entity_id=focus_entity_id)
             # All this iteration's tool_uses have matching tool_results in
-            # the message log now — clear the in-flight set (A1).
-            turn.pending_tool_ids = []
+            # the message log now — clear the in-flight set (A1). Approval
+            # halt leaves the held tool's id in pending_tool_ids; the
+            # resume endpoint clears it when the real result is written.
+            if pending_halt_signal != "approval":
+                turn.pending_tool_ids = []
             checkpoint(turn)
             history = get_messages(entity_id)
 

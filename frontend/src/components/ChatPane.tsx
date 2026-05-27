@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Entity, PendingClarification } from '../types'
+import type { DisplayMessage, Entity, PendingClarification, PendingApproval } from '../types'
 import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
 import Composer from './Composer'
@@ -45,6 +45,10 @@ interface Props {
    *  to /api/turns/{run_id}/resume. */
   pendingClarification?: PendingClarification | null
   onAnswerClarification?: (text: string) => void
+  /** P1 #3 — if set, a flagged tool wants explicit approval before
+   *  running. Replaces the main composer with an Approve / Reject bar. */
+  pendingApproval?: PendingApproval | null
+  onRespondApproval?: (action: 'approve' | 'approve_session' | 'reject') => void
 }
 
 export default function ChatPane({
@@ -74,6 +78,8 @@ export default function ChatPane({
   starters,
   pendingClarification,
   onAnswerClarification,
+  pendingApproval,
+  onRespondApproval,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -233,7 +239,25 @@ export default function ChatPane({
         </div>
       )}
       <div className="composer-wrap">
-        {pendingClarification && onAnswerClarification ? (
+        {pendingApproval && onRespondApproval ? (
+          <div className="approval-bar">
+            <div className="approval-bar__q">
+              Allow <code>{pendingApproval.toolName}</code>? <span className="approval-bar__sum">{pendingApproval.summary}</span>
+            </div>
+            <div className="approval-bar__actions">
+              <button className="approval-bar__btn approval-bar__btn--reject"
+                      onClick={() => onRespondApproval('reject')} disabled={streaming}>Reject</button>
+              <button className="approval-bar__btn approval-bar__btn--approve"
+                      onClick={() => onRespondApproval('approve')} disabled={streaming}>Approve</button>
+              {pendingApproval.policy === 'session' && (
+                <button className="approval-bar__btn approval-bar__btn--always"
+                        onClick={() => onRespondApproval('approve_session')} disabled={streaming}>
+                  Allow this thread
+                </button>
+              )}
+            </div>
+          </div>
+        ) : pendingClarification && onAnswerClarification ? (
           <form className="clarify-bar"
                 onSubmit={e => {
                   e.preventDefault()

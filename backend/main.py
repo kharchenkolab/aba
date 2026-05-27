@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1585,6 +1586,10 @@ def turn_get(run_id: str):
 
 class ResumeRequest(BaseModel):
     user_text: str = ""
+    # P1 #3 — for approval halts. 'approve' (run once), 'approve_session'
+    # (run + remember for this session), 'reject' (don't run; return
+    # rejection to the model).
+    action: str | None = None
 
 
 @app.post("/api/turns/{run_id}/resume")
@@ -1624,12 +1629,49 @@ async def turn_resume(run_id: str, req: ResumeRequest):
         except Exception:  # noqa: BLE001
             pass    # never block resume on a lifecycle update
 
+    # P1 #3 — approval resume. The held tool's result (real or rejection)
+    # is written into the message log here so the new turn sees a complete
+    # tool_use/tool_result pair when it loads history. The turn is then
+    # streamed in retry-mode (no new user_text appended) so the model
+    # picks up where it left off.
+    approval_mode = (
+        t.pending_user_signal == "approval"
+        and t.pending_approval
+        and req.action in ("approve", "approve_session", "reject")
+    )
+    if approval_mode:
+        from content.bio.tools import execute_tool
+        from core.graph.messages import append_message
+        from core.runtime.approval import grant_for_session
+        held = t.pending_approval
+        tool_name = held.get("tool_name", "")
+        tool_input = held.get("tool_input") or {}
+        tool_use_id = held.get("tool_use_id", "")
+        if req.action == "reject":
+            result_obj = {"status": "rejected",
+                          "note": "User declined to run this tool. Try a different approach "
+                                  "or ask the user what to do."}
+            result_str = json.dumps(result_obj)
+        else:
+            if req.action == "approve_session":
+                grant_for_session(thread_id, tool_name)
+            ctx = {"active_tools": [], "thread_id": thread_id, "focus_entity_id": focus_eid,
+                   "session_id": t.session_id}
+            result_str = execute_tool(tool_name, tool_input, ctx)
+        # Write the now-resolved tool_result for the held tool_use.
+        append_message("user",
+                       [{"type": "tool_result", "tool_use_id": tool_use_id, "content": result_str}],
+                       entity_id=WORKSPACE_ID, focus_entity_id=focus_eid, thread_id=thread_id)
+
     async def event_stream():
         async for chunk in stream_response(
             user_text,
             focus_entity_id=focus_eid,
             thread_id=thread_id,
             plan_entity_id=plan_eid,
+            # Approval resume: don't append a new user message — the held
+            # tool_result we just wrote is what advances the conversation.
+            retry=approval_mode,
         ):
             yield chunk
 

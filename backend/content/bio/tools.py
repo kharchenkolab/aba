@@ -698,8 +698,16 @@ def write_memory_tool(input_: dict) -> dict:
     return {"status": "ok", "name": e.name, "type": e.type, "description": e.description}
 
 
-def read_skill(input_: dict) -> dict:
-    """Return the body of a registered skill, or an error if absent."""
+def read_skill(input_: dict, ctx: dict | None = None) -> dict:
+    """Return the body of a registered skill, or an error if absent.
+
+    #5 — Skill-to-tool linkage: if the skill declares `requires_tools` in
+    its frontmatter and any of those aren't currently active for this
+    turn, return a structured error so the model knows to either pick a
+    different approach or ask the user to enable the missing tools.
+    Linkage check is skipped when ctx is absent (legacy callers / tests
+    without dispatch ctx).
+    """
     from core.skills import get_skill
     name = (input_.get("name") or "").strip() if isinstance(input_, dict) else ""
     if not name:
@@ -712,6 +720,26 @@ def read_skill(input_: dict) -> dict:
             "status": "unknown_skill",
             "note": f"No skill named {name!r}. Available: {', '.join(avail) or '(none)'}.",
         }
+
+    # #5 — surface missing required tools BEFORE returning the body. The
+    # model gets a clear "you can't use this skill as-is" signal instead
+    # of reading the body and then having a tool call fail.
+    missing: list[str] = []
+    if ctx and spec.requires_tools:
+        active = {t.get("name") for t in (ctx.get("active_tools") or [])}
+        missing = [t for t in spec.requires_tools if t not in active]
+    if missing:
+        return {
+            "status": "tools_unavailable",
+            "skill": spec.name,
+            "missing": missing,
+            "note": (
+                f"Skill {spec.name!r} requires tools {missing!r} which aren't active "
+                f"this turn. Either pick a different approach or ask the user to "
+                f"enable the missing tools."
+            ),
+        }
+
     return {
         "status": "ok",
         "name": spec.name,
@@ -748,12 +776,19 @@ EXECUTORS = {
     "write_memory": write_memory_tool,
 }
 
-def execute_tool(name: str, input_: dict) -> str:
+def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
+    """Dispatch a tool call. `ctx` is optional per-turn context that a few
+    tools consult (read_skill uses ctx['active_tools'] to enforce
+    skill-tool linkage). Most executors ignore it."""
+    import inspect
     fn = EXECUTORS.get(name)
     if not fn:
         return json.dumps({"error": f"Unknown tool: {name}"})
     try:
-        result = fn(input_)
+        # Pass ctx only to executors that declare it; preserves the
+        # 1-arg signature for everyone else.
+        sig_params = inspect.signature(fn).parameters
+        result = fn(input_, ctx) if "ctx" in sig_params else fn(input_)
         return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)})
