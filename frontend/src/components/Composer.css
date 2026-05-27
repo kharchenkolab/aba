@@ -51,20 +51,22 @@
 .composer__send:disabled { opacity: 0.4; cursor: default; }
 
 /* Stop button — appears inside the composer box next to the Send arrow
-   while the agent is responding. Icon-only, sized to match Send. */
+   while the agent is responding. Matches Send's size and alignment
+   exactly; the only visual difference is colour + the octagon icon.
+   Transparent background so the octagon shape itself reads as the
+   button (like a traffic stop sign). */
 .composer__stop {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border: none;
-  border-radius: 6px;
-  background: var(--red, #dc2626);
-  color: #fff;
+  background: transparent;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  margin-right: 4px;
-  transition: background 0.15s;
+  color: var(--red, #dc2626);
+  transition: color 0.15s, transform 0.15s;
 }
-.composer__stop:hover { background: #b91c1c; }
+.composer__stop:hover { color: #b91c1c; transform: scale(1.06); }

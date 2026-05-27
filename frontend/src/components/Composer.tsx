@@ -136,8 +136,15 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
             title="Stop the current turn (kills running work, drops queue)"
             aria-label="Stop"
           >
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="3" y="3" width="10" height="10" rx="1.5" />
+            {/* Traffic-style stop-sign octagon. Outer red fill is the
+                button surface; thin white ring inside mimics the real
+                sign's border. Same 16px viewBox as Send so the two icons
+                read as a matched pair. */}
+            <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+              <polygon points="7,1 13,1 19,7 19,13 13,19 7,19 1,13 1,7"
+                       fill="currentColor" />
+              <polygon points="8,3 12,3 17,8 17,12 12,17 8,17 3,12 3,8"
+                       fill="none" stroke="#fff" strokeWidth="1" />
             </svg>
           </button>
         )}
