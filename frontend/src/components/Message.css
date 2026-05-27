@@ -259,3 +259,25 @@
   margin-left: 1px;
 }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* T2.5: structured-plan styling — summary, assumptions, per-step
+   description, expected outputs, skill chip, validator concerns. */
+.plan-card__summary { font-size: 13px; color: var(--text-2); margin-top: 4px; line-height: 1.4; }
+.plan-card__assumptions { margin: 8px 0 4px; padding: 6px 9px; border-left: 2px solid var(--border); background: var(--bg-soft, #f6f5f3); border-radius: 4px; }
+.plan-card__assumptions-label { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 3px; }
+.plan-card__assumptions ul { margin: 0; padding-left: 16px; }
+.plan-card__assumptions li { font-size: 12px; color: var(--text-3); line-height: 1.45; }
+.plan-card__step { padding: 4px 0; }
+.plan-card__step-title { font-size: 13px; color: var(--text-2); line-height: 1.4; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.plan-card__step-desc { font-size: 12px; color: var(--text-3); margin-top: 2px; line-height: 1.45; }
+.plan-card__outs { font-size: 11.5px; color: var(--text-4); font-family: var(--mono); margin-top: 2px; }
+.plan-card__skill {
+  font-size: 10px; font-family: var(--mono); padding: 1px 6px; border-radius: 4px;
+  background: #e0e7ff; color: #4338ca; font-weight: 500;
+}
+.plan-card__concern {
+  margin-top: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11.5px; line-height: 1.4;
+}
+.plan-card__concern--info { color: var(--text-3); background: var(--bg-soft, #f6f5f3); }
+.plan-card__concern--warn { color: #b45309; background: #fef3c7; }
+.plan-card__concern--error { color: #b91c1c; background: #fee2e2; }

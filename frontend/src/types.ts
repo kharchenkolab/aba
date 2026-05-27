@@ -16,13 +16,38 @@ export interface ToolResultBlock {
   name: string
   result: Record<string, unknown>
 }
+/** A structured step in a presented plan (T2.5). Models may also emit a
+ *  plain string, which is coerced to {n, title} server-side. */
+export interface PlanStepShape {
+  n: number
+  title: string
+  description?: string
+  expected_outputs?: string[]
+  skill?: string | null
+  parameters?: Record<string, unknown>
+}
+
+/** A validator-emitted concern attached to a plan or specific step. */
+export interface PlanConcern {
+  step_n: number | null   // null = plan-level
+  level: 'info' | 'warn' | 'error'
+  message: string
+}
+
 /** A plan the Guide presented before multi-step work — rendered as a card with
- *  Go / Adjust while it's the latest message and awaiting the user's decision. */
+ *  Go / Adjust while it's the latest message and awaiting the user's decision.
+ *
+ *  Pre-T2.5 the steps were `string[]`; the structured object form is now
+ *  authoritative and `string[]` is kept only for backward compat on cached
+ *  history blocks. */
 export interface PlanBlock {
   type: 'plan'
   title?: string
-  steps: string[]
+  summary?: string
   rationale?: string
+  assumptions?: string[]
+  steps: (PlanStepShape | string)[]
+  concerns?: PlanConcern[]
 }
 
 export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock | PlanBlock
@@ -41,7 +66,15 @@ export interface ToolResultEvent  { type: 'tool_result'; name: string; result: R
 export interface DoneEvent        { type: 'done' }
 export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
 export interface NoticeEvent      { type: 'notice';      text: string }
-export interface PlanEvent        { type: 'plan'; title?: string; steps: string[]; rationale?: string }
+export interface PlanEvent {
+  type: 'plan'
+  title?: string
+  summary?: string
+  rationale?: string
+  assumptions?: string[]
+  steps: (PlanStepShape | string)[]
+  concerns?: PlanConcern[]
+}
 export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot }
 
 /** Structured per-turn context (T2.4 Drawer). Mirrors core.manifest.types.Manifest.to_dict(). */

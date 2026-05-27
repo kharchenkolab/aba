@@ -21,7 +21,17 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
     } else if (block.type === 'tool_use') {
       if (block.name === 'present_plan') {
         const inp = (block.input ?? {}) as { title?: string; steps?: unknown; rationale?: string }
-        blocks.push({ type: 'plan', title: inp.title, steps: asSteps(inp.steps), rationale: inp.rationale })
+        // History rehydration: steps may be a list of strings (older
+        // turns) or PlanStepShape objects (T2.5+); forward as-is so the
+        // renderer can inspect.
+        blocks.push({
+          type: 'plan',
+          title: inp.title,
+          summary: (inp as Record<string, unknown>).summary as string | undefined,
+          rationale: inp.rationale,
+          assumptions: (inp as Record<string, unknown>).assumptions as string[] | undefined,
+          steps: (Array.isArray(inp.steps) ? inp.steps : asSteps(inp.steps)) as (string | import('./types').PlanStepShape)[],
+        })
       } else {
         blocks.push({
           type: 'tool_start',
@@ -216,7 +226,17 @@ export function useChat(
               }
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'plan') {
-              streamingBlocks.push({ type: 'plan', title: ev.title, steps: asSteps(ev.steps), rationale: ev.rationale })
+              // T2.5: forward all structured fields. Steps may be strings
+              // (legacy / coerced) or PlanStepShape objects.
+              streamingBlocks.push({
+                type: 'plan',
+                title: ev.title,
+                summary: ev.summary,
+                rationale: ev.rationale,
+                assumptions: ev.assumptions,
+                steps: ev.steps,
+                concerns: ev.concerns,
+              })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'manifest') {
               // T2.4: drawer sidecar. The model only ever sees the rendered
