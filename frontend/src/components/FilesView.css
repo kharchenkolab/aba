@@ -89,3 +89,25 @@ button.files__head-action {
   cursor: pointer;
   font-family: inherit;
 }
+
+/* Readme inline expand */
+.files__readme { display: flex; flex-direction: column; }
+.files__row--readme { color: var(--text-3); }
+.files__name--readme { color: var(--text-3); font-style: italic; }
+.files__readme-body {
+  margin: 2px 0 6px 24px;
+  padding: 8px 11px;
+  font-family: var(--mono); font-size: 11px;
+  line-height: 1.5;
+  background: var(--page, #faf9f6); border: 1px solid var(--border);
+  border-radius: 5px;
+  white-space: pre-wrap;
+  color: var(--text-2);
+  max-height: 320px; overflow-y: auto;
+}
+.files__name--folder { font-weight: 500; color: var(--text-2); }
+.files__icon--clickable {
+  cursor: pointer; border: none; background: none; padding: 0;
+  font-size: 12px;
+}
+.files__icon--clickable:hover { transform: scale(1.1); }
