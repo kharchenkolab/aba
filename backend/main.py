@@ -24,7 +24,7 @@ from content.bio.lifecycle.promote import (
     remove_result_from_finding,
 )
 from content.bio.lifecycle.scenarios import create_scenario_variant
-from advisors import skeptic_review, explorer_suggest, stylist_review
+from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
 from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status
 from content.bio.lifecycle.adaptive import append_to_policy, run_probe
 from content.bio.tools_registry import registry as tools_registry
