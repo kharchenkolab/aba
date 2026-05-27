@@ -250,18 +250,17 @@
 /* T2.4 Drawer FAB + overlay. */
 .drawer-fab {
   position: fixed;
-  right: 14px;
-  bottom: 14px;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  right: 12px;
+  top: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg);
-  color: var(--text-2);
-  font-size: 16px;
+  color: var(--text-3);
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
   z-index: 60;
 }
 .drawer-fab:hover { background: var(--tree-active-bg); color: var(--text); }

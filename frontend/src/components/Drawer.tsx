@@ -17,29 +17,33 @@ import './Drawer.css'
 
 interface Props {
   manifest: ManifestSnapshot | null
+  focusEntityId: string
   threadId: string | null
   onClose?: () => void
 }
 
-export default function Drawer({ manifest: liveManifest, threadId, onClose }: Props) {
-  const [persisted, setPersisted] = useState<ManifestSnapshot | null>(null)
+export default function Drawer({ manifest: liveManifest, focusEntityId, threadId, onClose }: Props) {
+  // Live preview: whenever focus/thread changes, re-fetch what the agent
+  // WOULD see if a turn ran right now. The SSE-streamed liveManifest
+  // takes precedence while a turn is in flight.
+  const [preview, setPreview] = useState<ManifestSnapshot | null>(null)
 
-  // Hydrate from the persisted snapshot whenever the thread changes
-  // and we don't yet have a live one.
   useEffect(() => {
-    if (!threadId) { setPersisted(null); return }
     let cancelled = false
-    fetch(`/api/threads/${encodeURIComponent(threadId)}/manifest`)
+    const params = new URLSearchParams()
+    if (focusEntityId) params.set('focus_entity_id', focusEntityId)
+    if (threadId) params.set('thread_id', threadId)
+    fetch(`/api/manifest/preview?${params.toString()}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (cancelled) return
-        setPersisted((d?.manifest as ManifestSnapshot) ?? null)
+        setPreview((d?.manifest as ManifestSnapshot) ?? null)
       })
-      .catch(() => { /* ignore — drawer just shows empty */ })
+      .catch(() => { /* drawer just shows empty */ })
     return () => { cancelled = true }
-  }, [threadId])
+  }, [focusEntityId, threadId])
 
-  const m = liveManifest ?? persisted
+  const m = liveManifest ?? preview
 
   return (
     <aside className="drawer">

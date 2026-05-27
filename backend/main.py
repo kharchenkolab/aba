@@ -1612,6 +1612,31 @@ def thread_latest_manifest(tid: str):
     return {"manifest": m}
 
 
+@app.get("/api/manifest/preview")
+def manifest_preview(focus_entity_id: str | None = None, thread_id: str | None = None):
+    """Build a Manifest live for the current (focus, thread) without
+    running a turn. This is what the Drawer hits whenever the user
+    refocuses or switches threads — so the panel reflects what the agent
+    WOULD see if they sent a message right now, not the last turn's
+    snapshot.
+
+    No persistence; the row only gets written when an actual turn runs.
+    """
+    from core.manifest.assembler import build_manifest
+    import content.bio.cards  # noqa: F401 — ensure per-type builders register
+    # Tolerate the "default" sentinel used elsewhere in the UI.
+    resolved_thread = None
+    if thread_id and thread_id != "default":
+        resolved_thread = thread_id
+    m = build_manifest(
+        session_id="preview",
+        turn_index=0,
+        focus_entity_id=focus_entity_id,
+        thread_id=resolved_thread,
+    )
+    return {"manifest": m.to_dict()}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
