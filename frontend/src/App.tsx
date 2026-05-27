@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import { useLocation } from 'react-router-dom'
 import { useUrlState } from './useUrlState'
 import './App.css'
 import Rail from './components/Rail'
@@ -26,6 +25,21 @@ import type { Entity } from './types'
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
+
+/** Walk a files-tree response to find the node at the given POSIX path.
+ *  Used by Phase 2 routing to hydrate the viewedFile when the user lands
+ *  on /p/<pid>/files/<path> directly (deep link, reload, Back). */
+function findNodeByPath(root: FileNode | undefined, path: string): FileNode | null {
+  if (!root || !path) return null
+  type N = FileNode & { children?: N[] }
+  const stack: N[] = [root as N]
+  while (stack.length) {
+    const n = stack.pop()!
+    if (n.path === path) return n
+    if (n.children) for (const c of n.children) stack.push(c)
+  }
+  return null
+}
 
 // Display label for an entity type — note `analysis` reads as "Run" (the v3
 // "analysis run"), avoiding confusion with the thread/investigation idea.
@@ -73,12 +87,39 @@ export default function App() {
   // conversation. '_home' just keeps the key non-empty when no project.
   const projectKey = url.pid ?? '_home'
 
-  const [projectSection, setProjectSection] = useState<ProjectSection>('threads')
-  // Synthesized / non-entity file currently viewed in the central column
-  // (e.g., a README clicked from the Files tab). When set, the entity
-  // panel renders FileCanvas instead of FocusCanvas; clearing it (or
-  // focusing an entity) restores normal behavior.
+  // Phase 2: section + scene + viewedFile path all come from the URL.
+  const projectSection = url.section as ProjectSection
+  const setProjectSection = (s: ProjectSection) => url.setSection(s)
+  const overview  = url.scene === 'overview'
+  const inventory = url.scene === 'inventory'
+  const setOverview  = (on: boolean) => url.setScene(on ? 'overview'  : null)
+  const setInventory = (on: boolean) => url.setScene(on ? 'inventory' : null)
+  // Synthesized / non-entity file currently viewed in the central column.
+  // The URL is canonical for WHICH file (under /p/<pid>/files/<path>); the
+  // FileNode object is hydrated lazily from /api/files/tree so FileCanvas
+  // can render synthesized content (README bodies, claim markdown, etc.).
+  // Clicking a file in FilesView passes the full node here directly via
+  // viewFile() so the round-trip via /api/files/tree only fires for
+  // deep-link reload / Back navigation.
   const [viewedFile, setViewedFile] = useState<FileNode | null>(null)
+  useEffect(() => {
+    const path = url.filePath
+    if (!path) { setViewedFile(null); return }
+    if (viewedFile?.path === path) return    // already have the node from a click
+    let cancelled = false
+    fetch('/api/files/tree')
+      .then(r => r.json())
+      .then((root: FileNode) => {
+        if (cancelled) return
+        const found = findNodeByPath(root, path)
+        // Even if we can't find the node (stale tree, deleted file), set a
+        // stub so FileCanvas can attempt to render via /api/files/raw.
+        setViewedFile(found ?? { kind: 'file', name: path.split('/').pop() || path, path })
+      })
+      .catch(() => { /* ignore — central column will fall back to placeholder */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url.filePath, url.pid])
   const [posture, setPosture] = useState<Posture>('chat')
   const [highlighting, setHighlighting] = useState(false)
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
@@ -97,8 +138,6 @@ export default function App() {
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [hasProject, setHasProject] = useState(true)
-  const [inventory, setInventory] = useState(false)     // thread inventory mode (P9)
-  const [overview, setOverview] = useState(false)       // project overview mode (P8)
   const [chatReload, setChatReload] = useState(0)       // bump to refetch the thread's messages
   const orientedRef = useRef<Set<string>>(new Set())    // cold-start orient attempts
   const { entities, refresh } = useEntities()
@@ -111,23 +150,11 @@ export default function App() {
   }
   useEffect(() => { refreshCurrent() }, [])
 
-  // Back / Forward / deep-link recovery: transient UI modes (posture,
-  // viewedFile, inventory, overview) were set as side effects of the same
-  // actions that mutated the URL. Without a re-sync, Back unwinds the URL
-  // (focusedId / threadId) but leaves these modes frozen, so the columns
-  // and tabs read stale. On every pathname change, clear the transient
-  // modes and re-derive posture from the new (focus, viewedFile).
-  const location = useLocation()
+  // posture follows focus: entity-first when something is focused (or a
+  // file is being viewed); chat-first otherwise. PostureToggle can still
+  // override manually within a given URL state. Re-derived on every URL
+  // change because focusedId / viewedFile flip with the route.
   useEffect(() => {
-    setViewedFile(null)
-    setInventory(false)
-    setOverview(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname])
-  useEffect(() => {
-    // posture follows focus: entity-first when something is focused (or a
-    // file is being viewed); chat-first otherwise. PostureToggle can still
-    // override manually within a given URL state.
     setPosture((focusedId !== 'workspace' || viewedFile) ? 'entity' : 'chat')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedId, viewedFile])
@@ -224,21 +251,18 @@ export default function App() {
   const { proposals, undoable, accept: acceptProposal, dismiss: dismissProposal,
           undo: undoProposal, clearUndo } = useProposals(currentThread?.id ?? null, refresh)
 
-  // Leaving the full-canvas modes (project/thread overview) on any navigation,
-  // so rail clicks etc. aren't silently masked by an open overview.
-  const exitModes = () => { setOverview(false); setInventory(false) }
+  // Phase 2 routing: setFocus / setThread / setSection in useUrlState all
+  // drop the active scene as part of their navigation, so explicit
+  // "exitModes()" calls are no longer needed before a focus/thread change.
 
   // Everything opens in the center (entity-first); the chat moves to the right
   // peek and "← Back to thread" exits. There is no chat-first preview slot.
-  const openEntity = (id: string) => { exitModes(); setFocusedId(id); setPosture('entity') }
+  const openEntity = (id: string) => { setFocusedId(id) }
 
-  // Selecting a thread is entering a line of inquiry: reset the selection and
-  // drop to chat-first so you always land in that thread's conversation + shelf.
+  // Selecting a thread is entering a line of inquiry: switching threads
+  // also clears focus (handled by setThread). Posture re-derives from focus.
   const selectThread = (id: string) => {
-    exitModes()
     setThreadId(id)
-    setFocusedId('workspace')
-    setPosture('chat')
     // Thread-open event trigger (Phase D): may surface a return-wrap proposal.
     fetch(`/api/threads/${encodeURIComponent(id)}/evaluate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -246,15 +270,21 @@ export default function App() {
     }).catch(() => {})
   }
 
-  // Shortcut from the rail: jump straight to a thread's overview.
-  const openThreadOverview = (id: string) => { selectThread(id); setInventory(true) }
+  // Shortcut from the rail: jump straight to a thread's inventory. One
+  // navigation (single history entry) via setNav: switches thread, clears
+  // any focus, sets scene=inventory atomically.
+  const openThreadOverview = (id: string) => {
+    if (!url.pid) return
+    fetch(`/api/threads/${encodeURIComponent(id)}/evaluate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trigger: 'thread_open' }),
+    }).catch(() => {})
+    url.setNav({ threadId: id, focusedId: 'workspace', scene: 'inventory' })
+  }
 
-  // Navigate to a claim *in its own context*: switch to its home thread (so the
-  // chat peek shows the right conversation) and open it entity-first to work on.
-  // Use setThreadAndFocus so the URL switch is a single navigation (one Back
-  // entry, no intermediate flash).
+  // Navigate to a claim *in its own context*: switch to its home thread + open
+  // entity in one navigation (setThreadAndFocus also drops any scene).
   const openClaim = (id: string) => {
-    exitModes()
     const c = entities.find(e => e.id === id)
     const home = c?.metadata?.thread_id as string | undefined
     let newTid = threadId
@@ -277,18 +307,20 @@ export default function App() {
 
   // Open a non-entity tree node in the central column (FileCanvas).
   // Entity-backed nodes go through goToEntity instead — see FilesView.
+  // Sets local state for the immediate render (so we have the rich node
+  // including synthesized content) and navigates the URL so reload /
+  // bookmark / Back land on the same file.
   const viewFile = (node: FileNode) => {
-    exitModes()
     setViewedFile(node)
-    setPosture('entity')   // central column takes focus
+    url.setFilePath(node.path)
   }
   // From an entity (entity-first) back to its thread's conversation.
-  const backToThread = () => { exitModes(); setFocusedId('workspace'); setPosture('chat') }
+  const backToThread = () => { setFocusedId('workspace') }
 
   // Hand a request to the Guide (used by overview "describe a resource" /
   // "discuss this question"): leave any mode, drop to chat, send the message.
   const askGuide = (text: string) => {
-    exitModes(); setFocusedId('workspace'); setPosture('chat')
+    setFocusedId('workspace')
     sendMessage(text)
   }
 
@@ -302,7 +334,7 @@ export default function App() {
   // We only reveal the chat when a full-canvas mode (overview/inventory) is
   // currently hiding it.
   const chatAboutResult = async (label: string, thumb?: string, annotation?: { image: string; note: string }) => {
-    if (overview || inventory) { exitModes(); setFocusedId('workspace'); setPosture('chat') }
+    if (overview || inventory) { setFocusedId('workspace') }
     if (annotation) {
       // Already-composited image (e.g. a highlighted region) — attach as-is.
       attachAnnotation(annotation)
