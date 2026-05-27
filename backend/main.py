@@ -1743,6 +1743,55 @@ def project_materialize(pid: str, clean: bool = False, include_archived: bool = 
     return summary
 
 
+@app.get("/api/viewers/for")
+def viewers_for_node(
+    entity_id: str | None = None,
+    path: str | None = None,
+):
+    """Return the viewer entries applicable to a tree node. Supply
+    either entity_id (entity-backed file) or path (any node in the
+    files tree). First entry is the default; the rest are alternates.
+
+    The frontend uses this to build the right-click viewer menu and to
+    pick the default click handler.
+    """
+    import content.bio  # noqa: F401 — ensure registrations
+    from core.viewers.registry import viewers_for, to_wire
+
+    node: dict = {}
+    if entity_id:
+        e = get_entity(entity_id)
+        if not e:
+            raise HTTPException(404, f"no entity {entity_id}")
+        node = {
+            "entity_id": e["id"],
+            "entity_type": e["type"],
+            "name": e.get("title") or "",
+            "artifact_path": e.get("artifact_path"),
+            "size": None,
+        }
+    elif path:
+        from content.bio.files.tree import build_files_tree, find_node
+        tree = build_files_tree(include_archived=False)
+        n = find_node(tree, path)
+        if n is None:
+            raise HTTPException(404, f"no node at {path!r}")
+        node = n
+    else:
+        raise HTTPException(400, "supply either entity_id or path")
+
+    viewers = viewers_for(node)
+    return {
+        "primary": viewers[0].id if viewers else None,
+        "viewers": [to_wire(v) for v in viewers],
+        "download_url": (
+            f"/api/entities/{node['entity_id']}/download" if node.get("entity_id") and node.get("artifact_path")
+            else f"/api/files/download?path={path}" if path
+            else None
+        ),
+    }
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

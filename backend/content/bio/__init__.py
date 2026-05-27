@@ -9,3 +9,4 @@ from . import cards          # noqa: F401  — registers per-type card builders
 from . import advisors       # noqa: F401  — loads YAML specs + handlers
 from . import skills         # noqa: F401  — registers known skills
 from .files import layout    # noqa: F401  — registers per-type display_path computers
+from . import viewers        # noqa: F401  — loads file-viewer registry

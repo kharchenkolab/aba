@@ -5,6 +5,7 @@ import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
 import { RailIcon, type RailIconName } from './icons'
 import FilesView from './FilesView'
+import type { FileNode } from '../viewers/types'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
@@ -13,6 +14,7 @@ interface Props {
   focusedId: string
   activeSection: ProjectSection
   onFocus: (id: string) => void
+  onViewFile?: (node: FileNode) => void   // Files tab: open synthesized files in central column
   onChange: () => void
   currentThread: string
   onSelectThread: (id: string) => void
@@ -99,7 +101,7 @@ function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { classN
   )
 }
 
-export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
+export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -306,7 +308,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
 
       <div className="tree__scroll">
         {activeSection === 'files' ? (
-          <FilesView focusedId={focusedId} onFocus={onFocus} reloadKey={entities.length} />
+          <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length} />
         ) : activeSection === 'threads' ? (() => {
           const threadList = [
             { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
