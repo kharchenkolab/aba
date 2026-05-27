@@ -11,28 +11,19 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import './FilesView.css'
+import type { FileNode } from '../viewers/types'
 
-type TreeNode = {
-  kind: 'root' | 'folder' | 'file' | 'readme'
-  name: string
-  path: string
+type TreeNode = FileNode & {
   children?: TreeNode[]
-  entity_id?: string | null
-  entity_type?: string | null
-  title?: string | null
-  artifact_path?: string | null
-  size?: number | null
-  mtime?: number | null
   pinned?: boolean
   status?: string | null
-  content?: string                 // readme markdown
   container_kind?: string
-  synthesized?: boolean
 }
 
 interface Props {
   focusedId: string
   onFocus: (id: string) => void
+  onViewFile?: (node: FileNode) => void   // central-column viewer for synthesized files
   reloadKey?: unknown
 }
 
@@ -76,12 +67,11 @@ function downloadUrl(node: TreeNode): string {
   return `/api/files/download?path=${encodeURIComponent(node.path)}`
 }
 
-export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
+export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }: Props) {
   const [root, setRoot] = useState<TreeNode | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [openReadme, setOpenReadme] = useState<Set<string>>(new Set())
   const [materializeMsg, setMaterializeMsg] = useState<string | null>(null)
 
   useEffect(() => {
@@ -114,14 +104,6 @@ export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
     })
   }
 
-  function toggleReadme(path: string) {
-    setOpenReadme(prev => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path); else next.add(path)
-      return next
-    })
-  }
-
   async function materialize() {
     setMaterializeMsg('Building folder…')
     try {
@@ -139,29 +121,26 @@ export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
     }
   }
 
+  // Click handler shared by README, file, and folder-with-entity rows.
+  // Entity-backed → onFocus(entity_id) (existing FocusCanvas path).
+  // Synthesized / non-entity → onViewFile(node) (FileCanvas).
+  function activate(node: TreeNode) {
+    if (node.entity_id) {
+      onFocus(node.entity_id)
+    } else if (onViewFile) {
+      onViewFile(node)
+    }
+  }
+
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
     const indent = { paddingLeft: `${depth * 12}px` }
-    if (node.kind === 'readme') {
-      const isOpen = openReadme.has(node.path)
-      return (
-        <div key={node.path} className="files__readme" style={indent}>
-          <div className="files__row files__row--readme">
-            <button className="files__chev" onClick={() => toggleReadme(node.path)}>{isOpen ? '▾' : '▸'}</button>
-            <span className="files__icon">{leafIcon(node)}</span>
-            <span className="files__name files__name--readme">README.md</span>
-            <span className="files__size">{fmtSize(node.size ?? null)}</span>
-          </div>
-          {isOpen && node.content && (
-            <pre className="files__readme-body">{node.content}</pre>
-          )}
-        </div>
-      )
-    }
-    if (node.kind === 'file') {
+    if (node.kind === 'readme' || node.kind === 'file') {
+      const isReadme = node.kind === 'readme'
+      const isActive = node.entity_id ? focusedId === node.entity_id : false
       return (
         <div
           key={node.path}
-          className={`files__row files__row--file ${focusedId === node.entity_id ? 'is-current' : ''}`}
+          className={`files__row files__row--file ${isReadme ? 'files__row--readme' : ''} ${isActive ? 'is-current' : ''}`}
           style={indent}
           title={node.path}
         >
@@ -169,11 +148,11 @@ export default function FilesView({ focusedId, onFocus, reloadKey }: Props) {
           <span className="files__icon">{leafIcon(node)}</span>
           <button
             className="files__name files__name--clickable"
-            onClick={() => node.entity_id && onFocus(node.entity_id)}
-            title={`${node.entity_type ?? ''} · ${node.entity_id ?? ''}`}
+            onClick={() => activate(node)}
+            title={isReadme ? node.path : `${node.entity_type ?? ''} · ${node.entity_id ?? ''}`}
           >{node.name}</button>
           <span className="files__size">{fmtSize(node.size ?? null)}</span>
-          {(node.artifact_path || node.synthesized) && (
+          {(node.artifact_path || node.synthesized || isReadme) && (
             <a
               className="files__action"
               href={downloadUrl(node)}

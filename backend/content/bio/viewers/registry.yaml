@@ -1,0 +1,112 @@
+# Bio viewer registry (viewers.md §5.1).
+# Loaded at startup by content.bio.viewers; layered overlays (lab/project/
+# personal) come later via the same loader. Frontend has a name → React
+# component map keyed by `component:` below.
+
+viewers:
+  # ---------- entity-typed (rich app views) ----------
+  - id: figure-canvas
+    entity_types: [figure]
+    mode: canvas
+    component: FigureView
+    priority: 10
+
+  - id: result-canvas
+    entity_types: [result]
+    mode: canvas
+    component: ResultView
+    priority: 10
+
+  - id: claim-canvas
+    entity_types: [claim]
+    mode: canvas
+    component: ClaimView
+    priority: 10
+
+  - id: run-canvas
+    entity_types: [analysis]
+    mode: canvas
+    component: RunView
+    priority: 10
+
+  - id: thread-canvas
+    entity_types: [thread]
+    mode: canvas
+    component: ThreadView
+    priority: 10
+
+  - id: dataset-canvas
+    entity_types: [dataset]
+    mode: canvas
+    component: DatasetView
+    priority: 10
+
+  # ---------- generic by MIME / extension ----------
+  - id: image-canvas
+    mime_patterns: [image/png, image/jpeg, image/gif, image/webp]
+    extensions: [.png, .jpg, .jpeg, .gif, .webp]
+    mode: canvas
+    component: ImageCanvas
+    priority: 5
+
+  - id: image-modal
+    mime_patterns: [image/png, image/jpeg, image/gif, image/webp]
+    extensions: [.png, .jpg, .jpeg, .gif, .webp]
+    mode: modal
+    component: ImageModal
+    priority: 3        # alternate; offered on Cmd-click
+
+  - id: markdown-canvas
+    extensions: [.md, .markdown]
+    mode: canvas
+    component: MarkdownCanvas
+    priority: 6
+
+  - id: code-canvas
+    extensions: [.py, .R, .sh, .sql, .yaml, .yml, .ts, .tsx, .js, .jsx]
+    mode: canvas
+    component: CodeCanvas
+    priority: 4
+
+  - id: json-canvas
+    extensions: [.json]
+    mode: canvas
+    component: JsonCanvas
+    priority: 4
+
+  - id: text-canvas
+    mime_patterns: [text/plain]
+    extensions: [.txt, .log]
+    mode: canvas
+    component: TextCanvas
+    priority: 3
+
+  - id: csv-table
+    extensions: [.csv, .tsv]
+    mode: canvas
+    component: TableViewer
+    priority: 5
+
+  - id: pdf-modal
+    mime_patterns: [application/pdf]
+    extensions: [.pdf]
+    mode: modal
+    component: PdfViewer
+    priority: 5
+
+  # ---------- AI viewers (deferred to V4 — registered now so the menu shows them) ----------
+  - id: ai-summary
+    applies: any
+    mode: modal
+    component: AISummaryModal
+    priority: 0
+    requires_consent: true
+    label: "Ask Guide to summarize"
+
+  - id: ai-visualize
+    applies: any
+    mode: canvas
+    component: AIVisualization
+    priority: 0
+    requires_consent: true
+    label: "Ask Guide to visualize"

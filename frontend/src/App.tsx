@@ -5,6 +5,8 @@ import ProjectTree from './components/ProjectTree'
 import ChatPane from './components/ChatPane'
 import AdvisorStrip from './components/AdvisorStrip'
 import FocusCanvas from './components/FocusCanvas'
+import FileCanvas from './viewers/FileCanvas'
+import type { FileNode } from './viewers/types'
 import Home from './components/Home'
 import HResizer from './components/HResizer'
 import PostureToggle, { type Posture } from './components/PostureToggle'
@@ -57,6 +59,11 @@ export default function App() {
   const [view, setView] = useState<'home' | 'workspace'>('home')
   const [projectSection, setProjectSection] = useState<ProjectSection>('threads')
   const [focusedId, setFocusedId] = useState<string>('workspace')
+  // Synthesized / non-entity file currently viewed in the central column
+  // (e.g., a README clicked from the Files tab). When set, the entity
+  // panel renders FileCanvas instead of FocusCanvas; clearing it (or
+  // focusing an entity) restores normal behavior.
+  const [viewedFile, setViewedFile] = useState<FileNode | null>(null)
   const [posture, setPosture] = useState<Posture>('chat')
   const [highlighting, setHighlighting] = useState(false)
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
@@ -205,9 +212,18 @@ export default function App() {
   // The right column stays thread-context (brief + shelf); it never becomes a
   // preview slot — that's what created the in-place "expand with no way out".
   const goToEntity = (id: string) => {
+    setViewedFile(null)  // clear any synthesized-file view first
     const e = entities.find(x => x.id === id)
     if (e?.type === 'claim') openClaim(id)
     else openEntity(id)
+  }
+
+  // Open a non-entity tree node in the central column (FileCanvas).
+  // Entity-backed nodes go through goToEntity instead — see FilesView.
+  const viewFile = (node: FileNode) => {
+    exitModes()
+    setViewedFile(node)
+    setPosture('entity')   // central column takes focus
   }
   // From an entity (entity-first) back to its thread's conversation.
   const backToThread = () => { exitModes(); setFocusedId('workspace'); setPosture('chat') }
@@ -382,18 +398,26 @@ export default function App() {
 
   const entityPanel = (primary: boolean) => (
     <div className={`surface-panel entity-surface ${primary ? 'primary' : ''}`}>
-      <FocusCanvas
-        entity={focused}
-        entities={entities}
-        onChange={refresh}
-        onFocus={goToEntity}
-        onSelectThread={selectThread}
-        onAnnotate={attachAnnotation}
-        annotClear={annotClear}
-        compact={!primary}
-        onAsk={askGuide}
-        onChatResult={chatAboutResult}
-      />
+      {viewedFile ? (
+        <FileCanvas
+          node={viewedFile}
+          onFocus={goToEntity}
+          onClose={() => setViewedFile(null)}
+        />
+      ) : (
+        <FocusCanvas
+          entity={focused}
+          entities={entities}
+          onChange={refresh}
+          onFocus={goToEntity}
+          onSelectThread={selectThread}
+          onAnnotate={attachAnnotation}
+          annotClear={annotClear}
+          compact={!primary}
+          onAsk={askGuide}
+          onChatResult={chatAboutResult}
+        />
+      )}
     </div>
   )
 
@@ -441,6 +465,7 @@ export default function App() {
           focusedId={focusedId}
           activeSection={projectSection}
           onFocus={goToEntity}
+          onViewFile={viewFile}
           onChange={refresh}
           currentThread={threadId}
           onSelectThread={selectThread}
