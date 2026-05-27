@@ -103,6 +103,7 @@ def log_context_assembly(
     fields_preloaded: list[str],
     tool_calls: list[str],
     turn_text_len: int,
+    manifest: Optional[dict] = None,
 ) -> int:
     now = _utcnow()
     with _conn() as c:
@@ -110,16 +111,41 @@ def log_context_assembly(
             "INSERT INTO context_assemblies "
             "(session_id, turn_index, focus_entity_id, focus_entity_type, "
             " fields_preloaded, tool_calls, n_tool_calls, turn_text_len, "
-            " created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " manifest_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id, turn_index, focus_entity_id, focus_entity_type,
                 json.dumps(fields_preloaded), json.dumps(tool_calls),
-                len(tool_calls), turn_text_len, now,
+                len(tool_calls), turn_text_len,
+                json.dumps(manifest) if manifest is not None else None,
+                now,
             ),
         )
         c.commit()
         return cur.lastrowid
+
+
+def latest_manifest_for_thread(thread_id: Optional[str]) -> Optional[dict]:
+    """Drawer fallback (T2.4): return the most-recent persisted Manifest
+    snapshot whose focus was inside this thread. Returns None if no
+    manifest has been logged yet."""
+    if not thread_id:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            "SELECT manifest_json FROM context_assemblies "
+            "WHERE manifest_json IS NOT NULL "
+            "ORDER BY id DESC LIMIT 50"
+        ).fetchall()
+    for r in row:
+        try:
+            m = json.loads(r["manifest_json"])
+        except Exception:
+            continue
+        if (m.get("thread") or {}).get("thread_id") == thread_id:
+            return m
+    # Fall back to most recent overall
+    return json.loads(row[0]["manifest_json"]) if row else None
 
 
 def session_assembly_summary(session_id: str) -> dict:

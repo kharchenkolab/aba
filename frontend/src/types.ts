@@ -42,6 +42,26 @@ export interface DoneEvent        { type: 'done' }
 export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
 export interface NoticeEvent      { type: 'notice';      text: string }
 export interface PlanEvent        { type: 'plan'; title?: string; steps: string[]; rationale?: string }
+export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot }
+
+/** Structured per-turn context (T2.4 Drawer). Mirrors core.manifest.types.Manifest.to_dict(). */
+export interface ManifestSnapshot {
+  session_id: string
+  turn_index: number
+  focus: {
+    entity_id: string
+    entity_type: string
+    title: string
+    status: string
+    text: string
+    fields_loaded: string[]
+  } | null
+  thread: {
+    thread_id: string
+    text: string
+  } | null
+  policy_text: string
+}
 
 export interface EntityRegisteredEvent {
   type: 'entity_registered'
@@ -57,6 +77,7 @@ export type SSEEvent =
   | ErrorEvent
   | NoticeEvent
   | PlanEvent
+  | ManifestEvent
 
 // ---------- Entities ----------
 

@@ -149,6 +149,9 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies(session_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_assemblies_focus  ON context_assemblies(focus_entity_id)")
+        if not _column_exists(c, "context_assemblies", "manifest_json"):
+            # T2.4: full Manifest snapshot for the drawer UI.
+            c.execute("ALTER TABLE context_assemblies ADD COLUMN manifest_json TEXT")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS context_suggestions (

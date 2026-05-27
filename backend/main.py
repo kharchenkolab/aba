@@ -1599,6 +1599,19 @@ def turn_cancel(run_id: str, req: ResumeRequest):
     return {"ok": ok, "run_id": run_id}
 
 
+@app.get("/api/threads/{tid}/manifest")
+def thread_latest_manifest(tid: str):
+    """Drawer fallback (T2.4): most-recent persisted Manifest snapshot
+    for this thread (or any thread if none for this one yet). The live
+    drawer subscribes to the SSE 'manifest' event during chat; this
+    endpoint hydrates the initial state."""
+    from core.graph.audit import latest_manifest_for_thread
+    m = latest_manifest_for_thread(tid)
+    if m is None:
+        return {"manifest": None}
+    return {"manifest": m}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
