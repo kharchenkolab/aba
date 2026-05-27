@@ -248,6 +248,28 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at)")
 
+        # P3 #6 — per-tool-invocation telemetry. One row per execute_tool
+        # dispatch. Aggregated by /api/admin/tool_stats so we can see
+        # what's actually used + failure rates as the catalog grows.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS tool_invocations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id        TEXT,
+                agent_spec    TEXT,        -- 'guide' | advisor name
+                tool_name     TEXT,        -- e.g. 'run_python' or 'mcp_server:tool'
+                source        TEXT,        -- 'bio' | 'mcp:<server>' | 'core'
+                status        TEXT,        -- 'ok' | 'error' | 'rejected' | 'deferred'
+                input_summary TEXT,        -- truncated input for audit
+                duration_ms   INTEGER,
+                error_summary TEXT,
+                started_at    TEXT,
+                ended_at      TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_run ON tool_invocations(run_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_name ON tool_invocations(tool_name)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_when ON tool_invocations(started_at)")
+
         # Bootstrap workspace entity (opaque type 'workspace' — the seam-check
         # tolerates this because workspace is not a bio entity kind).
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()

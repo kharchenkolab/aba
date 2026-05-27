@@ -1,0 +1,12 @@
+# MCP server registry. List one entry per external server to start at
+# backend startup. Empty by default — the gateway is a no-op until
+# a server is configured.
+#
+# Schema (see core/runtime/mcp/config.py for the full spec):
+#   - name: <server-name>          # required; becomes the tool prefix
+#     command: <executable>         # required
+#     args: [...]                   # optional
+#     env: {...}                    # optional
+#     enabled: true                 # optional; default true
+#     default_timeout_s: 30         # optional
+servers: []

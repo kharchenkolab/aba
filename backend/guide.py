@@ -246,6 +246,13 @@ async def stream_response(
     from core.runtime.agent import filter_tools_by_allowlist
     disabled = get_disabled_tools()
     active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+    # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
+    # Empty when no MCP server is configured/connected.
+    try:
+        from core.runtime.mcp import list_tools as mcp_list_tools
+        active_tools.extend(t for t in mcp_list_tools() if t["name"] not in disabled)
+    except Exception:  # noqa: BLE001
+        pass    # gateway failure must never block normal tool dispatch
     if spec is not None:
         active_tools = filter_tools_by_allowlist(active_tools, spec.tool_allowlist)
 
@@ -525,11 +532,38 @@ async def stream_response(
                     "focus_entity_id": focus_entity_id,
                     "session_id": session_id,
                 }
+                # P3 #6 telemetry — wrap dispatch with timing.
+                import datetime as _dt
+                _t_start = _dt.datetime.now(_dt.timezone.utc)
                 loop = asyncio.get_event_loop()
                 result_str = await loop.run_in_executor(
                     None, execute_tool, tool_name, tool_input, tool_ctx
                 )
+                _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
+                _telem_status = (
+                    "deferred" if isinstance(result_obj, dict) and result_obj.get("deferred")
+                    else "error" if isinstance(result_obj, dict) and (result_obj.get("error") or result_obj.get("status") == "error")
+                    else "ok"
+                )
+                _telem_err = None
+                if _telem_status == "error" and isinstance(result_obj, dict):
+                    _telem_err = str(result_obj.get("error") or result_obj.get("note") or "")[:300]
+                try:
+                    from core.runtime.tool_telemetry import record as _record_invocation
+                    _record_invocation(
+                        run_id=turn.run_id,
+                        agent_spec=turn.agent_spec_name,
+                        tool_name=tool_name,
+                        input_=tool_input,
+                        started_at=_t_start.isoformat(),
+                        ended_at=_t_end.isoformat(),
+                        duration_ms=int((_t_end - _t_start).total_seconds() * 1000),
+                        status=_telem_status,
+                        error_summary=_telem_err,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass    # telemetry must never block real work
 
                 # P2 #4 — deferred tool result. Tool returned `{deferred: true,
                 # deferred_id}` instead of a real result. Halt the turn in
