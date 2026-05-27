@@ -190,10 +190,16 @@ export default function App() {
 
   // Rail nav: there's no project to open in the true empty state, so the
   // "Project" item falls back to Home until one exists.
+  // Guard against a subtle race: Rail's tab buttons call
+  // onNavigate('workspace') alongside onProjectSection(s). Without the
+  // url.pid no-op below, the async setProject(currentPid) would land
+  // *after* the section change and clobber it — flashing Runs and snapping
+  // back to default Threads. When we already have a pid, "go to workspace"
+  // is implicit; nothing to do.
   const goToView = (v: 'home' | 'workspace') => {
     if (v === 'home') { url.goHome(); return }
+    if (url.pid) return
     if (!hasProject) { url.goHome(); return }
-    // 'workspace' with no specific pid yet — fetch current and route into it
     fetch('/api/projects/current')
       .then(r => r.json())
       .then(d => { if (d.current) url.setProject(d.current) })
