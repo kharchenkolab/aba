@@ -18,11 +18,19 @@ def _on_post_tool_methodologist(ctx: dict) -> None:
     aid = analysis_ctx.get("analysis_id")
     if not aid:
         return
+    # B4: link the Methodologist's Turn row back to the Guide turn that
+    # produced the entities. thread_id rides along for inheritance.
+    parent_run_id = ctx.get("parent_run_id")
+    thread_id = ctx.get("thread_id")
+
+    def _run():
+        methodologist_review(aid, parent_run_id=parent_run_id, thread_id=thread_id)
+
     try:
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, methodologist_review, aid)
+        loop.run_in_executor(None, _run)
     except RuntimeError:
-        methodologist_review(aid)
+        _run()
 
 
 # Priority 20 so artifact-registration (priority 10) runs first; we
