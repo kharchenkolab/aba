@@ -1,0 +1,4 @@
+- this webapp will be used by biologists: the UI/UX should operate with familiar scientific entities and concepts
+- build robust, modular architecture
+- suggest opportunities to implement more general or flexible solution by engaging AI agents on different levels
+- use short git commit messages with no signature
