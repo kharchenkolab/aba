@@ -160,6 +160,7 @@ export type RailIconName =
   | 'data'
   | 'runs'
   | 'files'
+  | 'results'
 
 export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: number }) {
   const svg = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
@@ -240,6 +241,14 @@ export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: numbe
       return (
         <svg {...svg}>
           <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'results':
+      // Stacked layers — mirrors the EntityGlyph 'result' shape.
+      return (
+        <svg {...svg}>
+          <path d="M12 3l9 5-9 5-9-5z" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="M3 13l9 5 9-5" strokeWidth="1.7" strokeLinejoin="round" />
         </svg>
       )
   }

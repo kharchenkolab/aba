@@ -5,7 +5,7 @@ import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
 import { RailIcon, type RailIconName } from './icons'
 
-type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'files'
+type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
 interface Props {
   entities: Entity[]
@@ -51,13 +51,21 @@ const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
     sectionLabel: 'Recent runs',
     filters: ['Active', 'Attention', 'Complete', 'All'],
   },
+  results: {
+    label: 'Results',
+    types: ['figure', 'table', 'result', 'note', 'narrative'],
+    icon: 'results',
+    empty: 'No results yet.',
+    sectionLabel: 'Project results',
+    filters: ['All', 'Figures', 'Tables'],
+  },
   files: {
     label: 'Files',
-    types: ['figure', 'table', 'result', 'note', 'narrative'],
+    types: [],   // virtual files view — populated by F2; this rail entry is a placeholder until then.
     icon: 'files',
-    empty: 'No files or outputs yet.',
-    sectionLabel: 'Project files',
-    filters: ['All', 'Figures', 'Tables'],
+    empty: 'Virtual files view coming soon.',
+    sectionLabel: 'Files',
+    filters: ['All'],
   },
 }
 
@@ -66,6 +74,7 @@ const DEFAULT_FILTERS: Record<ProjectSection, string> = {
   claims: 'Active',
   data: 'Active',
   runs: 'Active',
+  results: 'All',
   files: 'All',
 }
 
@@ -232,7 +241,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       if (filter === 'Complete') return entity.status === 'active' || entity.status === 'completed'
       return entity.status === 'active' || entity.status === 'running'
     }
-    if (section === 'files') {
+    if (section === 'results') {
       if (filter === 'Figures') return entity.type === 'figure'
       if (filter === 'Tables') return entity.type === 'table'
     }
