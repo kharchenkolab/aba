@@ -77,6 +77,22 @@ export interface PlanEvent {
 }
 export interface ManifestEvent    { type: 'manifest'; manifest: ManifestSnapshot }
 
+/** B1 — the Guide paused the turn on ask_clarification. The UI shows the
+ *  one-line question with an inline answer input that posts to
+ *  /api/turns/{run_id}/resume. */
+export interface ClarificationPendingEvent {
+  type: 'clarification_pending'
+  question: string
+  tool_use_id: string
+  run_id: string
+}
+
+/** Current pending clarification state exposed by useChat. */
+export interface PendingClarification {
+  runId: string
+  question: string
+}
+
 /** Structured per-turn context (T2.4 Drawer). Mirrors core.manifest.types.Manifest.to_dict(). */
 export interface ManifestSnapshot {
   session_id: string
@@ -111,6 +127,7 @@ export type SSEEvent =
   | NoticeEvent
   | PlanEvent
   | ManifestEvent
+  | ClarificationPendingEvent
 
 // ---------- Entities ----------
 
@@ -124,6 +141,9 @@ export type EntityType =
   | 'finding'
   | 'claim'
   | 'narrative'
+  | 'thread'
+  | 'note'
+  | 'plan'
 
 /** A panel within a kept Result (observation). Figures/tables/values reference
  *  a cell entity by id; text panels carry inline prose. */

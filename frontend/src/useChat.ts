@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification } from './types'
 
 type RawMsg = { role: string; content: unknown[]; ts?: string }
 
@@ -104,6 +104,9 @@ export function useChat(
   const [loading, setLoading] = useState(false)   // fetching a thread's history
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
   const [manifest, setManifest] = useState<ManifestSnapshot | null>(null)
+  // B1 — when the Guide pauses on ask_clarification, the UI shows an
+  // inline mini-composer. Cleared when the resume turn starts streaming.
+  const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -141,14 +144,21 @@ export function useChat(
   // Then fetch the new thread's conversation (after paint).
   useEffect(() => { loadMessages() }, [reloadKey, threadId, loadMessages])
 
-  // Shared streaming core. `retry` regenerates the last turn server-side
-  // (no new user message); otherwise `text` is sent as a fresh turn.
+  // Shared streaming core. Three modes:
+  //  - default: post `text` as a fresh chat turn (POST /api/chat).
+  //  - retry: regenerate the last turn server-side (no new user message).
+  //  - resumeRunId: the user is answering a paused AWAITING_USER turn
+  //    (ask_clarification, plan Go/Adjust); posts to
+  //    /api/turns/{runId}/resume, which inherits thread+focus from the
+  //    prior turn and drives a fresh Turn forward.
   const runStream = useCallback(
-    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null }) => {
+    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string }) => {
       const myGen = genRef.current
       const ac = new AbortController()
       abortRef.current = ac
       setStreaming(true)
+      // A resume implicitly accepts whatever pending question/plan we were on.
+      if (opts.resumeRunId) setPendingClarification(null)
       const assistantId = `a-${Date.now()}`
       const streamingBlocks: Block[] = []
       setStreamMsg({ id: assistantId, role: 'assistant', blocks: [] })
@@ -160,18 +170,25 @@ export function useChat(
       const annot = opts.annotation !== undefined ? opts.annotation : annotationRef.current
 
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: ac.signal,
-          body: JSON.stringify({
-            text: opts.text ?? '',
-            retry: !!opts.retry,
-            focus_entity_id: focusEntityId,
-            thread_id: threadId,
-            ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
-          }),
-        })
+        const res = opts.resumeRunId
+          ? await fetch(`/api/turns/${encodeURIComponent(opts.resumeRunId)}/resume`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: ac.signal,
+              body: JSON.stringify({ user_text: opts.text ?? '' }),
+            })
+          : await fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: ac.signal,
+              body: JSON.stringify({
+                text: opts.text ?? '',
+                retry: !!opts.retry,
+                focus_entity_id: focusEntityId,
+                thread_id: threadId,
+                ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
+              }),
+            })
         if (!res.body) throw new Error('No response body')
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -238,6 +255,13 @@ export function useChat(
                 concerns: ev.concerns,
               })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+            } else if (ev.type === 'clarification_pending') {
+              // B1 — Guide paused the turn on ask_clarification. Show the
+              // question with an inline mini-composer; user's reply goes to
+              // /api/turns/{run_id}/resume.
+              streamingBlocks.push({ type: 'notice', text: `?  ${ev.question}` })
+              setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              setPendingClarification({ runId: ev.run_id, question: ev.question })
             } else if (ev.type === 'manifest') {
               // T2.4: drawer sidecar. The model only ever sees the rendered
               // system string; the JSON here is for visibility/inspection.
@@ -302,5 +326,22 @@ export function useChat(
     await runStream({ retry: true })
   }, [streaming, runStream, loadMessages])
 
-  return { messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest }
+  // B1 — resume a paused turn with the user's clarification answer. Pushes
+  // the answer into the visible message log first so it reads like a
+  // normal back-and-forth.
+  const answerClarification = useCallback(
+    async (text: string) => {
+      if (streaming || !pendingClarification) return
+      setMessages(prev => [...prev, {
+        id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }],
+      }])
+      await runStream({ text, resumeRunId: pendingClarification.runId })
+    },
+    [streaming, pendingClarification, runStream],
+  )
+
+  return {
+    messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest,
+    pendingClarification, answerClarification,
+  }
 }

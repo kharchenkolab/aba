@@ -1573,17 +1573,17 @@ class ResumeRequest(BaseModel):
 
 
 @app.post("/api/turns/{run_id}/resume")
-def turn_resume(run_id: str, req: ResumeRequest):
-    """Resume an AWAITING_USER turn by handing it the next user message.
+async def turn_resume(run_id: str, req: ResumeRequest):
+    """Resume an AWAITING_USER turn by streaming a new turn that picks up
+    the user's reply (plan Go/Adjust, ask_clarification answer, future
+    approval flows).
 
-    Today this is a thin wrapper over the regular chat flow — the user's
-    message goes into the same thread; a new Turn is created that picks
-    up the conversation. The Turn-level state machine that drives a
-    resumed run from EXECUTING_TOOLS / GENERATING is future work
-    (depends on tracking individual tool_use_ids in the Turn row).
+    The reply is appended as a normal user message into the prior turn's
+    thread; a fresh Turn drives the loop and sees the prior tool_result
+    + the new user message in history, so the model continues naturally.
 
-    Returns the prior Turn's snapshot + a chat redirect hint.
-    """
+    Same SSE shape as /api/chat. The frontend can re-use its existing
+    chat-stream handler for the resume response."""
     from core.runtime.checkpoint import load_turn
     t = load_turn(run_id)
     if t is None:
@@ -1591,16 +1591,26 @@ def turn_resume(run_id: str, req: ResumeRequest):
     if t.state.value != "awaiting_user":
         raise HTTPException(
             409,
-            f"Turn is in state {t.state.value!r}; only awaiting_user can be resumed today.",
+            f"Turn is in state {t.state.value!r}; only awaiting_user can be resumed.",
         )
-    return {
-        "ok": True,
-        "prior": t.to_row(),
-        "resumed_via": "chat",
-        "thread_id": t.thread_id,
-        "focus_entity_id": t.focus_entity_id,
-        "user_text": req.user_text,
-    }
+
+    focus_eid = t.focus_entity_id or WORKSPACE_ID
+    thread_id = t.thread_id or "default"
+    user_text = req.user_text or ""
+
+    async def event_stream():
+        async for chunk in stream_response(
+            user_text,
+            focus_entity_id=focus_eid,
+            thread_id=thread_id,
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/turns/{run_id}/cancel")

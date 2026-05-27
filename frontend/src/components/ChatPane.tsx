@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Entity } from '../types'
+import type { DisplayMessage, Entity, PendingClarification } from '../types'
 import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
 import Composer from './Composer'
@@ -40,6 +40,11 @@ interface Props {
   /** Cold-start starter prompts (from the Guide's orientation). Shown above the
    *  composer until the user starts talking; clicking one sends it. */
   starters?: string[]
+  /** B1 — if set, the Guide is awaiting a one-line clarification answer.
+   *  Replaces the main composer with a focused mini-composer that posts
+   *  to /api/turns/{run_id}/resume. */
+  pendingClarification?: PendingClarification | null
+  onAnswerClarification?: (text: string) => void
 }
 
 export default function ChatPane({
@@ -67,7 +72,15 @@ export default function ChatPane({
   highlighting: highlightingProp,
   onHighlightingChange,
   starters,
+  pendingClarification,
+  onAnswerClarification,
 }: Props) {
+  const [clarifyDraft, setClarifyDraft] = useState('')
+  useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
+  const clarifyInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (pendingClarification) clarifyInputRef.current?.focus()
+  }, [pendingClarification])
   const scrollRef = useRef<HTMLDivElement>(null)
   const [hlLocal, setHlLocal] = useState(false)
   const highlighting = highlightingProp ?? hlLocal
@@ -220,9 +233,31 @@ export default function ChatPane({
         </div>
       )}
       <div className="composer-wrap">
-        <Composer onSend={onSend} disabled={streaming}
-                  prefill={prefill} onPrefillConsumed={onPrefillConsumed}
-                  focusSignal={(composerFocus ?? 0) + extraFocus} />
+        {pendingClarification && onAnswerClarification ? (
+          <form className="clarify-bar"
+                onSubmit={e => {
+                  e.preventDefault()
+                  const text = clarifyDraft.trim()
+                  if (!text) return
+                  onAnswerClarification(text)
+                  setClarifyDraft('')
+                }}>
+            <div className="clarify-bar__q">{pendingClarification.question}</div>
+            <input ref={clarifyInputRef}
+                   className="clarify-bar__input"
+                   placeholder="Your answer…"
+                   value={clarifyDraft}
+                   onChange={e => setClarifyDraft(e.target.value)}
+                   disabled={streaming} />
+            <button type="submit" className="clarify-bar__send" disabled={streaming || !clarifyDraft.trim()}>
+              Send
+            </button>
+          </form>
+        ) : (
+          <Composer onSend={onSend} disabled={streaming}
+                    prefill={prefill} onPrefillConsumed={onPrefillConsumed}
+                    focusSignal={(composerFocus ?? 0) + extraFocus} />
+        )}
       </div>
     </div>
   )

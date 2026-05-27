@@ -38,7 +38,7 @@ const ACCEPTED_LABEL: Record<string, string> = {
 export function useProposals(threadId: string | null, onWorldChange?: () => void) {
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [undoable, setUndoable] = useState<{ id: number; label: string } | null>(null)
-  const undoTimer = useRef<ReturnType<typeof setTimeout>>()
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const load = useCallback(async () => {
     if (!threadId) { setProposals([]); return }
