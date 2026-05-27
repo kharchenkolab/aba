@@ -188,6 +188,14 @@ async def stream_response(
         thread_id=thread_id,
         plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
     )
+
+    # Per-turn cancellation token. Acquired here, released in the
+    # finally block at the very end of stream_response. Any tool that
+    # might run for a perceptible duration (subprocess, MCP call, etc.)
+    # registers an interrupter against this token via tool_ctx; the
+    # /api/turns/{id}/cancel endpoint fires them all.
+    from core.runtime import cancellation as _cancel
+    cancel_token = _cancel.acquire(turn.run_id)
     # Threads are real lines of inquiry: the Guide reasons within the current
     # thread, not the whole project firehose. "default" resolves to (and
     # materializes) the project's default thread entity.
@@ -291,10 +299,26 @@ async def stream_response(
     # so the right-rail drawer can render what the agent is currently
     # seeing. The model only ever consumes the rendered system string;
     # this is a UI-only stream.
-    yield sse({"type": "manifest", "manifest": manifest.to_dict()})
+    # Manifest also carries run_id so the frontend knows what to cancel
+    # when the user hits Stop (no separate "stream started" event needed).
+    yield sse({"type": "manifest", "manifest": manifest.to_dict(), "run_id": turn.run_id})
 
     try:
         while True:
+            # Cancellation check at the iteration boundary. The user may
+            # have hit Stop while we were processing the previous turn's
+            # tool results, or even before sending. Bail before paying
+            # for another LLM call.
+            if cancel_token.cancelled:
+                yield sse({"type": "cancelled", "reason": cancel_token.reason,
+                           "run_id": turn.run_id})
+                turn.transition(TurnState.FAILED)
+                turn.error = {"type": "Cancelled", "message": cancel_token.reason}
+                checkpoint(turn)
+                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                           "cache_read": usage_cr, "cache_write": usage_cw})
+                yield sse({"type": "done"})
+                return
             turn.transition(TurnState.GENERATING); checkpoint(turn)
             # Request-time safety net for middle-orphan history (assistant
             # → assistant without an intervening user). The Turn reaper
@@ -315,11 +339,22 @@ async def stream_response(
                 try:
                     with open_stream(llm_history, active_tools, system, model=guide_model) as stream:
                         for event in stream:
+                            # Cancel check inside the streaming loop. Bail
+                            # immediately so we stop paying for tokens the
+                            # user no longer wants. The 'with' block
+                            # closes the underlying HTTP connection.
+                            if cancel_token.cancelled:
+                                break
                             if event.type == "content_block_delta":
                                 delta = event.delta
                                 if delta.type == "text_delta":
                                     emitted = True
                                     yield sse({"type": "delta", "text": delta.text})
+                        if cancel_token.cancelled:
+                            # Cancelled mid-stream — skip get_final_message
+                            # (the partial message isn't usable) and let the
+                            # outer loop check pick it up and emit cancelled.
+                            break
                         final_msg = stream.get_final_message()
                     if getattr(final_msg, "usage", None):
                         u = final_msg.usage
@@ -338,6 +373,12 @@ async def stream_response(
                     yield sse({"type": "notice",
                                "text": f"Model is busy — retrying ({attempt}/{max_retries})…"})
                     await asyncio.sleep(backoff)
+
+            # If cancellation arrived during streaming, final_msg won't
+            # exist — short-circuit to the outer-loop top, which detects
+            # cancel and emits the cancelled SSE + returns cleanly.
+            if cancel_token.cancelled:
+                continue
 
             assistant_blocks = []
             text_out = ""
@@ -540,6 +581,9 @@ async def stream_response(
                     "thread_id": store_tid,
                     "focus_entity_id": focus_entity_id,
                     "session_id": session_id,
+                    # Long-running tools register kill interrupters here so
+                    # Stop actually stops the work (not just the UI).
+                    "cancel_token": cancel_token,
                 }
                 # P3 #6 telemetry — wrap dispatch with timing.
                 import datetime as _dt
@@ -735,3 +779,9 @@ async def stream_response(
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
                    "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})
+    finally:
+        # Always release the cancel token — leaking it would keep stale
+        # interrupters reachable and (via the registry) a re-entrant
+        # cancel on this run_id would fire them against now-defunct
+        # processes/connections.
+        _cancel.release(turn.run_id)

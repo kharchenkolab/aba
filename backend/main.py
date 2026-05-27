@@ -1761,12 +1761,26 @@ async def turn_tool_result(run_id: str, tool_use_id: str, req: DeferredResultReq
 
 @app.post("/api/turns/{run_id}/cancel")
 def turn_cancel(run_id: str, req: ResumeRequest):
-    """Mark an in-flight Turn FAILED (reason from user_text, optional).
-    Idempotent; safe on already-done/failed turns (returns ok=False)."""
+    """Real cancellation: invoke the live CancelToken (kills any
+    registered subprocesses + sets the in-loop cancel flag) AND mark
+    the DB row FAILED. The order matters — we cancel the in-flight
+    work BEFORE the DB write so the loop sees the cancel during its
+    next poll and emits a 'cancelled' SSE event.
+
+    Idempotent: a second cancel returns {killed: False} (the token's
+    already fired). Safe on already-DONE turns — the DB write is a
+    no-op because cancel_turn() checks state."""
+    from core.runtime import cancellation
     from core.runtime.checkpoint import cancel_turn
     reason = req.user_text.strip() or "user cancelled"
+
+    killed = False
+    tok = cancellation.get(run_id)
+    if tok is not None:
+        killed = tok.cancel(reason=reason)
+
     ok = cancel_turn(run_id, reason=reason)
-    return {"ok": ok, "run_id": run_id}
+    return {"ok": ok, "killed": killed, "run_id": run_id}
 
 
 @app.get("/api/admin/mcp")

@@ -120,6 +120,9 @@ export function useChat(
   // P1 #3 — when a flagged tool needs user approval before running. By
   // design rare; the bar should be "real money / hard-to-reverse only".
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
+  // Track the currently-streaming run_id so the Stop button can target
+  // the right turn. Cleared when the stream ends (done/error/cancelled).
+  const currentRunIdRef = useRef<string | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -289,15 +292,27 @@ export function useChat(
                 summary: ev.summary, policy: ev.policy,
               })
             } else if (ev.type === 'manifest') {
-              // T2.4: drawer sidecar. The model only ever sees the rendered
-              // system string; the JSON here is for visibility/inspection.
+              // T2.4: drawer sidecar. Also carries run_id so Stop can
+              // target the right turn (manifest is the first SSE event).
               setManifest(ev.manifest)
+              if (ev.run_id) currentRunIdRef.current = ev.run_id
+            } else if (ev.type === 'cancelled') {
+              // Backend confirmed the turn was cancelled. Render a
+              // "(cancelled)" notice in chat so the user knows their
+              // Stop click took effect (not just an aborted stream).
+              streamingBlocks.push({ type: 'notice', text: '(cancelled)' })
+              setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
+              setStreamMsg(null)
+              setStreaming(false)
+              currentRunIdRef.current = null
+              return
             } else if (ev.type === 'entity_registered') {
               onERRef.current?.()
             } else if (ev.type === 'done') {
               setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
               setStreamMsg(null)
               setStreaming(false)
+              currentRunIdRef.current = null
               // Refresh entities so post-turn background updates surface — e.g.
               // a silently-refined thread question (guide-owned) shows in the brief.
               onERRef.current?.()
@@ -307,6 +322,7 @@ export function useChat(
               setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
               setStreamMsg(null)
               setStreaming(false)
+              currentRunIdRef.current = null
               return
             }
           }
@@ -366,6 +382,24 @@ export function useChat(
     [streaming, pendingClarification, runStream],
   )
 
+  // Cancel the in-flight turn. Backend kills any registered work
+  // (subprocesses, MCP calls, …); the loop catches the cancel between
+  // iterations and emits a 'cancelled' SSE event. We also abort the
+  // SSE fetch so the client side closes cleanly. The 'cancelled' event
+  // handler clears streaming state — if the abort beats it, the catch
+  // block in runStream handles cleanup.
+  const stopTurn = useCallback(async () => {
+    const rid = currentRunIdRef.current
+    if (!rid) return
+    try {
+      await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+    } catch { /* best-effort; if the request fails the user can hit Stop again */ }
+  }, [])
+
   // P1 #3 — respond to a pending tool approval. The held tool runs (or
   // gets a rejection result) in the resume endpoint; the new turn then
   // streams normally with the result already in history.
@@ -381,5 +415,6 @@ export function useChat(
     messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest,
     pendingClarification, answerClarification,
     pendingApproval, respondApproval,
+    stopTurn,
   }
 }

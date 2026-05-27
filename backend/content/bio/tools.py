@@ -1,3 +1,4 @@
+import signal
 import subprocess
 import shutil
 import uuid
@@ -331,16 +332,16 @@ def read_csv_info(input_: dict) -> dict:
         return {"error": str(e)}
 
 
-def run_python(input_: dict) -> dict:
+def run_python(input_: dict, ctx: dict | None = None) -> dict:
+    """Spawn a Python subprocess and wait for it. If the turn is
+    cancelled mid-execution, the registered interrupter terminates the
+    child (SIGTERM → 2s grace → SIGKILL) so the user's Stop button
+    actually stops a runaway loop instead of just updating the UI."""
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 600))
     tmp_dir = Path("/tmp") / f"aba_{uuid.uuid4().hex}"
     tmp_dir.mkdir()
     try:
-        # Prepend DATA_DIR injection + make the vendored BioMNI tool library
-        # importable in the sandbox (functions are imported, not pre-declared
-        # — per aba_arch2.md §5.1). Heavy BioMNI deps may be absent; imports
-        # that need them will fail gracefully at use time.
         biomni_path = Path(__file__).parent.parent / "biomni"
         preamble = (
             f"DATA_DIR = {str(DATA_DIR)!r}\n"
@@ -354,19 +355,61 @@ def run_python(input_: dict) -> dict:
         import os
         env = os.environ.copy()
         env["MPLBACKEND"] = "Agg"
-        # Use the same python that's running this server (keeps venv libs available)
         python = sys.executable
 
-        result = subprocess.run(
+        # Popen instead of subprocess.run so we can hand a kill hook to
+        # the turn's CancelToken. start_new_session=True puts the child
+        # in its own process group; if it forks (numpy/matplotlib helper
+        # processes), we kill the whole group, not just the python pid.
+        proc = subprocess.Popen(
             [python, str(script)],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-            cwd=str(tmp_dir)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env, cwd=str(tmp_dir),
+            start_new_session=True,
         )
 
-        # Collect any PNG files produced
+        # Register a kill interrupter. Fired by token.cancel() when the
+        # user hits Stop. SIGTERM → 2s grace → SIGKILL. killpg on the
+        # whole group so forked children die too. The unregister returned
+        # here MUST run after the process exits; otherwise a stale
+        # callback could try to kill a recycled pid.
+        cancel_token = (ctx or {}).get("cancel_token")
+        unregister = None
+        if cancel_token is not None:
+            def _kill():
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass    # child already dead
+            unregister = cancel_token.register(_kill)
+
+        try:
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_s)
+                returncode = proc.returncode
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                returncode = -1
+                return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+        finally:
+            if unregister is not None:
+                unregister()
+
+        # Cancellation arrived during execution — surface a clean signal
+        # to the model rather than partial stdout/stderr from a killed run.
+        if cancel_token is not None and cancel_token.cancelled:
+            return {
+                "status": "cancelled",
+                "note": f"Run was cancelled by the user ({cancel_token.reason}). "
+                        f"No further work happened.",
+            }
+
         plots = []
         for png in tmp_dir.glob("*.png"):
             dest_name = f"{uuid.uuid4().hex}.png"
@@ -374,7 +417,6 @@ def run_python(input_: dict) -> dict:
             shutil.move(str(png), str(dest))
             plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
 
-        # Collect any CSV files produced (output tables).
         tables = []
         for csv in tmp_dir.glob("*.csv"):
             dest_name = f"{uuid.uuid4().hex}.csv"
@@ -383,14 +425,12 @@ def run_python(input_: dict) -> dict:
             tables.append({"url": f"/artifacts/{dest_name}", "original_name": csv.name})
 
         return {
-            "stdout": result.stdout[:4000] if result.stdout else "",
-            "stderr": result.stderr[:2000] if result.stderr else "",
-            "returncode": result.returncode,
+            "stdout": (stdout or "")[:4000],
+            "stderr": (stderr or "")[:2000],
+            "returncode": returncode,
             "plots": plots,
             "tables": tables,
         }
-    except subprocess.TimeoutExpired:
-        return {"error": f"Code execution timed out ({timeout_s}s limit)"}
     except Exception as e:
         return {"error": str(e)}
     finally:
@@ -795,10 +835,12 @@ def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
     fn = EXECUTORS.get(name)
     if fn is None:
         # P3 #1 — try the MCP gateway. Tool names there are 'server:tool'.
+        # Forward the cancel token so a Stop click can interrupt the call.
         try:
             from core.runtime.mcp import is_mcp_tool, call as mcp_call
             if is_mcp_tool(name):
-                return json.dumps(mcp_call(name, input_ or {}))
+                cancel_token = (ctx or {}).get("cancel_token")
+                return json.dumps(mcp_call(name, input_ or {}, cancel_token=cancel_token))
         except Exception:  # noqa: BLE001
             pass    # fall through to unknown-tool error
         return json.dumps({"error": f"Unknown tool: {name}"})

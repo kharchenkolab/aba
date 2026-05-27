@@ -49,6 +49,8 @@ interface Props {
    *  running. Replaces the main composer with an Approve / Reject bar. */
   pendingApproval?: PendingApproval | null
   onRespondApproval?: (action: 'approve' | 'approve_session' | 'reject') => void
+  /** Stop the current turn (cancel + kill any running work). */
+  onStop?: () => void
 }
 
 export default function ChatPane({
@@ -80,6 +82,7 @@ export default function ChatPane({
   onAnswerClarification,
   pendingApproval,
   onRespondApproval,
+  onStop,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -278,9 +281,17 @@ export default function ChatPane({
             </button>
           </form>
         ) : (
-          <Composer onSend={onSend} disabled={streaming}
-                    prefill={prefill} onPrefillConsumed={onPrefillConsumed}
-                    focusSignal={(composerFocus ?? 0) + extraFocus} />
+          <div className="composer-with-stop">
+            <Composer onSend={onSend} disabled={streaming}
+                      prefill={prefill} onPrefillConsumed={onPrefillConsumed}
+                      focusSignal={(composerFocus ?? 0) + extraFocus} />
+            {streaming && onStop && (
+              <button type="button" className="stop-btn" onClick={onStop} title="Stop the current turn (kills running work)">
+                <span className="stop-btn__icon">■</span>
+                <span className="stop-btn__label">Stop</span>
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
