@@ -4,6 +4,11 @@
   padding: 32px 40px;
 }
 
+/* Pre-fetch skeleton — keeps the page background in place while
+   /api/projects is still in flight, so we don't flash the empty-state
+   cards before the project list arrives. */
+.home--loading { min-height: 100vh; }
+
 /* Shared buttons */
 .home__btn {
   padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
