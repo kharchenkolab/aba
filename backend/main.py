@@ -73,6 +73,19 @@ def startup():
     except Exception as e:  # noqa: BLE001
         print(f"[startup] display_path backfill failed: {e}")
 
+    # P3 #1 — bring up the MCP gateway. Empty config = no-op.
+    try:
+        from core.runtime.mcp import start_all as start_mcp, status as mcp_status
+        from pathlib import Path
+        start_mcp(Path(__file__).parent / "content" / "bio" / "mcp" / "servers.yaml")
+        s = mcp_status()
+        n_up = sum(1 for srv in s["servers"] if srv["state"] == "connected")
+        n_tot = len(s["servers"])
+        if n_tot:
+            print(f"[startup] MCP gateway: {n_up}/{n_tot} servers connected")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] MCP gateway init failed: {e}")
+
 
 # ---------- Projects ----------
 
@@ -1754,6 +1767,29 @@ def turn_cancel(run_id: str, req: ResumeRequest):
     reason = req.user_text.strip() or "user cancelled"
     ok = cancel_turn(run_id, reason=reason)
     return {"ok": ok, "run_id": run_id}
+
+
+@app.get("/api/admin/mcp")
+def admin_mcp_status():
+    """Per-server health, tool counts, last error — drawer can show
+    'MCP: 2/3 servers up'."""
+    from core.runtime.mcp import status
+    return status()
+
+
+@app.get("/api/admin/tool_stats")
+def admin_tool_stats(days: int = 30):
+    """Per-tool aggregates: invocation count, ok/error/rejected/deferred
+    breakdown, average + max duration. Window defaults to 30 days."""
+    from core.runtime.tool_telemetry import stats
+    return stats(days=days)
+
+
+@app.get("/api/admin/tool_invocations")
+def admin_tool_invocations(limit: int = 50, tool_name: str | None = None):
+    """Raw recent invocations for debugging."""
+    from core.runtime.tool_telemetry import recent_invocations
+    return recent_invocations(limit=limit, tool_name=tool_name)
 
 
 @app.post("/api/admin/purge_orphan_fills")

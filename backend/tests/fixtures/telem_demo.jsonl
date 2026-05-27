@@ -1,0 +1,3 @@
+# Fake assistant calls list_data_files (no halt); telemetry records the dispatch.
+{"blocks": [{"type": "text", "text": "Listing data."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
+{"blocks": [{"type": "text", "text": "Done."}]}

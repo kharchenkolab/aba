@@ -786,14 +786,23 @@ EXECUTORS = {
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
     """Dispatch a tool call. `ctx` is optional per-turn context that a few
     tools consult (read_skill uses ctx['active_tools'] to enforce
-    skill-tool linkage). Most executors ignore it."""
+    skill-tool linkage). Most executors ignore it.
+
+    Falls through to the MCP gateway for tools the gateway owns
+    (prefixed 'server:name'); returns the gateway's result dict
+    serialized back to a string."""
     import inspect
     fn = EXECUTORS.get(name)
-    if not fn:
+    if fn is None:
+        # P3 #1 — try the MCP gateway. Tool names there are 'server:tool'.
+        try:
+            from core.runtime.mcp import is_mcp_tool, call as mcp_call
+            if is_mcp_tool(name):
+                return json.dumps(mcp_call(name, input_ or {}))
+        except Exception:  # noqa: BLE001
+            pass    # fall through to unknown-tool error
         return json.dumps({"error": f"Unknown tool: {name}"})
     try:
-        # Pass ctx only to executors that declare it; preserves the
-        # 1-arg signature for everyone else.
         sig_params = inspect.signature(fn).parameters
         result = fn(input_, ctx) if "ctx" in sig_params else fn(input_)
         return json.dumps(result)
