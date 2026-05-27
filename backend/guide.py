@@ -339,7 +339,11 @@ async def stream_response(
             ]
             turn.transition(TurnState.EXECUTING_TOOLS); checkpoint(turn)
             tool_result_blocks = []
-            halt_for_plan = False
+            # B1: a tool branch can request an AWAITING_USER halt by setting
+            # pending_halt_signal to "plan" or "clarify". Same break-out
+            # mechanism as the old halt_for_plan flag, generalized so a
+            # second flavor (ask_clarification) doesn't fork the loop.
+            pending_halt_signal: str | None = None
             for block in final_msg.content:
                 if block.type != "tool_use":
                     continue
@@ -385,7 +389,36 @@ async def stream_response(
                     }
                     tool_result_blocks.append({"type": "tool_result", "tool_use_id": block.id,
                                                "content": json.dumps(ack)})
-                    halt_for_plan = True
+                    pending_halt_signal = "plan"
+                    continue
+
+                # B1 — ask_clarification: pause the turn on a one-line
+                # question. Twin of present_plan but lighter weight: no
+                # entity, no validator, just the question + a synthetic
+                # tool_result so the LLM history stays well-formed.
+                if tool_name == "ask_clarification":
+                    inp = tool_input if isinstance(tool_input, dict) else {}
+                    question = str(inp.get("question") or "").strip()
+                    if not question:
+                        # Don't halt on an empty question — feed back an
+                        # error and let the model continue or retry.
+                        err = {"status": "error",
+                               "note": "ask_clarification needs a non-empty `question`."}
+                        tool_result_blocks.append({"type": "tool_result", "tool_use_id": block.id,
+                                                   "content": json.dumps(err)})
+                        continue
+                    yield sse({
+                        "type": "clarification_pending",
+                        "question": question,
+                        "tool_use_id": block.id,
+                        "run_id": turn.run_id,
+                    })
+                    ack = {"status": "asked",
+                           "note": "Question shown to the user. Stop here and "
+                                   "wait for their reply before continuing."}
+                    tool_result_blocks.append({"type": "tool_result", "tool_use_id": block.id,
+                                               "content": json.dumps(ack)})
+                    pending_halt_signal = "clarify"
                     continue
 
                 yield sse({"type": "tool_start", "name": tool_name, "input": tool_input})
@@ -461,13 +494,19 @@ async def stream_response(
             checkpoint(turn)
             history = get_messages(entity_id)
 
-            # A presented plan ends the turn: stop and wait for the user's
-            # Go/Adjust rather than executing the steps now.
-            if halt_for_plan:
+            # A halt-requesting tool (plan / clarify) PAUSES the turn:
+            # the on_stop reflection hooks are for natural session ends,
+            # not mid-conversation pauses, so we emit usage + done and
+            # return without falling through to SUMMARIZING (which would
+            # overwrite AWAITING_USER → DONE and break the resume gate).
+            if pending_halt_signal:
                 turn.transition(TurnState.AWAITING_USER)
-                turn.pending_user_signal = "plan"
+                turn.pending_user_signal = pending_halt_signal
                 checkpoint(turn)
-                break
+                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                           "cache_read": usage_cr, "cache_write": usage_cw})
+                yield sse({"type": "done"})
+                return
 
         # End-of-turn hooks: reflection (bio.adaptive) + proposals
         # evaluation (bio.proposals.scheduler). Handlers may set

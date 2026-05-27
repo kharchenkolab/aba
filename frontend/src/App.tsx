@@ -129,7 +129,8 @@ export default function App() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
-  const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest } = useChat(
+  const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
+          pendingClarification, answerClarification } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -393,6 +394,8 @@ export default function App() {
       highlighting={compact ? undefined : highlighting}
       onHighlightingChange={compact ? undefined : setHighlighting}
       starters={compact ? undefined : (currentThread?.metadata?.orient_steps as string[] | undefined)}
+      pendingClarification={pendingClarification}
+      onAnswerClarification={answerClarification}
     />
   )
 

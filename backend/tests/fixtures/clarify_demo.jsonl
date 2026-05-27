@@ -1,0 +1,4 @@
+# B1 acceptance: Guide pauses with ask_clarification (turn 1, halts), then
+# proceeds after the user's reply via /api/turns/{id}/resume (turn 2).
+{"blocks": [{"type": "text", "text": "Before I dive in, one quick question."}, {"type": "tool_use", "name": "ask_clarification", "input": {"question": "Are these single-cell or single-nucleus RNA-seq reads?"}}]}
+{"blocks": [{"type": "text", "text": "Got it — treating as single-cell. Proceeding."}]}

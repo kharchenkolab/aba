@@ -13,6 +13,56 @@
   padding: 8px 14px 0;
 }
 
+/* B1 — pending-clarification inline mini-composer. Replaces the main
+   composer when the Guide pauses on ask_clarification. */
+.clarify-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 10px 14px 12px;
+  border-top: 2px solid var(--accent);
+  background: var(--accent-soft, #f5fafd);
+}
+.clarify-bar__q {
+  grid-column: 1 / -1;
+  font: 500 12.5px/1.45 var(--sans);
+  color: var(--text);
+}
+.clarify-bar__q::before {
+  content: '?  ';
+  color: var(--accent);
+  font-weight: 700;
+}
+.clarify-bar__input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font: 13px var(--sans);
+  outline: none;
+  color: var(--text);
+  min-width: 0;
+}
+.clarify-bar__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft, #e7f1f7);
+}
+.clarify-bar__send {
+  border: none;
+  background: var(--accent);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font: 600 12px var(--sans);
+  cursor: pointer;
+}
+.clarify-bar__send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chat-tabs {
   display: flex;
   align-items: center;

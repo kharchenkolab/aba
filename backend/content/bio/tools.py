@@ -202,7 +202,29 @@ TOOL_SCHEMAS = [
             },
             "required": ["steps"],
         },
-    }
+    },
+    {
+        "name": "ask_clarification",
+        "description": (
+            "PAUSE the turn and ask the user ONE specific clarifying question that "
+            "you genuinely cannot answer from your loaded context or by inspecting "
+            "data. The user's reply resumes this same turn — do not call this for "
+            "routine confirmation or plan approval (use present_plan for plan "
+            "approval). Good uses: missing modality, ambiguous reference to a "
+            "sample, undefined threshold. Bad uses: 'is the data ready?', "
+            "'shall I proceed?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "A single, specific question. One sentence. No preamble.",
+                },
+            },
+            "required": ["question"],
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -576,6 +598,16 @@ def present_plan(input_: dict) -> dict:
                     "wait for their decision before executing the steps."}
 
 
+def ask_clarification(input_: dict) -> dict:
+    """No-op server-side, like present_plan. The actual halt + SSE emission
+    happens in guide.py's tool-dispatch branch; this stub exists so
+    EXECUTORS.get('ask_clarification') doesn't fall through to 'Unknown tool'
+    if the dispatch order ever changes."""
+    return {"status": "asked",
+            "note": "Question shown to the user. Stop here and wait for "
+                    "their reply before continuing."}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -585,6 +617,7 @@ EXECUTORS = {
     "get_dependents": get_dependents,
     "create_scenario": create_scenario,
     "present_plan": present_plan,
+    "ask_clarification": ask_clarification,
 }
 
 def execute_tool(name: str, input_: dict) -> str:
