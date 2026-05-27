@@ -121,15 +121,28 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
     }
   }
 
-  // Click handler shared by README, file, and folder-with-entity rows.
-  // Entity-backed → onFocus(entity_id) (existing FocusCanvas path).
-  // Synthesized / non-entity → onViewFile(node) (FileCanvas).
+  // Click handler for file rows. The discriminator is whether the row
+  // represents the file's own identity (an entity that IS that file —
+  // figure, table, claim, dataset) or just shares an entity_id for
+  // provenance (READMEs describe their container; synthesized text
+  // members reference a result).
+  //
+  // - kind === 'readme'        → always FileCanvas (a README is the
+  //                              container's description, not the entity).
+  // - file without entity_id   → FileCanvas.
+  // - file with entity_id      → onFocus (rich app view in FocusCanvas).
+  //
+  // Folders use a different handler — see the folder branch below.
   function activate(node: TreeNode) {
+    if (node.kind === 'readme') {
+      if (onViewFile) onViewFile(node)
+      return
+    }
     if (node.entity_id) {
       onFocus(node.entity_id)
-    } else if (onViewFile) {
-      onViewFile(node)
+      return
     }
+    if (onViewFile) onViewFile(node)
   }
 
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
