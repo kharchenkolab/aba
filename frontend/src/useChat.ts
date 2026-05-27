@@ -123,6 +123,18 @@ export function useChat(
   // Track the currently-streaming run_id so the Stop button can target
   // the right turn. Cleared when the stream ends (done/error/cancelled).
   const currentRunIdRef = useRef<string | null>(null)
+  // Queue-while-streaming: user can type + commit a follow-up while the
+  // agent is responding. Auto-flushes when the current turn ends (done
+  // OR cancelled via Steer). Stop drops the queue.
+  const [queuedMessage, setQueuedMessage] = useState<string | null>(null)
+  // A flag distinguishing Steer (cancel → flush queue) from Stop
+  // (cancel → drop queue). Set by steer(); read in the 'cancelled'
+  // handler; cleared either way.
+  const steerFlushRef = useRef(false)
+  // sendMessage is declared later in the hook; the SSE handler closure
+  // captures this ref so it can fire a new turn when the current one
+  // finishes (auto-flush of queued message).
+  const sendMessageRef = useRef<((text: string) => Promise<void>) | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -305,6 +317,19 @@ export function useChat(
               setStreamMsg(null)
               setStreaming(false)
               currentRunIdRef.current = null
+              // Steer path: this cancel was preceded by enqueue(text);
+              // send the queued message now. Plain Stop path: drop the
+              // queue. The distinction is the steerFlushRef flag set
+              // by steer() before it fires cancel.
+              if (steerFlushRef.current && queuedMessage) {
+                const q = queuedMessage
+                steerFlushRef.current = false
+                setQueuedMessage(null)
+                setTimeout(() => sendMessageRef.current?.(q), 0)
+              } else {
+                steerFlushRef.current = false
+                setQueuedMessage(null)
+              }
               return
             } else if (ev.type === 'entity_registered') {
               onERRef.current?.()
@@ -316,6 +341,13 @@ export function useChat(
               // Refresh entities so post-turn background updates surface — e.g.
               // a silently-refined thread question (guide-owned) shows in the brief.
               onERRef.current?.()
+              // Auto-flush any queued message so the user can think+type
+              // while the agent works.
+              if (queuedMessage) {
+                const q = queuedMessage
+                setQueuedMessage(null)
+                setTimeout(() => sendMessageRef.current?.(q), 0)
+              }
               return
             } else if (ev.type === 'error') {
               streamingBlocks.push({ type: 'error', text: ev.text, detail: ev.detail })
@@ -323,6 +355,9 @@ export function useChat(
               setStreamMsg(null)
               setStreaming(false)
               currentRunIdRef.current = null
+              // Don't auto-flush on error — user probably wants to see
+              // the error and decide whether their queued message is
+              // still appropriate. Keep the queue.
               return
             }
           }
@@ -356,6 +391,10 @@ export function useChat(
     },
     [streaming, runStream],
   )
+  // Keep the ref pointing at the latest sendMessage so the auto-flush
+  // code inside the SSE handler (set up via closure on an older render)
+  // can dispatch the queued message correctly.
+  sendMessageRef.current = (text: string) => sendMessage(text)
 
   // Re-run the last turn after a failure. Completed steps (assistant turns +
   // tool results) were persisted server-side *during* the turn — only the error
@@ -382,15 +421,13 @@ export function useChat(
     [streaming, pendingClarification, runStream],
   )
 
-  // Cancel the in-flight turn. Backend kills any registered work
-  // (subprocesses, MCP calls, …); the loop catches the cancel between
-  // iterations and emits a 'cancelled' SSE event. We also abort the
-  // SSE fetch so the client side closes cleanly. The 'cancelled' event
-  // handler clears streaming state — if the abort beats it, the catch
-  // block in runStream handles cleanup.
+  // Cancel the in-flight turn. Stop = pure cancel; queue is DROPPED
+  // (user reasserts control). The 'cancelled' SSE handler sees
+  // steerFlushRef=false and clears the queue without sending it.
   const stopTurn = useCallback(async () => {
     const rid = currentRunIdRef.current
     if (!rid) return
+    steerFlushRef.current = false   // make sure cancelled-handler treats this as Stop
     try {
       await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
         method: 'POST',
@@ -399,6 +436,40 @@ export function useChat(
       })
     } catch { /* best-effort; if the request fails the user can hit Stop again */ }
   }, [])
+
+  // Enqueue: type-while-streaming. Will auto-flush when the current
+  // turn ends (done) OR when the user Steers (cancel+flush).
+  const enqueue = useCallback((text: string) => {
+    const t = text.trim()
+    if (!t) { setQueuedMessage(null); return }
+    setQueuedMessage(t)
+  }, [])
+
+  const dropQueue = useCallback(() => { setQueuedMessage(null) }, [])
+
+  // Steer: cancel the current turn AND send `text` once cancelled
+  // commits. Sets the flush flag so the cancelled-handler knows this
+  // wasn't a plain Stop. If text is empty, no-op (the user can hit
+  // Stop alone if that's what they want).
+  const steer = useCallback(async (text: string) => {
+    const t = text.trim()
+    if (!t) return
+    const rid = currentRunIdRef.current
+    if (!rid) {
+      // Nothing in flight — just send directly.
+      await sendMessage(t)
+      return
+    }
+    steerFlushRef.current = true
+    setQueuedMessage(t)
+    try {
+      await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_text: 'steer' }),
+      })
+    } catch { /* if cancel fails, on-done flush still picks up the queue */ }
+  }, [sendMessage])
 
   // P1 #3 — respond to a pending tool approval. The held tool runs (or
   // gets a rejection result) in the resume endpoint; the new turn then
@@ -416,5 +487,6 @@ export function useChat(
     pendingClarification, answerClarification,
     pendingApproval, respondApproval,
     stopTurn,
+    queuedMessage, enqueue, dropQueue, steer,
   }
 }

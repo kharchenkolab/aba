@@ -223,7 +223,8 @@ export default function App() {
   }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
           pendingClarification, answerClarification,
-          pendingApproval, respondApproval, stopTurn } = useChat(
+          pendingApproval, respondApproval, stopTurn,
+          queuedMessage, enqueue, dropQueue, steer } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -474,7 +475,7 @@ export default function App() {
       streaming={streaming}
       loading={chatLoading}
       streamMsg={streamMsg}
-      onSend={sendMessage}
+      onSend={(text: string) => streaming ? enqueue(text) : sendMessage(text)}
       focusedEntity={focused}
       annotation={annotation}
       onClearAnnotation={clearAnnotation}
@@ -499,6 +500,9 @@ export default function App() {
       pendingApproval={pendingApproval}
       onRespondApproval={respondApproval}
       onStop={stopTurn}
+      queuedMessage={queuedMessage}
+      onDropQueue={dropQueue}
+      onSteer={steer}
     />
   )
 

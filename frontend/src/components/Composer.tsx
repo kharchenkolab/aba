@@ -14,9 +14,14 @@ interface Props {
   onPrefillConsumed?: () => void
   /** Increment to focus the composer (e.g. after a highlight is attached). */
   focusSignal?: number
+  /** True iff the agent is currently mid-turn. Changes placeholder copy
+   *  and enables the Cmd+Enter Steer shortcut. */
+  streaming?: boolean
+  /** Cmd/Ctrl+Enter while streaming = "Steer": cancel + send. */
+  onSteer?: (text: string) => void
 }
 
-export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal }: Props) {
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer }: Props) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -54,10 +59,19 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   }, [disabled])
 
   function handleKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      submit()
+    if (e.key !== 'Enter' || e.shiftKey) return
+    e.preventDefault()
+    // Cmd/Ctrl+Enter while streaming = Steer (cancel + send the typed
+    // text as the replacement). Plain Enter = primary action (which
+    // becomes Queue while streaming via onSend → enqueue mapping).
+    if (streaming && (e.metaKey || e.ctrlKey) && onSteer) {
+      const text = value.trim()
+      if (!text) return
+      onSteer(text)
+      setValue('')
+      return
     }
+    submit()
   }
 
   function submit() {
@@ -89,24 +103,33 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // Placeholder + textarea are always editable so the user can think +
+  // type in parallel with the agent. While streaming, Enter queues the
+  // message (handled upstream) and Cmd/Ctrl+Enter steers (cancel +
+  // send). The big primary button on the right is rendered by
+  // ChatPane, which morphs Send / Stop / Queue based on (streaming,
+  // text); the small arrow button inside the composer box remains as
+  // a click-to-send for users who don't like keyboards.
+  const placeholder = streaming
+    ? 'Type to queue a follow-up (Enter to queue, Cmd/Ctrl+Enter to steer)'
+    : 'Message Guide (Enter to send, Shift+Enter for newline)'
   return (
     <div className="composer">
-      <div className={`composer__box ${disabled ? 'composer__box--disabled' : ''}`}>
+      <div className="composer__box">
         <textarea
           ref={textareaRef}
           className="composer__input"
-          placeholder={disabled ? 'Guide is responding…' : 'Message Guide (Enter to send, Shift+Enter for newline)'}
+          placeholder={placeholder}
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={handleKey}
-          disabled={disabled}
           rows={1}
         />
         <button
           className="composer__send"
           onClick={submit}
-          disabled={disabled || !value.trim()}
-          title="Send (Enter)"
+          disabled={!value.trim()}
+          title={streaming ? 'Queue (Enter) — Cmd/Ctrl+Enter to steer' : 'Send (Enter)'}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
