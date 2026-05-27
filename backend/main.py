@@ -1868,6 +1868,27 @@ def project_materialize(pid: str, clean: bool = False, include_archived: bool = 
     return summary
 
 
+@app.get("/api/viewers/registry")
+def viewers_registry():
+    """Full viewer registry — fetched once by the frontend, then used for
+    client-side dispatch so each file click doesn't pay a round-trip to
+    pick a viewer. The matching metadata (entity_types, extensions,
+    mime_patterns, applies_any, max_size_kb) is included alongside the
+    wire info so the client can mirror the backend's match logic."""
+    import content.bio  # noqa: F401 — ensure viewer registrations
+    from core.viewers.registry import list_viewers, to_wire
+    out = []
+    for v in list_viewers():
+        d = to_wire(v)
+        d['extensions']     = list(v.extensions)
+        d['mime_patterns']  = list(v.mime_patterns)
+        d['entity_types']   = list(v.entity_types)
+        d['applies_any']    = v.applies_any
+        d['max_size_kb']    = v.max_size_kb
+        out.append(d)
+    return out
+
+
 @app.get("/api/viewers/for")
 def viewers_for_node(
     entity_id: str | None = None,

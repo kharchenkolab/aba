@@ -14,6 +14,16 @@ export interface ViewerInfo {
   requires_consent: boolean
 }
 
+/** Full viewer entry from /api/viewers/registry — includes the matching
+ *  metadata so we can dispatch client-side without a per-click API call. */
+export interface ViewerRegistryEntry extends ViewerInfo {
+  extensions:    string[]
+  mime_patterns: string[]
+  entity_types:  string[]
+  applies_any:   boolean
+  max_size_kb:   number | null
+}
+
 export interface ViewersResponse {
   primary: string | null
   viewers: ViewerInfo[]
