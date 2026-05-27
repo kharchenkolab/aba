@@ -9,7 +9,7 @@ Registered at import time via register_layout_computer().
 from __future__ import annotations
 
 from core.files.registry import (
-    register_layout_computer, slugify, ext_from_artifact,
+    register_layout_computer, slugify, ext_from_artifact, name_with_ext,
 )
 
 
@@ -22,27 +22,28 @@ def _date_prefix(entity: dict) -> str:
 def figure_path(e: dict) -> str:
     slug = slugify(e.get("title") or "")
     ext = ext_from_artifact(e, default=".png")
+    name = name_with_ext(slug, ext)
     # qc_*, de_* titles cluster under their group; otherwise top-level
     # figures/. This matches conventions.md "group/prefix hints".
     if slug.startswith("qc_"):
-        return f"figures/qc/{slug}{ext}"
+        return f"figures/qc/{name}"
     if slug.startswith("de_"):
-        return f"figures/de/{slug}{ext}"
+        return f"figures/de/{name}"
     if slug.startswith("umap_") or slug.startswith("tsne_") or slug.startswith("pca_"):
-        return f"figures/embeddings/{slug}{ext}"
-    return f"figures/{slug}{ext}"
+        return f"figures/embeddings/{name}"
+    return f"figures/{name}"
 
 
 def table_path(e: dict) -> str:
     slug = slugify(e.get("title") or "")
     ext = ext_from_artifact(e, default=".csv")
-    return f"tables/{slug}{ext}"
+    return f"tables/{name_with_ext(slug, ext)}"
 
 
 def dataset_path(e: dict) -> str:
     slug = slugify(e.get("title") or "")
     ext = ext_from_artifact(e, default="")
-    return f"datasets/{slug}{ext}"
+    return f"datasets/{name_with_ext(slug, ext)}"
 
 
 def result_path(e: dict) -> str:
