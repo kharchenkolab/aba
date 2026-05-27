@@ -50,7 +50,7 @@ const HOME_STATS = [
   { key: 'claim', label: 'claims' },
   { key: 'dataset', label: 'datasets' },
   { key: 'runs', label: 'runs' },
-  { key: 'files', label: 'files' },
+  { key: 'results', label: 'results' },
 ]
 const EVENT_LABEL: Record<string, string> = {
   entity_created: 'created', scenario_created: 'scenario',
@@ -59,7 +59,7 @@ const EVENT_LABEL: Record<string, string> = {
 
 function projectCount(counts: Record<string, number>, key: string): number {
   if (key === 'runs') return counts.analysis ?? counts.run ?? 0
-  if (key === 'files') {
+  if (key === 'results') {
     return ['figure', 'table', 'result', 'note', 'narrative']
       .reduce((sum, t) => sum + (counts[t] ?? 0), 0)
   }

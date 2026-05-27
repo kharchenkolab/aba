@@ -21,7 +21,7 @@ import type { Entity } from './types'
 
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
-type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'files'
+type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
 // Display label for an entity type — note `analysis` reads as "Run" (the v3
 // "analysis run"), avoiding confusion with the thread/investigation idea.
@@ -341,7 +341,10 @@ export default function App() {
     claims: activeEntities.filter(e => e.type === 'claim').length,
     data: activeEntities.filter(e => e.type === 'dataset').length,
     runs: activeEntities.filter(e => e.type === 'analysis').length,
-    files: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type)).length,
+    results: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type)).length,
+    // Virtual files view shows the same artifacts as Results but via a folder
+    // tree projection — count = same as results for now.
+    files: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type) && e.artifact_path).length,
   }
   const openProjectSection = (section: ProjectSection) => {
     setProjectSection(section)

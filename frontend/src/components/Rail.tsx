@@ -3,7 +3,7 @@ import Settings from './Settings'
 import { RailIcon } from './icons'
 import './Rail.css'
 
-type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'files'
+type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
 interface Props {
   onEntitiesChanged: () => void
@@ -18,6 +18,7 @@ interface Props {
     claims: number
     data: number
     runs: number
+    results: number
     files: number
   }
 }
@@ -47,6 +48,7 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
     { key: 'claims', label: 'Claims', icon: 'claims' as const, count: sectionCounts?.claims ?? 0 },
     { key: 'data', label: 'Data', icon: 'data' as const, count: sectionCounts?.data ?? 0 },
     { key: 'runs', label: 'Runs', icon: 'runs' as const, count: sectionCounts?.runs ?? 0 },
+    { key: 'results', label: 'Results', icon: 'results' as const, count: sectionCounts?.results ?? 0 },
     { key: 'files', label: 'Files', icon: 'files' as const, count: sectionCounts?.files ?? 0 },
   ]
 
