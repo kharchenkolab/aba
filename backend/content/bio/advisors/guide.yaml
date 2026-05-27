@@ -1,0 +1,20 @@
+name: guide
+role: primary
+# The Guide is the streaming, halt-capable, tool-using primary agent.
+# Currently the only primary; all other YAMLs are advisors.
+model: claude-haiku-4-5-20251001
+# Guide's system prompt is composed dynamically per turn by
+# content/bio/prompts/build.py (identity + capabilities + recipes +
+# behavior + conventions + plan_first, with active-tool gates).
+# This `system_prompt:` field is not consulted for the Guide — it's a
+# placeholder kept so the YAML conforms to AgentSpec's loader.
+system_prompt: ../prompts/identity.md
+manifest_role: primary
+# '*' = all currently-enabled tools (filtered server-side by the
+# disabled_tools registry). Future A3 will let role-aware filters narrow
+# this per agent.
+tool_allowlist: ['*']
+streaming: true
+halts_allowed: true
+max_iterations: 20
+timeout_s: 300
