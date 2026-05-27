@@ -188,7 +188,7 @@ def orient_thread(thread_id: str, dataset_id: Optional[str] = None) -> Optional[
 
         # The Explorer chimes in quietly (advisor note on the dataset), not in chat.
         try:
-            from advisors import explorer_suggest
+            from content.bio.advisors.runner import explorer_suggest
             explorer_suggest(ds["id"])
         except Exception:
             pass

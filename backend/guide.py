@@ -20,7 +20,7 @@ from content.bio.lifecycle.adaptive import new_session_id
 # Bio modules registering hook handlers at import — keep these imports even
 # though their names aren't used directly: the side effect is registration.
 import content.bio.lifecycle.registry  # noqa: F401  — on_post_tool: register artifacts
-import advisors  # noqa: F401          — on_post_tool: methodologist trigger
+import content.bio.advisors  # noqa: F401  — registers handlers + specs
 import content.bio.lifecycle.adaptive  # noqa: F401  — on_stop: maybe_reflect
 import content.bio.proposals.scheduler  # noqa: F401 — on_stop: evaluate_thread
 from core.jobs.runner import submit_python_job

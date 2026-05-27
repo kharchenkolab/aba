@@ -1,16 +1,7 @@
-"""Advisor agents — thin shim that drives spec-defined advisors.
-
-Pass F (arch3_plan.md): the per-advisor system-prompt text and fake-mode
-placeholders moved into content/bio/{prompts,advisors}/*. This module
-now:
-  - imports bio/advisors at startup to register all YAML specs,
-  - keeps the existing function names (skeptic_review, etc.) so callers
-    don't break,
-  - dispatches each function through core/runtime/agent.run_advisor_one_shot
-    which loads model/system/fake_text from the spec.
-
-Adding a new advisor is now: a YAML spec + a prompt MD file. No code
-change here.
+"""Advisor functions — prompt builders + one-shot calls keyed off the
+loaded AgentSpec. Pre-Pass-F these lived in backend/advisors.py; the
+T1.2 cleanup relocates them here so adding/removing an advisor is
+fully contained in content/bio/advisors/.
 """
 from __future__ import annotations
 from typing import Optional
@@ -19,8 +10,6 @@ from core.graph.audit import add_advisor_note, list_advisor_notes
 from core.graph.edges import edges_to
 from core.graph.entities import get_entity
 from core.runtime.agent import get_agent_spec, run_advisor_one_shot
-# Load all advisor specs at import time.
-import content.bio.advisors  # noqa: F401
 
 
 def _run(advisor_name: str, prompt: str, max_tokens: int = 400) -> Optional[str]:
@@ -137,29 +126,3 @@ def stylist_review(narrative_id: str) -> Optional[dict]:
     note_id = add_advisor_note(narrative_id, advisor="stylist", text=text,
                                metadata={"trigger": "narrative_focus"})
     return {"id": note_id, "entity_id": narrative_id, "advisor": "stylist", "text": text}
-
-
-# ---------- Hook handlers ----------
-# Pass D: methodologist auto-trigger on analysis-complete. The handler
-# stays here for now; in the next reshape it lands in
-# bio/advisors/handlers.py.
-
-import asyncio as _asyncio
-from core.hooks.dispatcher import register as _register_hook
-
-
-def _on_post_tool_methodologist(ctx: dict) -> None:
-    if not ctx.get("new_entities"):
-        return
-    analysis_ctx = ctx.get("analysis_ctx") or {}
-    aid = analysis_ctx.get("analysis_id")
-    if not aid:
-        return
-    try:
-        loop = _asyncio.get_event_loop()
-        loop.run_in_executor(None, methodologist_review, aid)
-    except RuntimeError:
-        methodologist_review(aid)
-
-
-_register_hook("on_post_tool", _on_post_tool_methodologist, priority=20)

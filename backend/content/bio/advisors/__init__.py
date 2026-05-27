@@ -18,3 +18,6 @@ for _yaml in sorted(_HERE.glob("*.yaml")):
         logging.getLogger(__name__).warning(
             "could not load advisor spec %s: %s", _yaml.name, e
         )
+
+# Register hook handlers (e.g. methodologist auto-trigger).
+from . import handlers  # noqa: F401,E402
