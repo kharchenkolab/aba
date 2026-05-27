@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 
 _HERE = Path(__file__).parent
+_BIO_ROOT = _HERE.parent  # backend/content/bio/
 
 
 @lru_cache(maxsize=None)
@@ -24,6 +25,13 @@ def _prompt(name: str) -> str:
     """Read a prompt .md file once and cache. Stripped of trailing whitespace
     so concatenations don't double-blank."""
     return (_HERE / name).read_text().rstrip()
+
+
+@lru_cache(maxsize=None)
+def _bio_doc(relpath: str) -> str:
+    """Read a bio doc (e.g. conventions.md) once and cache."""
+    p = _BIO_ROOT / relpath
+    return p.read_text().rstrip() if p.exists() else ""
 
 
 def _capabilities_block(active_tools: list[dict]) -> str:
@@ -48,6 +56,10 @@ def build_system(active_tools: list[dict]) -> str:
     if "create_scenario" in names:
         blocks.append(_prompt("scenarios.md"))
     blocks.append(_prompt("behavior.md"))
+    # File conventions — drives generated titles + future display paths.
+    conventions = _bio_doc("conventions.md")
+    if conventions:
+        blocks.append("### File conventions\n\n" + conventions)
     if "present_plan" in names:
         blocks.append(_prompt("plan_first.md"))
     return "\n\n".join(blocks)
