@@ -115,11 +115,19 @@ export default function HighlightableImage({ src, onAttach, label, hoverToolbar,
       ctx.fillRect(x, y, w, h)
     }
     const b64 = canvas.toDataURL('image/png').split(',')[1]
-    const what = label ? `the figure "${label}"` : 'the figure shown in the conversation'
-    onAttach({
-      image: b64,
-      note: `The user highlighted a region of ${what} — marked in translucent yellow on the attached image. Answer about the highlighted region specifically (they may refer to it as "here" or "the highlighted area").`,
-    })
+    const what = label ? `the figure "${label}"` : 'the figure'
+    // First-person, mode-aware note. Reads as the user speaking, so the
+    // model treats it as a directive, not metadata. Mentions the exact
+    // shape (stroke vs box) so the model knows what to look for.
+    const shape =
+      mode === 'highlight'
+        ? 'a yellow freehand mark (likely a circle, line, or squiggle)'
+        : 'a yellow box'
+    const note =
+      `I drew ${shape} on ${what} in the attached image to point at a specific region — ` +
+      `focus your answer there. The mark is translucent yellow; the underlying figure shows through. ` +
+      `I may refer to that region as "here" or "the highlighted area".`
+    onAttach({ image: b64, note })
     // Focus is now established (the red chip appears) — leave marking mode. The
     // drawn mark stays on the figure until the chip is cleared (clearSignal).
     setMarking(false)

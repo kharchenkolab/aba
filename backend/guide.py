@@ -173,9 +173,11 @@ async def stream_response(
     if not retry:
         user_blocks = [{"type": "text", "text": user_text}]
         if annotation_note:
-            # Persist a small marker so later turns know a region was discussed
-            # (we don't store the image itself — it'd bloat the DB).
-            user_blocks.append({"type": "text", "text": f"[{annotation_note}]"})
+            # The frontend already phrases the note as first-person user
+            # speech ("I drew a yellow circle…"). Persist it plain so the
+            # model treats it as a directive on this turn and as durable
+            # context on later turns (when the image itself is gone).
+            user_blocks.append({"type": "text", "text": annotation_note})
         append_message("user", user_blocks, entity_id=WORKSPACE_ID,
                        focus_entity_id=focus_entity_id, thread_id=store_tid)
     history = get_messages(WORKSPACE_ID, thread_id=store_tid)
