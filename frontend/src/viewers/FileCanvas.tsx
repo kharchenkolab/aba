@@ -10,9 +10,10 @@
  * generated code/text, AI-summary results, etc.) and any plain
  * artifact that's not entity-backed.
  */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { FileNode, ViewersResponse } from './types'
 import { VIEWERS, hasViewer } from './registry'
+import { useViewerRegistry, dispatchResponse } from './dispatch'
 import './FileCanvas.css'
 
 interface Props {
@@ -22,27 +23,12 @@ interface Props {
 }
 
 export default function FileCanvas({ node, onFocus, onClose }: Props) {
-  const [resp, setResp] = useState<ViewersResponse | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setResp(null); setErr(null)
-    // Prefer path-based lookup. The backend walks the tree and returns
-    // viewers matched on file context (extension, MIME, synthesized
-    // flag) — not just entity-type. A README under a thread has
-    // entity_id pointing at the thread; an entity_id lookup would
-    // return thread-only viewers (and the file-tree-y .md viewer would
-    // be missed).
-    const q = node.path
-      ? `path=${encodeURIComponent(node.path)}`
-      : `entity_id=${encodeURIComponent(node.entity_id || '')}`
-    fetch(`/api/viewers/for?${q}`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
-      .then(d => { if (!cancelled) setResp(d as ViewersResponse) })
-      .catch(e => { if (!cancelled) setErr(String(e)) })
-    return () => { cancelled = true }
-  }, [node.path, node.entity_id])
+  // Client-side dispatch (no per-click round-trip). The registry is
+  // fetched once at app start and cached; dispatch is a pure local
+  // computation from the node's extension / entity-type / size.
+  const registry = useViewerRegistry()
+  const resp: ViewersResponse | null = registry ? dispatchResponse(node, registry) : null
+  const [err] = useState<string | null>(null)
 
   // Pick the highest-priority canvas-mode viewer whose component we
   // actually have in the frontend registry.
