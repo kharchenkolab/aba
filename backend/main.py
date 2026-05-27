@@ -1682,6 +1682,70 @@ async def turn_resume(run_id: str, req: ResumeRequest):
     )
 
 
+class DeferredResultRequest(BaseModel):
+    result: dict | None = None
+    error:  str | None = None
+
+
+@app.post("/api/turns/{run_id}/tool_result/{tool_use_id}")
+async def turn_tool_result(run_id: str, tool_use_id: str, req: DeferredResultRequest):
+    """P2 #4 — webhook for deferred tool results. The tool that returned
+    `{deferred: true}` calls this when its real work completes. We write
+    the tool_result into the message log and resume the turn via the same
+    streaming mechanism as approval-resume.
+
+    Authentication: none in v1 (single-user backend). When multi-user
+    lands, sign the deferred_id and verify here."""
+    from core.runtime.checkpoint import load_turn
+    from core.graph.messages import append_message
+
+    t = load_turn(run_id)
+    if t is None:
+        raise HTTPException(404, "no such run")
+    if t.state.value != "awaiting_tool_result":
+        raise HTTPException(409, f"turn is in state {t.state.value!r}, not awaiting_tool_result")
+    if not t.pending_deferred or t.pending_deferred.get("tool_use_id") != tool_use_id:
+        raise HTTPException(
+            409,
+            f"turn is awaiting a different tool_use_id "
+            f"({t.pending_deferred.get('tool_use_id') if t.pending_deferred else None!r})",
+        )
+
+    focus_eid = t.focus_entity_id or WORKSPACE_ID
+    thread_id = t.thread_id or "default"
+
+    # Build the tool_result payload. Error path produces a structured error
+    # the model can react to; success path passes the tool's result through.
+    if req.error:
+        result_obj = {"status": "error", "note": req.error,
+                      "deferred_id": t.pending_deferred.get("deferred_id")}
+    else:
+        result_obj = req.result or {"status": "ok", "note": "(empty result)"}
+    result_str = json.dumps(result_obj)
+
+    # Write the now-resolved tool_result for the held tool_use.
+    append_message("user",
+                   [{"type": "tool_result", "tool_use_id": tool_use_id, "content": result_str}],
+                   entity_id=WORKSPACE_ID, focus_entity_id=focus_eid, thread_id=thread_id)
+
+    async def event_stream():
+        async for chunk in stream_response(
+            "",
+            focus_entity_id=focus_eid,
+            thread_id=thread_id,
+            # Retry mode: don't append a new user message — the tool_result
+            # we just wrote is what advances the conversation.
+            retry=True,
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/turns/{run_id}/cancel")
 def turn_cancel(run_id: str, req: ResumeRequest):
     """Mark an in-flight Turn FAILED (reason from user_text, optional).

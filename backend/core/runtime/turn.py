@@ -19,12 +19,15 @@ from typing import Any, Optional
 
 
 class TurnState(str, enum.Enum):
-    GENERATING       = "generating"        # streaming an LLM response
-    EXECUTING_TOOLS  = "executing_tools"   # dispatching tool_use blocks
-    AWAITING_USER    = "awaiting_user"     # halted on plan/clarification/approval
-    SUMMARIZING      = "summarizing"       # running on_stop hooks
-    DONE             = "done"
-    FAILED           = "failed"
+    GENERATING            = "generating"            # streaming an LLM response
+    EXECUTING_TOOLS       = "executing_tools"       # dispatching tool_use blocks
+    AWAITING_USER         = "awaiting_user"         # halted on plan/clarification/approval
+    AWAITING_TOOL_RESULT  = "awaiting_tool_result"  # P2 — tool returned {deferred:true};
+                                                    #   waiting for a webhook to post the
+                                                    #   real result before the loop continues
+    SUMMARIZING           = "summarizing"           # running on_stop hooks
+    DONE                  = "done"
+    FAILED                = "failed"
 
 
 def _utcnow() -> str:
@@ -54,6 +57,9 @@ class Turn:
     pending_user_signal: Optional[str] = None      # plan | clarify | approval
     pending_approval: Optional[dict] = None         # P1#3: held tool awaiting user approval
                                                    #   {tool_name, tool_input, tool_use_id, policy}
+    pending_deferred: Optional[dict] = None         # P2#4: tool returned {deferred:true}; waiting
+                                                   #   for the real result via webhook
+                                                   #   {tool_name, tool_use_id, deferred_id, started_at, timeout_s}
     final_message:    Optional[dict] = None
     error:            Optional[dict] = None
     usage_in:         int = 0
@@ -86,6 +92,7 @@ class Turn:
                 "parent_run_id": self.parent_run_id,
                 "plan_entity_id": self.plan_entity_id,
                 "pending_approval": self.pending_approval,
+                "pending_deferred": self.pending_deferred,
             }),
             "error_blob":      json.dumps(self.error) if self.error else None,
             "usage_blob":      json.dumps({
@@ -118,6 +125,7 @@ class Turn:
             parent_run_id=pend.get("parent_run_id"),
             plan_entity_id=pend.get("plan_entity_id"),
             pending_approval=pend.get("pending_approval"),
+            pending_deferred=pend.get("pending_deferred"),
             error=json.loads(row["error_blob"]) if row["error_blob"] else None,
             usage_in=usage.get("input", 0),
             usage_out=usage.get("output", 0),

@@ -761,6 +761,13 @@ def ask_clarification(input_: dict) -> dict:
                     "their reply before continuing."}
 
 
+def _test_deferred_tool(input_: dict) -> dict:
+    """P2 #4 test scaffolding only — not registered in TOOL_SCHEMAS. A
+    test reaches in to add it to EXECUTORS, calls it, then removes it.
+    Returns the deferred shape the guide loop recognizes."""
+    return {"deferred": True, "deferred_id": input_.get("id") or "demo-job-1"}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,

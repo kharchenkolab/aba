@@ -531,6 +531,42 @@ async def stream_response(
                 )
                 result_obj = json.loads(result_str)
 
+                # P2 #4 — deferred tool result. Tool returned `{deferred: true,
+                # deferred_id}` instead of a real result. Halt the turn in
+                # AWAITING_TOOL_RESULT; the webhook
+                # POST /api/turns/{run_id}/tool_result/{tool_use_id}
+                # writes the real result later and resumes the loop. We
+                # don't write any tool_result block for the deferred tool;
+                # the reaper skip-rule for AWAITING_TOOL_RESULT prevents
+                # orphan-fill from clobbering it.
+                if isinstance(result_obj, dict) and result_obj.get("deferred"):
+                    turn.pending_deferred = {
+                        "tool_name": tool_name,
+                        "tool_use_id": block.id,
+                        "deferred_id": result_obj.get("deferred_id"),
+                        "started_at": __import__("datetime").datetime.now(
+                            __import__("datetime").timezone.utc).isoformat(),
+                        "timeout_s": int(result_obj.get("timeout_s") or 0) or None,
+                    }
+                    yield sse({
+                        "type": "deferred_tool_pending",
+                        "tool_name": tool_name,
+                        "deferred_id": result_obj.get("deferred_id"),
+                        "tool_use_id": block.id,
+                        "run_id": turn.run_id,
+                    })
+                    # Write any earlier results, then halt. Don't write the
+                    # deferred tool's result — webhook does that on completion.
+                    if tool_result_blocks:
+                        append_message("user", tool_result_blocks,
+                                       entity_id=entity_id, focus_entity_id=focus_entity_id)
+                    turn.transition(TurnState.AWAITING_TOOL_RESULT)
+                    checkpoint(turn)
+                    yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                               "cache_read": usage_cr, "cache_write": usage_cw})
+                    yield sse({"type": "done"})
+                    return
+
                 # Post-tool hook: bio's registry handler adds new entities
                 # under ctx['new_entities']; advisors' methodologist handler
                 # may fire the Methodologist asynchronously.

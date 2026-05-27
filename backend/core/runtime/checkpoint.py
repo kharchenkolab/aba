@@ -134,16 +134,22 @@ def _is_orphan_fill_block(b) -> bool:
 
 
 def _threads_with_pending_approval() -> set[str | None]:
-    """Thread ids whose latest Turn row is paused on user approval.
-    Used by the orphan-fill reaper to skip patching held tool_uses —
-    the resume endpoint writes the real result on approve/reject."""
+    """Thread ids whose latest Turn row is paused (either AWAITING_USER on
+    approval OR AWAITING_TOOL_RESULT on a deferred tool). Used by the
+    orphan-fill reaper to skip patching held tool_uses — the
+    resume/webhook endpoint writes the real result on user action /
+    completion."""
     out: set[str | None] = set()
     with _conn() as c:
         rows = c.execute(
-            "SELECT thread_id, pending_blob FROM runs "
-            "WHERE state='awaiting_user' AND pending_blob IS NOT NULL"
+            "SELECT thread_id, state, pending_blob FROM runs "
+            "WHERE state IN ('awaiting_user', 'awaiting_tool_result') "
+            "  AND pending_blob IS NOT NULL"
         ).fetchall()
     for r in rows:
+        if r["state"] == "awaiting_tool_result":
+            out.add(r["thread_id"])
+            continue
         try:
             pend = json.loads(r["pending_blob"])
         except (json.JSONDecodeError, TypeError):
