@@ -357,9 +357,28 @@ async def stream_response(
                     # along on the SSE event so the user sees them inline.
                     from core.planning.validator import normalize_plan, validate_plan
                     plan = validate_plan(normalize_plan(inp))
-                    yield sse({"type": "plan", **plan.to_dict()})
+
+                    # A4: persist the plan as a durable `plan` entity so it
+                    # shows up in the Files tree under threads/T/plans/
+                    # and is browsable a week later. lifecycle starts at
+                    # 'validated' (the validator ran without erroring out);
+                    # transitions to executing/completed/aborted land when
+                    # the Go/Adjust flow gets a dedicated endpoint.
+                    from core.graph.entities import create_entity
+                    plan_eid = create_entity(
+                        entity_type="plan",
+                        title=plan.title or "Plan",
+                        parent_entity_id=focus_entity_id,
+                        metadata={
+                            "thread_id": store_tid,
+                            "plan": plan.to_dict(),
+                            "plan_lifecycle": "validated",
+                        },
+                    )
+                    yield sse({"type": "plan", "entity_id": plan_eid, **plan.to_dict()})
                     ack = {
                         "status": "presented",
+                        "plan_entity_id": plan_eid,
                         "note": "Plan shown to the user with Go/Adjust controls. "
                                 "Wait for their decision before executing.",
                         "concerns": [c.to_dict() for c in plan.concerns],
