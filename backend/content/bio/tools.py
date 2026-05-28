@@ -1278,6 +1278,14 @@ def read_memory_tool(input_: dict) -> dict:
         "type": e.type,
         "description": e.description,
         "body": e.body,
+        "caveat": ("This is YOUR own note from a past session — it can be stale or "
+                   "wrong (a summary you wrote may have garbled the real numbers). "
+                   "Use it to ORIENT (which accession/files, what you tried). Do NOT "
+                   "present specific facts from it — sample counts, per-sample "
+                   "attributes, demographics, identifiers — as fact without "
+                   "re-deriving them from the live source (e.g. re-fetch the GEO "
+                   "record). If you answer from memory alone, say it's from a saved "
+                   "note and offer to verify."),
     }
 
 
