@@ -9,6 +9,7 @@ follow biology domain naming where applicable, with a few generic ones
 from __future__ import annotations
 from content.bio.tools import TOOL_SCHEMAS
 from core.graph.tool_settings import get_disabled_tools
+from core.skills import list_skills
 
 
 def _by_name(name: str) -> dict | None:
@@ -60,55 +61,27 @@ _TOOL_META: dict[str, dict] = {
 }
 
 
-# Larger-grain "skills" — things Guide can do that aren't single tool calls
-# but pipelines documented in know-how. Surfaces these alongside tools so
-# the user can see what the system actually knows how to drive.
-_SKILLS = [
-    {
-        "name": "scrna_qc_clustering",
-        "category": "Single-cell",
-        "summary": (
-            "Compact scanpy pipeline: load → QC → filter → normalize → HVG "
-            "→ PCA → neighbors → UMAP → Leiden → marker genes."
-        ),
-        "example": "Run a standard QC and clustering pipeline on this 10x sample.",
-        "knowhow_doc": "backend/knowhow/scrna_pipeline.md",
-    },
-    {
-        "name": "bulk_rnaseq_de",
-        "category": "Bulk RNA-seq",
-        "summary": (
-            "DESeq2-style differential expression between two groups via "
-            "pydeseq2: load → filter → fit → contrast → volcano + MA + table."
-        ),
-        "example": "Run DE between treated and untreated samples.",
-        "knowhow_doc": "backend/knowhow/bulk_rnaseq_de.md",
-    },
-    {
-        "name": "create_scenario",
-        "category": "Analysis flow",
-        "summary": (
-            "Re-run a figure's producing code with parameter changes the "
-            "user describes (e.g. 'cap mt_fraction at 0.10'); the variant "
-            "appears alongside the baseline with a Compare toggle, and "
-            "downstream results that reference the baseline are surfaced "
-            "for review."
-        ),
-        "example": "What if we used a tighter QC cutoff?",
-        "knowhow_doc": None,
-    },
-    {
-        "name": "promote_to_result",
-        "category": "Result chain",
-        "summary": (
-            "Capture an interpretation of a focused figure as a result "
-            "entity (with the figure as evidence). The Skeptic advisor "
-            "automatically reviews the interpretation."
-        ),
-        "example": "This S4 outlier looks like doublet contamination — promote.",
-        "knowhow_doc": None,
-    },
-]
+# Larger-grain "skills" are authored markdown procedures in the content
+# library (content/bio/library/{skills,recipes}/), loaded into the same
+# registry the agent searches via search_skills. The catalog renders them
+# straight from that registry — single source of truth, no hardcoded copy.
+def _skill_category(domain: str) -> str:
+    """Map a skill's `domain` facet to a catalog category. Platform/workflow
+    skills carry no domain — they're ABA-native plumbing, grouped as such."""
+    d = (domain or "").strip().lower()
+    if not d:
+        return "Analysis flow"          # ABA-native workflow skills
+    return _DOMAIN_LABELS.get(d, d.replace("_", " ").capitalize())
+
+
+_DOMAIN_LABELS = {
+    "meta": "Strategy",
+    "genomics": "Genomics",
+    "molecular_biology": "Molecular biology",
+    "immunology": "Immunology",
+    "pharmacology": "Pharmacology",
+    "biochemistry": "Biochemistry",
+}
 
 
 # BioMNI domain modules — importable inside the sandbox (run_python adds the
@@ -141,7 +114,17 @@ def registry() -> dict:
             "enabled": t["name"] not in disabled,
             "toggleable": True,
         })
-    skills_out = [{"kind": "skill", "enabled": True, "toggleable": False, **s} for s in _SKILLS]
+    skills_out = [{
+        "kind": "skill",
+        "name": s.name,
+        "category": _skill_category(s.domain),
+        "summary": s.description,
+        "when_to_use": s.when_to_use or None,
+        "capabilities_needed": list(s.capabilities_needed) or None,
+        "source": s.source or None,
+        "enabled": True,
+        "toggleable": False,
+    } for s in list_skills()]
     biomni_out = [{
         "kind": "module", "name": f"biomni.tool.{m}", "category": "BioMNI library",
         "summary": desc, "example": f"from biomni.tool.{m} import ...  (inside run_python)",
@@ -149,10 +132,12 @@ def registry() -> dict:
     } for m, desc in _BIOMNI_MODULES]
     items = tools_out + skills_out + biomni_out
 
-    # Group by category, preserve a sensible order.
+    # Group by category, preserve a sensible order. Tool categories first,
+    # then skill domains (any unlisted ones append after), BioMNI + Other last.
     order = [
-        "Workspace", "Sandbox", "Provenance", "Analysis flow", "Result chain",
-        "Single-cell", "Bulk RNA-seq", "BioMNI library", "Other",
+        "Workspace", "Sandbox", "Provenance", "Analysis flow", "Strategy",
+        "Genomics", "Molecular biology", "Immunology", "Pharmacology",
+        "Biochemistry", "BioMNI library", "Other",
     ]
     cats: dict[str, list] = {c: [] for c in order}
     for it in items:
