@@ -36,10 +36,56 @@ def _api_messages(history: list) -> list:
     return [{"role": m["role"], "content": m["content"]} for m in history]
 
 
+def _is_interrupted_fill(block: dict) -> bool:
+    """A reaper-synthesized 'interrupted' tool_result (vs a real one)."""
+    c = block.get("content")
+    if isinstance(c, str):
+        try:
+            j = json.loads(c)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return isinstance(j, dict) and j.get("status") == "interrupted"
+    return False
+
+
+def _dedup_tool_results(messages: list) -> list:
+    """Collapse multiple tool_result blocks that share a tool_use_id down to
+    one — the Anthropic API rejects duplicates ("each tool_use must have a
+    single result"). Duplicates arise when a reaper 'interrupted' synth fill
+    coexists with a real result on a long/shared thread (or a resume race).
+    Prefer the REAL result over an interrupted synth; otherwise keep the first.
+    Idempotent; drops messages left empty."""
+    real_ids = {
+        b.get("tool_use_id")
+        for m in messages for b in (m.get("content") or [])
+        if isinstance(b, dict) and b.get("type") == "tool_result" and not _is_interrupted_fill(b)
+    }
+    seen: set = set()
+    out = []
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            out.append(m)
+            continue
+        new_content = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                tid = b.get("tool_use_id")
+                if tid in seen:
+                    continue                      # already kept one for this id
+                if tid in real_ids and _is_interrupted_fill(b):
+                    continue                      # skip synth; a real result exists elsewhere
+                seen.add(tid)
+            new_content.append(b)
+        if new_content:
+            out.append(dict(m, content=new_content))
+    return out
+
+
 def _ensure_tool_pair_completeness(messages: list) -> list:
     """In-memory safety net for the Anthropic API contract that every
     assistant `tool_use` block must be followed by a user `tool_result`
-    for the same id.
+    for the same id, and exactly one.
 
     A1 made the Turn state machine track pending_tool_ids and the
     reaper writes synthetic tool_results to the message log for crashes
@@ -51,6 +97,9 @@ def _ensure_tool_pair_completeness(messages: list) -> list:
     answer.
 
     Idempotent; doesn't mutate the input list."""
+    # First collapse any duplicate tool_results (dedup may empty a message and
+    # create a fresh middle-orphan, which the fill pass below then repairs).
+    messages = _dedup_tool_results(messages)
     out = [dict(m, content=list(m.get("content") or [])) for m in messages]
     i = 0
     while i < len(out):

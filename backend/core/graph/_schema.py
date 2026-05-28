@@ -13,7 +13,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(os.environ.get("ABA_DB_PATH") or (Path(__file__).parent.parent.parent / "aba.db"))
+# ABA_DB_PATH_OVERRIDE is honored too: it's the e2e-harness "override the DB
+# path" signal (projects.py treats either as single-project mode). Without this
+# the override only flipped SINGLE mode while DB_PATH silently stayed aba.db —
+# so harnesses using it wrote to the real dev DB (test-isolation + DB-safety bug).
+DB_PATH = Path(
+    os.environ.get("ABA_DB_PATH")
+    or os.environ.get("ABA_DB_PATH_OVERRIDE")
+    or (Path(__file__).parent.parent.parent / "aba.db")
+)
 
 # Root entity that hosts any chat not yet scoped to a specific entity.
 WORKSPACE_ID = "workspace"
