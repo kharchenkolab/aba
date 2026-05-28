@@ -9,6 +9,7 @@ from .loader import (
     read_skill,
     register_skill_dir,
     skills_index_block,
+    search_skills,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "read_skill",
     "register_skill_dir",
     "skills_index_block",
+    "search_skills",
 ]

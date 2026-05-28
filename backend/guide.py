@@ -332,7 +332,7 @@ async def stream_response(
     )
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
-    system = focus_text + thread_text + build_system(active_tools, role=guide_role)
+    system = focus_text + thread_text + build_system(active_tools, role=guide_role, intent=user_text)
     entity_id = WORKSPACE_ID
 
     focus_ent = get_entity(focus_entity_id) if focus_entity_id else None

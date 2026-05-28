@@ -3,6 +3,8 @@ name: scrna-qc-clustering
 description: scanpy QC + first-pass clustering for single-cell RNA-seq
 when_to_use: scRNA-seq dataset, fresh from CellRanger or similar; want to see clusters / UMAP before any biology
 requires_tools: [run_python]
+capabilities_needed: [scanpy, leidenalg]
+keywords: [single cell, scRNA-seq, clustering, UMAP, leiden, marker genes, cell QC, filtering]
 produces: [qc_summary.csv, umap.png, leiden_markers.csv]
 resource_profile: small-medium  (~30s for 10–50k cells)
 ---

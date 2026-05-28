@@ -3,6 +3,8 @@ name: bulk-rnaseq-de
 description: pydeseq2 differential expression between two groups (bulk RNA-seq)
 when_to_use: Bulk RNA-seq counts table with a design CSV; want DE between two conditions
 requires_tools: [run_python]
+capabilities_needed: [pydeseq2, adjusttext]
+keywords: [differential expression, DESeq2, DE genes, volcano plot, contrast, log2 fold change, treated vs control, bulk]
 produces: [de_results.csv, volcano.png, ma_plot.png, top_hits.csv]
 resource_profile: small  (~10s for typical bulk study)
 ---
