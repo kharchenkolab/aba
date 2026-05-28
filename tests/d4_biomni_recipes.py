@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 import content.bio  # noqa: E402,F401
 from core.skills import list_skills, search_skills  # noqa: E402
 
-RECIPES_DIR = ROOT / "backend" / "content" / "bio" / "collections" / "biomni" / "recipes"
+RECIPES_DIR = ROOT / "backend" / "content" / "bio" / "library" / "recipes"
 _failures: list[str] = []
 
 

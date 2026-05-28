@@ -11,13 +11,17 @@ from pathlib import Path
 
 from core.catalog import register_capability, register_seed_provider, register_collection_dir
 
-_SEED_DIR = Path(__file__).parent
+# Capability CONTENT lives in the content library, not next to this code:
+# `content/bio/library/capabilities/` holds the seed YAML(s) + collection
+# subdirs (e.g. biomni/). Keeping content out of the code tree mirrors the
+# skills registrar and is overlay-ready.
+_SEED_DIR = Path(__file__).parent.parent / "library" / "capabilities"
 
-# Extracted reference catalogues (collections.md). These are file-backed and
-# process-global (not per-project entities), so register the dir at import time.
-# biomni is an EXTRACTED catalogue (mined offline) — not a runtime dependency.
-_COLLECTIONS_DIR = _SEED_DIR.parent / "collections"
-for _cdir in sorted(p for p in _COLLECTIONS_DIR.glob("*") if p.is_dir()):
+# Extracted reference catalogues (collections.md) are subdirs of the capability
+# content root — file-backed + process-global (not per-project entities), so
+# register them at import time. biomni is an EXTRACTED catalogue (mined offline),
+# not a runtime dependency.
+for _cdir in sorted(p for p in _SEED_DIR.glob("*") if p.is_dir()):
     register_collection_dir(_cdir)
 
 
