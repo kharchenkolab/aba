@@ -14,3 +14,7 @@ _HERE = Path(__file__).parent
 # Import-time side effect: walk this dir, register every .md found,
 # feed the plan validator's known-skill catalog.
 register_skill_dir(_HERE)
+
+# Recipes distilled from mined collections (collections.md) — same skill format,
+# kept in a separate dir so generated content stays auditable + regenerable.
+register_skill_dir(_HERE.parent / "collections" / "biomni" / "recipes")
