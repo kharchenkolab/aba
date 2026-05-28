@@ -28,6 +28,13 @@ def clear_sink() -> None:
     _local.q = None
 
 
+def current_sink():
+    """This thread's progress sink (or None). A tool that fans work out to a
+    helper thread can rebind the same sink there — sinks are thread-local, so a
+    child thread won't inherit it otherwise."""
+    return getattr(_local, "q", None)
+
+
 def emit(message: str, *, phase: Optional[str] = None) -> None:
     """Push a progress line for the current tool call. No-op if no sink is bound
     (e.g. tests, background jobs, or callers outside a streamed dispatch)."""
