@@ -29,6 +29,15 @@ R_LIBS_ROOT = ENVS_DIR / "r_libs"
 # need the toolchain; GitHub needs remotes; Bioconductor needs BiocManager).
 RUNTIME_SPECS = ["r-base", "r-remotes", "r-biocmanager", "compilers", "make", "pkg-config"]
 
+# Foundational compiled R deps + system libs that most bioinformatics packages
+# share. Kept in the runtime as conda BINARIES so installs find them on
+# .libPaths() instead of source-compiling (igraph is slow + needs GLPK; irlba/
+# Rcpp* are slow) or failing on a missing libxml2 (the gap that blocked
+# pagoda2). Heavy frameworks (Seurat, tidyverse, DESeq2) stay in the on-demand
+# curated base (r_base.yaml), NOT here.
+R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcppprogress",
+               "r-igraph", "r-irlba", "r-xml2", "libxml2"]
+
 # Identifier validation so a package/ref string can't inject R code via `-e`.
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name
 _GH_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")   # owner/repo
@@ -56,15 +65,16 @@ def ensure_r_runtime(cancel_token=None) -> None:
     from core.exec.mamba import run_micromamba, installed_packages
     tenv = tools_env()
     have = installed_packages(tenv)
-    missing = [s for s in RUNTIME_SPECS if s not in have]
+    specs = RUNTIME_SPECS + R_CORE_DEPS
+    missing = [s for s in specs if s not in have]
     if not missing:
         return
     from core.runtime import progress
-    progress.emit("conda: building R runtime (r-base + toolchain + remotes + BiocManager)…",
-                  phase="conda")
+    progress.emit("conda: building R runtime (r-base + toolchain + core bio deps: "
+                  "igraph/irlba/Rcpp*/xml2)…", phase="conda")
     verb = "install" if (tenv / "conda-meta").exists() else "create"
     run_micromamba([verb, "-y", "-p", str(tenv), "-c", "conda-forge", "-c", "bioconda",
-                    *RUNTIME_SPECS], cancel_token=cancel_token)
+                    *specs], cancel_token=cancel_token)
 
 
 def ensure_r_base(specs: list[str]) -> None:
@@ -133,7 +143,10 @@ _ERR_MARKERS = (
 _SYSLIB_RE = re.compile(
     r"cannot find -l([A-Za-z0-9_.+-]+)"
     r"|([A-Za-z0-9_.+-]+\.h): No such file"
-    r"|cannot open shared object file:[^\n]*?\b(lib[A-Za-z0-9_.+-]+\.so[0-9.]*)",
+    r"|cannot open shared object file:[^\n]*?\b(lib[A-Za-z0-9_.+-]+\.so[0-9.]*)"
+    r"|No package '([A-Za-z0-9_.+-]+)' found"               # pkg-config miss
+    r"|\b([A-Za-z][A-Za-z0-9_.+-]{2,}) was not found"       # configure: 'libfoo was not found'
+    r"|[Cc]annot find ([A-Za-z][A-Za-z0-9_.+-]{2,}) (?:library|headers?)",  # 'Cannot find X library'
     re.I,
 )
 
@@ -149,6 +162,22 @@ def diagnose_install(text: str) -> dict:
     if m:
         out["missing_lib"] = next((g for g in m.groups() if g), None)
     return out
+
+
+# Map an R configure-error system-lib name → the conda package that provides it,
+# so a failed install can self-heal (conda-install the lib, then retry). Default
+# is the name itself when not listed.
+_SYS_LIB_CONDA = {
+    "xml2": "libxml2", "libxml-2.0": "libxml2", "libxml2": "libxml2",
+    "curl": "libcurl", "libcurl": "libcurl", "openssl": "openssl", "ssl": "openssl",
+    "fontconfig": "fontconfig", "freetype": "freetype", "freetype2": "freetype",
+    "harfbuzz": "harfbuzz", "fribidi": "fribidi", "png": "libpng", "libpng": "libpng",
+    "jpeg": "jpeg", "tiff": "libtiff", "z": "zlib", "zlib": "zlib", "bz2": "bzip2",
+    "gsl": "gsl", "glpk": "glpk", "gmp": "gmp", "mpfr": "mpfr",
+    "hdf5": "hdf5", "gdal": "gdal", "geos": "geos", "proj": "proj",
+    "udunits2": "udunits2", "udunits": "udunits2", "magick": "imagemagick",
+    "fftw": "fftw", "cairo": "cairo",
+}
 
 
 def r_install(source: str, package: str, *, project_id: str, library: Optional[str] = None,
@@ -189,6 +218,27 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
 
     log = ((proc.stderr or "") + "\n" + (proc.stdout or ""))
     diag = diagnose_install(log)
+
+    # Auto-recover a missing system library: conda-install the providing package
+    # into the R env and retry once (compiled against the now-present lib). This
+    # is the recover-smartly the diagnostic used to only *suggest* — the xml2
+    # gap that blocked pagoda2 now self-heals.
+    if not loaded and diag.get("missing_lib"):
+        libpkg = _SYS_LIB_CONDA.get(diag["missing_lib"].lower(), diag["missing_lib"])
+        progress.emit(f"R: missing system lib '{diag['missing_lib']}' — conda-installing "
+                      f"{libpkg} and retrying…", phase="r")
+        try:
+            ensure_r_base([libpkg])
+            proc, loaded = _attempt(force_source=True)
+            used_source_fallback = True
+        except Exception:  # noqa: BLE001 — recovery is best-effort
+            pass
+        if loaded:
+            return {"status": "ready", "package": package, "source": source, "lib": str(lib),
+                    "library": libname, "source_fallback": True, "recovered_lib": libpkg}
+        log = ((proc.stderr or "") + "\n" + (proc.stdout or ""))
+        diag = diagnose_install(log)
+
     note = f"R install of {package!r} ({source}) failed"
     if used_source_fallback:
         note += " (binary + source both failed)"

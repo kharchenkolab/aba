@@ -144,6 +144,46 @@ def test_verify_and_source_fallback():
         rexec.ensure_r_runtime, rexec._run_rscript, rexec.r_has_package = orig
 
 
+def test_runtime_core_deps():
+    print("runtime carries foundational compiled deps (binaries, not source)")
+    core = set(rexec.R_CORE_DEPS)
+    for want in ("r-igraph", "r-irlba", "r-matrix", "r-rcpp", "r-xml2", "libxml2"):
+        check(f"R_CORE_DEPS includes {want}", want in core, str(core))
+
+
+def test_missing_lib_autorecover():
+    print("missing system lib → conda-install providing pkg + retry (mocked)")
+    import types
+    orig = (rexec.ensure_r_runtime, rexec.ensure_r_base, rexec._run_rscript, rexec.r_has_package)
+    rexec.ensure_r_runtime = lambda cancel_token=None: None
+    recovered: list[str] = []
+    rexec.ensure_r_base = lambda specs: recovered.extend(specs)
+
+    def proc(rc, err=""):
+        return types.SimpleNamespace(returncode=rc, stdout="", stderr=err)
+
+    try:
+        attempts: list[str] = []
+
+        def run(expr, t, cancel_token=None):
+            attempts.append(expr)
+            if len(attempts) == 1:   # first try: missing libxml2
+                return proc(1, "configuration failed because libxml-2.0 was not found\n"
+                               "ERROR: configuration failed for package 'xml2'\n"
+                               "had non-zero exit status\n")
+            return proc(0)           # retry after conda-installing the lib
+        rexec._run_rscript = run
+        loads = iter([True])         # post-recover verify loads
+        rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: next(loads)
+        r = rexec.r_install("github", "kharchenkolab/pagoda2", project_id="t", library="pagoda2")
+        check("missing-lib install self-healed → ready", r.get("status") == "ready", str(r))
+        check("conda-installed the providing lib (libxml2)", "libxml2" in recovered, str(recovered))
+        check("retried after recovery (2 attempts)", len(attempts) == 2)
+        check("reports recovered_lib", r.get("recovered_lib") == "libxml2", str(r))
+    finally:
+        rexec.ensure_r_runtime, rexec.ensure_r_base, rexec._run_rscript, rexec.r_has_package = orig
+
+
 def test_propose():
     print("propose r_package")
     r1 = propose_capability_tool({"name": "DESeq2", "archetype": "r_package", "source": "bioconductor"})
@@ -233,6 +273,8 @@ def main() -> int:
     test_ppm_repo_config()
     test_source_flag_and_diagnostics()
     test_verify_and_source_fallback()
+    test_runtime_core_deps()
+    test_missing_lib_autorecover()
     test_propose()
     test_ensure_routing()
     test_read_capability()
