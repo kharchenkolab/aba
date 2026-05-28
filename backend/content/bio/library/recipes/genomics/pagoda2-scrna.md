@@ -3,7 +3,7 @@ name: pagoda2-scrna
 description: Single-sample scRNA-seq processing, clustering, embedding and DE with the pagoda2 R6 pipeline
 when_to_use: One scRNA-seq sample (sparse count matrix); want fast normalization, variance adjustment, PCA, KNN clustering, 2D embedding, marker DE, and optionally an interactive web app
 requires_tools: [run_r]
-capabilities_needed: [pagoda2, Matrix, igraph]
+capabilities_needed: [pagoda2]
 keywords: [pagoda2, single cell, scRNA-seq, clustering, embedding, largeVis, tSNE, differential expression, kharchenkolab, R6]
 produces: [Pagoda2 object (rds), cluster factors, 2D embedding, differential genes table, optional *.bin web app]
 domain: genomics
@@ -72,8 +72,11 @@ GO overdispersion: `ext <- extendedP2proc(p2, organism='hs')` (also 'mm','dr').
   large for the cell count.
 
 ## In ABA
-- Install via `ensure_capability` — pagoda2 is a GitHub R package:
-  propose_capability(archetype='r_package', source='github', package='kharchenkolab/pagoda2').
-  It pulls igraph, which needs the GLPK system lib (conda `glpk`). Run all
-  steps in `run_r`. For the example datasets the vignette uses the `p2data`
-  drat package, but real inputs come from `read10xMatrix` or a saved matrix.
+- One step: `ensure_capability("pagoda2")` — it's a known capability in the
+  catalog (GitHub R package) and installs into the project R library. Then run
+  every step in `run_r`. **Don't hand-roll `install_github` and don't
+  `ensure_capability` Matrix/igraph/irlba separately** — those (plus xml2 and
+  igraph's GLPK system lib) already ship with the R runtime as conda binaries,
+  so `library(Matrix); library(igraph)` just work. For example data the vignette
+  uses the `p2data` drat package, but real inputs come from `read10xMatrix` or a
+  saved matrix.

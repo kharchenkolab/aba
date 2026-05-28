@@ -163,3 +163,28 @@ capabilities:
     provisioning: {conda: {channel: bioconda, spec: "star=2.7.11b"}}
     scope: institution
     status: published
+
+  # --- r_package (kharchenkolab single-cell stack; r_provisioning.md) ---
+  # DECLARATIONS only — discoverable + installable on demand via
+  # ensure_capability (native GitHub install into the project R library). NOT
+  # pre-installed. The R runtime already carries igraph/irlba/Matrix/Rcpp*/xml2
+  # as conda binaries, so these build without source-compiling the heavy deps.
+  - name: pagoda2
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, embedding, differential-expression, pagoda2]
+    summary: R6 single-cell RNA-seq pipeline — fast normalization, PCA, KNN clustering, largeVis/UMAP embedding, and differential expression.
+    provisioning: {r: {source: github, package: kharchenkolab/pagoda2, library: pagoda2}}
+    source: github
+    scope: system
+    status: published
+
+  - name: conos
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, integration, joint-clustering, alignment, conos]
+    summary: Joint analysis of multiple single-cell RNA-seq samples — builds a cross-sample graph for clustering, label propagation, and joint embedding.
+    provisioning: {r: {source: github, package: kharchenkolab/conos, library: conos}}
+    source: github
+    scope: system
+    status: published

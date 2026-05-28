@@ -230,6 +230,17 @@ def test_read_capability():
     check("note points at run_r library()", "run_r" in (r.get("note") or "") and "library(" in (r.get("note") or ""))
 
 
+def test_seed_r_packages():
+    print("seed catalog declares pagoda2 + conos (r_package, github) — no propose dance")
+    from core.catalog import resolve_capability
+    for n, repo in (("pagoda2", "kharchenkolab/pagoda2"), ("conos", "kharchenkolab/conos")):
+        c = resolve_capability(n) or {}
+        r = (c.get("provisioning") or {}).get("r") or {}
+        check(f"{n} present as r_package", c.get("archetype") == "r_package", str(c)[:120])
+        check(f"{n} → github {repo}", r.get("source") == "github" and r.get("package") == repo, str(r))
+        check(f"{n} library name = {n}", r.get("library") == n, str(r))
+
+
 def test_base_manifest():
     print("curated base manifest")
     specs = load_r_base_specs()
@@ -278,6 +289,7 @@ def main() -> int:
     test_propose()
     test_ensure_routing()
     test_read_capability()
+    test_seed_r_packages()
     test_base_manifest()
     test_kernel_libpaths()
     test_live()
