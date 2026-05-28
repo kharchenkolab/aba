@@ -94,7 +94,15 @@ def test_propose_archetypes():
     check("pipeline approved", r1.get("status") == "approved" and r1.get("archetype") == "pipeline", str(r1))
     cap = resolve_capability("sarek")
     check("pipeline provisioning stored", (cap.get("provisioning") or {}).get("pipeline", {}).get("nf_core") == "sarek", str(cap))
-    check("ensure pipeline -> deferred", ensure_capability({"name": "sarek"}).get("status") == "deferred")
+    # ensure on a pipeline now installs nextflow (see d5_nextflow); mock the
+    # materialize so this discovery test doesn't trigger a real conda install.
+    from core.exec import MaterializingExecutor
+    _orig = MaterializingExecutor.materialize
+    MaterializingExecutor.materialize = lambda self, prov, scope="system": None
+    try:
+        check("ensure pipeline -> ready (nextflow)", ensure_capability({"name": "sarek"}).get("status") == "ready")
+    finally:
+        MaterializingExecutor.materialize = _orig
 
     r2 = propose_capability_tool({"name": "weather-mcp", "archetype": "mcp_server",
                                   "connection": {"command": "node", "args": ["x.js"]}})
