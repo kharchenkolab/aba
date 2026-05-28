@@ -57,9 +57,11 @@ def main() -> int:
     check("explicit type_filter='capability' still returns them",
           len(list_entities(type_filter="capability")) >= 1)
 
-    print("ensure_capability: deferred conda tool")
-    r_salmon = ensure_capability({"name": "salmon"})
-    check("conda CLI tool → deferred", r_salmon.get("status") == "deferred", str(r_salmon))
+    print("conda CLI tool is catalogued (materialization covered by p3_cli_tools)")
+    salmon = resolve_capability("salmon")
+    check("salmon catalogued as conda/cli (not materialized here)",
+          bool(salmon) and (salmon.get("provisioning") or {}).get("conda") is not None,
+          str(salmon))
 
     print("ensure_capability: not found")
     check("unknown capability → not_found",

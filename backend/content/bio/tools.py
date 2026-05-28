@@ -1008,9 +1008,15 @@ def ensure_capability(input_: dict) -> dict:
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
-        return {"status": "deferred", "name": cap.get("name"),
-                "note": "Non-Python CLI tool (conda). Discoverable, but the conda "
-                        "materialization path isn't wired yet — not runnable here."}
+        from core.exec import MaterializingExecutor, Provisioning
+        try:
+            MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]))
+        except Exception as e:  # noqa: BLE001
+            return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
+        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"),
+                "note": "Installed into the conda tools env; the binary is on PATH — "
+                        "invoke it from run_python via subprocess."}
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
