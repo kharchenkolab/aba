@@ -47,6 +47,9 @@ class SkillSpec:
     produces:       tuple[str, ...] = ()
     parameter_schema: dict[str, Any] = field(default_factory=dict)
     resource_profile: str = ""
+    # Provenance of the procedure (e.g. 'biomni:tool/genomics.py::…',
+    # 'github:kharchenkolab/pagoda2 + vignette …'). Surfaced in the catalog UI.
+    source:         str = ""
     body:           str = ""
     source_path:    str = ""           # for diagnostics; not part of identity
 
@@ -105,6 +108,7 @@ def _spec_from_text(text: str, source_path: str = "") -> SkillSpec:
         produces=tuple(prod),
         parameter_schema=fm.get("parameter_schema") or {},
         resource_profile=str(fm.get("resource_profile") or "").strip(),
+        source=str(fm.get("source") or "").strip(),
         body=body,
         source_path=source_path,
     )
