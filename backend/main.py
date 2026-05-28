@@ -28,7 +28,6 @@ from content.bio.lifecycle.scenarios import create_scenario_variant
 from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
 from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status, reject_all_pending_suggestions
 from content.bio.lifecycle.adaptive import append_to_policy, run_probe
-from content.bio.tools_registry import registry as tools_registry
 from content.bio.graph.figure_history import figure_history
 from core.graph.audit import list_events
 from core.graph.jobs import list_jobs, get_job
@@ -1460,23 +1459,6 @@ def history_legacy():
 def history_clear_legacy():
     clear_messages(WORKSPACE_ID)
     return {"ok": True}
-
-
-@app.get("/api/tools")
-def tools_catalog():
-    """Catalog of tools and skills for the Skills screen (Phase 12/14)."""
-    return tools_registry()
-
-
-class ToolEnabledRequest(BaseModel):
-    enabled: bool
-
-
-@app.post("/api/tools/{name}/enabled")
-def tools_set_enabled(name: str, req: ToolEnabledRequest):
-    from core.graph.tool_settings import set_tool_enabled
-    set_tool_enabled(name, req.enabled)
-    return {"name": name, "enabled": req.enabled}
 
 
 # ---------- Jobs (Phase 17) ----------
