@@ -14,6 +14,7 @@ Non-Python CLI tools (salmon/STAR/fastqc — not on PyPI) need conda; that path
 is deferred (capdat_impl.md task 186) and raises NotImplementedError here.
 """
 from __future__ import annotations
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,10 +25,15 @@ from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
 
 PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --target overlay for libraries
+TOOLS_ENV = ENVS_DIR / "tools"          # one shared conda env for CLI tools
 
 
 def pylib_dir() -> Path:
     return PYLIB_DIR
+
+
+def tools_env() -> Path:
+    return TOOLS_ENV
 
 
 class MaterializingExecutor:
@@ -37,25 +43,55 @@ class MaterializingExecutor:
     def __init__(self):
         self._local = LocalSubprocessExecutor()
 
-    def materialize(self, prov: Provisioning, scope: str = "system") -> Env:
-        base = Env(id="base-venv", kind="venv", python=sys.executable)
-        if prov is None or prov.is_base():
-            return base
+    def _tools_overlay(self) -> dict:
+        """PATH overlay for the conda tools env, when it exists. Always applied
+        to the base env so run_python sees any materialized CLI tool — mirror of
+        how the pylib overlay is always on sys.path."""
+        binp = TOOLS_ENV / "bin"
+        return {"PATH": str(binp)} if binp.exists() else {}
 
-        if prov.conda or prov.container or prov.binary or prov.cran:
+    def _base_env(self) -> Env:
+        return Env(id="base-venv", kind="venv", python=sys.executable,
+                   env_overlay=self._tools_overlay())
+
+    def materialize(self, prov: Provisioning, scope: str = "system") -> Env:
+        if prov is None or prov.is_base():
+            return self._base_env()
+
+        if prov.container or prov.binary or prov.cran:
             raise NotImplementedError(
-                "Non-pip provisioning (conda/container/cran/binary) is deferred; "
-                "CLI tools that aren't on PyPI need conda — to be wired when first "
-                "requested (capdat_impl.md task 186)."
+                "container/binary/cran provisioning is deferred (capdat_impl.md seams)."
             )
+
+        if prov.conda:
+            self._conda_install(prov.conda)
+            return Env(id="conda-tools", kind="conda", root=str(TOOLS_ENV),
+                       python=sys.executable, env_overlay=self._tools_overlay())
 
         if prov.pip:
             self._pip_install(prov.pip)
-            # Return the base venv: run_python appends the overlay to sys.path
-            # itself, so the same base interpreter sees both .venv and overlay.
-            return base
+            # Return the base venv: run_python appends the pylib overlay to
+            # sys.path itself, so one interpreter sees both .venv and overlay.
+            return self._base_env()
 
-        return base
+        return self._base_env()
+
+    def _conda_install(self, conda: dict) -> None:
+        """Install a CLI tool into the shared conda tools env via micromamba.
+        Cached: skips if the package is already present."""
+        from core.exec.mamba import run_micromamba, installed_packages
+        spec = (conda.get("spec") or "").strip()
+        channel = conda.get("channel") or "conda-forge"
+        if not spec:
+            raise RuntimeError("conda provisioning needs a 'spec'")
+        pkg = re.split(r"[=<>!]", spec)[0].strip()
+        if pkg and pkg in installed_packages(TOOLS_ENV):
+            return  # cache hit
+        # micromamba install -p doesn't auto-create the prefix; use create the
+        # first time, install thereafter (adds to the shared tools env).
+        verb = "install" if (TOOLS_ENV / "conda-meta").exists() else "create"
+        run_micromamba([verb, "-y", "-p", str(TOOLS_ENV),
+                        "-c", channel, "-c", "conda-forge", spec])
 
     def _pip_install(self, packages: Sequence[str]) -> None:
         """pip install the packages into the shared overlay. Idempotent enough:

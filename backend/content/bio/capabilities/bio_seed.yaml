@@ -72,7 +72,16 @@ capabilities:
     scope: institution
     status: published
 
-  # --- conda-only CLI tools (discoverable; materialization deferred) ---
+  # --- conda CLI tools (materialize via micromamba into the shared tools env) ---
+  - name: seqkit
+    version: "2.8"
+    archetype: cli
+    domain_tags: [sequence, fasta, fastq, manipulation]
+    summary: Fast cross-platform toolkit for FASTA/FASTQ manipulation.
+    provisioning: {conda: {channel: bioconda, spec: "seqkit"}}
+    scope: institution
+    status: published
+
   - name: salmon
     version: "1.10.3"
     archetype: cli
