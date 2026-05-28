@@ -92,8 +92,8 @@ def test_source_flag_and_diagnostics():
     # parallel source builds
     check("sets MAKEFLAGS -j for parallel compile", 'MAKEFLAGS="-j' in c, c[:90])
     check("passes Ncpus for parallel dep builds", "Ncpus=" in c, c)
-    check("github install also parallelized",
-          'MAKEFLAGS="-j' in g and "Ncpus=" in rexec.install_command("github", "a/b", lib="/L"))
+    gh = rexec.install_command("github", "a/b", lib="/L")
+    check("github install also parallelized", 'MAKEFLAGS="-j' in gh and "Ncpus=" in gh, gh[:90])
     # diagnostics pull the actionable lines + a missing system-lib name
     log = ("** building package indices\n"
            "/usr/bin/ld: cannot find -lgdal\n"
