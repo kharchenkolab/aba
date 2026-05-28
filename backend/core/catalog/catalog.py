@@ -16,6 +16,35 @@ from core.graph.entities import create_entity, get_entity, list_entities
 CAPABILITY = "capability"
 REFERENCE = "reference"
 
+# Seed providers (registered by content, e.g. content.bio.capabilities) run
+# lazily the first time a project's catalog is queried and found empty. This is
+# dependency inversion: content registers into core, not the reverse. Keyed by
+# DB path so each project DB gets seeded once.
+_seed_providers: list = []
+_seeded_dbs: set[str] = set()
+
+
+def register_seed_provider(fn) -> None:
+    if fn not in _seed_providers:
+        _seed_providers.append(fn)
+
+
+def _ensure_seeded() -> None:
+    if not _seed_providers:
+        return
+    from core.graph._schema import DB_PATH
+    key = str(DB_PATH)
+    if key in _seeded_dbs:
+        return
+    # Mark first to avoid recursion (providers call resolve/register, which
+    # call _ensure_seeded again).
+    _seeded_dbs.add(key)
+    for fn in _seed_providers:
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            pass
+
 
 def _to_capability(entity: dict) -> dict:
     """Flatten an entity row into a capability dict (metadata + id)."""
@@ -64,6 +93,7 @@ def list_capabilities(
 ) -> list[dict]:
     """Return visible capabilities, optionally filtered by a substring query
     (over name + summary + tags) and/or required domain tags."""
+    _ensure_seeded()
     out: list[dict] = []
     q = (query or "").lower().strip()
     want_tags = set(tags or [])
@@ -98,6 +128,7 @@ def resolve_capability(
     if ent is not None and ent.get("type") == CAPABILITY:
         cap = _to_capability(ent)
         return cap if _visible(cap, ctx) else None
+    _ensure_seeded()
     for cap in list_capabilities(ctx=ctx):
         if cap.get("name") == name_or_id:
             if version is None or str(cap.get("version")) == str(version):

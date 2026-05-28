@@ -5,7 +5,7 @@ Frozen interface. `Provisioning` over-declares satisfiers (`container`,
 as backends are added — the executor simply learns new branches.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Protocol, Sequence
 
 
@@ -33,6 +33,10 @@ class Env:
     kind: str                               # "venv" | "conda" | "container" | "remote"
     root: Optional[str] = None              # filesystem root, when local
     python: Optional[str] = None            # interpreter path, when relevant
+    env_overlay: dict = field(default_factory=dict)
+    # Extra environment variables exec() merges in — e.g. PYTHONPATH for the
+    # pylib overlay, PATH for a conda env's bin. Lets one materialized env
+    # compose with the base venv without mutating it.
 
 
 @dataclass

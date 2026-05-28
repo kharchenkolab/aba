@@ -15,6 +15,11 @@ ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", BASE_DIR / "artifacts")).resolve
 # where the sandbox writes intermediates freely. Unregistered, GC'd on a TTL.
 # Distinct from ARTIFACTS_DIR (the durable, content-addressed "kept" tier).
 WORK_DIR = Path(os.getenv("ABA_WORK_DIR", BASE_DIR / "work")).resolve()
+# ENVS_DIR is the materialized-tools area (capabilities.md / capdat_impl.md P1):
+# wipeable as a whole (rm -rf → repopulates on demand), kept OUT of the system
+# .venv so the backend's env stays pristine. Holds the pylib overlay (one
+# shared pip --target dir for Python libs) and conda envs for CLI tools.
+ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", BASE_DIR / "envs")).resolve()
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("ABA_MODEL", "claude-haiku-4-5-20251001")
 FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")

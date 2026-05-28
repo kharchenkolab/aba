@@ -283,6 +283,46 @@ TOOL_SCHEMAS = [
             "required": ["question"],
         },
     },
+    {
+        "name": "list_capabilities",
+        "description": (
+            "Search the capability catalog — the tools and libraries available "
+            "(or installable on demand) for analysis. Use this when you need a "
+            "tool you're not sure is installed (e.g. enrichment, a specific "
+            "parser, a quantifier). Returns name, what it does, and whether it's "
+            "a Python library or a CLI tool. Pair with ensure_capability to make "
+            "one ready before using it in run_python."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "Free-text search over names/summaries/tags, e.g. 'enrichment'."},
+                "tags": {"type": "array", "items": {"type": "string"},
+                         "description": "Optional domain tags to filter by, e.g. ['rna-seq']."},
+            },
+        },
+    },
+    {
+        "name": "ensure_capability",
+        "description": (
+            "Make a catalogued capability ready to use, materializing it on "
+            "demand if needed. For a Python library this installs it into the "
+            "materialized-library overlay so the very next run_python can import "
+            "it. Call this BEFORE run_python when your code needs a package that "
+            "isn't in the base environment. Returns status 'ready' (importable "
+            "now), 'deferred' (a CLI tool whose install path isn't wired yet), "
+            "or 'not_found'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "Capability name from the catalog (e.g. 'gseapy')."},
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -344,7 +384,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     persists across the run's turns and is GC'd on a TTL; it is NOT deleted
     here, so the agent can revisit its working files."""
     from core.data.workspace import scratch_dir
-    from core.exec import LocalSubprocessExecutor, Provisioning
+    from core.exec import MaterializingExecutor, Provisioning, pylib_dir
     from core import projects
 
     code = input_.get("code", "")
@@ -361,16 +401,20 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         scratch = scratch_dir(str(project_id), str(run_id))
 
         biomni_path = Path(__file__).parent.parent / "biomni"
+        # Append (not prepend) the materialized-library overlay to sys.path so
+        # the .venv's scientific stack wins and the overlay only supplies what's
+        # missing (e.g. a gseapy materialized via ensure_capability).
         preamble = (
             f"DATA_DIR = {str(DATA_DIR)!r}\n"
             f"import sys as _sys\n"
             f"_sys.path.insert(0, {str(biomni_path)!r})\n"
+            f"_sys.path.append({str(pylib_dir())!r})\n"
         )
         script = scratch / "script.py"
         script.write_text(preamble + code)
 
-        ex = LocalSubprocessExecutor()
-        env = ex.materialize(Provisioning())          # base venv
+        ex = MaterializingExecutor()
+        env = ex.materialize(Provisioning())          # base venv (+ overlay via preamble)
         result = ex.exec(
             env, [env.python or sys.executable, str(script)],
             cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
@@ -785,6 +829,47 @@ def _test_deferred_tool(input_: dict) -> dict:
     return {"deferred": True, "deferred_id": input_.get("id") or "demo-job-1"}
 
 
+def list_capabilities_tool(input_: dict) -> dict:
+    """Search the capability catalog (P1). Returns a trimmed view for the model."""
+    from core.catalog import list_capabilities as _list
+    caps = _list(query=input_.get("query"), tags=input_.get("tags"))
+    return {"capabilities": [
+        {"name": c.get("name"), "version": c.get("version"),
+         "archetype": c.get("archetype"), "summary": c.get("summary"),
+         "domain_tags": c.get("domain_tags"), "status": c.get("status")}
+        for c in caps
+    ]}
+
+
+def ensure_capability(input_: dict) -> dict:
+    """Materialize a catalogued capability on demand (P1). Python libraries go
+    into the wipeable overlay so the next run_python can import them; non-pip
+    CLI tools (conda) are reported as deferred."""
+    name = (input_.get("name") or input_.get("capability") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+    from core.catalog import resolve_capability
+    cap = resolve_capability(name)
+    if not cap:
+        return {"status": "not_found",
+                "note": f"No capability '{name}' in the catalog. Use list_capabilities to search."}
+    prov = cap.get("provisioning") or {}
+    if prov.get("pip"):
+        from core.exec import MaterializingExecutor, Provisioning
+        try:
+            MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])))
+        except Exception as e:  # noqa: BLE001
+            return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
+        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"),
+                "note": "Installed into the materialized-library overlay; importable from run_python now."}
+    if prov.get("conda"):
+        return {"status": "deferred", "name": cap.get("name"),
+                "note": "Non-Python CLI tool (conda). Discoverable, but the conda "
+                        "materialization path isn't wired yet — not runnable here."}
+    return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -798,6 +883,8 @@ EXECUTORS = {
     "read_skill": read_skill,
     "read_memory": read_memory_tool,
     "write_memory": write_memory_tool,
+    "list_capabilities": list_capabilities_tool,
+    "ensure_capability": ensure_capability,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:

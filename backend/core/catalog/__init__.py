@@ -10,11 +10,11 @@ P1-P3 fill in behavior without reshaping callers.
 from core.catalog.catalog import (
     CAPABILITY, REFERENCE,
     register_capability, list_capabilities, resolve_capability,
-    propose_capability,
+    propose_capability, register_seed_provider,
 )
 
 __all__ = [
     "CAPABILITY", "REFERENCE",
     "register_capability", "list_capabilities", "resolve_capability",
-    "propose_capability",
+    "propose_capability", "register_seed_provider",
 ]
