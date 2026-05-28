@@ -1,0 +1,14 @@
+name: biomni
+display_name: Biomni tool catalogue (reference)
+kind: reference            # extracted knowledge — NOT a runtime we import
+origin: biomni
+scope: institution
+description: >
+  A reference catalogue of computational-biology tools across 22 domains
+  (genomics, immunology, cancer biology, pharmacology, …), EXTRACTED from
+  biomni's tool descriptions. It tells the agent what analyses exist and what
+  inputs they need — discovery + planning knowledge. biomni is mined offline,
+  not depended on at runtime: these entries are not callable via biomni. To run
+  one, the agent uses ABA's own capabilities (real libraries) or, later, a
+  solution copied into lakeFS (see source_ref on each entry).
+index: index.json

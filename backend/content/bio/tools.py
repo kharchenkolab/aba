@@ -367,6 +367,23 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "read_capability",
+        "description": (
+            "Get full detail for one capability by name — what it does, its inputs "
+            "(params), and, for a reference entry (e.g. a tool mined from biomni), "
+            "where the original implementation lives (source_ref). The catalogue "
+            "search returns trimmed rows; call this once you've picked a candidate "
+            "and need its signature before using or implementing it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Capability name from the catalogue."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "ensure_capability",
         "description": (
             "Make a catalogued capability ready to use, materializing it on "
@@ -698,7 +715,6 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
-    biomni_path = str(Path(__file__).parent.parent / "biomni")
 
     # Lane selection (kernels.md §7): background > fresh > interactive.
     # - background: stateless job, deferred result the guide loop resumes from.
@@ -754,7 +770,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     try:
         return run_python_code(code, project_id=str(project_id), run_id=str(run_id),
                                timeout_s=timeout_s, cancel_token=cancel_token,
-                               extra_syspath=[biomni_path])
+                               extra_syspath=[])
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
 
@@ -1179,6 +1195,49 @@ def _test_deferred_tool(input_: dict) -> dict:
     return {"deferred": True, "deferred_id": input_.get("id") or "demo-job-1"}
 
 
+def read_capability(input_: dict) -> dict:
+    """Full detail for one capability by name — what it does, its inputs, and
+    (for a reference entry like a biomni tool) where the implementation lives.
+    Mirrors read_skill: list/search stay trimmed; this expands one on demand."""
+    name = (input_.get("name") or input_.get("capability") or "").strip()
+    if not name:
+        return {"status": "error", "note": "read_capability needs a non-empty `name`."}
+    from core.catalog import resolve_capability
+    cap = resolve_capability(name)
+    if not cap:
+        return {"status": "not_found",
+                "note": f"No capability '{name}'. Use list_capabilities to search."}
+    out = {
+        "status": "ok",
+        "name": cap.get("name"),
+        "archetype": cap.get("archetype"),
+        "summary": cap.get("summary"),
+        "domain_tags": cap.get("domain_tags"),
+        "collection": cap.get("collection"),
+        "scope": cap.get("scope"),
+    }
+    if cap.get("required_params") is not None or cap.get("optional_params") is not None:
+        out["required_params"] = cap.get("required_params") or []
+        out["optional_params"] = cap.get("optional_params") or []
+    if cap.get("reference"):
+        out["reference"] = True
+        out["origin"] = cap.get("origin")
+        out["source_ref"] = cap.get("source_ref")
+        out["note"] = (
+            f"Reference knowledge extracted from {cap.get('origin')} — describes the "
+            f"approach + inputs; not runnable via {cap.get('origin')}. Implement with "
+            f"ABA capabilities (or a lakeFS solution later; source_ref points to the "
+            f"original implementation)."
+        )
+    else:
+        if cap.get("version"):
+            out["version"] = cap.get("version")
+        if cap.get("import_path"):
+            out["import_path"] = cap.get("import_path")
+        out["note"] = "Use ensure_capability to make it ready, then use it in run_python."
+    return out
+
+
 def list_capabilities_tool(input_: dict) -> dict:
     """Search the capability catalog (P1). Intent-ranked (BM25 + substring)
     when a query is given, plain tag-filter otherwise. Returns a trimmed
@@ -1444,6 +1503,16 @@ def ensure_capability(input_: dict) -> dict:
         return {"status": "awaiting_approval", "name": cap.get("name"),
                 "note": f"'{name}' is proposed but not yet approved; it can't be "
                         f"materialized until approval."}
+    # Reference catalogue entry (e.g. extracted from biomni): know-how, not a
+    # runnable artifact in ABA. Don't pretend to install it.
+    if cap.get("reference"):
+        return {"status": "reference", "name": cap.get("name"),
+                "origin": cap.get("origin"), "source_ref": cap.get("source_ref"),
+                "note": f"'{cap.get('name')}' is a reference entry extracted from "
+                        f"{cap.get('origin')} — it describes an approach, it isn't "
+                        f"runnable here. Implement it with ABA capabilities (search the "
+                        f"catalogue / propose_capability for the real libraries), using "
+                        f"read_capability for its inputs."}
     prov = cap.get("provisioning") or {}
     if prov.get("pip"):
         from core.exec import MaterializingExecutor, Provisioning
@@ -1743,6 +1812,7 @@ EXECUTORS = {
     "read_memory": read_memory_tool,
     "write_memory": write_memory_tool,
     "list_capabilities": list_capabilities_tool,
+    "read_capability": read_capability,
     "ensure_capability": ensure_capability,
     "search_pypi": search_pypi,
     "search_bioconda": search_bioconda,
