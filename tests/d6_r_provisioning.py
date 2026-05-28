@@ -52,6 +52,28 @@ def test_command_and_validation():
     check("github -> install_github with ref", "install_github('satijalab/seurat@v5.0.0'" in g, g)
     check("command prepends project lib on .libPaths", c.startswith(".libPaths(c('/L'"), c[:30])
     check("libpaths_expr prepends project lib", "proj1" in rexec.libpaths_expr("proj1"))
+    # PPM: CRAN install targets a Posit PM repo + sets the binary-serving UA.
+    check("cran uses a PPM repo", "packagemanager.posit.co" in c, c)
+    check("cran sets the PPM HTTPUserAgent", "HTTPUserAgent" in c, c)
+    check("github does NOT force a repo/UA", "HTTPUserAgent" not in g and "posit.co" not in g)
+
+
+def test_ppm_repo_config():
+    print("PPM repo URL + config knobs")
+    import os
+    # auto-detected distro on this box (noble) → binary URL
+    check("default repo is a PPM url", "packagemanager.posit.co" in rexec.cran_repo(), rexec.cran_repo())
+    os.environ["ABA_R_PPM_DISTRO"] = "jammy"
+    os.environ["ABA_R_PPM_SNAPSHOT"] = "2024-12-01"
+    try:
+        url = rexec.cran_repo()
+        check("respects distro override", "__linux__/jammy" in url, url)
+        check("respects snapshot override", url.endswith("/2024-12-01"), url)
+        os.environ["ABA_R_PPM_DISTRO"] = ""   # explicit empty → source-only
+        check("empty distro -> source-only (no __linux__)", "__linux__" not in rexec.cran_repo(), rexec.cran_repo())
+    finally:
+        os.environ.pop("ABA_R_PPM_DISTRO", None)
+        os.environ.pop("ABA_R_PPM_SNAPSHOT", None)
     # validation
     check("rejects injection-y name", rexec.validate_install("cran", "x); system('rm')", None) is not None)
     check("github needs owner/repo", rexec.validate_install("github", "justname", None) is not None)
@@ -124,13 +146,20 @@ def test_live():
     if os.environ.get("ABA_R_LIVE") != "1":
         print("live R install: SKIPPED (set ABA_R_LIVE=1 to run)")
         return
-    print("live: minimal runtime + tiny CRAN + GitHub install")
+    print("live: runtime + PPM CRAN (pure-R + compiled) + GitHub install")
     rexec.ensure_r_runtime()
     check("R runtime ready", rexec.r_runtime_ready())
+    print(f"    CRAN repo in use: {rexec.cran_repo()}")
+    # pure-R from PPM
     cr = rexec.r_install("cran", "praise", project_id="d6live")
     check("CRAN install (praise) ready", cr.get("status") == "ready", str(cr)[:300])
     check("praise loadable in project lib", rexec.r_has_package("praise", project_id="d6live"))
-    gh = rexec.r_install("github", "cran/crayon", project_id="d6live")  # CRAN github mirror, pure-R
+    # compiled package from PPM — the real test of the binary route under conda R
+    jc = rexec.r_install("cran", "jsonlite", project_id="d6live")
+    check("CRAN install (jsonlite, compiled) ready", jc.get("status") == "ready", str(jc)[:300])
+    check("jsonlite loadable in project lib", rexec.r_has_package("jsonlite", project_id="d6live"))
+    # GitHub (CRAN mirror, pure-R) → source build path
+    gh = rexec.r_install("github", "cran/crayon", project_id="d6live")
     check("GitHub install (cran/crayon) ready", gh.get("status") == "ready", str(gh)[:300])
     check("crayon loadable in project lib", rexec.r_has_package("crayon", project_id="d6live"))
 
@@ -138,6 +167,7 @@ def test_live():
 def main() -> int:
     init_db()
     test_command_and_validation()
+    test_ppm_repo_config()
     test_propose()
     test_ensure_routing()
     test_read_capability()
