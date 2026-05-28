@@ -421,23 +421,64 @@ TOOL_SCHEMAS = [
         },
     },
     {
-        "name": "propose_capability",
+        "name": "search_nf_core",
         "description": (
-            "Add a tool to the catalog on demand. For a Python library (default, "
-            "archetype='library') found via search_pypi; for a command-line tool "
-            "(archetype='cli') found via search_bioconda. In solo mode it's "
-            "auto-approved and ready to install via ensure_capability. For a "
-            "library whose import name differs from the package name, pass "
-            "import_name (e.g. 'scikit-image' imports as 'skimage')."
+            "Discover nf-core pipelines by intent (e.g. 'rna-seq quantification', "
+            "'variant calling', 'methylation') when the analysis is a whole curated "
+            "workflow rather than a single tool. Returns ranked pipelines; adopt one "
+            "with propose_capability(archetype='pipeline'). Note: running a pipeline "
+            "needs a Nextflow runtime that isn't wired yet (adoption is record-only)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Package/tool name."},
-                "archetype": {"type": "string", "enum": ["library", "cli"],
-                              "description": "'library' = Python package (pip); 'cli' = command-line tool (conda)."},
+                "query": {"type": "string", "description": "What the pipeline should do, in plain words."},
+                "limit": {"type": "integer", "description": "Max results (default 8)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_mcp_registry",
+        "description": (
+            "Discover external MCP servers (tool servers published by others) by "
+            "intent when no in-catalog capability fits. Returns ranked servers with "
+            "a connection hint; adopt one with propose_capability(archetype="
+            "'mcp_server', connection=...), then ensure_capability connects it live "
+            "and its tools become callable as 'server:tool' this session."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What capability you need, in plain words."},
+                "limit": {"type": "integer", "description": "Max results (default 8)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "propose_capability",
+        "description": (
+            "Add a tool to the catalog on demand. Archetypes: 'library' (Python "
+            "package via pip, found via search_pypi); 'cli' (command-line tool via "
+            "conda, found via search_bioconda); 'mcp_server' (external MCP server "
+            "found via search_mcp_registry — pass connection={command,args} or "
+            "{transport,url}); 'pipeline' (nf-core pipeline found via search_nf_core). "
+            "In solo mode it's auto-approved. For a library whose import name differs "
+            "from the package name, pass import_name (e.g. 'scikit-image' → 'skimage')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Package/tool/server/pipeline name."},
+                "archetype": {"type": "string", "enum": ["library", "cli", "mcp_server", "pipeline"],
+                              "description": "'library'=pip; 'cli'=conda; 'mcp_server'=external MCP server; 'pipeline'=nf-core."},
                 "channel": {"type": "string",
                             "description": "Conda channel for cli tools (default 'bioconda')."},
+                "connection": {"type": "object",
+                               "description": "For mcp_server: {command, args[], env{}} (stdio) or {transport, url} (remote)."},
+                "url": {"type": "string", "description": "For pipeline: the nf-core URL."},
+                "revision": {"type": "string", "description": "For pipeline: pinned revision/version."},
                 "version": {"type": "string", "description": "Optional pinned version."},
                 "summary": {"type": "string", "description": "Optional one-line description."},
                 "import_name": {"type": "string",
@@ -1258,6 +1299,133 @@ def search_bioconda(input_: dict) -> dict:
         return {"error": f"bioconda lookup failed: {e}"}
 
 
+def _http_get_json(url: str, timeout: int = 15) -> dict:
+    """GET a URL and parse JSON. Browser UA (some hosts 403 bare urllib).
+    Raises on network/parse error — callers translate to a graceful note."""
+    import json as _json
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ABA discovery)"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read())
+
+
+# Indirection so tests can stub the network without monkeypatching urllib.
+_HTTP_GET_JSON = _http_get_json
+
+
+def search_nf_core(input_: dict) -> dict:
+    """Discover nf-core pipelines by intent (item 3). Fetches the public
+    nf-co.re pipelines index and ranks it with our BM25 over name +
+    description + topics. A discovered pipeline can be catalogued via
+    propose_capability(archetype='pipeline'); actually running it needs a
+    Nextflow runtime (not yet wired), so adoption is record-only for now."""
+    q = (input_.get("query") or "").strip()
+    if not q:
+        return {"status": "error", "note": "search_nf_core needs a non-empty `query`."}
+    limit = int(input_.get("limit") or 8)
+    try:
+        data = _HTTP_GET_JSON("https://nf-co.re/pipelines.json")
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "note": f"Could not reach nf-core registry: {e}"}
+    pipelines = data.get("remote_workflows") or data.get("pipelines") or []
+    from core.search import BM25
+    by_name: dict[str, dict] = {}
+    docs = []
+    for p in pipelines:
+        name = p.get("name") or ""
+        if not name:
+            continue
+        topics = " ".join(p.get("topics") or [])
+        by_name[name] = p
+        docs.append((name, f"{name} {p.get('description','')} {topics}"))
+    ranked = [n for n, _ in BM25(docs).search(q, limit=limit)]
+    out = []
+    for name in ranked:
+        p = by_name[name]
+        rels = p.get("releases") or []
+        latest = rels[0].get("tag_name") if rels and isinstance(rels[0], dict) else None
+        out.append({
+            "name": name,
+            "description": p.get("description"),
+            "topics": p.get("topics") or [],
+            "url": f"https://nf-co.re/{name}",
+            "latest_release": latest,
+        })
+    return {"pipelines": out, "total_indexed": len(docs),
+            "note": "Adopt one with propose_capability(name, archetype='pipeline'). "
+                    "Running pipelines needs a Nextflow runtime (deferred)."}
+
+
+_DEFAULT_MCP_REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers"
+
+
+def _mcp_registry_url() -> str:
+    """Public MCP server registry. Override via ABA_MCP_REGISTRY_URL to point at
+    Smithery / an internal registry without code changes (read at call time)."""
+    import os
+    return os.environ.get("ABA_MCP_REGISTRY_URL", _DEFAULT_MCP_REGISTRY_URL)
+
+
+def _mcp_command_hint(server: dict) -> Optional[dict]:
+    """Best-effort connection spec from a registry entry's packages/remotes,
+    in the shape propose_capability(archetype='mcp_server') expects."""
+    for pkg in (server.get("packages") or []):
+        reg = (pkg.get("registry_name") or pkg.get("registry_type") or "").lower()
+        pname = pkg.get("name") or pkg.get("identifier")
+        if not pname:
+            continue
+        if reg in ("npm", "node"):
+            return {"command": "npx", "args": ["-y", pname]}
+        if reg in ("pypi", "python"):
+            return {"command": "uvx", "args": [pname]}
+    for rem in (server.get("remotes") or []):
+        if rem.get("url"):
+            return {"transport": rem.get("transport_type") or "sse", "url": rem["url"]}
+    return None
+
+
+def search_mcp_registry(input_: dict) -> dict:
+    """Discover external MCP servers by intent (item 3). Fetches a public MCP
+    registry (configurable via ABA_MCP_REGISTRY_URL) and ranks entries with
+    our BM25 over name + description. A hit can be adopted as a capability via
+    propose_capability(archetype='mcp_server', connection=...), then
+    ensure_capability connects it live so its tools become callable."""
+    q = (input_.get("query") or "").strip()
+    if not q:
+        return {"status": "error", "note": "search_mcp_registry needs a non-empty `query`."}
+    limit = int(input_.get("limit") or 8)
+    registry_url = _mcp_registry_url()
+    try:
+        data = _HTTP_GET_JSON(registry_url)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "note": f"Could not reach MCP registry: {e}"}
+    servers = data.get("servers") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    from core.search import BM25
+    by_id: dict[str, dict] = {}
+    docs = []
+    for i, s in enumerate(servers or []):
+        name = s.get("name") or s.get("id") or f"server-{i}"
+        sid = f"{i}:{name}"
+        by_id[sid] = s
+        docs.append((sid, f"{name} {s.get('description','')}"))
+    ranked = [sid for sid, _ in BM25(docs).search(q, limit=limit)]
+    out = []
+    for sid in ranked:
+        s = by_id[sid]
+        conn = _mcp_command_hint(s)
+        out.append({
+            "name": s.get("name") or s.get("id"),
+            "description": s.get("description"),
+            "repository": (s.get("repository") or {}).get("url") if isinstance(s.get("repository"), dict) else s.get("repository"),
+            "connection": conn,
+            "adoptable": conn is not None,
+        })
+    return {"servers": out, "total_indexed": len(docs), "registry": registry_url,
+            "note": "Adopt one with propose_capability(name, archetype='mcp_server', "
+                    "connection={command,args} or {transport,url}); then ensure_capability "
+                    "connects it and its tools become callable as 'server:tool'."}
+
+
 def ensure_capability(input_: dict) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -1299,6 +1467,35 @@ def ensure_capability(input_: dict) -> dict:
                 "archetype": cap.get("archetype"),
                 "note": "Installed into the conda tools env; the binary is on PATH — "
                         "invoke it from run_python via subprocess."}
+    if prov.get("mcp_server"):
+        # Live adoption: connect the external server now so its tools become
+        # callable as 'server:tool' for the rest of this session.
+        conn = prov["mcp_server"]
+        if conn.get("url"):
+            return {"status": "deferred", "name": cap.get("name"), "archetype": "mcp_server",
+                    "note": "Remote (HTTP/SSE) MCP transport isn't wired yet; only stdio "
+                            "(command/args) servers can be connected on demand."}
+        from core.runtime.mcp import add_server, ServerConfig
+        cfg = ServerConfig(
+            name=cap.get("name"),
+            command=conn.get("command"),
+            args=tuple(conn.get("args") or ()),
+            env={str(k): str(v) for k, v in (conn.get("env") or {}).items()},
+            cwd=conn.get("cwd"),
+        )
+        res = add_server(cfg)
+        if res.get("status") in ("connected", "already_connected"):
+            tools = res.get("tools") or []
+            return {"status": "ready", "name": cap.get("name"), "archetype": "mcp_server",
+                    "tools": tools,
+                    "note": f"Connected; {len(tools)} tool(s) now callable: "
+                            f"{', '.join(tools[:8])}{'…' if len(tools) > 8 else ''}."}
+        return {"status": "error", "name": cap.get("name"), "archetype": "mcp_server",
+                "note": f"Could not connect MCP server: {res.get('note')}"}
+    if prov.get("pipeline"):
+        return {"status": "deferred", "name": cap.get("name"), "archetype": "pipeline",
+                "note": "Pipeline cataloged, but running it needs a Nextflow runtime "
+                        "that isn't wired yet."}
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
@@ -1321,7 +1518,37 @@ def propose_capability_tool(input_: dict) -> dict:
 
     archetype = (input_.get("archetype") or "library").strip()
     version = str(input_.get("version") or "latest")
-    if archetype == "cli":
+    if archetype == "mcp_server":
+        # An external MCP server discovered via search_mcp_registry. Provisioning
+        # carries the connection spec; ensure_capability connects it live.
+        conn = input_.get("connection") or {}
+        if not isinstance(conn, dict) or not (conn.get("command") or conn.get("url")):
+            return {"status": "error", "name": name,
+                    "note": "mcp_server needs connection={command,args[,env]} (stdio) "
+                            "or {transport,url} (remote)."}
+        spec = {
+            "name": name, "version": version, "archetype": "mcp_server",
+            "summary": input_.get("summary") or f"{name} (MCP server, adopted on demand)",
+            "domain_tags": input_.get("tags") or [],
+            "provisioning": {"mcp_server": conn},
+            "source": input_.get("source") or "mcp_registry",
+        }
+    elif archetype == "pipeline":
+        # An nf-core (or similar) pipeline discovered via search_nf_core. Record
+        # only for now — running needs a Nextflow runtime (deferred).
+        spec = {
+            "name": name, "version": version, "archetype": "pipeline",
+            "summary": input_.get("summary") or f"{name} (nf-core pipeline, catalogued)",
+            "domain_tags": input_.get("tags") or [],
+            "provisioning": {"pipeline": {
+                "engine": "nextflow",
+                "nf_core": name,
+                "url": input_.get("url") or f"https://nf-co.re/{name}",
+                "revision": input_.get("revision") or version,
+            }},
+            "source": input_.get("source") or "nf-core",
+        }
+    elif archetype == "cli":
         # A command-line tool from a conda channel (e.g. bowtie2, bedtools).
         channel = input_.get("channel") or "bioconda"
         conda_spec = f"{name}={version}" if version and version != "latest" else name
@@ -1350,6 +1577,12 @@ def propose_capability_tool(input_: dict) -> dict:
     if archetype == "cli":
         note = ("Added to the catalog (auto-approved). Call ensure_capability to "
                 "install it; the binary will be on PATH — invoke it from run_python via subprocess.")
+    elif archetype == "mcp_server":
+        note = ("Added to the catalog (auto-approved). Call ensure_capability to "
+                "connect it live; its tools then appear as 'server:tool' and are callable this session.")
+    elif archetype == "pipeline":
+        note = ("Catalogued (auto-approved). Running it needs a Nextflow runtime "
+                "(not yet wired) — ensure_capability will report it as deferred.")
     else:
         note = ("Added to the catalog (auto-approved). Call ensure_capability to "
                 "install it, then import it in run_python.")
@@ -1513,6 +1746,8 @@ EXECUTORS = {
     "ensure_capability": ensure_capability,
     "search_pypi": search_pypi,
     "search_bioconda": search_bioconda,
+    "search_nf_core": search_nf_core,
+    "search_mcp_registry": search_mcp_registry,
     "propose_capability": propose_capability_tool,
     "fetch_url": fetch_url,
     "lookup_sra_runinfo": lookup_sra_runinfo,

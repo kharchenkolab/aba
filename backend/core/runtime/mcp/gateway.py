@@ -93,6 +93,28 @@ async def _connect_all() -> None:
                          return_exceptions=True)
 
 
+def add_server(cfg: ServerConfig) -> dict:
+    """Adopt + connect a server at RUNTIME (not from servers.yaml) — the
+    materialization path for an mcp_server-archetype capability. Idempotent on
+    name: an already-connected server short-circuits; a present-but-disconnected
+    one is reconnected. Returns {status, server, tools|note}. Synchronous: blocks
+    on the background loop until the connect attempt settles."""
+    global _started
+    existing = _handles.get(cfg.name)
+    if existing is not None and existing.state == HandleState.CONNECTED:
+        return {"status": "already_connected", "server": cfg.name,
+                "tools": [t.name for t in existing.tools]}
+    h = existing if existing is not None else ServerHandle(config=cfg)
+    _handles[cfg.name] = h
+    _started = True
+    _submit(h.connect())
+    if h.state == HandleState.CONNECTED:
+        return {"status": "connected", "server": cfg.name,
+                "tools": [t.name for t in h.tools]}
+    return {"status": "error", "server": cfg.name,
+            "note": h.last_error or "connect failed"}
+
+
 def shutdown() -> None:
     """Tear down all servers + stop the background loop."""
     global _loop, _thread, _started
