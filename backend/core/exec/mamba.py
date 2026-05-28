@@ -60,14 +60,16 @@ def _mamba_env() -> dict:
 
 
 def run_micromamba(args: Sequence[str], *, timeout_s: int = 1800,
-                   check: bool = True) -> subprocess.CompletedProcess:
+                   check: bool = True, cancel_token=None) -> subprocess.CompletedProcess:
     """Run micromamba with the standalone root prefix set. Raises on failure
     when `check` (default); with check=False, returns the CompletedProcess so
     the caller can inspect returncode/stderr (used for `micromamba run` of an R
-    install, where a non-zero exit is a normal, reportable outcome)."""
+    install, where a non-zero exit is a normal, reportable outcome). A
+    cancel_token makes a long install abortable by Stop (killpg the group)."""
+    from core.exec.proc import run_cancellable
     mamba = ensure_micromamba()
-    proc = subprocess.run([mamba, *args], capture_output=True, text=True,
-                          env=_mamba_env(), timeout=timeout_s)
+    proc = run_cancellable([mamba, *args], env=_mamba_env(),
+                           timeout_s=timeout_s, cancel_token=cancel_token)
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"micromamba {' '.join(args)} failed:\n{(proc.stderr or proc.stdout or '')[-1500:]}"

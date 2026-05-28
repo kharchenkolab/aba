@@ -54,7 +54,7 @@ class MaterializingExecutor:
         return Env(id="base-venv", kind="venv", python=sys.executable,
                    env_overlay=self._tools_overlay())
 
-    def materialize(self, prov: Provisioning, scope: str = "system") -> Env:
+    def materialize(self, prov: Provisioning, scope: str = "system", *, cancel_token=None) -> Env:
         if prov is None or prov.is_base():
             return self._base_env()
 
@@ -64,19 +64,19 @@ class MaterializingExecutor:
             )
 
         if prov.conda:
-            self._conda_install(prov.conda)
+            self._conda_install(prov.conda, cancel_token=cancel_token)
             return Env(id="conda-tools", kind="conda", root=str(TOOLS_ENV),
                        python=sys.executable, env_overlay=self._tools_overlay())
 
         if prov.pip:
-            self._pip_install(prov.pip)
+            self._pip_install(prov.pip, cancel_token=cancel_token)
             # Return the base venv: run_python appends the pylib overlay to
             # sys.path itself, so one interpreter sees both .venv and overlay.
             return self._base_env()
 
         return self._base_env()
 
-    def _conda_install(self, conda: dict) -> None:
+    def _conda_install(self, conda: dict, *, cancel_token=None) -> None:
         """Install a CLI tool into the shared conda tools env via micromamba.
         Cached: skips if the package is already present."""
         from core.exec.mamba import run_micromamba, installed_packages
@@ -87,20 +87,26 @@ class MaterializingExecutor:
         pkg = re.split(r"[=<>!]", spec)[0].strip()
         if pkg and pkg in installed_packages(TOOLS_ENV):
             return  # cache hit
+        from core.runtime import progress
+        progress.emit(f"conda: solving + installing {spec} (binary; can take a few minutes)…",
+                      phase="conda")
         # micromamba install -p doesn't auto-create the prefix; use create the
         # first time, install thereafter (adds to the shared tools env).
         verb = "install" if (TOOLS_ENV / "conda-meta").exists() else "create"
         run_micromamba([verb, "-y", "-p", str(TOOLS_ENV),
-                        "-c", channel, "-c", "conda-forge", spec])
+                        "-c", channel, "-c", "conda-forge", spec], cancel_token=cancel_token)
 
-    def _pip_install(self, packages: Sequence[str]) -> None:
+    def _pip_install(self, packages: Sequence[str], *, cancel_token=None) -> None:
         """pip install the packages into the shared overlay. Idempotent enough:
         pip is fast on already-satisfied targets. Uses the .venv's pip but
         installs INTO the overlay dir, leaving the .venv untouched."""
         PYLIB_DIR.mkdir(parents=True, exist_ok=True)
+        from core.runtime import progress
+        from core.exec.proc import run_cancellable
+        progress.emit(f"pip: installing {', '.join(packages)} into the overlay…", phase="pip")
         cmd = [sys.executable, "-m", "pip", "install",
                "--target", str(PYLIB_DIR), *packages]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        proc = run_cancellable(cmd, timeout_s=900, cancel_token=cancel_token)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"pip install into overlay failed for {list(packages)}:\n"
