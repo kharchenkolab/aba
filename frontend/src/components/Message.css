@@ -228,6 +228,11 @@
 .tool-line__label { font-style: italic; }
 .tool-line--done .tool-line__label,
 .tool-line--err .tool-line__label { font-style: normal; }
+.tool-line__progress {
+  font-family: var(--mono); font-size: 11px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60ch;
+  opacity: 0.85;
+}
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg); color: var(--text-3);

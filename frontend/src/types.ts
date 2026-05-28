@@ -10,6 +10,9 @@ export interface ToolStartBlock {
   type: 'tool_start'
   name: string
   input: Record<string, unknown>
+  /** Latest live tool_progress message while the tool runs (installs, compiles,
+   *  downloads) — shown next to the spinner so a long call isn't a dead spin. */
+  progress?: string
 }
 export interface ToolResultBlock {
   type: 'tool_result'

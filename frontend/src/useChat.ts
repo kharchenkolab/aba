@@ -323,6 +323,14 @@ export function useChat(
             } else if (ev.type === 'tool_start') {
               streamingBlocks.push({ type: 'tool_start', name: ev.name, input: ev.input })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+            } else if (ev.type === 'tool_progress') {
+              // Surface the live phase line on the running tool so a long
+              // install/compile/download shows movement, not a dead spinner.
+              const last = streamingBlocks[streamingBlocks.length - 1]
+              if (last && last.type === 'tool_start') {
+                ;(last as { type: 'tool_start'; progress?: string }).progress = ev.message
+                setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              }
             } else if (ev.type === 'tool_result') {
               streamingBlocks.push({ type: 'tool_result', name: ev.name, result: ev.result })
               const plots = (ev.result as Record<string, unknown>).plots as

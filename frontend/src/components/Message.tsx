@@ -233,6 +233,9 @@ function ToolLine({ block, result }: {
             ? (hasError ? `${toolDoneLabel(block.name)} — error` : toolDoneLabel(block.name))
             : `${toolRunningLabel(block.name)}…`}
         </span>
+        {!done && block.progress && (
+          <span className="tool-line__progress">{block.progress}</span>
+        )}
         {code && (
           <button className="tool-line__script-toggle" onClick={() => setShowCode(s => !s)}>
             {showCode ? 'Hide script' : 'Show script'}
