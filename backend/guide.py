@@ -134,6 +134,93 @@ def _ensure_tool_pair_completeness(messages: list) -> list:
     return out
 
 
+def _dump_turn_context(run_id, *, user_text, system, history, active_tools,
+                       model, thread_id, focus_entity_id) -> None:
+    """Best-effort: persist the EXACT context the agent receives this turn (the
+    assembled system prompt + the message history + the offered tools) to a file,
+    so a human-driven run can be inspected afterward ("what did the agent actually
+    see?"). One file per turn under ABA_TURN_LOG_DIR (default /tmp/aba_turnlog);
+    set that env to '' / 'off' to disable. Never raises — debug aid only."""
+    import os
+    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    if d.strip().lower() in ("", "off", "0", "false"):
+        return
+    try:
+        import json as _json, datetime as _dt
+        os.makedirs(d, exist_ok=True)
+        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tools = [t.get("name") for t in (active_tools or [])]
+        body = "\n".join([
+            f"# Turn {run_id}  ({ts})",
+            f"thread={thread_id}  focus={focus_entity_id}  model={model}",
+            f"tools ({len(tools)}): {', '.join(tools)}",
+            "", "## USER MESSAGE", (user_text or "").strip(),
+            "", "## SYSTEM PROMPT", "```", system or "", "```",
+            "", "## MESSAGE HISTORY (input to the model)", "```json",
+            _json.dumps(history, indent=2, default=str)[:80000], "```",
+        ])
+        with open(os.path.join(d, f"{ts}_{run_id}.md"), "w") as f:
+            f.write(body)
+        # Rolling live transcript: a USER header per turn; events appended by
+        # _live_log_event. Tail this file to watch any run (incl. browser) live.
+        with open(os.path.join(d, "live.log"), "a") as f:
+            f.write(f"\n===== {ts}  run {run_id}  (thread {thread_id}) =====\n"
+                    f"👤 {(user_text or '').strip()}\n")
+    except Exception:  # noqa: BLE001 — a debug dump must never break a turn
+        pass
+
+
+def _live_log_event(run_id, obj: dict, dtbuf: list) -> None:
+    """Append one compact line per SSE event to the rolling live transcript
+    (ABA_TURN_LOG_DIR/live.log), so an active run can be watched by tailing it.
+    Streamed text 'delta' chunks are buffered and flushed as one line on the
+    next non-delta event. Never raises."""
+    import os
+    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    if d.strip().lower() in ("", "off", "0", "false"):
+        return
+    try:
+        import json as _j
+        t = obj.get("type")
+        if t == "delta":
+            dtbuf.append(obj.get("text") or "")
+            return
+        out: list[str] = []
+        if dtbuf:
+            txt = "".join(dtbuf).strip()
+            dtbuf.clear()
+            if txt:
+                out.append(f"🗣  {txt}")
+        if t == "tool_start":
+            out.append(f"🔧 {obj.get('name')}  {_j.dumps(obj.get('input') or {}, default=str)[:220]}")
+        elif t == "tool_result":
+            out.append(f"   ✓ {_j.dumps(obj.get('result') or {}, default=str)[:220]}")
+        elif t == "tool_progress":
+            out.append(f"   ⏳ {str(obj.get('message'))[:160]}")
+        elif t == "plan":
+            out.append(f"📋 PLAN: {str(obj.get('title') or '')[:140]}")
+        elif t in ("notice", "error", "cancelled", "clarification_pending", "approval_pending"):
+            out.append(f"[{t}] {_j.dumps(obj, default=str)[:220]}")
+        elif t == "entity_registered":
+            e = obj.get("entity") or {}
+            out.append(f"📦 {e.get('type')}: {e.get('title')}")
+        elif t == "job_submitted":
+            out.append(f"⚙ job: {_j.dumps(obj.get('job') or {}, default=str)[:160]}")
+        elif t == "done":
+            out.append("── turn done ──")
+        # manifest / usage / suggestion_logged: skip (noise)
+        if not out:
+            return
+        import datetime as _dt
+        ts = _dt.datetime.now().strftime("%H:%M:%S")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "live.log"), "a") as f:
+            for ln in out:
+                f.write(f"{ts} {ln}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Transient API conditions worth retrying: 429 (rate limit), 5xx, 529
 # (overloaded), and connection/timeouts. We match on the SDK's status code
 # when present and fall back to a string check.
@@ -211,7 +298,9 @@ async def stream_response(
     appending a new user message — used after a transient API failure, where
     the user turn was already persisted but no assistant reply was produced.
     """
+    _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
     def sse(obj: dict) -> str:
+        _live_log_event(turn.run_id, obj, _dtbuf)
         return f"data: {json.dumps(obj)}\n\n"
 
     session_id = new_session_id()
@@ -333,6 +422,9 @@ async def stream_response(
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
     system = focus_text + thread_text + build_system(active_tools, role=guide_role, intent=user_text)
+    _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
+                       active_tools=active_tools, model=guide_model, thread_id=store_tid,
+                       focus_entity_id=focus_entity_id)
     entity_id = WORKSPACE_ID
 
     focus_ent = get_entity(focus_entity_id) if focus_entity_id else None
