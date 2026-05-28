@@ -21,6 +21,7 @@ from core.exec.materialize import pylib_dir, tools_env
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _SPEC_NAME = "aba_py"
 _spec_ready = False
+_r_spec_ready = False
 
 
 def _ensure_python_kernelspec() -> str:
@@ -46,6 +47,39 @@ def _ensure_python_kernelspec() -> str:
     return _SPEC_NAME
 
 
+def _ensure_r_kernelspec() -> str:
+    """Ensure the IRkernel ('ir') kernelspec exists, installing r-irkernel into
+    the conda tools env and registering the spec on first use. Slow the first
+    time (a Bioconductor-scale conda solve); cached thereafter."""
+    global _r_spec_ready
+    if _r_spec_ready:
+        return "ir"
+    from jupyter_client.kernelspec import KernelSpecManager
+    try:
+        if "ir" in KernelSpecManager().find_kernel_specs():
+            _r_spec_ready = True
+            return "ir"
+    except Exception:  # noqa: BLE001
+        pass
+    import subprocess
+    from core.exec.mamba import run_micromamba, installed_packages
+    from core.exec.materialize import tools_env
+    tenv = tools_env()
+    if "r-irkernel" not in installed_packages(tenv):
+        verb = "install" if (tenv / "conda-meta").exists() else "create"
+        run_micromamba([verb, "-y", "-p", str(tenv), "-c", "conda-forge", "r-irkernel"])
+    # Register the 'ir' spec (user dir) pointing at THIS env's R + IRkernel.
+    subprocess.run([str(tenv / "bin" / "Rscript"), "-e", "IRkernel::installspec(user=TRUE)"],
+                   capture_output=True, text=True, timeout=300)
+    _r_spec_ready = True
+    return "ir"
+
+
+def _r_setup_code(cwd: str) -> str:
+    """First cell for an R session: cwd + DATA_DIR (parallel to the Python one)."""
+    return f"DATA_DIR <- {str(DATA_DIR)!r}\nsetwd({str(cwd)!r})\n"
+
+
 def _setup_code(cwd: str) -> str:
     """First cell: replicate the run_python environment in the kernel namespace."""
     biomni = str(Path(__file__).resolve().parents[3] / "content" / "biomni")
@@ -67,14 +101,19 @@ class JupyterKernelSession:
         self.last_used = time.time()
         self.alive = False
         Path(cwd).mkdir(parents=True, exist_ok=True)
-        self._km = KernelManager(kernel_name=_ensure_python_kernelspec())
+        if lang == "r":
+            kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
+        else:
+            kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
+        self._km = KernelManager(kernel_name=kernel_name)
         self._km.start_kernel(cwd=str(cwd))
         self._kc = self._km.client()
         self._kc.start_channels()
         self._kc.wait_for_ready(timeout=60)
         self.alive = True
-        # Configure the namespace to match run_python (overlay + DATA_DIR).
-        self.execute(_setup_code(cwd), timeout_s=30)
+        # Configure the session namespace (overlay + DATA_DIR for Python; cwd +
+        # DATA_DIR for R).
+        self.execute(setup, timeout_s=setup_to)
 
     def touch(self) -> None:
         self.last_used = time.time()
