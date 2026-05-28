@@ -23,6 +23,7 @@ Public API:
 """
 from .gateway import (
     start_all,
+    add_server,
     shutdown,
     list_tools,
     call,
@@ -30,6 +31,7 @@ from .gateway import (
     status,
     _reset_for_testing,
 )
+from .config import ServerConfig
 
-__all__ = ["start_all", "shutdown", "list_tools", "call", "is_mcp_tool", "status",
-           "_reset_for_testing"]
+__all__ = ["start_all", "add_server", "shutdown", "list_tools", "call", "is_mcp_tool",
+           "status", "ServerConfig", "_reset_for_testing"]
