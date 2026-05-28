@@ -492,21 +492,50 @@ def list_data_files(_input: dict) -> dict:
     from pathlib import Path as _Path
     from core.graph.entities import list_entities
     files = []
+    registered_names = set()
     for e in list_entities(include_archived=False):
         if e.get("type") != "dataset":
             continue
         path = e.get("artifact_path")
         name = _Path(path).name if path else e.get("title", "")
+        if name:
+            registered_names.add(name)
         size = None
         try:
             if path and _Path(path).exists():
                 size = _Path(path).stat().st_size
         except Exception:
             pass
-        files.append({"filename": name, "size_bytes": size, "title": e.get("title")})
+        files.append({"filename": name, "size_bytes": size,
+                      "title": e.get("title"), "registered": True})
+
+    # Also surface data files sitting in DATA_DIR that aren't registered as
+    # datasets — otherwise the agent sees "no datasets", concludes the project
+    # is empty, and asks the user to upload files that are already present.
+    # These are readable directly by filename (read_csv_info / run_python).
+    _DATA_EXTS = {".csv", ".tsv", ".tab", ".txt", ".xlsx", ".parquet",
+                  ".h5ad", ".h5", ".loom", ".mtx", ".gz", ".tar", ".zip", ".fa", ".fasta"}
+    n_unregistered = 0
+    try:
+        for p in sorted(DATA_DIR.iterdir()):
+            if not p.is_file() or p.name in registered_names:
+                continue
+            if p.suffix.lower() not in _DATA_EXTS:
+                continue
+            files.append({"filename": p.name, "size_bytes": p.stat().st_size,
+                          "registered": False})
+            n_unregistered += 1
+    except Exception:
+        pass
+
     if not files:
         return {"files": [], "message": "This project has no datasets yet — ask the user to upload one."}
-    return {"files": files}
+    out = {"files": files}
+    if n_unregistered:
+        out["message"] = ("Some files are present in the data folder but not yet "
+                          "registered as datasets. You can read them directly by "
+                          "filename (read_csv_info, or run_python via DATA_DIR/<name>).")
+    return out
 
 
 def read_csv_info(input_: dict) -> dict:
@@ -516,7 +545,12 @@ def read_csv_info(input_: dict) -> dict:
     if not path.exists():
         return {"error": f"File not found: {filename}"}
     try:
-        df = pd.read_csv(path)
+        # Sniff the delimiter so a TSV isn't read as a single comma-column.
+        # sep=None + the python engine uses csv.Sniffer; fall back to comma.
+        try:
+            df = pd.read_csv(path, sep=None, engine="python")
+        except Exception:
+            df = pd.read_csv(path)
         cols = [{"name": c, "dtype": str(df[c].dtype)} for c in df.columns]
         preview = df.head(5).to_markdown(index=False)
         return {

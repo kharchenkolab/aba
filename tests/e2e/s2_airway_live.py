@@ -73,7 +73,13 @@ import subprocess
 print(subprocess.run(['Rscript', {str(rscript)!r}], capture_output=True, text=True).stdout)
 """, "timeout_s": 120})
     ok = (_data / "counts.csv").exists() and (_data / "samples.tsv").exists()
-    print(f"SETUP {'ok' if ok else 'FAIL'}: counts.csv + samples.tsv staged" )
+    if ok:
+        # Register as datasets (production-faithful — an upload is registered),
+        # so list_data_files shows them instead of an empty project.
+        from core.data import register
+        register(str(_data / "counts.csv"), kind="dataset", title="airway counts", scope="project")
+        register(str(_data / "samples.tsv"), kind="dataset", title="airway sample sheet", scope="project")
+    print(f"SETUP {'ok' if ok else 'FAIL'}: counts.csv + samples.tsv staged + registered")
     return ok
 
 
