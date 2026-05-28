@@ -42,31 +42,36 @@ def _utcnow() -> str:
 
 
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
-                      timeout_s: int = 300) -> dict:
-    """Create a queued job and enqueue it. Returns the job record."""
+                      timeout_s: int = 300, project_id: str | None = None) -> dict:
+    """Create a queued job and enqueue it. Returns the job record. `project_id`
+    is captured at submit time so the job runs in the right project's scratch
+    workspace even if the active project changes before the worker picks it up."""
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
         kind="run_python",
         title=title or "Background analysis",
         focus_entity_id=focus_entity_id,
-        params={"code": code, "timeout_s": timeout_s},
+        params={"code": code, "timeout_s": timeout_s, "project_id": project_id},
     )
     _QUEUE.put_nowait(job_id)
     return job
 
 
 def cancel_job(job_id: str) -> bool:
-    """Cancel a queued or running job. Returns True if it was actionable."""
+    """Cancel a queued or running job. Returns True if it was actionable. Fires
+    the job's CancelToken so the shared exec core killpg's the whole process
+    group (forked children die too), matching the synchronous Stop path."""
     job = get_job(job_id)
     if not job:
         return False
     if job["status"] in ("done", "failed", "cancelled"):
         return False
     _CANCELLED.add(job_id)
-    proc = _RUNNING.get(job_id)
-    if proc and proc.poll() is None:
-        proc.terminate()
+    from core.runtime import cancellation
+    tok = cancellation.get(job_id)
+    if tok is not None:
+        tok.cancel("user cancelled job")
     update_job(job_id, status="cancelled", finished_at=_utcnow())
     return True
 
@@ -78,61 +83,44 @@ async def _run_one(job_id: str) -> None:
 
     params = job["params"] or {}
     code = params.get("code", "")
-    timeout_s = max(5, min(int(params.get("timeout_s") or 300), 600))
+    timeout_s = max(5, min(int(params.get("timeout_s") or 300), 1800))
+    project_id = params.get("project_id") or "default"
     focus_entity_id = job["focus_entity_id"]
 
     update_job(job_id, status="running", started_at=_utcnow())
 
-    tmp_dir = Path("/tmp") / f"aba_job_{uuid.uuid4().hex}"
-    tmp_dir.mkdir()
+    # P5: run through the SAME execution core as the synchronous run_python, so
+    # the background job sees the project scratch workspace, the pylib overlay,
+    # the conda tools env on PATH, and killpg cancellation. A per-job CancelToken
+    # (keyed by job_id) lets cancel_job kill the whole process group.
+    from core.exec.run import run_python_code
+    from core.runtime import cancellation
+    biomni = str(Path(__file__).resolve().parents[2] / "biomni")
+    token = cancellation.acquire(job_id)
     try:
-        full_code = f"DATA_DIR = {str(DATA_DIR)!r}\n" + code
-        (tmp_dir / "script.py").write_text(full_code)
-        env = os.environ.copy()
-        env["MPLBACKEND"] = "Agg"
-
-        # Run in a thread so we don't block the event loop; keep a handle
-        # for cancellation.
         loop = asyncio.get_event_loop()
+        result_obj = await loop.run_in_executor(
+            None,
+            lambda: run_python_code(code, project_id=str(project_id), run_id=job_id,
+                                    timeout_s=timeout_s, cancel_token=token,
+                                    extra_syspath=[biomni]),
+        )
 
-        def _spawn() -> tuple[int, str, str]:
-            proc = subprocess.Popen(
-                [sys.executable, str(tmp_dir / "script.py")],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                env=env, cwd=str(tmp_dir),
-            )
-            _RUNNING[job_id] = proc
-            try:
-                out, err = proc.communicate(timeout=timeout_s)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                out, err = proc.communicate()
-                err = (err or "") + f"\n[timed out after {timeout_s}s]"
-            return proc.returncode, out or "", err or ""
+        if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
+            update_job(job_id, status="cancelled", finished_at=_utcnow())
+            return
 
-        rc, stdout, stderr = await loop.run_in_executor(None, _spawn)
-        _RUNNING.pop(job_id, None)
+        if "error" in result_obj:
+            update_job(job_id, status="failed", error=result_obj["error"][:1000],
+                       log_tail=result_obj["error"][:1500], finished_at=_utcnow())
+            return
 
-        if job_id in _CANCELLED:
-            return  # already marked cancelled
-
-        # Collect artifacts the same way run_python does.
-        plots = []
-        for png in tmp_dir.glob("*.png"):
-            dest_name = f"{uuid.uuid4().hex}.png"
-            shutil.move(str(png), str(ARTIFACTS_DIR / dest_name))
-            plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
-
-        result_obj = {
-            "stdout": stdout[:4000], "stderr": stderr[:2000],
-            "returncode": rc, "plots": plots,
-        }
-
+        stdout = result_obj.get("stdout", "")
+        stderr = result_obj.get("stderr", "")
         log_tail = (stdout[-1500:] + ("\n" + stderr[-500:] if stderr else "")).strip()
-
-        if rc != 0:
+        if result_obj.get("returncode") != 0:
             update_job(job_id, status="failed",
-                       error=stderr[-1000:] or f"exit code {rc}",
+                       error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
                        log_tail=log_tail, finished_at=_utcnow())
             return
 
@@ -150,8 +138,7 @@ async def _run_one(job_id: str) -> None:
     except Exception as e:  # noqa: BLE001
         update_job(job_id, status="failed", error=str(e), finished_at=_utcnow())
     finally:
-        _RUNNING.pop(job_id, None)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        cancellation.release(job_id)
 
 
 async def _worker() -> None:

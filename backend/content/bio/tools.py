@@ -116,7 +116,8 @@ TOOL_SCHEMAS = [
             "or any .png name — they will be captured and displayed. Print any "
             "text results you want returned. Default timeout is 90 seconds; for "
             "scRNA-seq / bulk-RNA pipelines that need more, set timeout_s "
-            "explicitly (max 600s)."
+            "explicitly (max 1800s). Long runs (or background=true) are routed "
+            "to a background job so the conversation isn't blocked."
         ),
         "input_schema": {
             "type": "object",
@@ -127,9 +128,9 @@ TOOL_SCHEMAS = [
                 },
                 "timeout_s": {
                     "type": "integer",
-                    "description": "Optional timeout in seconds; capped at 600. Use larger values for full pipeline runs.",
+                    "description": "Optional timeout in seconds; capped at 1800. Large values auto-route to a background job.",
                     "minimum": 5,
-                    "maximum": 600,
+                    "maximum": 1800,
                 },
                 "background": {
                     "type": "boolean",
@@ -529,78 +530,42 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     plots/tables — the on_post_tool registration hook is unchanged. Scratch
     persists across the run's turns and is GC'd on a TTL; it is NOT deleted
     here, so the agent can revisit its working files."""
-    from core.data.workspace import scratch_dir
-    from core.exec import MaterializingExecutor, Provisioning, pylib_dir
+    from core.exec.run import run_python_code
+    from core.exec import LocalRouter
     from core import projects
 
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 600))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
-
-    # Scratch keys on (project, run) so multiple run_python calls in one turn
-    # share a working dir (the agent can read what an earlier call wrote).
     project_id = projects.current() or "default"
+    biomni_path = str(Path(__file__).parent.parent / "biomni")
+
+    # P5: decide synchronous vs background. Explicit background flag forces it;
+    # otherwise the router auto-routes long runs (timeout_s as the runtime proxy)
+    # to the background job queue. Background returns a deferred result the guide
+    # loop resumes from when the job completes.
+    override = "background" if input_.get("background") else None
+    choice = LocalRouter().route(estimate={"runtime_min": timeout_s / 60.0}, override=override)
+    if choice.location == "background":
+        from core.jobs.runner import submit_python_job
+        job = submit_python_job(code, title=input_.get("title") or "Background analysis",
+                                focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                                timeout_s=timeout_s, project_id=str(project_id))
+        return {
+            "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
+            "status": "submitted",
+            "note": f"Submitted as background job {job['id']} ({choice.rationale}). "
+                    f"I'll continue when it finishes.",
+        }
+
     run_id = ((ctx or {}).get("run_id")
               or getattr(cancel_token, "run_id", None)
               or uuid.uuid4().hex)
     try:
-        scratch = scratch_dir(str(project_id), str(run_id))
-
-        biomni_path = Path(__file__).parent.parent / "biomni"
-        # Append (not prepend) the materialized-library overlay to sys.path so
-        # the .venv's scientific stack wins and the overlay only supplies what's
-        # missing (e.g. a gseapy materialized via ensure_capability).
-        preamble = (
-            f"DATA_DIR = {str(DATA_DIR)!r}\n"
-            f"import sys as _sys\n"
-            f"_sys.path.insert(0, {str(biomni_path)!r})\n"
-            f"_sys.path.append({str(pylib_dir())!r})\n"
-        )
-        script = scratch / "script.py"
-        script.write_text(preamble + code)
-
-        ex = MaterializingExecutor()
-        env = ex.materialize(Provisioning())          # base venv (+ overlay via preamble)
-        result = ex.exec(
-            env, [env.python or sys.executable, str(script)],
-            cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
-        )
-
-        if result.timed_out:
-            return {"error": f"Code execution timed out ({timeout_s}s limit)"}
-        # Cancellation arrived mid-run — surface a clean signal rather than
-        # partial output from a killed process.
-        if result.cancelled:
-            return {
-                "status": "cancelled",
-                "note": f"Run was cancelled by the user "
-                        f"({getattr(cancel_token, 'reason', '')}). No further work happened.",
-            }
-
-        # Harvest kept outputs to the content-addressed artifact store. Moving
-        # them out of scratch also means a later call in the same scratch won't
-        # re-harvest them. Intermediates that aren't png/csv stay in scratch
-        # (inspectable) until GC.
-        plots = []
-        for png in scratch.glob("*.png"):
-            dest_name = f"{uuid.uuid4().hex}.png"
-            shutil.move(str(png), str(ARTIFACTS_DIR / dest_name))
-            plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
-
-        tables = []
-        for csv in scratch.glob("*.csv"):
-            dest_name = f"{uuid.uuid4().hex}.csv"
-            shutil.move(str(csv), str(ARTIFACTS_DIR / dest_name))
-            tables.append({"url": f"/artifacts/{dest_name}", "original_name": csv.name})
-
-        return {
-            "stdout": (result.stdout or "")[:4000],
-            "stderr": (result.stderr or "")[:2000],
-            "returncode": result.returncode,
-            "plots": plots,
-            "tables": tables,
-        }
-    except Exception as e:
+        return run_python_code(code, project_id=str(project_id), run_id=str(run_id),
+                               timeout_s=timeout_s, cancel_token=cancel_token,
+                               extra_syspath=[biomni_path])
+    except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
 
 
