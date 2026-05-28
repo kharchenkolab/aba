@@ -131,7 +131,29 @@ def _ensure_tool_pair_completeness(messages: list) -> list:
                     else:
                         out.insert(i + 1, {"role": "user", "content": synth})
         i += 1
-    return out
+
+    # Second pass — BACKWARD orphans: a `tool_result` must be preceded by an
+    # assistant message carrying the matching `tool_use`. A rolling-summary cut
+    # between an assistant tool_use and its tool_result, or a cancel/error that
+    # dropped the assistant turn, leaves a leading/orphaned tool_result the API
+    # rejects ("tool_result … without a corresponding tool_use"). Drop those.
+    repaired: list = []
+    for m in out:
+        if m["role"] == "user" and any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in m["content"]):
+            prev = repaired[-1] if repaired else None
+            valid_ids = set()
+            if prev and prev["role"] == "assistant":
+                valid_ids = {b["id"] for b in prev["content"]
+                             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")}
+            kept = [b for b in m["content"]
+                    if not (isinstance(b, dict) and b.get("type") == "tool_result"
+                            and b.get("tool_use_id") not in valid_ids)]
+            if not kept:
+                continue   # message was only orphaned tool_results — drop it
+            m = dict(m, content=kept)
+        repaired.append(m)
+    return repaired
 
 
 def _dump_turn_context(run_id, *, user_text, system, history, active_tools,
