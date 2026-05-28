@@ -674,8 +674,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                         "note": f"Run was cancelled by the user "
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
             plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
+            # Session-derived: reproduction needs this thread's ordered cells,
+            # not the single cell alone (kernels.md §8.1).
             return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
-                    "returncode": res.returncode, "plots": plots, "tables": tables}
+                    "returncode": res.returncode, "plots": plots, "tables": tables,
+                    "execution_mode": "session"}
         except Exception as e:  # noqa: BLE001
             # Never strand the agent on a kernel hiccup — fall back to stateless.
             print(f"[run_python] kernel path failed, falling back to one-shot: {e}")
@@ -726,7 +729,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
     plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
     return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
-            "returncode": res.returncode, "plots": plots, "tables": tables}
+            "returncode": res.returncode, "plots": plots, "tables": tables,
+            "execution_mode": "session"}
 
 
 def inspect_upload(input_: dict) -> dict:

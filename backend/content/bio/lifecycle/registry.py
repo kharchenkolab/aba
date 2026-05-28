@@ -79,9 +79,15 @@ def register_artifacts_from_tool_result(
     """
     new_records: list[dict] = []
     res_meta = {"thread_id": thread_id, "origin": "internal"} if thread_id else {"origin": "internal"}
+    # Reproducibility tag (kernels.md §8.1): a "stateless" artifact's producing_code
+    # reproduces it standalone; a "session" artifact (built in a persistent kernel)
+    # is reproduced by replaying this thread's ordered cells.
+    _mode = result_obj.get("execution_mode") if isinstance(result_obj, dict) else None
+    res_meta["execution_mode"] = _mode or "stateless"
+    res_meta["reproducible"] = "self_contained" if res_meta["execution_mode"] == "stateless" else "session"
 
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
-    if tool_name == "run_python" and plots:
+    if tool_name in ("run_python", "run_r") and plots:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         multi = len(plots) > 1
@@ -115,7 +121,7 @@ def register_artifacts_from_tool_result(
 
     # Output CSVs → table entities.
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
-    if tool_name == "run_python" and tables:
+    if tool_name in ("run_python", "run_r") and tables:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         for t in tables:

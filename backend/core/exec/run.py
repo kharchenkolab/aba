@@ -67,6 +67,8 @@ def run_python_code(
         "returncode": result.returncode,
         "plots": plots,
         "tables": tables,
+        # Self-contained one-shot script — its producing_code reproduces it alone.
+        "execution_mode": "stateless",
     }
 
 
