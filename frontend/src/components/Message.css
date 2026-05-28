@@ -233,6 +233,22 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60ch;
   opacity: 0.85;
 }
+
+/* Plot lightbox — click a chat plot to view it full-viewport at native res. */
+.lightbox {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.78); cursor: zoom-out; padding: 24px;
+}
+.lightbox__img {
+  max-width: 95vw; max-height: 95vh; object-fit: contain;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); background: #fff; border-radius: 4px;
+}
+.lightbox__close {
+  position: fixed; top: 14px; right: 18px; width: 34px; height: 34px;
+  border: none; border-radius: 50%; background: rgba(255, 255, 255, 0.9);
+  color: #222; font-size: 20px; line-height: 1; cursor: pointer;
+}
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg); color: var(--text-3);
