@@ -18,6 +18,7 @@ os.environ["ABA_DB_PATH"] = str(Path(_tmp) / "p0.db")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
+os.environ["ABA_KERNEL_ENABLED"] = "0"   # this suite tests the stateless one-shot lane
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                 # noqa: E402
