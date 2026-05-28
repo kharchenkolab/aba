@@ -117,8 +117,11 @@ TOOL_SCHEMAS = [
             "via restart_kernel), which clears state — so save important results to "
             "disk (to_parquet / np.save) and reload them rather than relying on "
             "memory for anything costly to recompute. "
-            "pandas, numpy, matplotlib, scanpy, anndata are available; DATA_DIR is "
-            "the data folder path. Save plots as plt.savefig('out.png') — they're "
+            "pandas, numpy, matplotlib, scanpy, anndata are available. The data "
+            "folder is the DATA_DIR variable, ALREADY DEFINED in your session — "
+            "reference files as DATA_DIR/<name> (e.g. pd.read_csv(f'{DATA_DIR}/counts.csv')); "
+            "never hardcode paths like /project/data, and call list_data_files if "
+            "unsure what's there. Save plots as plt.savefig('out.png') — they're "
             "captured. Set fresh=true for a one-off ISOLATED run that neither reads "
             "nor changes the session (use for reproducible/self-contained code). "
             "Set background=true for a long pipeline that shouldn't block the chat. "
@@ -156,6 +159,29 @@ TOOL_SCHEMAS = [
             },
             "required": ["code"]
         }
+    },
+    {
+        "name": "run_r",
+        "description": (
+            "Execute R in a PERSISTENT R session for this investigation (like an R "
+            "notebook). Objects — a SummarizedExperiment, DESeqDataSet, Seurat "
+            "object — PERSIST across run_r calls, so build them once and reuse. "
+            "Bioconductor/CRAN packages added via ensure_capability (conda) are "
+            "available. Hand data between Python and R by writing files to "
+            "DATA_DIR / the working dir (CSV / Parquet / RDS) — the R and Python "
+            "sessions for this thread share that directory. DATA_DIR is defined. "
+            "Use for Bioconductor / DESeq2 / edgeR / limma / Seurat work that's "
+            "awkward in Python. First R use installs the R kernel (slow, one-time)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "R code to execute."},
+                "timeout_s": {"type": "integer", "minimum": 5, "maximum": 1800,
+                              "description": "Hard time limit; default 120s."},
+            },
+            "required": ["code"],
+        },
     },
     {
         "name": "present_plan",
@@ -526,6 +552,7 @@ def list_data_files(_input: dict) -> dict:
         except Exception:
             pass
         files.append({"filename": name, "size_bytes": size,
+                      "path": str(path) if path else None,
                       "title": e.get("title"), "registered": True})
 
     # Also surface data files sitting in DATA_DIR that aren't registered as
@@ -542,18 +569,20 @@ def list_data_files(_input: dict) -> dict:
             if p.suffix.lower() not in _DATA_EXTS:
                 continue
             files.append({"filename": p.name, "size_bytes": p.stat().st_size,
-                          "registered": False})
+                          "path": str(p), "registered": False})
             n_unregistered += 1
     except Exception:
         pass
 
     if not files:
         return {"files": [], "message": "This project has no datasets yet — ask the user to upload one."}
-    out = {"files": files}
-    if n_unregistered:
-        out["message"] = ("Some files are present in the data folder but not yet "
-                          "registered as datasets. You can read them directly by "
-                          "filename (read_csv_info, or run_python via DATA_DIR/<name>).")
+    # Always tell the agent HOW to load them — the absolute path + the DATA_DIR
+    # convention — so it doesn't guess paths like /project/data.
+    out = {"files": files,
+           "data_dir": str(DATA_DIR),
+           "message": ("Load these via the DATA_DIR variable (already defined in run_python): "
+                       "e.g. pd.read_csv(f'{DATA_DIR}/<filename>'). Use the listed `path` "
+                       "values directly — do not hardcode other directories.")}
     return out
 
 
@@ -661,6 +690,43 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                extra_syspath=[biomni_path])
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
+
+
+def run_r(input_: dict, ctx: dict | None = None) -> dict:
+    """Execute R in the thread's persistent R (IRkernel) session — objects
+    persist across calls, and the session shares the thread's working dir with
+    run_python for file handoff (CSV/Parquet/RDS). For Bioconductor/DESeq2/
+    edgeR/limma/Seurat work."""
+    import time as _time
+    from core.exec.run import harvest_artifacts
+    from core.config import KERNEL_ENABLED
+    from core import projects
+
+    if not KERNEL_ENABLED:
+        return {"error": "R runs in a persistent kernel, which is currently disabled."}
+    code = input_.get("code", "")
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 120), 1800))
+    cancel_token = (ctx or {}).get("cancel_token")
+    project_id = projects.current() or "default"
+    thread_id = (ctx or {}).get("thread_id") or "default"
+    try:
+        from core.exec.kernels import get_pool
+        from core.data.workspace import scratch_dir
+        cwd = scratch_dir(str(project_id), f"thread-{thread_id}")   # shared with the Python kernel
+        start_ts = _time.time()
+        sess = get_pool().get_or_start(str(thread_id), "r", cwd=str(cwd))
+        res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"R kernel error: {e}"}
+    if res.timed_out:
+        return {"error": f"R code timed out ({timeout_s}s limit)"}
+    if res.cancelled:
+        return {"status": "cancelled",
+                "note": f"Run was cancelled by the user "
+                        f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+    plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
+    return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+            "returncode": res.returncode, "plots": plots, "tables": tables}
 
 
 def inspect_upload(input_: dict) -> dict:
@@ -1345,9 +1411,11 @@ def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "noop", "note": "Persistent sessions are disabled; run_python is already stateless."}
     from core.exec.kernels import get_pool
     thread_id = (ctx or {}).get("thread_id") or "default"
-    ok = get_pool().restart(str(thread_id), "python")
-    return {"status": "restarted" if ok else "no_active_session",
-            "note": "Python session cleared; variables reset. Next run_python starts fresh."}
+    pool = get_pool()
+    cleared = [lang for lang in ("python", "r") if pool.restart(str(thread_id), lang)]
+    return {"status": "restarted" if cleared else "no_active_session",
+            "cleared": cleared,
+            "note": "Session(s) cleared; variables reset. The next run_python/run_r starts fresh."}
 
 
 def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -1365,6 +1433,7 @@ EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
     "run_python": run_python,
+    "run_r": run_r,
     "inspect_upload": inspect_upload,
     "get_provenance": get_provenance,
     "get_dependents": get_dependents,
