@@ -86,20 +86,113 @@ def libpaths_expr(project_id: Optional[str]) -> str:
     return f'.libPaths(c({str(project_r_lib(project_id))!r}, .libPaths()))'
 
 
+def _run_rscript(expr: str, timeout_s: int):
+    """Run an R expression in the conda tools-env R via `micromamba run` (so the
+    env's toolchain / R_HOME / libs are active). Returns the CompletedProcess
+    (never raises on non-zero — callers inspect returncode)."""
+    from core.exec.mamba import run_micromamba
+    return run_micromamba(["run", "-p", str(tools_env()), "Rscript", "-e", expr],
+                          timeout_s=timeout_s, check=False)
+
+
 def r_has_package(pkg: str, project_id: Optional[str] = None, timeout_s: int = 60) -> bool:
-    """True if `pkg` is loadable on the (project + base) library paths."""
+    """True if `pkg` is *loadable* (requireNamespace dlopens it) on the
+    (project + base) library paths — a real load check, not just file presence."""
     if not _CRAN_RE.match(pkg or "") or not r_runtime_ready():
         return False
     setlib = libpaths_expr(project_id)
     pre = (setlib + "; ") if setlib else ""
     expr = f'{pre}quit(status=if (requireNamespace({pkg!r}, quietly=TRUE)) 0L else 1L)'
-    from core.exec.mamba import run_micromamba
     try:
-        proc = run_micromamba(["run", "-p", str(tools_env()), "Rscript", "-e", expr],
-                              timeout_s=timeout_s, check=False)
-        return proc.returncode == 0
+        return _run_rscript(expr, timeout_s).returncode == 0
     except Exception:  # noqa: BLE001
         return False
+
+
+# Patterns that tell the agent (and the user) what actually went wrong, so a
+# failed install is actionable rather than an opaque traceback.
+_ERR_MARKERS = (
+    "there is no package called",
+    "is not available",
+    "had non-zero exit status",
+    "dependenc",
+    "cannot open shared object file",
+    "unable to load shared object",
+    "No such file or directory",
+    "cannot find -l",
+    "configuration failed",
+    "C++ compiler",
+    "compilation failed",
+)
+# A missing *system* library — the case that may need conda (userspace) or, if
+# root-only, the user. Capture the lib name where we can.
+_SYSLIB_RE = re.compile(
+    r"cannot find -l([A-Za-z0-9_.+-]+)"
+    r"|([A-Za-z0-9_.+-]+\.h): No such file"
+    r"|cannot open shared object file:[^\n]*?\b(lib[A-Za-z0-9_.+-]+\.so[0-9.]*)",
+    re.I,
+)
+
+
+def diagnose_install(text: str) -> dict:
+    """Pull the actionable lines out of an R install/build log, and flag a
+    likely missing system library. Returns {lines, missing_lib?}."""
+    text = text or ""
+    keep = [ln.strip() for ln in text.splitlines()
+            if any(m.lower() in ln.lower() for m in _ERR_MARKERS)]
+    out: dict = {"lines": "\n".join(keep[-8:])[:800]}
+    m = _SYSLIB_RE.search(text)
+    if m:
+        out["missing_lib"] = next((g for g in m.groups() if g), None)
+    return out
+
+
+def r_install(source: str, package: str, *, project_id: str, library: Optional[str] = None,
+              ref: Optional[str] = None, timeout_s: int = 1800) -> dict:
+    """Native install (CRAN / Bioconductor / GitHub) into the project R library,
+    then **verify it loads**. For CRAN/Bioc, a binary that installs but won't
+    load under conda R (or an install that fails) triggers one automatic
+    **source** retry (compiled via the conda toolchain → consistent ABI/libs).
+    On genuine failure, returns an actionable diagnostic (incl. a missing
+    system-library hint) rather than an opaque log."""
+    err = validate_install(source, package, ref)
+    if err:
+        return {"status": "error", "note": err}
+    ensure_r_runtime()
+    lib = project_r_lib(project_id)
+    libname = library or (package.split("/")[-1] if source == "github" else package)
+
+    def _attempt(force_source: bool):
+        expr = install_command(source, package, lib=str(lib), ref=ref, force_source=force_source)
+        proc = _run_rscript(expr, timeout_s)
+        loaded = proc.returncode == 0 and r_has_package(libname, project_id=project_id)
+        return proc, loaded
+
+    proc, loaded = _attempt(force_source=False)
+    used_source_fallback = False
+    if not loaded and source in ("cran", "bioconductor"):
+        # Binary missing/failed, or installed-but-won't-load → recompile from source.
+        used_source_fallback = True
+        proc, loaded = _attempt(force_source=True)
+
+    if loaded:
+        return {"status": "ready", "package": package, "source": source, "lib": str(lib),
+                "library": libname, "source_fallback": used_source_fallback}
+
+    log = ((proc.stderr or "") + "\n" + (proc.stdout or ""))
+    diag = diagnose_install(log)
+    note = f"R install of {package!r} ({source}) failed"
+    if used_source_fallback:
+        note += " (binary + source both failed)"
+    note += "."
+    if diag.get("missing_lib"):
+        note += (f" Looks like a missing system library '{diag['missing_lib']}': install it "
+                 f"via conda (propose_capability + ensure_capability) and retry, or — if it's "
+                 f"root-only — ask the user.")
+    return {"status": "error", "package": package, "source": source,
+            "returncode": proc.returncode, "diagnostic": diag.get("lines"),
+            "missing_lib": diag.get("missing_lib"),
+            "stderr": (proc.stderr or "")[-1500:], "note": note}
 
 
 # Posit Package Manager (PPM): binary CRAN/Bioc packages (fast) with automatic
@@ -163,44 +256,25 @@ def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[
     return None
 
 
-def install_command(source: str, package: str, *, lib: str,
-                    ref: Optional[str] = None, repos: Optional[str] = None) -> str:
+def install_command(source: str, package: str, *, lib: str, ref: Optional[str] = None,
+                    repos: Optional[str] = None, force_source: bool = False) -> str:
     """Pure builder: the R expression to install `package` from `source` into
     `lib` (project library), prepended ahead of the base on .libPaths(). CRAN/
     Bioc installs set the PPM User-Agent so binaries are served when available
-    (source otherwise). GitHub always builds from source."""
+    (source otherwise); `force_source=True` requests source explicitly (the
+    fallback when a binary won't load under conda R). GitHub always builds from
+    source."""
     libq = repr(str(lib))
     setlib = f'.libPaths(c({libq}, .libPaths())); '
     if source == "github":
         spec = f"{package}@{ref}" if ref else package
         return f'{setlib}remotes::install_github({spec!r}, lib={libq}, upgrade="never")'
     ua = _ppm_ua_expr()
+    typ = ', type="source"' if force_source else ''
     if source == "bioconductor":
         # PPM also serves Bioc; the UA gets binaries where available, else source.
-        return f'{setlib}{ua}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE)'
+        return f'{setlib}{ua}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE{typ})'
     repos = repos or cran_repo()
-    return f'{setlib}{ua}install.packages({package!r}, lib={libq}, repos={repos!r})'
+    return f'{setlib}{ua}install.packages({package!r}, lib={libq}, repos={repos!r}{typ})'
 
 
-def r_install(source: str, package: str, *, project_id: str,
-              ref: Optional[str] = None, timeout_s: int = 1800) -> dict:
-    """Native install (CRAN / Bioconductor / GitHub) into the project R library.
-    Runs through `micromamba run` so the conda env (toolchain, R_HOME, libs) is
-    active for any source compilation."""
-    err = validate_install(source, package, ref)
-    if err:
-        return {"status": "error", "note": err}
-    ensure_r_runtime()
-    lib = project_r_lib(project_id)
-    expr = install_command(source, package, lib=str(lib), ref=ref)
-    from core.exec.mamba import run_micromamba
-    proc = run_micromamba(["run", "-p", str(tools_env()), "Rscript", "-e", expr],
-                          timeout_s=timeout_s, check=False)
-    ok = proc.returncode == 0
-    return {
-        "status": "ready" if ok else "error",
-        "package": package, "source": source, "lib": str(lib),
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "")[-2000:],
-        "stderr": (proc.stderr or "")[-2000:],
-    }
