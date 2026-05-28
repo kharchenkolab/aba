@@ -23,8 +23,18 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 def tokenize(text: str) -> list[str]:
     """Lowercase + split on non-alphanumeric. Deliberately simple: no
     stemming/stopwords (the vocab is small, domain-specific, and we'd rather
-    keep 'de'/'qc'/'rna' than risk a stoplist eating them)."""
-    return _TOKEN.findall((text or "").lower())
+    keep 'de'/'qc'/'rna' than risk a stoplist eating them).
+
+    Separator-insensitive: a hyphen/dot-joined word also yields its collapsed
+    form, so 'rna-seq' ↔ 'rnaseq', 'sc-atac' ↔ 'scatac', 'scikit-learn' ↔
+    'scikitlearn' cross-match (compound tool/pipeline names are common)."""
+    toks: list[str] = []
+    for word in (text or "").lower().split():
+        parts = _TOKEN.findall(word)
+        toks.extend(parts)
+        if len(parts) > 1:
+            toks.append("".join(parts))   # collapsed: rna-seq -> rnaseq
+    return toks
 
 
 class BM25:
