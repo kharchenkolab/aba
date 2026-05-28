@@ -15,6 +15,7 @@ For now bio owns the assembly directly; the assembler call site in
 guide.py imports `build_system` from here.
 """
 from __future__ import annotations
+import contextvars
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,13 @@ from typing import Callable, Optional
 
 _HERE = Path(__file__).parent
 _BIO_ROOT = _HERE.parent  # backend/content/bio/
+
+# The turn's intent (the user's message, usually) — set by build_system for
+# the duration of one assembly so retrieval-gated blocks (the skills index)
+# can rank against it without changing every block's render signature.
+# A ContextVar (not a plain global) keeps concurrent assemblies — Guide turn
+# vs. advisor/sub-agent — from clobbering each other's intent.
+_INTENT: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_intent", default="")
 
 
 @lru_cache(maxsize=None)
@@ -78,12 +86,13 @@ def _conventions(_tools: list[dict]) -> str:
 
 
 def _skills_index(_tools: list[dict]) -> str:
-    """B2: per-turn skills catalog (names + 1-line descriptions). The
-    agent uses `read_skill(name)` to expand the body on demand. Empty
-    until bio.skills register at import time; the registry returns ''
-    in that case, which the assembler drops."""
+    """B2: per-turn skills catalog. Retrieval-gated: a large recipe library
+    surfaces only the top-K skills relevant to this turn's intent plus a
+    pointer to search_skills, so the prompt imprint stays bounded. The agent
+    uses read_skill(name) to expand a body on demand. Empty until bio.skills
+    register at import time (registry returns '', which the assembler drops)."""
     from core.skills import skills_index_block
-    return skills_index_block()
+    return skills_index_block(query=_INTENT.get(""))
 
 
 def _memory_index(_tools: list[dict]) -> str:
@@ -111,21 +120,28 @@ _BLOCKS: tuple[_Block, ...] = (
 )
 
 
-def build_system(active_tools: list[dict], role: str = "primary") -> str:
+def build_system(active_tools: list[dict], role: str = "primary", intent: str = "") -> str:
     """Assemble a role-appropriate system prompt for this turn.
 
     role defaults to "primary" (the Guide). Advisor roles (e.g.
     "skeptic", "methodologist") get a trimmed prompt — no recipes,
     no scenarios, no plan_first, and no capabilities listing when
-    they have no tools."""
-    names = {t["name"] for t in active_tools}
-    parts: list[str] = []
-    for blk in _BLOCKS:
-        if blk.roles is not None and role not in blk.roles:
-            continue
-        if blk.required_tool is not None and blk.required_tool not in names:
-            continue
-        text = blk.render(active_tools)
-        if text:
-            parts.append(text)
-    return "\n\n".join(parts)
+    they have no tools.
+
+    `intent` (the user's message for this turn) feeds the retrieval-gated
+    skills index so a large recipe library surfaces only the relevant slice."""
+    token = _INTENT.set(intent or "")
+    try:
+        names = {t["name"] for t in active_tools}
+        parts: list[str] = []
+        for blk in _BLOCKS:
+            if blk.roles is not None and role not in blk.roles:
+                continue
+            if blk.required_tool is not None and blk.required_tool not in names:
+                continue
+            text = blk.render(active_tools)
+            if text:
+                parts.append(text)
+        return "\n\n".join(parts)
+    finally:
+        _INTENT.reset(token)

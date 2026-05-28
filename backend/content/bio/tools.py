@@ -288,7 +288,8 @@ TOOL_SCHEMAS = [
             "Load the full body (procedure / recipe) of a registered skill by name. "
             "The system prompt shows you a one-line description for each skill — call "
             "this when you've decided to use one and need the step-by-step details. "
-            "Returns the markdown body, or an error if the name isn't registered."
+            "Returns the markdown body plus the capabilities the skill needs, or an "
+            "error if the name isn't registered."
         ),
         "input_schema": {
             "type": "object",
@@ -299,6 +300,28 @@ TOOL_SCHEMAS = [
                 },
             },
             "required": ["name"],
+        },
+    },
+    {
+        "name": "search_skills",
+        "description": (
+            "Find skills (reusable analysis recipes) by intent when the one you "
+            "need isn't in the skills list shown in your prompt — that list is only "
+            "a relevant slice of a larger library. Search by what you want to do "
+            "('differential expression', 'cluster single-cell data', 'call "
+            "variants'), not by exact name. Returns ranked skills with their "
+            "descriptions and the capabilities each needs; follow with read_skill "
+            "to load one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "What you want to do, in plain words."},
+                "limit": {"type": "integer",
+                          "description": "Max results (default 8)."},
+            },
+            "required": ["query"],
         },
     },
     {
@@ -1076,15 +1099,26 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
             ),
         }
 
-    return {
+    # Skill→capability funnel: the skill names the catalog capabilities it
+    # uses; tell the agent which aren't ready yet so it can ensure_capability
+    # them before run_python (rather than hitting an ImportError mid-run).
+    out = {
         "status": "ok",
         "name": spec.name,
         "description": spec.description,
         "when_to_use": spec.when_to_use,
         "requires_tools": list(spec.requires_tools),
+        "capabilities_needed": list(spec.capabilities_needed),
         "produces": list(spec.produces),
         "body": spec.body,
     }
+    if spec.capabilities_needed:
+        out["note"] = (
+            "This skill uses these capabilities: "
+            f"{', '.join(spec.capabilities_needed)}. "
+            "Call ensure_capability(name) for any not already available before run_python."
+        )
+    return out
 
 
 def ask_clarification(input_: dict) -> dict:
@@ -1105,14 +1139,41 @@ def _test_deferred_tool(input_: dict) -> dict:
 
 
 def list_capabilities_tool(input_: dict) -> dict:
-    """Search the capability catalog (P1). Returns a trimmed view for the model."""
-    from core.catalog import list_capabilities as _list
-    caps = _list(query=input_.get("query"), tags=input_.get("tags"))
+    """Search the capability catalog (P1). Intent-ranked (BM25 + substring)
+    when a query is given, plain tag-filter otherwise. Returns a trimmed
+    view for the model."""
+    query = input_.get("query")
+    tags = input_.get("tags")
+    if (query or "").strip():
+        from core.catalog import search_capabilities as _search
+        caps = _search(query=query, tags=tags)
+    else:
+        from core.catalog import list_capabilities as _list
+        caps = _list(query=None, tags=tags)
     return {"capabilities": [
         {"name": c.get("name"), "version": c.get("version"),
          "archetype": c.get("archetype"), "summary": c.get("summary"),
          "domain_tags": c.get("domain_tags"), "status": c.get("status")}
         for c in caps
+    ]}
+
+
+def search_skills_tool(input_: dict) -> dict:
+    """Intent search over the skill (recipe) library. The system prompt only
+    surfaces a relevant slice of skills; this finds the rest by free-text
+    intent ('differential expression', 'cluster single cell data') so the
+    agent isn't limited to what happened to be in-prompt this turn."""
+    from core.skills import search_skills
+    q = (input_.get("query") or "").strip()
+    if not q:
+        return {"status": "error", "note": "search_skills needs a non-empty `query`."}
+    limit = input_.get("limit") or 8
+    hits = search_skills(q, limit=int(limit))
+    return {"skills": [
+        {"name": s.name, "description": s.description,
+         "when_to_use": s.when_to_use,
+         "capabilities_needed": list(s.capabilities_needed)}
+        for s in hits
     ]}
 
 
@@ -1445,6 +1506,7 @@ EXECUTORS = {
     "present_plan": present_plan,
     "ask_clarification": ask_clarification,
     "read_skill": read_skill,
+    "search_skills": search_skills_tool,
     "read_memory": read_memory_tool,
     "write_memory": write_memory_tool,
     "list_capabilities": list_capabilities_tool,

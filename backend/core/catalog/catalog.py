@@ -156,6 +156,51 @@ def list_capabilities(
     return out
 
 
+def _cap_doc_text(cap: dict) -> str:
+    """Searchable text for one capability."""
+    return " ".join([
+        str(cap.get("name", "")),
+        str(cap.get("summary", "")),
+        " ".join(cap.get("domain_tags") or []),
+        str(cap.get("archetype", "")),
+    ])
+
+
+def search_capabilities(
+    query: Optional[str] = None,
+    *,
+    limit: int = 20,
+    tags: Optional[list[str]] = None,
+    ctx: Optional[ExecContext] = None,
+) -> list[dict]:
+    """Intent-ranked capability search. BM25 over name+summary+tags+archetype
+    (multi-word / semantic queries: 'align rna-seq reads' surfaces salmon/STAR)
+    unioned with substring matches (partial words / prefixes BM25's whole-token
+    scoring would miss). BM25-ranked hits first, then substring-only matches.
+    Empty query → all visible (tag-filtered) capabilities. This is what the
+    list_capabilities tool calls when given a query — list_capabilities() above
+    stays the plain substring/tag filter used internally and for browsing."""
+    cands = list_capabilities(query=None, tags=tags, ctx=ctx)  # visible + tag-filtered
+    q = (query or "").strip()
+    if not q:
+        return cands[:limit] if limit else cands
+
+    from core.search import BM25
+    by_id = {c["id"]: c for c in cands}
+    idx = BM25((c["id"], _cap_doc_text(c)) for c in cands)
+    ranked_ids = [i for i, _ in idx.search(q, limit=limit)]
+    seen = set(ranked_ids)
+    ql = q.lower()
+    for c in cands:  # substring fallback for partial-word recall
+        if c["id"] in seen:
+            continue
+        if ql in _cap_doc_text(c).lower():
+            ranked_ids.append(c["id"])
+            seen.add(c["id"])
+    out = [by_id[i] for i in ranked_ids if i in by_id]
+    return out[:limit] if limit else out
+
+
 def resolve_capability(
     name_or_id: str,
     version: Optional[str] = None,
