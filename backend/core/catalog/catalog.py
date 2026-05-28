@@ -8,10 +8,12 @@ P0; BM25 retrieval (capabilities.md §9.2) arrives when the catalog grows past
 ~25 entries.
 """
 from __future__ import annotations
+import os
 from typing import Optional
 
 from core.data.handles import ExecContext
-from core.graph.entities import create_entity, get_entity, list_entities
+from core.graph.entities import create_entity, get_entity, list_entities, update_entity
+from core.graph.audit import log_event
 
 CAPABILITY = "capability"
 REFERENCE = "reference"
@@ -76,14 +78,52 @@ def register_capability(spec: dict) -> str:
     return create_entity(entity_type=CAPABILITY, title=name, metadata=meta)
 
 
+def _approval_mode() -> str:
+    """Read dynamically so tests / deployments can flip it at runtime."""
+    return os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+
+
+def capability_status(cap_id: str) -> Optional[str]:
+    """The lifecycle status of a capability entity, or None if unknown."""
+    ent = get_entity(cap_id)
+    if ent is None or ent.get("type") != CAPABILITY:
+        return None
+    return (ent.get("metadata") or {}).get("status", "published")
+
+
+def approve_capability(cap_id: str) -> Optional[dict]:
+    """Flip a proposed capability to `published` and audit it. Returns the
+    capability dict, or None if unknown."""
+    ent = get_entity(cap_id)
+    if ent is None or ent.get("type") != CAPABILITY:
+        return None
+    meta = dict(ent.get("metadata") or {})
+    meta["status"] = "published"
+    update_entity(cap_id, metadata=meta)
+    log_event("capability_approved", entity_id=cap_id,
+              title=meta.get("name") or ent.get("title"),
+              detail={"mode": _approval_mode()})
+    return _to_capability(get_entity(cap_id))
+
+
 def propose_capability(spec: dict, ctx: Optional[ExecContext] = None) -> str:
     """Draft a capability from a discovery hit, in the `proposed` lifecycle
-    state (capabilities.md §7.2). Approval (P3) flips it to `published`."""
+    state (capabilities.md §7.2), and audit it. In `auto` approval mode it is
+    published immediately; in `ask` mode it waits for approve_capability.
+    Returns the new capability's entity id."""
     meta = dict(spec)
     meta["status"] = "proposed"
-    if ctx is not None and ctx.project_id and "scope" not in meta:
-        meta["scope"] = f"project:{ctx.project_id}"
-    return register_capability(meta)
+    if "scope" not in meta:
+        meta["scope"] = f"project:{ctx.project_id}" if (ctx and ctx.project_id) else "project"
+    cap_id = register_capability(meta)
+    log_event("capability_proposed", entity_id=cap_id, title=meta.get("name"),
+              detail={"source": meta.get("source", "pypi"),
+                      "version": meta.get("version"),
+                      "provisioning": meta.get("provisioning"),
+                      "scope": meta.get("scope")})
+    if _approval_mode() == "auto":
+        approve_capability(cap_id)
+    return cap_id
 
 
 def list_capabilities(
