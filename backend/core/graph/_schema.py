@@ -26,8 +26,8 @@ DB_PATH = Path(
 # Root entity that hosts any chat not yet scoped to a specific entity.
 WORKSPACE_ID = "workspace"
 
-# Global default-disabled tools (comma-separated names). Per-project
-# settings layer on top via the tool_settings table.
+# Global default-disabled tools (comma-separated names). Operator kill-switch
+# read once at startup; layered under each agent's tool_allowlist.
 _GLOBAL_DISABLED = {t.strip() for t in os.environ.get("ABA_DISABLED_TOOLS", "").split(",") if t.strip()}
 
 
@@ -205,13 +205,6 @@ def init_db():
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS tool_settings (
-                name     TEXT PRIMARY KEY,
-                enabled  INTEGER NOT NULL DEFAULT 1
-            )
-        """)
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS proposals (
