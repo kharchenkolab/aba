@@ -378,6 +378,97 @@ TOOL_SCHEMAS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "fetch_url",
+        "description": (
+            "Download a file from a URL into the project's fetch workspace "
+            "(scratch). Use for public data — a genome/annotation file, a fastq "
+            "URL from lookup_sra_runinfo, etc. Returns the local path; then call "
+            "register_reference to keep reusable reference data, or just read it "
+            "from run_python. Large downloads are size-gated + audited."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "filename": {"type": "string", "description": "Optional output filename."},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "lookup_sra_runinfo",
+        "description": (
+            "Look up the run table for an SRA/ENA/GEO accession (study, sample, "
+            "or run) via ENA. Returns each run's accession, sample title, library "
+            "layout, and direct fastq download URLs — the input for planning a "
+            "fetch+align pipeline. Pair with fetch_url to download the fastqs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"accession": {"type": "string",
+                            "description": "e.g. 'SRP033351', 'GSE52778', or a run 'SRR1039508'."}},
+            "required": ["accession"],
+        },
+    },
+    {
+        "name": "fetch_ensembl",
+        "description": (
+            "Fetch a genome/transcriptome FASTA or GTF annotation from Ensembl. "
+            "Resolves the assembly-versioned filename automatically. Use for a "
+            "reference you'll align/quantify against; follow with register_reference."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "species": {"type": "string", "description": "e.g. 'drosophila_melanogaster'."},
+                "kind": {"type": "string", "enum": ["cdna", "dna", "gtf"],
+                         "description": "cdna (transcriptome), dna (genome), or gtf (annotation)."},
+                "release": {"type": "string", "description": "Ensembl release, default '110'."},
+            },
+            "required": ["species", "kind"],
+        },
+    },
+    {
+        "name": "register_reference",
+        "description": (
+            "Keep a fetched/built file as a reusable reference in the shared, "
+            "content-addressed store (deduplicated across projects). Tag it with "
+            "organism/role so find_reference can locate it later. For a derived "
+            "reference (e.g. an index built from a FASTA), pass derived_from with "
+            "the source reference id to record lineage."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Local path to the file or index dir."},
+                "organism": {"type": "string"},
+                "role": {"type": "string", "description": "e.g. 'transcriptome', 'genome', 'salmon_index', 'gtf'."},
+                "assembly": {"type": "string"},
+                "source": {"type": "string", "description": "Provenance, e.g. 'Ensembl r110'."},
+                "derived_from": {"type": "string", "description": "Source reference id, if derived."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "find_reference",
+        "description": (
+            "Find an already-stored reference by organism/role (and optionally "
+            "assembly) before fetching or building it — references are shared and "
+            "deduplicated, so a colleague's fly transcriptome or a previously-built "
+            "index is reused, not re-fetched. Pass all=true to list matches."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "organism": {"type": "string"},
+                "role": {"type": "string"},
+                "assembly": {"type": "string"},
+                "all": {"type": "boolean", "description": "Return all matches instead of the first."},
+            },
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -1058,6 +1149,128 @@ def propose_capability_tool(input_: dict) -> dict:
             "note": "Proposed; awaiting approval before it can be installed."}
 
 
+def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
+    """Download a URL into the project's fetch scratch (P4). Size-gated + audited."""
+    import os as _os
+    import urllib.request
+    from core.data.workspace import scratch_dir
+    from core.graph.audit import log_event
+    from core import projects
+
+    url = (input_.get("url") or "").strip()
+    if not url:
+        return {"error": "url is required"}
+    filename = input_.get("filename") or url.split("?")[0].rstrip("/").split("/")[-1] or "download"
+    project_id = projects.current() or "default"
+    dest = scratch_dir(str(project_id), "fetch") / filename
+    threshold = 5 * 1024 ** 3
+    mode = _os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=60) as resp:
+            clen = int(resp.headers.get("Content-Length") or 0)
+            if clen > threshold and mode == "ask":
+                return {"status": "needs_approval", "url": url, "bytes": clen,
+                        "note": f"Download is ~{clen} bytes (over threshold); approval required in ask mode."}
+            total = 0
+            with open(dest, "wb") as f:
+                for chunk in iter(lambda: resp.read(1 << 20), b""):
+                    f.write(chunk)
+                    total += len(chunk)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"fetch failed: {e}"}
+    log_event("data_fetched", title=filename, detail={"url": url, "bytes": total, "path": str(dest)})
+    return {"status": "ok", "path": str(dest), "filename": filename, "bytes": total}
+
+
+def lookup_sra_runinfo(input_: dict, ctx: dict | None = None) -> dict:
+    """Run table for an SRA/ENA/GEO accession via the ENA filereport API (P4)."""
+    import json as _json
+    import urllib.request
+    acc = (input_.get("accession") or input_.get("query") or "").strip()
+    if not acc:
+        return {"error": "accession is required"}
+    fields = "run_accession,fastq_ftp,sample_title,sample_accession,library_layout,read_count"
+    url = (f"https://www.ebi.ac.uk/ena/portal/api/filereport?accession={acc}"
+           f"&result=read_run&fields={fields}&format=json")
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            data = _json.loads(resp.read())
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"ENA lookup failed: {e}"}
+    runs = []
+    for r in data:
+        urls = [(u if u.startswith("http") else "https://" + u)
+                for u in (r.get("fastq_ftp") or "").split(";") if u]
+        runs.append({"run_accession": r.get("run_accession"),
+                     "sample_title": r.get("sample_title"),
+                     "library_layout": r.get("library_layout"),
+                     "read_count": r.get("read_count"),
+                     "fastq_urls": urls})
+    return {"accession": acc, "n_runs": len(runs), "runs": runs}
+
+
+def fetch_ensembl(input_: dict, ctx: dict | None = None) -> dict:
+    """Fetch a FASTA/GTF from Ensembl, resolving the assembly-versioned filename
+    by listing the release directory (P4)."""
+    import re
+    import urllib.request
+    species = (input_.get("species") or "").strip().lower()
+    kind = (input_.get("kind") or "cdna").strip()
+    release = str(input_.get("release") or "110")
+    if not species:
+        return {"error": "species is required"}
+    if kind in ("cdna", "dna"):
+        dir_url = f"https://ftp.ensembl.org/pub/release-{release}/fasta/{species}/{kind}/"
+        suffix = ".cdna.all.fa.gz" if kind == "cdna" else ".dna.toplevel.fa.gz"
+    elif kind == "gtf":
+        dir_url = f"https://ftp.ensembl.org/pub/release-{release}/gtf/{species}/"
+        suffix = f".{release}.gtf.gz"
+    else:
+        return {"error": f"unknown kind '{kind}'"}
+    try:
+        with urllib.request.urlopen(dir_url, timeout=30) as resp:
+            html = resp.read().decode("utf-8", "ignore")
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"Ensembl listing failed: {e}", "dir": dir_url}
+    files = re.findall(r'href="([^"]+)"', html)
+    match = next((f for f in files if f.endswith(suffix)), None)
+    if not match:
+        return {"error": f"no '{suffix}' file in {dir_url}", "candidates": files[:20]}
+    return fetch_url({"url": dir_url + match, "filename": match}, ctx)
+
+
+def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Keep a file/dir as a reusable, content-addressed reference (P4)."""
+    path = input_.get("path")
+    if not path:
+        return {"error": "path is required"}
+    from core.data import register_reference as _reg
+    from core.graph.entities import get_entity
+    try:
+        eid = _reg(path, organism=input_.get("organism"), role=input_.get("role"),
+                   source=input_.get("source"), assembly=input_.get("assembly"),
+                   derived_from=input_.get("derived_from"))
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"register failed: {e}"}
+    e = get_entity(eid) or {}
+    meta = e.get("metadata") or {}
+    return {"status": "ok", "reference_id": eid, "sha": meta.get("sha"),
+            "organism": meta.get("organism"), "role": meta.get("role"),
+            "artifact_path": e.get("artifact_path"),
+            "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
+
+
+def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Find a stored reference by organism/role before fetching/building (P4)."""
+    from core.data import find_reference as _find, list_references as _list
+    if input_.get("all"):
+        return {"references": _list(organism=input_.get("organism"), role=input_.get("role"),
+                                    assembly=input_.get("assembly"))}
+    r = _find(organism=input_.get("organism"), role=input_.get("role"),
+              assembly=input_.get("assembly"))
+    return {"found": bool(r), "reference": r}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -1076,6 +1289,11 @@ EXECUTORS = {
     "search_pypi": search_pypi,
     "search_bioconda": search_bioconda,
     "propose_capability": propose_capability_tool,
+    "fetch_url": fetch_url,
+    "lookup_sra_runinfo": lookup_sra_runinfo,
+    "fetch_ensembl": fetch_ensembl,
+    "register_reference": register_reference_tool,
+    "find_reference": find_reference_tool,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:

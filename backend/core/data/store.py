@@ -48,7 +48,10 @@ def resolve(handle: DataHandle, ctx: Optional[ExecContext] = None) -> StagedInpu
             f"entity {handle.entity_id} has no artifact_path to resolve "
             f"(type={entity.get('type')})"
         )
-    lock = handle.version or entity.get("updated_at") or "v0"
+    # References are content-addressed: lock to their content sha so a run
+    # records exactly which version it read. Other entities lock to updated_at.
+    meta = entity.get("metadata") or {}
+    lock = handle.version or meta.get("sha") or entity.get("updated_at") or "v0"
     return StagedInput(local_path=str(path), version_lock=str(lock))
 
 
