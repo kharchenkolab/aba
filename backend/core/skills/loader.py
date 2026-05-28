@@ -43,7 +43,14 @@ class SkillSpec:
     keywords:       tuple[str, ...] = ()
     # Coarse facet for filtering + the in-prompt domain "map" (e.g. 'genomics',
     # 'pharmacology'). Flat, not a tree — complements BM25, doesn't replace it.
+    # Derived from the recipes/<domain>/ subfolder (frontmatter overrides).
     domain:         str = ""
+    # How the skill reaches the agent: 'always' (rendered in the system prompt
+    # every turn — the curated core/ set) or 'local' (retrieval-gated via
+    # search_skills — the recipes/ cookbook). NOT a per-file choice: it's
+    # stamped from the registered root folder, so a generated recipe can never
+    # promote itself into the always-on prompt tier.
+    visibility:     str = "local"
     produces:       tuple[str, ...] = ()
     parameter_schema: dict[str, Any] = field(default_factory=dict)
     resource_profile: str = ""
@@ -80,7 +87,8 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
-def _spec_from_text(text: str, source_path: str = "") -> SkillSpec:
+def _spec_from_text(text: str, source_path: str = "", *,
+                    default_domain: str = "", visibility: str = "local") -> SkillSpec:
     fm, body = _split_frontmatter(text)
     name = (fm.get("name") or "").strip()
     if not name:
@@ -104,7 +112,8 @@ def _spec_from_text(text: str, source_path: str = "") -> SkillSpec:
         requires_tools=tuple(req),
         capabilities_needed=tuple(str(c).strip() for c in caps if str(c).strip()),
         keywords=tuple(str(k).strip() for k in kw if str(k).strip()),
-        domain=str(fm.get("domain") or "").strip(),
+        domain=(str(fm.get("domain") or "").strip() or default_domain),
+        visibility=visibility,
         produces=tuple(prod),
         parameter_schema=fm.get("parameter_schema") or {},
         resource_profile=str(fm.get("resource_profile") or "").strip(),
@@ -128,21 +137,30 @@ def _invalidate_index() -> None:
     _INDEX = None
 
 
-def register_skill_dir(path: str | Path) -> int:
-    """Walk a directory of .md skill files and register each one. Returns
+def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
+    """Walk a directory tree of .md skill files and register each one. Returns
     the number registered. Idempotent on re-registration (later wins so
     overlays can override). Also feeds the plan validator's KNOWN_SKILLS
-    so 'unknown skill' warnings reference the real catalog."""
+    so 'unknown skill' warnings reference the real catalog.
+
+    `visibility` is stamped on every file under this root (folder-driven, not
+    per-file). Files in a subfolder take that subfolder's name as their default
+    `domain` (frontmatter `domain:` still wins), so recipes/<domain>/foo.md is
+    self-classifying."""
     from core.planning.validator import register_skill
 
     p = Path(path)
     if not p.is_dir():
         return 0
     n = 0
-    for f in sorted(p.glob("*.md")):
+    for f in sorted(p.rglob("*.md")):
+        rel = f.relative_to(p)
+        # Immediate subfolder (if any) is the default domain facet.
+        default_domain = rel.parts[0] if len(rel.parts) > 1 else ""
         text = f.read_text()
         try:
-            spec = _spec_from_text(text, source_path=str(f))
+            spec = _spec_from_text(text, source_path=str(f),
+                                   default_domain=default_domain, visibility=visibility)
         except ValueError as e:
             # A broken skill file is a content bug — surface it but don't
             # abort loading. Other valid skills should still register.
@@ -195,9 +213,11 @@ def _doc_text(s: SkillSpec) -> str:
 
 
 def skill_domains() -> list[str]:
-    """Sorted distinct domains across registered skills — the flat facet that
-    backs the in-prompt domain map + the search_skills domain filter."""
-    return sorted({s.domain for s in _REGISTRY.values() if s.domain})
+    """Sorted distinct domains across the *searchable* (local) cookbook — the
+    flat facet that backs the in-prompt domain map + the search_skills filter.
+    Always-on core skills are listed in full and don't need a facet."""
+    return sorted({s.domain for s in _REGISTRY.values()
+                   if s.domain and s.visibility != "always"})
 
 
 def _index():
@@ -229,49 +249,65 @@ def search_skills(query: str, *, limit: int = GATED_TOP_K,
     return out[:limit]
 
 
-def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
-    """The skills slice embedded in the system prompt. Use read_skill(name)
-    to expand a body on demand. Returns '' when the registry is empty.
+def _skill_bullets(skills: list[SkillSpec]) -> list[str]:
+    return [f"- `{s.name}` — {s.description}" if s.description else f"- `{s.name}`"
+            for s in skills]
 
-    Scalability: a small catalog (≤ FULL_LIST_MAX) is listed in full (cheap,
-    complete). Past that, the block is *retrieval-gated* — it shows only the
-    top-K skills relevant to `query` (the turn's intent) plus a pointer to
-    search_skills — so the prompt imprint stays bounded as the recipe library
-    grows to hundreds. With no query and a large catalog it shows a stable
-    default slice and leans on search_skills for the rest."""
+
+def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
+    """The skills slice embedded in the system prompt. Two tiers, by visibility:
+
+      • Core (visibility 'always') — the curated operating + strategy skills,
+        listed in full every turn so the agent never loses them.
+      • Recipes (visibility 'local') — the domain cookbook, *retrieval-gated*:
+        a small catalog (≤ FULL_LIST_MAX) is listed in full; past that, only the
+        top-K relevant to `query` plus a `search_skills` pointer, so the prompt
+        imprint stays bounded as the cookbook grows to hundreds.
+
+    Anything in neither tier is discoverable remotely (search_nf_core /
+    search_mcp_registry / search_pypi). Use read_skill(name) to expand a body.
+    Returns '' when the registry is empty."""
     if not _REGISTRY:
         return ""
-    total = len(_REGISTRY)
     q = (query or "").strip()
-    header = [
+    all_skills = list_skills()
+    core = [s for s in all_skills if s.visibility == "always"]
+    cookbook = [s for s in all_skills if s.visibility != "always"]
+
+    lines = [
         "### Skills you can reference by name",
         "Use `read_skill(name)` to load the full procedure when needed.",
     ]
 
-    if total <= FULL_LIST_MAX:
-        skills = list_skills()
-    else:
-        k = limit or GATED_TOP_K
-        skills = search_skills(q, limit=k) if q else []
-        # No query, or a query with no lexical overlap → a stable default
-        # slice so the block is never bullet-less (the agent still gets a
-        # foothold + the search_skills pointer for the rest).
-        relevant = bool(q and skills)
-        if not skills:
-            skills = list_skills()[:k]
-        rel = " most relevant to the current request" if relevant else ""
-        header.append(
-            f"Showing {len(skills)} of {total} skills{rel}. "
-            f"Call `search_skills(query)` to find others by intent."
-        )
-        # One-line domain map so the agent can orient + narrow by facet without
-        # paying for the full list (the flat-facet alternative to a tree).
-        doms = skill_domains()
-        if doms:
-            header.append(f"Domains: {' · '.join(doms)} — narrow with search_skills(query, domain=…).")
+    if core:
+        lines += ["", "**Core skills** (always available):", *_skill_bullets(core)]
 
-    header.append("")
-    lines = list(header)
-    for s in skills:
-        lines.append(f"- `{s.name}` — {s.description}" if s.description else f"- `{s.name}`")
+    if cookbook:
+        total = len(cookbook)
+        lines.append("")
+        if total <= FULL_LIST_MAX:
+            lines.append("**Recipes:**")
+            shown = cookbook
+        else:
+            k = limit or GATED_TOP_K
+            # search_skills spans the whole registry; over-fetch then drop the
+            # core hits so the gated slice is k *cookbook* recipes.
+            raw = search_skills(q, limit=k + len(core)) if q else []
+            shown = [s for s in raw if s.visibility != "always"][:k]
+            relevant = bool(q and shown)
+            if not shown:  # no query, or no lexical overlap → stable default slice
+                shown = cookbook[:k]
+            rel = " most relevant to the current request" if relevant else ""
+            lines.append(
+                f"**Recipes** — showing {len(shown)} of {total}{rel}. "
+                f"Call `search_skills(query)` to find others by intent."
+            )
+            doms = skill_domains()
+            if doms:
+                lines.append(f"Domains: {' · '.join(doms)} — narrow with search_skills(query, domain=…).")
+        lines += _skill_bullets(shown)
+
+    lines += ["",
+              "Need a tool or pipeline that isn't listed? `search_nf_core`, "
+              "`search_mcp_registry`, `search_pypi` / `search_bioconda` discover external ones."]
     return "\n".join(lines)
