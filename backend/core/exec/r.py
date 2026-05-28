@@ -102,6 +102,53 @@ def r_has_package(pkg: str, project_id: Optional[str] = None, timeout_s: int = 6
         return False
 
 
+# Posit Package Manager (PPM): binary CRAN/Bioc packages (fast) with automatic
+# source fallback. Works with conda R via repo selection — R's compiled-package
+# ABI is stable per minor version, so a binary built for R x.y loads in any R
+# x.y; the only risk is exotic system-lib linkage, where PPM falls back to
+# source (which compiles via the conda toolchain). Reproducibility = pin
+# ABA_R_PPM_SNAPSHOT to a date instead of 'latest'.
+_PPM_BASE = "https://packagemanager.posit.co/cran"
+# Distros PPM ships Linux binaries for (others → source-only).
+_PPM_DISTROS = {"focal", "jammy", "noble", "bullseye", "bookworm",
+                "rhel8", "rhel9", "opensuse154", "opensuse155", "centos7"}
+
+
+def _ppm_distro() -> str:
+    """Linux distro codename for PPM binaries; '' → source-only snapshot.
+    Explicit ABA_R_PPM_DISTRO wins (empty disables binaries); else auto-detect
+    from /etc/os-release, but only if it's a PPM-supported distro."""
+    import os
+    env = os.environ.get("ABA_R_PPM_DISTRO")
+    if env is not None:
+        return env.strip()
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("VERSION_CODENAME="):
+                code = line.split("=", 1)[1].strip().strip('"')
+                return code if code in _PPM_DISTROS else ""
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def cran_repo() -> str:
+    """The CRAN repo URL for installs — a PPM snapshot (binary-enabled when on a
+    supported distro, else source). Override via ABA_R_PPM_BASE/SNAPSHOT/DISTRO."""
+    import os
+    base = os.environ.get("ABA_R_PPM_BASE", _PPM_BASE).rstrip("/")
+    snap = os.environ.get("ABA_R_PPM_SNAPSHOT", "latest")
+    distro = _ppm_distro()
+    return f"{base}/__linux__/{distro}/{snap}" if distro else f"{base}/{snap}"
+
+
+def _ppm_ua_expr() -> str:
+    """R `options(HTTPUserAgent=...)` so PPM serves binaries (it keys binary vs
+    source off the R version + platform in the UA). Harmless on a plain CRAN."""
+    return ('options(HTTPUserAgent=sprintf("R/%s R (%s)", getRversion(), '
+            'paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); ')
+
+
 def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[str]:
     """Return an error string if the install spec is unsafe/malformed, else None."""
     if source not in ("cran", "bioconductor", "github"):
@@ -119,16 +166,20 @@ def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[
 def install_command(source: str, package: str, *, lib: str,
                     ref: Optional[str] = None, repos: Optional[str] = None) -> str:
     """Pure builder: the R expression to install `package` from `source` into
-    `lib` (project library), prepended ahead of the base on .libPaths()."""
+    `lib` (project library), prepended ahead of the base on .libPaths(). CRAN/
+    Bioc installs set the PPM User-Agent so binaries are served when available
+    (source otherwise). GitHub always builds from source."""
     libq = repr(str(lib))
     setlib = f'.libPaths(c({libq}, .libPaths())); '
     if source == "github":
         spec = f"{package}@{ref}" if ref else package
         return f'{setlib}remotes::install_github({spec!r}, lib={libq}, upgrade="never")'
+    ua = _ppm_ua_expr()
     if source == "bioconductor":
-        return f'{setlib}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE)'
-    repos = repos or "https://cloud.r-project.org"
-    return f'{setlib}install.packages({package!r}, lib={libq}, repos={repos!r})'
+        # PPM also serves Bioc; the UA gets binaries where available, else source.
+        return f'{setlib}{ua}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE)'
+    repos = repos or cran_repo()
+    return f'{setlib}{ua}install.packages({package!r}, lib={libq}, repos={repos!r})'
 
 
 def r_install(source: str, package: str, *, project_id: str,
