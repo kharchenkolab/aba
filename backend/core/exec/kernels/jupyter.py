@@ -101,6 +101,21 @@ def _setup_code(cwd: str) -> str:
     )
 
 
+def _kernel_env(lang: str) -> dict:
+    """Environment for the kernel subprocess. For R, put the conda tools-env on
+    LD_LIBRARY_PATH + PATH so R-package .so's resolve their conda system-lib
+    deps (e.g. igraph → libglpk.so.40) — the kernel isn't conda-activated, so
+    without this, packages that load fine via `micromamba run` fail to dlopen
+    in run_r (r_provisioning.md F5)."""
+    import os
+    env = dict(os.environ)
+    if lang == "r":
+        tenv = tools_env()
+        env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        env["PATH"] = str(tenv / "bin") + os.pathsep + env.get("PATH", "")
+    return env
+
+
 class JupyterKernelSession:
     def __init__(self, scope_key: str, lang: str, *, cwd: str):
         from jupyter_client import KernelManager
@@ -114,7 +129,7 @@ class JupyterKernelSession:
         else:
             kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
-        self._km.start_kernel(cwd=str(cwd))
+        self._km.start_kernel(cwd=str(cwd), env=_kernel_env(lang))
         self._kc = self._km.client()
         self._kc.start_channels()
         self._kc.wait_for_ready(timeout=60)
