@@ -20,6 +20,13 @@ WORK_DIR = Path(os.getenv("ABA_WORK_DIR", BASE_DIR / "work")).resolve()
 # .venv so the backend's env stays pristine. Holds the pylib overlay (one
 # shared pip --target dir for Python libs) and conda envs for CLI tools.
 ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", BASE_DIR / "envs")).resolve()
+# Kernelspecs hardcode the interpreter's absolute path, so they must live and die
+# with the env they point at. Scope ABA's Jupyter data dir under ENVS_DIR (not the
+# user's global ~/.local/share/jupyter): prod stays self-consistent, and tests —
+# which point ABA_ENVS_DIR at a throwaway /tmp env — can no longer poison the
+# global dir with specs that dangle once that env is wiped (the bug that DOA'd
+# live run_r). Set before any jupyter_client import resolves kernelspec paths.
+os.environ["JUPYTER_DATA_DIR"] = str(ENVS_DIR / "jupyter")
 # REFS_DIR is the content-addressed reference store (data.md §4.3): shared,
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
@@ -49,3 +56,4 @@ ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 REFS_DIR.mkdir(parents=True, exist_ok=True)
+(ENVS_DIR / "jupyter").mkdir(parents=True, exist_ok=True)
