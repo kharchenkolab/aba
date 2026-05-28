@@ -58,6 +58,15 @@ def test_deferred_shape():
           out.get("deferred") is True and out.get("deferred_id", "").startswith("job_"), str(out))
     check("job was queued", get_job(out["deferred_id"]) is not None)
 
+    # Router-wrinkle fix: a high timeout_s is a ceiling, NOT a runtime estimate,
+    # so it must NOT auto-background; only an explicit estimate (or flag) does.
+    sync = run_python({"code": "print('quick')", "timeout_s": 1800})
+    check("high timeout_s alone runs synchronously (not backgrounded)",
+          not sync.get("deferred") and "quick" in (sync.get("stdout") or ""), str(sync)[:160])
+    est = run_python({"code": "print('hi')", "estimated_runtime_min": 10})
+    check("estimated_runtime_min over threshold → background",
+          est.get("deferred") is True, str(est)[:160])
+
 
 async def _drive(job_id):
     await _run_one(job_id)

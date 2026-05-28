@@ -128,13 +128,17 @@ TOOL_SCHEMAS = [
                 },
                 "timeout_s": {
                     "type": "integer",
-                    "description": "Optional timeout in seconds; capped at 1800. Large values auto-route to a background job.",
+                    "description": "Hard time LIMIT (ceiling) in seconds; capped at 1800. The run is killed if it exceeds this. This is NOT a runtime estimate and does not affect background routing — set it generously.",
                     "minimum": 5,
                     "maximum": 1800,
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run as a background job instead of inline. Use for long pipelines (>30s) so the conversation isn't blocked. Returns a job_id immediately; the figures register when the job finishes. Tell the user to watch the Queues panel.",
+                    "description": "Run as a background job instead of inline. Use for long pipelines (fetch+align, multi-sample quantification) so the conversation isn't blocked. Returns a job_id immediately; figures register when the job finishes. Tell the user to watch the Queues panel.",
+                },
+                "estimated_runtime_min": {
+                    "type": "number",
+                    "description": "Optional: your estimate of how long this will take, in minutes. If it exceeds the background threshold (~4 min) the run is auto-routed to a background job. Leave unset for quick steps.",
                 },
                 "title": {
                     "type": "string",
@@ -548,11 +552,14 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     biomni_path = str(Path(__file__).parent.parent / "biomni")
 
     # P5: decide synchronous vs background. Explicit background flag forces it;
-    # otherwise the router auto-routes long runs (timeout_s as the runtime proxy)
-    # to the background job queue. Background returns a deferred result the guide
-    # loop resumes from when the job completes.
+    # otherwise the router auto-routes when the *estimated* runtime exceeds the
+    # threshold. timeout_s is a CEILING, not an estimate — using it to route
+    # would background fast work that merely set a defensive timeout, so routing
+    # keys on estimated_runtime_min (agent-provided now; ResourceEstimator-fed
+    # later). Background returns a deferred result the guide loop resumes from.
     override = "background" if input_.get("background") else None
-    choice = LocalRouter().route(estimate={"runtime_min": timeout_s / 60.0}, override=override)
+    est_min = float(input_.get("estimated_runtime_min") or 0)
+    choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_python_job
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
@@ -1154,8 +1161,10 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
     dest = scratch_dir(str(project_id), "fetch") / filename
     threshold = 5 * 1024 ** 3
     mode = _os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+    # Some hosts (e.g. Bioconductor) 403 the default urllib user-agent.
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ABA)"})
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             clen = int(resp.headers.get("Content-Length") or 0)
             if clen > threshold and mode == "ask":
                 return {"status": "needs_approval", "url": url, "bytes": clen,
