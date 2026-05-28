@@ -153,7 +153,7 @@ def s4_macs2():
         r = search_skills_tool({"query": "call ATAC-seq / ChIP-seq peaks"})
         hits = r.get("skills", [])
         caps = sum((s.get("capabilities_needed") or [] for s in hits), [])
-        return ("macs2" in caps, f"skills={[s['name'] for s in hits[:3]]}")
+        return (any("macs" in c for c in caps), f"skills={[s['name'] for s in hits[:3]]}")
 
     def execute():
         # MACS3 (maintained) rather than MACS2 — the bioconda MACS2 build fails at
