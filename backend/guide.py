@@ -625,6 +625,11 @@ async def stream_response(
                 # (read_skill checks active_tools for skill-tool linkage).
                 # Most executors ignore ctx; execute_tool peeks at the
                 # signature and forwards conditionally.
+                # Progress channel: long synchronous tools (installs, kernel
+                # exec, nextflow) push phase lines onto this queue; we drain it
+                # and stream `tool_progress` SSE while the worker thread runs.
+                import queue as _queue
+                _progress_q: _queue.Queue = _queue.Queue()
                 tool_ctx = {
                     "active_tools": active_tools,
                     "thread_id": store_tid,
@@ -633,14 +638,36 @@ async def stream_response(
                     # Long-running tools register kill interrupters here so
                     # Stop actually stops the work (not just the UI).
                     "cancel_token": cancel_token,
+                    "progress_q": _progress_q,
                 }
                 # P3 #6 telemetry — wrap dispatch with timing.
                 import datetime as _dt
                 _t_start = _dt.datetime.now(_dt.timezone.utc)
                 loop = asyncio.get_event_loop()
-                result_str = await loop.run_in_executor(
+                _fut = loop.run_in_executor(
                     None, execute_tool, tool_name, tool_input, tool_ctx
                 )
+
+                def _drain_progress():
+                    out = []
+                    try:
+                        while True:
+                            out.append(_progress_q.get_nowait())
+                    except _queue.Empty:
+                        pass
+                    return out
+
+                while not _fut.done():
+                    evs = _drain_progress()
+                    for ev in evs:
+                        yield sse({"type": "tool_progress", "name": tool_name,
+                                   "message": ev.get("message"), "phase": ev.get("phase")})
+                    if not evs:
+                        await asyncio.sleep(0.2)
+                for ev in _drain_progress():   # flush the tail
+                    yield sse({"type": "tool_progress", "name": tool_name,
+                               "message": ev.get("message"), "phase": ev.get("phase")})
+                result_str = await _fut
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)
                 _telem_status = (

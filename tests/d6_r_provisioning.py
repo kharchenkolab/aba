@@ -108,7 +108,7 @@ def test_verify_and_source_fallback():
     print("post-install verify + auto source-fallback (mocked)")
     import types
     orig = (rexec.ensure_r_runtime, rexec._run_rscript, rexec.r_has_package)
-    rexec.ensure_r_runtime = lambda: None
+    rexec.ensure_r_runtime = lambda cancel_token=None: None
 
     def proc(rc, err=""):
         return types.SimpleNamespace(returncode=rc, stdout="", stderr=err)
@@ -116,7 +116,7 @@ def test_verify_and_source_fallback():
     try:
         # (1) binary installs (rc0) but won't load → source retry loads → ready+fallback
         runs = []
-        rexec._run_rscript = lambda expr, t: (runs.append(expr), proc(0))[1]
+        rexec._run_rscript = lambda expr, t, cancel_token=None: (runs.append(expr), proc(0))[1]
         loads = iter([False, True])  # verify after binary fails, after source succeeds
         rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: next(loads)
         r = rexec.r_install("cran", "xml2", project_id="t", library="xml2")
@@ -126,7 +126,7 @@ def test_verify_and_source_fallback():
         check("second attempt forced source", 'type="source"' in runs[1])
 
         # (2) both attempts fail → error with diagnostic + missing_lib
-        rexec._run_rscript = lambda expr, t: proc(1, "cannot find -lpng\nhad non-zero exit status\n")
+        rexec._run_rscript = lambda expr, t, cancel_token=None: proc(1, "cannot find -lpng\nhad non-zero exit status\n")
         rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: False
         r2 = rexec.r_install("cran", "Cairo", project_id="t", library="Cairo")
         check("both fail → error", r2.get("status") == "error", str(r2))
@@ -135,7 +135,7 @@ def test_verify_and_source_fallback():
 
         # (3) github won't load → NO source fallback (already source) → error
         calls = []
-        rexec._run_rscript = lambda expr, t: (calls.append(expr), proc(0))[1]
+        rexec._run_rscript = lambda expr, t, cancel_token=None: (calls.append(expr), proc(0))[1]
         rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: False
         r3 = rexec.r_install("github", "owner/pkg", project_id="t", library="pkg")
         check("github won't-load → error (no fallback)", r3.get("status") == "error", str(r3))
@@ -164,7 +164,7 @@ def test_ensure_routing():
     print("ensure_capability routing (R layer mocked)")
     calls = {"install": 0}
     orig = (rexec.ensure_r_runtime, rexec.r_has_package, rexec.r_install)
-    rexec.ensure_r_runtime = lambda: None
+    rexec.ensure_r_runtime = lambda cancel_token=None: None
     try:
         # Already present in the library path → ready, NO install.
         rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: True

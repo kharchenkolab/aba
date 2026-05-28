@@ -1531,13 +1531,15 @@ def search_mcp_registry(input_: dict) -> dict:
                     "connects it and its tools become callable as 'server:tool'."}
 
 
-def ensure_capability(input_: dict) -> dict:
+def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
-    CLI tools (conda) are reported as deferred."""
+    CLI tools (conda) are reported as deferred. A long install is cancellable
+    (Stop) via the turn's cancel_token, and streams phase progress."""
     name = (input_.get("name") or input_.get("capability") or "").strip()
     if not name:
         return {"error": "name is required"}
+    _ct = (ctx or {}).get("cancel_token")
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
     if not cap:
@@ -1559,11 +1561,13 @@ def ensure_capability(input_: dict) -> dict:
                         f"runnable here. Implement it with ABA capabilities (search the "
                         f"catalogue / propose_capability for the real libraries), using "
                         f"read_capability for its inputs."}
+    from core.runtime import progress
+    progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
     if prov.get("pip"):
         from core.exec import MaterializingExecutor, Provisioning
         try:
-            MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])))
+            MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
         imp = cap.get("import_name")
@@ -1575,7 +1579,7 @@ def ensure_capability(input_: dict) -> dict:
     if prov.get("conda"):
         from core.exec import MaterializingExecutor, Provisioning
         try:
-            MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]))
+            MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
@@ -1591,6 +1595,7 @@ def ensure_capability(input_: dict) -> dict:
                     "note": "Remote (HTTP/SSE) MCP transport isn't wired yet; only stdio "
                             "(command/args) servers can be connected on demand."}
         from core.runtime.mcp import add_server, ServerConfig
+        progress.emit(f"Connecting MCP server '{cap.get('name')}'…", phase="mcp")
         cfg = ServerConfig(
             name=cap.get("name"),
             command=conn.get("command"),
@@ -1615,7 +1620,7 @@ def ensure_capability(input_: dict) -> dict:
                     "note": f"Pipeline engine '{engine}' isn't wired yet (only nextflow)."}
         from core.exec import MaterializingExecutor, Provisioning
         try:
-            MaterializingExecutor().materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}))
+            MaterializingExecutor().materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": cap.get("name"), "archetype": "pipeline",
                     "note": f"Could not install nextflow: {e}"}
@@ -1639,7 +1644,7 @@ def ensure_capability(input_: dict) -> dict:
                     "library": libname,
                     "note": f"Already available — library({libname}) works in run_r."}
         res = rexec.r_install(rp.get("source", "cran"), rp.get("package") or cap.get("name"),
-                              project_id=pid, library=libname, ref=rp.get("ref"))
+                              project_id=pid, library=libname, ref=rp.get("ref"), cancel_token=_ct)
         if res.get("status") == "ready":
             via = " (recompiled from source)" if res.get("source_fallback") else ""
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
@@ -1930,10 +1935,14 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     from core.exec import MaterializingExecutor, Provisioning
     ex = MaterializingExecutor()
     try:
-        env = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}))
+        env = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}),
+                             cancel_token=cancel_token)
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "note": f"Could not install nextflow: {e}"}
 
+    from core.runtime import progress
+    progress.emit(f"nextflow: launching {pipeline}"
+                  + (f" (-profile {profile})" if profile else "") + "…", phase="nextflow")
     cmd = _nextflow_command(pipeline, revision=revision, profile=profile,
                             outdir=outdir, params=params)
     res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s)
@@ -2030,6 +2039,20 @@ def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
     (prefixed 'server:name'); returns the gateway's result dict
     serialized back to a string."""
     import inspect
+    # Bind the progress sink for this worker thread so deep tool code
+    # (installs, kernel exec, nextflow) can stream phase lines (progress.emit).
+    from core.runtime import progress as _progress
+    _pq = (ctx or {}).get("progress_q")
+    if _pq is not None:
+        _progress.set_sink(_pq)
+    try:
+        return _dispatch_tool(name, input_, ctx, inspect)
+    finally:
+        if _pq is not None:
+            _progress.clear_sink()
+
+
+def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
     fn = EXECUTORS.get(name)
     if fn is None:
         # P3 #1 — try the MCP gateway. Tool names there are 'server:tool'.

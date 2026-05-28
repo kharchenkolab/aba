@@ -50,7 +50,7 @@ def project_r_lib(project_id: Optional[str]) -> Path:
     return p
 
 
-def ensure_r_runtime() -> None:
+def ensure_r_runtime(cancel_token=None) -> None:
     """Materialize the minimum conda R runtime (r-base + toolchain + remotes +
     BiocManager) into the shared tools env. One batch solve; idempotent."""
     from core.exec.mamba import run_micromamba, installed_packages
@@ -59,9 +59,12 @@ def ensure_r_runtime() -> None:
     missing = [s for s in RUNTIME_SPECS if s not in have]
     if not missing:
         return
+    from core.runtime import progress
+    progress.emit("conda: building R runtime (r-base + toolchain + remotes + BiocManager)…",
+                  phase="conda")
     verb = "install" if (tenv / "conda-meta").exists() else "create"
     run_micromamba([verb, "-y", "-p", str(tenv), "-c", "conda-forge", "-c", "bioconda",
-                    *RUNTIME_SPECS])
+                    *RUNTIME_SPECS], cancel_token=cancel_token)
 
 
 def ensure_r_base(specs: list[str]) -> None:
@@ -86,13 +89,14 @@ def libpaths_expr(project_id: Optional[str]) -> str:
     return f'.libPaths(c({str(project_r_lib(project_id))!r}, .libPaths()))'
 
 
-def _run_rscript(expr: str, timeout_s: int):
+def _run_rscript(expr: str, timeout_s: int, cancel_token=None):
     """Run an R expression in the conda tools-env R via `micromamba run` (so the
     env's toolchain / R_HOME / libs are active). Returns the CompletedProcess
-    (never raises on non-zero — callers inspect returncode)."""
+    (never raises on non-zero — callers inspect returncode). cancel_token makes
+    a long install/compile abortable by Stop."""
     from core.exec.mamba import run_micromamba
     return run_micromamba(["run", "-p", str(tools_env()), "Rscript", "-e", expr],
-                          timeout_s=timeout_s, check=False)
+                          timeout_s=timeout_s, check=False, cancel_token=cancel_token)
 
 
 def r_has_package(pkg: str, project_id: Optional[str] = None, timeout_s: int = 60) -> bool:
@@ -148,7 +152,7 @@ def diagnose_install(text: str) -> dict:
 
 
 def r_install(source: str, package: str, *, project_id: str, library: Optional[str] = None,
-              ref: Optional[str] = None, timeout_s: int = 1800) -> dict:
+              ref: Optional[str] = None, timeout_s: int = 1800, cancel_token=None) -> dict:
     """Native install (CRAN / Bioconductor / GitHub) into the project R library,
     then **verify it loads**. For CRAN/Bioc, a binary that installs but won't
     load under conda R (or an install that fails) triggers one automatic
@@ -158,20 +162,24 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
     err = validate_install(source, package, ref)
     if err:
         return {"status": "error", "note": err}
-    ensure_r_runtime()
+    ensure_r_runtime(cancel_token=cancel_token)
     lib = project_r_lib(project_id)
     libname = library or (package.split("/")[-1] if source == "github" else package)
 
+    from core.runtime import progress
+
     def _attempt(force_source: bool):
         expr = install_command(source, package, lib=str(lib), ref=ref, force_source=force_source)
-        proc = _run_rscript(expr, timeout_s)
+        proc = _run_rscript(expr, timeout_s, cancel_token=cancel_token)
         loaded = proc.returncode == 0 and r_has_package(libname, project_id=project_id)
         return proc, loaded
 
+    progress.emit(f"R: installing {package} from {source} (parallel build, j={build_jobs()})…", phase="r")
     proc, loaded = _attempt(force_source=False)
     used_source_fallback = False
     if not loaded and source in ("cran", "bioconductor"):
         # Binary missing/failed, or installed-but-won't-load → recompile from source.
+        progress.emit(f"R: {package} binary didn't load — recompiling from source…", phase="r")
         used_source_fallback = True
         proc, loaded = _attempt(force_source=True)
 
