@@ -77,7 +77,7 @@ def test_domain_facet():
 def test_search():
     print("search_skills finds recipes by intent")
     cases = [
-        ("call ChIP-seq peaks with macs2", "chipseq-peak-calling-macs2"),
+        ("call ChIP-seq peaks with macs3", "chipseq-peak-calling-macs3"),
         ("flux balance analysis of a metabolic model", "perform-flux-balance-analysis"),
         ("liftover genomic coordinates between assemblies", "liftover-coordinates"),
         ("call somatic mutations from a tumor BAM", "detect-and-annotate-somatic-mutations"),
