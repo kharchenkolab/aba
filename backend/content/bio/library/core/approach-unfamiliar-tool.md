@@ -1,22 +1,38 @@
 ---
 name: approach-unfamiliar-tool
-description: How to use a library/tool you don't know — orient from skills + its own docs before trial-and-error, and recover smartly when something is broken.
-when_to_use: You need a package/tool you're not already fluent in, and there's no specific skill for the task. Skip this for tools you know well.
-requires_tools: [run_python]
+description: How to get external data or use a library/tool you don't have — discover the recipe + maintained package first, orient from its docs, recover smartly, and never fabricate.
+when_to_use: You need to acquire data from an external source/database (GEO, SRA, ENA, ArrayExpress, UniProt, …), OR use a package/tool you're not already fluent in and there's no obvious recipe. Skip only for tools you know well.
+requires_tools: [run_python, search_skills, search_pypi, ensure_capability]
 capabilities_needed: []
-keywords: [unfamiliar tool, orient, documentation, vignette, help, introspection, recover, fallback, strategy, meta]
+keywords: [unfamiliar tool, get data, download, fetch, database, GEO, SRA, library, package, discover, search_skills, search_pypi, orient, documentation, vignette, recover, fallback, fabricate, meta]
 produces: []
 domain: meta
 ---
-# Approaching an unfamiliar tool
+# Getting data, or approaching an unfamiliar tool
 
-Brute-forcing an unknown API in the kernel is slow and error-prone (15 failed
-calls discovering method names). Orient first; recover smartly.
+Two reflexes that prevent the common failure mode — flailing with `fetch_url` +
+hand-parsing (or, worse, *fabricating* the answer) instead of using the curated
+path that already exists.
 
-## Orient before trial-and-error
-1. **Is there a skill?** `search_skills(<intent>)` → `read_skill`. If a recipe
-   exists, follow it — you're done here.
-2. **Read the tool's own docs** — enough to learn the *real* API, then run.
+## Discover first — do NOT hand-roll
+Before writing code to fetch external data or drive a library you don't already
+have loaded:
+1. **Is there a recipe?** `search_skills(<intent>)` → `read_skill`. For a public
+   database (GEO/SRA/ENA/ArrayExpress/…) there's almost always one. Follow it.
+2. **Find the maintained package.** `search_pypi` / `search_bioconda` /
+   `list_capabilities` (e.g. GEO → `GEOparse`; SRA → `pysradb`/`sra-tools`) →
+   `ensure_capability(name)` → use it. A purpose-built library beats scraping a
+   webpage every time.
+3. Only if neither exists do you write fetch/parse code yourself — and even then,
+   prefer a documented API (eutils, a REST endpoint) over screen-scraping HTML.
+
+**Anti-patterns that mean you skipped discovery:** parsing GEO/EBI HTML by regex,
+`curl`-and-grep for metadata, or installing R/BiocManager from scratch to get a
+table a one-line `GEOparse`/`pysradb` call returns.
+
+## Orient before trial-and-error (once you have the tool)
+Brute-forcing an unknown API in the kernel is slow and error-prone.
+1. **Read the tool's own docs** — enough to learn the *real* API, then run.
    Fastest path is one call to **`inspect_package(name, language=...)`** (exported
    symbols, signatures, R6 methods, docstrings, vignette list). Otherwise, in the
    kernel:
@@ -43,6 +59,10 @@ Scope the reading to what the task needs — don't read everything.
   package that provides it (userspace), then retry — don't give up or fake a result.
 - When you genuinely can't proceed (needs root, an unavailable backend, etc.),
   say so plainly rather than improvising something that looks like it worked.
+- **Never fabricate data or metadata.** Sample attributes, study design,
+  identifiers, and values must come from a real tool result — never inferred from
+  filenames, prior knowledge, or the project summary. If retrieval fails, report
+  "I couldn't get X" and stop. A plausible made-up table is far worse than no table.
 
 ## After a successful figure-it-out
 If you worked out a non-obvious workflow, it's a good candidate to capture as a
