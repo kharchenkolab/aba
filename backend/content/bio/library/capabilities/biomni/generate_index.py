@@ -7,7 +7,7 @@ import path, and params. This index is the searchable knowledge-base and ships
 with ABA — discovery works without biomni installed.
 
 Re-run when biomni updates:
-    .venv/bin/python backend/content/bio/collections/biomni/generate_index.py
+    .venv/bin/python backend/content/bio/library/capabilities/biomni/generate_index.py
 """
 from __future__ import annotations
 import importlib.util
@@ -18,8 +18,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def _backend_dir() -> Path:
+    """Walk up to the repo's `backend/` dir (robust to where this file lives)."""
+    for p in Path(__file__).resolve().parents:
+        if p.name == "backend":
+            return p
+    raise SystemExit("could not locate the backend/ dir from this script.")
+
+
 def _biomni_td_dir() -> Path:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "backend"))
+    sys.path.insert(0, str(_backend_dir()))
     from core.config import BIOMNI_DIR
     if not BIOMNI_DIR:
         raise SystemExit("BIOMNI_DIR not set / vendored biomni not found.")
