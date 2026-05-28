@@ -1639,13 +1639,21 @@ def ensure_capability(input_: dict) -> dict:
                     "library": libname,
                     "note": f"Already available — library({libname}) works in run_r."}
         res = rexec.r_install(rp.get("source", "cran"), rp.get("package") or cap.get("name"),
-                              project_id=pid, ref=rp.get("ref"))
+                              project_id=pid, library=libname, ref=rp.get("ref"))
         if res.get("status") == "ready":
+            via = " (recompiled from source)" if res.get("source_fallback") else ""
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                     "library": libname,
-                    "note": f"Installed into the project R library; use library({libname}) in run_r."}
-        return {"status": "error", "name": cap.get("name"), "archetype": "r_package",
-                "note": f"R install failed: {(res.get('stderr') or res.get('note') or '')[-400:]}"}
+                    "note": f"Installed into the project R library{via}; use library({libname}) in run_r."}
+        # Surface the actionable diagnostic (incl. missing-system-lib hint) so the
+        # agent can self-correct (conda-install a dep + retry) or ask the user.
+        out = {"status": "error", "name": cap.get("name"), "archetype": "r_package",
+               "note": res.get("note") or "R install failed."}
+        if res.get("missing_lib"):
+            out["missing_lib"] = res["missing_lib"]
+        if res.get("diagnostic"):
+            out["diagnostic"] = res["diagnostic"]
+        return out
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 

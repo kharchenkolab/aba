@@ -81,6 +81,64 @@ def test_ppm_repo_config():
     check("accepts clean cran", rexec.validate_install("cran", "DESeq2", None) is None)
 
 
+def test_source_flag_and_diagnostics():
+    print("force_source flag + error diagnostics (pure)")
+    c = rexec.install_command("cran", "xml2", lib="/L", force_source=True)
+    check("force_source adds type=source (cran)", 'type="source"' in c, c)
+    b = rexec.install_command("bioconductor", "limma", lib="/L", force_source=True)
+    check("force_source adds type=source (bioc)", 'type="source"' in b, b)
+    check("default (no force) has no type=source",
+          'type="source"' not in rexec.install_command("cran", "xml2", lib="/L"))
+    # diagnostics pull the actionable lines + a missing system-lib name
+    log = ("** building package indices\n"
+           "/usr/bin/ld: cannot find -lgdal\n"
+           "ERROR: configuration failed for package 'rgdal'\n"
+           "installation of package 'rgdal' had non-zero exit status\n")
+    d = rexec.diagnose_install(log)
+    check("diagnose flags missing system lib", d.get("missing_lib") == "gdal", str(d))
+    check("diagnose keeps actionable lines", "had non-zero exit status" in (d.get("lines") or ""), str(d))
+
+
+def test_verify_and_source_fallback():
+    print("post-install verify + auto source-fallback (mocked)")
+    import types
+    orig = (rexec.ensure_r_runtime, rexec._run_rscript, rexec.r_has_package)
+    rexec.ensure_r_runtime = lambda: None
+
+    def proc(rc, err=""):
+        return types.SimpleNamespace(returncode=rc, stdout="", stderr=err)
+
+    try:
+        # (1) binary installs (rc0) but won't load → source retry loads → ready+fallback
+        runs = []
+        rexec._run_rscript = lambda expr, t: (runs.append(expr), proc(0))[1]
+        loads = iter([False, True])  # verify after binary fails, after source succeeds
+        rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: next(loads)
+        r = rexec.r_install("cran", "xml2", project_id="t", library="xml2")
+        check("won't-load binary → source fallback → ready", r.get("status") == "ready", str(r))
+        check("flagged as source_fallback", r.get("source_fallback") is True)
+        check("two attempts made (binary + source)", len(runs) == 2)
+        check("second attempt forced source", 'type="source"' in runs[1])
+
+        # (2) both attempts fail → error with diagnostic + missing_lib
+        rexec._run_rscript = lambda expr, t: proc(1, "cannot find -lpng\nhad non-zero exit status\n")
+        rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: False
+        r2 = rexec.r_install("cran", "Cairo", project_id="t", library="Cairo")
+        check("both fail → error", r2.get("status") == "error", str(r2))
+        check("error carries missing_lib", r2.get("missing_lib") == "png", str(r2))
+        check("note mentions system library + conda/user", "system library" in (r2.get("note") or ""))
+
+        # (3) github won't load → NO source fallback (already source) → error
+        calls = []
+        rexec._run_rscript = lambda expr, t: (calls.append(expr), proc(0))[1]
+        rexec.r_has_package = lambda pkg, project_id=None, timeout_s=60: False
+        r3 = rexec.r_install("github", "owner/pkg", project_id="t", library="pkg")
+        check("github won't-load → error (no fallback)", r3.get("status") == "error", str(r3))
+        check("github attempted once (no source retry)", len(calls) == 1)
+    finally:
+        rexec.ensure_r_runtime, rexec._run_rscript, rexec.r_has_package = orig
+
+
 def test_propose():
     print("propose r_package")
     r1 = propose_capability_tool({"name": "DESeq2", "archetype": "r_package", "source": "bioconductor"})
@@ -168,6 +226,8 @@ def main() -> int:
     init_db()
     test_command_and_validation()
     test_ppm_repo_config()
+    test_source_flag_and_diagnostics()
+    test_verify_and_source_fallback()
     test_propose()
     test_ensure_routing()
     test_read_capability()
