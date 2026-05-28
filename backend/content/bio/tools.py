@@ -345,9 +345,10 @@ TOOL_SCHEMAS = [
         "name": "search_bioconda",
         "description": (
             "Check whether a command-line bioinformatics tool exists on bioconda "
-            "(e.g. salmon, STAR, fastqc). Awareness only: the conda install path "
-            "isn't wired yet, so these can be reported to the user but not run "
-            "here. For Python libraries use search_pypi."
+            "(e.g. bowtie2, bedtools, samtools). If found, it's installable on "
+            "demand: propose_capability(name, archetype='cli') then "
+            "ensure_capability puts it on PATH for run_python. For Python "
+            "libraries use search_pypi."
         ),
         "input_schema": {
             "type": "object",
@@ -360,19 +361,25 @@ TOOL_SCHEMAS = [
     {
         "name": "propose_capability",
         "description": (
-            "Add a Python library to the catalog on demand, after finding it with "
-            "search_pypi. In solo mode it's auto-approved and ready to install via "
-            "ensure_capability. Pass import_name when it differs from the package "
-            "name (e.g. package 'scikit-image' imports as 'skimage')."
+            "Add a tool to the catalog on demand. For a Python library (default, "
+            "archetype='library') found via search_pypi; for a command-line tool "
+            "(archetype='cli') found via search_bioconda. In solo mode it's "
+            "auto-approved and ready to install via ensure_capability. For a "
+            "library whose import name differs from the package name, pass "
+            "import_name (e.g. 'scikit-image' imports as 'skimage')."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "PyPI package name."},
+                "name": {"type": "string", "description": "Package/tool name."},
+                "archetype": {"type": "string", "enum": ["library", "cli"],
+                              "description": "'library' = Python package (pip); 'cli' = command-line tool (conda)."},
+                "channel": {"type": "string",
+                            "description": "Conda channel for cli tools (default 'bioconda')."},
                 "version": {"type": "string", "description": "Optional pinned version."},
                 "summary": {"type": "string", "description": "Optional one-line description."},
                 "import_name": {"type": "string",
-                                "description": "Python import name, if it differs from the package name."},
+                                "description": "For a library: Python import name, if it differs from the package name."},
                 "tags": {"type": "array", "items": {"type": "string"},
                          "description": "Optional domain tags."},
             },
@@ -1021,8 +1028,9 @@ def search_bioconda(input_: dict) -> dict:
             "found": True, "name": name,
             "latest_version": data.get("latest_version"),
             "summary": data.get("summary"),
-            "note": "Available on bioconda, but conda materialization is not wired "
-                    "yet — discoverable, not installable here. Flag to the user if needed.",
+            "note": "Available on bioconda and installable on demand: call "
+                    "propose_capability(name, archetype='cli') then ensure_capability — "
+                    "it installs into the conda tools env and lands on PATH for run_python.",
         }
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -1093,25 +1101,41 @@ def propose_capability_tool(input_: dict) -> dict:
                 "version": existing.get("version"),
                 "note": "Already in the catalog — call ensure_capability to install it."}
 
-    spec = {
-        "name": name,
-        "version": str(input_.get("version") or "latest"),
-        "archetype": "library",
-        "summary": input_.get("summary") or f"{name} (added on demand from PyPI)",
-        "domain_tags": input_.get("tags") or [],
-        "provisioning": {"pip": [name]},
-        "source": "pypi",
-    }
-    if input_.get("import_name"):
-        spec["import_name"] = input_["import_name"]
+    archetype = (input_.get("archetype") or "library").strip()
+    version = str(input_.get("version") or "latest")
+    if archetype == "cli":
+        # A command-line tool from a conda channel (e.g. bowtie2, bedtools).
+        channel = input_.get("channel") or "bioconda"
+        conda_spec = f"{name}={version}" if version and version != "latest" else name
+        spec = {
+            "name": name, "version": version, "archetype": "cli",
+            "summary": input_.get("summary") or f"{name} (added on demand from {channel})",
+            "domain_tags": input_.get("tags") or [],
+            "provisioning": {"conda": {"channel": channel, "spec": conda_spec}},
+            "source": channel,
+        }
+    else:
+        spec = {
+            "name": name, "version": version, "archetype": "library",
+            "summary": input_.get("summary") or f"{name} (added on demand from PyPI)",
+            "domain_tags": input_.get("tags") or [],
+            "provisioning": {"pip": [name]},
+            "source": "pypi",
+        }
+        if input_.get("import_name"):
+            spec["import_name"] = input_["import_name"]
+
     cap_id = _propose(spec)
-    status = capability_status(cap_id)
-    if status == "published":
-        return {"status": "approved", "name": name,
-                "note": "Added to the catalog (auto-approved). Call ensure_capability "
-                        "to install it, then import it in run_python."}
-    return {"status": "pending_approval", "name": name,
-            "note": "Proposed; awaiting approval before it can be installed."}
+    if capability_status(cap_id) != "published":
+        return {"status": "pending_approval", "name": name,
+                "note": "Proposed; awaiting approval before it can be installed."}
+    if archetype == "cli":
+        note = ("Added to the catalog (auto-approved). Call ensure_capability to "
+                "install it; the binary will be on PATH — invoke it from run_python via subprocess.")
+    else:
+        note = ("Added to the catalog (auto-approved). Call ensure_capability to "
+                "install it, then import it in run_python.")
+    return {"status": "approved", "name": name, "archetype": archetype, "note": note}
 
 
 def fetch_url(input_: dict, ctx: dict | None = None) -> dict:

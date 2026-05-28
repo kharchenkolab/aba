@@ -52,8 +52,8 @@ def main() -> int:
 
     print("search_bioconda (awareness)")
     rb = search_bioconda({"query": "salmon"})
-    check("bioconda tool discoverable but flagged not-installable",
-          rb.get("found") and "not installable" in (rb.get("note") or "").lower(), str(rb)[:160])
+    check("bioconda tool discoverable + installable via propose/ensure",
+          rb.get("found") and "ensure_capability" in (rb.get("note") or "").lower(), str(rb)[:160])
 
     print("propose: de-dupe against seed")
     rd = propose_capability_tool({"name": "gseapy"})  # already seeded
