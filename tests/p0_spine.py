@@ -207,8 +207,9 @@ def test_catalog():
     pid = propose_capability({"name": "iqtree", "version": "2.3.6", "archetype": "cli",
                               "domain_tags": ["phylogenetics"]})
     proposed = resolve_capability(pid)
-    check("propose_capability sets status=proposed",
-          proposed is not None and proposed["status"] == "proposed")
+    # Default approval mode is "auto" (P2′): a proposal is published immediately.
+    check("propose_capability auto-publishes (auto mode)",
+          proposed is not None and proposed["status"] == "published")
 
 
 def main() -> int:

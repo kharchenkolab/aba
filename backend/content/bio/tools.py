@@ -323,6 +323,61 @@ TOOL_SCHEMAS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "search_pypi",
+        "description": (
+            "Look up a Python package on PyPI when a library you need isn't in "
+            "the catalog (list_capabilities missed it). Returns whether it "
+            "exists plus version/summary. Follow with propose_capability to add "
+            "it. For non-Python CLI tools (aligners, QC binaries) use "
+            "search_bioconda instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Package name, e.g. 'umap-learn'."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_bioconda",
+        "description": (
+            "Check whether a command-line bioinformatics tool exists on bioconda "
+            "(e.g. salmon, STAR, fastqc). Awareness only: the conda install path "
+            "isn't wired yet, so these can be reported to the user but not run "
+            "here. For Python libraries use search_pypi."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Tool name, e.g. 'salmon'."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "propose_capability",
+        "description": (
+            "Add a Python library to the catalog on demand, after finding it with "
+            "search_pypi. In solo mode it's auto-approved and ready to install via "
+            "ensure_capability. Pass import_name when it differs from the package "
+            "name (e.g. package 'scikit-image' imports as 'skimage')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "PyPI package name."},
+                "version": {"type": "string", "description": "Optional pinned version."},
+                "summary": {"type": "string", "description": "Optional one-line description."},
+                "import_name": {"type": "string",
+                                "description": "Python import name, if it differs from the package name."},
+                "tags": {"type": "array", "items": {"type": "string"},
+                         "description": "Optional domain tags."},
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -841,6 +896,86 @@ def list_capabilities_tool(input_: dict) -> dict:
     ]}
 
 
+def _pep503(name: str) -> str:
+    import re
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def search_pypi(input_: dict) -> dict:
+    """Look up a Python package on PyPI (P2′ discovery). Resolves the name (and
+    PEP-503 / separator variants) against the PyPI JSON API and returns its
+    metadata if it exists. Use this when the agent needs a library that
+    list_capabilities didn't find, before proposing it."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    raw = (input_.get("query") or input_.get("name") or "").strip()
+    if not raw:
+        return {"error": "query is required"}
+    # Candidate spellings to try, in order; PyPI is case-insensitive and
+    # normalizes separators, but trying variants covers user phrasing.
+    cands = []
+    for c in (raw, _pep503(raw), raw.replace("_", "-"), raw.replace("-", "_")):
+        if c and c not in cands:
+            cands.append(c)
+    for cand in cands:
+        try:
+            with urllib.request.urlopen(
+                f"https://pypi.org/pypi/{cand}/json", timeout=10
+            ) as resp:
+                info = (_json.loads(resp.read()).get("info") or {})
+            return {
+                "found": True,
+                "name": info.get("name") or cand,
+                "version": info.get("version"),
+                "summary": info.get("summary"),
+                "requires_python": info.get("requires_python"),
+                "home_page": info.get("home_page") or info.get("project_url"),
+                "tried": cands,
+            }
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+            return {"error": f"PyPI lookup failed ({e.code})", "tried": cands}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"PyPI lookup failed: {e}", "tried": cands}
+    return {"found": False, "tried": cands,
+            "note": "No PyPI package by that name. Check spelling, or it may be a "
+                    "non-Python CLI tool (try search_bioconda)."}
+
+
+def search_bioconda(input_: dict) -> dict:
+    """Check whether a tool exists on bioconda (P2′ awareness only). Returns
+    presence + a note that conda materialization is deferred — so the agent can
+    answer honestly about CLI tools it cannot yet install (e.g. salmon, STAR)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    name = (input_.get("query") or input_.get("name") or "").strip().lower()
+    if not name:
+        return {"error": "query is required"}
+    try:
+        with urllib.request.urlopen(
+            f"https://api.anaconda.org/package/bioconda/{name}", timeout=10
+        ) as resp:
+            data = _json.loads(resp.read())
+        return {
+            "found": True, "name": name,
+            "latest_version": data.get("latest_version"),
+            "summary": data.get("summary"),
+            "note": "Available on bioconda, but conda materialization is not wired "
+                    "yet — discoverable, not installable here. Flag to the user if needed.",
+        }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"found": False, "name": name}
+        return {"error": f"bioconda lookup failed ({e.code})"}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"bioconda lookup failed: {e}"}
+
+
 def ensure_capability(input_: dict) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -853,6 +988,12 @@ def ensure_capability(input_: dict) -> dict:
     if not cap:
         return {"status": "not_found",
                 "note": f"No capability '{name}' in the catalog. Use list_capabilities to search."}
+    # Honor the lifecycle: an unapproved (proposed) capability isn't runnable
+    # until approved (the 'ask' multi-user gate).
+    if cap.get("status") not in (None, "published"):
+        return {"status": "awaiting_approval", "name": cap.get("name"),
+                "note": f"'{name}' is proposed but not yet approved; it can't be "
+                        f"materialized until approval."}
     prov = cap.get("provisioning") or {}
     if prov.get("pip"):
         from core.exec import MaterializingExecutor, Provisioning
@@ -860,14 +1001,55 @@ def ensure_capability(input_: dict) -> dict:
             MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])))
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
+        imp = cap.get("import_name")
+        note = "Installed into the materialized-library overlay; importable from run_python now."
+        if imp and imp != cap.get("name"):
+            note += f" Import it as `{imp}`."
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"),
-                "note": "Installed into the materialized-library overlay; importable from run_python now."}
+                "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
         return {"status": "deferred", "name": cap.get("name"),
                 "note": "Non-Python CLI tool (conda). Discoverable, but the conda "
                         "materialization path isn't wired yet — not runnable here."}
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
+
+
+def propose_capability_tool(input_: dict) -> dict:
+    """Add a new Python library to the catalog on demand (P2′ demand loop).
+    De-dupes against the existing catalog, then proposes it; in auto-approval
+    mode it's published immediately (and audited). Follow with ensure_capability
+    to install it. For libraries whose import name differs from the pip name
+    (e.g. scikit-image → skimage), pass import_name so the ready note is correct."""
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+    from core.catalog import resolve_capability, propose_capability as _propose, capability_status
+
+    existing = resolve_capability(name)
+    if existing:
+        return {"status": "already_available", "name": existing.get("name"),
+                "version": existing.get("version"),
+                "note": "Already in the catalog — call ensure_capability to install it."}
+
+    spec = {
+        "name": name,
+        "version": str(input_.get("version") or "latest"),
+        "archetype": "library",
+        "summary": input_.get("summary") or f"{name} (added on demand from PyPI)",
+        "domain_tags": input_.get("tags") or [],
+        "provisioning": {"pip": [name]},
+        "source": "pypi",
+    }
+    if input_.get("import_name"):
+        spec["import_name"] = input_["import_name"]
+    cap_id = _propose(spec)
+    status = capability_status(cap_id)
+    if status == "published":
+        return {"status": "approved", "name": name,
+                "note": "Added to the catalog (auto-approved). Call ensure_capability "
+                        "to install it, then import it in run_python."}
+    return {"status": "pending_approval", "name": name,
+            "note": "Proposed; awaiting approval before it can be installed."}
 
 
 EXECUTORS = {
@@ -885,6 +1067,9 @@ EXECUTORS = {
     "write_memory": write_memory_tool,
     "list_capabilities": list_capabilities_tool,
     "ensure_capability": ensure_capability,
+    "search_pypi": search_pypi,
+    "search_bioconda": search_bioconda,
+    "propose_capability": propose_capability_tool,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
