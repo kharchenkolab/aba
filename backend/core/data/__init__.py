@@ -14,9 +14,13 @@ not change when it does.
 from core.data.handles import DataHandle, ExecContext, StagedInput
 from core.data.store import resolve, register, promote, version
 from core.data.workspace import scratch_dir, gc_scratch
+from core.data.refstore import (
+    register_reference, find_reference, list_references, content_sha,
+)
 
 __all__ = [
     "DataHandle", "ExecContext", "StagedInput",
     "resolve", "register", "promote", "version",
     "scratch_dir", "gc_scratch",
+    "register_reference", "find_reference", "list_references", "content_sha",
 ]

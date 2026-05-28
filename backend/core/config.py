@@ -20,6 +20,10 @@ WORK_DIR = Path(os.getenv("ABA_WORK_DIR", BASE_DIR / "work")).resolve()
 # .venv so the backend's env stays pristine. Holds the pylib overlay (one
 # shared pip --target dir for Python libs) and conda envs for CLI tools.
 ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", BASE_DIR / "envs")).resolve()
+# REFS_DIR is the content-addressed reference store (data.md §4.3): shared,
+# deduplicated reference data (genomes, transcriptomes, indices, annotations).
+# Distinct from the per-project artifact store; reused across projects.
+REFS_DIR = Path(os.getenv("ABA_REFS_DIR", BASE_DIR / "refs")).resolve()
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("ABA_MODEL", "claude-haiku-4-5-20251001")
 FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")
@@ -31,3 +35,4 @@ CAPABILITY_APPROVAL = os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+REFS_DIR.mkdir(parents=True, exist_ok=True)
