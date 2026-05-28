@@ -665,6 +665,135 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    # ---- Entity operations: the things a user can do in the UI, exposed to the
+    # agent so it can manage the workspace's entities (datasets, results,
+    # findings, claims), not just produce files. All route through the same
+    # service layer the API endpoints use, so agent and UI stay in lock-step.
+    {
+        "name": "list_entities",
+        "description": (
+            "List/find entities in this project (datasets, figures, tables, results, "
+            "findings, claims, narratives). Use it to discover the entity_id you need "
+            "before pinning, promoting, annotating, or citing as evidence — you can't "
+            "operate on an entity without its id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "description": "Filter by type: dataset|figure|table|result|finding|claim|narrative|note."},
+                "query": {"type": "string", "description": "Case-insensitive substring match on the title."},
+                "limit": {"type": "integer", "description": "Max results (default 30)."},
+            },
+        },
+    },
+    {
+        "name": "register_dataset",
+        "description": (
+            "Register a file/dir (e.g. a fetched count matrix, an .h5ad, a 10x bundle) "
+            "as a first-class Dataset entity in this project, so it appears in the Data "
+            "facet and can feed downstream analyses. Capture provenance: pass `source` "
+            "(e.g. 'GEO:GSM5746259') and the `producing_code` that fetched/built it. "
+            "Do this whenever the user says to 'add/register a dataset' — don't just "
+            "leave files on disk."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the dataset file or directory in the project."},
+                "title": {"type": "string", "description": "Human-readable dataset name."},
+                "summary": {"type": "string", "description": "One-line description (dims, organism, condition)."},
+                "source": {"type": "string", "description": "Provenance, e.g. 'GEO:GSM5746259' or 'upload'."},
+                "organism": {"type": "string"},
+                "producing_code": {"type": "string", "description": "The code that produced/fetched it (kept for provenance)."},
+            },
+            "required": ["path", "title"],
+        },
+    },
+    {
+        "name": "pin_entity",
+        "description": (
+            "Pin (or unpin) an entity so it stays surfaced in the project — e.g. pin a "
+            "figure or result the user wants to keep front-and-center. Pass pinned=false "
+            "to unpin. Find the id first with list_entities."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "pinned": {"type": "boolean", "description": "true to pin (default), false to unpin."},
+            },
+            "required": ["entity_id"],
+        },
+    },
+    {
+        "name": "promote_to_result",
+        "description": (
+            "Promote a figure into a first-class Result — an interpreted observation "
+            "(the figure becomes its evidence). The Skeptic advisor reviews it. Use when "
+            "the user draws a conclusion from a plot and wants it kept as a result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "figure_id": {"type": "string", "description": "The figure entity to interpret."},
+                "interpretation": {"type": "string", "description": "What the figure shows / the claim it supports."},
+                "title": {"type": "string", "description": "Optional short title (defaults to the first line of the interpretation)."},
+            },
+            "required": ["figure_id", "interpretation"],
+        },
+    },
+    {
+        "name": "create_finding",
+        "description": (
+            "Aggregate one or more Results into a Finding — a synthesized conclusion "
+            "backed by its supporting results. Use when several results together "
+            "establish a point the user wants to record."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "result_ids": {"type": "array", "items": {"type": "string"}, "description": "Supporting result entity ids (>=1)."},
+                "text": {"type": "string", "description": "The finding statement."},
+                "title": {"type": "string"},
+            },
+            "required": ["result_ids", "text"],
+        },
+    },
+    {
+        "name": "create_claim",
+        "description": (
+            "Record a Claim — a stated assertion the analysis supports (or refutes, with "
+            "negative=true), optionally citing evidence entities. Claims carry confidence "
+            "and can accrue caveats/alternatives over time."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "statement": {"type": "string", "description": "The claim, one sentence."},
+                "evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "Entity ids that support the claim."},
+                "negative": {"type": "boolean", "description": "true if the evidence refutes the statement."},
+            },
+            "required": ["statement"],
+        },
+    },
+    {
+        "name": "annotate_entity",
+        "description": (
+            "Update an entity's editable fields: tags, notes, title, or status. Use to "
+            "tag/annotate datasets, rename a figure, or jot a note on a result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string"},
+                "title": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "required": ["entity_id"],
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -2133,6 +2262,136 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"found": bool(r), "reference": r}
 
 
+# ---- Entity operations (UI parity) -------------------------------------------
+# Thin wrappers over the same core.graph + lifecycle service fns the API
+# endpoints call, so the agent manages entities exactly as the UI does. The
+# agent should reach for these whenever the user talks about datasets, results,
+# findings, claims, or pinning — these are our own system, not external tools.
+
+def _ctx_thread(ctx: dict | None) -> str:
+    return (ctx or {}).get("thread_id") or "default"
+
+
+def list_entities_tool(input_: dict, ctx: dict | None = None) -> dict:
+    from core.graph.entities import list_entities
+    ents = list_entities(
+        exclude_workspace=True, include_archived=False,
+        type_filter=(input_.get("type") or None),
+        title_query=(input_.get("query") or None),
+        limit=int(input_.get("limit") or 30),
+    )
+    return {"entities": [
+        {"id": e["id"], "type": e["type"], "title": e["title"],
+         "pinned": e.get("pinned"), "status": e.get("status")}
+        for e in ents
+    ]}
+
+
+def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
+    import os
+    path, title = input_.get("path"), input_.get("title")
+    if not path or not title:
+        return {"error": "path and title are required"}
+    from core.graph.entities import create_entity
+    abspath = os.path.abspath(path)
+    exists = os.path.exists(abspath)
+    eid = create_entity(
+        entity_type="dataset", title=title,
+        artifact_path=abspath if exists else None,
+        producing_code=input_.get("producing_code"),
+        metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
+                  "by_reference": True, "ref_path": abspath,
+                  "summary": input_.get("summary", ""), "source": input_.get("source", ""),
+                  "organism": input_.get("organism")})
+    note = "Registered as a Dataset entity — now in the Data facet."
+    if not exists:
+        note += " WARNING: path not found on disk; registered by reference only."
+    return {"status": "ok", "dataset_id": eid, "title": title,
+            "artifact_path": abspath, "note": note}
+
+
+def pin_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
+    eid = input_.get("entity_id")
+    if not eid:
+        return {"error": "entity_id is required"}
+    from core.graph.entities import get_entity, update_entity
+    if not get_entity(eid):
+        return {"error": f"entity {eid} not found"}
+    pinned = bool(input_.get("pinned", True))
+    update_entity(eid, pinned=pinned)
+    return {"status": "ok", "entity_id": eid, "pinned": pinned}
+
+
+def promote_to_result_tool(input_: dict, ctx: dict | None = None) -> dict:
+    fid, interp = input_.get("figure_id"), input_.get("interpretation")
+    if not fid or not interp:
+        return {"error": "figure_id and interpretation are required"}
+    from content.bio.lifecycle.promote import promote_figure_to_result
+    try:
+        rid = promote_figure_to_result(fid, interp, input_.get("title"))
+    except ValueError as e:
+        return {"error": str(e)}
+    try:    # fire the Skeptic review off-thread (mirrors the UI endpoint)
+        import threading
+        from content.bio.advisors.runner import skeptic_review
+        threading.Thread(target=skeptic_review, args=(rid,), daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"status": "ok", "result_id": rid,
+            "note": "Promoted to a Result; the Skeptic advisor is reviewing it."}
+
+
+def create_finding_tool(input_: dict, ctx: dict | None = None) -> dict:
+    rids = list(input_.get("result_ids") or [])
+    if not rids:
+        return {"error": "result_ids (>=1) are required"}
+    from content.bio.lifecycle.promote import promote_results_to_finding
+    try:
+        fid = promote_results_to_finding(rids, input_.get("text") or "", input_.get("title"))
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"status": "ok", "finding_id": fid}
+
+
+def create_claim_tool(input_: dict, ctx: dict | None = None) -> dict:
+    import datetime as _dt
+    stmt = (input_.get("statement") or "").strip()
+    if not stmt:
+        return {"error": "statement is required"}
+    from core.graph.entities import create_entity
+    from core.graph.edges import add_edge
+    evidence = list(input_.get("evidence_ids") or [])
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    cid = create_entity(
+        entity_type="claim", title=stmt[:80],
+        metadata={"statement": stmt, "negative": bool(input_.get("negative")),
+                  "evidence_ids": evidence, "caveats": [], "alternatives": [],
+                  "confidence": "preliminary", "thread_id": _ctx_thread(ctx),
+                  "status_log": [{"from": None, "to": "preliminary", "reason": "created",
+                                  "actor": "agent", "at": now}]})
+    for rid in evidence:
+        try:
+            add_edge(cid, rid, "supports")
+        except Exception:  # noqa: BLE001
+            pass
+    return {"status": "ok", "claim_id": cid, "statement": stmt}
+
+
+def annotate_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
+    eid = input_.get("entity_id")
+    if not eid:
+        return {"error": "entity_id is required"}
+    from core.graph.entities import get_entity, update_entity
+    if not get_entity(eid):
+        return {"error": f"entity {eid} not found"}
+    fields = {k: input_[k] for k in ("tags", "notes", "title", "status")
+              if k in input_ and input_[k] is not None}
+    if not fields:
+        return {"error": "nothing to update (pass tags/notes/title/status)"}
+    update_entity(eid, **fields)
+    return {"status": "ok", "entity_id": eid, "updated": list(fields.keys())}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -2164,6 +2423,13 @@ EXECUTORS = {
     "find_reference": find_reference_tool,
     "restart_kernel": restart_kernel_tool,
     "run_nextflow": run_nextflow,
+    "list_entities": list_entities_tool,
+    "register_dataset": register_dataset_tool,
+    "pin_entity": pin_entity_tool,
+    "promote_to_result": promote_to_result_tool,
+    "create_finding": create_finding_tool,
+    "create_claim": create_claim_tool,
+    "annotate_entity": annotate_entity_tool,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
