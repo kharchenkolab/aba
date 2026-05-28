@@ -72,7 +72,62 @@ capabilities:
     scope: institution
     status: published
 
+  # --- data acquisition (GEO / SRA / ENA → matrices, FASTQ, counts) ---
+  - name: GEOparse
+    version: "1.2"
+    archetype: library
+    domain_tags: [geo, gse, gsm, download, expression, supplementary, metadata]
+    summary: Query GEO and download series/sample SOFT metadata + supplementary (processed) files.
+    provisioning: {pip: ["GEOparse"]}
+    scope: system
+    status: published
+
+  - name: pysradb
+    version: "2.5"
+    archetype: cli
+    domain_tags: [sra, ena, geo, accession, fastq, run-metadata, download]
+    summary: Resolve GEO/SRA accessions to run metadata + ENA FASTQ links; convert between accession types.
+    provisioning: {pip: ["pysradb"]}
+    scope: system
+    status: published
+
+  - name: ffq
+    version: "0.3"
+    archetype: cli
+    domain_tags: [sra, ena, accession, download-links, fastq, metadata, doi]
+    summary: Fetch metadata and raw-data download links (ENA/SRA/AWS/GCP) for sequencing accessions and DOIs.
+    provisioning: {pip: ["ffq"]}
+    scope: system
+    status: published
+
+  - name: gget
+    version: "0.29"
+    archetype: cli
+    domain_tags: [reference, ensembl, genome, annotation, genomics, query]
+    summary: Fetch reference genomes/annotations and query genomic databases from the command line.
+    provisioning: {pip: ["gget"]}
+    scope: system
+    status: published
+
+  - name: kb-python
+    version: "0.29"
+    archetype: cli
+    domain_tags: [scrna-seq, quantification, kallisto, bustools, count-matrix, pseudoalignment]
+    summary: kallisto|bustools wrapper (bundled) to build indexes and quantify FASTQ into count matrices.
+    provisioning: {pip: ["kb-python"]}
+    scope: system
+    status: published
+
   # --- conda CLI tools (materialize via micromamba into the shared tools env) ---
+  - name: sra-tools
+    version: "3.1"
+    archetype: cli
+    domain_tags: [sra, fastq, prefetch, fasterq-dump, ncbi, download]
+    summary: NCBI SRA Toolkit — prefetch + fasterq-dump to download SRA runs and convert to FASTQ.
+    provisioning: {conda: {channel: bioconda, spec: "sra-tools"}}
+    scope: institution
+    status: published
+
   - name: seqkit
     version: "2.8"
     archetype: cli
