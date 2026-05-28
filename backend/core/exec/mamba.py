@@ -59,12 +59,16 @@ def _mamba_env() -> dict:
     return env
 
 
-def run_micromamba(args: Sequence[str], *, timeout_s: int = 1800) -> subprocess.CompletedProcess:
-    """Run micromamba with the standalone root prefix set. Raises on failure."""
+def run_micromamba(args: Sequence[str], *, timeout_s: int = 1800,
+                   check: bool = True) -> subprocess.CompletedProcess:
+    """Run micromamba with the standalone root prefix set. Raises on failure
+    when `check` (default); with check=False, returns the CompletedProcess so
+    the caller can inspect returncode/stderr (used for `micromamba run` of an R
+    install, where a non-zero exit is a normal, reportable outcome)."""
     mamba = ensure_micromamba()
     proc = subprocess.run([mamba, *args], capture_output=True, text=True,
                           env=_mamba_env(), timeout=timeout_s)
-    if proc.returncode != 0:
+    if check and proc.returncode != 0:
         raise RuntimeError(
             f"micromamba {' '.join(args)} failed:\n{(proc.stderr or proc.stdout or '')[-1500:]}"
         )
