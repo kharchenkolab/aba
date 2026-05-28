@@ -11,10 +11,11 @@ interfaces with no caller changes.
 """
 from core.exec.base import Executor, Provisioning, Env, ExecResult
 from core.exec.local import LocalSubprocessExecutor
+from core.exec.materialize import MaterializingExecutor, pylib_dir
 from core.exec.router import ExecutionRouter, ExecutorChoice, LocalRouter
 
 __all__ = [
     "Executor", "Provisioning", "Env", "ExecResult",
-    "LocalSubprocessExecutor",
+    "LocalSubprocessExecutor", "MaterializingExecutor", "pylib_dir",
     "ExecutionRouter", "ExecutorChoice", "LocalRouter",
 ]

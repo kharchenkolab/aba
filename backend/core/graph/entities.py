@@ -7,6 +7,12 @@ from typing import Optional
 from core.graph._schema import _conn, _utcnow, gen_entity_id, WORKSPACE_ID
 from core.graph.audit import log_event
 
+# Infrastructure entity kinds — real entities, but not user-facing analysis
+# artifacts. Hidden from the tree / entity feed / activity by default; a caller
+# that explicitly passes type_filter="capability" still gets them (the catalog
+# does this). Keeps the capability catalog off the project tree.
+HIDDEN_TYPES = ("capability", "reference")
+
 
 def create_entity(
     *,
@@ -41,7 +47,7 @@ def create_entity(
     # Log meaningful entity creations. The exclusion list happens to be bio-
     # shaped (workspace + analysis run); generalizing it is part of Pass D
     # (event-source policy). For now it's a small, harmless coupling.
-    if entity_type not in ("workspace", "analysis"):  # noqa: seam
+    if entity_type not in ("workspace", "analysis", *HIDDEN_TYPES):  # noqa: seam
         kind = "scenario_created" if scenario_of else "entity_created"
         log_event(kind, entity_id=eid, title=title, detail={"type": entity_type})
     return eid
@@ -98,6 +104,11 @@ def list_entities(
     if type_filter:
         q += " AND type = ?"
         args.append(type_filter)
+    elif HIDDEN_TYPES:
+        # Default: hide infrastructure kinds (capability/reference) from the
+        # tree + entity feed. An explicit type_filter overrides this.
+        q += " AND type NOT IN (%s)" % ",".join("?" * len(HIDDEN_TYPES))
+        args.extend(HIDDEN_TYPES)
     if title_query:
         q += " AND lower(title) LIKE ?"
         args.append(f"%{title_query.lower()}%")
@@ -121,6 +132,9 @@ def count_entities(
         q += " AND status != 'archived'"
     if type_filter:
         q += " AND type = ?"; args.append(type_filter)
+    elif HIDDEN_TYPES:
+        q += " AND type NOT IN (%s)" % ",".join("?" * len(HIDDEN_TYPES))
+        args.extend(HIDDEN_TYPES)
     if title_query:
         q += " AND lower(title) LIKE ?"; args.append(f"%{title_query.lower()}%")
     with _conn() as c:

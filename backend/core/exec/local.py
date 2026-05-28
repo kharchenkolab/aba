@@ -45,6 +45,15 @@ class LocalSubprocessExecutor:
         # filesystem); they matter only for container/remote executors.
         proc_env = os.environ.copy()
         proc_env["MPLBACKEND"] = "Agg"
+        # The materialized env's overlay (PYTHONPATH for a pylib overlay, PATH
+        # for a conda env's bin) composes with the base process env. PATH /
+        # PYTHONPATH are prepended so the overlay wins; other keys are set.
+        for k, v in (getattr(env, "env_overlay", None) or {}).items():
+            k, v = str(k), str(v)
+            if k in ("PATH", "PYTHONPATH") and proc_env.get(k):
+                proc_env[k] = v + os.pathsep + proc_env[k]
+            else:
+                proc_env[k] = v
         if env_vars:
             proc_env.update({str(k): str(v) for k, v in env_vars.items()})
 
