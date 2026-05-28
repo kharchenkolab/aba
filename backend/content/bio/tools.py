@@ -2352,25 +2352,33 @@ def list_entities_tool(input_: dict, ctx: dict | None = None) -> dict:
 
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
+    from config import DATA_DIR
     path, title = input_.get("path"), input_.get("title")
     if not path or not title:
         return {"error": "path and title are required"}
-    from core.graph.entities import create_entity
-    abspath = os.path.abspath(path)
+    from core.graph.entities import create_entity, update_entity
+    # Resolve a bare/relative path against DATA_DIR (where the agent's files
+    # live), then cwd — not the process cwd alone, so 'GSM…_counts.h5ad' is found.
+    cands = [path] if os.path.isabs(path) else [os.path.join(str(DATA_DIR), path), os.path.abspath(path)]
+    abspath = next((c for c in cands if os.path.exists(c)), cands[0])
     exists = os.path.exists(abspath)
+    summary = (input_.get("summary") or "").strip()
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
         producing_code=input_.get("producing_code"),
         metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
                   "by_reference": True, "ref_path": abspath,
-                  "summary": input_.get("summary", ""), "source": input_.get("source", ""),
+                  "summary": summary, "source": input_.get("source", ""),
                   "organism": input_.get("organism")})
+    if summary:
+        # The dataset detail view shows `notes` as the description — populate it.
+        update_entity(eid, notes=summary)
     note = "Registered as a Dataset entity — now in the Data facet."
     if not exists:
-        note += " WARNING: path not found on disk; registered by reference only."
+        note += " WARNING: path not found on disk; registered by reference only — pass a path under DATA_DIR."
     return {"status": "ok", "dataset_id": eid, "title": title,
-            "artifact_path": abspath, "note": note}
+            "artifact_path": abspath if exists else None, "note": note}
 
 
 def pin_entity_tool(input_: dict, ctx: dict | None = None) -> dict:

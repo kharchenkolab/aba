@@ -196,7 +196,8 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
     }
     if (entity.type === 'dataset') {
       const description = firstText(entity.metadata?.description, entity.metadata?.summary, entity.metadata?.text, entity.notes, entity.metadata?.source, entity.metadata?.path)
-      if (description) meta.push(<span key="description">{description}</span>)
+      // Keep the tree line short — the full text lives in the center detail view.
+      if (description) meta.push(<span key="description">{description.length > 80 ? description.slice(0, 80).trimEnd() + '…' : description}</span>)
     } else if (entity.type === 'analysis') {
       appendText(runOutputMeta(entity))
     } else if (entity.type === 'claim' && entity.metadata?.confidence) {

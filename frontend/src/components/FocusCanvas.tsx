@@ -395,6 +395,18 @@ function renderBody(
               <span className="focus__row-label">file</span>
               <code className="focus__row-val">{e.artifact_path ?? '—'}</code>
             </div>
+            {e.metadata?.source ? (
+              <div className="focus__row">
+                <span className="focus__row-label">source</span>
+                <span className="focus__row-val">{String(e.metadata.source)}</span>
+              </div>
+            ) : null}
+            {e.metadata?.organism ? (
+              <div className="focus__row">
+                <span className="focus__row-label">organism</span>
+                <span className="focus__row-val">{String(e.metadata.organism)}</span>
+              </div>
+            ) : null}
             {e.metadata?.size_bytes != null && (
               <div className="focus__row">
                 <span className="focus__row-label">size</span>
