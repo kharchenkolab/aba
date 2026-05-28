@@ -1,10 +1,10 @@
 ---
 name: query-geo
-description: Query NCBI Gene Expression Omnibus (GEO) for expression datasets and profiles
-when_to_use: When you need RNA-seq, microarray, or other genomic expression datasets from GEO; find studies by organism, condition, or gene
+description: SEARCH/discover NCBI GEO for studies & datasets by keyword (organism, condition, gene). Not for a known accession — see fetch-geo-processed-matrices.
+when_to_use: To FIND studies/datasets in GEO when you do NOT yet have an accession — search by organism, condition, gene, or keyword (eutils esearch). Do NOT use this for a known GSE/GSM — to list a series' samples + per-sample metadata, or download its matrices, use fetch-geo-processed-matrices (it has the GEOparse sample table). This recipe's esearch only returns study-level records, not the per-sample roster.
 requires_tools: [run_python]
 capabilities_needed: [requests]
-keywords: [GEO, gene expression, RNA-seq, microarray, dataset, GSE, GDS, NCBI, expression omnibus]
+keywords: [GEO search, find study, discover dataset, gene expression, RNA-seq, microarray, query, GDS, NCBI, expression omnibus]
 produces: [dataset metadata, series records, expression profile summaries]
 domain: database
 source: "biomni:tool/database.py::query_geo"
