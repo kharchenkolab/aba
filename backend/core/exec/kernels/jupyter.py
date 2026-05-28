@@ -10,9 +10,16 @@ from __future__ import annotations
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
+
+# After Stop, how long to let a cell abort cleanly under SIGINT (which preserves
+# the kernel + its state) before hard-killing the session. A cell wedged in
+# native code ignores SIGINT, so without this ceiling execute() would block for
+# the full timeout_s — the "Stop button does nothing" failure.
+_CANCEL_GRACE_S = float(os.environ.get("ABA_KERNEL_CANCEL_GRACE_S", "3"))
 
 from core.config import DATA_DIR
 from core.exec.base import ExecResult
@@ -144,6 +151,7 @@ class JupyterKernelSession:
         self.lang = lang
         self.last_used = time.time()
         self.alive = False
+        self._cancel_grace_s = _CANCEL_GRACE_S
         Path(cwd).mkdir(parents=True, exist_ok=True)
         if lang == "r":
             kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
@@ -199,31 +207,78 @@ class JupyterKernelSession:
                 if txt:
                     stdout.append(str(txt) + "\n")
 
-        unregister = cancel_token.register(self.interrupt) if cancel_token is not None else None
-        timed_out = False
-        status = "ok"
-        try:
+        # Run the blocking interactive execute in a worker thread so THIS thread
+        # can poll the cancel token and bound how long we wait after Stop. A cell
+        # wedged in native code ignores SIGINT, so execute_interactive would
+        # otherwise block for the full timeout_s — the "Stop does nothing"
+        # failure. The progress sink is thread-local, so rebind it in the worker.
+        sink = progress.current_sink()
+        box: dict = {}
+
+        def _runner():
+            if sink is not None:
+                progress.set_sink(sink)
             try:
                 reply = self._kc.execute_interactive(
                     code, store_history=True, allow_stdin=False,
                     timeout=timeout_s, output_hook=hook,
                 )
-                status = (reply.get("content") or {}).get("status", "ok")
+                box["status"] = (reply.get("content") or {}).get("status", "ok")
             except TimeoutError:
-                timed_out = True
-                self.interrupt()
+                box["timed_out"] = True
+            except Exception as e:  # noqa: BLE001 — e.g. channels die after a kill
+                box["error"] = repr(e)
+
+        worker = threading.Thread(target=_runner, name="kernel-exec", daemon=True)
+        # SIGINT on cancel (graceful — keeps the kernel + its state if the cell
+        # heeds it); we escalate to a hard kill below if it doesn't.
+        unregister = cancel_token.register(self.interrupt) if cancel_token is not None else None
+        cancelled = False
+        worker.start()
+        try:
+            while worker.is_alive():
+                worker.join(timeout=0.2)
+                if cancel_token is not None and getattr(cancel_token, "cancelled", False):
+                    cancelled = True
+                    break
         finally:
             if unregister is not None:
                 unregister()
 
+        if cancelled:
+            # SIGINT already fired via the token. Give the cell a short grace to
+            # abort cleanly (preserving session state). If it won't stop — wedged
+            # in native code — hard-kill the session so the abandoned cell can't
+            # keep computing or corrupt the next one; the pool starts a fresh
+            # session on the next call.
+            worker.join(timeout=self._cancel_grace_s)
+            if worker.is_alive():
+                self.shutdown()
+            self.touch()
+            return ExecResult(returncode=1, stdout="".join(stdout),
+                              stderr=(err_tb or "".join(stderr)),
+                              cancelled=True, timed_out=False)
+
+        if box.get("error"):
+            # The kernel died/errored out from under us (not a cancel) → channels
+            # are likely dead; drop the session so the next call gets a fresh one.
+            self.alive = False
+            self.touch()
+            return ExecResult(returncode=1, stdout="".join(stdout),
+                              stderr=((err_tb or "".join(stderr)) + f"\n[kernel error] {box['error']}"),
+                              cancelled=False, timed_out=False)
+
+        timed_out = bool(box.get("timed_out"))
+        if timed_out:
+            self.interrupt()   # SIGINT a cell that blew past its ceiling
+        status = box.get("status", "ok")
         self.touch()
-        cancelled = bool(cancel_token is not None and getattr(cancel_token, "cancelled", False))
         rc = 0 if (status == "ok" and not timed_out) else (-1 if timed_out else 1)
         return ExecResult(
             returncode=rc,
             stdout="".join(stdout),
             stderr=(err_tb or "".join(stderr)),
-            cancelled=cancelled,
+            cancelled=False,
             timed_out=timed_out,
         )
 

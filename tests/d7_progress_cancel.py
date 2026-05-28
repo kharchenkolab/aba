@@ -150,6 +150,56 @@ def test_inspect_package():
     check("R builder: exports+vignettes+R6", all(k in rc for k in ("package:", "vignette(", "R6ClassGenerator")), rc[:80])
 
 
+def test_kernel_cancel_responsive():
+    print("kernel execute(): Stop preempts a wedged cell (no full-timeout wait)")
+    from core.exec.kernels.jupyter import JupyterKernelSession
+    from core.runtime.cancellation import CancelToken
+
+    class FakeKC:
+        def __init__(self): self.stopped = False
+        def execute_interactive(self, code, store_history=True, allow_stdin=False,
+                                timeout=None, output_hook=None):
+            end = time.time() + 5            # a wedged cell that ignores SIGINT
+            while time.time() < end:
+                time.sleep(0.05)
+            return {"content": {"status": "ok"}}
+        def stop_channels(self): self.stopped = True
+
+    class FastKC(FakeKC):
+        def execute_interactive(self, code, store_history=True, allow_stdin=False,
+                                timeout=None, output_hook=None):
+            return {"content": {"status": "ok"}}
+
+    class FakeKM:
+        def __init__(self): self.killed = False; self.interrupts = 0
+        def interrupt_kernel(self): self.interrupts += 1     # SIGINT ignored by the wedged cell
+        def shutdown_kernel(self, now=True): self.killed = True
+
+    def _mk(kc_cls):
+        s = object.__new__(JupyterKernelSession)
+        s._kc, s._km = kc_cls(), FakeKM()
+        s.alive, s.last_used, s.lang, s._cancel_grace_s = True, time.time(), "python", 0.5
+        return s
+
+    # wedged cell + Stop → returns within ~grace, hard-kills the session
+    s = _mk(FakeKC)
+    tok = CancelToken(run_id="kc1")
+    threading.Thread(target=lambda: (time.sleep(0.3), tok.cancel()), daemon=True).start()
+    t0 = time.time()
+    res = s.execute("wedge()", cancel_token=tok, timeout_s=90)
+    dt = time.time() - t0
+    check("cancel returns promptly (≪ timeout_s)", dt < 3, f"dt={dt:.1f}s")
+    check("result flagged cancelled", res.cancelled is True, str(res))
+    check("SIGINT attempted first (graceful)", s._km.interrupts >= 1, str(s._km.interrupts))
+    check("wedged cell → session hard-killed", s._km.killed is True and s.alive is False)
+
+    # happy path: a fast cell completes normally, session preserved
+    s2 = _mk(FastKC)
+    res2 = s2.execute("1+1", cancel_token=CancelToken(run_id="kc2"), timeout_s=90)
+    check("normal cell ok", res2.returncode == 0 and not res2.cancelled, str(res2))
+    check("normal cell keeps session alive", s2.alive is True and not s2._km.killed)
+
+
 def main() -> int:
     init_db()
     test_progress_sink()
@@ -157,6 +207,7 @@ def main() -> int:
     test_execute_tool_streams()
     test_ensure_capability_emits_and_takes_ctx()
     test_cancellable_subprocess()
+    test_kernel_cancel_responsive()
     print()
     if _failures:
         print(f"FAILED ({len(_failures)}): " + ", ".join(_failures))
