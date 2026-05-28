@@ -46,6 +46,15 @@ TASKS = {
         "test data. Find the right nf-core pipeline, set up nextflow, and launch it on its "
         "built-in test profile."
     ),
+    # Replays the real session that exposed the gaps: GEO fetch + "register as a
+    # dataset". Watch for: discovers fetch-geo-processed-matrices (not flailing on
+    # ENA), ensures GEOparse, and calls register_dataset (the entity op that did
+    # not exist before) rather than just dumping files.
+    "geo": (
+        "I'd like to analyze some PBMC scRNA-seq data. Please fetch the processed "
+        "count matrices for GEO sample GSM5746259 and register them as a new "
+        "dataset in this project."
+    ),
 }
 
 
