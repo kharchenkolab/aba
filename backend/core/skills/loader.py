@@ -41,6 +41,9 @@ class SkillSpec:
     # Free search terms to widen intent-search recall beyond name/description
     # (synonyms, abbreviations, related concepts).
     keywords:       tuple[str, ...] = ()
+    # Coarse facet for filtering + the in-prompt domain "map" (e.g. 'genomics',
+    # 'pharmacology'). Flat, not a tree — complements BM25, doesn't replace it.
+    domain:         str = ""
     produces:       tuple[str, ...] = ()
     parameter_schema: dict[str, Any] = field(default_factory=dict)
     resource_profile: str = ""
@@ -98,6 +101,7 @@ def _spec_from_text(text: str, source_path: str = "") -> SkillSpec:
         requires_tools=tuple(req),
         capabilities_needed=tuple(str(c).strip() for c in caps if str(c).strip()),
         keywords=tuple(str(k).strip() for k in kw if str(k).strip()),
+        domain=str(fm.get("domain") or "").strip(),
         produces=tuple(prod),
         parameter_schema=fm.get("parameter_schema") or {},
         resource_profile=str(fm.get("resource_profile") or "").strip(),
@@ -182,7 +186,14 @@ def _doc_text(s: SkillSpec) -> str:
         s.when_to_use,
         " ".join(s.keywords),
         " ".join(s.capabilities_needed),
+        s.domain.replace("_", " "),
     ])
+
+
+def skill_domains() -> list[str]:
+    """Sorted distinct domains across registered skills — the flat facet that
+    backs the in-prompt domain map + the search_skills domain filter."""
+    return sorted({s.domain for s in _REGISTRY.values() if s.domain})
 
 
 def _index():
@@ -194,15 +205,24 @@ def _index():
     return _INDEX
 
 
-def search_skills(query: str, *, limit: int = GATED_TOP_K) -> list[SkillSpec]:
-    """Intent-ranked skills (BM25). Empty/whitespace query → first `limit`
-    alphabetically (a stable default slice, not a relevance claim). Names that
-    no longer resolve are skipped (registry mutated under us)."""
+def search_skills(query: str, *, limit: int = GATED_TOP_K,
+                  domain: Optional[str] = None) -> list[SkillSpec]:
+    """Intent-ranked skills (BM25), optionally filtered to one `domain` (the
+    flat facet). Empty/whitespace query → first `limit` (within the domain, if
+    given) — a stable default slice, not a relevance claim. Names that no longer
+    resolve are skipped (registry mutated under us)."""
+    dom = (domain or "").strip().lower()
+
+    def _ok(s: SkillSpec) -> bool:
+        return not dom or s.domain.lower() == dom
+
     q = (query or "").strip()
     if not q:
-        return list_skills()[:limit]
-    hits = _index().search(q, limit=limit)
-    return [_REGISTRY[i] for i, _ in hits if i in _REGISTRY]
+        return [s for s in list_skills() if _ok(s)][:limit]
+    # Over-fetch then domain-filter so the cap still yields `limit` matches.
+    hits = _index().search(q, limit=limit if not dom else max(limit * 5, 25))
+    out = [_REGISTRY[i] for i, _ in hits if i in _REGISTRY and _ok(_REGISTRY[i])]
+    return out[:limit]
 
 
 def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
@@ -240,6 +260,11 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
             f"Showing {len(skills)} of {total} skills{rel}. "
             f"Call `search_skills(query)` to find others by intent."
         )
+        # One-line domain map so the agent can orient + narrow by facet without
+        # paying for the full list (the flat-facet alternative to a tree).
+        doms = skill_domains()
+        if doms:
+            header.append(f"Domains: {' · '.join(doms)} — narrow with search_skills(query, domain=…).")
 
     header.append("")
     lines = list(header)

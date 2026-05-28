@@ -318,6 +318,8 @@ TOOL_SCHEMAS = [
             "properties": {
                 "query": {"type": "string",
                           "description": "What you want to do, in plain words."},
+                "domain": {"type": "string",
+                           "description": "Optional facet to narrow to, e.g. 'genomics' (see the domain map in the skills index)."},
                 "limit": {"type": "integer",
                           "description": "Max results (default 8)."},
             },
@@ -1288,16 +1290,17 @@ def search_skills_tool(input_: dict) -> dict:
     """Intent search over the skill (recipe) library. The system prompt only
     surfaces a relevant slice of skills; this finds the rest by free-text
     intent ('differential expression', 'cluster single cell data') so the
-    agent isn't limited to what happened to be in-prompt this turn."""
+    agent isn't limited to what happened to be in-prompt this turn. Pass
+    `domain` to narrow to one facet (see the domain map in the skills index)."""
     from core.skills import search_skills
     q = (input_.get("query") or "").strip()
     if not q:
         return {"status": "error", "note": "search_skills needs a non-empty `query`."}
     limit = input_.get("limit") or 8
-    hits = search_skills(q, limit=int(limit))
+    hits = search_skills(q, limit=int(limit), domain=input_.get("domain"))
     return {"skills": [
         {"name": s.name, "description": s.description,
-         "when_to_use": s.when_to_use,
+         "when_to_use": s.when_to_use, "domain": s.domain,
          "capabilities_needed": list(s.capabilities_needed)}
         for s in hits
     ]}

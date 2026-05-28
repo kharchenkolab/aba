@@ -21,16 +21,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Isolate state from a developer's real DB / artifacts before importing the app.
+# Isolation is via env vars read at import time by core.config /
+# core.graph._schema — set them BEFORE importing the app.
 tmpdir = tempfile.mkdtemp(prefix="aba_smoke_")
 os.environ["ABA_FAKE_SESSION"] = str(ROOT / "tests/fixtures/list_files.jsonl")
+os.environ["ABA_DB_PATH"] = str(Path(tmpdir) / "smoke.db")  # never touch aba.db
 os.environ["ARTIFACTS_DIR"] = str(Path(tmpdir) / "artifacts")
+os.environ["ABA_WORK_DIR"] = str(Path(tmpdir) / "work")
+os.environ["ABA_ENVS_DIR"] = str(Path(tmpdir) / "envs")
 os.environ.setdefault("DATA_DIR", str(ROOT / "backend/data"))
 
 sys.path.insert(0, str(ROOT / "backend"))
-
-# Point SQLite at a throwaway file so the smoke test never touches aba.db.
-import db as _db_mod  # noqa: E402
-_db_mod.DB_PATH = Path(tmpdir) / "smoke.db"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app  # noqa: E402
