@@ -1,0 +1,105 @@
+"""Catalog API over the entity store.
+
+A capability entity's full spec (capabilities.md §4.2) lives in its
+`metadata`; `title` mirrors the capability name for tree/search legibility.
+Scope + lifecycle status live in metadata too (a dedicated column can come
+later without changing this API). Discovery is a simple substring/tag match in
+P0; BM25 retrieval (capabilities.md §9.2) arrives when the catalog grows past
+~25 entries.
+"""
+from __future__ import annotations
+from typing import Optional
+
+from core.data.handles import ExecContext
+from core.graph.entities import create_entity, get_entity, list_entities
+
+CAPABILITY = "capability"
+REFERENCE = "reference"
+
+
+def _to_capability(entity: dict) -> dict:
+    """Flatten an entity row into a capability dict (metadata + id)."""
+    meta = dict(entity.get("metadata") or {})
+    meta.setdefault("name", entity.get("title"))
+    meta.setdefault("scope", "system")
+    meta.setdefault("status", "published")
+    meta["id"] = entity["id"]
+    return meta
+
+
+def _visible(cap: dict, ctx: Optional[ExecContext]) -> bool:
+    """A capability is visible if it is system-scope or its scope is in the
+    caller's scope chain. With no ctx, everything is visible (single-user)."""
+    if ctx is None:
+        return True
+    scope = cap.get("scope", "system")
+    return scope == "system" or scope in (ctx.scope_chain or [])
+
+
+def register_capability(spec: dict) -> str:
+    """Persist a capability spec as an entity. `spec` follows capabilities.md
+    §4.2 (name, version, archetype, provisioning, scope, status, ...).
+    Returns the entity id."""
+    name = spec.get("name") or "unnamed-capability"
+    meta = dict(spec)
+    meta.setdefault("scope", "system")
+    meta.setdefault("status", "published")
+    return create_entity(entity_type=CAPABILITY, title=name, metadata=meta)
+
+
+def propose_capability(spec: dict, ctx: Optional[ExecContext] = None) -> str:
+    """Draft a capability from a discovery hit, in the `proposed` lifecycle
+    state (capabilities.md §7.2). Approval (P3) flips it to `published`."""
+    meta = dict(spec)
+    meta["status"] = "proposed"
+    if ctx is not None and ctx.project_id and "scope" not in meta:
+        meta["scope"] = f"project:{ctx.project_id}"
+    return register_capability(meta)
+
+
+def list_capabilities(
+    query: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    ctx: Optional[ExecContext] = None,
+) -> list[dict]:
+    """Return visible capabilities, optionally filtered by a substring query
+    (over name + summary + tags) and/or required domain tags."""
+    out: list[dict] = []
+    q = (query or "").lower().strip()
+    want_tags = set(tags or [])
+    for ent in list_entities(type_filter=CAPABILITY):
+        cap = _to_capability(ent)
+        if not _visible(cap, ctx):
+            continue
+        cap_tags = set(cap.get("domain_tags") or [])
+        if want_tags and not (want_tags & cap_tags):
+            continue
+        if q:
+            hay = " ".join([
+                str(cap.get("name", "")),
+                str(cap.get("summary", "")),
+                " ".join(cap_tags),
+            ]).lower()
+            if q not in hay:
+                continue
+        out.append(cap)
+    return out
+
+
+def resolve_capability(
+    name_or_id: str,
+    version: Optional[str] = None,
+    ctx: Optional[ExecContext] = None,
+) -> Optional[dict]:
+    """Look up a capability by entity id or by name. Returns the flattened
+    capability dict, or None. (`version` is accepted for the frozen signature;
+    multi-version selection arrives with real materialization in P1.)"""
+    ent = get_entity(name_or_id)
+    if ent is not None and ent.get("type") == CAPABILITY:
+        cap = _to_capability(ent)
+        return cap if _visible(cap, ctx) else None
+    for cap in list_capabilities(ctx=ctx):
+        if cap.get("name") == name_or_id:
+            if version is None or str(cap.get("version")) == str(version):
+                return cap
+    return None

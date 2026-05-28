@@ -333,108 +333,85 @@ def read_csv_info(input_: dict) -> dict:
 
 
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
-    """Spawn a Python subprocess and wait for it. If the turn is
-    cancelled mid-execution, the registered interrupter terminates the
-    child (SIGTERM → 2s grace → SIGKILL) so the user's Stop button
-    actually stops a runaway loop instead of just updating the UI."""
+    """Run Python in the project's scratch workspace via the shared executor.
+
+    P0 (data.md / capdat_impl.md): the run executes in a per-run scratch dir
+    under WORK_DIR (the agent reads/writes intermediates there freely, by plain
+    path) and goes through LocalSubprocessExecutor so the exec + cancellation +
+    timeout contract is shared with future executors. Kept outputs (*.png/*.csv)
+    are still moved to the content-addressed artifact store and returned as
+    plots/tables — the on_post_tool registration hook is unchanged. Scratch
+    persists across the run's turns and is GC'd on a TTL; it is NOT deleted
+    here, so the agent can revisit its working files."""
+    from core.data.workspace import scratch_dir
+    from core.exec import LocalSubprocessExecutor, Provisioning
+    from core import projects
+
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 600))
-    tmp_dir = Path("/tmp") / f"aba_{uuid.uuid4().hex}"
-    tmp_dir.mkdir()
+    cancel_token = (ctx or {}).get("cancel_token")
+
+    # Scratch keys on (project, run) so multiple run_python calls in one turn
+    # share a working dir (the agent can read what an earlier call wrote).
+    project_id = projects.current() or "default"
+    run_id = ((ctx or {}).get("run_id")
+              or getattr(cancel_token, "run_id", None)
+              or uuid.uuid4().hex)
     try:
+        scratch = scratch_dir(str(project_id), str(run_id))
+
         biomni_path = Path(__file__).parent.parent / "biomni"
         preamble = (
             f"DATA_DIR = {str(DATA_DIR)!r}\n"
             f"import sys as _sys\n"
             f"_sys.path.insert(0, {str(biomni_path)!r})\n"
         )
-        full_code = preamble + code
-        script = tmp_dir / "script.py"
-        script.write_text(full_code)
+        script = scratch / "script.py"
+        script.write_text(preamble + code)
 
-        import os
-        env = os.environ.copy()
-        env["MPLBACKEND"] = "Agg"
-        python = sys.executable
-
-        # Popen instead of subprocess.run so we can hand a kill hook to
-        # the turn's CancelToken. start_new_session=True puts the child
-        # in its own process group; if it forks (numpy/matplotlib helper
-        # processes), we kill the whole group, not just the python pid.
-        proc = subprocess.Popen(
-            [python, str(script)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=env, cwd=str(tmp_dir),
-            start_new_session=True,
+        ex = LocalSubprocessExecutor()
+        env = ex.materialize(Provisioning())          # base venv
+        result = ex.exec(
+            env, [env.python or sys.executable, str(script)],
+            cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         )
 
-        # Register a kill interrupter. Fired by token.cancel() when the
-        # user hits Stop. SIGTERM → 2s grace → SIGKILL. killpg on the
-        # whole group so forked children die too. The unregister returned
-        # here MUST run after the process exits; otherwise a stale
-        # callback could try to kill a recycled pid.
-        cancel_token = (ctx or {}).get("cancel_token")
-        unregister = None
-        if cancel_token is not None:
-            def _kill():
-                try:
-                    pgid = os.getpgid(proc.pid)
-                    os.killpg(pgid, signal.SIGTERM)
-                    try:
-                        proc.wait(timeout=2.0)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(pgid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass    # child already dead
-            unregister = cancel_token.register(_kill)
-
-        try:
-            try:
-                stdout, stderr = proc.communicate(timeout=timeout_s)
-                returncode = proc.returncode
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                returncode = -1
-                return {"error": f"Code execution timed out ({timeout_s}s limit)"}
-        finally:
-            if unregister is not None:
-                unregister()
-
-        # Cancellation arrived during execution — surface a clean signal
-        # to the model rather than partial stdout/stderr from a killed run.
-        if cancel_token is not None and cancel_token.cancelled:
+        if result.timed_out:
+            return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+        # Cancellation arrived mid-run — surface a clean signal rather than
+        # partial output from a killed process.
+        if result.cancelled:
             return {
                 "status": "cancelled",
-                "note": f"Run was cancelled by the user ({cancel_token.reason}). "
-                        f"No further work happened.",
+                "note": f"Run was cancelled by the user "
+                        f"({getattr(cancel_token, 'reason', '')}). No further work happened.",
             }
 
+        # Harvest kept outputs to the content-addressed artifact store. Moving
+        # them out of scratch also means a later call in the same scratch won't
+        # re-harvest them. Intermediates that aren't png/csv stay in scratch
+        # (inspectable) until GC.
         plots = []
-        for png in tmp_dir.glob("*.png"):
+        for png in scratch.glob("*.png"):
             dest_name = f"{uuid.uuid4().hex}.png"
-            dest = ARTIFACTS_DIR / dest_name
-            shutil.move(str(png), str(dest))
+            shutil.move(str(png), str(ARTIFACTS_DIR / dest_name))
             plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
 
         tables = []
-        for csv in tmp_dir.glob("*.csv"):
+        for csv in scratch.glob("*.csv"):
             dest_name = f"{uuid.uuid4().hex}.csv"
-            dest = ARTIFACTS_DIR / dest_name
-            shutil.move(str(csv), str(dest))
+            shutil.move(str(csv), str(ARTIFACTS_DIR / dest_name))
             tables.append({"url": f"/artifacts/{dest_name}", "original_name": csv.name})
 
         return {
-            "stdout": (stdout or "")[:4000],
-            "stderr": (stderr or "")[:2000],
-            "returncode": returncode,
+            "stdout": (result.stdout or "")[:4000],
+            "stderr": (result.stderr or "")[:2000],
+            "returncode": result.returncode,
             "plots": plots,
             "tables": tables,
         }
     except Exception as e:
         return {"error": str(e)}
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def inspect_upload(input_: dict) -> dict:
