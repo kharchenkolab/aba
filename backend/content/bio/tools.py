@@ -1911,6 +1911,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         from core import projects
         pid = projects.current() or "default"
         libname = rp.get("library") or rp.get("package") or cap.get("name")
+        # The runtime now carries the foundational compiled deps (igraph/irlba/
+        # Rcpp*/xml2) as binaries, so GitHub/CRAN installs find them on
+        # .libPaths() instead of source-compiling. Heavy frameworks stay on-demand.
         rexec.ensure_r_runtime()
         if rexec.r_has_package(libname, project_id=pid):
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
