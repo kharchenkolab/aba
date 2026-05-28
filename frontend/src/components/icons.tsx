@@ -152,7 +152,6 @@ export type RailIconName =
   | 'brand'
   | 'home'
   | 'projects'
-  | 'skills'
   | 'queues'
   | 'alerts'
   | 'threads'
@@ -185,13 +184,6 @@ export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: numbe
         <svg {...svg}>
           <rect x="3" y="6" width="18" height="14" rx="2" strokeWidth="1.8" />
           <path d="M3 9h7l2-3h7" strokeWidth="1.8" strokeLinejoin="round" />
-        </svg>
-      )
-    case 'skills':
-      return (
-        <svg {...svg}>
-          <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth="1.8" />
-          <path d="M7 10l2 2 4-4M7 16h10" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
     case 'queues':
