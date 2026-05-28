@@ -37,39 +37,60 @@ first** and branch on what you see:
 
 ## Step 1 — list supplementary files (cheap, no big download)
 
-```python
-import GEOparse
-acc = "GSE176078"                      # GSE… (series) or GSM… (single sample)
-gse = GEOparse.get_GEO(geo=acc, destdir="./geo_meta", silent=True)  # fetches SOFT only
+**Check the GSM (sample) level FIRST.** A single sample almost always has its own
+supplementary files — for scRNA-seq that's the 10x triplet (`*barcodes.tsv.gz`,
+`*features.tsv.gz`/`*genes.tsv.gz`, `*matrix.mtx.gz`), typically only tens of MB.
+**Download those directly. Do NOT jump to the series `GSE…_RAW.tar`** (often many
+GB — it bundles every sample) unless the GSM genuinely lists no files.
 
-# series-level supplementary files
-print("SERIES files:", gse.metadata.get("supplementary_file", []))
-# per-sample supplementary files
-for gsm_name, gsm in gse.gsms.items():
-    print(gsm_name, gsm.metadata.get("supplementary_file", []))
-```
-
-`get_GEO` downloads only the SOFT metadata, so this is fast. Inspect the URLs to
-decide which branch above applies before pulling gigabytes.
-
-## Step 2 — download supplementary files to disk (durable)
+Reliable, GEOparse-free listing — parses the SOFT text directly, so it works for a
+GSM *or* a GSE even when GEOparse raises (it can, on some records):
 
 ```python
-# Series-level bundle(s):
-gse.download_supplementary_files(directory="./geo_data", download_sra=False)
-# download_sra=False is important: never let GEOparse pull SRA here — that is
-# the FASTQ path and is huge/slow. Keep this recipe to processed files only.
+import urllib.request, re
+def geo_supp_files(acc):
+    url = (f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
+           f"?acc={acc}&targ=self&form=text&view=quick")
+    txt = urllib.request.urlopen(url, timeout=60).read().decode("utf-8", "replace")
+    # GSM lines are !Sample_supplementary_file_N ; GSE lines are !Series_supplementary_file_N
+    urls = re.findall(r"^![A-Za-z]+_supplementary_file_\d+\s*=\s*(\S+)", txt, re.M)
+    # NCBI serves the same paths over https; ftp:// links are slow/flaky — rewrite them.
+    return [u.replace("ftp://ftp.ncbi.nlm.nih.gov", "https://ftp.ncbi.nlm.nih.gov") for u in urls]
+
+acc = "GSM5746259"                       # GSM… (one sample) or GSE… (series)
+files = geo_supp_files(acc)
+print(f"{acc}: {len(files)} supplementary file(s)"); [print(" ", u) for u in files]
 ```
 
-This writes into `./geo_data/<GSM>/...`. For a series-level tarball
-(`GSE..._RAW.tar`) you may instead fetch the single series URL directly with
-`requests`/`urllib` streaming and `tarfile.extractall`.
+(GEOparse convenience alternative: `g = GEOparse.get_GEO("GSM…", destdir="./geo_meta",
+silent=True); g.metadata.get("supplementary_file")`. Handy, but it raises on some
+records — the urllib method above is the dependable primary.)
 
-**Run big downloads as a background/streamed job and write to a durable path on
-disk** — do not buffer multi-GB files in the kernel. Stream with
-`requests.get(url, stream=True)` + chunked `iter_content`, or shell out to
-`curl -L -C - -o` (resumable). Always verify the file exists and is non-empty
-before loading.
+If the GSM lists files (the common case) → download them directly (Step 2). Only if
+it lists **none** → resolve the parent series (`!Sample_series_id`) and grab the
+series supplementary, falling back to `GSE…_RAW.tar` **only as a last resort** —
+and then stream it and extract just this sample's members, not the whole archive.
+
+## Step 2 — download the listed files to disk (durable, resumable)
+
+```python
+import os, subprocess
+os.makedirs("./geo_data", exist_ok=True)
+for u in files:                          # the per-sample URLs from Step 1
+    dst = os.path.join("./geo_data", os.path.basename(u))
+    # curl -L -C - is resumable; -# prints a progress meter. Print our own line
+    # too so progress streams to the Console for big files.
+    subprocess.run(f"curl -L -C - -o '{dst}' '{u}'", shell=True, check=True)
+    print(f"saved {dst} ({os.path.getsize(dst)//1024} KB)", flush=True)
+```
+
+The 10x triplet is ~tens of MB — quick. **For anything large, run it as a background
+job, write to a durable path, use resumable transfers (`curl -L -C -`), and print a
+progress line periodically (every N MB / N seconds) so it streams live** — never
+buffer multi-GB files in the kernel. Verify each file exists and is non-empty before
+loading. The series `_RAW.tar` last-resort path can be GB: stream it
+(`requests.get(stream=True)` + `iter_content`) and `tar.extract()` only the members
+whose names start with your `GSM…` prefix.
 
 ## Step 3 — load by branch
 
