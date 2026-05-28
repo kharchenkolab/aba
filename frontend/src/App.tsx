@@ -224,7 +224,8 @@ export default function App() {
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
           pendingClarification, answerClarification,
           pendingApproval, respondApproval, stopTurn,
-          queuedMessage, enqueue, dropQueue, steer } = useChat(
+          queuedMessage, enqueue, dropQueue, steer,
+          eventLog, jobs } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -713,6 +714,8 @@ export default function App() {
             manifest={manifest}
             focusEntityId={focusedId}
             threadId={threadId === 'default' ? (currentThread?.id ?? null) : threadId}
+            eventLog={eventLog}
+            jobs={jobs}
             onClose={() => setDrawerOpen(false)}
           />
         </div>

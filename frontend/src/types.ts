@@ -144,10 +144,44 @@ export interface EntityRegisteredEvent {
   entity: Entity
 }
 
+/** #1 — live phase/progress for a long synchronous tool call (installs,
+ *  kernel exec, nextflow). Streamed between tool_start and tool_result. */
+export interface ToolProgressEvent {
+  type: 'tool_progress'
+  name: string
+  message: string
+  phase?: string
+}
+
+/** A background job was submitted (run_python background=true). */
+export interface JobSubmittedEvent {
+  type: 'job_submitted'
+  job: { id: string; status?: string; title?: string }
+}
+
+/** Observability Console: one captured SSE event (delta excluded — that's
+ *  the chat text). `level` gates it in the detail-level selector. */
+export interface LogEntry {
+  t: number              // epoch ms
+  type: string
+  label: string
+  level: 1 | 2 | 3       // 1=progress, 2=tools, 3=debug
+}
+
+/** Observability Jobs tab — a background job's last-known state. */
+export interface JobInfo {
+  id: string
+  status: string
+  title?: string
+  t: number
+}
+
 export type SSEEvent =
   | DeltaEvent
   | ToolStartEvent
   | ToolResultEvent
+  | ToolProgressEvent
+  | JobSubmittedEvent
   | EntityRegisteredEvent
   | DoneEvent
   | ErrorEvent

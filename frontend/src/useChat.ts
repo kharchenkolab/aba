@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo } from './types'
 
 type RawMsg = { role: string; content: unknown[]; ts?: string }
 
@@ -102,6 +102,38 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
 
 interface Annotation { image: string; note: string }
 
+// Observability Console: map an SSE event to a log entry (or null to skip —
+// `delta` is the chat text, not worth logging). `level` gates it in the
+// detail-level selector (1=progress, 2=tools, 3=debug).
+function _summInput(o: Record<string, unknown>): string {
+  try {
+    return Object.entries(o || {}).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(' ').slice(0, 90)
+  } catch { return '' }
+}
+function logFor(ev: SSEEvent): LogEntry | null {
+  const t = Date.now()
+  switch (ev.type) {
+    case 'delta': return null
+    case 'tool_progress': return { t, type: ev.type, label: ev.message, level: 1 }
+    case 'plan': return { t, type: ev.type, label: ev.title || 'plan', level: 1 }
+    case 'notice': return { t, type: ev.type, label: ev.text, level: 1 }
+    case 'error': return { t, type: ev.type, label: ev.text, level: 1 }
+    case 'cancelled': return { t, type: ev.type, label: ev.reason || 'cancelled', level: 1 }
+    case 'done': return { t, type: ev.type, label: 'turn done', level: 1 }
+    case 'tool_start': return { t, type: ev.type, label: `${ev.name} ${_summInput(ev.input)}`, level: 2 }
+    case 'tool_result': {
+      const st = (ev.result as Record<string, unknown>)?.status
+      return { t, type: ev.type, label: ev.name + (st ? ` · ${st}` : ''), level: 2 }
+    }
+    case 'job_submitted': return { t, type: ev.type, label: `job ${ev.job.id} ${ev.job.status || ''}`, level: 2 }
+    case 'entity_registered': return { t, type: ev.type, label: `${ev.entity.type}: ${ev.entity.title}`, level: 2 }
+    case 'clarification_pending': return { t, type: ev.type, label: ev.question, level: 2 }
+    case 'approval_pending': return { t, type: ev.type, label: `approve ${ev.tool_name}`, level: 2 }
+    case 'manifest': return { t, type: ev.type, label: `turn ${ev.manifest.turn_index}`, level: 3 }
+    default: return { t, type: (ev as { type: string }).type, label: '', level: 3 }
+  }
+}
+
 export function useChat(
   focusEntityId: string,
   onEntityRegistered?: () => void,
@@ -114,6 +146,11 @@ export function useChat(
   const [loading, setLoading] = useState(false)   // fetching a thread's history
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
   const [manifest, setManifest] = useState<ManifestSnapshot | null>(null)
+  // Observability panel: a bounded tail of SSE events (Console tab) and the
+  // last-known state of background jobs (Jobs tab). Client-side views over the
+  // stream we already consume — no extra server cost.
+  const [eventLog, setEventLog] = useState<LogEntry[]>([])
+  const [jobs, setJobs] = useState<JobInfo[]>([])
   // B1 — when the Guide pauses on ask_clarification, the UI shows an
   // inline mini-composer. Cleared when the resume turn starts streaming.
   const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(null)
@@ -242,6 +279,20 @@ export function useChat(
               ev = JSON.parse(raw)
             } catch {
               continue
+            }
+
+            // Observability Console: capture every event (except chat-text
+            // deltas) into a bounded tail.
+            const _le = logFor(ev)
+            if (_le) setEventLog(prev => (prev.length > 400 ? prev.slice(-400) : prev).concat(_le))
+
+            if (ev.type === 'job_submitted') {
+              // Jobs tab: upsert by id.
+              const j = ev.job
+              setJobs(prev => {
+                const rest = prev.filter(x => x.id !== j.id)
+                return [...rest, { id: j.id, status: j.status || 'queued', title: j.title, t: Date.now() }]
+              })
             }
 
             if (ev.type === 'notice') {
@@ -488,5 +539,6 @@ export function useChat(
     pendingApproval, respondApproval,
     stopTurn,
     queuedMessage, enqueue, dropQueue, steer,
+    eventLog, jobs,
   }
 }
