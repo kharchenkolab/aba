@@ -61,6 +61,19 @@ def test_funnel_and_provenance(recs, md_files):
     check("no recipe depends on biomni as a capability", not leaks, str(leaks))
 
 
+def test_domain_facet():
+    print("domain facet")
+    from core.skills import skill_domains, search_skills
+    doms = skill_domains()
+    check("many domains present (>15)", len(doms) > 15, str(len(doms)))
+    check("recipes carry a domain", all(s.domain for s in
+          [s for s in list_skills() if s.source_path and "/recipes/" in s.source_path]))
+    # domain filter narrows results to that facet
+    hits = search_skills("cell type", domain="genomics", limit=5)
+    check("domain filter restricts to the facet", hits and all(s.domain == "genomics" for s in hits),
+          str([(s.name, s.domain) for s in hits]))
+
+
 def test_search():
     print("search_skills finds recipes by intent")
     cases = [
@@ -78,6 +91,7 @@ def test_search():
 def main() -> int:
     recs, md_files = test_all_parse()
     test_funnel_and_provenance(recs, md_files)
+    test_domain_facet()
     test_search()
     print()
     if _failures:

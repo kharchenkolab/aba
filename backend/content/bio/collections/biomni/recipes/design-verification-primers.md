@@ -3,7 +3,7 @@ name: design-verification-primers
 description: Design a minimal set of Sanger sequencing primers to fully cover a target region in a plasmid
 when_to_use: When planning Sanger sequencing verification of a cloned insert or edited region in a plasmid
 requires_tools: [run_python]
-capabilities_needed: ["biopython/Bio"]
+capabilities_needed: ["biopython"]
 keywords: [Sanger sequencing, verification, primer design, plasmid, coverage, sequencing primers, existing primers]
 produces: [recommended primer list with coverage map and full-coverage status]
 domain: molecular_biology

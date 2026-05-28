@@ -3,7 +3,7 @@ name: design-primer
 description: Design a single PCR or sequencing primer within a sliding window using GC% and Tm filters
 when_to_use: When a single primer is needed at a given position in a DNA sequence with defined GC and Tm constraints
 requires_tools: [run_python]
-capabilities_needed: ["biopython/Bio"]
+capabilities_needed: ["biopython"]
 keywords: [primer design, PCR, sequencing, GC content, melting temperature, Tm, Wallace rule]
 produces: [best primer sequence with position, GC fraction, Tm, and score]
 domain: molecular_biology
