@@ -1,7 +1,7 @@
 ---
 name: fetch-geo-processed-matrices
 description: Download processed/supplementary files (count matrices) for a GEO series or sample — 10x mtx triplets, h5/h5ad, or per-sample count tables — and load them for analysis.
-when_to_use: User has a GEO accession (GSE… or GSM…) and wants the *already-processed* expression data (count matrices, not raw FASTQ). This is the fast path for scRNA-seq and most bulk RNA-seq when the authors deposited matrices. Try this BEFORE the FASTQ/realignment path.
+when_to_use: You have a KNOWN GEO accession (GSE… or GSM…) and want either (a) its already-processed expression data — count matrices, not raw FASTQ — or (b) just to LIST the study's samples (GSM accessions) + per-sample metadata/characteristics. For a known accession use THIS recipe (it has the GEOparse sample table), not query-geo (which only searches for studies and can't list a series' real per-sample roster). Fast path for scRNA-seq / bulk RNA-seq when authors deposited matrices; try it BEFORE the FASTQ/realignment path.
 requires_tools: [run_python]
 capabilities_needed: [GEOparse, pandas, scanpy, anndata]
 keywords: [GEO, GSE, GSM, count matrix, supplementary files, 10x, mtx, barcodes, features, h5ad, h5, processed data, expression matrix, scRNA-seq, bulk RNA-seq, download]
