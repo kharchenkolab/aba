@@ -89,6 +89,11 @@ def test_source_flag_and_diagnostics():
     check("force_source adds type=source (bioc)", 'type="source"' in b, b)
     check("default (no force) has no type=source",
           'type="source"' not in rexec.install_command("cran", "xml2", lib="/L"))
+    # parallel source builds
+    check("sets MAKEFLAGS -j for parallel compile", 'MAKEFLAGS="-j' in c, c[:90])
+    check("passes Ncpus for parallel dep builds", "Ncpus=" in c, c)
+    check("github install also parallelized",
+          'MAKEFLAGS="-j' in g and "Ncpus=" in rexec.install_command("github", "a/b", lib="/L"))
     # diagnostics pull the actionable lines + a missing system-lib name
     log = ("** building package indices\n"
            "/usr/bin/ld: cannot find -lgdal\n"

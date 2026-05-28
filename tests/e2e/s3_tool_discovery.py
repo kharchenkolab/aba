@@ -86,6 +86,7 @@ def s1_scanpy():
 
     def execute():
         for c in ("scanpy", "leidenalg"):
+            _propose(name=c, archetype="library")
             _ensure(c)
         code = ("import numpy as np, scanpy as sc, anndata as ad\n"
                 "a=ad.AnnData(np.random.poisson(1.0,(300,800)).astype('float32'))\n"
@@ -151,16 +152,18 @@ def s4_macs2():
         return ("macs2" in caps, f"skills={[s['name'] for s in hits[:3]]}")
 
     def execute():
-        _propose(name="macs2", archetype="cli", channel="bioconda")
-        ins = _ensure("macs2")
+        # MACS3 (maintained) rather than MACS2 — the bioconda MACS2 build fails at
+        # runtime with `undefined symbol: __log_finite` (glibc 2.31+); see F2.
+        _propose(name="macs3", archetype="cli", channel="bioconda")
+        ins = _ensure("macs3")
         code = ('import subprocess,random,os\n'
                 'random.seed(0); L=[]\n'
                 'for i in range(3000): s=random.randint(500,1500); L.append(f"chr1\\t{s}\\t{s+50}\\tr{i}\\t0\\t+")\n'
                 'for i in range(300): s=random.randint(1,1000000); L.append(f"chr1\\t{s}\\t{s+50}\\tb{i}\\t0\\t+")\n'
                 'open("reads.bed","w").write("\\n".join(L)+"\\n")\n'
-                'r=subprocess.run(["macs2","callpeak","-t","reads.bed","-f","BED","-g","1000000",'
+                'r=subprocess.run(["macs3","callpeak","-t","reads.bed","-f","BED","-g","1000000",'
                 '"--nomodel","--extsize","200","--nolambda","-n","t","--outdir","."],capture_output=True,text=True)\n'
-                'print("OKMARK macs2 rc", r.returncode, "peaks", os.path.exists("t_peaks.narrowPeak"), r.stderr[-150:])\n')
+                'print("OKMARK macs3 rc", r.returncode, "peaks", os.path.exists("t_peaks.narrowPeak"), r.stderr[-150:])\n')
         res = _py(code, timeout_s=300)
         return (ins.get("status"), _ok(res) and "peaks True" in (res.get("stdout") or ""),
                 (res.get("stdout") or res.get("stderr") or str(res))[-180:])

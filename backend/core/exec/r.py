@@ -242,6 +242,24 @@ def _ppm_ua_expr() -> str:
             'paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); ')
 
 
+def build_jobs() -> int:
+    """Parallel-build width for source compiles. Override via ABA_R_BUILD_JOBS;
+    else #CPUs capped at 8 (diminishing returns + memory pressure beyond that)."""
+    import os
+    env = os.environ.get("ABA_R_BUILD_JOBS")
+    if env and env.isdigit():
+        return max(1, int(env))
+    return max(1, min(os.cpu_count() or 2, 8))
+
+
+def _parallel_expr() -> str:
+    """R prefix enabling parallel source builds: MAKEFLAGS=-jN parallelizes the
+    compile *within* a package; Ncpus parallelizes builds *across* the
+    dependency tree. Big win for source/GitHub installs (e.g. pagoda2, Seurat)."""
+    n = build_jobs()
+    return f'Sys.setenv(MAKEFLAGS="-j{n}"); options(Ncpus={n}); '
+
+
 def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[str]:
     """Return an error string if the install spec is unsafe/malformed, else None."""
     if source not in ("cran", "bioconductor", "github"):
@@ -266,15 +284,17 @@ def install_command(source: str, package: str, *, lib: str, ref: Optional[str] =
     source."""
     libq = repr(str(lib))
     setlib = f'.libPaths(c({libq}, .libPaths())); '
+    par = _parallel_expr()
+    n = build_jobs()
     if source == "github":
         spec = f"{package}@{ref}" if ref else package
-        return f'{setlib}remotes::install_github({spec!r}, lib={libq}, upgrade="never")'
+        return f'{setlib}{par}remotes::install_github({spec!r}, lib={libq}, upgrade="never")'
     ua = _ppm_ua_expr()
     typ = ', type="source"' if force_source else ''
     if source == "bioconductor":
         # PPM also serves Bioc; the UA gets binaries where available, else source.
-        return f'{setlib}{ua}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE{typ})'
+        return f'{setlib}{ua}{par}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE, Ncpus={n}{typ})'
     repos = repos or cran_repo()
-    return f'{setlib}{ua}install.packages({package!r}, lib={libq}, repos={repos!r}{typ})'
+    return f'{setlib}{ua}{par}install.packages({package!r}, lib={libq}, repos={repos!r}, Ncpus={n}{typ})'
 
 
