@@ -1847,9 +1847,10 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     params = input_.get("params") or {}
     timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
     cancel_token = (ctx or {}).get("cancel_token")
+    from core import projects
+    from core.data.workspace import scratch_dir
     project_id = projects.current() or "default"
     run_id = (ctx or {}).get("run_id") or uuid.uuid4().hex
-    from core.data.workspace import scratch_dir
     scratch = scratch_dir(str(project_id), f"nf-{run_id}")
     outdir = input_.get("outdir") or str(Path(scratch) / "results")
 
