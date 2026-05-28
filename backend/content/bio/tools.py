@@ -506,9 +506,10 @@ TOOL_SCHEMAS = [
         "description": (
             "Add a tool to the catalog on demand. Archetypes: 'library' (Python "
             "package via pip, found via search_pypi); 'cli' (command-line tool via "
-            "conda, found via search_bioconda); 'mcp_server' (external MCP server "
-            "found via search_mcp_registry — pass connection={command,args} or "
-            "{transport,url}); 'pipeline' (nf-core pipeline found via search_nf_core). "
+            "conda, found via search_bioconda); 'r_package' (R package from CRAN / "
+            "Bioconductor / GitHub — pass source + package); 'mcp_server' (external "
+            "MCP server found via search_mcp_registry — pass connection={command,args} "
+            "or {transport,url}); 'pipeline' (nf-core pipeline found via search_nf_core). "
             "In solo mode it's auto-approved. For a library whose import name differs "
             "from the package name, pass import_name (e.g. 'scikit-image' → 'skimage')."
         ),
@@ -516,10 +517,18 @@ TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Package/tool/server/pipeline name."},
-                "archetype": {"type": "string", "enum": ["library", "cli", "mcp_server", "pipeline"],
-                              "description": "'library'=pip; 'cli'=conda; 'mcp_server'=external MCP server; 'pipeline'=nf-core."},
+                "archetype": {"type": "string", "enum": ["library", "cli", "r_package", "mcp_server", "pipeline"],
+                              "description": "'library'=pip; 'cli'=conda; 'r_package'=R (CRAN/Bioc/GitHub); 'mcp_server'=external MCP server; 'pipeline'=nf-core."},
                 "channel": {"type": "string",
                             "description": "Conda channel for cli tools (default 'bioconda')."},
+                "source": {"type": "string", "enum": ["cran", "bioconductor", "github"],
+                           "description": "For r_package: where it comes from (default cran)."},
+                "package": {"type": "string",
+                            "description": "For r_package: install target (the package name, or 'owner/repo' for github)."},
+                "library": {"type": "string",
+                            "description": "For r_package: the R library() name, if it differs (default: package, or repo segment for github)."},
+                "ref": {"type": "string",
+                        "description": "For r_package github: tag/branch/commit; for pipeline: revision."},
                 "connection": {"type": "object",
                                "description": "For mcp_server: {command, args[], env{}} (stdio) or {transport, url} (remote)."},
                 "url": {"type": "string", "description": "For pipeline: the nf-core URL."},
@@ -1257,6 +1266,14 @@ def read_capability(input_: dict) -> dict:
             f"ABA capabilities (or a lakeFS solution later; source_ref points to the "
             f"original implementation)."
         )
+    elif cap.get("archetype") == "r_package":
+        r = (cap.get("provisioning") or {}).get("r") or {}
+        out["r_source"] = r.get("source")
+        out["library"] = r.get("library") or r.get("package")
+        if r.get("ref"):
+            out["ref"] = r.get("ref")
+        out["note"] = (f"R package ({r.get('source')}). ensure_capability installs it into "
+                       f"the project R library; then `library({out['library']})` in run_r.")
     else:
         if cap.get("version"):
             out["version"] = cap.get("version")
@@ -1607,6 +1624,28 @@ def ensure_capability(input_: dict) -> dict:
                 "note": f"nextflow installed and on PATH. Run this pipeline with "
                         f"run_nextflow(pipeline='{ref}', profile='test', ...). "
                         f"(Large runs will route to HPC/remote later — local only for now.)"}
+    if prov.get("r"):
+        # R package (r_provisioning.md): already on the library path → ready;
+        # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
+        # shared base is never mutated here — only curation grows it.
+        rp = prov["r"]
+        from core.exec import r as rexec
+        from core import projects
+        pid = projects.current() or "default"
+        libname = rp.get("library") or rp.get("package") or cap.get("name")
+        rexec.ensure_r_runtime()
+        if rexec.r_has_package(libname, project_id=pid):
+            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+                    "library": libname,
+                    "note": f"Already available — library({libname}) works in run_r."}
+        res = rexec.r_install(rp.get("source", "cran"), rp.get("package") or cap.get("name"),
+                              project_id=pid, ref=rp.get("ref"))
+        if res.get("status") == "ready":
+            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+                    "library": libname,
+                    "note": f"Installed into the project R library; use library({libname}) in run_r."}
+        return {"status": "error", "name": cap.get("name"), "archetype": "r_package",
+                "note": f"R install failed: {(res.get('stderr') or res.get('note') or '')[-400:]}"}
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
@@ -1659,6 +1698,26 @@ def propose_capability_tool(input_: dict) -> dict:
             }},
             "source": input_.get("source") or "nf-core",
         }
+    elif archetype == "r_package":
+        # An R package (r_provisioning.md). Native install into the project R
+        # library from CRAN / Bioconductor / GitHub. `name` is the capability
+        # name; `package` the install target (owner/repo for github); `library`
+        # the R library() name used for the present-check (defaults sensibly).
+        r_source = (input_.get("source") or "cran").strip()
+        pkg = (input_.get("package") or name).strip()
+        lib = input_.get("library") or (pkg.split("/")[-1] if r_source == "github" else pkg)
+        from core.exec.r import validate_install
+        verr = validate_install(r_source, pkg, input_.get("ref"))
+        if verr:
+            return {"status": "error", "name": name, "note": verr}
+        spec = {
+            "name": name, "version": version, "archetype": "r_package",
+            "summary": input_.get("summary") or f"{name} (R package from {r_source})",
+            "domain_tags": input_.get("tags") or [],
+            "provisioning": {"r": {"source": r_source, "package": pkg,
+                                   "library": lib, "ref": input_.get("ref")}},
+            "source": r_source,
+        }
     elif archetype == "cli":
         # A command-line tool from a conda channel (e.g. bowtie2, bedtools).
         channel = input_.get("channel") or "bioconda"
@@ -1694,6 +1753,9 @@ def propose_capability_tool(input_: dict) -> dict:
     elif archetype == "pipeline":
         note = ("Catalogued (auto-approved). Running it needs a Nextflow runtime "
                 "(not yet wired) — ensure_capability will report it as deferred.")
+    elif archetype == "r_package":
+        note = ("Added to the catalog (auto-approved). Call ensure_capability to "
+                "install it into the project R library, then use library(...) in run_r.")
     else:
         note = ("Added to the catalog (auto-approved). Call ensure_capability to "
                 "install it, then import it in run_python.")

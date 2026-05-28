@@ -25,6 +25,26 @@ for _cdir in sorted(p for p in _SEED_DIR.glob("*") if p.is_dir()):
     register_collection_dir(_cdir)
 
 
+def load_r_base_specs() -> list[str]:
+    """Curated shared-R-base conda specs from r_base.yaml (r_provisioning.md).
+    Content lives in the library; core.exec.r provides the batch-install
+    mechanism. Returns [] if the manifest is absent."""
+    import yaml
+    f = _SEED_DIR / "r_base.yaml"
+    if not f.exists():
+        return []
+    doc = yaml.safe_load(f.read_text()) or {}
+    return [str(p) for p in (doc.get("packages") or [])]
+
+
+def provision_r_base() -> None:
+    """Batch-install the curated R base into the shared tools env. HEAVY
+    (Bioconductor/Seurat-scale conda solve) — an ops/on-demand action, not a
+    per-request one; the agent installs project-local via ensure_capability."""
+    from core.exec.r import ensure_r_base
+    ensure_r_base(load_r_base_specs())
+
+
 def load_seed() -> int:
     """Upsert seed capabilities from *.yaml into the active project's catalog.
     Idempotent: skips any (name, version) already present. Returns count added."""

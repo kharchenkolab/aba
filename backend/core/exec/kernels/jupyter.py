@@ -76,8 +76,15 @@ def _ensure_r_kernelspec() -> str:
 
 
 def _r_setup_code(cwd: str) -> str:
-    """First cell for an R session: cwd + DATA_DIR (parallel to the Python one)."""
-    return f"DATA_DIR <- {str(DATA_DIR)!r}\nsetwd({str(cwd)!r})\n"
+    """First cell for an R session: project R library ahead of the shared base
+    on .libPaths() (r_provisioning.md), then cwd + DATA_DIR (parallel to the
+    Python one). The project lib is where on-demand `r_package` installs land,
+    so a freshly-installed package is importable in the next cell."""
+    from core import projects
+    from core.exec.r import libpaths_expr
+    libline = libpaths_expr(projects.current() or "default")
+    libline = (libline + "\n") if libline else ""
+    return f"{libline}DATA_DIR <- {str(DATA_DIR)!r}\nsetwd({str(cwd)!r})\n"
 
 
 def _setup_code(cwd: str) -> str:
