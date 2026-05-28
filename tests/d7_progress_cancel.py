@@ -104,6 +104,17 @@ def test_cancellable_subprocess():
     r = run_cancellable(["echo", "ok"])
     check("normal run returns output", r.returncode == 0 and "ok" in r.stdout)
 
+    # streams milestone lines live (filtered) into the progress sink
+    sq: queue.Queue = queue.Queue()
+    progress.set_sink(sq)
+    try:
+        run_cancellable(["bash", "-c", "echo Downloading nextflow; echo boring chatter"])
+    finally:
+        progress.clear_sink()
+    streamed = [sq.get_nowait()["message"] for _ in range(sq.qsize())]
+    check("streams milestone lines", any("Downloading nextflow" in m for m in streamed), str(streamed))
+    check("filters out boring lines", not any("boring chatter" in m for m in streamed), str(streamed))
+
     class _Tok:
         def __init__(self): self._cbs = []
         def register(self, cb): self._cbs.append(cb); return lambda: None
