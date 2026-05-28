@@ -1562,10 +1562,14 @@ def search_pypi(input_: dict) -> dict:
     import json as _json
     import urllib.error
     import urllib.request
+    from urllib.parse import quote
 
     raw = (input_.get("query") or input_.get("name") or "").strip()
     if not raw:
         return {"error": "query is required"}
+    # A PyPI package name is a single token; a multi-word query (e.g. "geoparse
+    # geo") isn't a package and would put a space in the URL. Take the first token.
+    raw = raw.split()[0]
     # Candidate spellings to try, in order; PyPI is case-insensitive and
     # normalizes separators, but trying variants covers user phrasing.
     cands = []
@@ -1575,7 +1579,7 @@ def search_pypi(input_: dict) -> dict:
     for cand in cands:
         try:
             with urllib.request.urlopen(
-                f"https://pypi.org/pypi/{cand}/json", timeout=10
+                f"https://pypi.org/pypi/{quote(cand)}/json", timeout=10
             ) as resp:
                 info = (_json.loads(resp.read()).get("info") or {})
             return {
@@ -1757,6 +1761,43 @@ def search_mcp_registry(input_: dict) -> dict:
                     "connects it and its tools become callable as 'server:tool'."}
 
 
+def _detect_import_name(pip_specs: list[str]) -> str | None:
+    """After a pip install, find the actual top-level IMPORT name from the
+    overlay's dist-info (top_level.txt, else RECORD). Systemic: stops the agent
+    guessing the import (pip 'biopython' → import 'Bio', 'GEOparse' → 'GEOparse',
+    'kb-python' → 'kb_python') and thrashing on ModuleNotFoundError. Returns the
+    first top-level module name, or None if undetectable."""
+    import os, re, glob
+    try:
+        from core.exec.materialize import pylib_dir
+        d = str(pylib_dir())
+    except Exception:  # noqa: BLE001
+        return None
+    _norm = lambda s: re.sub(r"[-_.]+", "-", s).lower()
+    for spec in pip_specs or []:
+        base = re.split(r"[<>=!~\[ ;]", (spec or "").strip())[0]
+        if not base:
+            continue
+        target = _norm(base)
+        for di in sorted(glob.glob(os.path.join(d, "*.dist-info"))):
+            stem = os.path.basename(di)[: -len(".dist-info")]   # "<name>-<version>"
+            if _norm(stem.rsplit("-", 1)[0]) != target:
+                continue
+            tl = os.path.join(di, "top_level.txt")
+            if os.path.exists(tl):
+                for line in open(tl):
+                    m = line.strip()
+                    if m and not m.startswith("_"):
+                        return m
+            rec = os.path.join(di, "RECORD")
+            if os.path.exists(rec):
+                for line in open(rec):
+                    top = line.split(",", 1)[0].split("/")[0]
+                    if top and "." not in top and not top.endswith(".dist-info") and not top.startswith("_"):
+                        return top
+    return None
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -1796,10 +1837,16 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
-        imp = cap.get("import_name")
+        # Authoritatively resolve the import name (seed override → auto-detect),
+        # so the agent never guesses `import <pipname>` and thrashes.
+        imp = cap.get("import_name") or _detect_import_name(list(prov["pip"]))
         note = "Installed into the materialized-library overlay; importable from run_python now."
-        if imp and imp != cap.get("name"):
-            note += f" Import it as `{imp}`."
+        if imp:
+            note += f" Import it with `import {imp}`."
+        else:
+            note += (" If `import " + str(cap.get("name")) + "` fails, the import name "
+                     "differs from the package name — confirm it with inspect_package "
+                     "rather than guessing/retrying.")
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
