@@ -386,6 +386,27 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "inspect_package",
+        "description": (
+            "Orient on an unfamiliar library in one call before trial-and-error: "
+            "returns its exported symbols + function signatures (Python) or exports "
+            "+ vignettes + R6 methods (R), and optional detail on one function/class. "
+            "The package must already be importable (ensure_capability first). Use "
+            "this — and read_skill/the tool's docs — instead of guessing API names."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Package/library name (e.g. 'pagoda2', 'scanpy')."},
+                "language": {"type": "string", "enum": ["python", "r"],
+                             "description": "Which interpreter to introspect in (default python)."},
+                "object": {"type": "string",
+                           "description": "Optional function/class to detail (signature/methods)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "ensure_capability",
         "description": (
             "Make a catalogued capability ready to use, materializing it on "
@@ -1283,6 +1304,80 @@ def read_capability(input_: dict) -> dict:
     return out
 
 
+def _py_inspect_code(name: str, focus: Optional[str]) -> str:
+    """Python introspection script: version/doc, exported symbols, signatures,
+    and (optional) detail on one focus object."""
+    foc = focus or ""
+    return (
+        "import importlib, inspect, json\n"
+        f"try:\n    m = importlib.import_module({name!r})\n"
+        "except Exception as e:\n    print('IMPORT_ERROR:', e); raise SystemExit(0)\n"
+        "names = [n for n in dir(m) if not n.startswith('_')]\n"
+        "out = {'name': getattr(m,'__name__',%r), 'version': getattr(m,'__version__',None),\n"
+        "       'doc': (m.__doc__ or '')[:400], 'symbols': names[:80]}\n"
+        "sigs = {}\n"
+        "for n in names[:60]:\n"
+        "    try:\n        o = getattr(m, n)\n        if callable(o): sigs[n] = str(inspect.signature(o))\n"
+        "    except Exception: pass\n"
+        "out['signatures'] = sigs\n"
+        f"foc = {foc!r}\n"
+        "if foc:\n"
+        "    o = getattr(m, foc, None)\n"
+        "    if o is not None:\n"
+        "        try: fs = str(inspect.signature(o))\n"
+        "        except Exception: fs = '(...)'\n"
+        "        out['focus'] = {'name': foc, 'signature': fs, 'doc': (getattr(o,'__doc__','') or '')[:800]}\n"
+        "print(json.dumps(out, indent=1, default=str))\n"
+    ) % (name,)
+
+
+def _r_inspect_code(name: str, focus: Optional[str]) -> str:
+    """R introspection script: exports, vignette list, and (optional) focus
+    detail — function args, or R6 generator methods/fields."""
+    foc = focus or ""
+    return (
+        f'pkg <- {name!r}\n'
+        'ok <- suppressWarnings(suppressMessages(require(pkg, character.only=TRUE)))\n'
+        'if (!ok) {{ cat("LOAD_ERROR: package not available/loadable\\n"); quit(status=0) }}\n'
+        'cat("== exports ==\\n"); print(utils::head(sort(ls(paste0("package:", pkg))), 120))\n'
+        'cat("== vignettes ==\\n"); v <- vignette(package=pkg)\n'
+        'if (NROW(v$results)) print(v$results[, "Item"]) else cat("(none)\\n")\n'
+        f'foc <- {foc!r}\n'
+        'if (nzchar(foc) && exists(foc)) {{\n'
+        '  obj <- get(foc); cat("== ", foc, " ==\\n")\n'
+        '  if (inherits(obj, "R6ClassGenerator")) {{\n'
+        '    cat("R6 public methods:\\n"); print(names(obj$public_methods))\n'
+        '    cat("R6 public fields:\\n"); print(names(obj$public_fields))\n'
+        '  }} else if (is.function(obj)) {{ print(args(obj)) }}\n'
+        '}}\n'
+    ).replace("{{", "{").replace("}}", "}")
+
+
+def inspect_package(input_: dict, ctx: dict | None = None) -> dict:
+    """One-call orientation for an unfamiliar library: exported symbols,
+    signatures (Python) / vignettes + R6 methods (R), and optional focus on one
+    function/class — so the agent learns the real API instead of trial-and-error.
+    The package must already be importable (ensure_capability first)."""
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "note": "inspect_package needs a `name`."}
+    lang = (input_.get("language") or "python").strip().lower()
+    focus = input_.get("object") or input_.get("function") or input_.get("focus")
+    if lang in ("r", "rlang", "R"):
+        res = run_r({"code": _r_inspect_code(name, focus), "timeout_s": 120}, ctx)
+        lang = "r"
+    else:
+        res = run_python({"code": _py_inspect_code(name, focus), "fresh": True, "timeout_s": 120}, ctx)
+        lang = "python"
+    report = (res.get("stdout") or "").strip()
+    err = (res.get("stderr") or res.get("error") or "").strip()
+    if (not report or "IMPORT_ERROR" in report or "LOAD_ERROR" in report) and (err or "ERROR" in report):
+        return {"status": "error", "name": name, "language": lang,
+                "note": f"Couldn't introspect {name!r} — is it installed? "
+                        f"ensure_capability first. ({(report or err)[-300:]})"}
+    return {"status": "ok", "name": name, "language": lang, "report": report[:4000]}
+
+
 def list_capabilities_tool(input_: dict) -> dict:
     """Search the capability catalog (P1). Intent-ranked (BM25 + substring)
     when a query is given, plain tag-filter otherwise. Returns a trimmed
@@ -2055,6 +2150,7 @@ EXECUTORS = {
     "write_memory": write_memory_tool,
     "list_capabilities": list_capabilities_tool,
     "read_capability": read_capability,
+    "inspect_package": inspect_package,
     "ensure_capability": ensure_capability,
     "search_pypi": search_pypi,
     "search_bioconda": search_bioconda,

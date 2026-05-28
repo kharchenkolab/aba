@@ -135,9 +135,25 @@ def test_cancellable_subprocess():
         check(f"{fn.__name__} accepts cancel_token", "cancel_token" in inspect.signature(fn).parameters)
 
 
+def test_inspect_package():
+    print("inspect_package — one-call orientation")
+    from content.bio.tools import inspect_package, _r_inspect_code, _py_inspect_code
+    # Python path on a stdlib module (always importable, no install needed)
+    r = inspect_package({"name": "json", "language": "python", "object": "dumps"})
+    check("python introspection ok", r.get("status") == "ok", str(r)[:160])
+    check("report lists symbols + focus", "dumps" in (r.get("report") or "") and "loads" in (r.get("report") or ""))
+    # uninstalled package -> clear error pointing at ensure_capability
+    r2 = inspect_package({"name": "no_such_pkg_xyz", "language": "python"})
+    check("uninstalled -> error w/ ensure hint", r2.get("status") == "error" and "ensure_capability" in (r2.get("note") or ""), str(r2)[:160])
+    # R code builder includes R6 + vignette introspection (no R run)
+    rc = _r_inspect_code("pagoda2", "Pagoda2")
+    check("R builder: exports+vignettes+R6", all(k in rc for k in ("package:", "vignette(", "R6ClassGenerator")), rc[:80])
+
+
 def main() -> int:
     init_db()
     test_progress_sink()
+    test_inspect_package()
     test_execute_tool_streams()
     test_ensure_capability_emits_and_takes_ctx()
     test_cancellable_subprocess()
