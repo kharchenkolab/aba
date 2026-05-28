@@ -145,6 +145,8 @@ meta = pd.DataFrame({g: s.metadata for g, s in gse.gsms.items()}).T
   bulk is often one series-level count table.
 
 ## Gotchas
+- **Just need a cell count?** Download only `barcodes.tsv.gz` (one barcode = one
+  cell) and count its lines — don't pull the (often 50–150 MB) `matrix.mtx.gz`.
 - **No naming standard.** You must list files and branch; do not assume 10x.
 - 10x triplets are commonly prefixed per sample and need regrouping (Step 3a).
 - `features.tsv.gz` vs legacy `genes.tsv.gz`; CellRanger v2 vs v3 layouts differ.

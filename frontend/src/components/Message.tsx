@@ -187,7 +187,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
         <div key={i} className="msg-image">
           {ent && <div className="msg-image__head"><span className="msg-image__title">{ent.title}</span></div>}
           <div className="msg-image__frame">
-            <img className="msg-image__img" src={b.url} alt={b.alt ?? 'plot'} crossOrigin="anonymous" />
+            <ZoomableImg src={b.url} alt={b.alt ?? 'plot'} />
             {ent && onPin && (
               <div className="msg-image__tools">
                 <FigurePin entity={ent} onPin={onPin} />
@@ -213,6 +213,32 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
 
 // A single tool step. For tools that ran a script (run_python), a "Show script"
 // disclosure reveals the exact code — the inner-loop detail the Trace panel used
+// A chat plot that opens to a full-viewport lightbox on click — the chat column
+// downsizes the (≈150 DPI) PNG, so click-to-zoom surfaces the native resolution.
+function ZoomableImg({ src, alt }: { src: string; alt: string }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
+  return (
+    <>
+      <img className="msg-image__img" src={src} alt={alt} crossOrigin="anonymous"
+        style={{ cursor: 'zoom-in' }} title="Click to view full size"
+        onClick={() => setOpen(true)} />
+      {open && (
+        <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
+          <img className="lightbox__img" src={src} alt={alt} crossOrigin="anonymous"
+            onClick={e => e.stopPropagation()} />
+          <button className="lightbox__close" onClick={() => setOpen(false)} aria-label="Close">×</button>
+        </div>
+      )}
+    </>
+  )
+}
+
 // to carry, now available per cell.
 function ToolLine({ block, result }: {
   block: Extract<Block, { type: 'tool_start' }>

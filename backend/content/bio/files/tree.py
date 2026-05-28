@@ -246,6 +246,61 @@ def _add_numbered_children(parent: dict, entities: list[dict], slug_fn=_folder_s
     return out
 
 
+def _working_files_node(entities: list[dict]) -> Optional[dict]:
+    """A 'working' folder listing real on-disk files (the project DATA_DIR + its
+    scratch dir) that AREN'T registered entities — so nothing the agent produces
+    is hidden behind the curated entity tree (the "where are my files?" gap).
+    Flagged ephemeral: scratch is GC-able and uncurated until promoted."""
+    from pathlib import Path as _P
+    try:
+        from core.config import DATA_DIR, WORK_DIR
+    except Exception:  # noqa: BLE001
+        return None
+    pid = "default"
+    try:
+        from core.projects import current as _cur
+        pid = _cur() or "default"
+    except Exception:  # noqa: BLE001
+        pass
+    shown = set()
+    for e in entities:
+        d = _resolve_disk(e.get("artifact_path"))
+        if d:
+            shown.add(str(_P(d).resolve()))
+    children: list[dict] = []
+    seen = 0
+    for base, label in ((_P(DATA_DIR), "data"), (_P(WORK_DIR) / pid, "scratch")):
+        if not base.exists():
+            continue
+        for f in base.rglob("*"):       # generator → break stops the walk early
+            if seen >= 200:
+                break
+            if not f.is_file() or f.name.startswith("."):
+                continue
+            rp = str(f.resolve())
+            if rp in shown:
+                continue               # already shown as a registered entity
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            children.append({
+                "kind": "file", "name": f.name,
+                "path": f"working/{label}/{f.relative_to(base).as_posix()}",
+                "artifact_path": rp, "size": st.st_size, "mtime": st.st_mtime,
+                "ephemeral": True,
+            })
+            seen += 1
+    if not children:
+        return None
+    children.sort(key=lambda c: c["path"])
+    node = _folder("working", path="working", kind="folder")
+    node["ephemeral"] = True
+    node["note"] = "Scratch / unregistered files on disk — not kept unless promoted to a dataset."
+    node["children"] = children
+    return node
+
+
 def build_files_tree(*, include_archived: bool = False) -> dict:
     """Compose the full project file tree from the entity graph.
 
@@ -534,6 +589,12 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                 sub_folder["children"].append(_file_node(e, path=f"{sub_path}/{_leaf_name(e)}"))
             orphans_folder["children"].append(sub_folder)
         root["children"].append(orphans_folder)
+
+    # Working files: real on-disk scratch/unregistered files, so they're visible
+    # (not just the curated entity tree). Promotion elevates them to datasets.
+    wf = _working_files_node(entities)
+    if wf:
+        root["children"].append(wf)
 
     return root
 
