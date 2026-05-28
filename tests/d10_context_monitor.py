@@ -75,6 +75,8 @@ def test_always_on_guidance():
     check("discovery-first behavior rule", "name the concrete thing you need to do" in p)
     check("don't-fire-a-look-alike-tool rule", "looks topically related" in p)
     check("anti-fabrication rule", "Never invent or infer data" in p)
+    check("failed-tool rule", "A failed tool call means that step failed" in p)
+    check("don't-claim-unconfirmed-outputs rule", "Don't claim outputs you haven't confirmed" in p)
     check("core skill: approach-unfamiliar-tool", "approach-unfamiliar-tool" in p)
     check("core skill: manage-entities", "manage-entities" in p)
     check("Core skills section header", "**Core skills**" in p)
