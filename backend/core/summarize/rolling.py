@@ -69,6 +69,31 @@ def _text_of(msg: dict) -> str:
     return f"{msg['role']}: {' '.join(parts)}"
 
 
+def extract_session_cells(messages: list[dict], max_chars: int = 6000) -> str:
+    """Concatenated code of run_python/run_r cells in `messages` (kernels.md §8.2).
+
+    Summarization collapses old messages to prose — but for a kernel-backed
+    thread that would drop the very cells that built the live session's state,
+    so the agent loses the record of HOW objects were made and can't replay
+    after a kernel restart. We keep the code (compact, results stripped). If the
+    listing is huge, keep the most RECENT cells (they define current state)."""
+    blocks: list[str] = []
+    for m in messages:
+        if m.get("role") != "assistant":
+            continue
+        for b in m.get("content", []):
+            if isinstance(b, dict) and b.get("type") == "tool_use" \
+                    and b.get("name") in ("run_python", "run_r"):
+                code = ((b.get("input") or {}).get("code") or "").strip()
+                if code:
+                    lang = "r" if b["name"] == "run_r" else "python"
+                    blocks.append(f"```{lang}\n{code}\n```")
+    if not blocks:
+        return ""
+    text = "\n".join(blocks)
+    return text[-max_chars:] if len(text) > max_chars else text
+
+
 def _summarize(old_msgs: list[dict], prior: str | None) -> str:
     transcript = "\n".join(_text_of(m) for m in old_msgs)[:8000]
     system = (
@@ -112,13 +137,21 @@ def effective_history(entity_id: str, messages: list[dict]) -> list[dict]:
             if summary is None:
                 return messages  # can't summarize; fall back to full history
 
-    summary_msg = {
-        "role": "user",
-        "content": [{
+    content = [{
+        "type": "text",
+        "text": f"[Summary of the earlier {covered} messages in this project]\n{summary}",
+    }]
+    # Retain the code cells from the summarized region so a kernel-backed
+    # session's state remains explainable / replayable (kernels.md §8.2).
+    cells = extract_session_cells(messages[:covered])
+    if cells:
+        content.append({
             "type": "text",
-            "text": f"[Summary of the earlier {covered} messages in this project]\n{summary}",
-        }],
-    }
+            "text": ("[Code cells executed earlier in this session — their state persists in "
+                     "your kernel; this is the record of how objects were built, for recall "
+                     "or replay after a restart]:\n" + cells),
+        })
+    summary_msg = {"role": "user", "content": content}
     # Keep messages after the covered point (at least RECENT_KEEP).
     tail = messages[covered:]
     return [summary_msg] + tail
