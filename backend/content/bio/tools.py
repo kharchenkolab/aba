@@ -585,15 +585,17 @@ TOOL_SCHEMAS = [
     {
         "name": "lookup_sra_runinfo",
         "description": (
-            "Look up the run table for an SRA/ENA/GEO accession (study, sample, "
-            "or run) via ENA. Returns each run's accession, sample title, library "
-            "layout, and direct fastq download URLs — the input for planning a "
-            "fetch+align pipeline. Pair with fetch_url to download the fastqs."
+            "Run table for a sequencing-RUN accession that ENA indexes — SRR/ERR/DRR "
+            "(run), SRP/ERP/PRJNA (study/project), SRX (experiment). Returns each "
+            "run's accession, sample title, library layout, and direct fastq URLs "
+            "(input for a fetch+align pipeline). This is for RAW READS only. It does "
+            "NOT resolve GEO series/sample accessions (GSE…/GSM…) or list a study's "
+            "samples/metadata — for that, search_skills for the GEO recipe."
         ),
         "input_schema": {
             "type": "object",
             "properties": {"accession": {"type": "string",
-                            "description": "e.g. 'SRP033351', 'GSE52778', or a run 'SRR1039508'."}},
+                            "description": "A sequencing-run/study accession, e.g. 'SRP033351' or run 'SRR1039508'. Not a GEO GSE/GSM."}},
             "required": ["accession"],
         },
     },
@@ -2035,12 +2037,26 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def lookup_sra_runinfo(input_: dict, ctx: dict | None = None) -> dict:
-    """Run table for an SRA/ENA/GEO accession via the ENA filereport API (P4)."""
+    """Run table for a sequencing-run/study accession via the ENA filereport API
+    (P4). GEO accessions are redirected to the GEO recipe, not dead-ended."""
     import json as _json
     import urllib.request
     acc = (input_.get("accession") or input_.get("query") or "").strip()
     if not acc:
         return {"error": "accession is required"}
+    # GEO series/sample accessions are not in ENA's read_run index — this tool
+    # would 400/return empty. Redirect to discovery instead of dead-ending (the
+    # wrong-tool reach that made the agent scrape GEO by hand).
+    if acc.upper().startswith(("GSE", "GSM", "GDS", "GPL")):
+        return {"status": "wrong_tool", "accession": acc,
+                "note": (f"{acc} is a GEO accession; this tool only handles SRA/ENA "
+                         "run/study accessions (SRR/SRP/ERR/PRJNA…) and can't list a "
+                         "GEO study's samples or metadata. To list samples / fetch "
+                         "processed matrices, call search_skills('fetch GEO data') and "
+                         "read_skill('fetch-geo-processed-matrices'). To get raw reads, "
+                         "first resolve the GEO accession to an SRA study with the "
+                         "fetch-sequencing-fastq recipe (pysradb), then call this tool "
+                         "with the resulting SRP/SRR.")}
     fields = "run_accession,fastq_ftp,sample_title,sample_accession,library_layout,read_count"
     url = (f"https://www.ebi.ac.uk/ena/portal/api/filereport?accession={acc}"
            f"&result=read_run&fields={fields}&format=json")
