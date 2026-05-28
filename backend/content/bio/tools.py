@@ -1888,6 +1888,41 @@ def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
             "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
 
 
+_CONTAINER_ENGINES = ("docker", "singularity", "apptainer", "podman", "charliecloud", "shifter", "sarus")
+_CONDA_PROFILES = ("conda", "mamba", "micromamba")
+
+
+def _available_container_engines() -> list[str]:
+    """Container/runtime engines actually on PATH (nf-core needs one to run a
+    pipeline's processes). conda-as-backend is handled separately."""
+    import shutil
+    return [e for e in _CONTAINER_ENGINES if shutil.which(e)]
+
+
+def _nextflow_env_blocker(pipeline: str, profile: Optional[str]) -> Optional[dict]:
+    """F6: fail fast (instead of timing out) when the run can't possibly execute
+    here. Two cases: (a) the profile names a container engine that isn't
+    installed; (b) it's an nf-core pipeline with no backend profile and no
+    container engine on the box. Returns an error dict, or None to proceed."""
+    tokens = {t.strip() for t in (profile or "").split(",") if t.strip()}
+    avail = _available_container_engines()
+    requested = tokens & set(_CONTAINER_ENGINES)
+    if requested and not (requested & set(avail)):
+        return {"status": "unsupported_environment", "pipeline": pipeline,
+                "note": f"profile requests {sorted(requested)} but none are available here "
+                        f"(PATH has: {avail or 'no container engine'}). nf-core needs a container "
+                        f"engine (docker/singularity/apptainer) or a conda profile — install one, "
+                        f"use -profile test,conda, or run on HPC/remote (deferred)."}
+    if (not requested and not (tokens & set(_CONDA_PROFILES)) and not avail
+            and pipeline.lower().startswith("nf-core/")):
+        return {"status": "unsupported_environment", "pipeline": pipeline,
+                "note": "No container engine (docker/singularity/apptainer) detected and no "
+                        "conda profile requested. nf-core pipelines need a software backend to run "
+                        "their processes — add a backend profile (test,docker / test,singularity / "
+                        "test,conda) once one is available, or run on HPC/remote (deferred)."}
+    return None
+
+
 def _nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
                       params: dict | None = None, extra_args=None) -> list[str]:
     """Build the `nextflow run …` argv. Pure function — unit-tested separately."""
@@ -1922,6 +1957,11 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
 
     revision = input_.get("revision")
     profile = input_.get("profile")
+    # F6: fail fast if the environment can't run this (e.g. profile needs a
+    # container engine that isn't installed) instead of letting nextflow time out.
+    blocked = _nextflow_env_blocker(pipeline, profile)
+    if blocked is not None:
+        return blocked
     params = input_.get("params") or {}
     timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
     cancel_token = (ctx or {}).get("cancel_token")

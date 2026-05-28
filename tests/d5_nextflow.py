@@ -70,7 +70,7 @@ def test_ensure_pipeline_installs_nextflow():
     calls = {}
     orig = MaterializingExecutor.materialize
 
-    def fake_materialize(self, prov, scope="system"):
+    def fake_materialize(self, prov, scope="system", cancel_token=None):
         calls["conda"] = (prov.conda or {}).get("spec")
         return None
 
@@ -84,6 +84,24 @@ def test_ensure_pipeline_installs_nextflow():
         check("note points at run_nextflow", "run_nextflow" in (res.get("note") or ""))
     finally:
         MaterializingExecutor.materialize = orig
+
+
+def test_container_precheck():
+    print("F6: container-engine pre-check (fail fast, no timeout)")
+    from content.bio.tools import _nextflow_env_blocker, _available_container_engines
+    avail = _available_container_engines()
+    check("trivial pipeline (hello) never blocked", _nextflow_env_blocker("nextflow-io/hello", None) is None)
+    missing = next((e for e in ("docker", "singularity", "apptainer") if e not in avail), None)
+    if missing:
+        b = _nextflow_env_blocker("nf-core/rnaseq", missing)
+        check("requested-but-missing engine -> blocked", (b or {}).get("status") == "unsupported_environment", str(b))
+        # run_nextflow returns immediately (before installing nextflow / launching)
+        r = run_nextflow({"pipeline": "nf-core/rnaseq", "profile": missing})
+        check("run_nextflow short-circuits (no install, no timeout)",
+              r.get("status") == "unsupported_environment", str(r)[:160])
+    if not avail:
+        check("nf-core with no backend + no engine -> blocked",
+              (_nextflow_env_blocker("nf-core/rnaseq", "test") or {}).get("status") == "unsupported_environment")
 
 
 def test_live_hello():
@@ -100,6 +118,7 @@ def main() -> int:
     test_command_builder()
     test_input_validation_and_remote_seam()
     test_ensure_pipeline_installs_nextflow()
+    test_container_precheck()
     test_live_hello()
     print()
     if _failures:
