@@ -89,7 +89,22 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
                 steps_raw = raw[alt]
                 break
     if isinstance(steps_raw, str):
-        steps_raw = _coerce_string_list(steps_raw)
+        # A model may pass the array as a JSON string ('[{"title":…}]') rather
+        # than a real list — parse it before falling back to line-splitting.
+        s = steps_raw.strip()
+        parsed = None
+        if s[:1] in "[{":
+            import json as _json
+            try:
+                parsed = _json.loads(s)
+            except Exception:
+                parsed = None
+        if isinstance(parsed, list):
+            steps_raw = parsed
+        elif isinstance(parsed, dict):
+            steps_raw = [parsed]
+        else:
+            steps_raw = _coerce_string_list(steps_raw)
     elif not isinstance(steps_raw, list):
         steps_raw = []
 
@@ -116,11 +131,47 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
             # Unsupported shape — drop with a synthesized title for traceability.
             norm_steps.append(PlanStep(n=i, title=f"(unparsed step {i})"))
 
+    # Recovery: some models cram the steps as a JSON array into a *text* field
+    # (e.g. function-call XML leaking into `assumptions`), leaving `steps` empty.
+    # If we have no steps, scan the raw string values for an embedded step array.
+    if not norm_steps:
+        import json as _json, re as _re
+        for v in raw.values():
+            if not (isinstance(v, str) and ('"title"' in v or '"description"' in v)):
+                continue
+            m = _re.search(r"\[\s*\{.*\}\s*\]", v, _re.S)
+            if not m:
+                continue
+            try:
+                arr = _json.loads(m.group(0))
+            except Exception:
+                continue
+            if isinstance(arr, list):
+                for i, s in enumerate(arr, start=1):
+                    if isinstance(s, dict):
+                        title = (s.get("title") or s.get("description") or "").strip()[:120]
+                        if title:
+                            norm_steps.append(PlanStep(
+                                n=i, title=title,
+                                description=(s.get("description") or "").strip(),
+                                expected_outputs=_coerce_string_list(s.get("expected_outputs"))))
+                if norm_steps:
+                    break
+
+    def _strip_leak(s: str) -> str:
+        # Remove leaked function-call / XML-ish tags some models emit into prose
+        # (e.g. '<parameter name="steps">', '</assumptions>', '<invoke …>') and a
+        # trailing JSON array (e.g. the steps array crammed into a text field).
+        import re as _re
+        s = _re.sub(r"</?(?:parameter|assumptions|steps|invoke|function_calls|antml)[^>]*>", "", s or "")
+        s = _re.sub(r"\[\s*\{.*?\}\s*\]", "", s, flags=_re.S)
+        return s.strip()
+
     return Plan(
-        title=str(raw.get("title") or "").strip(),
-        summary=str(raw.get("summary") or "").strip(),
-        rationale=str(raw.get("rationale") or "").strip(),
-        assumptions=_coerce_string_list(raw.get("assumptions")),
+        title=_strip_leak(str(raw.get("title") or "")),
+        summary=_strip_leak(str(raw.get("summary") or "")),
+        rationale=_strip_leak(str(raw.get("rationale") or "")),
+        assumptions=[_strip_leak(a) for a in _coerce_string_list(raw.get("assumptions")) if _strip_leak(a)],
         steps=norm_steps,
     )
 

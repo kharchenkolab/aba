@@ -203,7 +203,19 @@ def _live_log_event(run_id, obj: dict, dtbuf: list) -> None:
         return
     try:
         import json as _j
+        os.makedirs(d, exist_ok=True)
         t = obj.get("type")
+        # Full-fidelity record: append the UNTRUNCATED event (tool inputs +
+        # results, plans, errors) to a per-run JSONL, so a run can be fully
+        # reconstructed offline for debugging (the truncated live.log hid the
+        # evidence when diagnosing the pagoda2 fabrication). 'delta' text chunks
+        # are skipped — the prose is in live.log (coalesced) + the message log.
+        if t and t != "delta" and t not in ("manifest", "usage", "suggestion_logged"):
+            try:
+                with open(os.path.join(d, f"{run_id}.jsonl"), "a") as _ff:
+                    _ff.write(_j.dumps(obj, default=str) + "\n")
+            except Exception:  # noqa: BLE001
+                pass
         if t == "delta":
             dtbuf.append(obj.get("text") or "")
             return
