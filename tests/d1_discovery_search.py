@@ -94,31 +94,38 @@ def test_gating_imprint_bounded():
             f"description: synthetic skill {i} about {topic}\n"
             f"keywords: [{topic}]\n---\n\nbody {i}\n"
         )
+    # Synthetic skills register as the 'local' (recipe) tier by default — they
+    # can never inflate the always-on core tier (folder-driven visibility).
     n = loader.register_skill_dir(big)
     check("registered 100 synthetic skills", n == 100, str(n))
-    total = len(loader.list_skills())
-    check("catalog now large (>FULL_LIST_MAX)", total > loader.FULL_LIST_MAX, str(total))
+    skills = loader.list_skills()
+    total = len(skills)
+    core_n = sum(1 for s in skills if s.visibility == "always")
+    cookbook_n = total - core_n
+    # Two-tier imprint cap: the full core set (fixed, small) + the gated recipe
+    # slice. Constant in catalog size — that's the scalability invariant.
+    cap = core_n + loader.GATED_TOP_K
+    check("catalog now large (>FULL_LIST_MAX)", cookbook_n > loader.FULL_LIST_MAX, str(cookbook_n))
 
     block = skills_index_block(query="deconvolve spatial transcriptomics")
     bullets = [ln for ln in block.splitlines() if ln.strip().startswith("- `")]
-    check("imprint bounded to top-K", len(bullets) <= loader.GATED_TOP_K, f"{len(bullets)} bullets")
+    check("imprint bounded to core+top-K", len(bullets) <= cap, f"{len(bullets)} bullets (cap {cap})")
     check("surfaces the relevant skill", any("spatial" in b for b in bullets), str(bullets[:3]))
-    check("points at search_skills for the rest", "search_skills" in block and f"of {total}" in block)
+    check("points at search_skills for the rest", "search_skills" in block and f"of {cookbook_n}" in block)
 
     # Imprint must NOT scale with catalog size: block stays small vs listing all.
-    full_would_be = sum(1 for _ in loader.list_skills())
-    check("block << full listing", len(bullets) < full_would_be / 5, f"{len(bullets)} vs {full_would_be}")
+    check("block << full listing", len(bullets) < total / 5, f"{len(bullets)} vs {total}")
 
-    # No query, still bounded (stable default slice + pointer).
+    # No query, still bounded (core + stable default recipe slice + pointer).
     nq = skills_index_block(query="")
     nq_bullets = [ln for ln in nq.splitlines() if ln.strip().startswith("- `")]
-    check("no-query index also bounded", len(nq_bullets) <= loader.GATED_TOP_K, f"{len(nq_bullets)}")
+    check("no-query index also bounded", len(nq_bullets) <= cap, f"{len(nq_bullets)} (cap {cap})")
 
     # Query with no lexical overlap → still shows a default slice (never bullet-less).
     none = skills_index_block(query="zzzqqq nonexistent gibberish")
     none_bullets = [ln for ln in none.splitlines() if ln.strip().startswith("- `")]
-    check("no-overlap query falls back to a slice", 0 < len(none_bullets) <= loader.GATED_TOP_K,
-          f"{len(none_bullets)}")
+    check("no-overlap query falls back to a slice", 0 < len(none_bullets) <= cap,
+          f"{len(none_bullets)} (cap {cap})")
 
 
 def test_capability_intent_search():
