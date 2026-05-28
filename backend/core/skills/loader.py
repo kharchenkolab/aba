@@ -254,6 +254,33 @@ def _skill_bullets(skills: list[SkillSpec]) -> list[str]:
             for s in skills]
 
 
+def _diversify(pool: list[SkillSpec], k: int, *, reserve: int = 3) -> list[SkillSpec]:
+    """Pick k from a relevance-ranked pool, but don't let one domain take every
+    slot. A single domain may fill at most k-reserve slots; the rest go to the
+    next-best recipes from other domains. Without this, a domain-heavy phrasing
+    (e.g. 'analyze PBMC scRNA-seq') fills all slots with analysis recipes and
+    crowds out the action-relevant one (e.g. a GEO-fetch recipe ranked just
+    outside the cap) — the exact gap that made the agent hand-roll + scrape."""
+    cap = max(1, k - reserve)
+    chosen: list[SkillSpec] = []
+    counts: dict[str, int] = {}
+    for s in pool:
+        if len(chosen) >= k:
+            break
+        d = s.domain or "_"
+        if counts.get(d, 0) < cap:
+            chosen.append(s)
+            counts[d] = counts.get(d, 0) + 1
+    # If the cap left us short (small/narrow pool), backfill by pure relevance.
+    if len(chosen) < k:
+        for s in pool:
+            if len(chosen) >= k:
+                break
+            if s not in chosen:
+                chosen.append(s)
+    return chosen[:k]
+
+
 def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
     """The skills slice embedded in the system prompt. Two tiers, by visibility:
 
@@ -290,10 +317,12 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
             shown = cookbook
         else:
             k = limit or GATED_TOP_K
-            # search_skills spans the whole registry; over-fetch then drop the
-            # core hits so the gated slice is k *cookbook* recipes.
-            raw = search_skills(q, limit=k + len(core)) if q else []
-            shown = [s for s in raw if s.visibility != "always"][:k]
+            # Over-fetch a deeper pool (search_skills spans the whole registry),
+            # drop core hits, then diversify by domain so one topic can't take
+            # every slot and crowd out the action-relevant recipe.
+            raw = search_skills(q, limit=k * 3 + len(core)) if q else []
+            pool = [s for s in raw if s.visibility != "always"]
+            shown = _diversify(pool, k)
             relevant = bool(q and shown)
             if not shown:  # no query, or no lexical overlap → stable default slice
                 shown = cookbook[:k]
