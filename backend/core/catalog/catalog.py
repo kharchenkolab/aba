@@ -181,6 +181,18 @@ def search_capabilities(
     list_capabilities tool calls when given a query — list_capabilities() above
     stays the plain substring/tag filter used internally and for browsing."""
     cands = list_capabilities(query=None, tags=tags, ctx=ctx)  # visible + tag-filtered
+    # Merge file-backed collection capabilities (biomni, …) — searchable without
+    # being seeded as entities (collections.md). Tag-filter + visibility applied
+    # the same way.
+    from core.catalog.collections import collection_capabilities
+    want_tags = set(tags or [])
+    for cap in collection_capabilities():
+        if not _visible(cap, ctx):
+            continue
+        if want_tags and not (want_tags & set(cap.get("domain_tags") or [])):
+            continue
+        cands.append(cap)
+
     q = (query or "").strip()
     if not q:
         return cands[:limit] if limit else cands
@@ -218,4 +230,10 @@ def resolve_capability(
         if cap.get("name") == name_or_id:
             if version is None or str(cap.get("version")) == str(version):
                 return cap
+    # Fall back to file-backed collections (biomni, …). These aren't graph
+    # entities, so a name match here covers the discovered-but-not-promoted case.
+    from core.catalog.collections import find_collection_capability
+    col = find_collection_capability(name_or_id)
+    if col is not None and _visible(col, ctx):
+        return col
     return None
