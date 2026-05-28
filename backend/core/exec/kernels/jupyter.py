@@ -82,10 +82,11 @@ def _r_setup_code(cwd: str) -> str:
 
 def _setup_code(cwd: str) -> str:
     """First cell: replicate the run_python environment in the kernel namespace."""
-    biomni = str(Path(__file__).resolve().parents[3] / "content" / "biomni")
+    from core.config import BIOMNI_DIR
+    biomni_line = f"_sys.path.insert(0, {str(BIOMNI_DIR)!r})\n" if BIOMNI_DIR else ""
     return (
         "import sys as _sys, os as _os\n"
-        f"_sys.path.insert(0, {biomni!r})\n"
+        f"{biomni_line}"
         f"_sys.path.append({str(pylib_dir())!r})\n"
         f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"

@@ -24,6 +24,14 @@ ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", BASE_DIR / "envs")).resolve()
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
 REFS_DIR = Path(os.getenv("ABA_REFS_DIR", BASE_DIR / "refs")).resolve()
+# BIOMNI_DIR is the runtime location of the biomni capability collection
+# (collections.md): the dir to put on sys.path so `import biomni.*` works in
+# run_python / the kernel. Transitional fallback until biomni is provisioned as
+# a real pip install; defaults to the vendored copy at repo root if present.
+_biomni_default = BASE_DIR.parent / "biomni"
+BIOMNI_DIR = Path(os.getenv("ABA_BIOMNI_DIR", _biomni_default)).resolve() if (
+    os.getenv("ABA_BIOMNI_DIR") or _biomni_default.is_dir()) else None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("ABA_MODEL", "claude-haiku-4-5-20251001")
 FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")

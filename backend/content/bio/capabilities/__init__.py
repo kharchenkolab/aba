@@ -9,9 +9,16 @@ reverse).
 from __future__ import annotations
 from pathlib import Path
 
-from core.catalog import register_capability, register_seed_provider
+from core.catalog import register_capability, register_seed_provider, register_collection_dir
 
 _SEED_DIR = Path(__file__).parent
+
+# Extracted reference catalogues (collections.md). These are file-backed and
+# process-global (not per-project entities), so register the dir at import time.
+# biomni is an EXTRACTED catalogue (mined offline) — not a runtime dependency.
+_COLLECTIONS_DIR = _SEED_DIR.parent / "collections"
+for _cdir in sorted(p for p in _COLLECTIONS_DIR.glob("*") if p.is_dir()):
+    register_collection_dir(_cdir)
 
 
 def load_seed() -> int:
