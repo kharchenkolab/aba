@@ -28,7 +28,7 @@ interface Props {
 export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [], jobs = [], onClose }: Props) {
   // Remember the last-selected tab per user: devs land on Console/Jobs,
   // everyone else stays on Context (the broadly-useful default).
-  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('aba.drawer.tab') as Tab) || 'context')
+  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('aba.drawer.tab') as Tab) || 'console')
   useEffect(() => { localStorage.setItem('aba.drawer.tab', tab) }, [tab])
 
   const tabs: Tab[] = ['console', 'jobs', 'context']
@@ -114,7 +114,7 @@ const LEVELS: { v: 1 | 2 | 3; label: string }[] = [
 ]
 function ConsoleTab({ log }: { log: LogEntry[] }) {
   const [level, setLevel] = useState<1 | 2 | 3>(
-    () => (Number(localStorage.getItem('aba.console.level')) as 1 | 2 | 3) || 2)
+    () => (Number(localStorage.getItem('aba.console.level')) as 1 | 2 | 3) || 3)
   useEffect(() => { localStorage.setItem('aba.console.level', String(level)) }, [level])
   const endRef = useRef<HTMLDivElement>(null)
   const shown = log.filter(e => e.level <= level)

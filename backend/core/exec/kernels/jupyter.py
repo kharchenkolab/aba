@@ -142,16 +142,35 @@ class JupyterKernelSession:
         self.last_used = time.time()
 
     def execute(self, code: str, *, cancel_token=None, timeout_s: int = 90) -> ExecResult:
+        from core.runtime import progress
         stdout: list[str] = []
         stderr: list[str] = []
         err_tb: Optional[str] = None
+        _last_emit = [0.0]   # throttle live progress to ~2/s so a chatty loop can't flood
+
+        def _emit_live(text: str):
+            # Surface the newest line of output as a tool_progress tick so long
+            # run_python work (downloads, training) is legible live instead of an
+            # opaque wait. Carriage returns = in-place meters (curl/tqdm) → take
+            # the latest segment. No-op when no progress sink is bound.
+            line = next((s.strip() for s in reversed(text.replace("\r", "\n").splitlines())
+                         if s.strip()), "")
+            if not line:
+                return
+            now = time.time()
+            if now - _last_emit[0] < 0.5:
+                return
+            _last_emit[0] = now
+            progress.emit(line[:200], phase="run")
 
         def hook(msg):
             nonlocal err_tb
             mtype = msg["header"]["msg_type"]
             content = msg.get("content", {})
             if mtype == "stream":
-                (stderr if content.get("name") == "stderr" else stdout).append(content.get("text", ""))
+                txt = content.get("text", "")
+                (stderr if content.get("name") == "stderr" else stdout).append(txt)
+                _emit_live(txt)   # stdout *and* stderr — progress bars often go to stderr
             elif mtype == "error":
                 err_tb = _ANSI.sub("", "\n".join(content.get("traceback", [])))
             elif mtype in ("execute_result", "display_data"):

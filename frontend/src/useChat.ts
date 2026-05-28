@@ -284,7 +284,17 @@ export function useChat(
             // Observability Console: capture every event (except chat-text
             // deltas) into a bounded tail.
             const _le = logFor(ev)
-            if (_le) setEventLog(prev => (prev.length > 400 ? prev.slice(-400) : prev).concat(_le))
+            if (_le) setEventLog(prev => {
+              const capped = prev.length > 400 ? prev.slice(-400) : prev
+              // Coalesce a run of progress ticks into a single updating line —
+              // a long download stays legible without flooding the capped buffer
+              // or evicting the surrounding tool_start/result history.
+              const last = capped[capped.length - 1]
+              if (_le.type === 'tool_progress' && last && last.type === 'tool_progress') {
+                return [...capped.slice(0, -1), _le]
+              }
+              return capped.concat(_le)
+            })
 
             if (ev.type === 'job_submitted') {
               // Jobs tab: upsert by id.
