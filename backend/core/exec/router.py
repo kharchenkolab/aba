@@ -42,15 +42,21 @@ class LocalRouter:
         data_locality: str = "local",
         override: Optional[str] = None,
     ) -> ExecutorChoice:
-        if override and override != "local":
-            # A forced non-local target is recorded but flagged — there is no
-            # backend to honor it yet, so approval/visibility is required.
+        # Explicit background request (agent flag) — honored directly.
+        if override == "background":
+            return ExecutorChoice(location="background",
+                                  rationale="explicit background request")
+        # A forced target other than local/background has no backend yet.
+        if override and override not in ("local", "background"):
+            return ExecutorChoice(location=override,
+                                  rationale=f"override → {override} (no backend yet; future seam)",
+                                  requires_approval=True)
+        # Threshold: a long estimated runtime auto-routes to the background
+        # job queue (the single-VM analog of HPC). Short runs stay synchronous.
+        runtime_min = float((estimate or {}).get("runtime_min") or 0)
+        threshold_min = float((policy or {}).get("background_threshold_min", 4))
+        if runtime_min and runtime_min >= threshold_min:
             return ExecutorChoice(
-                location=override,
-                rationale=f"user override → {override} (no backend yet; P5+)",
-                requires_approval=True,
-            )
-        return ExecutorChoice(
-            location="local",
-            rationale="single-VM: all work runs locally",
-        )
+                location="background",
+                rationale=f"est runtime {runtime_min:.0f}m ≥ {threshold_min:.0f}m → background")
+        return ExecutorChoice(location="local", rationale="short/synchronous")
