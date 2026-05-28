@@ -87,7 +87,7 @@ def register_artifacts_from_tool_result(
     res_meta["reproducible"] = "self_contained" if res_meta["execution_mode"] == "stateless" else "session"
 
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
-    if tool_name in ("run_python", "run_r") and plots:
+    if tool_name in ("run_python", "run_r", "run_nextflow") and plots:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         multi = len(plots) > 1
@@ -121,7 +121,7 @@ def register_artifacts_from_tool_result(
 
     # Output CSVs → table entities.
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
-    if tool_name in ("run_python", "run_r") and tables:
+    if tool_name in ("run_python", "run_r", "run_nextflow") and tables:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         for t in tables:

@@ -443,8 +443,8 @@ TOOL_SCHEMAS = [
             "Discover nf-core pipelines by intent (e.g. 'rna-seq quantification', "
             "'variant calling', 'methylation') when the analysis is a whole curated "
             "workflow rather than a single tool. Returns ranked pipelines; adopt one "
-            "with propose_capability(archetype='pipeline'). Note: running a pipeline "
-            "needs a Nextflow runtime that isn't wired yet (adoption is record-only)."
+            "with propose_capability(archetype='pipeline'), ensure_capability to "
+            "install nextflow, then run_nextflow to execute it."
         ),
         "input_schema": {
             "type": "object",
@@ -453,6 +453,32 @@ TOOL_SCHEMAS = [
                 "limit": {"type": "integer", "description": "Max results (default 8)."},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "run_nextflow",
+        "description": (
+            "Run a Nextflow / nf-core pipeline (e.g. 'nf-core/rnaseq', or "
+            "'nextflow-io/hello' to smoke-test). Installs nextflow on demand, runs "
+            "`nextflow run <pipeline>` in the project workspace, and returns the log + "
+            "output files. Use profile='test' for a quick canned run; pass pipeline "
+            "params via `params` (e.g. {input: samplesheet.csv, genome: GRCh38}). "
+            "Local execution only for now — large runs will move to HPC/remote later."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pipeline": {"type": "string",
+                             "description": "Pipeline ID, e.g. 'nf-core/rnaseq' or 'nextflow-io/hello'."},
+                "revision": {"type": "string", "description": "Pipeline revision/version (-r), optional."},
+                "profile": {"type": "string",
+                            "description": "Nextflow profile, e.g. 'test', 'docker', 'test,docker'."},
+                "params": {"type": "object",
+                           "description": "Pipeline --params as a flat object (key -> value)."},
+                "outdir": {"type": "string", "description": "Output directory (default: a scratch results dir)."},
+                "timeout_s": {"type": "integer", "description": "Max seconds (default 1800, cap 3600)."},
+            },
+            "required": ["pipeline"],
         },
     },
     {
@@ -1562,9 +1588,22 @@ def ensure_capability(input_: dict) -> dict:
         return {"status": "error", "name": cap.get("name"), "archetype": "mcp_server",
                 "note": f"Could not connect MCP server: {res.get('note')}"}
     if prov.get("pipeline"):
-        return {"status": "deferred", "name": cap.get("name"), "archetype": "pipeline",
-                "note": "Pipeline cataloged, but running it needs a Nextflow runtime "
-                        "that isn't wired yet."}
+        pl = prov["pipeline"]
+        engine = (pl.get("engine") or "nextflow").lower()
+        if engine != "nextflow":
+            return {"status": "deferred", "name": cap.get("name"), "archetype": "pipeline",
+                    "note": f"Pipeline engine '{engine}' isn't wired yet (only nextflow)."}
+        from core.exec import MaterializingExecutor, Provisioning
+        try:
+            MaterializingExecutor().materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}))
+        except Exception as e:  # noqa: BLE001
+            return {"status": "error", "name": cap.get("name"), "archetype": "pipeline",
+                    "note": f"Could not install nextflow: {e}"}
+        ref = pl.get("nf_core") or cap.get("name")
+        return {"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
+                "note": f"nextflow installed and on PATH. Run this pipeline with "
+                        f"run_nextflow(pipeline='{ref}', profile='test', ...). "
+                        f"(Large runs will route to HPC/remote later — local only for now.)"}
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 
@@ -1771,6 +1810,86 @@ def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
             "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
 
 
+def _nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
+                      params: dict | None = None, extra_args=None) -> list[str]:
+    """Build the `nextflow run …` argv. Pure function — unit-tested separately."""
+    cmd = ["nextflow", "run", pipeline]
+    if revision:
+        cmd += ["-r", str(revision)]
+    if profile:
+        cmd += ["-profile", str(profile)]
+    cmd += ["-ansi-log", "false", "--outdir", str(outdir)]
+    for k, v in (params or {}).items():
+        cmd += [f"--{k}", str(v)]
+    cmd += list(extra_args or [])
+    return cmd
+
+
+def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
+    """Run a Nextflow / nf-core pipeline. Installs nextflow on demand (conda),
+    runs `nextflow run <pipeline>` in the project workspace, returns logs +
+    output files. Local execution today; the ExecutionRouter seam is where
+    HPC/remote submission plugs in later (kernels.md / capdat_impl.md)."""
+    pipeline = (input_.get("pipeline") or "").strip()
+    if not pipeline:
+        return {"status": "error",
+                "note": "run_nextflow needs `pipeline` (e.g. 'nf-core/rnaseq' or 'nextflow-io/hello')."}
+
+    # Remote/HPC seam: many pipelines will eventually run off-box. That routing
+    # decision lives here; for now only local synchronous execution is wired.
+    if input_.get("remote") or input_.get("background"):
+        return {"status": "unsupported_location",
+                "note": "Remote/HPC nextflow execution isn't wired yet — only local. "
+                        "Re-run without remote/background (long pipelines will move to HPC later)."}
+
+    revision = input_.get("revision")
+    profile = input_.get("profile")
+    params = input_.get("params") or {}
+    timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
+    cancel_token = (ctx or {}).get("cancel_token")
+    project_id = projects.current() or "default"
+    run_id = (ctx or {}).get("run_id") or uuid.uuid4().hex
+    from core.data.workspace import scratch_dir
+    scratch = scratch_dir(str(project_id), f"nf-{run_id}")
+    outdir = input_.get("outdir") or str(Path(scratch) / "results")
+
+    from core.exec import MaterializingExecutor, Provisioning
+    ex = MaterializingExecutor()
+    try:
+        env = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}))
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "note": f"Could not install nextflow: {e}"}
+
+    cmd = _nextflow_command(pipeline, revision=revision, profile=profile,
+                            outdir=outdir, params=params)
+    res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s)
+    if res.timed_out:
+        return {"status": "error",
+                "note": f"nextflow run timed out ({timeout_s}s). Long pipelines should run "
+                        f"on HPC/remote (not yet wired)."}
+    if getattr(res, "cancelled", False):
+        return {"status": "cancelled", "note": "nextflow run cancelled by the user."}
+
+    from core.exec.run import harvest_artifacts
+    plots, tables, out_files = [], [], []
+    op = Path(outdir)
+    if op.exists():
+        plots, tables = harvest_artifacts(op)
+        out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
+    return {
+        "status": "ok" if res.returncode == 0 else "error",
+        "command": " ".join(cmd),
+        "returncode": res.returncode,
+        "stdout": (res.stdout or "")[:4000],
+        "stderr": (res.stderr or "")[:3000],
+        "outdir": outdir,
+        "outputs": out_files,
+        "plots": plots,
+        "tables": tables,
+        "execution_mode": "stateless",
+    }
+
+
 def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Clear the current thread's persistent Python session (kernels.md §6)."""
     from core.config import KERNEL_ENABLED
@@ -1825,6 +1944,7 @@ EXECUTORS = {
     "register_reference": register_reference_tool,
     "find_reference": find_reference_tool,
     "restart_kernel": restart_kernel_tool,
+    "run_nextflow": run_nextflow,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
