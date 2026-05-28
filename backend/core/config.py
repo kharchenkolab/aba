@@ -31,6 +31,11 @@ FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")
 # proposed capability immediately (solo/dev; every add still audited), "ask"
 # leaves it proposed for human review (multi-user seam).
 CAPABILITY_APPROVAL = os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+# Persistent kernels (kernels.md): conservative defaults — lazy start, short
+# idle TTL, small per-user cap with LRU eviction.
+KERNEL_ENABLED = os.environ.get("ABA_KERNEL_ENABLED", "1") not in ("0", "false", "")
+KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "900"))   # 15 min
+KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user
 
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -109,15 +109,20 @@ TOOL_SCHEMAS = [
     {
         "name": "run_python",
         "description": (
-            "Execute Python code in a sandboxed subprocess. "
-            "pandas, numpy, matplotlib, scanpy, anndata, leidenalg, and umap "
-            "are available. The data folder is available as the variable "
-            "DATA_DIR (a string path). Save any plots as plt.savefig('out.png') "
-            "or any .png name — they will be captured and displayed. Print any "
-            "text results you want returned. Default timeout is 90 seconds; for "
-            "scRNA-seq / bulk-RNA pipelines that need more, set timeout_s "
-            "explicitly (max 1800s). Long runs (or background=true) are routed "
-            "to a background job so the conversation isn't blocked."
+            "Execute Python in a PERSISTENT session for this investigation — like "
+            "a notebook. Variables, imports, and loaded data PERSIST across "
+            "run_python calls, so load files and compute expensive things (e.g. a "
+            "DESeq2 fit) ONCE and reuse them; do not re-read inputs or refit models "
+            "you already have in memory. The session can be reset (idle timeout or "
+            "via restart_kernel), which clears state — so save important results to "
+            "disk (to_parquet / np.save) and reload them rather than relying on "
+            "memory for anything costly to recompute. "
+            "pandas, numpy, matplotlib, scanpy, anndata are available; DATA_DIR is "
+            "the data folder path. Save plots as plt.savefig('out.png') — they're "
+            "captured. Set fresh=true for a one-off ISOLATED run that neither reads "
+            "nor changes the session (use for reproducible/self-contained code). "
+            "Set background=true for a long pipeline that shouldn't block the chat. "
+            "timeout_s caps a run (max 1800s)."
         ),
         "input_schema": {
             "type": "object",
@@ -139,6 +144,10 @@ TOOL_SCHEMAS = [
                 "estimated_runtime_min": {
                     "type": "number",
                     "description": "Optional: your estimate of how long this will take, in minutes. If it exceeds the background threshold (~4 min) the run is auto-routed to a background job. Leave unset for quick steps.",
+                },
+                "fresh": {
+                    "type": "boolean",
+                    "description": "Run one-off in a clean, isolated process instead of the persistent session — nothing from the session is available and nothing persists. Use for self-contained/reproducible code or a quick isolated check.",
                 },
                 "title": {
                     "type": "string",
@@ -464,6 +473,16 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "restart_kernel",
+        "description": (
+            "Clear this investigation's persistent Python session — all variables, "
+            "imports, and loaded data are reset, and the next run_python starts "
+            "fresh. Use when the session state is confused/corrupted, or when you "
+            "deliberately want a clean slate. Does not delete files on disk."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "find_reference",
         "description": (
             "Find an already-stored reference by organism/role (and optionally "
@@ -575,22 +594,25 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     plots/tables — the on_post_tool registration hook is unchanged. Scratch
     persists across the run's turns and is GC'd on a TTL; it is NOT deleted
     here, so the agent can revisit its working files."""
-    from core.exec.run import run_python_code
+    import time as _time
+    from core.exec.run import run_python_code, harvest_artifacts
     from core.exec import LocalRouter
+    from core.config import KERNEL_ENABLED
     from core import projects
 
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
+    thread_id = (ctx or {}).get("thread_id") or "default"
     biomni_path = str(Path(__file__).parent.parent / "biomni")
 
-    # P5: decide synchronous vs background. Explicit background flag forces it;
-    # otherwise the router auto-routes when the *estimated* runtime exceeds the
-    # threshold. timeout_s is a CEILING, not an estimate — using it to route
-    # would background fast work that merely set a defensive timeout, so routing
-    # keys on estimated_runtime_min (agent-provided now; ResourceEstimator-fed
-    # later). Background returns a deferred result the guide loop resumes from.
+    # Lane selection (kernels.md §7): background > fresh > interactive.
+    # - background: stateless job, deferred result the guide loop resumes from.
+    # - fresh: stateless one-shot subprocess (isolated/reproducible; no session).
+    # - interactive (default): the thread's persistent kernel (state persists).
+    # timeout_s is a CEILING, not an estimate; routing to background keys on the
+    # agent's estimated_runtime_min so a defensive timeout doesn't mis-background.
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
@@ -606,6 +628,30 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                     f"I'll continue when it finishes.",
         }
 
+    # Interactive persistent kernel — the default. State persists across calls
+    # within this thread, so the agent reuses loaded data / fitted models.
+    if KERNEL_ENABLED and not input_.get("fresh"):
+        try:
+            from core.exec.kernels import get_pool
+            from core.data.workspace import scratch_dir
+            cwd = scratch_dir(str(project_id), f"thread-{thread_id}")   # persistent per thread
+            start_ts = _time.time()
+            sess = get_pool().get_or_start(str(thread_id), "python", cwd=str(cwd))
+            res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
+            if res.timed_out:
+                return {"error": f"Code execution timed out ({timeout_s}s limit)"}
+            if res.cancelled:
+                return {"status": "cancelled",
+                        "note": f"Run was cancelled by the user "
+                                f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+            plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
+            return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+                    "returncode": res.returncode, "plots": plots, "tables": tables}
+        except Exception as e:  # noqa: BLE001
+            # Never strand the agent on a kernel hiccup — fall back to stateless.
+            print(f"[run_python] kernel path failed, falling back to one-shot: {e}")
+
+    # Stateless one-shot (fresh=true, kernel disabled, or kernel fallback).
     run_id = ((ctx or {}).get("run_id")
               or getattr(cancel_token, "run_id", None)
               or uuid.uuid4().hex)
@@ -1292,6 +1338,18 @@ def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
             "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
 
 
+def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Clear the current thread's persistent Python session (kernels.md §6)."""
+    from core.config import KERNEL_ENABLED
+    if not KERNEL_ENABLED:
+        return {"status": "noop", "note": "Persistent sessions are disabled; run_python is already stateless."}
+    from core.exec.kernels import get_pool
+    thread_id = (ctx or {}).get("thread_id") or "default"
+    ok = get_pool().restart(str(thread_id), "python")
+    return {"status": "restarted" if ok else "no_active_session",
+            "note": "Python session cleared; variables reset. Next run_python starts fresh."}
+
+
 def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Find a stored reference by organism/role before fetching/building (P4)."""
     from core.data import find_reference as _find, list_references as _list
@@ -1326,6 +1384,7 @@ EXECUTORS = {
     "fetch_ensembl": fetch_ensembl,
     "register_reference": register_reference_tool,
     "find_reference": find_reference_tool,
+    "restart_kernel": restart_kernel_tool,
 }
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:

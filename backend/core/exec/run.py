@@ -60,17 +60,7 @@ def run_python_code(
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
 
-    plots = []
-    for png in scratch.glob("*.png"):
-        dest_name = f"{uuid.uuid4().hex}.png"
-        shutil.move(str(png), str(ARTIFACTS_DIR / dest_name))
-        plots.append({"url": f"/artifacts/{dest_name}", "original_name": png.name})
-    tables = []
-    for csv in scratch.glob("*.csv"):
-        dest_name = f"{uuid.uuid4().hex}.csv"
-        shutil.move(str(csv), str(ARTIFACTS_DIR / dest_name))
-        tables.append({"url": f"/artifacts/{dest_name}", "original_name": csv.name})
-
+    plots, tables = harvest_artifacts(scratch)
     return {
         "stdout": (result.stdout or "")[:4000],
         "stderr": (result.stderr or "")[:2000],
@@ -78,3 +68,27 @@ def run_python_code(
         "plots": plots,
         "tables": tables,
     }
+
+
+def harvest_artifacts(scratch: Path, since_ts: float = 0.0) -> tuple[list, list]:
+    """Copy kept outputs (*.png/*.csv) from a working dir into the artifact
+    store, returning (plots, tables). `since_ts` harvests only files
+    created/modified at-or-after that time — needed for a PERSISTENT kernel cwd
+    where earlier cells' files remain (avoids re-harvesting them). Copies (not
+    moves) so the agent can still read its own output file in a later cell."""
+    scratch = Path(scratch)
+    plots, tables = [], []
+    for src, bucket, ext in (
+        (scratch.glob("*.png"), plots, "png"),
+        (scratch.glob("*.csv"), tables, "csv"),
+    ):
+        for f in src:
+            try:
+                if f.stat().st_mtime < since_ts:
+                    continue
+            except OSError:
+                continue
+            dest_name = f"{uuid.uuid4().hex}.{ext}"
+            shutil.copy2(str(f), str(ARTIFACTS_DIR / dest_name))
+            bucket.append({"url": f"/artifacts/{dest_name}", "original_name": f.name})
+    return plots, tables
