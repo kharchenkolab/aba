@@ -44,6 +44,17 @@ def main() -> int:
     p = normalize_plan({"title": "T", "steps": '[{"title":"Load"},{"title":"Run"}]'})
     check("JSON-string steps parsed", [s.title for s in p.steps] == ["Load", "Run"])
 
+    # 2b. steps as a PYTHON-REPR string (single quotes — json.loads rejects, so
+    # before the ast fallback this line-split into garbled one-line "steps").
+    p = normalize_plan({"title": "T", "steps":
+        '''[{"title": "QC", "expected_outputs": ['adata.layers["counts"] preserved']},
+            {"title": "Cluster"}]'''})
+    check("python-repr steps string parsed (not line-split)",
+          [s.title for s in p.steps] == ["QC", "Cluster"], str([s.title for s in p.steps]))
+    check("python-repr inner step value preserved",
+          p.steps[0].expected_outputs == ['adata.layers["counts"] preserved'],
+          str(p.steps[0].expected_outputs))
+
     # 3. steps crammed (leaked function-call XML) into `assumptions`, steps empty
     p = validate_plan(normalize_plan({
         "title": "Pagoda2 plan", "summary": "process two samples",
