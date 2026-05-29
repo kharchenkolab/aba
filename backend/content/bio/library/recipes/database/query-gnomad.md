@@ -4,7 +4,7 @@ description: Query gnomAD for population variant frequencies and constraint metr
 when_to_use: When retrieving allele frequencies, variant consequence, or gene constraint scores from gnomAD
 requires_tools: [run_python]
 capabilities_needed: [requests]
-keywords: [gnomAD, allele frequency, population genetics, variant, constraint, pLoF, missense, GRCh38]
+keywords: [gnomAD, allele frequency, population genetics, variant, rsID, SNP, constraint, pLoF, missense, GRCh38, population frequency, populations, minor allele frequency, MAF, how common, variant consequence]
 produces: [variant records, allele frequencies, constraint metrics, gene summaries]
 domain: database
 source: biomni:tool/database.py::query_gnomad

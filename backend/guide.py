@@ -156,6 +156,35 @@ def _ensure_tool_pair_completeness(messages: list) -> list:
     return repaired
 
 
+_CONFIRM_WORDS = {
+    "yes", "y", "go", "ok", "okay", "sure", "proceed", "continue", "do it", "go ahead",
+    "yes go ahead", "yes please", "yep", "please do", "run it", "sounds good", "go for it",
+    "yes, go ahead", "do that", "please proceed",
+}
+
+
+def _effective_intent(user_text: str, history: list) -> str:
+    """The intent used to rank the in-prompt recipe slice. On a resume/confirmation
+    ('Yes, go ahead') the literal user_text carries no task signal — fall back to
+    the last substantive user message so the slice still reflects the real task
+    (otherwise the resume turn gets an irrelevant slice). Normal turns return
+    user_text unchanged."""
+    t = (user_text or "").strip()
+    if len(t) > 40 or t.lower().rstrip(".!").strip() not in _CONFIRM_WORDS:
+        return user_text
+    for m in reversed(history or []):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        txt = c if isinstance(c, str) else " ".join(
+            b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
+        ) if isinstance(c, list) else ""
+        txt = (txt or "").strip()
+        if len(txt) > 40 and txt.lower().rstrip(".!").strip() not in _CONFIRM_WORDS:
+            return txt
+    return user_text
+
+
 def _dump_turn_context(run_id, *, user_text, system, history, active_tools,
                        model, thread_id, focus_entity_id) -> None:
     """Best-effort: persist the EXACT context the agent receives this turn (the
@@ -455,7 +484,8 @@ async def stream_response(
     )
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
-    system = focus_text + thread_text + build_system(active_tools, role=guide_role, intent=user_text)
+    system = focus_text + thread_text + build_system(
+        active_tools, role=guide_role, intent=_effective_intent(user_text, history))
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
                        focus_entity_id=focus_entity_id)

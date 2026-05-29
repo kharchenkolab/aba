@@ -83,9 +83,23 @@ def _md(name: str) -> Callable[[list[dict]], str]:
     return lambda _tools: _prompt(name)
 
 
+# Only the agent-actionable essentials go in every prompt. The full run/result/
+# thread/finding directory layout (the bulk of conventions.md) is applied
+# automatically by the materializer when entities are registered — it's not
+# something the agent codes — so injecting all ~115 lines every turn was waste.
+_CONVENTIONS_ESSENTIALS = (
+    "### File conventions (essentials)\n"
+    "- Generated files: snake_case + descriptive (`qc_n_genes_per_cell.png`, not `plot.png`); "
+    "no spaces/parens; **no dates in names** (the entity's created_at carries the date).\n"
+    "- Plots: 150 DPI (300 for publication); colorblind-safe palettes (viridis/cividis); "
+    "label axes; save each plot to its own descriptively-named PNG.\n"
+    "- The run/result/thread/finding directory layout is applied automatically when entities are "
+    "registered — you don't build it by hand."
+)
+
+
 def _conventions(_tools: list[dict]) -> str:
-    body = _bio_doc("conventions.md")
-    return ("### File conventions\n\n" + body) if body else ""
+    return _CONVENTIONS_ESSENTIALS
 
 
 def _skills_index(_tools: list[dict]) -> str:

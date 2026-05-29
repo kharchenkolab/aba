@@ -1536,12 +1536,23 @@ def list_capabilities_tool(input_: dict) -> dict:
     else:
         from core.catalog import list_capabilities as _list
         caps = _list(query=None, tags=tags)
-    return {"capabilities": [
-        {"name": c.get("name"), "version": c.get("version"),
-         "archetype": c.get("archetype"), "summary": c.get("summary"),
-         "domain_tags": c.get("domain_tags"), "status": c.get("status")}
-        for c in caps
-    ]}
+    out = []
+    for c in caps:
+        e = {"name": c.get("name"), "version": c.get("version"),
+             "archetype": c.get("archetype"), "summary": c.get("summary"),
+             "domain_tags": c.get("domain_tags"), "status": c.get("status")}
+        # Mark mined reference entries (e.g. extracted from biomni) so the agent
+        # doesn't reach for one as a runnable tool — ensure_capability can't
+        # install it; it's know-how to read (read_capability → source_ref), or a
+        # cue to find a real maintained library.
+        if c.get("reference"):
+            e["reference"] = True
+            e["runnable"] = False
+            e["note"] = ("REFERENCE ONLY (mined know-how) — NOT installable via "
+                         "ensure_capability. read_capability for its source_ref/idioms, "
+                         "or find a runnable library/CLI instead (search_pypi/search_bioconda).")
+        out.append(e)
+    return {"capabilities": out}
 
 
 def search_skills_tool(input_: dict) -> dict:
