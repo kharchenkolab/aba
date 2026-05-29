@@ -1948,10 +1948,14 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         res = rexec.r_install(rp.get("source", "cran"), rp.get("package") or cap.get("name"),
                               project_id=pid, library=libname, ref=rp.get("ref"), cancel_token=_ct)
         if res.get("status") == "ready":
-            via = " (recompiled from source)" if res.get("source_fallback") else ""
+            if res.get("via") == "conda":
+                note = (f"Installed as a Bioconductor binary into the shared R environment; "
+                        f"use library({libname}) in run_r.")
+            else:
+                via = " (recompiled from source)" if res.get("source_fallback") else ""
+                note = f"Installed into the project R library{via}; use library({libname}) in run_r."
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname,
-                    "note": f"Installed into the project R library{via}; use library({libname}) in run_r."}
+                    "library": libname, "note": note}
         # Surface the actionable diagnostic (incl. missing-system-lib hint) so the
         # agent can self-correct (conda-install a dep + retry) or ask the user.
         out = {"status": "error", "name": cap.get("name"), "archetype": "r_package",

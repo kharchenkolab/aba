@@ -180,6 +180,39 @@ _SYS_LIB_CONDA = {
 }
 
 
+def _bioc_conda_spec(package: str) -> str:
+    """bioconda mirrors Bioconductor as 'bioconductor-<name lowercased>'
+    (DESeq2 → bioconductor-deseq2, edgeR → bioconductor-edger, limma → bioconductor-limma)."""
+    return "bioconductor-" + (package or "").strip().lower()
+
+
+def install_bioconductor_conda(package: str, library: str, *, project_id: Optional[str] = None,
+                               cancel_token=None) -> Optional[dict]:
+    """Install a Bioconductor package as a prebuilt CONDA BINARY into the shared
+    tools env (the env's R finds it on .libPaths()), avoiding the slow + fragile
+    BiocManager source compile of the whole dependency tree — the XVector-style
+    failure that blocks heavy/popular packages (DESeq2/limma/edgeR). Returns a
+    ready dict on success, or None if the binary isn't on bioconda / didn't load,
+    so the caller falls back to the BiocManager source path."""
+    from core.exec.mamba import run_micromamba, installed_packages
+    from core.runtime import progress
+    spec = _bioc_conda_spec(package)
+    tenv = tools_env()
+    if spec not in installed_packages(tenv):
+        progress.emit(f"conda: installing {spec} (Bioconductor binary — avoids source compile)…",
+                      phase="conda")
+        try:
+            verb = "install" if (tenv / "conda-meta").exists() else "create"
+            run_micromamba([verb, "-y", "-p", str(tenv), "-c", "bioconda", "-c", "conda-forge", spec],
+                           cancel_token=cancel_token)
+        except Exception:  # noqa: BLE001 — not on bioconda / solve failed → caller falls back to source
+            return None
+    if r_has_package(library, project_id=project_id):
+        return {"status": "ready", "package": package, "source": "bioconductor",
+                "library": library, "via": "conda"}
+    return None
+
+
 def r_install(source: str, package: str, *, project_id: str, library: Optional[str] = None,
               ref: Optional[str] = None, timeout_s: int = 1800, cancel_token=None) -> dict:
     """Native install (CRAN / Bioconductor / GitHub) into the project R library,
@@ -194,6 +227,16 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
     ensure_r_runtime(cancel_token=cancel_token)
     lib = project_r_lib(project_id)
     libname = library or (package.split("/")[-1] if source == "github" else package)
+
+    # Heavy/popular Bioconductor packages (DESeq2/limma/edgeR + their dep trees)
+    # are fragile to source-compile (e.g. XVector → 'make Error 1'); prefer the
+    # prebuilt conda binary from bioconda, falling back to BiocManager source only
+    # if it isn't available there.
+    if source == "bioconductor":
+        cres = install_bioconductor_conda(package, libname, project_id=project_id,
+                                          cancel_token=cancel_token)
+        if cres is not None:
+            return cres
 
     from core.runtime import progress
 

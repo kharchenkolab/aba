@@ -184,6 +184,37 @@ def test_missing_lib_autorecover():
         rexec.ensure_r_runtime, rexec.ensure_r_base, rexec._run_rscript, rexec.r_has_package = orig
 
 
+def test_bioconductor_conda_route():
+    print("bioconductor r_package → conda binary first, BiocManager source fallback")
+    import types
+    check("bioc conda spec lowercases (DESeq2)", rexec._bioc_conda_spec("DESeq2") == "bioconductor-deseq2",
+          rexec._bioc_conda_spec("DESeq2"))
+    check("edgeR → bioconductor-edger", rexec._bioc_conda_spec("edgeR") == "bioconductor-edger")
+    orig = (rexec.ensure_r_runtime, rexec.install_bioconductor_conda, rexec._run_rscript, rexec.r_has_package)
+    rexec.ensure_r_runtime = lambda cancel_token=None: None
+    calls = {"conda": 0, "biocmgr": 0}
+    try:
+        # conda binary available → used; BiocManager source NOT touched
+        rexec.install_bioconductor_conda = lambda pkg, lib, project_id=None, cancel_token=None: (
+            calls.__setitem__("conda", calls["conda"] + 1),
+            {"status": "ready", "package": pkg, "source": "bioconductor", "library": lib, "via": "conda"})[1]
+        rexec._run_rscript = lambda expr, t, cancel_token=None: (
+            calls.__setitem__("biocmgr", calls["biocmgr"] + 1),
+            types.SimpleNamespace(returncode=0, stdout="", stderr=""))[1]
+        rexec.r_has_package = lambda *a, **k: True
+        r = rexec.r_install("bioconductor", "DESeq2", project_id="t", library="DESeq2")
+        check("bioc → conda binary (ready, via=conda)", r.get("status") == "ready" and r.get("via") == "conda", str(r))
+        check("conda attempted", calls["conda"] == 1)
+        check("BiocManager source NOT used when conda works", calls["biocmgr"] == 0)
+        # conda binary unavailable → fall back to BiocManager source
+        rexec.install_bioconductor_conda = lambda *a, **k: None
+        r2 = rexec.r_install("bioconductor", "SomeBiocPkg", project_id="t", library="SomeBiocPkg")
+        check("conda miss → BiocManager source fallback", calls["biocmgr"] >= 1 and r2.get("status") == "ready", str(r2))
+        check("cran does NOT take the conda-bioc path", rexec.r_install("cran", "praise", project_id="t").get("via") != "conda")
+    finally:
+        rexec.ensure_r_runtime, rexec.install_bioconductor_conda, rexec._run_rscript, rexec.r_has_package = orig
+
+
 def test_propose():
     print("propose r_package")
     # Use a synthetic name — real bioc packages (DESeq2) are now seeded in the catalog.
@@ -287,6 +318,7 @@ def main() -> int:
     test_verify_and_source_fallback()
     test_runtime_core_deps()
     test_missing_lib_autorecover()
+    test_bioconductor_conda_route()
     test_propose()
     test_ensure_routing()
     test_read_capability()

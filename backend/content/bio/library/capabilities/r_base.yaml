@@ -18,5 +18,6 @@ packages:
   - r-seurat
   - bioconductor-deseq2
   - bioconductor-limma
+  - bioconductor-edger
   - r-ggplot2
   - r-tidyverse
