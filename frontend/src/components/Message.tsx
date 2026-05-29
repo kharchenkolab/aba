@@ -38,27 +38,93 @@ function ErrorLine({ text, detail, onRetry }: { text: string; detail?: string; o
   )
 }
 
+// Human-friendly tool labels for the chat (biologists shouldn't see raw
+// function names like `ensure_capability`). Anything unmapped falls back to a
+// de-underscored phrase rather than snake_case.
+function humanize(name: string) {
+  return name.replace(/_/g, ' ').replace(/\b\w/, c => c.toUpperCase())
+}
 function toolDoneLabel(name: string) {
   const labels: Record<string, string> = {
     list_data_files: 'Listed data files',
     read_csv_info: 'Read CSV',
     run_python: 'Ran Python',
+    run_r: 'Ran R',
+    run_nextflow: 'Ran pipeline',
+    ensure_capability: 'Tools ready',
+    list_capabilities: 'Checked available tools',
+    read_capability: 'Read tool details',
+    inspect_package: 'Inspected package',
+    search_pypi: 'Searched packages',
+    search_bioconda: 'Searched bioconda',
+    search_nf_core: 'Searched pipelines',
+    search_mcp_registry: 'Searched tool servers',
+    propose_capability: 'Added a tool',
+    search_skills: 'Looked up methods',
+    read_skill: 'Read the recipe',
+    open_run: 'Started a run',
+    close_run: 'Closed the run',
+    register_dataset: 'Registered dataset',
+    pin_entity: 'Pinned',
+    promote_to_result: 'Saved result',
+    create_finding: 'Recorded finding',
+    create_claim: 'Recorded claim',
+    annotate_entity: 'Updated entity',
+    list_entities: 'Listed items',
+    read_memory: 'Recalled a note',
+    write_memory: 'Saved a note',
+    fetch_url: 'Fetched data',
+    fetch_ensembl: 'Queried Ensembl',
+    lookup_sra_runinfo: 'Looked up SRA runs',
+    register_reference: 'Registered reference',
+    find_reference: 'Found reference',
+    restart_kernel: 'Restarted session',
     get_provenance: 'Traced provenance',
     get_dependents: 'Found dependents',
     create_scenario: 'Created scenario',
   }
-  return labels[name] ?? name
+  return labels[name] ?? humanize(name)
 }
 function toolRunningLabel(name: string) {
   const labels: Record<string, string> = {
     list_data_files: 'listing data files',
     read_csv_info: 'reading CSV',
     run_python: 'running Python',
+    run_r: 'running R',
+    run_nextflow: 'running pipeline',
+    ensure_capability: 'setting up tools',
+    list_capabilities: 'checking available tools',
+    read_capability: 'reading tool details',
+    inspect_package: 'inspecting package',
+    search_pypi: 'searching packages',
+    search_bioconda: 'searching bioconda',
+    search_nf_core: 'searching pipelines',
+    search_mcp_registry: 'searching tool servers',
+    propose_capability: 'adding a tool',
+    search_skills: 'looking up methods',
+    read_skill: 'reading the recipe',
+    open_run: 'starting a run',
+    close_run: 'closing the run',
+    register_dataset: 'registering dataset',
+    pin_entity: 'pinning',
+    promote_to_result: 'saving result',
+    create_finding: 'recording finding',
+    create_claim: 'recording claim',
+    annotate_entity: 'updating entity',
+    list_entities: 'listing items',
+    read_memory: 'recalling a note',
+    write_memory: 'saving a note',
+    fetch_url: 'fetching data',
+    fetch_ensembl: 'querying Ensembl',
+    lookup_sra_runinfo: 'looking up SRA runs',
+    register_reference: 'registering reference',
+    find_reference: 'finding reference',
+    restart_kernel: 'restarting session',
     get_provenance: 'tracing provenance',
     get_dependents: 'finding dependents',
     create_scenario: 'creating scenario',
   }
-  return labels[name] ?? name
+  return labels[name] ?? humanize(name).toLowerCase()
 }
 
 /**
