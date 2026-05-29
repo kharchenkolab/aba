@@ -157,8 +157,9 @@ export default function FileBrowser({
   const [listPath, setListPath] = useState('')
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<1 | -1>(1)
-  // Resizable Type/Size columns (list/table layout). Name flexes to fill.
-  const [colW, setColW] = useState<{ type: number; size: number }>({ type: 130, size: 78 })
+  // Resizable Name/Type/Size columns (list/table layout). When the total exceeds
+  // the panel the list scrolls horizontally, so long file names are never clipped.
+  const [colW, setColW] = useState<{ name: number; type: number; size: number }>({ name: 300, type: 130, size: 78 })
   // Optimistic pinned state — pinning creates a separate entity (the file node
   // isn't marked), so we track clicked paths locally to show a filled-red pin.
   const [pinned, setPinned] = useState<Set<string>>(new Set())
@@ -222,12 +223,14 @@ export default function FileBrowser({
     if (sortKey === k) setSortDir(d => (d === 1 ? -1 : 1))
     else { setSortKey(k); setSortDir(1) }
   }
-  function startResize(col: 'type' | 'size', e: React.MouseEvent) {
+  function startResize(col: 'name' | 'type' | 'size', e: React.MouseEvent) {
     e.preventDefault(); e.stopPropagation()
     const startX = e.clientX; const startW = colW[col]
+    const maxW = col === 'name' ? 900 : 360
     const onMove = (ev: MouseEvent) => {
-      const w = Math.max(48, Math.min(360, startW + (col === 'size' ? (startX - ev.clientX) : (ev.clientX - startX))))
-      setColW(prev => ({ ...prev, [col]: w }))
+      // 'size' is rightmost (drag left widens); name/type widen rightward.
+      const delta = col === 'size' ? (startX - ev.clientX) : (ev.clientX - startX)
+      setColW(prev => ({ ...prev, [col]: Math.max(48, Math.min(maxW, startW + delta)) }))
     }
     const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
@@ -382,7 +385,11 @@ export default function FileBrowser({
   }
 
   const sortCaret = (k: SortKey) => sortKey === k ? (sortDir === 1 ? ' ▲' : ' ▼') : ''
-  const bodyStyle = { ['--col-type' as string]: `${colW.type}px`, ['--col-size' as string]: `${colW.size}px` }
+  const bodyStyle = {
+    ['--col-name' as string]: `${colW.name}px`,
+    ['--col-type' as string]: `${colW.type}px`,
+    ['--col-size' as string]: `${colW.size}px`,
+  }
 
   const viewToggle = (
     <div className="files__view-toggle" role="tablist" aria-label="View mode">
@@ -410,9 +417,12 @@ export default function FileBrowser({
         {notice}
       </div>
 
+      <div className="files__listwrap" style={view === 'list' ? bodyStyle : undefined}>
       {view === 'list' && (
-        <div className={`files__column-head files__column-head--${variant}`} style={bodyStyle} aria-hidden="false">
-          <button className="files__col files__col--name files__col--sortable" onClick={() => toggleSort('name')}>Name{sortCaret('name')}</button>
+        <div className={`files__column-head files__column-head--${variant}`} aria-hidden="false">
+          <button className="files__col files__col--name files__col--sortable" onClick={() => toggleSort('name')}>
+            Name{sortCaret('name')}<span className="files__col-grip" onMouseDown={e => startResize('name', e)} />
+          </button>
           <button className="files__col files__col--type files__col--sortable" onClick={() => toggleSort('type')}>
             Type{sortCaret('type')}<span className="files__col-grip" onMouseDown={e => startResize('type', e)} />
           </button>
@@ -423,7 +433,7 @@ export default function FileBrowser({
         </div>
       )}
 
-      <div className={`files__body files__body--${view}`} style={view === 'list' ? bodyStyle : undefined}>
+      <div className={`files__body files__body--${view}`}>
         {error && <div className="files__error">Couldn't load files: {error}</div>}
         {loading && !root && <div className="files__empty">Loading…</div>}
         {!loading && root && (root.children?.length ?? 0) === 0 && (
@@ -438,6 +448,7 @@ export default function FileBrowser({
         {view === 'list' && listEntries.length === 0 && root && (
           <div className="files__empty">{isSearching ? `No files match "${query}".` : 'This folder is empty.'}</div>
         )}
+      </div>
       </div>
 
       <div className="files__footer">

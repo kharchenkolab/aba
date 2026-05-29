@@ -332,6 +332,18 @@
 .files__column-head .files__col--type, .files__body--list .files__type { width: var(--col-type, 110px); }
 .files__column-head .files__col--size, .files__body--list .files__size { width: var(--col-size, 60px); }
 
+/* List header + body share one wrapper; in wide mode it scrolls HORIZONTALLY so
+   a resized/long Name column reveals via scroll (header + rows move together)
+   rather than clipping. */
+.files__listwrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.files-view--wide .files__listwrap { overflow-x: auto; }
+/* Wide list: Name is a fixed, RESIZABLE width (drag its grip); rows/header grow
+   to content so the wrapper can scroll. */
+.files-view--wide .files__column-head .files__col--name,
+.files-view--wide .files__body--list .files__name { width: var(--col-name, 300px); flex: 0 0 auto; }
+.files-view--wide .files__column-head,
+.files-view--wide .files__row--list { min-width: max-content; }
+
 /* Wide variant (Run middle-column embed): always show columns + Type/Size,
    regardless of the container query the rail uses. */
 .files-view--wide .files__type, .files-view--wide .files__size { display: inline-block; }
@@ -340,6 +352,8 @@
 .files-view--wide .files__view-label { display: inline; }
 .files-view--wide .files__action { opacity: 0.45; }
 .files-view--wide .files__row:hover .files__action { opacity: 1; }
+/* The Name header grip needs the header cell to be a positioning context. */
+.files__col--name { position: relative; }
 
 /* Working / scratch tier (ephemeral) — uncurated until promoted to a dataset. */
 .files__row--ephemeral .files__name-main,

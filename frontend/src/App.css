@@ -31,7 +31,7 @@
 }
 .canvas-title {
   font-size: 15px; font-weight: 600; color: var(--text);
-  display: flex; align-items: center; gap: 8px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .canvas-title__type {

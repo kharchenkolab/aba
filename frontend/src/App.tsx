@@ -94,6 +94,7 @@ function EditableThreadTitle({ thread, onRenamed }: {
       <span className="canvas-title__type">thread</span>
       {editing ? (
         <input className="canvas-title__input" autoFocus value={draft}
+               onFocus={e => e.currentTarget.select()}
                onChange={e => setDraft(e.target.value)} onBlur={save}
                onKeyDown={e => {
                  if (e.key === 'Enter') save()
