@@ -198,3 +198,23 @@ capabilities:
     source: bioconductor
     scope: system
     status: published
+
+  - name: limma
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, microarray, differential-expression, bioconductor, limma, voom, contrasts, statistics]
+    summary: Bioconductor limma — linear models + empirical-Bayes DE for RNA-seq (voom) and microarray/normalized data; flexible custom contrasts, blocking/repeated measures, fold-change-thresholded tests. See the limma-voom recipe.
+    provisioning: {r: {source: bioconductor, package: limma, library: limma}}
+    source: bioconductor
+    scope: system
+    status: published
+
+  - name: edgeR
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, differential-expression, bioconductor, edger, normalization, counts, statistics]
+    summary: Bioconductor edgeR — count-based RNA-seq DE (negative-binomial); provides DGEList, filterByExpr, and TMM normalization (calcNormFactors) used by the limma-voom path. See the limma-voom recipe.
+    provisioning: {r: {source: bioconductor, package: edgeR, library: edgeR}}
+    source: bioconductor
+    scope: system
+    status: published
