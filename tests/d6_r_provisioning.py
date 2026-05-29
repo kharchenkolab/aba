@@ -186,12 +186,13 @@ def test_missing_lib_autorecover():
 
 def test_propose():
     print("propose r_package")
-    r1 = propose_capability_tool({"name": "DESeq2", "archetype": "r_package", "source": "bioconductor"})
+    # Use a synthetic name — real bioc packages (DESeq2) are now seeded in the catalog.
+    r1 = propose_capability_tool({"name": "DESeqTestPkg", "archetype": "r_package", "source": "bioconductor"})
     check("bioc r_package approved", r1.get("status") == "approved" and r1.get("archetype") == "r_package", str(r1))
     from core.catalog import resolve_capability
-    cap = resolve_capability("DESeq2")
+    cap = resolve_capability("DESeqTestPkg")
     rprov = (cap.get("provisioning") or {}).get("r") or {}
-    check("provisioning.r stored", rprov.get("source") == "bioconductor" and rprov.get("package") == "DESeq2", str(rprov))
+    check("provisioning.r stored", rprov.get("source") == "bioconductor" and rprov.get("package") == "DESeqTestPkg", str(rprov))
     # github: library defaults to the repo segment
     propose_capability_tool({"name": "presto", "archetype": "r_package", "source": "github",
                              "package": "immunogenomics/presto"})

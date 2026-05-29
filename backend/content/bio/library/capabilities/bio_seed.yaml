@@ -188,3 +188,13 @@ capabilities:
     source: github
     scope: system
     status: published
+
+  - name: DESeq2
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, differential-expression, bioconductor, deseq2, statistics]
+    summary: Bioconductor DESeq2 — the authoritative bulk RNA-seq differential-expression method (negative-binomial GLM; Wald + LRT, shrinkage, multi-factor designs, custom contrasts). See the deseq2-r recipe.
+    provisioning: {r: {source: bioconductor, package: DESeq2, library: DESeq2}}
+    source: bioconductor
+    scope: system
+    status: published

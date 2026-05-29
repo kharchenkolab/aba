@@ -61,8 +61,9 @@ def test_bm25_unit():
 
 def test_skill_intent_search():
     print("skill intent search")
-    check("DE query -> bulk-rnaseq-de",
-          search_skills("differential expression between treated and control")[0].name == "bulk-rnaseq-de")
+    check("DE query -> a DE recipe (pydeseq2 or R DESeq2)",
+          search_skills("bulk rna-seq differential expression of counts, treated vs control")[0].name
+          in ("bulk-rnaseq-de", "deseq2-r"))
     check("single-cell query -> scrna-qc-clustering",
           search_skills("cluster single cell data and make a umap")[0].name == "scrna-qc-clustering")
     # keyword recall: 'volcano' is only in keywords, not the description
