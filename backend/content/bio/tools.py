@@ -1858,6 +1858,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
     if prov.get("pip"):
+        # Base-provided libs (scanpy/anndata/…) already live in the .venv scientific
+        # stack. A `pip --target` reinstall would redundantly pull them + their deps
+        # into the overlay — so when the seed declares an import_name that's already
+        # importable, ensuring is a no-op. (Only trusts an explicit import_name, so
+        # we never short-circuit a package that merely shares a base dep.)
+        import importlib.util as _ilu
+        _imp0 = cap.get("import_name")
+        if _imp0 and _ilu.find_spec(_imp0) is not None:
+            return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                    "archetype": cap.get("archetype"), "import_name": _imp0,
+                    "note": f"Already available in the base environment; `import {_imp0}` works in run_python."}
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)

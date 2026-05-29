@@ -1,7 +1,7 @@
 ---
 name: bulk-rnaseq-de
 description: Bulk RNA-seq differential expression with pydeseq2 (Python) — designs, covariate control, and contrasts. Wald-only (no LRT).
-when_to_use: Bulk RNA-seq RAW counts + sample table; want DE between conditions in a PYTHON session (scanpy/anndata already in play) or when the user wants Python / no R. If the question needs the likelihood-ratio test, or the session is R-based, or the user asks for DESeq2/R, use the deseq2-r recipe instead.
+when_to_use: Bulk RNA-seq RAW counts + sample table; want DE between conditions in a PYTHON session (scanpy/anndata already in play) or when the user wants Python / no R. If the question needs the likelihood-ratio test, or the session is R-based, or the user asks for DESeq2/R, use the deseq2-r recipe instead. SCOPE — bulk or pseudobulk-aggregated counts ONLY; NOT for direct per-cell scRNA-seq DE.
 requires_tools: [run_python]
 capabilities_needed: [pydeseq2, adjusttext]
 keywords: [pydeseq2, DESeq2, bulk RNA-seq, differential expression, contrast, covariate, batch, log2 fold change, volcano, Python]
@@ -17,6 +17,13 @@ pydeseq2 is a Python re-implementation of DESeq2 — convenient in a Python-nati
 session, no R needed. **It is Wald-only — there is no LRT.** If the question
 needs the likelihood-ratio test, or the session is already in R, or the user
 asks for DESeq2/R, use the **`deseq2-r`** recipe (authoritative, fuller feature set).
+
+> **Bulk / pseudobulk only.** DESeq2-family methods model gene-level **negative-binomial counts
+> per sample**. For single-cell data they apply ONLY to **pseudobulk** (sum raw counts per
+> sample × cell type — see **`bp-differential-expression`**), never to a per-cell count matrix.
+> For **direct per-cell scRNA-seq DE** use `sc.tl.rank_genes_groups` (Wilcoxon — cluster/marker
+> genes; see **`scrna-qc-clustering`** / **`bp-annotation`**) or scVI's model-based DE
+> (**`scvi-de`**). Per-cell DESeq2 commits pseudoreplication and inflates the FDR.
 
 **Provision:** `ensure_capability("pydeseq2")` (and `adjusttext` for volcano labels).
 

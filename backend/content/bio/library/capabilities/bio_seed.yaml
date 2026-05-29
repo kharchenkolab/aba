@@ -218,3 +218,238 @@ capabilities:
     source: bioconductor
     scope: system
     status: published
+
+  # --- single-cell Python stack (scanpy ecosystem) ---
+  # scanpy/anndata/leidenalg/igraph ship in the .venv base; declared here so the
+  # catalog is complete and ensure_capability is a clean no-op (import_name guard)
+  # rather than a redundant --target reinstall. The rest materialize on demand.
+  - name: scanpy
+    version: "latest"
+    archetype: library
+    domain_tags: [scrna-seq, single-cell, clustering, umap, leiden, marker-genes, analysis]
+    summary: The standard Python toolkit for single-cell analysis — QC, normalization, HVGs, PCA, neighbors, Leiden clustering, UMAP, and marker DE on AnnData. Anchors the best-practice (bp-*) recipes.
+    provisioning: {pip: ["scanpy"]}
+    import_name: scanpy
+    scope: system
+    status: published
+
+  - name: anndata
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, data-structure, h5ad, matrix, scrna-seq]
+    summary: Annotated data matrix (AnnData/.h5ad) — the in-memory + on-disk container for single-cell observations, variables, layers and embeddings used across scanpy/scvi-tools.
+    provisioning: {pip: ["anndata"]}
+    import_name: anndata
+    scope: system
+    status: published
+
+  - name: leidenalg
+    version: "latest"
+    archetype: library
+    domain_tags: [clustering, community-detection, graph, single-cell, leiden]
+    summary: Leiden community-detection backend used by scanpy's clustering (sc.tl.leiden).
+    provisioning: {pip: ["leidenalg"]}
+    import_name: leidenalg
+    scope: system
+    status: published
+
+  - name: igraph
+    version: "latest"
+    archetype: library
+    domain_tags: [graph, network, clustering, single-cell]
+    summary: Python igraph — graph construction/analysis backing neighborhood graphs and Leiden/Louvain clustering.
+    provisioning: {pip: ["igraph"]}
+    import_name: igraph
+    scope: system
+    status: published
+
+  - name: scvi-tools
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, deep-learning, scvi, scanvi, totalvi, multivi, differential-expression]
+    summary: Probabilistic deep-generative models for single-cell omics (scVI/scANVI/totalVI/MULTIVI/PeakVI) — batch-aware integration, label transfer, reference mapping, multimodal modeling, and model-based DE. See the scvi-* recipes.
+    provisioning: {pip: ["scvi-tools"]}
+    import_name: scvi
+    scope: system
+    status: published
+
+  - name: harmonypy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, harmony]
+    summary: Python port of Harmony — fast linear batch integration in PCA space (sc.external.pp.harmony_integrate). See the bp-data-integration recipe.
+    provisioning: {pip: ["harmonypy"]}
+    import_name: harmonypy
+    scope: system
+    status: published
+
+  - name: scanorama
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, panorama-stitching]
+    summary: Mutual-nearest-neighbor panorama stitching for batch integration of heterogeneous single-cell datasets. See the bp-data-integration recipe.
+    provisioning: {pip: ["scanorama"]}
+    import_name: scanorama
+    scope: system
+    status: published
+
+  - name: bbknn
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, knn-graph]
+    summary: Batch-balanced kNN — a fast graph-based batch correction that replaces sc.pp.neighbors. See the bp-data-integration recipe.
+    provisioning: {pip: ["bbknn"]}
+    import_name: bbknn
+    scope: system
+    status: published
+
+  - name: scib-metrics
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, benchmarking, metrics]
+    summary: Batch-correction vs bio-conservation benchmarking metrics (scIB) to compare integration methods. See the bp-data-integration recipe.
+    provisioning: {pip: ["scib-metrics"]}
+    import_name: scib_metrics
+    scope: system
+    status: published
+
+  - name: decoupler
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, pathway, transcription-factor, enrichment, gene-set, activity]
+    summary: Footprint/enrichment methods for inferring pathway and transcription-factor activities from expression (works on AnnData). See the bp-gsea-pathway and bp-differential-expression recipes.
+    provisioning: {pip: ["decoupler"]}
+    import_name: decoupler
+    scope: system
+    status: published
+
+  - name: omnipath
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, prior-knowledge, signaling, pathway, gene-set, database]
+    summary: Python client for the OmniPath prior-knowledge database (signaling, TF-target, pathway gene sets) — supplies networks/regulons to decoupler. See the bp-gsea-pathway recipe.
+    provisioning: {pip: ["omnipath"]}
+    import_name: omnipath
+    scope: system
+    status: published
+
+  - name: scrublet
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, quality-control, doublet-detection]
+    summary: Simulation-based doublet detection for droplet scRNA-seq (also wrapped as sc.pp.scrublet). See the bp-quality-control recipe.
+    provisioning: {pip: ["scrublet"]}
+    import_name: scrublet
+    scope: system
+    status: published
+
+  - name: scvelo
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, rna-velocity, dynamics, trajectory]
+    summary: RNA velocity (stochastic/dynamical models) from spliced + unspliced counts to infer directional cell-state dynamics. See the bp-rna-velocity recipe.
+    provisioning: {pip: ["scvelo"]}
+    import_name: scvelo
+    scope: system
+    status: published
+
+  - name: palantir
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, trajectory, pseudotime, cell-fate, differentiation]
+    summary: Diffusion-based trajectory inference — pseudotime, terminal-state probabilities, and branch/fate analysis of differentiation. See the bp-trajectory-inference recipe.
+    provisioning: {pip: ["palantir"]}
+    import_name: palantir
+    scope: system
+    status: published
+
+  - name: celltypist
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, annotation, cell-type, classifier, label-transfer]
+    summary: Automated cell-type annotation via pre-trained logistic-regression models (e.g. Immune_All_Low). See the bp-annotation recipe.
+    provisioning: {pip: ["celltypist"]}
+    import_name: celltypist
+    scope: system
+    status: published
+
+  - name: snapatac2
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, atac, chromatin-accessibility, epigenomics, fragments]
+    summary: Single-cell ATAC-seq analysis — fragment import, tile matrices, dimensionality reduction, clustering and peak calling on AnnData. See the bp-atac recipe.
+    provisioning: {pip: ["snapatac2"]}
+    import_name: snapatac2
+    scope: system
+    status: published
+
+  - name: muon
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, multimodal, cite-seq, multiome, mudata]
+    summary: Multimodal single-cell framework (RNA + protein/ATAC) built on MuData — WNN integration and per-modality processing. See the bp-cite-seq recipe.
+    provisioning: {pip: ["muon"]}
+    import_name: muon
+    scope: system
+    status: published
+
+  - name: mudata
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, multimodal, data-structure, h5mu]
+    summary: MuData (.h5mu) — the multimodal container pairing several AnnData modalities for CITE-seq / multiome workflows. See the bp-cite-seq recipe.
+    provisioning: {pip: ["mudata"]}
+    import_name: mudata
+    scope: system
+    status: published
+
+  - name: pertpy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, perturbation, compositional-analysis, differential-abundance, sccoda]
+    summary: Perturbation-analysis toolkit — scCODA/tascCODA compositional tests, Milo, Augur and more for multi-condition single-cell designs. See the bp-compositional-analysis recipe.
+    provisioning: {pip: ["pertpy"]}
+    import_name: pertpy
+    scope: system
+    status: published
+
+  - name: milopy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, differential-abundance, neighborhoods, compositional-analysis, milo]
+    summary: Differential-abundance testing on cell neighborhoods (Milo) for AnnData. GitHub-only (emdann/milopy); pertpy's pt.tl.Milo is the maintained alternative. See the bp-compositional-analysis recipe.
+    provisioning: {pip: ["git+https://github.com/emdann/milopy.git"]}
+    import_name: milopy
+    scope: system
+    status: published
+
+  # --- single-cell R frameworks (on-demand; heavy frameworks are NOT pre-baked) ---
+  - name: Seurat
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, integration, seurat, r, marker-genes]
+    summary: The Seurat R toolkit — QC, SCTransform/log normalization, PCA, neighbors, clustering, UMAP, marker DE and anchor/Harmony integration on Seurat objects. CRAN binary via PPM on first install. See the seurat-scrna recipe.
+    provisioning: {r: {source: cran, package: Seurat, library: Seurat}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: harmony
+    version: "latest"
+    archetype: r_package
+    domain_tags: [single-cell, integration, batch-correction, harmony, r, seurat]
+    summary: Harmony R package — fast linear batch integration; RunHarmony() plugs directly into the Seurat workflow. See the harmony-integration recipe.
+    provisioning: {r: {source: cran, package: harmony, library: harmony}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: scry
+    version: "latest"
+    archetype: r_package
+    domain_tags: [single-cell, feature-selection, deviance, bioconductor, r]
+    summary: Bioconductor scry — deviance-based feature selection (devianceFeatureSelection) on raw counts, called from Python via rpy2. See the bp-feature-selection recipe.
+    provisioning: {r: {source: bioconductor, package: scry, library: scry}}
+    source: bioconductor
+    scope: system
+    status: published

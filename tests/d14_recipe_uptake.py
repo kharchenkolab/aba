@@ -49,7 +49,8 @@ def hint(name, code, read=None, result=None, intent=None):
 def test_capability_map():
     print("recipes_for_capability maps a specific lib → its recipe(s)")
     check("DESeq2 -> deseq2-r", recipes_for_capability("DESeq2") == ["deseq2-r"], str(recipes_for_capability("DESeq2")))
-    check("pydeseq2 -> bulk-rnaseq-de", recipes_for_capability("pydeseq2") == ["bulk-rnaseq-de"])
+    check("pydeseq2 -> bulk-rnaseq-de", "bulk-rnaseq-de" in recipes_for_capability("pydeseq2"),
+          str(recipes_for_capability("pydeseq2")))
     check("limma -> limma-voom", "limma-voom" in recipes_for_capability("limma"))
     check("case-insensitive", recipes_for_capability("deseq2") == ["deseq2-r"])
     check("pandas is ubiquitous (>4 recipes → filtered)", len(recipes_for_capability("pandas")) > 4,

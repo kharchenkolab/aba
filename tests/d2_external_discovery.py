@@ -98,7 +98,7 @@ def test_propose_archetypes():
     # materialize so this discovery test doesn't trigger a real conda install.
     from core.exec import MaterializingExecutor
     _orig = MaterializingExecutor.materialize
-    MaterializingExecutor.materialize = lambda self, prov, scope="system": None
+    MaterializingExecutor.materialize = lambda self, prov, scope="system", **kw: None
     try:
         check("ensure pipeline -> ready (nextflow)", ensure_capability({"name": "sarek"}).get("status") == "ready")
     finally:
