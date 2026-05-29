@@ -2006,6 +2006,34 @@ def project_materialize(pid: str, clean: bool = False, include_archived: bool = 
     return summary
 
 
+@app.post("/api/files/promote")
+def files_promote(path: str, title: str = ""):
+    """Promote an unregistered working/scratch file into a curated Dataset entity
+    (data.md scratch→curated tier). Validates that `path` is a real *ephemeral*
+    working-tree node (not an arbitrary disk path), then registers its on-disk
+    artifact as a dataset via the same service the agent's register_dataset uses.
+    """
+    import content.bio  # noqa: F401 — register tree builders + tools
+    from content.bio.files.tree import build_files_tree, find_node
+    from content.bio.tools import register_dataset_tool
+
+    node = find_node(build_files_tree(include_archived=False), (path or "").strip())
+    if not node or node.get("kind") != "file" or not node.get("ephemeral"):
+        raise HTTPException(400, "not a promotable working file")
+    ap = node.get("artifact_path")
+    if not ap or not Path(ap).exists():
+        raise HTTPException(404, "working file is no longer on disk")
+    res = register_dataset_tool({
+        "path": ap,
+        "title": (title or node.get("name") or Path(ap).name).strip(),
+        "summary": "Promoted from the working/scratch tier.",
+        "source": "promoted-from-working",
+    })
+    if res.get("status") != "ok":
+        raise HTTPException(400, res.get("error") or res.get("note") or "promotion failed")
+    return res
+
+
 @app.get("/api/viewers/registry")
 def viewers_registry():
     """Full viewer registry — fetched once by the frontend, then used for
