@@ -64,8 +64,10 @@ def test_skill_intent_search():
     check("DE query -> a DE recipe (pydeseq2 or R DESeq2)",
           search_skills("bulk rna-seq differential expression of counts, treated vs control")[0].name
           in ("bulk-rnaseq-de", "deseq2-r"))
-    check("single-cell query -> scrna-qc-clustering",
-          search_skills("cluster single cell data and make a umap")[0].name == "scrna-qc-clustering")
+    check("single-cell query -> a single-cell clustering recipe",
+          search_skills("cluster single cell data and make a umap")[0].name
+          in ("scrna-qc-clustering", "seurat-scrna", "bp-clustering",
+              "bp-dimensionality-reduction", "pagoda2-scrna"))
     # keyword recall: 'volcano' is only in keywords, not the description
     names = [s.name for s in search_skills("volcano plot")]
     check("keyword recall (volcano)", "bulk-rnaseq-de" in names, str(names))

@@ -1,7 +1,7 @@
 ---
 name: limma-voom
 description: Bulk RNA-seq (and array) differential expression with R/Bioconductor limma — voom for counts, flexible custom contrasts, blocking/repeated measures, and fold-change-thresholded tests.
-when_to_use: Bulk RNA-seq RAW counts (voom) or already-normalized/log array-like expression (classic limma); want DE between conditions. Prefer THIS over DESeq2 when you need flexible/composite contrasts, many groups, blocking or repeated-measures (random-effect-like) designs, fold-change-thresholded tests (treat), speed on large n, or microarray/normalized data. For a negative-binomial GLM, small-n robustness, or the LRT, see deseq2-r.
+when_to_use: Bulk RNA-seq RAW counts (voom) or already-normalized/log array-like expression (classic limma); want DE between conditions. Prefer THIS over DESeq2 when you need flexible/composite contrasts, many groups, blocking or repeated-measures (random-effect-like) designs, fold-change-thresholded tests (treat), speed on large n, or microarray/normalized data. For a negative-binomial GLM, small-n robustness, or the LRT, see deseq2-r. SCOPE — bulk, microarray, or pseudobulk-aggregated scRNA-seq ONLY; NOT for direct per-cell scRNA-seq DE.
 requires_tools: [run_r]
 capabilities_needed: [limma, edgeR]
 keywords: [limma, voom, edgeR, bulk RNA-seq, microarray, differential expression, contrast, makeContrasts, covariate, batch, donor, block, duplicateCorrelation, treat, quality weights, removeBatchEffect, Bioconductor, R]
@@ -18,6 +18,12 @@ speed on large designs. For RNA-seq counts use the **voom** path (edgeR builds t
 DGEList, voom adds precision weights); for already-normalized/log array-like data
 use **classic limma** (eBayes directly). Prefer DESeq2 (`deseq2-r`) when you want a
 negative-binomial GLM, small-n robustness, or the LRT.
+
+> **Bulk / pseudobulk only.** voom/limma model **per-sample** expression. In single-cell work
+> they apply ONLY to **pseudobulk** (sum raw counts per sample × cell type — see
+> **`bp-differential-expression`**), never to a per-cell matrix. For **direct per-cell scRNA-seq
+> DE** use `sc.tl.rank_genes_groups` (Wilcoxon; see **`scrna-qc-clustering`** / **`bp-annotation`**)
+> or scVI's model-based DE (**`scvi-de`**) — per-cell limma commits pseudoreplication.
 
 **Provision:** `ensure_capability("limma")` **and** `ensure_capability("edgeR")`
 (both Bioconductor, via ABA's R layer), then `library(limma); library(edgeR)` in

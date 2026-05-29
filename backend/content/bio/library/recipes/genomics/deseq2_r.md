@@ -1,7 +1,7 @@
 ---
 name: deseq2-r
 description: Authoritative bulk RNA-seq differential expression with R/Bioconductor DESeq2 — designs, covariate control, Wald & LRT tests, LFC shrinkage, and custom contrasts.
-when_to_use: Bulk RNA-seq RAW count matrix + sample table; want DE between conditions. Use THIS (R) when the session is already R-based, when the user asks for DESeq2/R, or when the question needs the likelihood-ratio test, multi-factor models, covariate control, interactions, or arbitrary custom contrasts (pydeseq2 is Wald-only). For a Python-only session with no such needs, see bulk-rnaseq-de (pydeseq2).
+when_to_use: Bulk RNA-seq RAW count matrix + sample table; want DE between conditions. Use THIS (R) when the session is already R-based, when the user asks for DESeq2/R, or when the question needs the likelihood-ratio test, multi-factor models, covariate control, interactions, or arbitrary custom contrasts (pydeseq2 is Wald-only). For a Python-only session with no such needs, see bulk-rnaseq-de (pydeseq2). SCOPE — bulk or pseudobulk-aggregated counts ONLY; NOT for direct per-cell scRNA-seq DE.
 requires_tools: [run_r]
 capabilities_needed: [DESeq2]
 keywords: [DESeq2, bulk RNA-seq, differential expression, LRT, Wald, contrast, covariate, batch, donor, interaction, lfcShrink, apeglm, ashr, Bioconductor, R]
@@ -16,6 +16,13 @@ DESeq2 is the reference implementation. Prefer it over pydeseq2 when the session
 is already in R, the user asks for DESeq2/R, or the question needs anything
 pydeseq2 lacks: the **likelihood-ratio test**, multi-factor models, covariate
 control, interaction terms, or arbitrary custom contrasts.
+
+> **Bulk / pseudobulk only.** DESeq2 models gene-level **negative-binomial counts per sample**.
+> In single-cell work it applies ONLY to **pseudobulk** (sum raw counts per sample × cell type —
+> see **`bp-differential-expression`**), never to a per-cell matrix. For **direct per-cell
+> scRNA-seq DE** use `sc.tl.rank_genes_groups` (Wilcoxon; see **`scrna-qc-clustering`** /
+> **`bp-annotation`**) or scVI's model-based DE (**`scvi-de`**) — per-cell DESeq2 commits
+> pseudoreplication and inflates the FDR.
 
 **Provision:** `ensure_capability("DESeq2")` (Bioconductor, via ABA's R layer),
 then `library(DESeq2)` in `run_r`. Heavy on first install; cached after.
