@@ -16,6 +16,7 @@ guide.py imports `build_system` from here.
 """
 from __future__ import annotations
 import contextvars
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -54,7 +55,9 @@ def _capabilities_block(active_tools: list[dict]) -> str:
     lines = ["Your tools (use them directly for routine reads — don't ask permission):"]
     for t in active_tools:
         desc = " ".join((t.get("description") or "").split())
-        first = desc.split(". ")[0].rstrip(".")
+        # First sentence, but don't break on the "e.g." / "i.e." abbreviations
+        # (a naive split(". ") truncated tool descriptions right at "(e.g").
+        first = re.split(r"(?<![ei]\.[ge])\.\s", desc, maxsplit=1)[0].rstrip(".")
         lines.append(f"- {t['name']}: {first}.")
     return "\n".join(lines) + "\n\n" + _prompt("sandbox_libs.md")
 
