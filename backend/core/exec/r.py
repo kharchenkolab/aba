@@ -393,8 +393,14 @@ def install_command(source: str, package: str, *, lib: str, ref: Optional[str] =
     ua = _ppm_ua_expr()
     typ = ', type="source"' if force_source else ''
     if source == "bioconductor":
-        # PPM also serves Bioc; the UA gets binaries where available, else source.
-        return f'{setlib}{ua}{par}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE, Ncpus={n}{typ})'
+        # NB: PPM does NOT build Bioconductor binaries (CRAN only, per Posit docs),
+        # so this BiocManager path source-compiles the Bioc packages themselves.
+        # r_install tries the conda binary (bioconductor-<pkg>) FIRST via
+        # install_bioconductor_conda; this is only the fallback for Bioc packages not
+        # on bioconda. We still point the CRAN *dependencies* at PPM (repos + UA) so
+        # at least those resolve as binaries — only the actual Bioc pkgs compile.
+        repos_opt = f'options(repos=c(CRAN={cran_repo()!r})); '
+        return f'{setlib}{ua}{repos_opt}{par}BiocManager::install({package!r}, lib={libq}, update=FALSE, ask=FALSE, Ncpus={n}{typ})'
     repos = repos or cran_repo()
     return f'{setlib}{ua}{par}install.packages({package!r}, lib={libq}, repos={repos!r}, Ncpus={n}{typ})'
 
