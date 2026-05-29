@@ -107,12 +107,19 @@ def _r_setup_code(cwd: str) -> str:
     """First cell for an R session: project R library ahead of the shared base
     on .libPaths() (r_provisioning.md), then cwd + DATA_DIR (parallel to the
     Python one). The project lib is where on-demand `r_package` installs land,
-    so a freshly-installed package is importable in the next cell."""
+    so a freshly-installed package is importable in the next cell.
+
+    Also defaults the session's CRAN repo to ABA's PPM snapshot + sets the binary
+    User-Agent — so even a hand-rolled `install.packages("pagoda2")` in run_r gets
+    a PPM BINARY (source-compiling only when no binary exists), instead of the
+    slow source build a bare `install.packages(..., repos='cloud.r-project.org')`
+    triggers. `type='source'` still forces a source build on demand."""
     from core import projects
-    from core.exec.r import libpaths_expr
+    from core.exec.r import libpaths_expr, cran_repo, _ppm_ua_expr
     libline = libpaths_expr(projects.current() or "default")
     libline = (libline + "\n") if libline else ""
-    return (f"{libline}DATA_DIR <- {str(DATA_DIR)!r}\n"
+    repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
+    return (f"{libline}{repoline}DATA_DIR <- {str(DATA_DIR)!r}\n"
             f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n")
 
 
