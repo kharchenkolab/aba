@@ -562,6 +562,7 @@ export default function App() {
           compact={!primary}
           onAsk={askGuide}
           onChatResult={chatAboutResult}
+          onBrowseFiles={() => openProjectSection('files')}
         />
       )}
     </div>

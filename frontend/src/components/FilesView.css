@@ -313,6 +313,8 @@
 .files__action--promote:hover { background: var(--surface-3); color: var(--accent); }
 .files__action--pin, .files__action--discuss { color: var(--text-4); }
 .files__action--pin:hover, .files__action--discuss:hover { background: var(--surface-3); color: var(--accent); }
+.files__action--pinned { color: var(--red, #dc2626); opacity: 1 !important; }
+.files__action--pinned:hover { color: var(--red, #dc2626); }
 
 /* Sortable + resizable column headers (list/table layout). */
 .files__col--sortable {

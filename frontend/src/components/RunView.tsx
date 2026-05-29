@@ -10,6 +10,8 @@ import type { Entity } from '../types'
 import { EntityGlyph } from './icons'
 import ResultList, { type OutputItem } from './ResultList'
 import FileBrowser, { type TreeNode } from './FileBrowser'
+import FileCanvas from '../viewers/FileCanvas'
+import type { FileNode } from '../viewers/types'
 import './RunView.css'
 
 export interface RunMeta {
@@ -33,10 +35,11 @@ function rel(a?: string, bIso?: string): string {
   const m = Math.round(s / 60); if (m < 60) return `${m}m`
   const h = Math.floor(m / 60); return `${h}h ${m % 60}m`
 }
-export default function RunView({ run, entities, onFocus, onChange, onAsk, onChatResult }: {
+export default function RunView({ run, entities, onFocus, onChange, onAsk, onChatResult, onBrowseFiles }: {
   run: Entity; entities: Entity[]; onFocus: (id: string) => void; onChange: () => void
   onAsk?: (t: string) => void
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  onBrowseFiles?: () => void
 }) {
   void entities
   const m = (run.metadata?.run ?? {}) as RunMeta
@@ -51,6 +54,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   // The Run's full output directory, browsed with the shared FileBrowser —
   // nested folders (model/, figures/…) and every file type, with pin/discuss.
   const [runTree, setRunTree] = useState<TreeNode | null>(null)
+  const [modalNode, setModalNode] = useState<TreeNode | null>(null)
   useEffect(() => {
     let cancelled = false
     fetch(`/api/runs/${encodeURIComponent(run.id)}/tree`)
@@ -60,25 +64,30 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
     return () => { cancelled = true }
   }, [run.id])
 
-  function browseViewFile(node: { entity_id?: string | null; artifact_path?: string | null; path: string }) {
-    if (node.entity_id) { onFocus(node.entity_id); return }
+  function fileHref(node: { artifact_path?: string | null; path: string }): string {
     const ap = node.artifact_path || ''
-    const url = ap.startsWith('/artifacts/') || ap.startsWith('http')
+    return ap.startsWith('/artifacts/') || ap.startsWith('http')
       ? ap : `/api/files/content?path=${encodeURIComponent(node.path)}`
-    window.open(url, '_blank')
   }
+  // View a file in a MODAL overlay (keeps the run in the middle column), the same
+  // way plot thumbnails preview. The "Browse in Files tab" link is the escape
+  // hatch for those who want the full middle-column viewer.
+  function browseViewFile(node: FileNode) { setModalNode(node as TreeNode) }
   async function pinFile(node: TreeNode) {
     const ext = (node.name.split('.').pop() || '').toLowerCase()
     const kind = /^(png|jpe?g|gif|svg|webp)$/.test(ext) ? 'figure' : /^(csv|tsv)$/.test(ext) ? 'table' : 'file'
-    const href = `/api/files/content?path=${encodeURIComponent(node.path)}`
+    const href = fileHref(node)
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, label: node.name, thumb: kind === 'figure' ? href : undefined, href }),
     }).catch(() => {})
     onChange()
   }
+  // Discuss: set the chat CONTEXT (prefill + focus composer) without sending —
+  // mirrors the plot-thumbnail "Discuss" so the user types their own question.
   function discussFile(node: TreeNode) {
-    onAsk?.(`Let's look at "${node.name}" from the run "${run.title}".`)
+    const isImg = /\.(png|jpe?g|gif|svg|webp)$/i.test(node.name)
+    onChatResult?.(node.name, isImg ? fileHref(node) : undefined)
   }
 
   const where = hpc ? `⛁ ${m.where || 'cluster'}${m.queue ? ` · ${m.queue}` : ''}` : '⚙ local'
@@ -100,6 +109,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const toggle = (p: 'command' | 'inputs' | 'log') => setPanel(c => c === p ? null : p)
 
   const outputs = m.outputs ?? []
+  const plotOutputs = outputs.filter(o => o.kind === 'figure' || o.kind === 'view')
   const pinOutput = async (it: OutputItem) => {
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -187,20 +197,31 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           <div className="runview__state-sub">This run failed before producing outputs. See the error above; Re-run when fixed.</div>
         </div>
       )}
-      {(outputs.length > 0 || m.browse || m.bulk) && (
+      {/* PLOTS — glanceable figure thumbnails. The redundant table/file rows +
+          browse/bulk are dropped; the FileBrowser below owns all files. */}
+      {plotOutputs.length > 0 && (
         <section className="runview__outputs">
-          <div className="runview__outputs-head">Outputs</div>
-          <ResultList items={outputs} runId={run.id} browse={m.browse} bulk={m.bulk} onPin={pinOutput} onChat={chatOutput}
+          <div className="runview__outputs-head">Plots</div>
+          <ResultList items={plotOutputs} runId={run.id} onPin={pinOutput} onChat={chatOutput}
             onChatAnnotated={(it, annot) => onChatResult?.(it.label, undefined, annot)}
             onRegister={registerOutput} />
         </section>
       )}
 
       {/* Full output directory — nested folders + every file, browsable with the
-          shared FileBrowser (sortable/resizable columns, pin/discuss per file). */}
+          shared FileBrowser (sortable/resizable columns, pin/discuss per file).
+          Files open in a modal here; "Browse in Files tab" frees the middle column. */}
       {runTree && (runTree.children?.length ?? 0) > 0 && (
         <section className="runview__browse">
-          <div className="runview__outputs-head">Output files</div>
+          <div className="runview__outputs-head runview__browse-head">
+            Output files
+            {onBrowseFiles && (
+              <button className="runview__browse-link" onClick={onBrowseFiles}
+                      title="Open this run's folder in the Files tab (viewer in the middle column)">
+                Browse in Files tab →
+              </button>
+            )}
+          </div>
           <FileBrowser
             root={runTree}
             variant="wide"
@@ -211,6 +232,15 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
             emptyHint="No files in this run's output folder."
           />
         </section>
+      )}
+
+      {modalNode && (
+        <div className="runview__modal" onClick={() => setModalNode(null)}>
+          <div className="runview__modal-box" onClick={e => e.stopPropagation()}>
+            <button className="runview__modal-close" onClick={() => setModalNode(null)} aria-label="Close">×</button>
+            <FileCanvas node={modalNode} onFocus={onFocus} onClose={() => setModalNode(null)} />
+          </div>
+        </div>
       )}
     </div>
   )

@@ -55,6 +55,29 @@
 /* Outputs — the focus for a completed run */
 .runview__outputs-head { font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 8px; }
 .runview__outputs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.runview__browse { margin-top: 16px; }
+.runview__browse-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.runview__browse-link {
+  border: none; background: none; cursor: pointer; padding: 0;
+  font-family: var(--sans); font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--accent);
+}
+.runview__browse-link:hover { text-decoration: underline; }
+/* File-preview modal — mirrors the plot-thumbnail preview overlay. */
+.runview__modal {
+  position: fixed; inset: 0; z-index: 60; background: rgba(20,18,16,0.55);
+  display: flex; align-items: center; justify-content: center; padding: 4vh 4vw;
+}
+.runview__modal-box {
+  position: relative; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+  width: min(1100px, 92vw); height: min(86vh, 900px); overflow: auto;
+}
+.runview__modal-close {
+  position: absolute; top: 8px; right: 10px; z-index: 2;
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-2); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.runview__modal-close:hover { background: var(--surface-3); color: var(--text); }
 .run-out {
   display: flex; align-items: center; gap: 10px; text-decoration: none;
   border: 1px solid var(--border); background: var(--bg); border-radius: 10px; padding: 11px 13px;
