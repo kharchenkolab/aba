@@ -17,7 +17,7 @@ from typing import Optional
 
 from core.graph._schema import WORKSPACE_ID
 from core.graph.edges import add_edge
-from core.graph.entities import create_entity, get_entity
+from core.graph.entities import create_entity, get_entity, update_entity
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
@@ -74,6 +74,17 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
         parent_entity_id=parent,
         metadata={"thread_id": thread_id, "run_state": "open", "origin": "internal"} if thread_id else None,
     )
+    # The ambient analysis's output dir IS the shared thread scratch dir (where
+    # run_python/run_r write when no named run is open) — so its outputs are
+    # browsable under it, mirroring a named run's own dir.
+    if thread_id:
+        try:
+            from core.data.workspace import scratch_dir
+            from core import projects
+            d = scratch_dir(projects.current() or "default", f"thread-{thread_id}")
+            update_entity(aid, artifact_path=str(d))
+        except Exception:  # noqa: BLE001
+            pass
     analysis_ctx["analysis_id"] = aid
     return aid
 
@@ -178,6 +189,22 @@ def register_artifacts_from_tool_result(
         latest = get_entity(rec["id"])
         if latest:
             refreshed.append(latest)
+
+    # Refresh the active Run's output manifest (figures/tables/files in its dir)
+    # after EVERY code cell — even one that wrote only a .rds and emitted no
+    # figure — so the Run view always reflects what the pipeline produced. Map
+    # harvested PNG urls (served from /artifacts) as figure thumbnails.
+    if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
+        try:
+            from content.bio.lifecycle.runs import active_run_id, refresh_output_manifest
+            _rid = active_run_id(thread_id)
+            if _rid:
+                _plots = (result_obj.get("plots") or []) if isinstance(result_obj, dict) else []
+                _by_name = {p.get("original_name"): p.get("url") for p in _plots
+                            if p.get("original_name") and p.get("url")}
+                refresh_output_manifest(_rid, plot_urls_by_name=_by_name)
+        except Exception:  # noqa: BLE001 — manifest is best-effort cosmetic
+            pass
     return refreshed
 
 

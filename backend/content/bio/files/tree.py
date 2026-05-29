@@ -246,11 +246,82 @@ def _add_numbered_children(parent: dict, entities: list[dict], slug_fn=_folder_s
     return out
 
 
+def _graft_dir(parent: dict, base, *, ephemeral: bool = True,
+               skip: frozenset = frozenset(), skip_dirs: tuple = (),
+               cap: int = 300, counter: Optional[list] = None) -> int:
+    """Graft `base`'s files as a NESTED folder tree under `parent` (mirroring the
+    on-disk layout, so a pile is navigable). Skips files whose resolved path is in
+    `skip` or lives under any prefix in `skip_dirs`. Returns the count grafted.
+    `counter` (a 1-elem list) shares a budget across calls."""
+    from pathlib import Path as _P
+    import os as _os
+    base = _P(base)
+    if not base.exists():
+        return 0
+    folders: dict[str, dict] = {parent["path"]: parent}
+
+    def _ensure(parts: list[str]) -> dict:
+        path, node = parent["path"], parent
+        for p in parts:
+            path = f"{path}/{p}" if path else p
+            child = folders.get(path)
+            if child is None:
+                child = _folder(p, path=path, kind="folder")
+                if ephemeral:
+                    child["ephemeral"] = True
+                node["children"].append(child)
+                folders[path] = child
+            node = child
+        return node
+
+    cnt = 0
+    for f in sorted(base.rglob("*")):     # sorted → stable, parents before children
+        if (counter[0] if counter else cnt) >= cap:
+            break
+        if not f.is_file() or f.name.startswith("."):
+            continue
+        rp = str(f.resolve())
+        if rp in skip or any(rp == d or rp.startswith(d + _os.sep) for d in skip_dirs):
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        rel = f.relative_to(base).parts                # (...subdirs..., filename)
+        node = _ensure(list(rel[:-1]))
+        fnode = {
+            "kind": "file", "name": f.name,
+            "path": f"{node['path']}/{f.name}",
+            "artifact_path": rp, "size": st.st_size, "mtime": st.st_mtime,
+        }
+        if ephemeral:
+            fnode["ephemeral"] = True
+        node["children"].append(fnode)
+        cnt += 1
+        if counter is not None:
+            counter[0] += 1
+    return cnt
+
+
+def _run_output_dirs(entities: list[dict]) -> tuple:
+    """Resolved output-dir paths of all analysis Runs (their artifact_path) — so
+    the catch-all working/ node can skip files that belong under a Run."""
+    from pathlib import Path as _P
+    out = []
+    for e in entities:
+        if e.get("type") == "analysis" and e.get("artifact_path"):
+            try:
+                out.append(str(_P(e["artifact_path"]).resolve()))
+            except Exception:  # noqa: BLE001
+                pass
+    return tuple(out)
+
+
 def _working_files_node(entities: list[dict]) -> Optional[dict]:
     """A 'working' folder listing real on-disk files (the project DATA_DIR + its
-    scratch dir) that AREN'T registered entities — so nothing the agent produces
-    is hidden behind the curated entity tree (the "where are my files?" gap).
-    Flagged ephemeral: scratch is GC-able and uncurated until promoted."""
+    scratch dir) that AREN'T registered entities and don't belong to a Run — so
+    nothing the agent produces is hidden, without duplicating per-Run output (which
+    shows under threads/<t>/runs/<r>/output/). Flagged ephemeral: scratch is GC-able."""
     from pathlib import Path as _P
     try:
         from core.config import DATA_DIR, WORK_DIR
@@ -262,57 +333,25 @@ def _working_files_node(entities: list[dict]) -> Optional[dict]:
         pid = _cur() or "default"
     except Exception:  # noqa: BLE001
         pass
-    shown = set()
-    for e in entities:
-        d = _resolve_disk(e.get("artifact_path"))
-        if d:
-            shown.add(str(_P(d).resolve()))
+    shown = frozenset(
+        str(_P(d).resolve())
+        for e in entities
+        for d in (_resolve_disk(e.get("artifact_path")),) if d
+    )
+    run_dirs = _run_output_dirs(entities)          # Run output dirs live under WORK_DIR/<pid>
     root = _folder("working", path="working", kind="folder")
     root["ephemeral"] = True
     root["note"] = "Scratch / unregistered files on disk — not kept unless promoted to a dataset."
-    # Build REAL nested folders mirroring the on-disk layout, so the scratch tier
-    # is navigable (per-sample dirs, per-thread/per-analysis output dirs) instead
-    # of one flat pile. Folders are created once and cached by tree path.
-    _folders: dict[str, dict] = {"working": root}
-
-    def _ensure_dir(parts: list[str]) -> dict:
-        path, parent = "working", root
-        for p in parts:
-            path = f"{path}/{p}"
-            node = _folders.get(path)
-            if node is None:
-                node = _folder(p, path=path, kind="folder")
-                node["ephemeral"] = True
-                parent["children"].append(node)
-                _folders[path] = node
-            parent = node
-        return parent
-
-    seen = 0
+    budget = [0]
     for base, label in ((_P(DATA_DIR), "data"), (_P(WORK_DIR) / pid, "scratch")):
         if not base.exists():
             continue
-        for f in sorted(base.rglob("*")):   # sorted → stable, parents before children
-            if seen >= 200:
-                break
-            if not f.is_file() or f.name.startswith("."):
-                continue
-            rp = str(f.resolve())
-            if rp in shown:
-                continue               # already shown as a registered entity
-            try:
-                st = f.stat()
-            except OSError:
-                continue
-            rel = f.relative_to(base).parts            # (...subdirs..., filename)
-            parent = _ensure_dir([label, *rel[:-1]])
-            parent["children"].append({
-                "kind": "file", "name": f.name,
-                "path": f"{parent['path']}/{f.name}",
-                "artifact_path": rp, "size": st.st_size, "mtime": st.st_mtime,
-                "ephemeral": True,
-            })
-            seen += 1
+        label_node = _folder(label, path=f"working/{label}", kind="folder")
+        label_node["ephemeral"] = True
+        _graft_dir(label_node, base, ephemeral=True, skip=shown, skip_dirs=run_dirs,
+                   cap=200, counter=budget)
+        if label_node["children"]:
+            root["children"].append(label_node)
     if not root["children"]:
         return None
     return root
@@ -438,6 +477,17 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                             "synthesized_kind": "producing_code",
                             "synthesized_content": code,
                         })
+
+                    # Full output directory — every file the pipeline wrote
+                    # (.rds/.h5ad/subfolders/…), nested as on disk. This is the
+                    # browsable bundle; the curated figures/tables below are the
+                    # harvested subset (also kept as entities, pinnable).
+                    out_dir = run.get("artifact_path")
+                    if out_dir:
+                        out_node = _folder("output", path=f"{r_path}/output", kind="folder")
+                        _graft_dir(out_node, out_dir, ephemeral=False, cap=300)
+                        if out_node["children"]:
+                            r_folder["children"].append(out_node)
 
                     # Group run's children by type into subfolders.
                     children = run_children(run["id"])

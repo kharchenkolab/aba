@@ -646,6 +646,29 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest):
     return get_entity(eid)
 
 
+@app.get("/api/runs/{rid}/file")
+def run_file(rid: str, rel: str, download: int = 0):
+    """Serve a single file from a Run's output directory (its artifact_path).
+    Powers the Run view's output rows + figure thumbnails. `rel` is the path
+    relative to the run dir; traversal outside the dir is rejected. Images/text
+    render inline; `download=1` forces an attachment."""
+    import mimetypes
+    from pathlib import Path
+    run = _run_or_404(rid)
+    base = run.get("artifact_path")
+    if not base:
+        raise HTTPException(404, "run has no output directory")
+    base_p = Path(base).resolve()
+    target = (base_p / rel).resolve()
+    if base_p != target and base_p not in target.parents:
+        raise HTTPException(400, "path escapes the run directory")
+    if not target.is_file():
+        raise HTTPException(404, f"no file {rel!r} in the run output")
+    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f'attachment; filename="{target.name}"'} if download else {}
+    return FileResponse(str(target), media_type=media, headers=headers)
+
+
 # ---------- Results (kept observations — a grouping of panels) ----------
 
 class MemberRequest(BaseModel):
