@@ -27,6 +27,7 @@ if coming from a cells x genes source.
      op <- function(p) if (grepl("\\.gz$", p)) gzfile(p) else p   # transparent gz
      m  <- as(Matrix::readMM(op(mtx)), "CsparseMatrix")           # genes (rows) x cells (cols)
      ft <- utils::read.delim(op(features), header = FALSE)        # col1=Ensembl, col2=symbol
+     # make.unique FIRST: gene symbols often repeat — pagoda2 errors on dup/NA names.
      rownames(m) <- make.unique(as.character(ft[[ if (ncol(ft) >= gene.col) gene.col else 1 ]]))
      colnames(m) <- readLines(op(barcodes))
      m
