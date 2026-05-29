@@ -19,5 +19,6 @@ packages:
   - bioconductor-deseq2
   - bioconductor-limma
   - bioconductor-edger
+  - bioconductor-apeglm
   - r-ggplot2
   - r-tidyverse

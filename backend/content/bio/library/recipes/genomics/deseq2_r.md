@@ -94,14 +94,19 @@ res <- results(dds, contrast = list(c("condition_treated_vs_untreated",
 res <- results(dds, contrast = c(0, 0, 1, -1))
 ```
 
-## Shrink LFCs for ranking / plotting (recommended)
+## Optional — LFC shrinkage (for ranking / visualization, not significance)
+Shrinkage stabilizes noisy log2FCs for low-count genes — handy for ranking and
+volcano plots, but it does NOT change which genes are significant, and the raw
+`results()` LFCs are the effect sizes to report. Skip it unless ranking/plotting
+calls for it; if you do shrink, pick the estimator to fit the comparison (no
+single default):
 ```r
 resultsNames(dds)
 resLFC <- lfcShrink(dds, coef = "condition_treated_vs_untreated", type = "apeglm")
 ```
-Types: **apeglm** (default; needs a `coef=` name), **ashr** (works with any
-`contrast=`), **normal** (legacy). Use shrunk LFCs for volcano/ranking; raw
-`results()` LFCs when reporting effect sizes.
+Estimators: **apeglm** (needs a `coef=` name), **ashr** (works with any
+`contrast=`), **normal** (simple/built-in). apeglm is in the R base; `ashr` may
+need installing; `normal` needs nothing.
 
 ## Stricter test against an effect-size threshold
 ```r
