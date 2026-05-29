@@ -2127,6 +2127,29 @@ def viewers_for_node(
     }
 
 
+@app.get("/api/files/content")
+def files_content(path: str, download: int = 0):
+    """Serve a tree file's RAW BYTES (with content-type) — powers the image
+    viewer + binary downloads for files whose artifact_path is an on-disk path
+    (run-output / working-tree files), which the browser can't fetch directly.
+    Harvested entities use their served /artifacts URL instead."""
+    import mimetypes
+    import content.bio  # noqa: F401
+    from content.bio.files.tree import build_files_tree, find_node
+    from core.files.materialize import _resolve_artifact_disk_path
+
+    tree = build_files_tree(include_archived=False)
+    node = find_node(tree, path)
+    if node is None:
+        raise HTTPException(404, f"no node at {path!r}")
+    src = _resolve_artifact_disk_path(node.get("artifact_path"))
+    if src is None or not src.exists():
+        raise HTTPException(404, f"file content missing on disk: {node.get('artifact_path')}")
+    media = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f'attachment; filename="{src.name}"'} if download else {}
+    return FileResponse(str(src), media_type=media, headers=headers)
+
+
 @app.get("/api/files/raw")
 def files_raw(path: str, offset: int = 0, max_lines: int = 200):
     """Stream a chunk of a file's text content (viewers.md fallback —
