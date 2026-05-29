@@ -77,6 +77,32 @@
 .thread-context { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .thread-context > .surface-panel { flex: 1; min-height: 0; }   /* shelf / preview fills below the brief */
 .split--chat, .split--entity { grid-template-columns: 1fr 384px; }
+/* Collapsed right column: primary panel takes the full width; the side panel
+   (thread-context / chat-peek) is hidden behind a thin edge re-open handle. */
+.split--right-collapsed { grid-template-columns: 1fr 0 !important; position: relative; }
+.split--right-collapsed > .thread-context,
+.split--right-collapsed > .chat-peek-anchor { display: none; }
+
+/* Side-panel collapse/expand toggles. */
+.right-collapse {
+  position: absolute; top: 6px; left: -11px; z-index: 5;
+  width: 20px; height: 30px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-2); color: var(--text-3);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.right-collapse:hover { background: var(--surface-3); color: var(--text); }
+.right-expand {
+  position: absolute; top: 6px; right: 0; z-index: 6;
+  width: 18px; height: 34px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-right: none;
+  border-radius: 6px 0 0 6px;
+  background: var(--surface-2); color: var(--text-3);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.right-expand:hover { background: var(--surface-3); color: var(--text); }
 
 /* chat pane fills its surface-panel */
 .chat-primary, .chat-peek { padding: 0; }
