@@ -465,6 +465,9 @@ async def stream_response(
     focus_type = focus_ent["type"] if focus_ent else None
 
     analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}
+    # Per-turn recipe-uptake tracking: read_skill records names here; run_python/
+    # run_r nudge (once) if the code uses a library a recipe covers but wasn't read.
+    recipe_ctx: dict = {"read": set(), "nudged": False}
     usage_in = usage_out = usage_cr = usage_cw = 0   # Guide tokens this turn (+cache read/write)
     turn.thread_id = store_tid
     turn.entity_id = entity_id   # message-log scope for the reaper
@@ -761,6 +764,7 @@ async def stream_response(
                     "thread_id": store_tid,
                     "focus_entity_id": focus_entity_id,
                     "session_id": session_id,
+                    "recipe_ctx": recipe_ctx,
                     # Long-running tools register kill interrupters here so
                     # Stop actually stops the work (not just the UI).
                     "cancel_token": cancel_token,

@@ -249,6 +249,19 @@ def search_skills(query: str, *, limit: int = GATED_TOP_K,
     return out[:limit]
 
 
+def recipes_for_capability(cap: str) -> list[str]:
+    """Names of recipes whose `capabilities_needed` includes `cap` (case-
+    insensitive). Drives the run_python/run_r recipe-uptake nudge: if the agent
+    codes with a library a recipe covers but didn't read that recipe this turn,
+    remind it (the recipe has the correct API/idioms it would otherwise hand-roll
+    from stale memory)."""
+    c = (cap or "").strip().lower()
+    if not c:
+        return []
+    return [s.name for s in list_skills()
+            if any(c == (x or "").strip().lower() for x in (s.capabilities_needed or ()))]
+
+
 def _skill_bullets(skills: list[SkillSpec]) -> list[str]:
     return [f"- `{s.name}` — {s.description}" if s.description else f"- `{s.name}`"
             for s in skills]
@@ -303,7 +316,11 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
 
     lines = [
         "### Skills you can reference by name",
-        "Use `read_skill(name)` to load the full procedure when needed.",
+        "Use `read_skill(name)` to load the full procedure. **If your task matches one of "
+        "these recipes — especially anything using a specific library/tool or a multi-step "
+        "method — `read_skill` it BEFORE writing run_python/run_r code.** The recipe carries "
+        "the correct API, parameters, and gotchas; coding a known library from memory is the "
+        "top cause of wrong-API fumbles here.",
     ]
 
     if core:

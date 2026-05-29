@@ -3,6 +3,7 @@ import subprocess
 import shutil
 import uuid
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -1334,6 +1335,12 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
             "note": f"No skill named {name!r}. Available: {', '.join(avail) or '(none)'}.",
         }
 
+    # Record that this recipe was read this turn, so the run_python/run_r
+    # recipe-uptake nudge doesn't remind the agent to read what it already read.
+    rc = ctx.get("recipe_ctx") if isinstance(ctx, dict) else None
+    if isinstance(rc, dict):
+        rc.setdefault("read", set()).add(spec.name)
+
     # #5 — surface missing required tools BEFORE returning the body. The
     # model gets a clear "you can't use this skill as-is" signal instead
     # of reading the body and then having a tool call fail.
@@ -2514,6 +2521,72 @@ EXECUTORS = {
     "annotate_entity": annotate_entity_tool,
 }
 
+# Libraries a run_python/run_r cell pulls in — used to nudge recipe uptake.
+_PY_IMPORT_RE = re.compile(r"^[ \t]*(?:import|from)[ \t]+([A-Za-z_][\w]*)", re.M)
+_R_LIB_RE = re.compile(r"(?:library|require|requireNamespace)\([ \t]*['\"]?([A-Za-z_.][\w.]*)", re.M)
+# Foundational libs that are never the recipe-uptake signal (everything uses
+# them). The count cap below catches the rest (a lib declared by many recipes is
+# generic; a specific analysis lib maps to 1-2 recipes).
+_UPTAKE_SKIP = {
+    "pandas", "numpy", "np", "scipy", "matplotlib", "seaborn", "plt", "sklearn",
+    "os", "sys", "re", "json", "math", "collections", "itertools", "pathlib",
+    "warnings", "time", "subprocess", "glob", "io", "functools", "typing",
+    "random", "gzip", "shutil", "urllib", "requests", "pickle", "anndata",
+    # R foundational
+    "matrix", "ggplot2", "dplyr", "tidyverse", "tidyr", "stringr", "readr",
+    "data", "magrittr", "methods", "stats", "utils", "base", "grid", "purrr",
+    "tibble", "reshape2", "gridextra", "rcolorbrewer", "scales",
+}
+
+
+def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None) -> None:
+    """If a run_python/run_r cell imports/loads a library that a recipe covers
+    (capabilities_needed) but no such recipe was read this turn, attach a one-time
+    hint nudging the agent to read it first. Keyed on the code's imports — not a
+    fuzzy relevance score — so false positives are rare. Once per turn.
+
+    Why: the agent's #1 failure mode is hand-rolling a known library from stale
+    memory (wrong pydeseq2 submodule, removed Biopython API, dgCMatrix layout)
+    instead of reading the recipe that's already in its prompt slice."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict):
+        return
+    if "returncode" not in result:   # only when code actually ran (skip timeout/cancel/launch-error)
+        return
+    rc = (ctx or {}).get("recipe_ctx") if isinstance(ctx, dict) else None
+    if not isinstance(rc, dict) or rc.get("nudged"):
+        return
+    code = (input_ or {}).get("code") or ""
+    toks = (_PY_IMPORT_RE.findall(code) if name == "run_python" else _R_LIB_RE.findall(code))
+    if not toks:
+        return
+    try:
+        from core.skills.loader import recipes_for_capability
+    except Exception:  # noqa: BLE001
+        return
+    read = rc.get("read") or set()
+    pairs = []
+    for t in dict.fromkeys(toks):
+        if t.lower() in _UPTAKE_SKIP:
+            continue
+        all_recs = recipes_for_capability(t)
+        # Skip ubiquitous libs (declared by many recipes) — only a SPECIFIC
+        # analysis library (1-2 recipes) is a real "you should read the recipe" signal.
+        if not all_recs or len(all_recs) > 4:
+            continue
+        pairs.extend((r, t) for r in all_recs if r not in read)
+    if not pairs:
+        return
+    rc["nudged"] = True
+    recs = sorted({r for r, _ in pairs})
+    libs = sorted({t for _, t in pairs})
+    result["recipe_hint"] = (
+        f"There {'is a recipe' if len(recs) == 1 else 'are recipes'} for "
+        f"{', '.join(libs)} you have not read this turn: {', '.join('`'+r+'`' for r in recs)}. "
+        "read_skill it before coding from memory — it carries the correct API, "
+        "design/contrast idioms, and gotchas. (Ignore if your code is already correct.)"
+    )
+
+
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
     """Dispatch a tool call. `ctx` is optional per-turn context that a few
     tools consult (read_skill uses ctx['active_tools'] to enforce
@@ -2552,6 +2625,8 @@ def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
     try:
         sig_params = inspect.signature(fn).parameters
         result = fn(input_, ctx) if "ctx" in sig_params else fn(input_)
+        if isinstance(result, dict):
+            _recipe_uptake_hint(name, input_, result, ctx)
         return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)})
