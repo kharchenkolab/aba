@@ -18,6 +18,15 @@ loading it is far faster and more reliable than re-fetching FASTQ and re-alignin
 **Try this recipe first.** Fall back to `fetch-sequencing-fastq` only if the
 series has no usable processed matrices, or the user explicitly needs raw reads.
 
+**Match the deliverable to the ask — downloading is NOT the same as converting.**
+If the user asked to *download* (and/or *register*) the data, fetch the
+supplementary files, register them as a dataset, and stop — the files are the
+deliverable. Load into **AnnData only when the NEXT step is actual analysis**
+(clustering/DE). And **don't merge multiple samples into one object unless asked**:
+"register them together" means one dataset entity spanning the files, not a single
+merged `.h5ad`. Converting/merging by default discards the raw files the user
+wanted and bakes in choices they didn't make.
+
 `run_python` only; `ensure_capability("GEOparse")` and (`scanpy`/`anndata` for
 loading 10x/h5ad, `pandas` for plain tables).
 

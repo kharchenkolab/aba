@@ -24,6 +24,16 @@ if coming from a cells x genes source.
    features.tsv[.gz]; pass several to merge samples). It returns a genes x cells
    `dgCMatrix` with correct dimnames — do NOT hand-roll `readMM` + manual dimnames,
    which is where orientation/transpose bugs creep in.
+   - **Reads gzip directly — do NOT gunzip first.** `read.10x.matrices` handles
+     `.gz` (and uncompressed); decompressing the MTX triplet is wasted work.
+   - **Filename caution.** It expects each sample directory to hold the *standard*
+     CellRanger names (`matrix.mtx.gz`, `barcodes.tsv.gz`, `features.tsv.gz`; or the
+     v2 `genes.tsv` for `version='V2'`). GEO supplementary files usually carry a GSM
+     prefix (e.g. `GSM5746268_…barcodes.tsv.gz`), so the reader won't find them as-is.
+     Put each sample's triplet in its own dir and **symlink/rename to the standard
+     names first** — e.g. `file.symlink(gsm_barcodes_gz, file.path(d, 'barcodes.tsv.gz'))`
+     (×3), then pass `d` as a `matrixPaths` entry. (A future pagoda2 update may relax
+     this; for now, rename.)
 2. QC filter: `counts <- gene.vs.molecule.cell.filter(cm, min.cell.size=500)`,
    then drop near-empty genes, e.g. `counts <- counts[rowSums(counts)>=10, ]`.
 3. Gene names must be unique: `rownames(counts) <- make.unique(rownames(counts))`.
