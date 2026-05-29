@@ -42,17 +42,21 @@ def _utcnow() -> str:
 
 
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
-                      timeout_s: int = 300, project_id: str | None = None) -> dict:
+                      timeout_s: int = 300, project_id: str | None = None,
+                      thread_id: str | None = None, run_id: str | None = None) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
-    workspace even if the active project changes before the worker picks it up."""
+    workspace even if the active project changes before the worker picks it up.
+    `thread_id` + `run_id` (the active Run at submit time) are captured so the
+    job's outputs attach to the originating Run/thread instead of orphaning."""
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
         kind="run_python",
         title=title or "Background analysis",
         focus_entity_id=focus_entity_id,
-        params={"code": code, "timeout_s": timeout_s, "project_id": project_id},
+        params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
+                "thread_id": thread_id, "run_id": run_id},
     )
     _QUEUE.put_nowait(job_id)
     return job
@@ -124,14 +128,17 @@ async def _run_one(job_id: str) -> None:
                        log_tail=log_tail, finished_at=_utcnow())
             return
 
-        # Register artifacts via the on_job_complete hook (bio handler).
+        # Register artifacts via the on_job_complete hook (bio handler). Carry
+        # the originating thread + Run (captured at submit) so the job's outputs
+        # attach to that Run instead of orphaning under a stray "Background
+        # analysis" — analysis_id pins it directly; thread_id is the fallback.
         dispatch("on_job_complete", {
             "tool_name": "run_python",
             "tool_input": {"code": code},
             "result_obj": result_obj,
             "focus_entity_id": focus_entity_id,
-            "analysis_ctx": {"analysis_id": None, "turn_index": 0},
-            "thread_id": None,
+            "analysis_ctx": {"analysis_id": params.get("run_id"), "turn_index": 0},
+            "thread_id": params.get("thread_id"),
             "new_entities": [],
         })
         update_job(job_id, status="done", log_tail=log_tail, finished_at=_utcnow())

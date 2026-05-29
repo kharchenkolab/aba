@@ -20,19 +20,30 @@ from core.graph.edges import add_edge
 from core.graph.entities import create_entity, get_entity
 
 
-def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
+def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
+                     thread_id: Optional[str] = None) -> str:
     """
-    Lazily create (and remember) an `analysis` entity for this turn.
+    Find or create the `analysis` entity (= Run) that new artifacts attach to.
 
-    If the user is focused on an existing figure/table/result, group new
-    artifacts under THAT entity's parent analysis (sibling relationship)
-    rather than nesting "Analysis of mt_fraction histogram" under the
-    figure itself.
+    Resolution order:
+    1. The id already cached for this turn (analysis_ctx).
+    2. The thread's OPEN Run, if one exists — so a planned, multi-turn pipeline
+       groups under ONE Run (runs.open_run / close_run) instead of a fresh
+       per-turn analysis each time.
+    3. Otherwise a lazily-created per-turn `analysis` (the small-scale fallback).
+       When focused on a leaf artifact, group under its parent analysis.
 
     `analysis_ctx` is shared across tool calls within one Guide turn.
     """
     if analysis_ctx.get("analysis_id"):
         return analysis_ctx["analysis_id"]
+
+    if thread_id:
+        from content.bio.lifecycle.runs import active_run_id
+        rid = active_run_id(thread_id)
+        if rid:
+            analysis_ctx["analysis_id"] = rid
+            return rid
 
     focused = focused_entity_id or WORKSPACE_ID
     parent = focused
@@ -56,6 +67,7 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict) -> str:
         entity_type="analysis",
         title=title,
         parent_entity_id=parent,
+        metadata={"thread_id": thread_id} if thread_id else None,
     )
     analysis_ctx["analysis_id"] = aid
     return aid
@@ -86,9 +98,17 @@ def register_artifacts_from_tool_result(
     res_meta["execution_mode"] = _mode or "stateless"
     res_meta["reproducible"] = "self_contained" if res_meta["execution_mode"] == "stateless" else "session"
 
+    # Capture every executed cell onto the thread's open Run (if any), so the
+    # Run is the recompute unit — not just cells that happened to emit a figure.
+    if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
+        from content.bio.lifecycle.runs import active_run_id, append_run_code
+        _rid = active_run_id(thread_id)
+        if _rid:
+            append_run_code(_rid, tool_input.get("code", "") if isinstance(tool_input, dict) else "")
+
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
     if tool_name in ("run_python", "run_r", "run_nextflow") and plots:
-        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
+        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         multi = len(plots) > 1
         for i, p in enumerate(plots):
@@ -122,7 +142,7 @@ def register_artifacts_from_tool_result(
     # Output CSVs → table entities.
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
     if tool_name in ("run_python", "run_r", "run_nextflow") and tables:
-        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx)
+        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
         for t in tables:
             original_name = t.get("original_name") or "table.csv"
