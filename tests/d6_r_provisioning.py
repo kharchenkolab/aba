@@ -263,13 +263,16 @@ def test_read_capability():
 
 
 def test_seed_r_packages():
-    print("seed catalog declares pagoda2 + conos (r_package, github) — no propose dance")
+    print("seed catalog declares pagoda2 (CRAN binary) + conos (github, for its Bioc dep)")
     from core.catalog import resolve_capability
-    for n, repo in (("pagoda2", "kharchenkolab/pagoda2"), ("conos", "kharchenkolab/conos")):
+    # pagoda2 → CRAN (fast PPM binary; no Bioconductor deps). conos stays GitHub:
+    # it depends on the Bioconductor pkg ComplexHeatmap, which install.packages()/PPM
+    # can't resolve but remotes::install_github + BiocManager does.
+    for n, src, pkg in (("pagoda2", "cran", "pagoda2"), ("conos", "github", "kharchenkolab/conos")):
         c = resolve_capability(n) or {}
         r = (c.get("provisioning") or {}).get("r") or {}
         check(f"{n} present as r_package", c.get("archetype") == "r_package", str(c)[:120])
-        check(f"{n} → github {repo}", r.get("source") == "github" and r.get("package") == repo, str(r))
+        check(f"{n} → {src} {pkg}", r.get("source") == src and r.get("package") == pkg, str(r))
         check(f"{n} library name = {n}", r.get("library") == n, str(r))
 
 
