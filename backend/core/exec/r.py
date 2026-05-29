@@ -36,7 +36,11 @@ RUNTIME_SPECS = ["r-base", "r-remotes", "r-biocmanager", "compilers", "make", "p
 # pagoda2). Heavy frameworks (Seurat, tidyverse, DESeq2) stay in the on-demand
 # curated base (r_base.yaml), NOT here.
 R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcppprogress",
-               "r-igraph", "r-irlba", "r-xml2", "libxml2"]
+               "r-igraph", "r-irlba", "r-xml2", "libxml2",
+               # ggrepel (+ its ggplot2 dep) — non-overlapping point/text labels for
+               # volcano/marker plots; the R analog of Python adjustText. Common enough
+               # across DE/single-cell plotting to keep ready as a binary.
+               "r-ggrepel"]
 
 # Identifier validation so a package/ref string can't inject R code via `-e`.
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name
