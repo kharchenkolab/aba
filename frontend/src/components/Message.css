@@ -160,6 +160,13 @@
   padding: 6px 14px; border-radius: 8px; cursor: pointer;
 }
 .plan-card__adjust:hover { background: var(--tree-active-bg); }
+.plan-card__saverun {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: auto; align-self: center;
+  font-size: 11px; color: var(--text-4); cursor: pointer; user-select: none;
+}
+.plan-card__saverun input { margin: 0; cursor: pointer; }
+.plan-card__saverun:hover { color: var(--text-3); }
 
 .msg-error {
   margin: 4px 0; padding: 7px 10px;

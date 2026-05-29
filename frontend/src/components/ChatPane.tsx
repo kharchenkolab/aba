@@ -215,7 +215,9 @@ export default function ChatPane({
                 keptKeys={keptKeys}
                 onKeepMessage={onKeepMessage}
                 planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
-                onPlanGo={() => onSend('Go ahead with the plan as proposed.')}
+                onPlanGo={(saveAsRun: boolean) => onSend(saveAsRun
+                  ? 'Go ahead with the plan as proposed.'
+                  : 'Go ahead with the plan as proposed. Do not save this as a run.')}
                 onPlanAdjust={() => setExtraFocus(n => n + 1)}
               />
               </ErrorBoundary>

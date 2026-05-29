@@ -86,8 +86,11 @@ function FigurePin({ entity, onPin }: { entity: Entity; onPin: (id: string, pinn
 
 function PlanCard({ block, active, onGo, onAdjust }: {
   block: Extract<Block, { type: 'plan' }>
-  active: boolean; onGo?: () => void; onAdjust?: () => void
+  active: boolean; onGo?: (saveAsRun: boolean) => void; onAdjust?: () => void
 }) {
+  // Pre-checked: by default a plan's outputs group into one Run (see open_run).
+  // Unchecking rides along on the Go message as a hint to skip it.
+  const [saveAsRun, setSaveAsRun] = useState(true)
   // T2.5: steps can be strings (legacy) or PlanStepShape objects with
   // title/description/expected_outputs/skill/parameters.
   const steps = (Array.isArray(block.steps) ? block.steps : []) as (
@@ -145,8 +148,14 @@ function PlanCard({ block, active, onGo, onAdjust }: {
       ))}
       {active && (
         <div className="plan-card__actions">
-          <button className="plan-card__go" onClick={onGo}>Go</button>
+          <button className="plan-card__go" onClick={() => onGo?.(saveAsRun)}>Go</button>
           <button className="plan-card__adjust" onClick={onAdjust}>Adjust…</button>
+          <label className="plan-card__saverun"
+                 title="Group this plan's outputs into one Run in the project tree">
+            <input type="checkbox" checked={saveAsRun}
+                   onChange={e => setSaveAsRun(e.target.checked)} />
+            Save as a run
+          </label>
         </div>
       )}
     </div>
@@ -154,7 +163,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 }
 
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void,
-                      planActive?: boolean, onPlanGo?: () => void, onPlanAdjust?: () => void,
+                      planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
                       isStreaming?: boolean) {
   const out: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
@@ -301,7 +310,7 @@ interface Props {
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
   /** A presented plan awaiting a decision (latest message): show Go / Adjust. */
   planActive?: boolean
-  onPlanGo?: () => void
+  onPlanGo?: (saveAsRun: boolean) => void
   onPlanAdjust?: () => void
 }
 
