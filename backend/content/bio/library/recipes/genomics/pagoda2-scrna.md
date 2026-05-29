@@ -129,7 +129,10 @@ GO overdispersion: `ext <- extendedP2proc(p2, organism='hs')` (also 'mm','dr').
   UMAP's `uwot` already ships with the runtime. **Don't hand-roll `install_github`
   and don't `ensure_capability` Matrix/igraph/irlba separately** — those (plus xml2
   and igraph's GLPK system lib) already ship as conda binaries, so
-  `library(Matrix); library(igraph)` just work.
+  `library(Matrix); library(igraph)` just work. **Never** `install.packages("pagoda2",
+  repos="https://cloud.r-project.org")` in `run_r` — cloud is source-only and
+  source-compiles the whole Rcpp dep tree (slow). Use `ensure_capability`; the run_r
+  session's repo already defaults to ABA's PPM binary mirror if you must install ad hoc.
 - Write outputs (plots, RDS, CSVs) under the injected `DATA_DIR` / the session working
   dir — NOT bare `/tmp` (it isn't compartmentalized and isn't picked up as a project
   artifact). Better still, let plots render in the cell so run_r captures them as figure
