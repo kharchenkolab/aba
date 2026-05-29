@@ -2589,6 +2589,18 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
         if not all_recs or len(all_recs) > 4:
             continue
         pairs.extend((r, t) for r in all_recs if r not in read)
+    # Only nudge toward a recipe that ALSO plausibly matches the turn's intent. A
+    # versatile lib (e.g. gget — used by several unrelated recipes) shouldn't nudge
+    # an off-topic recipe: an enrichment task that imports gget must not be told to
+    # read get-rna-seq-archs4. Keep only candidates in the intent's top recipes.
+    intent = (ctx or {}).get("intent") if isinstance(ctx, dict) else None
+    if pairs and intent and str(intent).strip():
+        try:
+            from core.skills.loader import search_skills as _ss
+            relevant = {s.name for s in _ss(str(intent), limit=8)}
+            pairs = [(r, t) for (r, t) in pairs if r in relevant]   # empty → no nudge
+        except Exception:  # noqa: BLE001
+            pass
     if not pairs:
         return
     rc["nudged"] = True
