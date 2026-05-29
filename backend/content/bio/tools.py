@@ -1824,6 +1824,22 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     return None
 
 
+def _overlay_has_import(import_name: str) -> bool:
+    """Is import_name already materialized in the pip overlay? Faithful to
+    run_python (which appends the overlay to sys.path) but thread-safe — probes
+    the overlay dir directly via PathFinder, never mutating sys.path."""
+    if not import_name:
+        return False
+    try:
+        from core.exec.materialize import pylib_dir
+        from importlib.machinery import PathFinder
+        import importlib
+        importlib.invalidate_caches()   # overlay dir may have appeared post-startup
+        return PathFinder.find_spec(import_name, [str(pylib_dir())]) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -1858,17 +1874,22 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
     if prov.get("pip"):
-        # Base-provided libs (scanpy/anndata/…) already live in the .venv scientific
-        # stack. A `pip --target` reinstall would redundantly pull them + their deps
-        # into the overlay — so when the seed declares an import_name that's already
-        # importable, ensuring is a no-op. (Only trusts an explicit import_name, so
-        # we never short-circuit a package that merely shares a base dep.)
+        # Already importable? Then ensuring is a no-op. Two cases, both keyed on
+        # the seed's explicit import_name (so we never short-circuit a package
+        # that merely shares a base dep):
+        #   • base env — scanpy/anndata/… ship in the .venv scientific stack;
+        #   • overlay  — a prior session already materialized it (e.g. scvi-tools).
+        # Skipping avoids a `pip --target` that re-resolves + re-fetches the whole
+        # dependency tree of a heavy package every fresh session.
         import importlib.util as _ilu
         _imp0 = cap.get("import_name")
-        if _imp0 and _ilu.find_spec(_imp0) is not None:
-            return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                    "archetype": cap.get("archetype"), "import_name": _imp0,
-                    "note": f"Already available in the base environment; `import {_imp0}` works in run_python."}
+        if _imp0:
+            _in_base = _ilu.find_spec(_imp0) is not None
+            if _in_base or _overlay_has_import(_imp0):
+                _where = "base environment" if _in_base else "materialized overlay"
+                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                        "archetype": cap.get("archetype"), "import_name": _imp0,
+                        "note": f"Already available ({_where}); `import {_imp0}` works in run_python."}
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)
