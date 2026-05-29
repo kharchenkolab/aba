@@ -729,9 +729,10 @@ TOOL_SCHEMAS = [
     {
         "name": "pin_entity",
         "description": (
-            "Pin (or unpin) an entity so it stays surfaced in the project — e.g. pin a "
-            "figure or result the user wants to keep front-and-center. Pass pinned=false "
-            "to unpin. Find the id first with list_entities."
+            "ONLY when the user explicitly asks to pin/keep something — pinning is the "
+            "scientist's curation gesture; never auto-pin your outputs (it devalues the "
+            "shelf). Pin (or unpin) an entity so it stays surfaced — pass pinned=false to "
+            "unpin. Find the id first with list_entities."
         ),
         "input_schema": {
             "type": "object",
@@ -745,9 +746,12 @@ TOOL_SCHEMAS = [
     {
         "name": "promote_to_result",
         "description": (
-            "Promote a figure into a first-class Result — an interpreted observation "
-            "(the figure becomes its evidence). The Skeptic advisor reviews it. Use when "
-            "the user draws a conclusion from a plot and wants it kept as a result."
+            "ONLY when the user explicitly asks to keep/promote a figure as a result — "
+            "NEVER autonomously after a pipeline (a pile of agent-made results devalues "
+            "them). If a plot looks worth keeping, say so in prose and offer to promote "
+            "it; wait for the user. Promotes a figure into a first-class Result — an "
+            "interpreted observation (the figure becomes its evidence); the Skeptic "
+            "advisor reviews it."
         ),
         "input_schema": {
             "type": "object",
@@ -762,9 +766,10 @@ TOOL_SCHEMAS = [
     {
         "name": "create_finding",
         "description": (
-            "Aggregate one or more Results into a Finding — a synthesized conclusion "
-            "backed by its supporting results. Use when several results together "
-            "establish a point the user wants to record."
+            "ONLY on the user's explicit request — never autonomously. Aggregate one or "
+            "more Results into a Finding — a synthesized conclusion backed by its "
+            "supporting results. Offer it in prose ('want me to record that as a "
+            "finding?') rather than minting one yourself."
         ),
         "input_schema": {
             "type": "object",
@@ -779,9 +784,12 @@ TOOL_SCHEMAS = [
     {
         "name": "create_claim",
         "description": (
-            "Record a Claim — a stated assertion the analysis supports (or refutes, with "
-            "negative=true), optionally citing evidence entities. Claims carry confidence "
-            "and can accrue caveats/alternatives over time."
+            "ONLY when the user explicitly asks to make/record a claim — a Claim is the "
+            "scientist's epistemic assertion, NEVER something you mint on your own after "
+            "an analysis (auto-claims are noise and erode trust in the claim list). State "
+            "your interpretation in prose and ask if they want it recorded as a claim. "
+            "Records a stated assertion the analysis supports (or refutes, negative=true), "
+            "optionally citing evidence; claims carry confidence + accrue caveats over time."
         ),
         "input_schema": {
             "type": "object",
