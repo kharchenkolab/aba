@@ -570,6 +570,14 @@ async def stream_response(
                                 if delta.type == "text_delta":
                                     emitted = True
                                     yield sse({"type": "delta", "text": delta.text})
+                            # Yield to the event loop on EVERY event, not just text
+                            # deltas. While the model generates a tool call, content
+                            # arrives as input_json_delta (no text yield) — without
+                            # this the async generator would monopolize the loop for
+                            # the whole generation, freezing concurrent requests
+                            # (e.g. GET /api/files/tree → stuck "Loading…" until the
+                            # action finishes).
+                            await asyncio.sleep(0)
                         if cancel_token.cancelled:
                             # Cancelled mid-stream — skip get_final_message
                             # (the partial message isn't usable) and let the
