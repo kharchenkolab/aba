@@ -226,6 +226,11 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
 // downsizes the (≈150 DPI) PNG, so click-to-zoom surfaces the native resolution.
 function ZoomableImg({ src, alt }: { src: string; alt: string }) {
   const [open, setOpen] = useState(false)
+  // crossOrigin enables highlight-to-canvas, but if the load fails for any
+  // reason, retry WITHOUT it (an image is more useful than blank space — the
+  // Run-view img has no crossOrigin and always renders). Reset per src.
+  const [cors, setCors] = useState(true)
+  useEffect(() => { setCors(true) }, [src])
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
@@ -234,12 +239,15 @@ function ZoomableImg({ src, alt }: { src: string; alt: string }) {
   }, [open])
   return (
     <>
-      <img className="msg-image__img" src={src} alt={alt} crossOrigin="anonymous"
+      <img className="msg-image__img" src={src} alt={alt}
+        crossOrigin={cors ? 'anonymous' : undefined}
+        onError={() => { if (cors) setCors(false) }}
         style={{ cursor: 'zoom-in' }} title="Click to view full size"
         onClick={() => setOpen(true)} />
       {open && (
         <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
-          <img className="lightbox__img" src={src} alt={alt} crossOrigin="anonymous"
+          <img className="lightbox__img" src={src} alt={alt}
+            crossOrigin={cors ? 'anonymous' : undefined}
             onClick={e => e.stopPropagation()} />
           <button className="lightbox__close" onClick={() => setOpen(false)} aria-label="Close">×</button>
         </div>

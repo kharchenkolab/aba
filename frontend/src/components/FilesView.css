@@ -324,10 +324,15 @@
 }
 .files__col--sortable:hover { color: var(--text-2); }
 .files__col-grip {
-  position: absolute; right: -4px; top: -2px; bottom: -2px; width: 8px;
+  position: absolute; right: -4px; top: 2px; bottom: 2px; width: 9px;
   cursor: col-resize;
+  display: flex; align-items: stretch; justify-content: center;
 }
-.files__col-grip:hover { background: var(--accent-border); border-radius: 2px; }
+/* Always-visible thin divider so users see the column boundary is draggable. */
+.files__col-grip::before {
+  content: ''; width: 1px; background: var(--border);
+}
+.files__col-grip:hover::before { width: 2px; background: var(--accent); }
 /* Resizable widths come from CSS vars set on the body/header (FileBrowser). */
 .files__column-head .files__col--type, .files__body--list .files__type { width: var(--col-type, 110px); }
 .files__column-head .files__col--size, .files__body--list .files__size { width: var(--col-size, 60px); }
