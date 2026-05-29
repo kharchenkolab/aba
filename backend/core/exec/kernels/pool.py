@@ -39,6 +39,14 @@ class KernelPool:
             self._sessions[key] = s
             return s
 
+    def peek(self, scope_key: str, lang: str = "python"):
+        """Return the live session for (scope_key, lang) if one exists, else None
+        — WITHOUT starting a new kernel. Used to nudge an already-running kernel
+        (e.g. invalidate import caches after an overlay install)."""
+        with self._lock:
+            s = self._sessions.get((scope_key, lang))
+            return s if (s is not None and getattr(s, "alive", False)) else None
+
     def restart(self, scope_key: str, lang: str = "python") -> bool:
         """Clear a thread's session (hard reset). Next use starts fresh."""
         with self._lock:
