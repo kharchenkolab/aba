@@ -16,6 +16,10 @@ interface Props {
   onFocus: (id: string) => void
   onViewFile?: (node: FileNode) => void
   reloadKey?: unknown
+  /** Deep-link: navigate the browser to this folder path (e.g. from a Run's
+   *  "Browse in Files tab"). `targetNonce` makes repeat requests re-fire. */
+  targetPath?: string
+  targetNonce?: number
 }
 
 function countFiles(n: TreeNode | null): number {
@@ -25,7 +29,7 @@ function countFiles(n: TreeNode | null): number {
   return c
 }
 
-export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }: Props) {
+export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, targetPath, targetNonce }: Props) {
   const [root, setRoot] = useState<TreeNode | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -103,6 +107,8 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
       titleSlot={titleSlot}
       actionsSlot={actionsSlot}
       notice={notice && <div className="files__notice">{notice}</div>}
+      targetPath={targetPath}
+      targetNonce={targetNonce}
     />
   )
 }

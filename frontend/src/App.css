@@ -48,8 +48,8 @@
 .canvas-title__input {
   font-size: 15px; font-weight: 600; color: var(--text);
   background: var(--bg); border: 1px solid var(--accent-border);
-  border-radius: 6px; padding: 2px 8px; min-width: 0; flex: 1;
-  outline: none;
+  border-radius: 6px; padding: 1px 7px; margin: -1px 0; outline: none;
+  flex: 1 1 auto; width: 100%; min-width: 0;   /* fill the header's free space */
 }
 .canvas-back {
   flex: none; border: 1px solid var(--border); background: var(--bg); color: var(--text-3);

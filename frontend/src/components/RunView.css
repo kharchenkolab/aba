@@ -70,10 +70,12 @@
 .runview__modal-box {
   position: relative; background: var(--bg); border: 1px solid var(--border);
   border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,0.35);
-  width: min(1100px, 92vw); height: min(86vh, 900px); overflow: auto;
+  width: min(1100px, 92vw); height: min(86vh, 900px);
+  overflow: hidden; display: flex; flex-direction: column;   /* box fixed; body scrolls */
 }
+.runview__modal-body { flex: 1; min-height: 0; overflow: auto; }
 .runview__modal-close {
-  position: absolute; top: 8px; right: 10px; z-index: 2;
+  position: absolute; top: 8px; right: 10px; z-index: 3;   /* pinned to the box, above scrolling content */
   width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text-2); font-size: 18px; line-height: 1; cursor: pointer;
 }

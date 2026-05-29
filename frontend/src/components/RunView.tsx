@@ -39,7 +39,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   run: Entity; entities: Entity[]; onFocus: (id: string) => void; onChange: () => void
   onAsk?: (t: string) => void
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
-  onBrowseFiles?: () => void
+  onBrowseFiles?: (path?: string) => void
 }) {
   void entities
   const m = (run.metadata?.run ?? {}) as RunMeta
@@ -64,6 +64,14 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
     return () => { cancelled = true }
   }, [run.id])
 
+  // Esc closes the file-preview modal.
+  useEffect(() => {
+    if (!modalNode) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModalNode(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [modalNode])
+
   function fileHref(node: { artifact_path?: string | null; path: string }): string {
     const ap = node.artifact_path || ''
     return ap.startsWith('/artifacts/') || ap.startsWith('http')
@@ -73,14 +81,27 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   // way plot thumbnails preview. The "Browse in Files tab" link is the escape
   // hatch for those who want the full middle-column viewer.
   function browseViewFile(node: FileNode) { setModalNode(node as TreeNode) }
-  async function pinFile(node: TreeNode) {
-    const ext = (node.name.split('.').pop() || '').toLowerCase()
-    const kind = /^(png|jpe?g|gif|svg|webp)$/.test(ext) ? 'figure' : /^(csv|tsv)$/.test(ext) ? 'table' : 'file'
-    const href = fileHref(node)
-    await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, label: node.name, thumb: kind === 'figure' ? href : undefined, href }),
-    }).catch(() => {})
+  // path → pinned-result entity id, so a second click UNPINS (archives) it
+  // instead of adding a duplicate to the thread.
+  const [pinnedIds, setPinnedIds] = useState<Record<string, string>>({})
+  async function pinFile(node: TreeNode, pinned: boolean) {
+    if (pinned) {
+      const ext = (node.name.split('.').pop() || '').toLowerCase()
+      const kind = /^(png|jpe?g|gif|svg|webp)$/.test(ext) ? 'figure' : /^(csv|tsv)$/.test(ext) ? 'table' : 'file'
+      const href = fileHref(node)
+      try {
+        const r = await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind, label: node.name, thumb: kind === 'figure' ? href : undefined, href }),
+        })
+        const ent = await r.json().catch(() => null)
+        if (ent?.id) setPinnedIds(m => ({ ...m, [node.path]: ent.id }))
+      } catch { /* leave unpinned on failure */ }
+    } else {
+      const id = pinnedIds[node.path]
+      if (id) await fetch(`/api/entities/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+      setPinnedIds(m => { const n = { ...m }; delete n[node.path]; return n })
+    }
     onChange()
   }
   // Discuss: set the chat CONTEXT (prefill + focus composer) without sending —
@@ -216,8 +237,10 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           <div className="runview__outputs-head runview__browse-head">
             Output files
             {onBrowseFiles && (
-              <button className="runview__browse-link" onClick={onBrowseFiles}
-                      title="Open this run's folder in the Files tab (viewer in the middle column)">
+              <button className="runview__browse-link"
+                      onClick={() => onBrowseFiles(
+                        runTree?.children?.find(c => c.name === 'output')?.path || runTree?.path || '')}
+                      title="Open this run's output folder in the Files tab (viewer in the middle column)">
                 Browse in Files tab →
               </button>
             )}
@@ -237,8 +260,10 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
       {modalNode && (
         <div className="runview__modal" onClick={() => setModalNode(null)}>
           <div className="runview__modal-box" onClick={e => e.stopPropagation()}>
-            <button className="runview__modal-close" onClick={() => setModalNode(null)} aria-label="Close">×</button>
-            <FileCanvas node={modalNode} onFocus={onFocus} onClose={() => setModalNode(null)} />
+            <button className="runview__modal-close" onClick={() => setModalNode(null)} aria-label="Close (Esc)" title="Close (Esc)">×</button>
+            <div className="runview__modal-body">
+              <FileCanvas node={modalNode} onFocus={onFocus} onClose={() => setModalNode(null)} />
+            </div>
           </div>
         </div>
       )}

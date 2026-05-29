@@ -87,20 +87,23 @@ function EditableThreadTitle({ thread, onRenamed }: {
     })
     onRenamed()
   }
-  if (editing) return (
-    <input className="canvas-title__input" autoFocus value={draft}
-           onChange={e => setDraft(e.target.value)} onBlur={save}
-           onKeyDown={e => {
-             if (e.key === 'Enter') save()
-             if (e.key === 'Escape') { setDraft(thread.title); setEditing(false) }
-           }} />
-  )
+  // Edit IN PLACE: keep the "thread" pill, swap only the title text for an
+  // input that fills the remaining width — so nothing jumps.
   return (
     <>
       <span className="canvas-title__type">thread</span>
-      <span className="canvas-title__editable"
-            onClick={() => { setDraft(thread.title); setEditing(true) }}
-            title="Click to rename">{thread.title}</span>
+      {editing ? (
+        <input className="canvas-title__input" autoFocus value={draft}
+               onChange={e => setDraft(e.target.value)} onBlur={save}
+               onKeyDown={e => {
+                 if (e.key === 'Enter') save()
+                 if (e.key === 'Escape') { setDraft(thread.title); setEditing(false) }
+               }} />
+      ) : (
+        <span className="canvas-title__editable"
+              onClick={() => { setDraft(thread.title); setEditing(true) }}
+              title="Click to rename">{thread.title}</span>
+      )}
     </>
   )
 }
@@ -164,6 +167,9 @@ export default function App() {
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
   const [prefill, setPrefill] = useState('')
+  // Files-tab deep-link target (e.g. a Run's "Browse in Files tab"); nonce so a
+  // repeat click to the same path re-navigates.
+  const [filesTarget, setFilesTarget] = useState<{ path: string; n: number }>({ path: '', n: 0 })
   const [composerFocus, setComposerFocus] = useState(0)
   const [annotClear, setAnnotClear] = useState(0)
   const attachAnnotation = (a: { image: string; note: string }) => {
@@ -562,7 +568,7 @@ export default function App() {
           compact={!primary}
           onAsk={askGuide}
           onChatResult={chatAboutResult}
-          onBrowseFiles={() => openProjectSection('files')}
+          onBrowseFiles={(path?: string) => { openProjectSection('files'); setFilesTarget(t => ({ path: path ?? '', n: t.n + 1 })) }}
         />
       )}
     </div>
@@ -618,6 +624,7 @@ export default function App() {
           onSelectThread={selectThread}
           onOpenOverview={() => setOverview(true)}
           onOpenThreadOverview={openThreadOverview}
+          filesTarget={filesTarget}
         />
       )}
       <HResizer
