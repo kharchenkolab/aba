@@ -78,8 +78,9 @@ place via `$`.
   (`use.local.clusters=TRUE`) are not.
 
 ## In ABA
-- Install via `ensure_capability("conos")` — it's a seeded CRAN R package
-  (installs as a PPM binary, fast). Pulls in pagoda2/leidenAlg as needed.
+- Install via `ensure_capability("conos")` — seeded R package (GitHub, so its
+  Bioconductor dep ComplexHeatmap resolves via remotes+BiocManager; a CRAN install
+  can't). pagoda2/leidenAlg come along as needed.
   It depends on pagoda2 (also a GitHub r_package) for preprocessing, plus
   Matrix and igraph; igraph needs the GLPK system lib (conda `glpk`). Run all
   steps in `run_r`.
