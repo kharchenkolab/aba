@@ -40,7 +40,12 @@ R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcpppr
                # ggrepel (+ its ggplot2 dep) — non-overlapping point/text labels for
                # volcano/marker plots; the R analog of Python adjustText. Common enough
                # across DE/single-cell plotting to keep ready as a binary.
-               "r-ggrepel"]
+               "r-ggrepel",
+               # biomaRt — ubiquitous for Ensembl ID↔symbol mapping / gene annotation.
+               # Pre-installed as the conda Bioconductor BINARY: an on-demand source
+               # compile pulls Biostrings/XVector/png and reliably blew the run_r 120s
+               # timeout (see session thr_78efae37). r-binary-channels.
+               "bioconductor-biomart"]
 
 # Identifier validation so a package/ref string can't inject R code via `-e`.
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name
