@@ -7,8 +7,21 @@ import { useState } from 'react'
 import type { ViewerComponentProps } from './types'
 import './MarkdownCanvas.css'
 
+/** Image source for a file node. Harvested entities carry a served URL
+ *  (/artifacts/… or http…); run-output / working-tree files carry a raw on-disk
+ *  artifact_path the browser can't fetch — for those, stream the bytes through
+ *  /api/files/content (keyed by the tree path). */
+function imageSrc(node: ViewerComponentProps['node']): string {
+  const ap = node.artifact_path || ''
+  if (ap.startsWith('/artifacts/') || ap.startsWith('http') || ap.startsWith('/api/') || ap.startsWith('data:')) {
+    return ap
+  }
+  if (node.path) return `/api/files/content?path=${encodeURIComponent(node.path)}`
+  return ap
+}
+
 export default function ImageCanvas({ node }: ViewerComponentProps) {
-  const src = node.artifact_path || ''
+  const src = imageSrc(node)
   const [loadError, setLoadError] = useState(false)
   return (
     <article className="viewer viewer--image">
