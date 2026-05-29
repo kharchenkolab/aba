@@ -926,6 +926,48 @@ def read_csv_info(input_: dict) -> dict:
         return {"error": str(e)}
 
 
+def _run_scratch_cwd(project_id: str, thread_id: str):
+    """Working dir for this run_python/run_r cell: the active Run's own output
+    directory (so a pipeline's files group into one browsable bundle), else the
+    shared per-thread scratch dir. The Run's dir is recorded as its artifact_path
+    by runs.open_run / the ambient analysis."""
+    from pathlib import Path
+    from core.data.workspace import scratch_dir
+    try:
+        from content.bio.lifecycle.runs import active_run_id
+        from core.graph.entities import get_entity
+        rid = active_run_id(str(thread_id))
+        if rid:
+            ap = (get_entity(rid) or {}).get("artifact_path")
+            if ap:
+                p = Path(ap)
+                p.mkdir(parents=True, exist_ok=True)
+                return p
+    except Exception:  # noqa: BLE001 — fall back to the thread dir
+        pass
+    return scratch_dir(str(project_id), f"thread-{thread_id}")
+
+
+def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
+    """Switch the persistent kernel into `cwd` (the active Run's output dir) and
+    re-point the WORK_DIR variable/env — only when it changed, so it's a no-op on
+    repeat cells. Relative writes (savefig('x.png'), saveRDS(o,'x.rds')) then land
+    in the Run's folder, captured as that Run's outputs."""
+    path = str(cwd)
+    if getattr(sess, "_aba_cwd", None) == path:
+        return
+    try:
+        if lang == "r":
+            snippet = (f'setwd({path!r}); Sys.setenv(WORK_DIR={path!r}); WORK_DIR <- {path!r}')
+        else:
+            snippet = (f'import os as _os; _os.chdir({path!r}); '
+                       f'_os.environ["WORK_DIR"]={path!r}; WORK_DIR={path!r}')
+        sess.execute(snippet, timeout_s=15)
+        sess._aba_cwd = path
+    except Exception:  # noqa: BLE001 — best-effort; the run still works in the kernel's prior cwd
+        pass
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -978,9 +1020,13 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         try:
             from core.exec.kernels import get_pool
             from core.data.workspace import scratch_dir
-            cwd = scratch_dir(str(project_id), f"thread-{thread_id}")   # persistent per thread
+            # cwd = the active Run's own output dir (so a pipeline's files land in
+            # one browsable bundle), else the shared thread scratch dir.
+            cwd = _run_scratch_cwd(str(project_id), str(thread_id))
             start_ts = _time.time()
-            sess = get_pool().get_or_start(str(thread_id), "python", cwd=str(cwd))
+            sess = get_pool().get_or_start(str(thread_id), "python",
+                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+            _ensure_kernel_cwd(sess, "python", cwd)
             res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
                 return {"error": f"Code execution timed out ({timeout_s}s limit)"}
@@ -1030,9 +1076,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     try:
         from core.exec.kernels import get_pool
         from core.data.workspace import scratch_dir
-        cwd = scratch_dir(str(project_id), f"thread-{thread_id}")   # shared with the Python kernel
+        # cwd = the active Run's own output dir (shared with the Python kernel via
+        # the same run-keyed dir), else the thread scratch dir.
+        cwd = _run_scratch_cwd(str(project_id), str(thread_id))
         start_ts = _time.time()
-        sess = get_pool().get_or_start(str(thread_id), "r", cwd=str(cwd))
+        sess = get_pool().get_or_start(str(thread_id), "r",
+                                       cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+        _ensure_kernel_cwd(sess, "r", cwd)
         res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001
         return {"error": f"R kernel error: {e}"}
