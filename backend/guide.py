@@ -484,8 +484,9 @@ async def stream_response(
     )
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
+    eff_intent = _effective_intent(user_text, history)
     system = focus_text + thread_text + build_system(
-        active_tools, role=guide_role, intent=_effective_intent(user_text, history))
+        active_tools, role=guide_role, intent=eff_intent)
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
                        focus_entity_id=focus_entity_id)
@@ -795,6 +796,7 @@ async def stream_response(
                     "focus_entity_id": focus_entity_id,
                     "session_id": session_id,
                     "recipe_ctx": recipe_ctx,
+                    "intent": eff_intent,
                     # Long-running tools register kill interrupters here so
                     # Stop actually stops the work (not just the UI).
                     "cancel_token": cancel_token,

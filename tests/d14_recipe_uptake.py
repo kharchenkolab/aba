@@ -36,10 +36,13 @@ def check(label, cond, detail=""):
         _failures.append(label)
 
 
-def hint(name, code, read=None, result=None):
+def hint(name, code, read=None, result=None, intent=None):
     rc = {"read": set(read or []), "nudged": False}
     r = dict(result or {"stdout": "", "stderr": "", "returncode": 0})
-    T._recipe_uptake_hint(name, {"code": code}, r, {"recipe_ctx": rc})
+    ctx = {"recipe_ctx": rc}
+    if intent is not None:
+        ctx["intent"] = intent
+    T._recipe_uptake_hint(name, {"code": code}, r, ctx)
     return r.get("recipe_hint"), rc
 
 
@@ -79,9 +82,20 @@ def test_nudge():
     check("once per turn (2nd qualifying call silent)", bool(r1.get("recipe_hint")) and not r2.get("recipe_hint"))
 
 
+def test_nudge_intent_filter():
+    print("nudge requires the recipe to also match the turn intent (versatile-lib guard)")
+    h_m, _ = hint("run_python", "from pydeseq2.dds import DeseqDataSet",
+                  intent="bulk RNA-seq differential expression treated vs control")
+    check("intent matches → nudge", bool(h_m) and "bulk-rnaseq-de" in h_m, str(h_m))
+    h_x, _ = hint("run_python", "from pydeseq2.dds import DeseqDataSet",
+                  intent="align protein sequences and build a phylogenetic tree")
+    check("intent mismatch → no nudge (off-topic recipe suppressed)", h_x is None, str(h_x))
+
+
 def main() -> int:
     test_capability_map()
     test_nudge()
+    test_nudge_intent_filter()
     print()
     if _failures:
         print(f"FAILED ({len(_failures)}): " + ", ".join(_failures))
