@@ -22,17 +22,34 @@ interface Props {
   /** Stop button rendered inside the composer box. Visible only while
    *  streaming. Icon-only, sits next to the Send arrow. */
   onStop?: () => void
+  /** Stable per-thread key for persisting the unsent draft across unmounts
+   *  (switching tabs/views) so typed-but-unsent text isn't lost. */
+  draftKey?: string
 }
 
-export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop }: Props) {
-  const [value, setValue] = useState('')
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop, draftKey }: Props) {
+  // Restore any persisted draft for this thread (the composer unmounts when you
+  // switch views, so without this the unsent text would vanish).
+  const [value, setValue] = useState<string>(() => (draftKey && sessionStorage.getItem(draftKey)) || '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const persist = (v: string) => {
+    if (!draftKey) return
+    try { if (v) sessionStorage.setItem(draftKey, v); else sessionStorage.removeItem(draftKey) }
+    catch { /* storage unavailable — degrade to in-memory only */ }
+  }
+  const setDraft = (v: string) => { setValue(v); persist(v) }
+  // Reload the draft if the thread (draftKey) changes without a remount.
+  const firstDraftKey = useRef(true)
+  useEffect(() => {
+    if (firstDraftKey.current) { firstDraftKey.current = false; return }
+    setValue((draftKey && sessionStorage.getItem(draftKey)) || '')
+  }, [draftKey])
 
   // When an advisor's "Try it" prefills the composer, drop the text in and
   // focus — the user can edit or just hit Enter.
   useEffect(() => {
     if (prefill) {
-      setValue(prefill)
+      setDraft(prefill)
       textareaRef.current?.focus()
       onPrefillConsumed?.()
     }
@@ -71,7 +88,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
       const text = value.trim()
       if (!text) return
       onSteer(text)
-      setValue('')
+      setDraft('')
       return
     }
     submit()
@@ -81,7 +98,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     const text = value.trim()
     if (!text || disabled) return
     onSend(text)
-    setValue('')
+    setDraft('')
   }
 
   // Auto-grow on every value change — covers typing, paste, prefill,
@@ -124,7 +141,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           className="composer__input"
           placeholder={placeholder}
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => setDraft(e.target.value)}
           onKeyDown={handleKey}
           rows={1}
         />
