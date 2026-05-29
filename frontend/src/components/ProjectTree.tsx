@@ -20,6 +20,8 @@ interface Props {
   onSelectThread: (id: string) => void
   onOpenOverview: () => void
   onOpenThreadOverview: (id: string) => void
+  /** Files tab deep-link target (e.g. a Run's output folder). */
+  filesTarget?: { path: string; n: number }
 }
 
 const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
@@ -101,7 +103,7 @@ function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { classN
   )
 }
 
-export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview }: Props) {
+export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview, filesTarget }: Props) {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -308,7 +310,8 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       </div>
 
       {activeSection === 'files' ? (
-        <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length} />
+        <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length}
+                   targetPath={filesTarget?.path} targetNonce={filesTarget?.n} />
       ) : (
       <div className="tree__scroll">
         {activeSection === 'threads' ? (() => {

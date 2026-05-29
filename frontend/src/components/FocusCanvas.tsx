@@ -24,8 +24,8 @@ interface Props {
   onAsk?: (text: string) => void
   /** "Chat" gesture on a run output — bring the plot (with its image) into chat. */
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
-  /** Run view → switch the left rail to the Files tab (browse output there). */
-  onBrowseFiles?: () => void
+  /** Run view → switch the left rail to the Files tab, deep-linking to a folder. */
+  onBrowseFiles?: (path?: string) => void
 }
 
 interface TablePreview {
@@ -379,7 +379,7 @@ function renderBody(
   compact?: boolean,
   onAsk?: (t: string) => void,
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void,
-  onBrowseFiles?: () => void,
+  onBrowseFiles?: (path?: string) => void,
 ) {
   switch (e.type) {
     case 'figure':

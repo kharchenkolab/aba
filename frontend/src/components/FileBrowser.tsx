@@ -9,7 +9,7 @@
  * same component renders the whole project tree (rail) or a run subtree (Run view).
  * Folders are first-class — nested output dirs (model/, figures/…) are navigable.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './FilesView.css'
 import type { FileNode } from '../viewers/types'
 
@@ -23,7 +23,8 @@ export type TreeNode = FileNode & {
 /** Per-file gestures the host wires in. Buttons render only when provided. */
 export interface FileActions {
   onPromote?: (node: TreeNode) => void
-  onPin?: (node: TreeNode) => void
+  /** Toggle pin. `pinned` is the NEW state (true=pin, false=unpin). */
+  onPin?: (node: TreeNode, pinned: boolean) => void
   onDiscuss?: (node: TreeNode) => void
 }
 
@@ -41,6 +42,10 @@ interface Props {
   titleSlot?: React.ReactNode
   actionsSlot?: React.ReactNode
   notice?: React.ReactNode
+  /** Deep-link: navigate the browser INTO this folder path (list view). The
+   *  nonce makes a repeat request to the same path re-fire. */
+  targetPath?: string
+  targetNonce?: number
 }
 
 function fmtSize(n: number | null | undefined): string {
@@ -143,7 +148,7 @@ type SortKey = 'name' | 'type' | 'size'
 
 export default function FileBrowser({
   root, focusedId = '', onFocus, onViewFile, variant = 'rail', actions,
-  loading, error, emptyHint, titleSlot, actionsSlot, notice,
+  loading, error, emptyHint, titleSlot, actionsSlot, notice, targetPath, targetNonce,
 }: Props) {
   const wide = variant === 'wide'
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -157,6 +162,14 @@ export default function FileBrowser({
   // Optimistic pinned state — pinning creates a separate entity (the file node
   // isn't marked), so we track clicked paths locally to show a filled-red pin.
   const [pinned, setPinned] = useState<Set<string>>(new Set())
+
+  // Deep-link navigation: when a host asks to open a folder (e.g. "Browse in
+  // Files tab" → a run's output dir), switch to list view at that path so it's
+  // shown from the top. Keyed on the nonce so repeat clicks re-fire.
+  useEffect(() => {
+    if (targetPath) { setView('list'); setQuery(''); setListPath(targetPath) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetNonce])
 
   const visible = useMemo(() => root ? filterTree(root, query.trim()) : null, [root, query])
   const isSearching = query.trim().length > 0
@@ -227,8 +240,13 @@ export default function FileBrowser({
       <>
         {actions.onPin && (
           <button className={`files__action files__action--pin ${isPinned ? 'files__action--pinned' : ''}`}
-                  title={isPinned ? 'Pinned to the thread' : 'Pin to the thread'} aria-label="Pin"
-                  onClick={e => { e.stopPropagation(); actions.onPin!(node); setPinned(s => new Set(s).add(node.path)) }}>
+                  title={isPinned ? 'Unpin from the thread' : 'Pin to the thread'} aria-label={isPinned ? 'Unpin' : 'Pin'}
+                  onClick={e => {
+                    e.stopPropagation()
+                    const next = !isPinned
+                    setPinned(s => { const n = new Set(s); next ? n.add(node.path) : n.delete(node.path); return n })
+                    actions.onPin!(node, next)
+                  }}>
             <PinGlyph filled={isPinned} />
           </button>
         )}
