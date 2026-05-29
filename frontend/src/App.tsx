@@ -166,6 +166,11 @@ export default function App() {
   const [highlighting, setHighlighting] = useState(false)
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
+  // Right column (thread-context / chat-peek) collapse. Policy: collapsing is a
+  // transient "give me room for THIS view" gesture — it auto-reopens whenever the
+  // view context changes (posture, focused entity, thread, overview/inventory), so
+  // the user never loses the contextual right column silently after navigating.
+  const [rightCollapsed, setRightCollapsed] = useState(false)
   const [prefill, setPrefill] = useState('')
   // Files-tab deep-link target (e.g. a Run's "Browse in Files tab"); nonce so a
   // repeat click to the same path re-navigates.
@@ -269,6 +274,9 @@ export default function App() {
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId,
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
+
+  // Right column auto-reopens on any view-context change (see rightCollapsed).
+  useEffect(() => { setRightCollapsed(false) }, [posture, focusedId, threadId, overview, inventory])
 
   // Cold-start orientation: when a thread has data but no conversation yet, ask
   // the Guide to post an opening summary + next steps. Idempotent server-side;
@@ -707,11 +715,17 @@ export default function App() {
               onAsk={askGuide}
             />
           ) : (
-          <div className={`split split--${posture}`}>
+          <div className={`split split--${posture} ${rightCollapsed ? 'split--right-collapsed' : ''}`}>
+            {rightCollapsed && (
+              <button className="right-expand" onClick={() => setRightCollapsed(false)}
+                      title="Show the side panel" aria-label="Expand side panel">‹</button>
+            )}
             {posture === 'chat' ? (
               <>
                 <div className="surface-panel primary chat-primary">{chatPane(false)}</div>
                 <div className="thread-context">
+                  <button className="right-collapse" onClick={() => setRightCollapsed(true)}
+                          title="Hide the side panel" aria-label="Collapse side panel">›</button>
                   {drawerToggle}
                   {currentThread && (
                     <ThreadHeader thread={currentThread} onChange={refresh} onSwitchThread={selectThread}
@@ -734,6 +748,8 @@ export default function App() {
                     right:-10px is NOT clipped by surface-panel's
                     overflow: hidden. */}
                 <div className="chat-peek-anchor">
+                  <button className="right-collapse" onClick={() => setRightCollapsed(true)}
+                          title="Hide the side panel" aria-label="Collapse side panel">›</button>
                   {drawerToggle}
                   <div className="surface-panel chat-peek">{chatPane(true)}</div>
                 </div>
