@@ -323,6 +323,11 @@
 }
 .focus__dataset-desc::placeholder { color: var(--text-4); }
 .focus__dataset-desc:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.focus__dataset-files { margin-top: 12px; }
+.focus__dataset-files-head {
+  font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-4); margin-bottom: 6px;
+}
 .focus__rows    { display: flex; flex-direction: column; gap: 4px; }
 
 .focus__preview-wrap {

@@ -646,6 +646,38 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest):
     return get_entity(eid)
 
 
+@app.get("/api/datasets/{did}/tree")
+def dataset_tree(did: str):
+    """The dataset's subtree from the files tree (its directory contents, or the
+    single registered file) — so the Dataset view can browse a folder dataset
+    with the shared FileBrowser instead of showing one opaque 'file' row."""
+    ent = get_entity(did)
+    if not ent or ent["type"] != "dataset":
+        raise HTTPException(404, f"Dataset {did} not found")
+    import content.bio  # noqa: F401
+    from content.bio.files.tree import build_files_tree
+
+    tree = build_files_tree(include_archived=False)
+
+    def _find(node):
+        if node.get("entity_id") == did:
+            return node
+        for c in node.get("children") or []:
+            hit = _find(c)
+            if hit:
+                return hit
+        return None
+
+    node = _find(tree)
+    if node is None:
+        return {"kind": "root", "name": ent.get("title") or "dataset", "path": "", "children": []}
+    if node.get("kind") == "folder":
+        return {**node, "kind": "root"}
+    # Single-file dataset → present the one file under a root.
+    return {"kind": "root", "name": ent.get("title") or "dataset", "path": "",
+            "children": [node]}
+
+
 @app.get("/api/runs/{rid}/tree")
 def run_tree(rid: str):
     """The Run's subtree from the files tree (its readme, code, output/ dir +
