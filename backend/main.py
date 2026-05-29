@@ -646,6 +646,33 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest):
     return get_entity(eid)
 
 
+@app.get("/api/runs/{rid}/tree")
+def run_tree(rid: str):
+    """The Run's subtree from the files tree (its readme, code, output/ dir +
+    curated figures/tables) — so the Run view can embed the shared FileBrowser
+    and browse nested output folders, not just a flat list."""
+    _run_or_404(rid)
+    import content.bio  # noqa: F401
+    from content.bio.files.tree import build_files_tree
+
+    tree = build_files_tree(include_archived=False)
+
+    def _find(node):
+        if node.get("entity_id") == rid and node.get("kind") == "folder":
+            return node
+        for c in node.get("children") or []:
+            hit = _find(c)
+            if hit:
+                return hit
+        return None
+
+    node = _find(tree)
+    if node is None:
+        # Run exists but isn't placed in the tree yet (e.g. no outputs) — empty root.
+        return {"kind": "root", "name": "", "path": "", "children": []}
+    return {**node, "kind": "root"}   # present the run folder as the browser root
+
+
 @app.get("/api/runs/{rid}/file")
 def run_file(rid: str, rel: str, download: int = 0):
     """Serve a single file from a Run's output directory (its artifact_path).
