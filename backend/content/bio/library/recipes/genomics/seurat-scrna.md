@@ -17,9 +17,10 @@ PBMC3k guided-clustering workflow, written with current **Seurat v5** idioms.
 Prefer it over scanpy when the session is already R, the user asks for Seurat/R,
 or downstream tools are Bioconductor.
 
-**Provision:** `ensure_capability("Seurat")` (R package — heavy on first install,
-cached after; it lives in ABA's curated R base), then `library(Seurat)` in
-`run_r`. `library(dplyr)` is also handy for marker post-processing.
+**Provision:** `ensure_capability("Seurat")` (CRAN R package, installed on demand
+into the project R library — heavy the first time, but most deps come as PPM
+*binaries* so it's a few minutes, then cached), then `library(Seurat)` in `run_r`.
+`library(dplyr)` is also handy for marker post-processing.
 
 ## The three choices that DEFINE the result — surface them with present_plan
 Halt and walk the user through these before committing; the defaults below are
@@ -33,15 +34,25 @@ advisor adds value.
    clusters you get.
 
 ## Input + object creation
-`Read10X` reads a CellRanger `filtered_feature_bc_matrix` directory (the
-`barcodes.tsv`/`features.tsv`/`matrix.mtx` triple). `CreateSeuratObject` does the
-first, gene/cell-level filter: `min.cells` drops genes seen in too few cells,
-`min.features` drops near-empty cells.
+`Read10X` reads a CellRanger `filtered_feature_bc_matrix` **directory** with the
+standard `barcodes.tsv`/`features.tsv`/`matrix.mtx` names. GEO supplementary files
+are usually loose + GSM-prefixed, so use **`ReadMtx`** with explicit paths instead
+(don't hand-roll `readMM` — `CreateSeuratObject` errors on **duplicate gene
+rownames**, and `ReadMtx` de-dups for you). `CreateSeuratObject(min.cells, min.features)`
+does the first gene/cell filter.
 ```r
 library(Seurat)
 library(dplyr)
-pbmc.data <- Read10X(data.dir = file.path(Sys.getenv("DATA_DIR"), "filtered_gene_bc_matrices/hg19"))
-pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k",
+D <- Sys.getenv("DATA_DIR")
+# Standard CellRanger dir:
+#   pbmc.data <- Read10X(data.dir = file.path(D, "filtered_feature_bc_matrix"))
+# Loose / GSM-prefixed files (gz ok) — explicit paths:
+pbmc.data <- ReadMtx(
+  mtx      = file.path(D, "GSM..._matrix.mtx.gz"),
+  cells    = file.path(D, "GSM..._barcodes.tsv.gz"),
+  features = file.path(D, "GSM..._features.tsv.gz"),
+  feature.column = 2)   # gene symbols (col 1 = Ensembl)
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc",
                            min.cells = 3, min.features = 200)
 ```
 

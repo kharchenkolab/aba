@@ -123,7 +123,7 @@ GO overdispersion: `ext <- extendedP2proc(p2, organism='hs')` (also 'mm','dr').
   large for the cell count.
 
 ## In ABA
-- Provision: `ensure_capability("pagoda2")` (GitHub R package → project R library).
+- Provision: `ensure_capability("pagoda2")` (CRAN R package → project R library, installs as a PPM binary — fast).
   For the defaults above also `ensure_capability("leidenAlg")` (Leiden clustering)
   and, for the marker heatmap, `ensure_capability("conos")` + `ensure_capability("ComplexHeatmap")`.
   UMAP's `uwot` already ships with the runtime. **Don't hand-roll `install_github`
