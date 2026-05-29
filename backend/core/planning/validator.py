@@ -45,6 +45,23 @@ _ITEM_TAG_RE = _re.compile(r"<\s*item\s*>(.*?)<\s*/\s*item\s*>", _re.DOTALL | _r
 _LIST_PREFIX_RE = _re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 
 
+def _loads_loose(s: str):
+    """Parse a model-emitted array/object string into Python data, tolerant of
+    the two shapes models actually produce: strict JSON, and Python-repr (single
+    quotes, e.g. `['adata.layers["counts"] preserved']`) which json.loads rejects.
+    Returns the parsed value, or None if neither parser succeeds."""
+    import json as _json
+    try:
+        return _json.loads(s)
+    except Exception:
+        pass
+    import ast as _ast
+    try:
+        return _ast.literal_eval(s)   # handles single-quoted strings, etc.; literals only (safe)
+    except Exception:
+        return None
+
+
 def _coerce_string_list(x: Any) -> list[str]:
     """Best-effort: turn a model-supplied "list of strings" into an
     actual list of strings. Handles already-list inputs, XML-wrapped
@@ -89,16 +106,13 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
                 steps_raw = raw[alt]
                 break
     if isinstance(steps_raw, str):
-        # A model may pass the array as a JSON string ('[{"title":…}]') rather
-        # than a real list — parse it before falling back to line-splitting.
+        # A model may pass the array as a serialized string ('[{"title":…}]')
+        # rather than a real list — parse it (JSON or Python-repr) before falling
+        # back to line-splitting. (Python-repr happens when a step value uses
+        # single quotes, e.g. 'adata.layers["counts"]', which json.loads rejects;
+        # without this it line-splits the array into garbled one-char/-line steps.)
         s = steps_raw.strip()
-        parsed = None
-        if s[:1] in "[{":
-            import json as _json
-            try:
-                parsed = _json.loads(s)
-            except Exception:
-                parsed = None
+        parsed = _loads_loose(s) if s[:1] in "[{" else None
         if isinstance(parsed, list):
             steps_raw = parsed
         elif isinstance(parsed, dict):
@@ -135,17 +149,14 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
     # (e.g. function-call XML leaking into `assumptions`), leaving `steps` empty.
     # If we have no steps, scan the raw string values for an embedded step array.
     if not norm_steps:
-        import json as _json, re as _re
+        import re as _re
         for v in raw.values():
-            if not (isinstance(v, str) and ('"title"' in v or '"description"' in v)):
+            if not (isinstance(v, str) and ("title" in v and ("description" in v or "expected_outputs" in v))):
                 continue
             m = _re.search(r"\[\s*\{.*\}\s*\]", v, _re.S)
             if not m:
                 continue
-            try:
-                arr = _json.loads(m.group(0))
-            except Exception:
-                continue
+            arr = _loads_loose(m.group(0))
             if isinstance(arr, list):
                 for i, s in enumerate(arr, start=1):
                     if isinstance(s, dict):
