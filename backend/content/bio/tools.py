@@ -178,6 +178,9 @@ TOOL_SCHEMAS = [
             "work. Write outputs (plots via png(file.path(WORK_DIR,'x.png')); CSV/RDS) to "
             "WORK_DIR — NEVER bare /tmp; files there are auto-captured as artifacts and "
             "shared with the Python session for this thread. "
+            "R-string note: R has NO `*` or `%+%` for strings — use strrep('=',60) or "
+            "paste0(rep('=',60),collapse='') and paste0()/paste(); don't write Python "
+            "idioms like \"=\"*60 (they error). "
             "Use for Bioconductor / DESeq2 / edgeR / limma / Seurat work that's "
             "awkward in Python. First R use installs the R kernel (slow, one-time)."
         ),

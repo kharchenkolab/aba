@@ -78,8 +78,8 @@ place via `$`.
   (`use.local.clusters=TRUE`) are not.
 
 ## In ABA
-- Install via `ensure_capability` — conos is a GitHub R package:
-  propose_capability(archetype='r_package', source='github', package='kharchenkolab/conos').
+- Install via `ensure_capability("conos")` — it's a seeded CRAN R package
+  (installs as a PPM binary, fast). Pulls in pagoda2/leidenAlg as needed.
   It depends on pagoda2 (also a GitHub r_package) for preprocessing, plus
   Matrix and igraph; igraph needs the GLPK system lib (conda `glpk`). Run all
   steps in `run_r`.
