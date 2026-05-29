@@ -21,7 +21,7 @@ from typing import Optional
 # the full timeout_s — the "Stop button does nothing" failure.
 _CANCEL_GRACE_S = float(os.environ.get("ABA_KERNEL_CANCEL_GRACE_S", "3"))
 
-from core.config import DATA_DIR
+from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.exec.base import ExecResult
 from core.exec.materialize import pylib_dir, tools_env
 
@@ -112,7 +112,8 @@ def _r_setup_code(cwd: str) -> str:
     from core.exec.r import libpaths_expr
     libline = libpaths_expr(projects.current() or "default")
     libline = (libline + "\n") if libline else ""
-    return f"{libline}DATA_DIR <- {str(DATA_DIR)!r}\nsetwd({str(cwd)!r})\n"
+    return (f"{libline}DATA_DIR <- {str(DATA_DIR)!r}\n"
+            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n")
 
 
 def _setup_code(cwd: str) -> str:
@@ -126,17 +127,24 @@ def _setup_code(cwd: str) -> str:
         f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(DATA_DIR)!r}\n"
+        f"WORK_DIR = {str(cwd)!r}\n"
     )
 
 
-def _kernel_env(lang: str) -> dict:
-    """Environment for the kernel subprocess. For R, put the conda tools-env on
-    LD_LIBRARY_PATH + PATH so R-package .so's resolve their conda system-lib
-    deps (e.g. igraph → libglpk.so.40) — the kernel isn't conda-activated, so
-    without this, packages that load fine via `micromamba run` fail to dlopen
-    in run_r (r_provisioning.md F5)."""
+def _kernel_env(lang: str, cwd: str) -> dict:
+    """Environment for the kernel subprocess. Exposes DATA_DIR / WORK_DIR /
+    ARTIFACTS_DIR as real env vars so Sys.getenv() (R) and os.environ (Python)
+    both resolve them — not just the injected convenience variables (the gap that
+    made Sys.getenv("DATA_DIR") return "" in run_r). For R, also put the conda
+    tools-env on LD_LIBRARY_PATH + PATH so R-package .so's resolve their conda
+    system-lib deps (e.g. igraph → libglpk.so.40) — the kernel isn't conda-
+    activated, so without this, packages that load via `micromamba run` fail to
+    dlopen in run_r (r_provisioning.md F5)."""
     import os
     env = dict(os.environ)
+    env["DATA_DIR"] = str(DATA_DIR)
+    env["ARTIFACTS_DIR"] = str(ARTIFACTS_DIR)
+    env["WORK_DIR"] = str(cwd)
     if lang == "r":
         tenv = tools_env()
         env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
@@ -158,7 +166,7 @@ class JupyterKernelSession:
         else:
             kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
-        self._km.start_kernel(cwd=str(cwd), env=_kernel_env(lang))
+        self._km.start_kernel(cwd=str(cwd), env=_kernel_env(lang, cwd))
         self._kc = self._km.client()
         self._kc.start_channels()
         self._kc.wait_for_ready(timeout=60)
