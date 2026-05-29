@@ -74,6 +74,12 @@ TASKS = {
         "I have a small variant file at DATA_DIR/variants.vcf. Keep only the high-quality "
         "variants and tell me how many pass and what the transition/transversion ratio is."
     ),
+    "deseq2_r": (
+        "I have a bulk RNA-seq count table at DATA_DIR/counts.csv (genes × samples) and a sample "
+        "sheet DATA_DIR/samples.csv with a `condition` column (control vs treated) and a `batch` "
+        "column. Using DESeq2 in R, find the genes differentially expressed between treated and "
+        "control while controlling for batch, and show me the top hits."
+    ),
 }
 
 RESUMES = {}  # default "Yes, go ahead."
@@ -124,6 +130,23 @@ def _stage():
         with open(d / "seqs.fasta", "w") as f:
             for name, s in seqs.items():
                 f.write(f">{name}\n{s}\n")
+    elif SCENARIO == "deseq2_r":
+        import numpy as np, pandas as pd
+        rng = np.random.default_rng(1)
+        n = 1500
+        X = rng.poisson(50, size=(n, 8)).astype(float)       # 8 samples: 4 control, 4 treated
+        de = rng.choice(n, 100, replace=False)
+        X[de, 4:] *= rng.uniform(3, 8, size=(100, 1))        # 100 genes up in treated
+        X *= np.array([1, 1, 1.5, 1.5, 1, 1, 1.5, 1.5])      # batch effect (not confounded w/ condition)
+        df = pd.DataFrame(X.round().astype(int), index=[f"GENE{i:04d}" for i in range(n)],
+                          columns=[f"s{j}" for j in range(8)])
+        df.index.name = "gene"
+        df.to_csv(d / "counts.csv")                          # genes × samples (R orientation)
+        meta = pd.DataFrame({"condition": ["control"] * 4 + ["treated"] * 4,
+                             "batch": ["A", "A", "B", "B", "A", "A", "B", "B"]},
+                            index=[f"s{j}" for j in range(8)])
+        meta.index.name = "sample"
+        meta.to_csv(d / "samples.csv")
     elif SCENARIO == "vcf_stats":
         import random
         random.seed(0)
