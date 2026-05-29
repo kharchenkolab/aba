@@ -164,6 +164,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
   const [query, setQuery] = useState('')
   const [view, setView] = useState<'tree' | 'list'>('tree')
   const [listPath, setListPath] = useState('')
+  const [bump, setBump] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -174,7 +175,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
       .catch(e => { if (!cancelled) setError(String(e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [reloadKey])
+  }, [reloadKey, bump])
 
   const stats = useMemo(() => {
     let files = 0, folders = 0, bytes = 0
@@ -233,6 +234,24 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
     if (onViewFile) onViewFile(node)
   }
 
+  // Promote an unregistered working/scratch file into a curated Dataset entity.
+  async function promote(node: TreeNode) {
+    setMaterializeMsg(`Promoting ${node.name}…`)
+    try {
+      const r = await fetch(
+        `/api/files/promote?path=${encodeURIComponent(node.path)}&title=${encodeURIComponent(node.name)}`,
+        { method: 'POST' },
+      )
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { setMaterializeMsg(`Promote failed: ${d.detail || r.status}`); return }
+      setMaterializeMsg(`Promoted ${node.name} → dataset.`)
+      setBump(b => b + 1)                       // refetch tree (now shows it as a registered dataset)
+      if (d.dataset_id) onFocus(d.dataset_id)
+    } catch (e) {
+      setMaterializeMsg(`Promote failed: ${String(e)}`)
+    }
+  }
+
   function renderListRow(node: TreeNode): React.ReactNode {
     const isReadme = node.kind === 'readme'
     const isFile = node.kind === 'file' || isReadme
@@ -250,7 +269,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
     return (
       <div
         key={node.path}
-        className={`files__row files__row--list ${isFile ? 'files__row--file' : 'files__row--folder'} ${isReadme ? 'files__row--readme' : ''} ${isActive ? 'is-current' : ''}`}
+        className={`files__row files__row--list ${isFile ? 'files__row--file' : 'files__row--folder'} ${isReadme ? 'files__row--readme' : ''} ${node.ephemeral ? 'files__row--ephemeral' : ''} ${isActive ? 'is-current' : ''}`}
         title={node.path}
       >
         {isFile ? (
@@ -274,6 +293,14 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
         </button>
         <span className="files__type">{typeLabel}</span>
         <span className="files__size">{isFile ? fmtSize(node.size ?? null) : <span className="files__size--dash">—</span>}</span>
+        {node.ephemeral && isFile && (
+          <button
+            className="files__action files__action--promote"
+            onClick={e => { e.stopPropagation(); promote(node) }}
+            title="Promote to a dataset (keep it)"
+            aria-label="Promote to dataset"
+          ><PromoteGlyph /></button>
+        )}
         {isFile && (node.artifact_path || node.synthesized || isReadme) ? (
           <a
             className="files__action"
@@ -333,7 +360,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
       return (
         <div
           key={node.path}
-          className={`files__row files__row--file ${isReadme ? 'files__row--readme' : ''} ${isActive ? 'is-current' : ''}`}
+          className={`files__row files__row--file ${isReadme ? 'files__row--readme' : ''} ${node.ephemeral ? 'files__row--ephemeral' : ''} ${isActive ? 'is-current' : ''}`}
           style={indent}
           title={node.path}
         >
@@ -346,6 +373,14 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
           >{node.name}</button>
           <span className="files__type">{typeLabel}</span>
           <span className="files__size">{fmtSize(node.size ?? null)}</span>
+          {node.ephemeral && (
+            <button
+              className="files__action files__action--promote"
+              onClick={e => { e.stopPropagation(); promote(node) }}
+              title="Promote to a dataset (keep it)"
+              aria-label="Promote to dataset"
+            ><PromoteGlyph /></button>
+          )}
           {(node.artifact_path || node.synthesized || isReadme) ? (
             <a
               className="files__action"
@@ -367,7 +402,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
     return (
       <div key={node.path || '__root__'}>
         {node.kind !== 'root' && (
-          <div className="files__row files__row--folder" style={indent}>
+          <div className={`files__row files__row--folder ${node.ephemeral ? 'files__row--ephemeral' : ''}`} style={indent}>
             <button
               className="files__chev"
               onClick={() => toggleFolder(node.path)}
@@ -389,6 +424,9 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey }:
               onClick={() => hasEntity && node.entity_id && onFocus(node.entity_id)}
               title={node.title || node.name}
             >{node.name}/</span>
+            {node.ephemeral && (
+              <span className="files__badge files__badge--scratch" title={node.note || 'Scratch — not kept unless promoted to a dataset'}>scratch</span>
+            )}
             <span className="files__type">{folderTypeLabel(node)}</span>
             <span className="files__size files__size--dash">—</span>
             <a
@@ -535,6 +573,15 @@ function DownloadGlyph() {
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M8 2.5v8" />
       <path d="M4.5 7L8 10.5 11.5 7" />
+      <path d="M3 13.5h10" />
+    </svg>
+  )
+}
+function PromoteGlyph() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 10.5v-8" />
+      <path d="M4.5 6L8 2.5 11.5 6" />
       <path d="M3 13.5h10" />
     </svg>
   )

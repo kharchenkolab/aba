@@ -45,6 +45,8 @@ export interface FileNode {
   synthesized?: boolean
   synthesized_kind?: string
   synthesized_content?: string
+  ephemeral?: boolean              // working/scratch tier — uncurated, GC-able until promoted
+  note?: string                    // folder subtitle (e.g. the working/ scratch note)
 }
 
 /** A viewer component receives the node + the picked ViewerInfo and renders. */

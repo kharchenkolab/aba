@@ -309,6 +309,22 @@
   color: var(--accent);
 }
 .files__action--ghost { pointer-events: none; opacity: 0; }
+.files__action--promote { color: var(--text-4); }
+.files__action--promote:hover { background: var(--surface-3); color: var(--accent); }
+
+/* Working / scratch tier (ephemeral) — uncurated until promoted to a dataset. */
+.files__row--ephemeral .files__name-main,
+.files__row--ephemeral .files__name { color: var(--text-3); font-style: italic; }
+.files__badge--scratch {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--text-4);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px; line-height: 1.55;
+}
 
 .files__children {
   /* No background — relies on indent. */
