@@ -121,6 +121,13 @@
 .rail--collapsed .rail__nav--project {
   padding-top: 64px;
 }
+/* Gap + hairline between the navigation tabs (Threads/Claims/Data) and the
+   artifact stores (Results/Runs/Files) — conceptually distinct groups. */
+.rail__nav-group-sep {
+  height: 1px; margin: 8px 10px 8px 2px;
+  background: var(--panel-bd-soft, var(--border));
+}
+.rail--collapsed .rail__nav-group-sep { margin: 8px 6px; }
 
 .rail__nav-item {
   display: flex;

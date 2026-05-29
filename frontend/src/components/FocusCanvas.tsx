@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from './AnnotatedFigure'
@@ -6,6 +6,9 @@ import ClaimView from './ClaimView'
 import RunView from './RunView'
 import ResultView from './ResultView'
 import ThreadHeader from './ThreadHeader'
+import FileBrowser, { type TreeNode } from './FileBrowser'
+import FileCanvas from '../viewers/FileCanvas'
+import type { FileNode } from '../viewers/types'
 import './FocusCanvas.css'
 
 interface Annotation { image: string; note: string }
@@ -333,9 +336,67 @@ function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: ()
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }),
     }).then(() => onChange()).catch(() => {})
   }
+  // Auto-grow so a long description shows in full instead of being clipped to one line.
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const grow = () => { const t = ref.current; if (t) { t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px` } }
+  useEffect(grow, [val])
   return (
-    <textarea className="focus__dataset-desc" value={val} rows={1} placeholder="Add a description… (what this dataset is, where it came from)"
+    <textarea ref={ref} className="focus__dataset-desc" value={val} rows={1}
+      placeholder="Add a description… (what this dataset is, where it came from)"
       onChange={e => setVal(e.target.value)} onBlur={save} />
+  )
+}
+
+/** Browse a dataset's directory contents with the shared FileBrowser (folders +
+ *  every file), viewing files in a modal — so a folder dataset isn't a single
+ *  opaque "file" row. Renders nothing for a dataset with no browsable tree. */
+function DatasetFiles({ entity, onFocus, onChatResult }: {
+  entity: Entity
+  onFocus: (id: string) => void
+  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+}) {
+  const [tree, setTree] = useState<TreeNode | null>(null)
+  const [modalNode, setModalNode] = useState<TreeNode | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/datasets/${encodeURIComponent(entity.id)}/tree`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled) setTree(d as TreeNode) })
+      .catch(() => { if (!cancelled) setTree(null) })
+    return () => { cancelled = true }
+  }, [entity.id])
+  useEffect(() => {
+    if (!modalNode) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModalNode(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [modalNode])
+  if (!tree || (tree.children?.length ?? 0) === 0) return null
+  const fileHref = (n: FileNode) => {
+    const ap = n.artifact_path || ''
+    return ap.startsWith('/artifacts/') || ap.startsWith('http') ? ap : `/api/files/content?path=${encodeURIComponent(n.path)}`
+  }
+  const discuss = (n: TreeNode) => {
+    const img = /\.(png|jpe?g|gif|svg|webp)$/i.test(n.name)
+    onChatResult?.(n.name, img ? fileHref(n) : undefined)
+  }
+  return (
+    <section className="focus__dataset-files">
+      <div className="focus__dataset-files-head">Files</div>
+      <FileBrowser root={tree} variant="wide" focusedId="" onFocus={onFocus}
+        onViewFile={n => setModalNode(n as TreeNode)}
+        actions={onChatResult ? { onDiscuss: discuss } : undefined} />
+      {modalNode && (
+        <div className="runview__modal" onClick={() => setModalNode(null)}>
+          <div className="runview__modal-box" onClick={e => e.stopPropagation()}>
+            <button className="runview__modal-close" onClick={() => setModalNode(null)} aria-label="Close (Esc)" title="Close (Esc)">×</button>
+            <div className="runview__modal-body">
+              <FileCanvas node={modalNode} onFocus={onFocus} onClose={() => setModalNode(null)} />
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -431,6 +492,7 @@ function renderBody(
           {preview?.kind === 'error' && (
             <div className="focus__placeholder">preview error: {preview.error}</div>
           )}
+          <DatasetFiles entity={e} onFocus={onFocus} onChatResult={onChatResult} />
         </div>
       )
 

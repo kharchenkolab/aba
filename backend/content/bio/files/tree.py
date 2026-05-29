@@ -309,7 +309,10 @@ def _run_output_dirs(entities: list[dict]) -> tuple:
     from pathlib import Path as _P
     out = []
     for e in entities:
-        if e.get("type") == "analysis" and e.get("artifact_path"):
+        # Skip the ambient analysis: it's hidden from the runs UI, so its dir
+        # (the shared thread scratch) must stay visible under working/.
+        if (e.get("type") == "analysis" and e.get("artifact_path")
+                and not (e.get("metadata") or {}).get("ambient")):
             try:
                 out.append(str(_P(e["artifact_path"]).resolve()))
             except Exception:  # noqa: BLE001
@@ -419,10 +422,22 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
 
     # ---------- datasets/ ----------
     if datasets:
+        from pathlib import Path as _P
         d_folder = _folder("datasets", path="datasets")
         for d in sorted(datasets, key=lambda x: x.get("created_at") or ""):
             placed_in_thread.add(d["id"])  # datasets aren't orphans
-            if d.get("artifact_path"):
+            ap = d.get("artifact_path")
+            disk = _resolve_disk(ap) if ap else None
+            if disk and _P(disk).is_dir():
+                # A directory dataset (e.g. a 10x bundle / multi-sample download):
+                # show it as an entity-backed folder + graft its real contents so
+                # it's browsable, not a single opaque "file" row.
+                seg = _folder_slug(d)
+                ds = _folder(seg, path=f"datasets/{seg}", entity=d)
+                _graft_dir(ds, disk, ephemeral=False, cap=500)
+                d_folder["children"].append(ds if ds["children"]
+                                            else _file_node(d, path=f"datasets/{_leaf_name(d)}"))
+            elif ap:
                 d_folder["children"].append(_file_node(d, path=f"datasets/{_leaf_name(d)}"))
             # else: dataset without artifact — skip silently
         if d_folder["children"]:
@@ -445,8 +460,12 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
             # a Run is opened the moment a plan is presented (default-save), so a
             # pending/abandoned plan would otherwise litter the tree with an empty
             # Run. It surfaces once it actually has content.
+            # Exclude the ambient catch-all analysis (it's a structural parent for
+            # ad-hoc outputs, not a real Run — hidden from the UI per its `ambient`
+            # flag; its files surface under working/ and its figures as orphans).
             runs = [r for r in in_thread(thread["id"], RUN_TYPES)
-                    if run_children(r["id"]) or r.get("producing_code")]
+                    if not (r.get("metadata") or {}).get("ambient")
+                    and (run_children(r["id"]) or r.get("producing_code"))]
             if runs:
                 runs_folder = _folder("runs", path=f"{t_path}/runs")
                 for run, ri, r_seg in _add_numbered_children(runs_folder, runs):

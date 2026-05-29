@@ -68,11 +68,15 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
     # every turn — otherwise pre-plan ad-hoc work piles up N analyses. A
     # present_plan/open_run later rotates this ambient one out (kept if it has
     # artifacts, discarded if empty).
+    # `ambient`: this is the catch-all analysis for ad-hoc, pre-plan work — it
+    # exists only to parent stray outputs, so it's HIDDEN from the Runs UI (a
+    # named Run comes from open_run / an approved plan). Still structurally real.
     aid = create_entity(
         entity_type="analysis",
         title=title,
         parent_entity_id=parent,
-        metadata={"thread_id": thread_id, "run_state": "open", "origin": "internal"} if thread_id else None,
+        metadata={"thread_id": thread_id, "run_state": "open", "origin": "internal",
+                  "ambient": True} if thread_id else {"ambient": True},
     )
     # The ambient analysis's output dir IS the shared thread scratch dir (where
     # run_python/run_r write when no named run is open) — so its outputs are

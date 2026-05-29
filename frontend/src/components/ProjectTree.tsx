@@ -129,6 +129,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   // Named threads only; the default thread is represented by the "Main thread"
   // chip (selects the 'default' alias), not a duplicate named row.
   const threads = entities.filter(e => e.type === 'thread' && e.status !== 'archived' && !e.metadata?.is_default)
+  const hasArchived = entities.some(e => e.status === 'archived' && !e.metadata?.is_default)
   const projectTitle = workspace?.title ?? 'Workspace'
 
   async function newThread() {
@@ -447,16 +448,18 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       </div>
       )}
 
-      <div className="tree__footer">
-        <label className="tree__toggle">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={e => setShowArchived(e.target.checked)}
-          />
-          show archived
-        </label>
-      </div>
+      {(hasArchived || showArchived) && (
+        <div className="tree__footer">
+          <label className="tree__toggle">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={e => setShowArchived(e.target.checked)}
+            />
+            show archived
+          </label>
+        </div>
+      )}
     </aside>
   )
 }
