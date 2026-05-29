@@ -154,6 +154,9 @@ export default function FileBrowser({
   const [sortDir, setSortDir] = useState<1 | -1>(1)
   // Resizable Type/Size columns (list/table layout). Name flexes to fill.
   const [colW, setColW] = useState<{ type: number; size: number }>({ type: 130, size: 78 })
+  // Optimistic pinned state — pinning creates a separate entity (the file node
+  // isn't marked), so we track clicked paths locally to show a filled-red pin.
+  const [pinned, setPinned] = useState<Set<string>>(new Set())
 
   const visible = useMemo(() => root ? filterTree(root, query.trim()) : null, [root, query])
   const isSearching = query.trim().length > 0
@@ -219,12 +222,14 @@ export default function FileBrowser({
 
   function rowActions(node: TreeNode, isFile: boolean): React.ReactNode {
     if (!isFile || !actions) return null
+    const isPinned = pinned.has(node.path)
     return (
       <>
         {actions.onPin && (
-          <button className="files__action files__action--pin" title="Pin to the thread"
-                  aria-label="Pin" onClick={e => { e.stopPropagation(); actions.onPin!(node) }}>
-            <PinGlyph />
+          <button className={`files__action files__action--pin ${isPinned ? 'files__action--pinned' : ''}`}
+                  title={isPinned ? 'Pinned to the thread' : 'Pin to the thread'} aria-label="Pin"
+                  onClick={e => { e.stopPropagation(); actions.onPin!(node); setPinned(s => new Set(s).add(node.path)) }}>
+            <PinGlyph filled={isPinned} />
           </button>
         )}
         {actions.onDiscuss && (
@@ -437,8 +442,8 @@ function DownloadGlyph() {
 function PromoteGlyph() {
   return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5v-8" /><path d="M4.5 6L8 2.5 11.5 6" /><path d="M3 13.5h10" /></svg>
 }
-function PinGlyph() {
-  return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 2.5l4 4M11 4l-5 1.5-3.5 3.5 5 5L11 10.5 12.5 5.5" /><path d="M5.5 10.5L2.5 13.5" /></svg>
+function PinGlyph({ filled }: { filled?: boolean }) {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z" /></svg>
 }
 function ChatGlyph() {
   return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H6l-3 2.5v-2.5H3.5a1 1 0 0 1-1-1Z" /></svg>

@@ -24,6 +24,8 @@ interface Props {
   onAsk?: (text: string) => void
   /** "Chat" gesture on a run output — bring the plot (with its image) into chat. */
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  /** Run view → switch the left rail to the Files tab (browse output there). */
+  onBrowseFiles?: () => void
 }
 
 interface TablePreview {
@@ -42,7 +44,7 @@ type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -152,7 +154,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult)}
+          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -377,6 +379,7 @@ function renderBody(
   compact?: boolean,
   onAsk?: (t: string) => void,
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void,
+  onBrowseFiles?: () => void,
 ) {
   switch (e.type) {
     case 'figure':
@@ -432,7 +435,7 @@ function renderBody(
       )
 
     case 'analysis':
-      return <RunView run={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />
+      return <RunView run={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 
     case 'result':
       return <ResultView result={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />

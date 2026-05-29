@@ -227,6 +227,16 @@ _GENERIC_COMMENTS = {
 _GENERIC_STEMS = {"out", "output", "figure", "fig", "plot", "image", "img", "result"}
 
 
+def _meaningful_title(s: str) -> bool:
+    """A title must carry real words — reject separator / progress-bar noise like
+    '====================' or '----' that pagoda2-style banner comments emit
+    (which otherwise becomes the figure name). Needs ≥2 alphanumerics and not be
+    mostly punctuation."""
+    s = (s or "").strip()
+    alnum = sum(ch.isalnum() for ch in s)
+    return alnum >= 2 and alnum >= len(s) * 0.4
+
+
 def _figure_title(code: str, original_name: str, idx: int, multi: bool) -> str:
     """Display title for a produced figure. The code-derived title is the same
     for every plot in one run (it scans the whole block), so when a run emits
@@ -251,14 +261,14 @@ def _title_from_code(code: str) -> Optional[str]:
         return None
     for pat in _TITLE_PATTERNS:
         m = pat.search(code)
-        if m:
+        if m and _meaningful_title(m.group(1)):
             return m.group(1).strip()[:80]
     for line in code.splitlines():
         s = line.strip()
         if not s.startswith("# ") or s.startswith("# !"):
             continue
         body = s[2:].strip()
-        if not body or body.lower() in _GENERIC_COMMENTS:
+        if not body or body.lower() in _GENERIC_COMMENTS or not _meaningful_title(body):
             continue
         return body[:80]
     return None
