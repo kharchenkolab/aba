@@ -57,6 +57,8 @@ interface Props {
   onDropQueue?: () => void
   /** Steer — cancel current turn AND send `text` as the replacement. */
   onSteer?: (text: string) => void
+  /** Current thread id — used to persist the composer draft per thread. */
+  threadId?: string | null
 }
 
 export default function ChatPane({
@@ -92,6 +94,7 @@ export default function ChatPane({
   queuedMessage,
   onDropQueue,
   onSteer,
+  threadId,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -325,6 +328,7 @@ export default function ChatPane({
               prefill={prefill}
               onPrefillConsumed={onPrefillConsumed}
               focusSignal={(composerFocus ?? 0) + extraFocus}
+              draftKey={`chatdraft:${threadId ?? 'default'}`}
             />
           </div>
         )}
