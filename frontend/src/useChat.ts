@@ -164,6 +164,11 @@ export function useChat(
   // agent is responding. Auto-flushes when the current turn ends (done
   // OR cancelled via Steer). Stop drops the queue.
   const [queuedMessage, setQueuedMessage] = useState<string | null>(null)
+  // Mirror of queuedMessage in a ref. The in-flight stream's done/cancelled
+  // handlers capture `queuedMessage` from the closure at TURN START (when it was
+  // null), so reading the state there is stale — that's why "Send now" / auto-flush
+  // dropped a message queued mid-turn. The ref always holds the latest queue.
+  const queuedMessageRef = useRef<string | null>(null)
   // A flag distinguishing Steer (cancel → flush queue) from Stop
   // (cancel → drop queue). Set by steer(); read in the 'cancelled'
   // handler; cleared either way.
@@ -390,13 +395,15 @@ export function useChat(
               // send the queued message now. Plain Stop path: drop the
               // queue. The distinction is the steerFlushRef flag set
               // by steer() before it fires cancel.
-              if (steerFlushRef.current && queuedMessage) {
-                const q = queuedMessage
+              if (steerFlushRef.current && queuedMessageRef.current) {
+                const q = queuedMessageRef.current
                 steerFlushRef.current = false
+                queuedMessageRef.current = null
                 setQueuedMessage(null)
                 setTimeout(() => sendMessageRef.current?.(q), 0)
               } else {
                 steerFlushRef.current = false
+                queuedMessageRef.current = null
                 setQueuedMessage(null)
               }
               return
@@ -412,8 +419,9 @@ export function useChat(
               onERRef.current?.()
               // Auto-flush any queued message so the user can think+type
               // while the agent works.
-              if (queuedMessage) {
-                const q = queuedMessage
+              if (queuedMessageRef.current) {
+                const q = queuedMessageRef.current
+                queuedMessageRef.current = null
                 setQueuedMessage(null)
                 setTimeout(() => sendMessageRef.current?.(q), 0)
               }
@@ -510,11 +518,11 @@ export function useChat(
   // turn ends (done) OR when the user Steers (cancel+flush).
   const enqueue = useCallback((text: string) => {
     const t = text.trim()
-    if (!t) { setQueuedMessage(null); return }
-    setQueuedMessage(t)
+    if (!t) { setQueuedMessage(null); queuedMessageRef.current = null; return }
+    setQueuedMessage(t); queuedMessageRef.current = t
   }, [])
 
-  const dropQueue = useCallback(() => { setQueuedMessage(null) }, [])
+  const dropQueue = useCallback(() => { setQueuedMessage(null); queuedMessageRef.current = null }, [])
 
   // Steer: cancel the current turn AND send `text` once cancelled
   // commits. Sets the flush flag so the cancelled-handler knows this
@@ -530,7 +538,7 @@ export function useChat(
       return
     }
     steerFlushRef.current = true
-    setQueuedMessage(t)
+    setQueuedMessage(t); queuedMessageRef.current = t
     try {
       await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
         method: 'POST',
