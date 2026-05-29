@@ -63,11 +63,16 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
             else:
                 title = f"Analysis of {focused_ent['title']}"
 
+    # Tag it open + thread-scoped so the NEXT turn's _ensure_analysis (via
+    # active_run_id) REUSES it instead of minting a fresh anonymous "Analysis"
+    # every turn — otherwise pre-plan ad-hoc work piles up N analyses. A
+    # present_plan/open_run later rotates this ambient one out (kept if it has
+    # artifacts, discarded if empty).
     aid = create_entity(
         entity_type="analysis",
         title=title,
         parent_entity_id=parent,
-        metadata={"thread_id": thread_id} if thread_id else None,
+        metadata={"thread_id": thread_id, "run_state": "open", "origin": "internal"} if thread_id else None,
     )
     analysis_ctx["analysis_id"] = aid
     return aid
