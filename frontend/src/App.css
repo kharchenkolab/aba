@@ -40,6 +40,17 @@
   border: 1px solid var(--accent-border);
   padding: 2px 7px; border-radius: 9999px;
 }
+.canvas-title__editable {
+  cursor: text; border-radius: 5px; padding: 1px 5px; margin: -1px -5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.canvas-title__editable:hover { background: var(--tree-active-bg); }
+.canvas-title__input {
+  font-size: 15px; font-weight: 600; color: var(--text);
+  background: var(--bg); border: 1px solid var(--accent-border);
+  border-radius: 6px; padding: 2px 8px; min-width: 0; flex: 1;
+  outline: none;
+}
 .canvas-back {
   flex: none; border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
   font-size: 12px; padding: 3px 10px; border-radius: 9999px; cursor: pointer;

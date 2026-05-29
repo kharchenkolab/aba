@@ -71,6 +71,40 @@ function entityLabel(e: Entity | null): string {
   }
 }
 
+/** Central-header thread title — click to rename inline (mirrors ResultView). */
+function EditableThreadTitle({ thread, onRenamed }: {
+  thread: { id: string; title: string }; onRenamed: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(thread.title)
+  async function save() {
+    const t = draft.trim()
+    setEditing(false)
+    if (!t || t === thread.title) return
+    await fetch(`/api/threads/${encodeURIComponent(thread.id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: t }),
+    })
+    onRenamed()
+  }
+  if (editing) return (
+    <input className="canvas-title__input" autoFocus value={draft}
+           onChange={e => setDraft(e.target.value)} onBlur={save}
+           onKeyDown={e => {
+             if (e.key === 'Enter') save()
+             if (e.key === 'Escape') { setDraft(thread.title); setEditing(false) }
+           }} />
+  )
+  return (
+    <>
+      <span className="canvas-title__type">thread</span>
+      <span className="canvas-title__editable"
+            onClick={() => { setDraft(thread.title); setEditing(true) }}
+            title="Click to rename">{thread.title}</span>
+    </>
+  )
+}
+
 export default function App() {
   // Phase 1 routing: URL is canonical for project / thread / focused entity.
   // The legacy variable names (focusedId, threadId, view, projectKey) are
@@ -504,6 +538,7 @@ export default function App() {
       queuedMessage={queuedMessage}
       onDropQueue={dropQueue}
       onSteer={steer}
+      threadId={currentThread?.id ?? threadId}
     />
   )
 
@@ -616,7 +651,7 @@ export default function App() {
             {scoped
               ? <><span className="canvas-title__type">{typeLabel(focused!.type)}</span>{focused!.title}</>
               : currentThread
-              ? <><span className="canvas-title__type">thread</span>{currentThread.title}</>
+              ? <EditableThreadTitle thread={currentThread} onRenamed={refresh} />
               : <>{projectName}</>}
             </>)}
           </div>
