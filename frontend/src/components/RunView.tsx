@@ -5,10 +5,11 @@
  * focus (succinct cells: counts + links, not every artifact). Running/failed
  * runs foreground the log; queued runs foreground the queue.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import { EntityGlyph } from './icons'
 import ResultList, { type OutputItem } from './ResultList'
+import FileBrowser, { type TreeNode } from './FileBrowser'
 import './RunView.css'
 
 export interface RunMeta {
@@ -46,6 +47,39 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const [title, setTitle] = useState(run.title)
   const [panel, setPanel] = useState<'command' | 'inputs' | 'log' | null>(
     status === 'failed' || status === 'running' ? 'log' : null)
+
+  // The Run's full output directory, browsed with the shared FileBrowser —
+  // nested folders (model/, figures/…) and every file type, with pin/discuss.
+  const [runTree, setRunTree] = useState<TreeNode | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/runs/${encodeURIComponent(run.id)}/tree`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled) setRunTree(d as TreeNode) })
+      .catch(() => { if (!cancelled) setRunTree(null) })
+    return () => { cancelled = true }
+  }, [run.id])
+
+  function browseViewFile(node: { entity_id?: string | null; artifact_path?: string | null; path: string }) {
+    if (node.entity_id) { onFocus(node.entity_id); return }
+    const ap = node.artifact_path || ''
+    const url = ap.startsWith('/artifacts/') || ap.startsWith('http')
+      ? ap : `/api/files/content?path=${encodeURIComponent(node.path)}`
+    window.open(url, '_blank')
+  }
+  async function pinFile(node: TreeNode) {
+    const ext = (node.name.split('.').pop() || '').toLowerCase()
+    const kind = /^(png|jpe?g|gif|svg|webp)$/.test(ext) ? 'figure' : /^(csv|tsv)$/.test(ext) ? 'table' : 'file'
+    const href = `/api/files/content?path=${encodeURIComponent(node.path)}`
+    await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, label: node.name, thumb: kind === 'figure' ? href : undefined, href }),
+    }).catch(() => {})
+    onChange()
+  }
+  function discussFile(node: TreeNode) {
+    onAsk?.(`Let's look at "${node.name}" from the run "${run.title}".`)
+  }
 
   const where = hpc ? `⛁ ${m.where || 'cluster'}${m.queue ? ` · ${m.queue}` : ''}` : '⚙ local'
   const elapsed = status === 'running' ? `running ${rel(m.started_at)}`
@@ -159,6 +193,23 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           <ResultList items={outputs} runId={run.id} browse={m.browse} bulk={m.bulk} onPin={pinOutput} onChat={chatOutput}
             onChatAnnotated={(it, annot) => onChatResult?.(it.label, undefined, annot)}
             onRegister={registerOutput} />
+        </section>
+      )}
+
+      {/* Full output directory — nested folders + every file, browsable with the
+          shared FileBrowser (sortable/resizable columns, pin/discuss per file). */}
+      {runTree && (runTree.children?.length ?? 0) > 0 && (
+        <section className="runview__browse">
+          <div className="runview__outputs-head">Output files</div>
+          <FileBrowser
+            root={runTree}
+            variant="wide"
+            focusedId=""
+            onFocus={onFocus}
+            onViewFile={browseViewFile}
+            actions={{ onPin: pinFile, onDiscuss: discussFile }}
+            emptyHint="No files in this run's output folder."
+          />
         </section>
       )}
     </div>

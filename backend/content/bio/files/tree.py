@@ -667,7 +667,25 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
     if wf:
         root["children"].append(wf)
 
+    _dedupe_child_paths(root)
     return root
+
+
+def _dedupe_child_paths(node: dict) -> None:
+    """Ensure sibling nodes have unique `path`s — two same-named artifacts in one
+    folder (e.g. two 'untitled.csv' tables under runs/<r>/tables/) otherwise
+    collide, which the frontend uses as a React key (dropped/duplicated rows) and
+    which makes path-based download/view ambiguous. Suffix the dupes (·2, ·3).
+    Recurses; artifact_path (disk resolution) is untouched."""
+    seen: dict[str, int] = {}
+    for c in node.get("children") or []:
+        p = c.get("path")
+        if p:
+            n = seen.get(p, 0) + 1
+            seen[p] = n
+            if n > 1:
+                c["path"] = f"{p}~{n}"
+        _dedupe_child_paths(c)
 
 
 def iter_files(node: dict, base_path: str = "") -> list[dict]:

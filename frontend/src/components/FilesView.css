@@ -311,6 +311,33 @@
 .files__action--ghost { pointer-events: none; opacity: 0; }
 .files__action--promote { color: var(--text-4); }
 .files__action--promote:hover { background: var(--surface-3); color: var(--accent); }
+.files__action--pin, .files__action--discuss { color: var(--text-4); }
+.files__action--pin:hover, .files__action--discuss:hover { background: var(--surface-3); color: var(--accent); }
+
+/* Sortable + resizable column headers (list/table layout). */
+.files__col--sortable {
+  border: none; background: none; cursor: pointer; text-align: left;
+  font: inherit; color: inherit; padding: 0; position: relative;
+  display: inline-flex; align-items: center;
+}
+.files__col--sortable:hover { color: var(--text-2); }
+.files__col-grip {
+  position: absolute; right: -4px; top: -2px; bottom: -2px; width: 8px;
+  cursor: col-resize;
+}
+.files__col-grip:hover { background: var(--accent-border); border-radius: 2px; }
+/* Resizable widths come from CSS vars set on the body/header (FileBrowser). */
+.files__column-head .files__col--type, .files__body--list .files__type { width: var(--col-type, 110px); }
+.files__column-head .files__col--size, .files__body--list .files__size { width: var(--col-size, 60px); }
+
+/* Wide variant (Run middle-column embed): always show columns + Type/Size,
+   regardless of the container query the rail uses. */
+.files-view--wide .files__type, .files-view--wide .files__size { display: inline-block; }
+.files-view--wide .files__column-head { display: flex; }
+.files-view--wide .files__name-path { display: block; }
+.files-view--wide .files__view-label { display: inline; }
+.files-view--wide .files__action { opacity: 0.45; }
+.files-view--wide .files__row:hover .files__action { opacity: 1; }
 
 /* Working / scratch tier (ephemeral) — uncurated until promoted to a dataset. */
 .files__row--ephemeral .files__name-main,
