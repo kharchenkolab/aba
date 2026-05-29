@@ -2,6 +2,14 @@
 
 Reference the Guide consults when given a single-cell RNA-seq task. Captures the canonical pbmc3k-style flow in a self-contained block.
 
+## Multiple samples: keep them SEPARATE — do NOT naively concatenate
+
+For scRNA-seq, several samples/donors/runs are **multiple datasets, not one matrix**. Concatenating raw count matrices into a single AnnData/object and treating it as one sample is **wrong** — it confounds batch with biology, and the joint PCA/clustering then just separates cells by sample (batch), not by cell type.
+
+- "Register them **together**" / "as one dataset" = ONE dataset entity (or collection) spanning the per-sample files — NOT `sc.concat`/`merge` into a single matrix. Keep the per-sample files; register the bundle (a directory is fine).
+- Combine samples into one object **only** as the explicit first step of a **batch-aware integration** that models the sample/batch covariate — Harmony (`harmony-integration`), scVI (`scvi-integration`), or conos (`conos-integration`). The "merge" in those recipes is always immediately followed by batch correction; never lift it out as a standalone step.
+- One sample → the flow below. Two+ samples to analyze jointly → an integration recipe, not a concatenate-then-cluster shortcut.
+
 ## Stages
 
 1. **Load**
