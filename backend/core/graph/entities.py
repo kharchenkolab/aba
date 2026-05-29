@@ -144,7 +144,8 @@ def count_entities(
 def update_entity(entity_id: str, **fields) -> Optional[dict]:
     """Partial update. Accepted fields: title, notes, tags, pinned, status,
     metadata, artifact_path. Other keys silently ignored."""
-    allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path", "display_path"}
+    allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path",
+               "display_path", "producing_code", "producing_params"}
     sets = []
     args = []
     for k, v in fields.items():
@@ -152,8 +153,8 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
             continue
         if k == "tags" and isinstance(v, list):
             sets.append("tags = ?"); args.append(json.dumps(v))
-        elif k == "metadata":
-            sets.append("metadata = ?"); args.append(json.dumps(v) if v is not None else None)
+        elif k in ("metadata", "producing_params"):
+            sets.append(f"{k} = ?"); args.append(json.dumps(v) if v is not None else None)
         elif k == "pinned":
             sets.append("pinned = ?"); args.append(1 if v else 0)
         else:

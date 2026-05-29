@@ -802,6 +802,35 @@ TOOL_SCHEMAS = [
             "required": ["entity_id"],
         },
     },
+    {
+        "name": "open_run",
+        "description": (
+            "Open an analysis Run so a multi-step pipeline's outputs group as ONE unit "
+            "in the Files tree (instead of scattering across per-step analyses). Call this "
+            "as your FIRST action when you begin executing an approved multi-step plan — "
+            "name it after the plan/task (e.g. 'pagoda2 clustering of GSM5746268'). Every "
+            "figure/table you produce and every cell you run then attaches to this Run, and "
+            "the Run keeps the code so it can be re-run. A new open_run rotates to a fresh "
+            "Run. For a single trivial output, don't bother — skip it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Name for the Run — usually the plan/task title."},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "close_run",
+        "description": (
+            "Close the thread's open Run. Call when the user clearly pivots to an unrelated "
+            "analysis, so the prior pipeline's outputs stay grouped and new work doesn't get "
+            "mixed in. (A new open_run or present_plan also rotates the Run.) An empty Run is "
+            "discarded on close."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 # ---------- Executors ----------
@@ -922,9 +951,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_python_job
+        from content.bio.lifecycle.runs import active_run_id
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
                                 focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                                timeout_s=timeout_s, project_id=str(project_id))
+                                timeout_s=timeout_s, project_id=str(project_id),
+                                thread_id=str(thread_id), run_id=active_run_id(str(thread_id)))
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
@@ -2518,6 +2549,34 @@ def create_claim_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "claim_id": cid, "statement": stmt}
 
 
+def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Open an analysis Run so this pipeline's outputs group as one unit."""
+    tid = _ctx_thread(ctx)
+    if not tid:
+        return {"error": "no active thread"}
+    title = (input_.get("title") or "").strip()
+    if not title:
+        return {"error": "title is required — name the analysis (e.g. the approved plan's title)"}
+    from content.bio.lifecycle.runs import open_run
+    rid = open_run(tid, title, focus_entity_id=(ctx or {}).get("focus_entity_id"))
+    return {"status": "ok", "run_id": rid, "title": title,
+            "note": "Run opened. Figures/tables you produce and the cells you execute now "
+                    "group under this Run until you close_run or open another."}
+
+
+def close_run_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Close the thread's open Run (call when the user pivots to unrelated work)."""
+    tid = _ctx_thread(ctx)
+    if not tid:
+        return {"error": "no active thread"}
+    from content.bio.lifecycle.runs import close_run
+    rid = close_run(tid)
+    if not rid:
+        return {"status": "noop", "note": "No open run to close."}
+    return {"status": "ok", "closed_run_id": rid,
+            "note": "Run closed. New outputs go to a fresh per-step analysis until you open_run again."}
+
+
 def annotate_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
     eid = input_.get("entity_id")
     if not eid:
@@ -2571,6 +2630,8 @@ EXECUTORS = {
     "create_finding": create_finding_tool,
     "create_claim": create_claim_tool,
     "annotate_entity": annotate_entity_tool,
+    "open_run": open_run_tool,
+    "close_run": close_run_tool,
 }
 
 # Libraries a run_python/run_r cell pulls in — used to nudge recipe uptake.
