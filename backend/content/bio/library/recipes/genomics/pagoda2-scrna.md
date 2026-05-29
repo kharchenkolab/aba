@@ -51,8 +51,16 @@ if coming from a cells x genes source.
 5. `r$adjustVariance(plot=TRUE, gam.k=10)` — variance normalization /
    overdispersed-gene selection.
 6. `r$calculatePcaReduction(nPcs=50, n.odgenes=3e3)` — PCA on OD genes,
-   stored under name `'PCA'`.
+   stored under reduction name `'PCA'`.
 7. `r$makeKnnGraph(k=40, type='PCA', center=TRUE, distance='cosine')`.
+   - **CRITICAL — `type` must be the PCA reduction (`'PCA'`), NEVER `'counts'`.**
+     `type=` selects the space the graph/clustering/embedding operate in. With
+     `type='counts'` pagoda2 builds the kNN graph on the **raw ~15k-dimensional
+     count matrix** — that doesn't error, it just **HANGS** (the run "times out",
+     which looks like a variance/normalization stall but is really the kNN step).
+     Steps 7–10 below all pass `type='PCA'` for this reason. (`calculatePcaReduction`
+     reads from counts and *stores* under name `'PCA'`; everything downstream reads
+     that stored reduction by name.)
 8. **Clustering — default to Leiden.** `r$getKnnClusters(method=leidenAlg::leiden.community, type='PCA', name='leiden', resolution=1.0)`.
    `getKnnClusters` takes an igraph-style community function; Leiden comes from the
    `leidenAlg` package — `ensure_capability("leidenAlg")` first (it is NOT in the base
