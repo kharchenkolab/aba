@@ -18,22 +18,29 @@ Matrix package. This is the opposite layout from scanpy/AnnData — transpose
 if coming from a cells x genes source.
 
 ## Approach
-1. Load `library(Matrix); library(igraph); library(pagoda2)`. Read 10x/CellRanger
-   output with pagoda2's own reader — **`cm <- read.10x.matrices(matrixPaths, version='V3')`**
-   (`matrixPaths` is one or more directories, each holding matrix.mtx / barcodes.tsv /
-   features.tsv[.gz]; pass several to merge samples). It returns a genes x cells
-   `dgCMatrix` with correct dimnames — do NOT hand-roll `readMM` + manual dimnames,
-   which is where orientation/transpose bugs creep in.
-   - **Reads gzip directly — do NOT gunzip first.** `read.10x.matrices` handles
-     `.gz` (and uncompressed); decompressing the MTX triplet is wasted work.
-   - **Filename caution.** It expects each sample directory to hold the *standard*
-     CellRanger names (`matrix.mtx.gz`, `barcodes.tsv.gz`, `features.tsv.gz`; or the
-     v2 `genes.tsv` for `version='V2'`). GEO supplementary files usually carry a GSM
-     prefix (e.g. `GSM5746268_…barcodes.tsv.gz`), so the reader won't find them as-is.
-     Put each sample's triplet in its own dir and **symlink/rename to the standard
-     names first** — e.g. `file.symlink(gsm_barcodes_gz, file.path(d, 'barcodes.tsv.gz'))`
-     (×3), then pass `d` as a `matrixPaths` entry. (A future pagoda2 update may relax
-     this; for now, rename.)
+1. Load `library(Matrix); library(igraph); library(pagoda2)`, then read the 10x MTX
+   triplet **from explicit file paths** with this small inline reader. It reads `.gz`
+   directly (don't gunzip), tolerates GEO's GSM-prefixed filenames (no rename/symlink
+   dance), and pins the **genes × cells** orientation so there's no transpose ambiguity:
+   ```r
+   read_10x_explicit <- function(mtx, barcodes, features, gene.col = 2) {
+     op <- function(p) if (grepl("\\.gz$", p)) gzfile(p) else p   # transparent gz
+     m  <- as(Matrix::readMM(op(mtx)), "CsparseMatrix")           # genes (rows) x cells (cols)
+     ft <- utils::read.delim(op(features), header = FALSE)        # col1=Ensembl, col2=symbol
+     rownames(m) <- make.unique(as.character(ft[[ if (ncol(ft) >= gene.col) gene.col else 1 ]]))
+     colnames(m) <- readLines(op(barcodes))
+     m
+   }
+   cm <- read_10x_explicit(
+     file.path(DATA_DIR, "GSM5746268_..._matrix.mtx.gz"),
+     file.path(DATA_DIR, "GSM5746268_..._barcodes.tsv.gz"),
+     file.path(DATA_DIR, "GSM5746268_..._features.tsv.gz"))
+   ```
+   `gene.col=2` uses gene symbols; pass `1` for Ensembl IDs. For **multiple samples**,
+   read each into its own matrix and integrate with **conos** — don't `cbind` raw counts.
+   (pagoda2's `read.10x.matrices(matrixPaths, version='V3')` is the convenience path
+   *only* when files already sit in a per-sample dir under standard CellRanger names —
+   GEO files usually don't, so prefer the explicit reader above.)
 2. QC filter: `counts <- gene.vs.molecule.cell.filter(cm, min.cell.size=500)`,
    then drop near-empty genes, e.g. `counts <- counts[rowSums(counts)>=10, ]`.
 3. Gene names must be unique: `rownames(counts) <- make.unique(rownames(counts))`.
