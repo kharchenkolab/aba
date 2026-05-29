@@ -4,7 +4,7 @@ description: Query the Ensembl REST API for gene/variant lookup, sequence retrie
 when_to_use: When looking up gene coordinates, rsID-to-coordinate conversion, overlapping features, or sequence for Ensembl-supported species
 requires_tools: [run_python]
 capabilities_needed: [requests]
-keywords: [Ensembl, gene lookup, variant, rsID, genomic region, sequence, VEP, transcript, homo_sapiens]
+keywords: [Ensembl, gene lookup, variant, rsID, rs number, SNP, genomic region, sequence, VEP, variant consequence, consequence, missense, amino acid change, transcript, population frequency, homo_sapiens]
 produces: [gene records, variant coordinates, sequences, overlapping features, transcript info]
 domain: database
 source: biomni:tool/database.py::query_ensembl

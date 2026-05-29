@@ -4,7 +4,7 @@ description: Query NCBI dbSNP for SNPs and genetic variants using natural langua
 when_to_use: When looking up SNP rsIDs, allele frequencies, clinical significance, or variants in a gene or genomic region
 requires_tools: [run_python]
 capabilities_needed: [requests]
-keywords: [SNP, variant, dbSNP, rsID, polymorphism, allele frequency, clinical significance, NCBI]
+keywords: [SNP, variant, dbSNP, rsID, polymorphism, allele frequency, clinical significance, NCBI, consequence, variant consequence, population frequency, populations, minor allele frequency, MAF]
 produces: [variant records, rsIDs, clinical significance, allele data]
 domain: database
 source: biomni:tool/database.py::query_dbsnp
