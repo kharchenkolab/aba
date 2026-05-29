@@ -504,6 +504,17 @@ async def stream_response(
     turn.entity_id = entity_id   # message-log scope for the reaper
     checkpoint(turn)  # initial Turn row before the loop runs
 
+    # Run save opt-out. A plan's Run is opened server-side when present_plan fires
+    # (default-save — robust even if the agent never calls open_run). If the user
+    # approved with "Save as a run" UNCHECKED, the Go message carries this marker,
+    # so discard the just-opened (still-empty) Run before execution groups under it.
+    if "do not save this as a run" in (user_text or "").lower():
+        try:
+            from content.bio.lifecycle.runs import close_run
+            close_run(store_tid)
+        except Exception:  # noqa: BLE001
+            pass
+
     # Drawer sidecar: send the structured Manifest snapshot to the client
     # so the right-rail drawer can render what the agent is currently
     # seeing. The model only ever consumes the rendered system string;
@@ -681,6 +692,17 @@ async def stream_response(
                     # #160: stash on the Turn row so the resume endpoint can
                     # find which plan to transition when the user clicks Go.
                     turn.plan_entity_id = plan_eid
+                    # Open the analysis Run for this plan NOW, server-side — the
+                    # default-save the user expects, robust even if the agent never
+                    # calls open_run. Rotates any prior open Run; an empty one is
+                    # discarded on the next rotation or on the unchecked-box opt-out
+                    # (handled at turn start). The agent does NOT open for plans.
+                    try:
+                        from content.bio.lifecycle.runs import open_run as _open_run
+                        _open_run(store_tid, plan.title or "Analysis run",
+                                  focus_entity_id=focus_entity_id, plan_entity_id=plan_eid)
+                    except Exception:  # noqa: BLE001
+                        pass
                     yield sse({"type": "plan", "entity_id": plan_eid, **plan.to_dict()})
                     ack = {
                         "status": "presented",

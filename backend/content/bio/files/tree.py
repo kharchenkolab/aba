@@ -267,12 +267,32 @@ def _working_files_node(entities: list[dict]) -> Optional[dict]:
         d = _resolve_disk(e.get("artifact_path"))
         if d:
             shown.add(str(_P(d).resolve()))
-    children: list[dict] = []
+    root = _folder("working", path="working", kind="folder")
+    root["ephemeral"] = True
+    root["note"] = "Scratch / unregistered files on disk — not kept unless promoted to a dataset."
+    # Build REAL nested folders mirroring the on-disk layout, so the scratch tier
+    # is navigable (per-sample dirs, per-thread/per-analysis output dirs) instead
+    # of one flat pile. Folders are created once and cached by tree path.
+    _folders: dict[str, dict] = {"working": root}
+
+    def _ensure_dir(parts: list[str]) -> dict:
+        path, parent = "working", root
+        for p in parts:
+            path = f"{path}/{p}"
+            node = _folders.get(path)
+            if node is None:
+                node = _folder(p, path=path, kind="folder")
+                node["ephemeral"] = True
+                parent["children"].append(node)
+                _folders[path] = node
+            parent = node
+        return parent
+
     seen = 0
     for base, label in ((_P(DATA_DIR), "data"), (_P(WORK_DIR) / pid, "scratch")):
         if not base.exists():
             continue
-        for f in base.rglob("*"):       # generator → break stops the walk early
+        for f in sorted(base.rglob("*")):   # sorted → stable, parents before children
             if seen >= 200:
                 break
             if not f.is_file() or f.name.startswith("."):
@@ -284,21 +304,18 @@ def _working_files_node(entities: list[dict]) -> Optional[dict]:
                 st = f.stat()
             except OSError:
                 continue
-            children.append({
+            rel = f.relative_to(base).parts            # (...subdirs..., filename)
+            parent = _ensure_dir([label, *rel[:-1]])
+            parent["children"].append({
                 "kind": "file", "name": f.name,
-                "path": f"working/{label}/{f.relative_to(base).as_posix()}",
+                "path": f"{parent['path']}/{f.name}",
                 "artifact_path": rp, "size": st.st_size, "mtime": st.st_mtime,
                 "ephemeral": True,
             })
             seen += 1
-    if not children:
+    if not root["children"]:
         return None
-    children.sort(key=lambda c: c["path"])
-    node = _folder("working", path="working", kind="folder")
-    node["ephemeral"] = True
-    node["note"] = "Scratch / unregistered files on disk — not kept unless promoted to a dataset."
-    node["children"] = children
-    return node
+    return root
 
 
 def build_files_tree(*, include_archived: bool = False) -> dict:
@@ -385,8 +402,12 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                 entity=thread,
             ))
 
-            # Runs in this thread
-            runs = in_thread(thread["id"], RUN_TYPES)
+            # Runs in this thread. Hide EMPTY ones (no outputs, no captured code):
+            # a Run is opened the moment a plan is presented (default-save), so a
+            # pending/abandoned plan would otherwise litter the tree with an empty
+            # Run. It surfaces once it actually has content.
+            runs = [r for r in in_thread(thread["id"], RUN_TYPES)
+                    if run_children(r["id"]) or r.get("producing_code")]
             if runs:
                 runs_folder = _folder("runs", path=f"{t_path}/runs")
                 for run, ri, r_seg in _add_numbered_children(runs_folder, runs):
