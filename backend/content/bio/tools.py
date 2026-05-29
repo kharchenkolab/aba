@@ -707,7 +707,11 @@ TOOL_SCHEMAS = [
             "facet and can feed downstream analyses. Capture provenance: pass `source` "
             "(e.g. 'GEO:GSM5746259') and the `producing_code` that fetched/built it. "
             "Do this whenever the user says to 'add/register a dataset' — don't just "
-            "leave files on disk."
+            "leave files on disk. Registering several samples 'together' / 'as one "
+            "dataset' means point `path` at the DIRECTORY holding the per-sample files "
+            "(one dataset entity over the bundle) — do NOT concatenate/merge raw "
+            "scRNA-seq samples into a single matrix to register them (that confounds "
+            "batch with biology; combine samples only inside a batch-aware integration)."
         ),
         "input_schema": {
             "type": "object",
