@@ -18,9 +18,12 @@ Matrix package. This is the opposite layout from scanpy/AnnData — transpose
 if coming from a cells x genes source.
 
 ## Approach
-1. Load `library(Matrix); library(igraph); library(pagoda2)`. Read counts
-   (e.g. `read10xMatrix(path, version='V3')` for CellRanger output) into a
-   genes x cells sparse matrix.
+1. Load `library(Matrix); library(igraph); library(pagoda2)`. Read 10x/CellRanger
+   output with pagoda2's own reader — **`cm <- read.10x.matrices(matrixPaths, version='V3')`**
+   (`matrixPaths` is one or more directories, each holding matrix.mtx / barcodes.tsv /
+   features.tsv[.gz]; pass several to merge samples). It returns a genes x cells
+   `dgCMatrix` with correct dimnames — do NOT hand-roll `readMM` + manual dimnames,
+   which is where orientation/transpose bugs creep in.
 2. QC filter: `counts <- gene.vs.molecule.cell.filter(cm, min.cell.size=500)`,
    then drop near-empty genes, e.g. `counts <- counts[rowSums(counts)>=10, ]`.
 3. Gene names must be unique: `rownames(counts) <- make.unique(rownames(counts))`.
@@ -32,22 +35,40 @@ if coming from a cells x genes source.
 6. `r$calculatePcaReduction(nPcs=50, n.odgenes=3e3)` — PCA on OD genes,
    stored under name `'PCA'`.
 7. `r$makeKnnGraph(k=40, type='PCA', center=TRUE, distance='cosine')`.
-8. `r$getKnnClusters(method=infomap.community, type='PCA')` — community
-   detection. Pass any igraph method: `multilevel.community` (Louvain, the
-   `basicP2proc` default), `walktrap.community`, `infomap.community`. Use
-   `name=` to store several side by side (default name is `'community'`).
-9. Embed: `r$getEmbedding(type='PCA', embeddingType='largeVis', M=30, perplexity=30, gamma=1/30)`
-   or `embeddingType='tSNE'`. Visualize with
-   `r$plotEmbedding(type='PCA', embeddingType='tSNE', mark.groups=TRUE, ...)`;
-   overlay a gene with `colors=r$counts[,gene]`.
-10. DE: `r$getDifferentialGenes(type='PCA', clusterType='community', verbose=TRUE)`.
-    Results land in `r$diffgenes$PCA[[1]][['<cluster>']]`. Heatmap via
-    `r$plotGeneHeatmap(genes=rownames(de)[1:15], groups=r$clusters$PCA[[1]])`.
-11. Persist: `saveRDS(r, 'pagoda2object.rds')`.
+8. **Clustering — default to Leiden.** `r$getKnnClusters(method=leidenAlg::leiden.community, type='PCA', name='leiden', resolution=1.0)`.
+   `getKnnClusters` takes an igraph-style community function; Leiden comes from the
+   `leidenAlg` package — `ensure_capability("leidenAlg")` first (it is NOT in the base
+   R runtime; invoking Leiden without it is what raised the "no package called conos" /
+   missing-package errors). `resolution` tunes granularity (higher = more clusters).
+   Other methods only if asked: `igraph::multilevel.community` (Louvain),
+   `walktrap.community`, `infomap.community`. Clusters land in `r$clusters$PCA[[name]]`.
+9. **Embedding — default to UMAP.** `r$getEmbedding(type='PCA', embeddingType='UMAP', distance='cosine', n.cores=1)`
+   (UMAP uses `uwot`, which ships with the runtime). `largeVis`/`tSNE` stay available
+   if asked. Visualize with
+   `r$plotEmbedding(type='PCA', embeddingType='UMAP', clusterType='leiden', mark.groups=TRUE)`
+   — `clusterType=` MUST match the cluster `name=` from step 8 and `embeddingType=` the
+   one you computed, or you get "Clustering <x> for type PCA doesn't exist". Overlay a
+   gene with `colors=r$counts[,gene]`.
+10. **Marker DE — use the built-in, do NOT hand-roll.** `r$getDifferentialGenes(type='PCA', clusterType='leiden', verbose=TRUE, upregulated.only=TRUE)`
+    (`clusterType` = your cluster `name=`). Results land in `r$diffgenes$PCA$leiden`.
+    Manually slicing `r$counts` by cluster to compute markers is the classic failure
+    mode: **`r$counts` is stored cells x genes (the transpose of the input)**, so
+    hand-rolled row/col means silently mismatch the cluster factor. Let pagoda2 do it.
+11. **Marker heatmap — `plotDEheatmap`** (the preferred marker viz). It is a **conos**
+    function — not a pagoda2 method — that also accepts a pagoda2 object as the first
+    arg. See the conos walkthrough "Cluster markers" section:
+    https://github.com/kharchenkolab/conos/blob/main/doc/walkthrough.md#cluster-markers
+    `conos::plotDEheatmap(r, r$clusters$PCA$leiden, r$diffgenes$PCA$leiden, n.genes.per.cluster=10)`.
+    Provision: `ensure_capability("conos")` (provides plotDEheatmap) **and**
+    `ensure_capability("ComplexHeatmap")` — install ComplexHeatmap as the conda
+    Bioconductor *binary*; a source compile is heavy/fragile (see [[r-binary-channels]]).
+12. Persist: `saveRDS(r, file.path(DATA_DIR, 'pagoda2object.rds'))` — use the injected
+    `DATA_DIR` variable (or the session working dir), NOT bare `/tmp`.
 
 Fast path: `p2 <- basicP2proc(cd, n.cores=1, min.cells.per.gene=10, n.odgenes=2e3, get.largevis=FALSE, make.geneknn=FALSE)`
-runs steps 3-9 (multilevel clustering + largeVis/tSNE) in one call. It does
-`make.unique` internally.
+runs steps 3-9 in one call (Louvain/multilevel clustering + largeVis by default). It
+does `make.unique` internally. For the Leiden + UMAP defaults above, either run the
+steps explicitly, or call `basicP2proc` then re-run steps 8-9 (Leiden cluster + UMAP).
 
 Web app (optional): `r$makeGeneKnnGraph()`, build genesets (e.g.
 `hierDiffToGenesets(r$getHierarchicalDiffExpressionAspects(type='PCA', clusterName='community'))`),
@@ -64,19 +85,27 @@ GO overdispersion: `ext <- extendedP2proc(p2, organism='hs')` (also 'mm','dr').
 - `distance='cosine'` with `center=TRUE` is the standard KNN setup.
 
 ## Caveats
-- Matrix orientation is genes x cells — the constructor errors on duplicate
-  or NA gene/cell names; sanitize first.
+- INPUT orientation is genes x cells; the constructor errors on duplicate or NA
+  gene/cell names — sanitize first. But pagoda2 stores `r$counts` **internally as
+  cells x genes** (transposed from the input) — never assume `r$counts` is genes x
+  cells when post-processing; prefer the built-in methods (`getDifferentialGenes`,
+  `plotEmbedding`) over hand-slicing the matrix.
 - Methods mutate the object in place; do not reassign the return value.
 - `testPathwayOverdispersion` is slow on >1k cells — prefer hierarchical DE.
 - largeVis is much faster than tSNE; tSNE perplexity auto-shrinks if too
   large for the cell count.
 
 ## In ABA
-- One step: `ensure_capability("pagoda2")` — it's a known capability in the
-  catalog (GitHub R package) and installs into the project R library. Then run
-  every step in `run_r`. **Don't hand-roll `install_github` and don't
-  `ensure_capability` Matrix/igraph/irlba separately** — those (plus xml2 and
-  igraph's GLPK system lib) already ship with the R runtime as conda binaries,
-  so `library(Matrix); library(igraph)` just work. For example data the vignette
-  uses the `p2data` drat package, but real inputs come from `read10xMatrix` or a
-  saved matrix.
+- Provision: `ensure_capability("pagoda2")` (GitHub R package → project R library).
+  For the defaults above also `ensure_capability("leidenAlg")` (Leiden clustering)
+  and, for the marker heatmap, `ensure_capability("conos")` + `ensure_capability("ComplexHeatmap")`.
+  UMAP's `uwot` already ships with the runtime. **Don't hand-roll `install_github`
+  and don't `ensure_capability` Matrix/igraph/irlba separately** — those (plus xml2
+  and igraph's GLPK system lib) already ship as conda binaries, so
+  `library(Matrix); library(igraph)` just work.
+- Write outputs (plots, RDS, CSVs) under the injected `DATA_DIR` / the session working
+  dir — NOT bare `/tmp` (it isn't compartmentalized and isn't picked up as a project
+  artifact). Better still, let plots render in the cell so run_r captures them as figure
+  entities automatically; `register_dataset(...)` any table worth keeping.
+- Real inputs come from `read.10x.matrices` or a saved matrix (the vignette's `p2data`
+  drat package is example-only).
