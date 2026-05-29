@@ -2524,31 +2524,139 @@ def list_entities_tool(input_: dict, ctx: dict | None = None) -> dict:
     ]}
 
 
+def _within(p: str, base: str) -> bool:
+    import os
+    p, base = os.path.abspath(p), os.path.abspath(base)
+    return p == base or p.startswith(base + os.sep)
+
+
+def _scratch_bases(ctx: dict | None) -> list[str]:
+    """Where a relative-path download actually lands: the active Run's output
+    dir and the thread's scratch dir (the kernel cwd), so register_dataset can
+    find files the agent wrote there with a bare name."""
+    bases: list[str] = []
+    try:
+        from core.data.workspace import scratch_dir
+        from core import projects
+        tid = _ctx_thread(ctx)
+        pid = projects.current() or "default"
+        if tid:
+            from content.bio.lifecycle.runs import active_run_id
+            from core.graph.entities import get_entity
+            rid = active_run_id(tid)
+            if rid:
+                ap = (get_entity(rid) or {}).get("artifact_path")
+                if ap:
+                    bases.append(str(ap))
+            bases.append(str(scratch_dir(pid, f"thread-{tid}")))
+    except Exception:  # noqa: BLE001
+        pass
+    return bases
+
+
+def _hardlink_tree(src: str, dest: str) -> None:
+    """Replicate src→dest by HARDLINKING every file (instant — no data copied;
+    both names point at the same inodes, so the dest survives scratch GC of the
+    src). Raises OSError (EXDEV) across filesystems → caller falls back to copy."""
+    import os
+    if os.path.isfile(src):
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        os.link(src, dest)
+        return
+    os.makedirs(dest, exist_ok=True)
+    for root, _dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        dst_root = dest if rel == "." else os.path.join(dest, rel)
+        os.makedirs(dst_root, exist_ok=True)
+        for f in files:
+            os.link(os.path.join(root, f), os.path.join(dst_root, f))
+
+
+def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
+    """Bring a scratch path into DATA_DIR so a registered dataset persists past
+    scratch GC. Hardlinks (instant, non-blocking) when same-filesystem; across
+    filesystems, copies in a BACKGROUND thread (via a .part temp + atomic rename)
+    so the turn never blocks. Returns (dest_path, materializing)."""
+    import os, shutil, threading
+    from config import DATA_DIR
+    src = os.path.abspath(src)
+    dest = os.path.join(str(DATA_DIR), os.path.basename(src.rstrip("/")) or "dataset")
+    if not os.path.exists(os.path.dirname(dest)):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+    base, i = dest, 2
+    while os.path.exists(dest):       # don't clobber an existing dataset dir
+        dest = f"{base}_{i}"; i += 1
+    try:
+        _hardlink_tree(src, dest)     # instant on same fs
+        return dest, False
+    except OSError:                   # cross-device → background copy
+        shutil.rmtree(dest, ignore_errors=True)
+        tmp = dest + ".part"
+
+        def _bg():
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+                if os.path.isdir(src):
+                    shutil.copytree(src, tmp)
+                else:
+                    os.makedirs(os.path.dirname(tmp) or ".", exist_ok=True)
+                    shutil.copy2(src, tmp)
+                os.replace(tmp, dest)
+            except Exception:  # noqa: BLE001
+                shutil.rmtree(tmp, ignore_errors=True)
+
+        threading.Thread(target=_bg, daemon=True).start()
+        return dest, True
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from config import DATA_DIR
+    from core.config import WORK_DIR
     path, title = input_.get("path"), input_.get("title")
     if not path or not title:
         return {"error": "path and title are required"}
     from core.graph.entities import create_entity, update_entity
-    # Resolve a bare/relative path against DATA_DIR (where the agent's files
-    # live), then cwd — not the process cwd alone, so 'GSM…_counts.h5ad' is found.
-    cands = [path] if os.path.isabs(path) else [os.path.join(str(DATA_DIR), path), os.path.abspath(path)]
+    # Resolve a bare/relative path against DATA_DIR (the kept tier), then the
+    # active Run / thread SCRATCH dir (where a relative-path download lands —
+    # the kernel cwd), then process cwd. So 'GSM…_counts' is found wherever the
+    # agent actually wrote it, without a manual move.
+    if os.path.isabs(path):
+        cands = [path]
+    else:
+        cands = [os.path.join(str(DATA_DIR), path)]
+        cands += [os.path.join(b, path) for b in _scratch_bases(ctx)]
+        cands.append(os.path.abspath(path))
     abspath = next((c for c in cands if os.path.exists(c)), cands[0])
     exists = os.path.exists(abspath)
+    # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR) is
+    # hardlinked into DATA_DIR so the dataset persists past the 48h scratch GC —
+    # removing the move-then-re-register dance. Non-blocking (instant hardlink,
+    # or a background copy across filesystems).
+    adopted = materializing = False
+    if exists and _within(abspath, str(WORK_DIR)) and not _within(abspath, str(DATA_DIR)):
+        try:
+            abspath, materializing = _adopt_into_data_dir(abspath)
+            adopted = True
+        except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
+            pass
     summary = (input_.get("summary") or "").strip()
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
         producing_code=input_.get("producing_code"),
         metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
-                  "by_reference": True, "ref_path": abspath,
+                  "by_reference": not adopted, "ref_path": abspath,
                   "summary": summary, "source": input_.get("source", ""),
                   "organism": input_.get("organism")})
     if summary:
         # The dataset detail view shows `notes` as the description — populate it.
         update_entity(eid, notes=summary)
     note = "Registered as a Dataset entity — now in the Data facet."
+    if adopted and not materializing:
+        note += " Files adopted into DATA_DIR (kept past scratch cleanup)."
+    elif adopted and materializing:
+        note += " Files are copying into DATA_DIR in the background — fully available shortly."
     if not exists:
         note += " WARNING: path not found on disk; registered by reference only — pass a path under DATA_DIR."
     return {"status": "ok", "dataset_id": eid, "title": title,
