@@ -48,7 +48,12 @@ R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcpppr
                "bioconductor-biomart",
                # KernSmooth — R "Recommended" pkg conda r-base omits; smoothScatter()
                # needs it, so pagoda2 adjustVariance(plot=TRUE) errors without it.
-               "r-kernsmooth"]
+               "r-kernsmooth",
+               # dplyr — the %>% pipe + group_by/top_n the agent reaches for in
+               # marker post-processing (and tidyverse, which isn't installed); keep
+               # it ready so `library(dplyr)` always works. ggplot2 is already present
+               # via r-ggrepel. Together they cover the common Seurat plotting/wrangling.
+               "r-dplyr"]
 
 # Identifier validation so a package/ref string can't inject R code via `-e`.
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name

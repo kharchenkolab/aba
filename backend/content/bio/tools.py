@@ -181,6 +181,10 @@ TOOL_SCHEMAS = [
             "R-string note: R has NO `*` or `%+%` for strings — use strrep('=',60) or "
             "paste0(rep('=',60),collapse='') and paste0()/paste(); don't write Python "
             "idioms like \"=\"*60 (they error). "
+            "Library note: ggplot2 and dplyr are installed but NOT auto-attached by "
+            "library(Seurat) — call library(ggplot2); library(dplyr) yourself before using "
+            "ggtitle()/aes() or the %>% pipe + group_by()/top_n(). There is NO 'tidyverse' "
+            "meta-package; never library(tidyverse) — load ggplot2 and dplyr directly. "
             "Use for Bioconductor / DESeq2 / edgeR / limma / Seurat work that's "
             "awkward in Python. First R use installs the R kernel (slow, one-time)."
         ),

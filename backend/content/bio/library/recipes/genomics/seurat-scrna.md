@@ -20,7 +20,11 @@ or downstream tools are Bioconductor.
 **Provision:** `ensure_capability("Seurat")` (CRAN R package, installed on demand
 into the project R library — heavy the first time, but most deps come as PPM
 *binaries* so it's a few minutes, then cached), then `library(Seurat)` in `run_r`.
-`library(dplyr)` is also handy for marker post-processing.
+**`library(Seurat)` does NOT attach ggplot2 or dplyr** — load them yourself:
+`library(ggplot2)` (for `ggtitle()`/`aes()` on the plots Seurat returns) and
+`library(dplyr)` (the `%>%` pipe + `group_by()`/`top_n()` for marker post-processing).
+Both are already installed. There is **no `tidyverse`** meta-package here — never
+`library(tidyverse)`; load `ggplot2` and `dplyr` directly.
 
 ## The three choices that DEFINE the result — surface them with present_plan
 Halt and walk the user through these before committing; the defaults below are
@@ -42,7 +46,8 @@ rownames**, and `ReadMtx` de-dups for you). `CreateSeuratObject(min.cells, min.f
 does the first gene/cell filter.
 ```r
 library(Seurat)
-library(dplyr)
+library(ggplot2)   # ggtitle/aes — Seurat returns ggplot objects but won't attach this
+library(dplyr)     # %>% + group_by/top_n for markers
 D <- Sys.getenv("DATA_DIR")
 # Standard CellRanger dir:
 #   pbmc.data <- Read10X(data.dir = file.path(D, "filtered_feature_bc_matrix"))

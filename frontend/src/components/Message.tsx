@@ -38,52 +38,49 @@ function ErrorLine({ text, detail, onRetry }: { text: string; detail?: string; o
   )
 }
 
-// Human-friendly tool labels for the chat (biologists shouldn't see raw
-// function names like `ensure_capability`). Anything unmapped falls back to a
+// Human-friendly, lower-case tool labels for the chat (biologists shouldn't see
+// raw function names like `ensure_capability`). Anything unmapped falls back to a
 // de-underscored phrase rather than snake_case.
-function humanize(name: string) {
-  return name.replace(/_/g, ' ').replace(/\b\w/, c => c.toUpperCase())
-}
 function toolDoneLabel(name: string) {
   const labels: Record<string, string> = {
-    list_data_files: 'Listed data files',
-    read_csv_info: 'Read CSV',
-    run_python: 'Ran Python',
-    run_r: 'Ran R',
-    run_nextflow: 'Ran pipeline',
-    ensure_capability: 'Tools ready',
-    list_capabilities: 'Checked available tools',
-    read_capability: 'Read tool details',
-    inspect_package: 'Inspected package',
-    search_pypi: 'Searched packages',
-    search_bioconda: 'Searched bioconda',
-    search_nf_core: 'Searched pipelines',
-    search_mcp_registry: 'Searched tool servers',
-    propose_capability: 'Added a tool',
-    search_skills: 'Looked up methods',
-    read_skill: 'Read the recipe',
-    open_run: 'Started a run',
-    close_run: 'Closed the run',
-    register_dataset: 'Registered dataset',
-    pin_entity: 'Pinned',
-    promote_to_result: 'Saved result',
-    create_finding: 'Recorded finding',
-    create_claim: 'Recorded claim',
-    annotate_entity: 'Updated entity',
-    list_entities: 'Listed items',
-    read_memory: 'Recalled a note',
-    write_memory: 'Saved a note',
-    fetch_url: 'Fetched data',
-    fetch_ensembl: 'Queried Ensembl',
-    lookup_sra_runinfo: 'Looked up SRA runs',
-    register_reference: 'Registered reference',
-    find_reference: 'Found reference',
-    restart_kernel: 'Restarted session',
-    get_provenance: 'Traced provenance',
-    get_dependents: 'Found dependents',
-    create_scenario: 'Created scenario',
+    list_data_files: 'listed data files',
+    read_csv_info: 'read CSV',
+    run_python: 'ran Python',
+    run_r: 'ran R',
+    run_nextflow: 'ran pipeline',
+    ensure_capability: 'tools ready',
+    list_capabilities: 'checked available tools',
+    read_capability: 'read tool details',
+    inspect_package: 'inspected package',
+    search_pypi: 'searched packages',
+    search_bioconda: 'searched bioconda',
+    search_nf_core: 'searched pipelines',
+    search_mcp_registry: 'searched tool servers',
+    propose_capability: 'added a tool',
+    search_skills: 'looked up methods',
+    read_skill: 'read the recipe',
+    open_run: 'started a run',
+    close_run: 'closed the run',
+    register_dataset: 'registered dataset',
+    pin_entity: 'pinned',
+    promote_to_result: 'saved result',
+    create_finding: 'recorded finding',
+    create_claim: 'recorded claim',
+    annotate_entity: 'updated entity',
+    list_entities: 'listed items',
+    read_memory: 'recalled a note',
+    write_memory: 'saved a note',
+    fetch_url: 'fetched data',
+    fetch_ensembl: 'queried Ensembl',
+    lookup_sra_runinfo: 'looked up SRA runs',
+    register_reference: 'registered reference',
+    find_reference: 'found reference',
+    restart_kernel: 'restarted session',
+    get_provenance: 'traced provenance',
+    get_dependents: 'found dependents',
+    create_scenario: 'created scenario',
   }
-  return labels[name] ?? humanize(name)
+  return labels[name] ?? name.replace(/_/g, ' ')
 }
 function toolRunningLabel(name: string) {
   const labels: Record<string, string> = {
@@ -124,7 +121,7 @@ function toolRunningLabel(name: string) {
     get_dependents: 'finding dependents',
     create_scenario: 'creating scenario',
   }
-  return labels[name] ?? humanize(name).toLowerCase()
+  return labels[name] ?? name.replace(/_/g, ' ')
 }
 
 /**
