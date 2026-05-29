@@ -55,6 +55,15 @@ _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package 
 _GH_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")   # owner/repo
 _REF_RE = re.compile(r"^[A-Za-z0-9_./-]+$")                 # tag / branch / sha
 
+# "ERROR/Warning: dependency 'X' is not available for package 'Y'" — a CRAN
+# install can hard-depend on a Bioconductor package the CRAN/PPM repo lacks.
+_MISSING_DEP_RE = re.compile(r"dependency [‘'\"]([A-Za-z][A-Za-z0-9.]+)[’'\"] is not available")
+
+
+def _missing_r_deps(log: str) -> list[str]:
+    """Unavailable R-package dependency names parsed from an install log (deduped)."""
+    return list(dict.fromkeys(_MISSING_DEP_RE.findall(log or "")))
+
 
 def _rscript() -> Path:
     return tools_env() / "bin" / "Rscript"
@@ -293,6 +302,28 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
                     "library": libname, "source_fallback": True, "recovered_lib": libpkg}
         log = ((proc.stderr or "") + "\n" + (proc.stdout or ""))
         diag = diagnose_install(log)
+
+    # Auto-recover a missing R-package dependency that lives on Bioconductor: a
+    # CRAN package (e.g. conos) can hard-depend on a Bioc package (ComplexHeatmap)
+    # that the CRAN/PPM repo can't supply (→ "dependency 'X' is not available").
+    # Install each such dep as a conda Bioc BINARY (onto .libPaths), then retry —
+    # so a CRAN package with Bioc deps installs fast instead of needing GitHub/source.
+    if not loaded and source == "cran":
+        recovered = []
+        for dep in _missing_r_deps(log):
+            if r_has_package(dep, project_id=project_id):
+                continue
+            if install_bioconductor_conda(dep, dep, project_id=project_id, cancel_token=cancel_token):
+                recovered.append(dep)
+        if recovered:
+            progress.emit(f"R: installed Bioconductor dep(s) {', '.join(recovered)} as conda binaries — "
+                          f"retrying {package}…", phase="r")
+            proc, loaded = _attempt(force_source=False)
+            if loaded:
+                return {"status": "ready", "package": package, "source": source, "lib": str(lib),
+                        "library": libname, "recovered_deps": recovered}
+            log = ((proc.stderr or "") + "\n" + (proc.stdout or ""))
+            diag = diagnose_install(log)
 
     note = f"R install of {package!r} ({source}) failed"
     if used_source_fallback:

@@ -263,12 +263,12 @@ def test_read_capability():
 
 
 def test_seed_r_packages():
-    print("seed catalog declares pagoda2 (CRAN binary) + conos (github, for its Bioc dep)")
+    print("seed catalog declares pagoda2 + conos as CRAN r_packages (fast PPM binaries)")
     from core.catalog import resolve_capability
-    # pagoda2 → CRAN (fast PPM binary; no Bioconductor deps). conos stays GitHub:
-    # it depends on the Bioconductor pkg ComplexHeatmap, which install.packages()/PPM
-    # can't resolve but remotes::install_github + BiocManager does.
-    for n, src, pkg in (("pagoda2", "cran", "pagoda2"), ("conos", "github", "kharchenkolab/conos")):
+    # Both CRAN now. conos hard-depends on the Bioconductor pkg ComplexHeatmap; a
+    # CRAN install can't fetch it directly, but r_install auto-recovers it (conda
+    # Bioc binary, then retry) — so conos installs from CRAN without a source compile.
+    for n, src, pkg in (("pagoda2", "cran", "pagoda2"), ("conos", "cran", "conos")):
         c = resolve_capability(n) or {}
         r = (c.get("provisioning") or {}).get("r") or {}
         check(f"{n} present as r_package", c.get("archetype") == "r_package", str(c)[:120])

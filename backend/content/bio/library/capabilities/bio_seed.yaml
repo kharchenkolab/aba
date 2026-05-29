@@ -184,12 +184,12 @@ capabilities:
     archetype: r_package
     domain_tags: [scrna-seq, single-cell, integration, joint-clustering, alignment, conos]
     summary: Joint analysis of multiple single-cell RNA-seq samples — builds a cross-sample graph for clustering, label propagation, and joint embedding.
-    # NOTE: stays on GitHub (not CRAN) on purpose — conos depends on the
-    # Bioconductor pkg ComplexHeatmap, which install.packages()/PPM can't resolve
-    # (CRAN-only repo), but remotes::install_github + BiocManager does. pagoda2 is
-    # CRAN (no Bioc deps → fast PPM binary); conos can't be without a Bioc-aware path.
-    provisioning: {r: {source: github, package: kharchenkolab/conos, library: conos}}
-    source: github
+    # CRAN (fast PPM binary). conos hard-depends on the Bioconductor pkg
+    # ComplexHeatmap, which a CRAN-only install can't fetch — but r_install
+    # auto-recovers it (installs ComplexHeatmap as a conda Bioc binary, then
+    # retries), so the CRAN path works without a slow GitHub source compile.
+    provisioning: {r: {source: cran, package: conos, library: conos}}
+    source: cran
     scope: system
     status: published
 
