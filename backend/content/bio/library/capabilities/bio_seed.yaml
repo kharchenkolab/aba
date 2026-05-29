@@ -189,6 +189,26 @@ capabilities:
     scope: system
     status: published
 
+  - name: leidenAlg
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, leiden, community-detection, kharchenkolab]
+    summary: Leiden community detection for R (kharchenkolab) — leiden.community(); the clustering backend pagoda2/conos use for Leiden. See the pagoda2-scrna recipe.
+    provisioning: {r: {source: cran, package: leidenAlg, library: leidenAlg}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: ComplexHeatmap
+    version: "latest"
+    archetype: r_package
+    domain_tags: [visualization, heatmap, bioconductor, marker-genes, single-cell]
+    summary: Bioconductor ComplexHeatmap — flexible heatmaps; the renderer behind conos/pagoda2 plotDEheatmap for cluster-marker visualization. Installs via the conda Bioconductor binary (a source compile is heavy).
+    provisioning: {r: {source: bioconductor, package: ComplexHeatmap, library: ComplexHeatmap}}
+    source: bioconductor
+    scope: system
+    status: published
+
   - name: DESeq2
     version: "latest"
     archetype: r_package
