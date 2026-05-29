@@ -45,7 +45,10 @@ R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcpppr
                # Pre-installed as the conda Bioconductor BINARY: an on-demand source
                # compile pulls Biostrings/XVector/png and reliably blew the run_r 120s
                # timeout (see session thr_78efae37). r-binary-channels.
-               "bioconductor-biomart"]
+               "bioconductor-biomart",
+               # KernSmooth — R "Recommended" pkg conda r-base omits; smoothScatter()
+               # needs it, so pagoda2 adjustVariance(plot=TRUE) errors without it.
+               "r-kernsmooth"]
 
 # Identifier validation so a package/ref string can't inject R code via `-e`.
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name

@@ -68,8 +68,9 @@ if coming from a cells x genes source.
    missing-package errors). `resolution` tunes granularity (higher = more clusters).
    Other methods only if asked: `igraph::multilevel.community` (Louvain),
    `walktrap.community`, `infomap.community`. Clusters land in `r$clusters$PCA[[name]]`.
-9. **Embedding — default to UMAP.** `r$getEmbedding(type='PCA', embeddingType='UMAP', distance='cosine', n.cores=1)`
-   (UMAP uses `uwot`, which ships with the runtime). `largeVis`/`tSNE` stay available
+9. **Embedding — default to UMAP.** UMAP is `r$getEmbedding(type='PCA', embeddingType='UMAP', distance='cosine', n.cores=1)`
+   — **there is NO `r$calculateUmap()` method; do not guess one.** `getEmbedding` stores
+   the result in `r$embeddings$PCA$UMAP`. (UMAP uses `uwot`, which ships with the runtime.) `largeVis`/`tSNE` stay available
    if asked. Visualize with
    `r$plotEmbedding(type='PCA', embeddingType='UMAP', clusterType='leiden', mark.groups=TRUE)`
    — `clusterType=` MUST match the cluster `name=` from step 8 and `embeddingType=` the
