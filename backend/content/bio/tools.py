@@ -1946,6 +1946,20 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             note += (" If `import " + str(cap.get("name")) + "` fails, the import name "
                      "differs from the package name — confirm it with inspect_package "
                      "rather than guessing/retrying.")
+        # If a Python kernel is already running for this thread, it scanned the
+        # overlay at startup (before this install) and importlib cached the dir
+        # listing — so `import <new pkg>` would fail until a restart. Invalidate
+        # its caches now so the very next run_python imports it WITHOUT a restart
+        # (the harmonypy-needed-restart friction).
+        try:
+            _tid = (ctx or {}).get("thread_id")
+            if _tid:
+                from core.exec.kernels import get_pool
+                _sess = get_pool().peek(str(_tid), "python")
+                if _sess is not None:
+                    _sess.execute("import importlib as _il; _il.invalidate_caches()", timeout_s=15)
+        except Exception:  # noqa: BLE001
+            pass
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):

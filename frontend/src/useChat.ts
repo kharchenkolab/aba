@@ -177,6 +177,11 @@ export function useChat(
   // captures this ref so it can fire a new turn when the current one
   // finishes (auto-flush of queued message).
   const sendMessageRef = useRef<((text: string) => Promise<void>) | null>(null)
+  // Unguarded sender for the auto-flush / steer paths. The turn has JUST ended,
+  // so sendMessage's `if (streaming) return` guard — whose stale `streaming`
+  // closure still reads true at the setTimeout(0) instant — would silently drop
+  // the queued message (chip clears, nothing sends). This bypasses that guard.
+  const flushSendRef = useRef<((text: string) => void) | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -400,7 +405,7 @@ export function useChat(
                 steerFlushRef.current = false
                 queuedMessageRef.current = null
                 setQueuedMessage(null)
-                setTimeout(() => sendMessageRef.current?.(q), 0)
+                setTimeout(() => flushSendRef.current?.(q), 0)
               } else {
                 steerFlushRef.current = false
                 queuedMessageRef.current = null
@@ -423,7 +428,7 @@ export function useChat(
                 const q = queuedMessageRef.current
                 queuedMessageRef.current = null
                 setQueuedMessage(null)
-                setTimeout(() => sendMessageRef.current?.(q), 0)
+                setTimeout(() => flushSendRef.current?.(q), 0)
               }
               return
             } else if (ev.type === 'error') {
@@ -472,6 +477,10 @@ export function useChat(
   // code inside the SSE handler (set up via closure on an older render)
   // can dispatch the queued message correctly.
   sendMessageRef.current = (text: string) => sendMessage(text)
+  flushSendRef.current = (text: string) => {
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }] }])
+    runStream({ text })
+  }
 
   // Re-run the last turn after a failure. Completed steps (assistant turns +
   // tool results) were persisted server-side *during* the turn — only the error
