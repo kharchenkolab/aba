@@ -81,6 +81,16 @@ def _minimal_flat(q):
             "from memory is the top cause of wrong-API errors here. Plan multi-step work with "
             "present_plan first, then stop for the user's go-ahead.")
 
+# PK's #2-via-instruction: a GENERAL "observe-before-you-analyze" practice. Targets the
+# assume-instead-of-observe failures (MT- prefix, invented species, fabricated counts) by
+# grounding the agent in the data's ACTUAL state — the instruction form of kernel-state #2.
+DATA_SUMMARY = """DATA-FIRST RULE — before running any analysis on a dataset you have not yet inspected this session, FIRST load it and produce a brief DATA SUMMARY for YOUR OWN use (not a user deliverable): the object's shape, the key fields/columns, the identifier conventions actually present (e.g. whether gene names are symbols or IDs, the real mitochondrial-gene prefix), value ranges/dtype, and the species/platform IF determinable from the data. Base every later step — and every number, identifier, or label you report — on what you OBSERVED in that summary, never on the filename, dataset name, or prior assumption. If something can't be observed, say so rather than assume it."""
+
+
+def _data_summary(q):
+    return DATA_SUMMARY + "\n\n" + build_system(TOOL_SCHEMAS, role="primary", intent=q, ctx={})
+
+
 def _orient_first(q):
     # E: principles + a REQUIRED orientation artifact before acting (mechanism, not
     # just declaration). Isolates "forced structure" vs principles_preamble's "stated".
@@ -93,6 +103,7 @@ STRATEGIES = {
     "deprimed": _deprimed,                      # C: strip enumerated forbidden-lists/dangles
     "minimal_flat": _minimal_flat,              # D: radical — no wall, no recipe slice
     "orient_first": _orient_first,              # E: forced orientation artifact (mechanism)
+    "data_summary": _data_summary,              # F: observe-before-analyze (PK #2-via-instruction)
 }
 
 # ── critical-query panel (derived from the scenarios + observed stumbles) ─────
