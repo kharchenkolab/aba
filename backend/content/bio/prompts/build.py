@@ -275,6 +275,11 @@ _BLOCKS: tuple[_Block, ...] = (
     # for primary turns when the tool is on; the block itself returns ''
     # when no memories exist, which the assembler drops.
     _Block("memory",       frozenset({"primary"}), "read_memory",    _memory_index),
+    # Data-first / observe-before-assume (PK #2-via-instruction). Salient END
+    # position (like plan_first). Toggle off with ABA_DATA_SUMMARY=off (for eval
+    # isolation); on by default live.
+    _Block("data_orientation", frozenset({"primary"}), None, _md("data_orientation.md"),
+           gate=lambda c: (os.environ.get("ABA_DATA_SUMMARY") or "on").lower() != "off"),
     _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
 )
 
