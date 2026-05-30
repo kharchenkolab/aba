@@ -32,6 +32,8 @@ class SkillSpec:
     name:           str
     description:    str
     when_to_use:    str = ""
+    # When NOT to use — applicability anti-conditions, for selection/triage.
+    avoid_when:     str = ""
     requires_tools: tuple[str, ...] = ()
     # Catalog capabilities (libs/CLIs) the procedure uses — e.g. ('pydeseq2',
     # 'gseapy'). Distinct from requires_tools (agent tools like run_python):
@@ -109,6 +111,7 @@ def _spec_from_text(text: str, source_path: str = "", *,
         name=name,
         description=str(fm.get("description") or "").strip(),
         when_to_use=str(fm.get("when_to_use") or "").strip(),
+        avoid_when=str(fm.get("avoid_when") or "").strip(),
         requires_tools=tuple(req),
         capabilities_needed=tuple(str(c).strip() for c in caps if str(c).strip()),
         keywords=tuple(str(k).strip() for k in kw if str(k).strip()),

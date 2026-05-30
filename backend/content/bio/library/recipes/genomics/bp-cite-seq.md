@@ -1,10 +1,10 @@
 ---
 name: bp-cite-seq
 description: Best-practice CITE-seq / surface-protein (ADT) analysis — MuData multimodal handling, ADT-specific QC (by detected proteins), and DSB/CLR normalization, per the Single-cell Best Practices book.
-when_to_use: CITE-seq data with paired RNA + antibody-derived tags (ADT/surface protein). Handle the two modalities with muon/MuData; apply ADT-specific QC and normalization (do NOT reuse RNA thresholds).
+when_to_use: Use this for the CITE-seq / surface-protein (ADT) modality only — paired RNA + antibody-derived tags handled as muon/MuData with ADT-specific QC and DSB/CLR normalization (do NOT reuse RNA thresholds). For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, muon, mudata]
-keywords: [CITE-seq, surface protein, ADT, antibody derived tags, multimodal, muon, MuData, DSB normalization, CLR, centered log ratio, isotype control, single cell]
+keywords: [CITE-seq, surface protein, ADT, antibody derived tags, multimodal, muon, MuData, DSB normalization, CLR centered log ratio, isotype control]
 produces: [mdata_cite.h5mu, adt_qc.png, adt_normalized.h5mu]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/surface_protein/quality_control.html"

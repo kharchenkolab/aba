@@ -1,10 +1,10 @@
 ---
 name: bp-compositional-analysis
 description: Best-practice scRNA-seq compositional analysis — testing cell-type proportion shifts across conditions with scCODA/tascCODA (pertpy) or Milo, accounting for compositionality, per the Single-cell Best Practices book.
-when_to_use: Multi-sample scRNA-seq with a condition, and you want to know whether CELL-TYPE PROPORTIONS change between conditions (not gene expression). Use a compositional-aware model (scCODA) or KNN-neighborhood DA (Milo); never a plain proportion t-test.
+when_to_use: Use this for the compositional / differential-abundance STAGE only — multi-sample scRNA-seq with a condition where you want to know whether CELL-TYPE PROPORTIONS change (not gene expression), via a compositional-aware model (scCODA) or KNN-neighborhood DA (Milo). For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, pertpy, milopy]
-keywords: [compositional analysis, cell type proportions, differential abundance, scCODA, tascCODA, pertpy, Milo, milopy, Dirichlet multinomial, reference cell type, single cell]
+keywords: [compositional analysis, cell-type proportion shift, differential abundance, scCODA, tascCODA, pertpy, Milo, milopy, Dirichlet multinomial, reference cell type, compositionality]
 produces: [composition_results.csv, proportions_barplot.png, credible_effects.csv]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/conditions/compositional.html"

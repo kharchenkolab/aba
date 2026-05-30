@@ -1,10 +1,10 @@
 ---
 name: bp-clustering
 description: Best-practice scRNA-seq clustering — Leiden community detection on the KNN graph at multiple resolutions, per the Single-cell Best Practices book.
-when_to_use: A scRNA-seq object with a PCA (or integrated) representation, and you want data-driven cell groupings before annotation. Use Leiden (not Louvain) and scan resolutions.
+when_to_use: Use this for the clustering STAGE only when you want rigor beyond a single Leiden call — a resolution sweep, sub-clustering, and cluster-stability/coherence assessment (Leiden over Louvain). For a quick end-to-end first pass (single Leiden resolution) use scrna-qc-clustering; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, leidenalg, igraph]
-keywords: [clustering, Leiden, Louvain, community detection, resolution, KNN graph, neighbors, subclustering, single cell]
+keywords: [clustering resolution sweep, cluster stability, sub-clustering, Leiden vs Louvain, multi-resolution scan, community detection rigor]
 produces: [adata_clustered.h5ad, leiden_umap.png]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/cellular_structure/clustering.html"

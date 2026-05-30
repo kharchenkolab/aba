@@ -54,9 +54,9 @@ export default function PinnedShelf({ entities, threadId, threads, onChange, onF
         <div className="panel-head-title">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z" /></svg>
           Pinned in this thread
+          {pins.length > 0 && <span className="panel-head-sub">{pins.length}</span>}
         </div>
         <div className="panel-head-actions">
-          <span className="panel-head-sub">{pins.length}</span>
           <input ref={fileRef} type="file" style={{ display: 'none' }}
             onChange={e => { const f = e.target.files?.[0]; if (f) uploadExternal(f); e.target.value = '' }} />
           <button className="pinned-shelf__upload" title="Add an external result (gel, wet-lab, other tool)"

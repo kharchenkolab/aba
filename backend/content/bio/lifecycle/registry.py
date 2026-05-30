@@ -216,6 +216,10 @@ _TITLE_PATTERNS = [
     re.compile(r"""\.set_title\(\s*['"]([^'"]+)['"]"""),
     re.compile(r"""\bplt\.title\(\s*['"]([^'"]+)['"]"""),
     re.compile(r"""\.suptitle\(\s*['"]([^'"]+)['"]"""),
+    # R / ggplot title calls (Seurat DimPlot/VlnPlot etc. return ggplots)
+    re.compile(r"""\bggtitle\(\s*['"]([^'"]+)['"]"""),
+    re.compile(r"""\blabs\([^)]*title\s*=\s*['"]([^'"]+)['"]"""),
+    re.compile(r"""\bplot_annotation\([^)]*title\s*=\s*['"]([^'"]+)['"]"""),
 ]
 
 # Comments to skip when nothing else turns up — generic action verbs that
@@ -246,7 +250,21 @@ def _figure_title(code: str, original_name: str, idx: int, multi: bool) -> str:
     for every plot in one run (it scans the whole block), so when a run emits
     several plots we disambiguate — by the saved filename stem if it's
     meaningful, otherwise a 1-based index — so siblings don't collide."""
-    base = _title_from_code(code) or Path(original_name).stem
+    # Precedence: an explicit in-code plot title (most reliable) → a MEANINGFUL
+    # saved filename (the agent names plots descriptively: umap_clusters.png) →
+    # the first code comment (often just a step label like "Run UMAP", which makes
+    # a poor figure title) → the raw stem.
+    stem = Path(original_name).stem
+    stem_disp = stem.replace("_", " ").strip()
+    # Reject auto-generated names — R's default device (Rplot001) and generic
+    # matplotlib/harvest stems (figure3, plot1, out) — so a descriptive comment
+    # wins over device junk; a hand-named file (umap_clusters) still wins.
+    auto = bool(re.match(r"^(rplot|rplots|figure|fig|plot|out|output|image|img|result|untitled)\d*$", stem.lower()))
+    stem_ok = bool(stem) and not auto and stem.lower() not in _GENERIC_STEMS and _meaningful_title(stem_disp)
+    base = (_explicit_title(code)
+            or (stem_disp if stem_ok else None)
+            or _title_from_code(code)
+            or stem)
     if not multi:
         return base
     stem = Path(original_name).stem
@@ -255,18 +273,30 @@ def _figure_title(code: str, original_name: str, idx: int, multi: bool) -> str:
     return f"{base} ({idx + 1})"
 
 
-def _title_from_code(code: str) -> Optional[str]:
-    """
-    Derive a meaningful figure title from the producing code:
-    1) Look for matplotlib title calls (set_title / plt.title / suptitle).
-    2) Otherwise the first non-generic top-level comment.
-    """
+def _explicit_title(code: str) -> Optional[str]:
+    """An explicit in-code plot title — matplotlib (set_title/plt.title/suptitle)
+    or R/ggplot (ggtitle/labs(title=)/plot_annotation). The most reliable signal
+    when present; describes the FIGURE, not the step."""
     if not code:
         return None
     for pat in _TITLE_PATTERNS:
         m = pat.search(code)
         if m and _meaningful_title(m.group(1)):
             return m.group(1).strip()[:80]
+    return None
+
+
+def _title_from_code(code: str) -> Optional[str]:
+    """
+    Derive a meaningful figure title from the producing code:
+    1) An explicit plot title call (matplotlib or ggplot).
+    2) Otherwise the first non-generic top-level comment.
+    """
+    if not code:
+        return None
+    explicit = _explicit_title(code)
+    if explicit:
+        return explicit
     for line in code.splitlines():
         s = line.strip()
         if not s.startswith("# ") or s.startswith("# !"):

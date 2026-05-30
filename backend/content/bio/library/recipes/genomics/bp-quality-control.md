@@ -1,10 +1,10 @@
 ---
 name: bp-quality-control
 description: Best-practice scRNA-seq cell QC — MAD-based outlier filtering on counts/genes/mito, ambient-RNA correction (SoupX), and doublet detection (scDblFinder/scrublet) per the Single-cell Best Practices book.
-when_to_use: A raw scRNA-seq count matrix (from CellRanger/alevin-fry/kb), and you want a principled QC pass before normalization. Prefer this over a fixed-threshold filter when you want robust, data-driven cutoffs. For a quick end-to-end first look, see scrna-qc-clustering.
+when_to_use: Use this for the rigorous QC STAGE only — MAD-based (data-driven) outlier detection, doublet detection (scrublet/scDblFinder), and ambient-RNA removal (SoupX) — when fixed thresholds are not good enough. For a quick end-to-end first pass use scrna-qc-clustering; for the full rigorous flow start at the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, scrublet]
-keywords: [quality control, QC, MAD, median absolute deviation, mitochondrial, doublets, scrublet, scDblFinder, SoupX, ambient RNA, empty droplets, filtering, single cell]
+keywords: [MAD outlier QC, median absolute deviation, data-driven cutoffs, doublets, scrublet, scDblFinder, SoupX, ambient RNA removal, empty droplets, mitochondrial outliers]
 produces: [qc_metrics.csv, qc_violins.png, adata_qc.h5ad]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/preprocessing_visualization/quality_control.html"

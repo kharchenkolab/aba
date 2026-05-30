@@ -1,10 +1,10 @@
 ---
 name: bp-dimensionality-reduction
 description: Best-practice scRNA-seq dimensionality reduction — PCA on HVGs as the analysis representation, with t-SNE/UMAP only for visualization, per the Single-cell Best Practices book.
-when_to_use: A normalized scRNA-seq object with HVGs selected, and you need the PCA representation for the neighbor graph plus a 2D embedding to look at. Clarifies that UMAP/t-SNE are for viewing, not for computing on.
+when_to_use: Use this for the dimensionality-reduction STAGE only when you want the principled distinction enforced — PCA as the COMPUTE representation (choosing n_pcs from the variance elbow, PCA diagnostics) vs UMAP/t-SNE/diffusion map as view-only embeddings you must NOT compute on. For a quick end-to-end first pass (which just runs PCA+UMAP with defaults) use scrna-qc-clustering; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata]
-keywords: [dimensionality reduction, PCA, principal components, UMAP, t-SNE, tsne, embedding, visualization, diffusion map, single cell]
+keywords: [PCA diagnostics, variance ratio elbow, number of PCs, compute representation vs visualization, diffusion map, t-SNE PCA init, axes have no meaning]
 produces: [pca_variance.png, umap.png, adata_dimred.h5ad]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/preprocessing_visualization/dimensionality_reduction.html"

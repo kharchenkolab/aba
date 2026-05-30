@@ -1046,12 +1046,15 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 return {"status": "cancelled",
                         "note": f"Run was cancelled by the user "
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-            plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
+            plots, tables, warns = harvest_artifacts(cwd, since_ts=start_ts)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
-            return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
-                    "returncode": res.returncode, "plots": plots, "tables": tables,
-                    "execution_mode": "session"}
+            out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+                   "returncode": res.returncode, "plots": plots, "tables": tables,
+                   "execution_mode": "session"}
+            if warns:
+                out["figure_warnings"] = warns
+            return out
         except Exception as e:  # noqa: BLE001
             # Never strand the agent on a kernel hiccup — fall back to stateless.
             print(f"[run_python] kernel path failed, falling back to one-shot: {e}")
@@ -1104,10 +1107,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-    plots, tables = harvest_artifacts(cwd, since_ts=start_ts)
-    return {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
-            "returncode": res.returncode, "plots": plots, "tables": tables,
-            "execution_mode": "session"}
+    plots, tables, warns = harvest_artifacts(cwd, since_ts=start_ts)
+    out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+           "returncode": res.returncode, "plots": plots, "tables": tables,
+           "execution_mode": "session"}
+    if warns:
+        out["figure_warnings"] = warns
+    return out
 
 
 def inspect_upload(input_: dict) -> dict:
@@ -2470,7 +2476,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     plots, tables, out_files = [], [], []
     op = Path(outdir)
     if op.exists():
-        plots, tables = harvest_artifacts(op)
+        plots, tables, _warns = harvest_artifacts(op)
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
     return {
         "status": "ok" if res.returncode == 0 else "error",
@@ -2636,8 +2642,14 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     if os.path.isabs(path):
         cands = [path]
     else:
-        cands = [os.path.join(str(DATA_DIR), path)]
-        cands += [os.path.join(b, path) for b in _scratch_bases(ctx)]
+        # SCRATCH first: a relative path the agent just wrote THIS run (a fresh
+        # download) must win over a stale same-named dir left in DATA_DIR by a
+        # prior session. Otherwise we'd register the OLD data and never adopt the
+        # new files (the dir name collides, the adopt is skipped, and the agent
+        # then loads the leftover). Fall back to an existing DATA_DIR dataset,
+        # then the process cwd.
+        cands = [os.path.join(b, path) for b in _scratch_bases(ctx)]
+        cands.append(os.path.join(str(DATA_DIR), path))
         cands.append(os.path.abspath(path))
     abspath = next((c for c in cands if os.path.exists(c)), cands[0])
     exists = os.path.exists(abspath)
@@ -2843,6 +2855,13 @@ _UPTAKE_SKIP = {
     "data", "magrittr", "methods", "stats", "utils", "base", "grid", "purrr",
     "tibble", "reshape2", "gridextra", "rcolorbrewer", "scales",
 }
+# import-name → distribution/capability-name, for the cases where a cell imports
+# a module under a different name than the recipe's capabilities_needed (which use
+# the pip/conda dist name). Without this, e.g. `import scvi` maps to 0 recipes.
+_UPTAKE_ALIAS = {
+    "scvi": "scvi-tools", "skimage": "scikit-image", "cv2": "opencv",
+    "bs4": "beautifulsoup4",
+}
 
 
 def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None) -> None:
@@ -2870,32 +2889,49 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
     except Exception:  # noqa: BLE001
         return
     read = rc.get("read") or set()
-    pairs = []
-    for t in dict.fromkeys(toks):
-        if t.lower() in _UPTAKE_SKIP:
-            continue
-        all_recs = recipes_for_capability(t)
-        # Skip ubiquitous libs (declared by many recipes) — only a SPECIFIC
-        # analysis library (1-2 recipes) is a real "you should read the recipe" signal.
-        if not all_recs or len(all_recs) > 4:
-            continue
-        pairs.extend((r, t) for r in all_recs if r not in read)
-    # Only nudge toward a recipe that ALSO plausibly matches the turn's intent. A
-    # versatile lib (e.g. gget — used by several unrelated recipes) shouldn't nudge
-    # an off-topic recipe: an enrichment task that imports gget must not be told to
-    # read get-rna-seq-archs4. Keep only candidates in the intent's top recipes.
+    # Recipes relevant to THIS turn's intent — the precise way to disambiguate a
+    # library that MANY recipes declare. Computed once.
     intent = (ctx or {}).get("intent") if isinstance(ctx, dict) else None
-    if pairs and intent and str(intent).strip():
+    intent = str(intent).strip() if intent else ""
+    relevant: Optional[set] = None
+    relevant_order: list = []
+    if intent:
         try:
             from core.skills.loader import search_skills as _ss
-            relevant = {s.name for s in _ss(str(intent), limit=8)}
-            pairs = [(r, t) for (r, t) in pairs if r in relevant]   # empty → no nudge
+            relevant_order = [s.name for s in _ss(intent, limit=8)]
+            relevant = set(relevant_order)
         except Exception:  # noqa: BLE001
-            pass
+            relevant = None
+    pairs = []
+    for t in dict.fromkeys(toks):
+        tl = t.lower()
+        if tl in _UPTAKE_SKIP:
+            continue
+        all_recs = recipes_for_capability(t)
+        if not all_recs and tl in _UPTAKE_ALIAS:
+            all_recs = recipes_for_capability(_UPTAKE_ALIAS[tl])   # import-name → dist-name
+        if not all_recs:
+            continue
+        # A lib declared by MANY recipes (>4) is generic — a useful "read the recipe"
+        # signal ONLY if the turn intent can say WHICH one. Defer it to the intent
+        # narrowing below instead of skipping outright: the old hard-skip silently
+        # suppressed scanpy (33 recipes) and scvi-tools (8) — the anchors of the
+        # whole cookbook, exactly the recipes we want surfaced. Specific libs (≤4)
+        # fire directly.
+        if len(all_recs) > 4 and not relevant:
+            continue
+        pairs.extend((r, t) for r in all_recs if r not in read)
+    # Keep only recipes that ALSO match the turn's intent (a versatile lib must not
+    # nudge an off-topic recipe). Empty after narrowing → no nudge.
+    if pairs and relevant:
+        pairs = [(r, t) for (r, t) in pairs if r in relevant]
     if not pairs:
         return
     rc["nudged"] = True
-    recs = sorted({r for r, _ in pairs})
+    # Name the few MOST-relevant recipes (by intent rank, top one first) — not an
+    # alphabetical pile that buries the core recipe among bp-* variants.
+    _rank = {n: i for i, n in enumerate(relevant_order)}
+    recs = sorted({r for r, _ in pairs}, key=lambda r: _rank.get(r, 999))[:3]
     libs = sorted({t for _, t in pairs})
     result["recipe_hint"] = (
         f"There {'is a recipe' if len(recs) == 1 else 'are recipes'} for "
@@ -2903,6 +2939,117 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
         "read_skill it before coding from memory — it carries the correct API, "
         "design/contrast idioms, and gotchas. (Ignore if your code is already correct.)"
     )
+
+
+# A data fetch failing inside a cell (urllib 403/404, requests, DNS, "download
+# failed") is the trigger for the worst failure mode we see: the agent quietly
+# substitutes a FABRICATED / simulated dataset and runs the analysis on it. The
+# behavior.md "STOP and ask on fetch-fail" rule is soft and reliably ignored
+# (both Haiku AND Sonnet fabricated a labeled synthetic dataset on a 403). High-
+# precision signatures only — must clearly denote a network/fetch failure, not
+# just the digits "404" appearing in data.
+_FETCH_FAIL_RE = re.compile(
+    r"HTTP\s*Error\s*[45]\d\d"                              # urllib: "HTTP Error 403: Forbidden"
+    r"|HTTPError|URLError"                                  # exception classes in tracebacks
+    r"|\b[45]\d\d\s+(?:Forbidden|Not Found|Client Error|Server Error)"  # requests-style
+    r"|download failed|failed to (?:download|fetch|retrieve)"
+    r"|could not (?:download|fetch|retrieve|connect|resolve)"
+    r"|max retries exceeded"
+    r"|connection refused"
+    r"|name or service not known|temporary failure in name resolution",
+    re.IGNORECASE,
+)
+
+
+def _fetch_fail_guardrail(name: str, result: dict) -> None:
+    """If a run_python/run_r cell's OUTPUT shows a data fetch failed, warn AT THAT
+    POINT not to substitute fabricated/simulated data for the requested REAL
+    analysis. Point-of-use is the lever that lands (cf. the blank-figure warning,
+    which the agent obeyed); the equivalent soft prompt rule does not."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict):
+        return
+    if "returncode" not in result:        # only when code actually ran
+        return
+    blob = f"{result.get('stdout', '')}\n{result.get('stderr', '')}"
+    if not _FETCH_FAIL_RE.search(blob):
+        return
+    result["fetch_warning"] = (
+        "A data fetch in this cell FAILED (e.g. 403/404, HTTPError, DNS). Do NOT "
+        "fabricate, simulate, or 'generate representative' data to stand in for the "
+        "real data and continue — a clearly-labeled SYNTHETIC dataset is STILL NOT a "
+        "substitute for the requested real analysis, and presenting it wastes the "
+        "user's time. STOP, say exactly which fetch failed, and ask how to proceed "
+        "(first try a maintained fetch recipe/tool via search_skills, or a different "
+        "accession/mirror). Build synthetic data ONLY if the user explicitly asked for a demo."
+    )
+
+
+# ── #303 point-of-use JUDGMENT + ANTI-FABRICATION guardrails ──────────────────
+# The eval (full-scenario + 2 Q->A rounds) showed these failures are NOT prompt-
+# fixable — a soft rule in the prompt is inert; only a steer IN THE TOOL RESULT,
+# at the moment of failure, lands. Framing matters: steer to "use Wilcoxon", never
+# "you need replicates" (the latter provoked the agent to FABRICATE replicates).
+_NO_REPLICATES_RE = re.compile(
+    r"checkForExperimentalReplicates|same number of samples and coefficients|"
+    r"dispersion (?:is )?not possible|cannot estimate dispersion|"
+    r"only.{0,20}one (?:sample|replicate)|no (?:biological )?replicate", re.I)
+# Fabricating replicates IN THE CODE: randomly splitting/assigning cells into
+# pseudo-replicate groups to make a replicate-requiring test run (the most egregious
+# fabrication the eval found). Detected as the CO-OCCURRENCE of a DE-context + a
+# randomness op + a replicate token (a legit replicated design never builds its
+# replicates with np.random), plus a few strong explicit patterns. Near-zero FP.
+_DE_CTX_RE = re.compile(r"DESeq|edgeR|limma|estimateDisp|DESeqDataSet|dispersion|pseudobulk", re.I)
+_RANDOM_OP_RE = re.compile(r"np\.random\.(?:choice|randint|permutation|shuffle|rand)|"
+                           r"(?:np\.)?array_split|\brunif\b|\brnorm\b|sample\.int|\.sample\(", re.I)
+_REP_TOKEN_RE = re.compile(r"replicat|pseudo[_-]?rep|\brep_?id\b|\breps?\b\s*[=<]|n_?reps?\b|rep[123]\b|_rep\b", re.I)
+_STRONG_FAB_RE = re.compile(
+    r"round\s*\(\s*[\w.]+\s*\*\s*runif"
+    r"|(?:create|fabricat\w*|simulat\w*|assign|generate|make|fake|split.{0,15}into)\s+(?:\d+\s+)?(?:pseudo[_-]?)?replicat",
+    re.I)
+# Building the analyzed dataset from random numbers (synthetic-data substitution).
+_SYNTH_DATA_RE = re.compile(
+    r"(?:synthetic|simulat\w+|representative|mimic\w*|fabricat\w*|\btoy\b|\bfake)\s+"
+    r"(?:sc[- ]?atac|sc[- ]?rna|single[- ]?cell|pbmc|count|expression|atac|rna|gene)?[ -]*"
+    r"(?:data|dataset|matrix|counts|cells|anndata|adata|reads|fragments|profile)"
+    r"|(?:AnnData|ad\.AnnData|csr_matrix|sp\.csr_matrix|sparse\.\w*matrix|pd\.DataFrame)\s*\([^)]{0,140}np\.random"
+    r"|(?:=|<-)\s*np\.random\.(?:negative_binomial|binomial|poisson|lognormal|gamma)\s*\([^)]*size\s*=",
+    re.I)
+
+
+def _judgment_guardrails(name: str, input_: dict, result: dict) -> None:
+    """Append point-of-use steers to a run_python/run_r result for the three
+    not-prompt-fixable failures: (A) invalid replicate-requiring test on n=1,
+    (B) fabricated replicates in the code, (C) synthetic-data substitution."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict) or "returncode" not in result:
+        return
+    warns: list = list(result.get("guardrail_warnings") or [])
+    blob = f"{result.get('stdout','')}\n{result.get('stderr','')}"
+    code = (input_ or {}).get("code") or ""
+    if _NO_REPLICATES_RE.search(blob):
+        warns.append(
+            "NO biological replicates in this design (e.g. two clusters within ONE sample → n=1 "
+            "per group). DESeq2/edgeR/limma are statistically INVALID here and their p-values are "
+            "meaningless. Do NOT create or fabricate replicates (e.g. randomly splitting cells into "
+            "pseudo-replicate groups) to make it run — that is fake statistics. For within-sample "
+            "cluster DE use `sc.tl.rank_genes_groups` (Wilcoxon). Tell the user the DESeq2 design is "
+            "invalid and switch to Wilcoxon, or stop and ask — do not report invalid DE as valid.")
+    _fab_rep = _STRONG_FAB_RE.search(code) or (
+        _DE_CTX_RE.search(code) and _RANDOM_OP_RE.search(code) and _REP_TOKEN_RE.search(code))
+    if _fab_rep:
+        warns.append(
+            "This code appears to FABRICATE replicates — assigning cells to random pseudo-replicate "
+            "groups to make a replicate-requiring test run. This manufactures fake statistical power; "
+            "the results are INVALID and must NOT be presented as real DE. Remove the fabricated "
+            "replicates and use Wilcoxon (`sc.tl.rank_genes_groups`) for single-sample cluster DE.")
+    if _SYNTH_DATA_RE.search(code):
+        warns.append(
+            "This code appears to BUILD a synthetic/simulated dataset from random numbers and analyze "
+            "it. If the user asked for REAL data and a fetch/load failed, do NOT substitute fabricated "
+            "data and present it as the analysis — STOP, say you couldn't obtain the real data, and "
+            "ask how to proceed. Build synthetic data ONLY if the user explicitly asked for a demo, "
+            "and then label every output 'SYNTHETIC (not real data)'.")
+    if warns:
+        result["guardrail_warnings"] = warns
 
 
 def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
@@ -2945,6 +3092,8 @@ def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
         result = fn(input_, ctx) if "ctx" in sig_params else fn(input_)
         if isinstance(result, dict):
             _recipe_uptake_hint(name, input_, result, ctx)
+            _fetch_fail_guardrail(name, result)
+            _judgment_guardrails(name, input_, result)
         return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)})

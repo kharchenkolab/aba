@@ -1,10 +1,10 @@
 ---
 name: bp-data-integration
 description: Best-practice scRNA-seq data integration / batch correction — scVI & scANVI (top scIB performers), with Harmony/Scanorama/BBKNN alternatives and scIB evaluation, per the Single-cell Best Practices book.
-when_to_use: Multiple scRNA-seq batches/samples/donors that need to be integrated into a shared space before joint clustering/annotation. Choose a method by whether labels exist and evaluate with scIB; don't integrate if there's no real batch effect.
+when_to_use: Use this for the integration / batch-correction STAGE only — multiple scRNA-seq batches/samples/donors that need a shared embedding before joint clustering/annotation, choosing a method by whether labels exist and ranking with scIB. For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, scvi-tools, scanorama, harmonypy, bbknn, scib-metrics]
-keywords: [data integration, batch correction, scVI, scANVI, Harmony, Scanorama, BBKNN, FastMNN, Seurat, scIB, batch key, latent representation, single cell]
+keywords: [data integration, batch correction, scVI, scANVI, Harmony, Scanorama, BBKNN, FastMNN, scIB evaluation, batch key, latent embedding]
 produces: [adata_integrated.h5ad, integration_umap.png, scib_metrics.csv]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/cellular_structure/integration.html"

@@ -36,13 +36,13 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 28px;
+  width: 14px;
   height: 44px;
   border: 1px solid #cbd5e1;
   border-radius: 999px;
   background: #fff;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -53,6 +53,6 @@
 .hresizer__toggle:hover { background: #eef4f8; color: #0f766e; border-color: #99f6e4; }
 .hresizer--collapsed .hresizer__toggle {
   left: 50%;
-  width: 28px;
+  width: 14px;
   height: 54px;
 }

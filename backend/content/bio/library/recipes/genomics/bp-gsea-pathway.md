@@ -1,10 +1,10 @@
 ---
 name: bp-gsea-pathway
 description: Best-practice scRNA-seq gene-set enrichment & pathway/TF activity — decoupler (GSEA/ORA/AUCell) with MSigDB, PROGENy and CollecTRI/DoRothEA, per the Single-cell Best Practices book.
-when_to_use: You have DE results (ranked stats) and want enriched pathways, OR you want per-cell pathway/TF activity scores. Use decoupler; choose enrichment-on-DE vs per-cell activity by the question.
+when_to_use: Use this for the enrichment / pathway-and-TF-activity STAGE only — DE results (ranked stats) to enriched pathways, OR per-cell pathway/TF activity scores, via decoupler with MSigDB / PROGENy / CollecTRI. For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, decoupler, omnipath]
-keywords: [gene set enrichment, GSEA, ORA, pathway, decoupler, AUCell, MSigDB, hallmark, reactome, PROGENy, DoRothEA, CollecTRI, transcription factor activity, single cell]
+keywords: [gene set enrichment, GSEA, ORA over-representation, pathway activity, decoupler, AUCell, MSigDB hallmark, PROGENy, DoRothEA, CollecTRI, transcription factor activity]
 produces: [enrichment_results.csv, pathway_activity.h5ad, tf_activity_heatmap.png]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/conditions/gsea_pathway.html"

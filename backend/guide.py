@@ -485,14 +485,20 @@ async def stream_response(
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
     eff_intent = _effective_intent(user_text, history)
+    # Per-turn gate signals for build_system — only inject the scenarios /
+    # highlighting blocks when the user is actually acting on a figure (focus is
+    # a figure) or just highlighted; otherwise they're dead weight every turn.
+    focus_ent = get_entity(focus_entity_id) if focus_entity_id else None
+    prompt_ctx = {
+        "focus_is_figure": bool(focus_ent and focus_ent.get("type") in ("figure", "view")),
+        "highlight_active": bool(annotation_image),
+    }
     system = focus_text + thread_text + build_system(
-        active_tools, role=guide_role, intent=eff_intent)
+        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
                        focus_entity_id=focus_entity_id)
     entity_id = WORKSPACE_ID
-
-    focus_ent = get_entity(focus_entity_id) if focus_entity_id else None
     focus_type = focus_ent["type"] if focus_ent else None
 
     analysis_ctx: dict = {"analysis_id": None, "turn_index": 0}

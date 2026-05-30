@@ -1,7 +1,7 @@
 ---
 name: bp-raw-data-processing
 description: Best-practice scRNA-seq raw data processing — FASTQ to a filtered count matrix (mapping, barcode correction, UMI dedup, empty-droplet detection) per the Single-cell Best Practices book.
-when_to_use: You have raw 10x/Chromium (or similar) FASTQs, or an unfiltered CellRanger/alevin-fry output, and need to produce or understand the count matrix BEFORE QC. For a ready-made kallisto|bustools path in ABA, see quantify-fastq-to-counts-kb; downstream cell QC is bp-quality-control.
+when_to_use: Use this for the raw-data / FASTQ→counts STAGE only — raw 10x/Chromium FASTQs or an unfiltered CellRanger/alevin-fry output that must become (or be understood as) a count matrix BEFORE QC (mapping, barcode correction, UMI dedup, empty-droplet detection). For a ready-made kallisto|bustools path in ABA see quantify-fastq-to-counts-kb; downstream cell QC is bp-quality-control; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, kb-python]
 keywords: [raw data, FASTQ, alignment, alevin-fry, STARsolo, CellRanger, kallisto, bustools, kb-python, barcode correction, UMI deduplication, empty droplets, knee plot, EmptyDrops, augmented transcriptome, spliced unspliced]

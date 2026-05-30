@@ -1,10 +1,10 @@
 ---
 name: bp-trajectory-inference
 description: Best-practice scRNA-seq pseudotemporal ordering — diffusion pseudotime (DPT) and PAGA topology in scanpy, plus Palantir, with root-cell choice and validation, per the Single-cell Best Practices book.
-when_to_use: A continuous/developmental scRNA-seq process (differentiation, maturation) and you want to order cells along pseudotime and recover branch topology. First know whether the process is linear, cyclic, or branching; validate against biology.
+when_to_use: Use this for the trajectory / pseudotime STAGE only — a continuous/developmental scRNA-seq process (differentiation, maturation) where you want to order cells along pseudotime and recover branch topology (DPT/PAGA/Palantir). For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, palantir]
-keywords: [trajectory inference, pseudotime, pseudotemporal ordering, diffusion pseudotime, DPT, PAGA, Palantir, Slingshot, root cell, branching, lineage, single cell]
+keywords: [trajectory inference, pseudotime, pseudotemporal ordering, diffusion pseudotime, DPT, PAGA, Palantir, Slingshot, root cell, branching lineage]
 produces: [adata_pseudotime.h5ad, paga_graph.png, pseudotime_umap.png]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/trajectories/pseudotemporal.html"

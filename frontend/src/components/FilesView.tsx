@@ -83,7 +83,7 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, t
     <span className="tree__tab-badge">
       <FolderGlyph />
       Files
-      <span className="tree__pill tree__pill--green">{fileCount}</span>
+      {fileCount > 0 && <span className="tree__pill tree__pill--green">{fileCount}</span>}
     </span>
   )
   const actionsSlot = (

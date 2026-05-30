@@ -2,6 +2,7 @@
 name: bulk-rnaseq-de
 description: Bulk RNA-seq differential expression with pydeseq2 (Python) — designs, covariate control, and contrasts. Wald-only (no LRT).
 when_to_use: Bulk RNA-seq RAW counts + sample table; want DE between conditions in a PYTHON session (scanpy/anndata already in play) or when the user wants Python / no R. If the question needs the likelihood-ratio test, or the session is R-based, or the user asks for DESeq2/R, use the deseq2-r recipe instead. SCOPE — bulk or pseudobulk-aggregated counts ONLY; NOT for direct per-cell scRNA-seq DE.
+avoid_when: "Direct per-cell scRNA-seq DE (use rank_genes_groups/Wilcoxon or scVI); NO biological replicates — two clusters within a SINGLE sample pseudobulk to n=1 per group and the DE statistics are then invalid; only a gene list (use enrichment); you need LRT / multi-factor / arbitrary contrasts (use deseq2-r — pydeseq2 is Wald-only)."
 requires_tools: [run_python]
 capabilities_needed: [pydeseq2, adjusttext]
 keywords: [pydeseq2, DESeq2, bulk RNA-seq, differential expression, contrast, covariate, batch, log2 fold change, volcano, Python]
@@ -24,6 +25,11 @@ asks for DESeq2/R, use the **`deseq2-r`** recipe (authoritative, fuller feature 
 > For **direct per-cell scRNA-seq DE** use `sc.tl.rank_genes_groups` (Wilcoxon — cluster/marker
 > genes; see **`scrna-qc-clustering`** / **`bp-annotation`**) or scVI's model-based DE
 > (**`scvi-de`**). Per-cell DESeq2 commits pseudoreplication and inflates the FDR.
+> Pseudobulk also needs **≥2 biological REPLICATES per group** (multiple samples/donors per
+> condition). Comparing two **clusters within a SINGLE sample** pseudobulks to n=1 per group —
+> DESeq2 will run but its statistics are MEANINGLESS (no dispersion estimate). For cluster-vs-
+> cluster DE in one sample, use `rank_genes_groups` (Wilcoxon); reach for pseudobulk-DESeq2 only
+> when you have a real replicated condition contrast (e.g. disease vs control across donors).
 
 **Provision:** `ensure_capability("pydeseq2")` (and `adjusttext` for volcano labels).
 

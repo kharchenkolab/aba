@@ -24,6 +24,9 @@ import type { Entity } from './types'
 
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
+const RIGHT_DEFAULT = 384
+const RIGHT_MIN = 280
+const RIGHT_MAX = 560
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
 
 /** Walk a files-tree response to find the node at the given POSIX path.
@@ -167,6 +170,7 @@ export default function App() {
   const [highlighting, setHighlighting] = useState(false)
   const [treeW, setTreeW] = useState(TREE_DEFAULT)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
+  const [rightW, setRightW] = useState(RIGHT_DEFAULT)
   // Right column (thread-context / chat-peek) collapse. Policy: collapsing is a
   // transient "give me room for THIS view" gesture — it auto-reopens whenever the
   // view context changes (posture, focused entity, thread, overview/inventory), so
@@ -192,6 +196,14 @@ export default function App() {
   const [chatReload, setChatReload] = useState(0)       // bump to refetch the thread's messages
   const orientedRef = useRef<Set<string>>(new Set())    // cold-start orient attempts
   const { entities, refresh } = useEntities()
+
+  // Active (non-archived) entities + the content tallies the "start-slowly"
+  // framing needs. Computed up here (before the Home early-return) so the
+  // collapse effects below can read them; sectionCounts reuses activeEntities.
+  const activeEntities = entities.filter(e => e.status !== 'archived' && e.status !== 'superseded')
+  const datasetCount = activeEntities.filter(e => e.type === 'dataset').length
+  const downstreamCount = activeEntities.filter(e =>
+    ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type)).length
 
   const refreshCurrent = () => {
     fetch('/api/projects/current')
@@ -220,20 +232,44 @@ export default function App() {
   // the server already.
   useEffect(() => {
     if (!url.pid) return
+    const pid = url.pid
     setPosture('chat')
     setAnnotation(null)
     setInventory(false)
     fetch('/api/projects/current')
       .then(r => r.json())
       .then(d => {
-        if (d.current !== url.pid) {
-          return fetch(`/api/projects/${encodeURIComponent(url.pid!)}/open`, { method: 'POST' })
+        if (d.current !== pid) {
+          return fetch(`/api/projects/${encodeURIComponent(pid)}/open`, { method: 'POST' })
         }
       })
       .then(() => { refresh(); refreshCurrent() })
+      // Start-slowly framing from a FRESH snapshot — an empty `entities` array
+      // can't tell "still loading" from "genuinely empty", so we re-fetch here.
+      .then(() => fetch('/api/entities'))
+      .then(r => (r && r.ok) ? r.json() : [])
+      .then((rows: { status?: string; type?: string }[]) => frameOnProjectEntry(rows))
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url.pid])
+
+  // Apply the initial column framing when a project is opened:
+  //   • empty project              → full-chat view (both side columns collapsed)
+  //   • dataset(s), no output yet  → left open on the Data tab, right collapsed
+  //   • established (has output)   → normal full layout (both columns open)
+  const frameOnProjectEntry = (rows: { status?: string; type?: string }[]) => {
+    const active = rows.filter(e => e.status !== 'archived' && e.status !== 'superseded')
+    const ds = active.filter(e => e.type === 'dataset').length
+    const downstream = active.filter(e =>
+      ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type ?? '')).length
+    if (downstream > 0) {            // established — show the full layout
+      setTreeCollapsed(false); setRightCollapsed(false)
+    } else if (ds > 0) {             // fresh but data is loaded — orient to it
+      setTreeCollapsed(false); setProjectSection('data'); setRightCollapsed(true)
+    } else {                         // empty — focus the conversation
+      setTreeCollapsed(true); setRightCollapsed(true)
+    }
+  }
 
   // Enter a project picked in Home: pure navigation; the useEffect above
   // does the server sync + state reset.
@@ -276,8 +312,28 @@ export default function App() {
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // Right column auto-reopens on any view-context change (see rightCollapsed).
-  useEffect(() => { setRightCollapsed(false) }, [posture, focusedId, threadId, overview, inventory])
+  // Right column auto-reopens on any view-context change — but only once the
+  // project has earned output to show there. While the project is still fresh
+  // (no results/runs/claims) the start-slowly framing keeps it collapsed; the
+  // 0→>0 transition in this same effect is what reveals it when earned.
+  useEffect(() => {
+    if (downstreamCount === 0) return
+    setRightCollapsed(false)
+  }, [posture, focusedId, threadId, overview, inventory, downstreamCount])
+
+  // Mid-session: the first dataset landing in a still-fresh project reveals the
+  // tree on the Data tab (mirrors the project-entry framing). Edge-triggered on
+  // the 0→>0 transition; null start means it never fires on initial mount.
+  const prevDatasetCount = useRef<number | null>(null)
+  useEffect(() => {
+    const prev = prevDatasetCount.current
+    prevDatasetCount.current = datasetCount
+    if (prev === 0 && datasetCount > 0 && downstreamCount === 0) {
+      setTreeCollapsed(false)
+      setProjectSection('data')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetCount, downstreamCount])
 
   // Cold-start orientation: when a thread has data but no conversation yet, ask
   // the Guide to post an opening summary + next steps. Idempotent server-side;
@@ -503,7 +559,6 @@ export default function App() {
   }
 
   const gridCols = `var(--w-rail) ${treeCollapsed ? 0 : treeW}px ${treeCollapsed ? 8 : 10}px 1fr`
-  const activeEntities = entities.filter(e => e.status !== 'archived' && e.status !== 'superseded')
   const sectionCounts = {
     threads: 1 + activeEntities.filter(e => e.type === 'thread' && !e.metadata?.is_default).length,
     claims: activeEntities.filter(e => e.type === 'claim').length,
@@ -716,18 +771,22 @@ export default function App() {
               onAsk={askGuide}
             />
           ) : (
-          <div className={`split split--${posture} ${rightCollapsed ? 'split--right-collapsed' : ''}`}>
-            {rightCollapsed && (
-              <button className="right-expand" onClick={() => setRightCollapsed(false)}
-                      title="Show the side panel" aria-label="Expand side panel">‹</button>
-            )}
+          <div className={`split split--${posture} ${rightCollapsed ? 'split--right-collapsed' : ''}`}
+               style={{ gridTemplateColumns: rightCollapsed ? '1fr 10px 0' : `1fr 10px ${rightW}px`, gap: 0 }}>
+            {/* Console/context (ⓘ) pinned to the split's top-right — i.e. the
+                top-right of the rightmost column: the right column when expanded,
+                the chat when it's collapsed. Sticks out of the corner. */}
+            {drawerToggle}
             {posture === 'chat' ? (
               <>
                 <div className="surface-panel primary chat-primary">{chatPane(false)}</div>
+                <HResizer
+                  side="right"
+                  collapsed={rightCollapsed}
+                  onDrag={dx => setRightW(w => Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, w - dx)))}
+                  onToggle={() => setRightCollapsed(c => !c)}
+                />
                 <div className="thread-context">
-                  <button className="right-collapse" onClick={() => setRightCollapsed(true)}
-                          title="Hide the side panel" aria-label="Collapse side panel">›</button>
-                  {drawerToggle}
                   {currentThread && (
                     <ThreadHeader thread={currentThread} onChange={refresh} onSwitchThread={selectThread}
                                   onOpenFull={() => openEntity(currentThread.id)} />
@@ -745,13 +804,13 @@ export default function App() {
             ) : (
               <>
                 {entityPanel(true)}
-                {/* Wrapper has overflow: visible so the FAB at top:-10px
-                    right:-10px is NOT clipped by surface-panel's
-                    overflow: hidden. */}
+                <HResizer
+                  side="right"
+                  collapsed={rightCollapsed}
+                  onDrag={dx => setRightW(w => Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, w - dx)))}
+                  onToggle={() => setRightCollapsed(c => !c)}
+                />
                 <div className="chat-peek-anchor">
-                  <button className="right-collapse" onClick={() => setRightCollapsed(true)}
-                          title="Hide the side panel" aria-label="Collapse side panel">›</button>
-                  {drawerToggle}
                   <div className="surface-panel chat-peek">{chatPane(true)}</div>
                 </div>
               </>

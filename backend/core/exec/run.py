@@ -60,8 +60,8 @@ def run_python_code(
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
 
-    plots, tables = harvest_artifacts(scratch)
-    return {
+    plots, tables, warns = harvest_artifacts(scratch)
+    out = {
         "stdout": (result.stdout or "")[:4000],
         "stderr": (result.stderr or "")[:2000],
         "returncode": result.returncode,
@@ -70,16 +70,26 @@ def run_python_code(
         # Self-contained one-shot script — its producing_code reproduces it alone.
         "execution_mode": "stateless",
     }
+    if warns:
+        out["figure_warnings"] = warns
+    return out
 
 
-def harvest_artifacts(scratch: Path, since_ts: float = 0.0) -> tuple[list, list]:
+def harvest_artifacts(scratch: Path, since_ts: float = 0.0) -> tuple[list, list, list]:
     """Copy kept outputs (*.png/*.csv) from a working dir into the artifact
-    store, returning (plots, tables). `since_ts` harvests only files
+    store, returning (plots, tables, warnings). `since_ts` harvests only files
     created/modified at-or-after that time — needed for a PERSISTENT kernel cwd
     where earlier cells' files remain (avoids re-harvesting them). Copies (not
-    moves) so the agent can still read its own output file in a later cell."""
+    moves) so the agent can still read its own output file in a later cell.
+
+    BLANK figures are dropped, not shown. A PNG that is a single flat colour
+    (matplotlib saved an empty/never-drawn canvas — empty AnnData, missing
+    embedding, savefig-before-draw) carries no information; surfacing it as a
+    white box in the chat misleads the user and the agent both. Such files are
+    excluded from `plots` and reported in `warnings` so the agent learns the
+    plot FAILED (point-of-use guardrail) instead of silently 'succeeding'."""
     scratch = Path(scratch)
-    plots, tables = [], []
+    plots, tables, warnings = [], [], []
     for src, bucket, ext in (
         (scratch.glob("*.png"), plots, "png"),
         (scratch.glob("*.csv"), tables, "csv"),
@@ -90,7 +100,31 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0) -> tuple[list, list]
                     continue
             except OSError:
                 continue
+            if ext == "png" and _png_is_blank(f):
+                warnings.append(
+                    f"Figure '{f.name}' came out BLANK (one flat colour — no data was "
+                    f"drawn) and was dropped. The plot FAILED: check the data isn't empty "
+                    f"(n_obs/rows > 0), the embedding/columns you coloured by exist, and "
+                    f"you didn't savefig before plotting. Do NOT present it as a result."
+                )
+                continue
             dest_name = f"{uuid.uuid4().hex}.{ext}"
             shutil.copy2(str(f), str(ARTIFACTS_DIR / dest_name))
             bucket.append({"url": f"/artifacts/{dest_name}", "original_name": f.name})
-    return plots, tables
+    return plots, tables, warnings
+
+
+def _png_is_blank(path: Path) -> bool:
+    """True if a PNG is effectively one flat colour across the whole image — a
+    matplotlib savefig of an empty/never-drawn canvas. Uses grayscale extrema:
+    exact, cheap, and a real plot (axes/ticks/labels/marks) always spans a wide
+    range. A figure with one empty panel among several is NOT flagged (the other
+    panels give it range). Errs toward 'not blank' on any read error so a real
+    figure is never dropped."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            lo, hi = im.convert("L").getextrema()
+        return (hi - lo) <= 4
+    except Exception:  # noqa: BLE001 — never drop a real figure on a read hiccup
+        return False

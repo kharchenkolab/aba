@@ -26,6 +26,15 @@ capabilities:
     scope: system
     status: published
 
+  - name: requests
+    version: "latest"
+    archetype: library
+    domain_tags: [http, api, web, download]
+    summary: HTTP client. NOTE the sandbox venv does NOT ship it — prefer urllib (stdlib) for HTTP; ensure this only if you specifically need the requests API.
+    provisioning: {pip: ["requests"]}
+    scope: system
+    status: published
+
   - name: biopython
     version: "1.83"
     archetype: library

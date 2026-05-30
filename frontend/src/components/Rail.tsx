@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Settings from './Settings'
 import { RailIcon } from './icons'
 import './Rail.css'
@@ -43,31 +43,59 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
     return () => { cancelled = true; clearInterval(interval) }
   }, [settingsOpen])
 
-  type SectionDef = { key: ProjectSection; label: string; icon: ProjectSection; count: number }
-  // Two conceptual groups: the investigation/navigation tabs, then (after a gap)
-  // the concrete artifact stores — Results, Runs, Files — in that order.
+  type SectionDef = { key: ProjectSection; label: string; icon: ProjectSection; count: number; visible: boolean }
+  const c = (k: keyof NonNullable<typeof sectionCounts>) => sectionCounts?.[k] ?? 0
+  // A tab is shown once it's "earned" (has content) — or while it's the active
+  // tab, so the user is never stranded on one that just emptied out.
+  const earned = (k: ProjectSection) => c(k) > 0 || activeSection === k
+  // Top group: Threads + Data are always available — you can act on them from an
+  // empty project (start a conversation, add data). Claims is earned, so it sits
+  // LAST in the group and reveals without nudging Threads/Data. Bottom group
+  // (Results · Runs · Files, in that order) is purely agent-generated — each tab
+  // appears the moment its first artifact exists.
   const navSections: SectionDef[] = [
-    { key: 'threads', label: 'Threads', icon: 'threads', count: sectionCounts?.threads ?? 0 },
-    { key: 'claims', label: 'Claims', icon: 'claims' as const, count: sectionCounts?.claims ?? 0 },
-    { key: 'data', label: 'Data', icon: 'data' as const, count: sectionCounts?.data ?? 0 },
+    { key: 'threads', label: 'Threads', icon: 'threads', count: c('threads'), visible: true },
+    { key: 'data', label: 'Data', icon: 'data' as const, count: c('data'), visible: true },
+    { key: 'claims', label: 'Claims', icon: 'claims' as const, count: c('claims'), visible: earned('claims') },
   ]
   const artifactSections: SectionDef[] = [
-    { key: 'results', label: 'Results', icon: 'results' as const, count: sectionCounts?.results ?? 0 },
-    { key: 'runs', label: 'Runs', icon: 'runs' as const, count: sectionCounts?.runs ?? 0 },
-    { key: 'files', label: 'Files', icon: 'files' as const, count: sectionCounts?.files ?? 0 },
+    { key: 'results', label: 'Results', icon: 'results' as const, count: c('results'), visible: earned('results') },
+    { key: 'runs', label: 'Runs', icon: 'runs' as const, count: c('runs'), visible: earned('runs') },
+    // Files is the on-disk browser spanning run outputs + datasets + results, so
+    // it's earned as soon as any Run or Result exists — including a run that wrote
+    // only an .h5ad (not harvested as a figure/table entity, so files-count stays 0).
+    { key: 'files', label: 'Files', icon: 'files' as const, count: c('files'),
+      visible: earned('files') || c('runs') > 0 || c('results') > 0 },
   ]
+
+  // Animate only tabs that transition hidden→visible (slide in from the left, as
+  // if emerging from under the rail). Tabs present on first render don't animate.
+  const visibleKeys = [...navSections, ...artifactSections].filter(s => s.visible).map(s => s.key)
+  const prevVisible = useRef<Set<ProjectSection> | null>(null)
+  const justAppeared = (k: ProjectSection) =>
+    prevVisible.current !== null && !prevVisible.current.has(k)
+  useEffect(() => { prevVisible.current = new Set(visibleKeys) })
+
+  // Every tab keeps a FIXED slot, shown or not, so positions never shift as the
+  // subset changes. A hidden tab leaves its slot reserved but invisible; an
+  // earned tab slides into its own slot from the left (rail__nav-item--enter).
   const renderTab = (section: SectionDef) => (
     <button
       key={section.key}
-      className={`rail__nav-item rail__nav-item--btn rail__project-tab ${activeSection === section.key ? 'rail__nav-item--active' : ''}`}
+      className={`rail__nav-item rail__nav-item--btn rail__project-tab rail__project-tab--${section.key}`
+        + ` ${activeSection === section.key ? 'rail__nav-item--active' : ''}`
+        + ` ${section.visible ? (justAppeared(section.key) ? 'rail__nav-item--enter' : '') : 'rail__project-tab--reserved'}`}
       title={collapsed ? `Open ${section.label}` : section.label}
       onClick={() => { onNavigate('workspace'); onProjectSection?.(section.key) }}
+      tabIndex={section.visible ? undefined : -1}
+      aria-hidden={section.visible ? undefined : true}
     >
       <RailIcon name={section.icon} />
       <span>{section.label}</span>
-      <small>{section.count}</small>
+      {section.count > 0 && <small>{section.count}</small>}
     </button>
   )
+  const anyArtifactVisible = artifactSections.some(s => s.visible)
 
   return (
     <aside className={`rail ${view === 'workspace' ? 'rail--project' : 'rail--home'} ${collapsed ? 'rail--collapsed' : ''}`}>
@@ -94,7 +122,9 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
       {view === 'workspace' ? (
         <nav className="rail__nav rail__nav--project" aria-label="Project navigation">
           {navSections.map(renderTab)}
-          <div className="rail__nav-group-sep" aria-hidden="true" />
+          {/* Always present so the lower slots stay fixed; only the hairline
+              shows once the bottom group has an earned tab. */}
+          <div className={`rail__nav-group-sep ${anyArtifactVisible ? '' : 'rail__nav-group-sep--hidden'}`} aria-hidden="true" />
           {artifactSections.map(renderTab)}
         </nav>
       ) : (

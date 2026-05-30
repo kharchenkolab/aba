@@ -1,7 +1,7 @@
 ---
 name: harmony-integration
 description: Batch/sample integration of scRNA-seq with R/Seurat + Harmony — merge multiple samples, preprocess (Normalize→HVG→Scale→PCA), RunHarmony over a batch covariate, then cluster/UMAP on the harmony reduction and assess mixing.
-when_to_use: Two or more scRNA-seq samples/conditions/donors (10x lanes, stim vs ctrl, batches) whose batch effect is visible in a plain PCA/UMAP, and you want a fast, linear batch correction before clustering/annotation. Use THIS (R/Seurat) when the session is already R-based or the user asks for Seurat/Harmony in R. For a Python/scanpy session use harmonypy via sc.external.pp.harmony_integrate (or the create-harmony-embeddings-scrna recipe). For a deep-generative alternative see scvi-integration. For a single clean sample no integration is needed — see seurat-scrna / scrna-qc-clustering.
+when_to_use: Two or more scRNA-seq samples/conditions/donors (10x lanes, stim vs ctrl, batches) whose batch effect is visible in a plain PCA/UMAP, and you want a fast, linear batch correction before clustering/annotation. Use THIS (R/Seurat) when the session is already R-based or the user asks for Seurat/Harmony in R. For a Python/scanpy session use harmony-integration-scanpy (the full scanpy + harmonypy flow via sc.external.pp.harmony_integrate), or create-harmony-embeddings-scrna for the embedding-only step. For a deep-generative alternative see scvi-integration. For a single clean sample no integration is needed — see seurat-scrna / scrna-qc-clustering.
 requires_tools: [run_r]
 capabilities_needed: [harmony, Seurat]
 keywords: [Harmony, RunHarmony, batch correction, batch integration, sample integration, group.by.vars, theta, sigma, lambda, Seurat, scRNA-seq, single cell, reduction harmony, UMAP, FindClusters, batch mixing, harmonypy, R]
@@ -189,11 +189,13 @@ embedding is for neighbors/UMAP only).
   `FindAllMarkers`/`FindMarkers` (see seurat-scrna).
 
 ## Python alternative + cross-links
-- **scanpy / harmonypy:** in a Python session with PCA already computed, one call
-  integrates in place — `sc.external.pp.harmony_integrate(adata, key = "batch")`
-  (backed by **harmonypy**), which writes `adata.obsm["X_pca_harmony"]`; then
+- **scanpy / harmonypy:** in a Python session, one call integrates in place —
+  `sc.external.pp.harmony_integrate(adata, key = "batch")` (backed by
+  **harmonypy**), which writes `adata.obsm["X_pca_harmony"]`; then
   `sc.pp.neighbors(adata, use_rep = "X_pca_harmony")` → `sc.tl.leiden` /
-  `sc.tl.umap`. The standalone embedding-only flow is **create-harmony-embeddings-scrna**.
+  `sc.tl.umap`. The full load→concat→QC→PCA→integrate→cluster Python flow (with
+  before/after mixing plots) is **harmony-integration-scanpy**; the standalone
+  embedding-only step (PCA already computed) is **create-harmony-embeddings-scrna**.
 - **scrna-qc-clustering** — the scanpy single-sample QC→clustering baseline (run
   it per sample / pre-integration to confirm a batch effect exists).
 - **seurat-scrna** — the R/Seurat single-sample QC→clustering→annotation workflow
