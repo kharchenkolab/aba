@@ -36,8 +36,9 @@ GEO supplementary layout is not standardized. Before loading, **list the files
 first** and branch on what you see:
 
 - **10x triplet** (`*matrix.mtx.gz` + `*barcodes.tsv.gz` + `*features.tsv.gz`/`*genes.tsv.gz`):
-  scanpy `sc.read_mtx` / `sc.read_10x_mtx`. Files are often prefixed per-sample
-  (`GSM..._matrix.mtx.gz`) and must be regrouped into one dir per sample.
+  files are usually loose and prefixed per-sample (`GSM..._matrix.mtx.gz`), so
+  `sc.read_10x_mtx` (which needs a standard CellRanger dir) fails — read the three
+  parts EXPLICITLY with `sc.read_mtx` + pandas (Step 3a).
 - **HDF5** (`*.h5ad`, `*.h5`, `*filtered_feature_bc_matrix.h5`): `sc.read_h5ad`
   or `sc.read_10x_h5`. Single richest case.
 - **Flat table** (`*.csv.gz`, `*.txt.gz`, `*.tsv.gz`, `*counts*`): `pandas.read_csv`
@@ -104,23 +105,34 @@ whose names start with your `GSM…` prefix.
 ## Step 3 — load by branch
 
 ### 3a. 10x mtx triplet
-```python
-import scanpy as sc, glob, os, shutil
-# Regroup a per-sample triplet into one dir with canonical names:
-def stage_10x(sample_prefix, src_dir, dst_dir):
-    os.makedirs(dst_dir, exist_ok=True)
-    for canon, pats in {
-        "matrix.mtx.gz":   ["*matrix.mtx.gz"],
-        "barcodes.tsv.gz": ["*barcodes.tsv.gz"],
-        "features.tsv.gz": ["*features.tsv.gz", "*genes.tsv.gz"],
-    }.items():
-        hit = next((f for p in pats
-                    for f in glob.glob(os.path.join(src_dir, sample_prefix + p))), None)
-        if hit: shutil.copy(hit, os.path.join(dst_dir, canon))
-    return dst_dir
+GEO supplementary triplets are **loose, GSM-prefixed** (`GSM..._matrix.mtx.gz` /
+`...barcodes.tsv.gz` / `...features.tsv.gz` all in one dir) — `sc.read_10x_mtx`
+will NOT find these (non-standard names), so read the three parts EXPLICITLY.
+This is the usual GEO layout and the #1 source of "lost gene names" flailing:
 
-adata = sc.read_10x_mtx(stage_10x("GSM5354513_", "./geo_data/GSM5354513", "./tenx/GSM5354513"))
+```python
+import scanpy as sc, pandas as pd, anndata as ad, os
+D = "./geo_data"
+def load_geo_10x(prefix):                       # one GEO loose, GSM-prefixed triplet
+    a = sc.read_mtx(f"{D}/{prefix}.matrix.mtx.gz").T          # mtx is genes×cells → transpose
+    a.obs_names = pd.read_csv(f"{D}/{prefix}.barcodes.tsv.gz", header=None)[0].values
+    a.var_names = pd.read_csv(f"{D}/{prefix}.features.tsv.gz", header=None, sep='\t')[1].values  # col 2 = symbols
+    a.var_names_make_unique(); return a         # do NOT skip — duplicate symbols are common
+
+# single sample:
+adata = load_geo_10x("GSM5354513_...")          # the shared file prefix (sans .matrix.mtx.gz etc.)
+
+# MULTIPLE samples — concat with a batch key (one object spanning the samples,
+# only when the next step is batch-aware analysis; see the merge caveat above):
+prefixes = ["GSM5354513_...", "GSM5354514_..."]
+sample_names = ["S1", "S2"]
+adata = ad.concat([load_geo_10x(p) for p in prefixes],
+                  label='sample', keys=sample_names, index_unique='-')
 ```
+
+If the files happen to be in a **standard CellRanger dir** (canonical
+`matrix.mtx.gz`/`barcodes.tsv.gz`/`features.tsv.gz` names), use the loader instead:
+`adata = sc.read_10x_mtx(dir, var_names='gene_symbols')`.
 
 ### 3b. HDF5
 ```python

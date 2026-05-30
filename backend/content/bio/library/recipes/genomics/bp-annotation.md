@@ -1,10 +1,10 @@
 ---
 name: bp-annotation
 description: Best-practice scRNA-seq cell-type annotation — manual marker-gene assignment, automated classification (CellTypist), and reference label transfer (scArches/scANVI), per the Single-cell Best Practices book.
-when_to_use: Clustered scRNA-seq and you need to assign cell-type identities. Combine manual marker validation with an automated method; treat automated calls as a starting point, never final.
+when_to_use: Use this for the cell-type annotation STAGE — assigning identities to clusters by combining manual marker-gene validation, automated classification (CellTypist), and reference label transfer (scArches/scANVI), treating automated calls as a starting point. For a quick end-to-end first pass that just emits cluster markers use scrna-qc-clustering; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, celltypist]
-keywords: [annotation, cell type, marker genes, rank_genes_groups, CellTypist, label transfer, scArches, scANVI, dotplot, score_genes, reference mapping, single cell]
+keywords: [cell-type annotation, marker-based annotation, automated cell-type classification, CellTypist, reference mapping, label transfer, scArches, scANVI, score_genes, coarse-to-fine annotation]
 produces: [adata_annotated.h5ad, marker_dotplot.png, annotation.csv]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/cellular_structure/annotation.html"

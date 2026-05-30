@@ -1,10 +1,10 @@
 ---
 name: analyze-protein-phylogeny
 description: Multiple sequence alignment then phylogenetic tree construction from a set of protein sequences, with a rendered tree image
-when_to_use: When given a set of protein sequences in FASTA format and asked to infer their evolutionary relationships, build a phylogenetic tree, or visualise clade structure
+when_to_use: When asked to infer evolutionary relationships / build a phylogenetic tree from proteins — either given FASTA, OR given a gene + a set of species (fetch the orthologs first via the UniProt step, then align + tree)
 requires_tools: [run_python]
 capabilities_needed: [biopython, matplotlib]
-keywords: [phylogeny, phylogenetic tree, multiple sequence alignment, MAFFT, MUSCLE, FastTree, IQ-TREE, neighbor-joining, newick, protein evolution]
+keywords: [phylogeny, phylogenetic tree, multiple sequence alignment, MAFFT, MUSCLE, FastTree, IQ-TREE, neighbor-joining, newick, protein evolution, ortholog, orthologs, UniProt, fetch protein sequences, cross-species, taxid]
 produces: [alignment_file, newick_tree_file, tree_image_png]
 domain: genetics
 source: "MAFFT/MUSCLE docs + Biopython Bio.Phylo / Bio.AlignIO API (>= 1.84)"
@@ -25,6 +25,30 @@ then **build a tree** from the alignment. The tree can come from a fast ML tool
 `propose_capability` + `ensure_capability` (all on the bioconda channel):
 - aligner: `mafft` (recommended, robust `--auto`) or `muscle` (v5).
 - ML tree (optional): `fasttree` (fast) or `iqtree` (model selection + bootstrap).
+
+## Fetching the sequences (when given a GENE + species, not FASTA)
+If the user names a gene and a set of species ("TP53 across human, mouse, rat, …")
+rather than handing you FASTA, fetch the canonical (SwissProt-reviewed) protein per
+species from **UniProt REST** — this exact query is robust; do NOT guess accessions
+or use the old `uniprot.org/uniprot/?query=` endpoint (both 400 / return the wrong
+isoform). Resolve each species to its NCBI **taxid** and:
+```python
+import urllib.request, urllib.parse
+taxa = {"human": 9606, "mouse": 10090, "rat": 10116, "zebrafish": 7955, "chicken": 9031}
+gene = "TP53"
+recs = []
+for sp, tax in taxa.items():
+    q = f"gene:{gene} AND organism_id:{tax} AND reviewed:true"          # reviewed = SwissProt canonical
+    url = "https://rest.uniprot.org/uniprotkb/search?" + urllib.parse.urlencode(
+        {"query": q, "format": "fasta", "size": 1})
+    fa = urllib.request.urlopen(url, timeout=30).read().decode()
+    if fa.strip():
+        recs.append(fa.strip())                                         # keep the >sp|…| header
+fasta_path = os.path.join(os.environ.get("ABA_WORK_DIR", "."), f"{gene}_orthologs.fasta")
+open(fasta_path, "w").write("\n".join(recs) + "\n")
+```
+(`urllib` is stdlib — no `requests` needed. If a species has no reviewed entry, drop
+`AND reviewed:true` and take `size=1`.) Then proceed to Input/alignment below.
 
 ## Input
 Accept a FASTA path or a FASTA string (write the string to a temp file). Count

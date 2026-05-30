@@ -1,10 +1,10 @@
 ---
 name: bp-rna-velocity
 description: Best-practice RNA velocity — scVelo dynamical (EM) model on spliced/unspliced counts, with phase-portrait validation and assumption checks, per the Single-cell Best Practices book.
-when_to_use: A scRNA-seq dataset WITH spliced + unspliced counts (velocyto/alevin-fry/kb-python loom) capturing an active transient process, and you want directional dynamics. Verify the system has transitions and RNA-half-life-scale dynamics before trusting it.
+when_to_use: Use this for the RNA-velocity STAGE only — a scRNA-seq dataset WITH spliced + unspliced counts (velocyto/alevin-fry/kb-python loom) capturing an active transient process, where you want directional dynamics from the scVelo dynamical model. For the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, scvelo]
-keywords: [RNA velocity, scVelo, dynamical model, EM model, spliced, unspliced, velocyto, kb-python, phase portrait, CellRank, transient state, single cell]
+keywords: [RNA velocity, scVelo, dynamical EM model, spliced unspliced, velocyto, phase portrait, CellRank, transient state dynamics]
 produces: [adata_velocity.h5ad, velocity_stream.png, phase_portraits.png]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/trajectories/rna_velocity.html"

@@ -1,10 +1,10 @@
 ---
 name: bp-feature-selection
 description: Best-practice scRNA-seq feature selection — deviance-based selection on raw counts (scry) and scanpy highly_variable_genes, avoiding normalization-induced artifacts, per the Single-cell Best Practices book.
-when_to_use: A normalized scRNA-seq object (with raw counts retained) and you need to pick informative genes before PCA/clustering. Use deviance on raw counts to dodge normalization sensitivity, or scanpy HVGs for the standard path.
+when_to_use: Use this for the feature-selection STAGE only when you want a PRINCIPLED gene-selection method — deviance-based selection on raw counts (scry) to dodge normalization sensitivity, or a deliberate HVG flavor choice. For a quick end-to-end first pass (which just calls highly_variable_genes with defaults) use scrna-qc-clustering; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, scry]
-keywords: [feature selection, highly variable genes, HVG, deviance, scry, devianceFeatureSelection, Pearson residuals, seurat_v3, cell_ranger, dispersion, single cell]
+keywords: [deviance feature selection, binomial deviance, scry devianceFeatureSelection, analytic Pearson residuals feature selection, seurat_v3 vs seurat flavor, normalization-robust gene selection]
 produces: [adata_hvg.h5ad, hvg_list.csv]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/preprocessing_visualization/feature_selection.html"

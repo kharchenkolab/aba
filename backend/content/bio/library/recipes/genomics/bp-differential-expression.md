@@ -1,10 +1,10 @@
 ---
 name: bp-differential-expression
 description: Best-practice scRNA-seq differential expression ACROSS CONDITIONS — pseudobulk aggregation per sample x cell type then DESeq2/edgeR/pydeseq2, avoiding pseudoreplication, per the Single-cell Best Practices book.
-when_to_use: Multi-sample scRNA-seq with a condition variable (e.g. stim vs ctrl) and you want genes that change between conditions within a cell type. Use pseudobulk (NOT a per-cell Wilcoxon). For finding cluster MARKER genes instead, use rank_genes_groups (see bp-annotation).
+when_to_use: Use this for the condition-DE STAGE only — multi-sample scRNA-seq with a condition variable (stim vs ctrl) where you want genes that change between conditions within a cell type via pseudobulk (NOT a per-cell Wilcoxon). For cluster MARKER genes use rank_genes_groups (see bp-annotation); for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, decoupler, pydeseq2]
-keywords: [differential expression, pseudobulk, DESeq2, edgeR, pydeseq2, decoupler, pseudoreplication, condition, sample, replicate, MAST, single cell DE]
+keywords: [condition differential expression, pseudobulk DE, DESeq2, edgeR, pydeseq2, decoupler aggregation, pseudoreplication, biological replicates, MAST random effect]
 produces: [pseudobulk.h5ad, de_results.csv, volcano.png]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/conditions/differential_gene_expression.html"

@@ -62,6 +62,35 @@ def _loads_loose(s: str):
         return None
 
 
+def _salvage_step_objects(s: str) -> list[dict]:
+    """Last-resort recovery when a `steps` string LOOKS like a JSON array of step
+    objects but fails BOTH strict and loose parsing — usually because the model
+    emitted one malformed value (e.g. an unquoted array element:
+    `"expected_outputs": ["x.png", ~2000 HVGs ...]`). Rather than degrade to
+    line-splitting (which turns every source line into a junk step), anchor on
+    each `"title":` key and pull title/description/expected_outputs out with
+    tolerant regexes. One bad value then costs at most that one field, not the
+    whole plan. Returns [] if it doesn't look like step objects at all."""
+    title_iter = list(_re.finditer(r'"title"\s*:', s))
+    if not title_iter:
+        return []
+    _STR = r'"((?:[^"\\]|\\.)*)"'        # a JSON double-quoted string body
+    out: list[dict] = []
+    for j, m in enumerate(title_iter):
+        chunk = s[m.start():(title_iter[j + 1].start() if j + 1 < len(title_iter) else len(s))]
+        tm = _re.search(r'"title"\s*:\s*' + _STR, chunk)
+        dm = _re.search(r'"description"\s*:\s*' + _STR, chunk)
+        title = (tm.group(1).strip() if tm else "")
+        desc = (dm.group(1).strip() if dm else "")
+        om = _re.search(r'"expected_outputs"\s*:\s*\[(.*?)\]', chunk, _re.S)
+        outs = [o for o in _re.findall(_STR, om.group(1)) if o.strip()] if om else []
+        sm = _re.search(r'"skill"\s*:\s*' + _STR, chunk)
+        if title or desc:
+            out.append({"title": title, "description": desc,
+                        "expected_outputs": outs, "skill": (sm.group(1).strip() if sm else "")})
+    return out
+
+
 def _coerce_string_list(x: Any) -> list[str]:
     """Best-effort: turn a model-supplied "list of strings" into an
     actual list of strings. Handles already-list inputs, XML-wrapped
@@ -112,11 +141,18 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
         # single quotes, e.g. 'adata.layers["counts"]', which json.loads rejects;
         # without this it line-splits the array into garbled one-char/-line steps.)
         s = steps_raw.strip()
-        parsed = _loads_loose(s) if s[:1] in "[{" else None
+        looks_structured = s[:1] in "[{"
+        parsed = _loads_loose(s) if looks_structured else None
         if isinstance(parsed, list):
             steps_raw = parsed
         elif isinstance(parsed, dict):
             steps_raw = [parsed]
+        elif looks_structured:
+            # Malformed-but-structured (a stray bad value): salvage step objects
+            # instead of line-splitting the JSON source into junk steps. Only if
+            # salvage finds nothing do we fall back to bullet/line coercion.
+            salvaged = _salvage_step_objects(s)
+            steps_raw = salvaged if salvaged else _coerce_string_list(steps_raw)
         else:
             steps_raw = _coerce_string_list(steps_raw)
     elif not isinstance(steps_raw, list):

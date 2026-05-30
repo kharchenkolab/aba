@@ -1,10 +1,10 @@
 ---
 name: bp-normalization
 description: Best-practice scRNA-seq normalization — shifted-log (CP10k+log1p), scran pooling size factors, and analytic Pearson residuals, with task-specific guidance per the Single-cell Best Practices book.
-when_to_use: A QC'd raw count matrix and you need to normalize for downstream analysis. Picks the normalization method by downstream task (DR/DE vs batch vs rare-cell/feature selection).
+when_to_use: Use this for the normalization STAGE only when you need a PRINCIPLED method choice — scran pooling size factors or analytic Pearson residuals (sctransform-style) rather than the default shifted-log — selected by downstream task (DR/DE vs sparse/batch vs rare-cell/feature selection). For a quick end-to-end first pass (which just uses CP10k+log1p) use scrna-qc-clustering; for the full rigorous flow see the scrna-best-practices index.
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata]
-keywords: [normalization, shifted logarithm, log1p, normalize_total, CP10k, size factors, scran, pooling, Pearson residuals, analytic Pearson residuals, sctransform, depth normalization, single cell]
+keywords: [scran pooling size factors, deconvolution size factors, analytic Pearson residuals, sctransform, shifted logarithm method choice, normalization method by downstream task]
 produces: [adata_normalized.h5ad]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/preprocessing_visualization/normalization.html"

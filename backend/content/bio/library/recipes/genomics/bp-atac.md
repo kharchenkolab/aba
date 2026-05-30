@@ -1,10 +1,11 @@
 ---
 name: bp-atac
 description: Best-practice single-cell ATAC-seq — snapATAC2 workflow (fragment import, ATAC QC, feature selection, TF-IDF + spectral/LSI embedding, Leiden, gene activity, motif/TF) per the Single-cell Best Practices book.
-when_to_use: scATAC-seq (chromatin accessibility) data — a fragments file or peak/tile x cell matrix — and you want QC -> embedding -> clustering -> gene-activity / motif analysis. The pipeline differs from scRNA (binary, sparse, TF-IDF/LSI not log-PCA).
+when_to_use: Use this for scATAC-seq (chromatin accessibility) only — a fragments file or peak/tile x cell matrix taken through the snapATAC2 pipeline (TF-IDF + spectral/LSI, not log-PCA) to QC -> embedding -> clustering -> gene-activity / motif. This is a DIFFERENT modality from scRNA. For the scRNA full rigorous flow see the scrna-best-practices index.
+avoid_when: "scRNA gene-expression data (this is chromatin accessibility — a DIFFERENT modality; do not apply the log-PCA scRNA flow); bulk ATAC-seq; when you already have peak calls and only want differential accessibility between conditions (use an ATAC differential-accessibility recipe)."
 requires_tools: [run_python]
 capabilities_needed: [scanpy, anndata, snapatac2]
-keywords: [scATAC, ATAC-seq, chromatin accessibility, snapATAC2, TF-IDF, LSI, latent semantic indexing, spectral embedding, TSS enrichment, fragments, gene activity, chromVAR, motif, single cell]
+keywords: [scATAC, ATAC-seq, chromatin accessibility, snapATAC2, TF-IDF, LSI latent semantic indexing, spectral embedding, TSS enrichment, fragments, gene activity, chromVAR motif]
 produces: [adata_atac.h5ad, atac_qc.png, atac_umap.png, gene_activity.h5ad]
 domain: genomics
 source: "Single-cell Best Practices (Heumos et al.) — sc-best-practices.org/chromatin_accessibility/introduction.html"

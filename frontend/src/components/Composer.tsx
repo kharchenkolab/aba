@@ -38,17 +38,41 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     catch { /* storage unavailable — degrade to in-memory only */ }
   }
   const setDraft = (v: string) => { setValue(v); persist(v) }
-  // Reload the draft if the thread (draftKey) changes without a remount.
+
+  // ── Sent-message history: shell-style ↑/↓ recall, per thread ──
+  const histKey = (k: string) => k.replace(/^chatdraft:/, 'chathist:')
+  const [history, setHistory] = useState<string[]>(() => {
+    try { return draftKey ? JSON.parse(sessionStorage.getItem(histKey(draftKey)) || '[]') : [] }
+    catch { return [] }
+  })
+  const histIdx = useRef<number | null>(null)   // null = editing a draft, not navigating
+  const histStash = useRef('')                   // the in-progress draft, stashed on entering history
+  const caretToEnd = useRef(false)               // park caret at end after a programmatic value set
+  const pushHistory = (text: string) => {
+    histIdx.current = null
+    setHistory(h => {
+      const next = h[h.length - 1] === text ? h : [...h, text]   // skip consecutive dupes
+      const capped = next.slice(-100)
+      if (draftKey) { try { sessionStorage.setItem(histKey(draftKey), JSON.stringify(capped)) } catch { /* ignore */ } }
+      return capped
+    })
+  }
+
+  // Reload the draft + history if the thread (draftKey) changes without a remount.
   const firstDraftKey = useRef(true)
   useEffect(() => {
     if (firstDraftKey.current) { firstDraftKey.current = false; return }
     setValue((draftKey && sessionStorage.getItem(draftKey)) || '')
+    histIdx.current = null
+    try { setHistory(draftKey ? JSON.parse(sessionStorage.getItem(histKey(draftKey)) || '[]') : []) }
+    catch { setHistory([]) }
   }, [draftKey])
 
   // When an advisor's "Try it" prefills the composer, drop the text in and
   // focus — the user can edit or just hit Enter.
   useEffect(() => {
     if (prefill) {
+      histIdx.current = null
       setDraft(prefill)
       textareaRef.current?.focus()
       onPrefillConsumed?.()
@@ -79,6 +103,36 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   }, [disabled])
 
   function handleKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Shell-style history recall. ↑ only fires on the first line and ↓ only on
+    // the last line, so multi-line editing (and caret movement) still works.
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const ta = textareaRef.current
+      if (!ta || !history.length) return
+      if (e.key === 'ArrowUp') {
+        const onFirstLine = value.slice(0, ta.selectionStart).indexOf('\n') === -1
+        if (!onFirstLine) return
+        e.preventDefault()
+        if (histIdx.current === null) { histStash.current = value; histIdx.current = history.length - 1 }
+        else if (histIdx.current > 0) { histIdx.current -= 1 }
+        caretToEnd.current = true
+        setDraft(history[histIdx.current])
+      } else {
+        if (histIdx.current === null) return            // not navigating → let ↓ move the caret
+        const onLastLine = value.slice(ta.selectionEnd).indexOf('\n') === -1
+        if (!onLastLine) return
+        e.preventDefault()
+        if (histIdx.current < history.length - 1) {
+          histIdx.current += 1
+          caretToEnd.current = true
+          setDraft(history[histIdx.current])
+        } else {                                        // past the newest → restore the stashed draft
+          histIdx.current = null
+          caretToEnd.current = true
+          setDraft(histStash.current)
+        }
+      }
+      return
+    }
     if (e.key !== 'Enter' || e.shiftKey) return
     e.preventDefault()
     // Cmd/Ctrl+Enter while streaming = Steer (cancel + send the typed
@@ -87,6 +141,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     if (streaming && (e.metaKey || e.ctrlKey) && onSteer) {
       const text = value.trim()
       if (!text) return
+      pushHistory(text)
       onSteer(text)
       setDraft('')
       return
@@ -97,6 +152,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   function submit() {
     const text = value.trim()
     if (!text || disabled) return
+    pushHistory(text)
     onSend(text)
     setDraft('')
   }
@@ -109,6 +165,12 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
+    // After a programmatic value set (history recall), park the caret at the end.
+    if (caretToEnd.current) {
+      caretToEnd.current = false
+      const n = ta.value.length
+      ta.setSelectionRange(n, n)
+    }
   }, [value])
 
   // Recompute the cap on viewport resize (the max is vh-relative).
@@ -141,7 +203,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           className="composer__input"
           placeholder={placeholder}
           value={value}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e => { histIdx.current = null; setDraft(e.target.value) }}
           onKeyDown={handleKey}
           rows={1}
         />

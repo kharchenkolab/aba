@@ -45,10 +45,26 @@ the QC'd object — but feed it **raw counts**, not log-normalized scaled data.
 ## Procedure
 
 ```python
-import scvi, scanpy as sc, numpy as np, os
+import scvi, scanpy as sc, anndata as ad, pandas as pd, numpy as np, os
 DATA = os.environ["DATA_DIR"]
 
-adata = sc.read_h5ad(os.path.join(DATA, "qc_filtered.h5ad"))  # from scrna-qc-clustering
+# 0) Load. If you already have a QC'd object, just read it:
+#       adata = sc.read_h5ad(os.path.join(DATA, "qc_filtered.h5ad"))  # from scrna-qc-clustering
+#    Loading multiple samples straight from GEO? They are LOOSE, GSM-PREFIXED
+#    triplets (GSM..._matrix.mtx.gz / ...barcodes.tsv.gz / ...features.tsv.gz in one
+#    dir) — sc.read_10x_mtx will NOT find these, so read the parts EXPLICITLY and
+#    concat with a batch key (this becomes scVI's batch_key — see below):
+def load_geo_10x(prefix):                       # one GEO loose, GSM-prefixed triplet
+    a = sc.read_mtx(f"{DATA}/{prefix}.matrix.mtx.gz").T          # mtx is genes×cells → transpose
+    a.obs_names = pd.read_csv(f"{DATA}/{prefix}.barcodes.tsv.gz", header=None)[0].values
+    a.var_names = pd.read_csv(f"{DATA}/{prefix}.features.tsv.gz", header=None, sep='\t')[1].values  # col 2 = symbols
+    a.var_names_make_unique(); return a
+prefixes = ["GSM5746268_...", "GSM5746269_..."]   # the shared per-sample file prefixes
+sample_names = ["S1", "S2"]
+adata = ad.concat([load_geo_10x(p) for p in prefixes],
+                  label="sample", keys=sample_names, index_unique="-")  # batch_key="sample"
+# (standard CellRanger dir instead → sc.read_10x_mtx(dir, var_names='gene_symbols'))
+# Then run QC/filtering (scrna-qc-clustering) before continuing.
 
 # 1) Preserve raw counts in a dedicated layer (scVI needs integer counts).
 adata.layers["counts"] = adata.X.copy()

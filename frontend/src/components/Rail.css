@@ -128,6 +128,9 @@
   background: var(--panel-bd-soft, var(--border));
 }
 .rail--collapsed .rail__nav-group-sep { margin: 8px 6px; }
+/* Keep the separator's vertical space reserved (so the bottom slots never
+   move) but hide the hairline until the bottom group has an earned tab. */
+.rail__nav-group-sep--hidden { background: transparent; }
 
 .rail__nav-item {
   display: flex;
@@ -174,16 +177,29 @@
   border-radius: 9px 0 0 9px;
   background: #f4f7fa;
   color: #64748b;
-  box-shadow: inset 3px 0 0 #94a3b8;
+  box-shadow: inset 3px 0 0 var(--tab-accent, #94a3b8);
   gap: 4px;
   font-weight: 650;
   transition: background 0.14s, border-color 0.14s, color 0.14s, transform 0.14s, box-shadow 0.14s;
 }
-.rail__project-tab:nth-child(1) { box-shadow: inset 3px 0 0 #0f766e; }
-.rail__project-tab:nth-child(2) { box-shadow: inset 3px 0 0 #6d28d9; }
-.rail__project-tab:nth-child(3) { box-shadow: inset 3px 0 0 #0891b2; }
-.rail__project-tab:nth-child(4) { box-shadow: inset 3px 0 0 #b45309; }
-.rail__project-tab:nth-child(5) { box-shadow: inset 3px 0 0 #64748b; }
+/* Stable per-tab accent colors — keyed, not positional, so the right hue
+   follows each tab no matter which subset is shown or which is active. */
+.rail__project-tab--threads { --tab-accent: #0f766e; }
+.rail__project-tab--data    { --tab-accent: #0891b2; }
+.rail__project-tab--claims  { --tab-accent: #6d28d9; }
+.rail__project-tab--results { --tab-accent: #b45309; }
+.rail__project-tab--runs    { --tab-accent: #be123c; }
+.rail__project-tab--files   { --tab-accent: #475569; }
+/* Reserved (hidden) slot: occupies its space so neighbors never shift, but is
+   fully invisible and unclickable until earned. */
+.rail__project-tab--reserved { visibility: hidden; pointer-events: none; }
+/* Earned tab sliding into its fixed slot right→left, docking under the rail
+   (the left column). Only the appearing tab animates; nothing else moves. */
+@keyframes rail-tab-in {
+  from { opacity: 0; transform: translateX(22px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.rail__nav-item--enter { animation: rail-tab-in 300ms cubic-bezier(0.2, 0.7, 0.3, 1) both; }
 .rail__project-tab svg {
   width: 21px;
   height: 21px;
@@ -212,55 +228,23 @@
 }
 .rail__project-tab.rail__nav-item--active {
   background: #fff;
-  color: #0f766e;
+  color: var(--tab-accent, #0f766e);
   border-color: #b7c2d0;
-  box-shadow: inset 4px 0 0 #0f766e, 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
+  box-shadow: inset 4px 0 0 var(--tab-accent, #0f766e), 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
   z-index: 2;
 }
 .rail__project-tab.rail__nav-item--active svg {
   opacity: 1;
 }
 .rail__project-tab.rail__nav-item--active small {
-  color: #0f766e;
+  color: var(--tab-accent, #0f766e);
 }
-.rail__project-tab:nth-child(2).rail__nav-item--active {
-  color: #6d28d9;
-  box-shadow: inset 4px 0 0 #6d28d9, 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
-}
-.rail__project-tab:nth-child(3).rail__nav-item--active {
-  color: #0891b2;
-  box-shadow: inset 4px 0 0 #0891b2, 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
-}
-.rail__project-tab:nth-child(4).rail__nav-item--active {
-  color: #b45309;
-  box-shadow: inset 4px 0 0 #b45309, 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
-}
-.rail__project-tab:nth-child(5).rail__nav-item--active {
-  color: #475569;
-  box-shadow: inset 4px 0 0 #64748b, 9px 0 0 #fff, 0 8px 14px rgba(15, 23, 42, 0.07);
-}
-.rail__project-tab:nth-child(2).rail__nav-item--active small { color: #6d28d9; }
-.rail__project-tab:nth-child(3).rail__nav-item--active small { color: #0891b2; }
-.rail__project-tab:nth-child(4).rail__nav-item--active small { color: #b45309; }
-.rail__project-tab:nth-child(5).rail__nav-item--active small { color: #475569; }
 
 .rail--collapsed .rail__project-tab {
   cursor: pointer;
 }
 .rail--collapsed .rail__project-tab.rail__nav-item--active {
-  box-shadow: inset 4px 0 0 #0f766e, 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
-}
-.rail--collapsed .rail__project-tab:nth-child(2).rail__nav-item--active {
-  box-shadow: inset 4px 0 0 #6d28d9, 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
-}
-.rail--collapsed .rail__project-tab:nth-child(3).rail__nav-item--active {
-  box-shadow: inset 4px 0 0 #0891b2, 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
-}
-.rail--collapsed .rail__project-tab:nth-child(4).rail__nav-item--active {
-  box-shadow: inset 4px 0 0 #b45309, 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
-}
-.rail--collapsed .rail__project-tab:nth-child(5).rail__nav-item--active {
-  box-shadow: inset 4px 0 0 #64748b, 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
+  box-shadow: inset 4px 0 0 var(--tab-accent, #0f766e), 6px 0 0 #fff, 0 6px 12px rgba(15, 23, 42, 0.06);
 }
 
 .rail--project .rail__user {

@@ -6,8 +6,13 @@
   overflow: hidden;
 }
 .app > * { min-height: 0; min-width: 0; overflow: hidden; }
+/* The HResizer's pill is wider (28px) than its divider column (~10px) and must
+   spill over the seam — without this it gets clipped to a thin, tall sliver by
+   the rule above. (The right-column HResizer lives inside .split, not a direct
+   .app child, so it was never clipped — which is why the two looked different.) */
 .app--workspace > .rail,
-.app--workspace > .tree {
+.app--workspace > .tree,
+.app--workspace > .hresizer {
   overflow: visible;
 }
 
@@ -73,36 +78,17 @@
 .canvas-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 .canvas-body { flex: 1; min-height: 0; padding: 14px 18px 14px 8px; overflow: hidden; }
-.split { display: grid; gap: 14px; height: 100%; min-height: 0; }
+/* The split grid is driven inline from App.tsx (1fr | 10px HResizer | rightW),
+   mirroring the app-level rail|tree|HResizer|canvas layout. The right column's
+   collapse/resize control is the SAME <HResizer> component as the left, with
+   side="right" — so the two handles are pixel-identical, just mirrored. */
+.split { position: relative; display: grid; height: 100%; min-height: 0; }
 .thread-context { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .thread-context > .surface-panel { flex: 1; min-height: 0; }   /* shelf / preview fills below the brief */
-.split--chat, .split--entity { grid-template-columns: 1fr 384px; }
-/* Collapsed right column: primary panel takes the full width; the side panel
-   (thread-context / chat-peek) is hidden behind a thin edge re-open handle. */
-.split--right-collapsed { grid-template-columns: 1fr 0 !important; position: relative; }
+/* Collapsed right column: the side panel is hidden; the HResizer divider stays
+   as the re-open handle (it sits in its own grid column, not inside the panel). */
 .split--right-collapsed > .thread-context,
 .split--right-collapsed > .chat-peek-anchor { display: none; }
-
-/* Side-panel collapse/expand toggles. */
-.right-collapse {
-  position: absolute; top: 6px; left: -11px; z-index: 5;
-  width: 20px; height: 30px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface-2); color: var(--text-3);
-  font-size: 15px; line-height: 1; cursor: pointer;
-}
-.right-collapse:hover { background: var(--surface-3); color: var(--text); }
-.right-expand {
-  position: absolute; top: 6px; right: 0; z-index: 6;
-  width: 18px; height: 34px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); border-right: none;
-  border-radius: 6px 0 0 6px;
-  background: var(--surface-2); color: var(--text-3);
-  font-size: 15px; line-height: 1; cursor: pointer;
-}
-.right-expand:hover { background: var(--surface-3); color: var(--text); }
 
 /* chat pane fills its surface-panel */
 .chat-primary, .chat-peek { padding: 0; }
@@ -285,10 +271,10 @@
 }
 
 /* T2.4 Drawer FAB + overlay. */
-/* ⓘ floats outside the top-right corner of the right column (Questions
-   in chat posture; chat peek in entity posture). The parent container
-   (.thread-context / .chat-peek) gets position:relative; the button
-   tucks above the corner with negative offsets. */
+/* ⓘ (console/context) is pinned to the top-right corner of the .split (which is
+   the right edge of the RIGHTMOST visible column — the right column when open,
+   the chat when collapsed) and sticks partly out of the corner. .split has
+   overflow:visible, so the negative offsets aren't clipped. */
 .drawer-fab {
   position: absolute;
   top: -10px;

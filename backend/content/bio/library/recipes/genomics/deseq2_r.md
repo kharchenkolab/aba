@@ -2,6 +2,7 @@
 name: deseq2-r
 description: Authoritative bulk RNA-seq differential expression with R/Bioconductor DESeq2 — designs, covariate control, Wald & LRT tests, LFC shrinkage, and custom contrasts.
 when_to_use: Bulk RNA-seq RAW count matrix + sample table; want DE between conditions. Use THIS (R) when the session is already R-based, when the user asks for DESeq2/R, or when the question needs the likelihood-ratio test, multi-factor models, covariate control, interactions, or arbitrary custom contrasts (pydeseq2 is Wald-only). For a Python-only session with no such needs, see bulk-rnaseq-de (pydeseq2). SCOPE — bulk or pseudobulk-aggregated counts ONLY; NOT for direct per-cell scRNA-seq DE.
+avoid_when: "Direct per-cell scRNA-seq DE (use rank_genes_groups/Wilcoxon or scVI); NO biological replicates — comparing two clusters within a SINGLE sample pseudobulks to n=1 per group and DESeq2's statistics are then invalid; only a gene list (use enrichment); a Python-only session with no LRT/multi-factor/contrast need (use bulk-rnaseq-de)."
 requires_tools: [run_r]
 capabilities_needed: [DESeq2]
 keywords: [DESeq2, bulk RNA-seq, differential expression, LRT, Wald, contrast, covariate, batch, donor, interaction, lfcShrink, apeglm, ashr, Bioconductor, R]
