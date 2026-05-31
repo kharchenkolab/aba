@@ -492,17 +492,21 @@ async def stream_response(
             },
         })
         # Trailer reminder AFTER the user's question — combats recency bias.
-        # With a short generic question ("what is this?", "what are these?")
-        # the model's attention pools on the last text block; the opening
-        # note at position 0 can get skipped. A terse "↑ marked region
-        # only" at the tail keeps the directive sticky for THIS turn.
+        # With a short demonstrative question ("what is this?", "what are
+        # these?") the model's attention pools on the last text block; the
+        # opening note at position 0 can get skipped. A terse pointer to
+        # "demonstratives → the mark" at the tail keeps the directive sticky
+        # without absolutizing it (the question may still be about the
+        # broader figure, e.g. axes / comparison — that's fine, answer
+        # what's asked).
         # NOT persisted (only injected into the live history) — same model
         # as the image itself, so it doesn't leak into later turns.
         content.append({
             "type": "text",
-            "text": "[Reminder: answer about the YELLOW-MARKED region only — "
-                    "not the rest of the figure. The mark was described in the "
-                    "first text block above.]",
+            "text": "[Reminder: a region of the figure is yellow-marked (see "
+                    "the first text block for what + where). If this question "
+                    "uses 'this'/'these'/'here'/'what is this' it's about the "
+                    "marked region; otherwise answer as asked.]",
         })
         history[-1] = {**last, "content": content}
 
