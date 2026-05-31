@@ -29,6 +29,7 @@ interface Props {
   compact?: boolean
   entities?: Entity[]
   onPin?: (id: string, pinned: boolean) => void
+  pinnedFigureIds?: Set<string>
   keptKeys?: Set<string>
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
   /** Selection→Claim: make a claim from a highlighted span of the conversation. */
@@ -80,6 +81,7 @@ export default function ChatPane({
   compact,
   entities,
   onPin,
+  pinnedFigureIds,
   keptKeys,
   onKeepMessage,
   onClaimFromSelection,
@@ -103,6 +105,16 @@ export default function ChatPane({
     if (pendingClarification) clarifyInputRef.current?.focus()
   }, [pendingClarification])
   const scrollRef = useRef<HTMLDivElement>(null)
+  // "Pinned to bottom" auto-follow: while pinned, new content auto-scrolls
+  // the view; while UN-pinned (the user has scrolled up to read history),
+  // we DON'T jerk them back to the bottom — instead a floating button shows
+  // up so they can return on their own. We count NEW MESSAGES (not stream
+  // tokens) that landed while scrolled up so the button can show "N new
+  // messages" instead of an abstract indicator.
+  const isAtBottomRef = useRef(true)
+  const lastMsgCountRef = useRef(0)
+  const [showJump, setShowJump] = useState(false)
+  const [newCount, setNewCount] = useState(0)
   const [hlLocal, setHlLocal] = useState(false)
   const highlighting = highlightingProp ?? hlLocal
   const setHighlighting = (on: boolean) => (onHighlightingChange ?? setHlLocal)(on)
@@ -127,11 +139,54 @@ export default function ChatPane({
     return () => document.removeEventListener('mouseup', onUp)
   }, [onClaimFromSelection])
 
+  // Track pinned-to-bottom from scroll events. Threshold (60px) accommodates
+  // small layout shifts (an image loading, code block expanding) without
+  // un-pinning the user just because the bottom moved a little.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      const atBottom = dist < 60
+      isAtBottomRef.current = atBottom
+      if (atBottom) {
+        setShowJump(false)
+        setNewCount(0)
+        lastMsgCountRef.current = messages.length + (streamMsg ? 1 : 0)
+      } else {
+        setShowJump(true)
+      }
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [messages.length, streamMsg])
+
+  // Auto-scroll only when the user is pinned. While unpinned, count how many
+  // brand-new MESSAGES (not stream tokens — stream replaces an in-progress
+  // assistant message in place) landed since we left the bottom.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (isAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+      lastMsgCountRef.current = messages.length
+    } else {
+      const delta = messages.length - lastMsgCountRef.current
+      if (delta > 0) setNewCount(c => c + delta)
+      lastMsgCountRef.current = messages.length
+    }
   }, [messages, streamMsg])
+
+  const jumpToBottom = () => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    // Optimistic flip — the scroll listener will confirm/correct.
+    isAtBottomRef.current = true
+    setShowJump(false)
+    setNewCount(0)
+    lastMsgCountRef.current = messages.length
+  }
 
   const all = streamMsg ? [...messages, streamMsg] : messages
   const scoped = !!focusedEntity && focusedEntity.type !== 'workspace'
@@ -215,6 +270,7 @@ export default function ChatPane({
                 onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
                 entities={entities}
                 onPin={onPin}
+                pinnedFigureIds={pinnedFigureIds}
                 keptKeys={keptKeys}
                 onKeepMessage={onKeepMessage}
                 planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
@@ -237,6 +293,25 @@ export default function ChatPane({
               </div>
             )}
           </div>
+          {showJump && (
+            <button
+              type="button"
+              className={`chat-jump-bottom ${newCount > 0 ? 'chat-jump-bottom--new' : ''}`}
+              onClick={jumpToBottom}
+              title={newCount > 0 ? 'New messages — jump to latest' : 'Jump to latest'}
+              aria-label="Jump to latest"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                   stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+              {newCount > 0 && (
+                <span className="chat-jump-bottom__label">
+                  {newCount} new {newCount === 1 ? 'message' : 'messages'}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 

@@ -535,7 +535,14 @@ export default function App() {
   const pinEntity = (id: string, pin: boolean) => {
     const path = pin ? 'pin' : 'unpin'
     fetch(`/api/entities/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
-      .then(() => refresh())
+      .then(() => {
+        refresh()
+        // Pin's auto_interpret daemon writes the caption + title ~1-3s
+        // after the POST returns. Re-fetch once more so the UI picks up
+        // the generated text without the user having to click anything.
+        // (Unpin doesn't need this — no async work follows.)
+        if (pin) setTimeout(refresh, 2500)
+      })
       .catch(() => {})
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
@@ -552,6 +559,18 @@ export default function App() {
     entities
       .filter(e => e.type === 'note' && e.status === 'active' && (e.metadata?.source_key as string))
       .map(e => e.metadata!.source_key as string),
+  )
+
+  // Figures kept by an active Result — derives chat figure pin state on
+  // re-entry. (Task #318 dropped the `entity.pinned` flag in favor of
+  // membership: a figure is "pinned" iff it appears as a member of an
+  // active Result.)
+  const pinnedFigureIds = new Set<string>(
+    entities
+      .filter(e => e.type === 'result' && e.status === 'active')
+      .flatMap(e => ((e.metadata?.members as Array<{kind?: string, ref?: string}>) ?? [])
+        .filter(m => m.kind === 'figure' && m.ref)
+        .map(m => m.ref as string)),
   )
 
   if (view === 'home') {
@@ -603,6 +622,7 @@ export default function App() {
       compact={compact}
       entities={entities}
       onPin={pinEntity}
+      pinnedFigureIds={pinnedFigureIds}
       keptKeys={keptKeys}
       onKeepMessage={(key, text, image_urls) => keepMessage(key, text, image_urls)}
       onClaimFromSelection={text => createClaim(text, [])}

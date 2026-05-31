@@ -177,6 +177,63 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  position: relative;   /* containing block for .chat-jump-bottom */
+}
+
+/* Floating "jump to latest" affordance — appears when the user has
+   scrolled up away from the bottom while the agent is still writing.
+   Two shapes share the same class:
+     - bare arrow → small circle (no new messages yet, just "go down");
+     - arrow + "N new messages" label → pill (something arrived while
+       you were scrolled up).
+   Soft + center-bottom so it sits in eye-line without competing with
+   the message stream. */
+.chat-jump-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border-2, #d4d4d8);
+  background: var(--surface-1, #fff);
+  color: var(--text-2, #3f3f46);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.04);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0;
+  animation: chat-jump-fade-in 140ms ease-out forwards;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.chat-jump-bottom:hover {
+  background: var(--surface-2, #fafafa);
+  transform: translateX(-50%) translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.14), 0 1px 2px rgba(0,0,0,0.05);
+}
+.chat-jump-bottom:active {
+  transform: translateX(-50%) translateY(0);
+}
+.chat-jump-bottom--new {
+  border-color: var(--accent-3, #60a5fa);
+  color: var(--accent-1, #1d4ed8);
+  padding: 0 12px 0 10px;
+}
+.chat-jump-bottom__label {
+  white-space: nowrap;
+  font-weight: 500;
+}
+@keyframes chat-jump-fade-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 .chat-pane--split .chat-main {
   flex: 1 1 60%;

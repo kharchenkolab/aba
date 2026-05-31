@@ -7,6 +7,7 @@
  */
 import { useRef, useState } from 'react'
 import type { Entity } from '../types'
+import { EntityGlyph } from './icons'
 import './PinnedShelf.css'
 
 interface Props {
@@ -84,7 +85,15 @@ export default function PinnedShelf({ entities, threadId, threads, onChange, onF
 function PinRow({ pin, cover, panels, threads, onChange, onFocus, onClaimFrom }:
   { pin: Entity; cover?: string; panels?: number; threads: Entity[]; onChange: () => void; onFocus: (id: string) => void; onClaimFrom: (id: string) => void }) {
   const isNote = pin.type === 'note'
-  const interp = (pin.metadata?.interpretation as string) ?? ''
+  // The figure caption lives on the first figure member (set by the
+  // auto_interpret daemon); fall back to the Result-level synthesis
+  // (interpretation) only when the user has written one. Old Results
+  // before the ontology change may still have interpretation set
+  // without a member-caption — same fallback covers that case.
+  const members = (pin.metadata?.members as Array<{kind: string, caption?: string}> | undefined) ?? []
+  const figureCaption = members.find(m => m.kind === 'figure' && m.caption)?.caption ?? ''
+  const resultSynthesis = (pin.metadata?.interpretation as string) ?? ''
+  const interp = figureCaption || resultSynthesis
   const noteText = (pin.metadata?.text as string) ?? ''
   const [editing, setEditing] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -119,20 +128,57 @@ function PinRow({ pin, cover, panels, threads, onChange, onFocus, onClaimFrom }:
           <div className="pin-row__note-text">{noteText}</div>
         ) : editing ? (
           <input className="pin-row__interp-input" defaultValue={interp} autoFocus
-            placeholder="one-line interpretation…"
-            onBlur={e => { setEditing(false); if (e.target.value !== interp) patch({ interpretation: e.target.value }) }}
+            placeholder="one-line caption…"
+            onBlur={async e => {
+              setEditing(false)
+              const v = e.target.value
+              if (v === interp) return
+              // Write to the figure-member's caption (where the caption
+              // lives now). Fall back to Result.interpretation when there
+              // is no figure member (pure-text Result, multi-evidence, …).
+              const figMember = members.find(m => m.kind === 'figure')
+              if (figMember) {
+                const mid = (figMember as { id?: string }).id
+                await fetch(`/api/results/${encodeURIComponent(pin.id)}/members/${encodeURIComponent(mid ?? '')}`, {
+                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ caption: v, caption_origin: 'user' }),
+                }).catch(() => {})
+                onChange()
+              } else {
+                patch({ interpretation: v })
+              }
+            }}
             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditing(false) }} />
         ) : (
           <div className={`pin-row__interp ${interp ? '' : 'is-empty'}`} onClick={() => setEditing(true)}>
-            {interp || 'add a one-line interpretation…'}
+            {interp || 'add a one-line caption…'}
           </div>
         )}
       </div>
       <div className="pin-row__actions">
         <button className="pin-row__act pin-row__act--claim" title="Make a claim from this"
-          onClick={() => onClaimFrom(pin.id)}>claim</button>
-        <button className="pin-row__act" title="Move to another thread" onClick={() => setMenuOpen(o => !o)}>⤳</button>
-        <button className="pin-row__act" title="Unpin" onClick={unpin}>×</button>
+          onClick={() => onClaimFrom(pin.id)} aria-label="Make a claim from this">
+          <EntityGlyph name="claim" size={14} />
+        </button>
+        <button className="pin-row__act" title="Move to another thread"
+          onClick={() => setMenuOpen(o => !o)} aria-label="Move to another thread">
+          {/* Folder-arrow: an outlined folder with a → on top, reads as
+              "move to a different bucket". Stronger than the prior ⤳. */}
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+            <path d="M9 13h7M13 10l3 3-3 3" />
+          </svg>
+        </button>
+        <button className="pin-row__act" title="Unpin" onClick={unpin} aria-label="Unpin">
+          {/* 14px SVG × so the unpin button matches the other two icons
+              in visual weight — the unicode × character rendered ~9-10px
+              tall, noticeably smaller than the 14px claim flag + folder. */}
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
         {menuOpen && (
           <div className="pin-row__menu" onMouseLeave={() => setMenuOpen(false)}>
             {moveTargets.length === 0 && <div className="pin-row__menu-empty">no other threads</div>}

@@ -26,9 +26,44 @@
 .rv-panel__table { display: inline-flex; align-items: center; gap: 8px; padding: 14px; border: none; background: none; color: var(--text-2); font-size: 13.5px; cursor: pointer; }
 .rv-panel__table:hover { color: var(--accent); }
 .rv-panel__missing { padding: 14px; color: var(--text-4); font-size: 13px; }
-.rv-panel__caption { border: none; background: none; font-size: 12.5px; color: var(--text-3); padding: 2px 2px; font-family: inherit; }
+/* Per-figure caption — sits under the image as the figure's legend.
+   Textarea (not input) so multi-sentence captions wrap + auto-size. */
+.rv-panel__caption-row { display: flex; align-items: flex-start; gap: 6px; }
+.rv-panel__caption {
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+  padding: 3px 5px;
+  font-family: inherit;
+}
 .rv-panel__caption::placeholder { color: var(--text-4); }
-.rv-panel__caption:focus { outline: none; color: var(--text); }
+.rv-panel__caption:focus {
+  outline: none;
+  color: var(--text);
+  background: var(--bg-soft);
+  border-color: var(--border);
+}
+.rv-panel__ai-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--mono);
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  user-select: none;
+  margin-top: 4px;
+}
 
 .rv-panel--text { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); padding: 8px 10px; position: relative; }
 .rv-panel__note { width: 100%; box-sizing: border-box; border: none; background: none; resize: vertical; min-height: 40px; font-size: 13.5px; line-height: 1.5; color: var(--text); font-family: inherit; }
@@ -65,8 +100,38 @@
 .rv__zoom-x { position: fixed; top: 16px; right: 20px; font-size: 28px; line-height: 1; color: #fff; background: none; border: none; cursor: pointer; }
 
 /* A3: ✨ AI tag next to the auto-generated interpretation; goes away on first user edit. */
-.rv__reading-row { display: flex; align-items: flex-start; gap: 8px; }
-.rv__reading-row .rv__reading { flex: 1; }
+/* Legend lives under the figure (caption-like). Margin separates it
+   from the last member panel; alignment + flex-1 keeps the ✨ AI tag
+   tucked to the right of the text. */
+/* Quiet "+ Add synthesis" affordance — shown when the Result-level
+   synthesis is empty. Clicking opens the textarea inline. */
+.rv__add-synthesis {
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-4);
+  font-family: inherit;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.rv__add-synthesis:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rv__reading-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+.rv__reading-row .rv__reading {
+  flex: 1;
+  min-height: 30px;   /* baseline for empty placeholder; auto-resize grows beyond */
+}
 .rv__ai-tag {
   font-size: 10px;
   font-weight: 600;

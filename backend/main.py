@@ -243,11 +243,23 @@ def entities_patch(entity_id: str, req: EntityPatch):
     for k in ("interpretation", "interpretation_origin", "thread_id"):
         if k in fields:
             meta_updates[k] = fields.pop(k)
-    if meta_updates:
+    # Any user edit to a Result — title, interpretation — flips `invested`
+    # so a later unpin preserves the user's work instead of archiving it
+    # as an unused auto-wrapper. Caption/text edits on members flip it via
+    # update_result_member (result_members.py); this catches the
+    # entity-level edits.
+    user_edited_result = False
+    if meta_updates or ("title" in fields):
+        ent_probe = get_entity(entity_id)
+        if ent_probe and ent_probe.get("type") == "result":
+            user_edited_result = True
+    if meta_updates or user_edited_result:
         ent = get_entity(entity_id)
         if not ent:
             raise HTTPException(404, f"Entity {entity_id} not found")
         merged = {**(ent.get("metadata") or {}), **meta_updates}
+        if user_edited_result:
+            merged["invested"] = True
         fields["metadata"] = merged
     # status whitelist
     if "status" in fields and fields["status"] not in (
@@ -865,6 +877,7 @@ class MemberRequest(BaseModel):
     ref: str | None = None         # cell entity id (for figure/table/value)
     text: str | None = None        # inline prose (for text panels)
     caption: str = ""
+    caption_origin: str | None = None   # 'ai' | 'user' — set by the UI on first edit
     at: int | None = None          # insert position (append if None)
 
 
@@ -913,7 +926,8 @@ def result_add_member(rid: str, req: MemberRequest):
 @app.patch("/api/results/{rid}/members/{member_id}")
 def result_update_member(rid: str, member_id: str, req: MemberRequest):
     _result_or_404(rid)
-    return update_result_member(rid, member_id, caption=req.caption, text=req.text)
+    return update_result_member(rid, member_id, caption=req.caption,
+                                text=req.text, caption_origin=req.caption_origin)
 
 
 @app.delete("/api/results/{rid}/members/{member_id}")
@@ -1032,77 +1046,15 @@ def suggest_interpretation(entity_id: str):
 
 def _llm_figure_caption(artifact_path: str, producing_code: str,
                         chat_context: str, title: str) -> str:
-    """Generate a structured figure caption via vision LLM. Returns '' on any
-    failure (caller falls back to chat-text pluck). Reads the figure file
-    directly from ARTIFACTS_DIR; caps token usage."""
-    import base64
-    try:
-        if not artifact_path: return ""
-        # Resolve /artifacts/<pid>/<hash>.png → projects/<pid>/artifacts/<hash>.png.
-        fpath = _artifact_url_to_path(artifact_path)
-        if fpath is None or not fpath.is_file(): return ""
-        name = fpath.name
-        suffix = fpath.suffix.lower().lstrip(".")
-        media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                 "webp": "image/webp", "gif": "image/gif"}.get(suffix)
-        if not media: return ""        # PDFs/SVGs not vision-readable here; bail to fallback
-        b64 = base64.b64encode(fpath.read_bytes()).decode("ascii")
-
-        from core.llm import _llm_client
-        from core.config import MODEL
-        client = _llm_client()
-        sys_prompt = (
-            "You are writing a figure caption for a scientist's lab notebook. "
-            "This caption goes into a permanent record — no chat fillers "
-            "(no 'Perfect!', 'Now you have...', 'Great!'), no first-person "
-            "narration, no commentary on what the user should do next.\n\n"
-            "You will receive THREE sources and must use all three:\n"
-            "  - The figure itself (image) — what's actually rendered.\n"
-            "  - The producing code — the mechanical truth of what was computed.\n"
-            "  - The conversation context — the user's ASK (intent / question that\n"
-            "    motivated the figure) and the agent's surrounding commentary.\n"
-            "Cross-check: ground the take-home in what the USER asked AND in what\n"
-            "the code computed.\n\n"
-            "NUMBERS — STRICT RULE: a specific numeric value (a percentage, a\n"
-            "count, a coefficient, a p-value, a fold-change) may appear in your\n"
-            "caption ONLY if it appears VERBATIM in either (a) the producing code\n"
-            "or (b) the conversation context above. Do not 'round to a plausible\n"
-            "value', do not interpolate, do not split-the-difference between two\n"
-            "nearby numbers, do not pull a number from the figure pixels (e.g.\n"
-            "axis tick labels). When you can't quote a specific number, describe\n"
-            "qualitatively — \"the majority of cells\", \"a clear majority\",\n"
-            "\"most genes\", \"approximately three quarters\", \"~70% overlap\".\n"
-            "It is better to be vague-but-honest than precise-but-fabricated.\n\n"
-            "Output markdown with EXACTLY this structure:\n\n"
-            "**What's shown.** Describe panel-by-panel (if multi-panel) or the "
-            "whole figure (if single-panel). For each panel name: what's plotted, "
-            "what the X and Y axes are, what color / shape / size encodes, and "
-            "any notable annotations or thresholds. Be specific (\"UMAP1 vs UMAP2 "
-            "of 9282 cells, colored by Leiden cluster (18 clusters)\"), not generic "
-            "(\"a scatter plot\").\n\n"
-            "**Take-home.** 1-3 short bullet points stating what the figure "
-            "DEMONSTRATES in the context of the user's question. The visual "
-            "conclusion, not the method. Concrete and biological where appropriate.\n\n"
-            "~150 words total. No header lines other than the two bolded labels."
-        )
-        user_blocks = [
-            {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
-            {"type": "text", "text":
-                (f"Figure title (from the producer): {title!r}\n\n" if title else "") +
-                f"Producing code:\n```\n{producing_code}\n```\n\n" +
-                (f"Conversation context (user asks + agent narration around the figure):\n{chat_context}\n"
-                 if chat_context else "")},
-        ]
-        r = client.messages.create(
-            model=MODEL,
-            max_tokens=600,
-            system=sys_prompt,
-            messages=[{"role": "user", "content": user_blocks}],
-        )
-        out = " ".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
-        return out
-    except Exception:  # noqa: BLE001 — fallback handles missing-caption case
-        return ""
+    """Thin wrapper around the shared vision-LLM caption helper in
+    `content/bio/lifecycle/promote.py` — resolves the /artifacts/<pid>/<name>
+    URL to a disk path, then delegates. Kept here so the FastAPI endpoint
+    `/api/entities/<id>/suggest-interpretation` and the background
+    `auto_interpret` daemon share the SAME caption generator and system
+    prompt (single source of truth)."""
+    from content.bio.lifecycle.promote import caption_via_vision_llm
+    disk = _artifact_url_to_path(artifact_path) if artifact_path else None
+    return caption_via_vision_llm(disk, producing_code, chat_context, title)
 
 
 class PinMessageRequest(BaseModel):
