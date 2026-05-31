@@ -384,6 +384,16 @@ async def stream_response(
     _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
     def sse(obj: dict) -> str:
         _live_log_event(turn.run_id, obj, _dtbuf)
+        # C-0: mirror every SSE event into the per-Turn sink so a
+        # reconnecting client can detect an in-flight Turn and offer
+        # Stop. C-1 will flip this around so SSE is served FROM the sink.
+        try:
+            from core.runtime import turn_sink as _ts
+            s = _ts.get(turn.run_id)
+            if s is not None:
+                s.push(obj)
+        except Exception:  # noqa: BLE001
+            pass    # sink mirroring is best-effort; never block the stream
         return f"data: {json.dumps(obj)}\n\n"
 
     session_id = new_session_id()
@@ -421,6 +431,13 @@ async def stream_response(
     # thread, not the whole project firehose. "default" resolves to (and
     # materializes) the project's default thread entity.
     store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
+    # C-0: register a per-Turn event sink (in-memory ring buffer). Every
+    # SSE event is mirrored into it; `/api/threads/{tid}/active-turn`
+    # surfaces this Turn so a client that reloaded the page can find the
+    # in-flight work and offer Stop. Released in the same finally that
+    # releases the cancel token.
+    from core.runtime import turn_sink as _ts
+    _ts.create(turn.run_id, store_tid, turn.started_at)
 
     if not retry:
         # Note-FIRST ordering: when the user attached a highlight, lead
@@ -1138,3 +1155,10 @@ async def stream_response(
         # cancel on this run_id would fire them against now-defunct
         # processes/connections.
         _cancel.release(turn.run_id)
+        # C-0: release the per-Turn sink. Closes the in-memory ring so
+        # `/api/threads/{tid}/active-turn` stops returning this Turn.
+        try:
+            from core.runtime import turn_sink as _ts
+            _ts.release(turn.run_id)
+        except Exception:  # noqa: BLE001
+            pass

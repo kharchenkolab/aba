@@ -1989,6 +1989,45 @@ def turn_get(run_id: str):
     return t.to_row()
 
 
+@app.get("/api/threads/{thread_id}/active-turn")
+def thread_active_turn(thread_id: str):
+    """C-0: is there an in-flight Turn on this thread? Used by the
+    frontend on chat mount so a page reload during a long-running cell
+    can re-surface the Stop button (otherwise the user has no recovery
+    path — the SSE generator was cancelled by the reload, but the
+    underlying tool kept running and the DB Turn row stayed in
+    `executing_tools` with no way to clear it).
+
+    Source of truth is the DB (Turn rows). If the live in-memory sink
+    is also present (the loop is genuinely still streaming, not just
+    leaked from a CancelledError), include its last_seq so a future
+    C-1 reattach can resume from the right point.
+
+    Returns null if no live Turn on this thread."""
+    from core.graph._schema import _conn
+    states = ("generating", "executing_tools", "summarizing")
+    placeholders = ",".join("?" for _ in states)
+    with _conn() as c:
+        r = c.execute(
+            f"SELECT run_id, state, started_at, updated_at "
+            f"FROM runs WHERE thread_id = ? AND state IN ({placeholders}) "
+            f"ORDER BY updated_at DESC LIMIT 1",
+            (thread_id, *states),
+        ).fetchone()
+    if not r:
+        return None
+    out = dict(r)
+    try:
+        from core.runtime import turn_sink as _ts
+        s = _ts.get(out["run_id"])
+        out["sink_alive"] = s is not None and not s.closed
+        out["last_seq"] = s.last_seq if s is not None else 0
+    except Exception:  # noqa: BLE001
+        out["sink_alive"] = False
+        out["last_seq"] = 0
+    return out
+
+
 class ResumeRequest(BaseModel):
     user_text: str = ""
     # P1 #3 — for approval halts. 'approve' (run once), 'approve_session'
