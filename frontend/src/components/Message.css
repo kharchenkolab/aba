@@ -127,6 +127,30 @@
   margin: 6px 0;
 }
 .msg-text pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* Inline file links — an agent-quoted filename ("see `umap.pdf`") that the
+   harvester actually wrote becomes a clickable code-pill opening the file
+   in a new tab. Kind variants tint the border so PDFs/tables/plots are
+   distinguishable at a glance. */
+.msg-filelink {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+}
+.msg-filelink:hover code {
+  background: var(--bg-hover, #e8eef7);
+  border-color: var(--accent, #4a90e2);
+}
+.msg-filelink--plot  code { border-color: #b4d2a0; }
+.msg-filelink--table code { border-color: #d2b48c; }
+.msg-filelink--file  code { border-color: #a0b4d2; }
+.msg-filelink code::after {
+  content: " ↗";
+  opacity: 0.5;
+  font-size: 10px;
+  margin-left: 2px;
+}
 .msg-text strong { font-weight: 600; }
 .msg-text table { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
 .msg-text th, .msg-text td { border: 1px solid var(--panel-bd); padding: 3px 8px; text-align: left; }

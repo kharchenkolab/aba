@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DisplayMessage, Entity, PendingClarification, PendingApproval } from '../types'
 import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
@@ -189,6 +189,32 @@ export default function ChatPane({
   }
 
   const all = streamMsg ? [...messages, streamMsg] : messages
+  // basename → {url, kind} map for inline filename mentions in agent prose.
+  // Walk every tool_result and pick the LAST-SEEN entry per basename (later
+  // messages win on collision — most recent run's output wins). Covers
+  // plots, tables, and the new `files` bucket (PDFs / RDS / HTML / …).
+  const fileMap = useMemo(() => {
+    const m = new Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>()
+    type Entry = { url?: unknown; original_name?: unknown }
+    const ingest = (arr: unknown, kind: 'plot' | 'table' | 'file') => {
+      if (!Array.isArray(arr)) return
+      for (const e of arr as Entry[]) {
+        const name = typeof e?.original_name === 'string' ? e.original_name : null
+        const url = typeof e?.url === 'string' ? e.url : null
+        if (name && url) m.set(name, { url, kind })
+      }
+    }
+    for (const msg of all) {
+      for (const b of msg.blocks) {
+        if (b.type !== 'tool_result') continue
+        const r = (b as { result?: Record<string, unknown> }).result || {}
+        ingest(r.plots, 'plot')
+        ingest(r.tables, 'table')
+        ingest(r.files, 'file')
+      }
+    }
+    return m
+  }, [all])
   const scoped = !!focusedEntity && focusedEntity.type !== 'workspace'
   const focusChipText = scoped ? `${focusedEntity!.type} · ${focusedEntity!.title}` : 'Workspace'
 
@@ -259,6 +285,7 @@ export default function ChatPane({
               <Message
                 key={m.id}
                 message={m}
+                fileMap={fileMap}
                 isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
                 collapseTools={i !== all.length - 1}
                 onAnnotate={onAnnotate}
