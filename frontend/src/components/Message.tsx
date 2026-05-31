@@ -240,8 +240,26 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void,
                       planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
-                      isStreaming?: boolean, pinnedFigureIds?: Set<string>) {
+                      isStreaming?: boolean, pinnedFigureIds?: Set<string>,
+                      fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>) {
   const out: React.ReactNode[] = []
+  // Override inline `code` so basenames the agent quotes resolve to a link
+  // (only when the basename actually corresponds to a file written this thread).
+  // Bare code (variable names, identifiers) renders unchanged.
+  const mdComponents = fileMap && fileMap.size > 0 ? {
+    code: (props: { inline?: boolean; children?: React.ReactNode; className?: string }) => {
+      const raw = String(props.children ?? '').trim()
+      const hit = !props.className /* not a fenced block */ && fileMap.get(raw)
+      if (!hit) return <code className={props.className}>{props.children}</code>
+      const title = `Open ${raw}`
+      return (
+        <a className={`msg-filelink msg-filelink--${hit.kind}`}
+           href={hit.url} target="_blank" rel="noreferrer" title={title}>
+          <code>{props.children}</code>
+        </a>
+      )
+    },
+  } : undefined
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
     if (b.type === 'plan') {
@@ -249,7 +267,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
     } else if (b.type === 'text') {
       out.push(
         <div key={i} className="msg-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{b.text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{b.text}</ReactMarkdown>
         </div>,
       )
     } else if (b.type === 'error') {
@@ -416,6 +434,10 @@ interface Props {
   /** Keep (pin) a non-entity message as a snapshot, keyed by content. */
   keptKeys?: Set<string>
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
+  /** Map basename → {url, kind} for files written in this thread (any
+   *  tool_result.plots / tables / files entry). Lets inline ` `foo.pdf` ` in
+   *  agent prose render as a clickable link to /artifacts/<pid>/<hash><ext>. */
+  fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>
   /** A presented plan awaiting a decision (latest message): show Go / Adjust. */
   planActive?: boolean
   onPlanGo?: (saveAsRun: boolean) => void
@@ -429,7 +451,7 @@ function msgKey(s: string): string {
   return 'm' + (h >>> 0).toString(36)
 }
 
-export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust }: Props) {
+export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   const visibleBlocks = message.blocks
@@ -440,7 +462,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()

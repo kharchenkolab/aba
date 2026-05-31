@@ -1302,12 +1302,12 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 return {"status": "cancelled",
                         "note": f"Run was cancelled by the user "
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-            plots, tables, warns = harvest_artifacts(cwd, since_ts=start_ts)
+            plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
             out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
                    "returncode": res.returncode, "plots": plots, "tables": tables,
-                   "execution_mode": "session"}
+                   "files": files, "execution_mode": "session"}
             if warns:
                 out["figure_warnings"] = warns
             # A: namespace preview (only on success — probing a half-broken
@@ -1378,10 +1378,10 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-    plots, tables, warns = harvest_artifacts(cwd, since_ts=start_ts)
+    plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
     out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
            "returncode": res.returncode, "plots": plots, "tables": tables,
-           "execution_mode": "session"}
+           "files": files, "execution_mode": "session"}
     if warns:
         out["figure_warnings"] = warns
     # A: namespace preview. B: one-shot prior-run files preamble on cwd switch.
@@ -2845,10 +2845,10 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "cancelled", "note": "nextflow run cancelled by the user."}
 
     from core.exec.run import harvest_artifacts
-    plots, tables, out_files = [], [], []
+    plots, tables, files, out_files = [], [], [], []
     op = Path(outdir)
     if op.exists():
-        plots, tables, _warns = harvest_artifacts(op)
+        plots, tables, files, _warns = harvest_artifacts(op)
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
     return {
         "status": "ok" if res.returncode == 0 else "error",
@@ -2860,6 +2860,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         "outputs": out_files,
         "plots": plots,
         "tables": tables,
+        "files": files,
         "execution_mode": "stateless",
     }
 
