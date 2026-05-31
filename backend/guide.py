@@ -1076,7 +1076,7 @@ async def stream_response(
             if pending_halt_signal != "approval":
                 turn.pending_tool_ids = []
             checkpoint(turn)
-            history = get_messages(entity_id)
+            history = get_messages(entity_id, thread_id=store_tid)
 
             # A halt-requesting tool (plan / clarify) PAUSES the turn:
             # the on_stop reflection hooks are for natural session ends,
