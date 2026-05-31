@@ -106,12 +106,27 @@ def _salvage_step_objects(s: str) -> list[dict]:
 
 def _coerce_string_list(x: Any) -> list[str]:
     """Best-effort: turn a model-supplied "list of strings" into an
-    actual list of strings. Handles already-list inputs, XML-wrapped
-    items, bullet/numbered lines, and bare strings."""
+    actual list of strings. Handles already-list inputs (whose items
+    may themselves be XML-wrapped), XML-wrapped strings, bullet/
+    numbered lines, and bare strings."""
     if x is None:
         return []
     if isinstance(x, list):
-        return [str(item).strip() for item in x if str(item).strip()]
+        # Each list entry might be a clean string OR an "<item>X</item>"
+        # blob OR a multi-item "<item>A</item> <item>B</item>" — the
+        # 2026-05-31 live bug where Haiku emitted expected_outputs as
+        # `["<item>UMAP plot (PNG)</item>"]`. Unwrap any <item> tags.
+        out: list[str] = []
+        for item in x:
+            s = str(item).strip()
+            if not s:
+                continue
+            tagged = _ITEM_TAG_RE.findall(s)
+            if tagged:
+                out.extend(t.strip() for t in tagged if t.strip())
+            else:
+                out.append(s)
+        return out
     if isinstance(x, str):
         s = x.strip()
         if not s:
@@ -122,12 +137,12 @@ def _coerce_string_list(x: Any) -> list[str]:
             return [t.strip() for t in tagged if t.strip()]
         # Newline-separated (with optional bullet/number prefixes)
         if "\n" in s:
-            out: list[str] = []
+            out2: list[str] = []
             for line in s.splitlines():
                 stripped = _LIST_PREFIX_RE.sub("", line).strip()
                 if stripped:
-                    out.append(stripped)
-            return out
+                    out2.append(stripped)
+            return out2
         # Single line — one item
         return [s]
     # Other shapes (dict, int, etc.) → render as string singleton.
@@ -284,13 +299,49 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
             if norm_steps:
                 break
 
+    # Filter out output-shaped strings from assumptions. Models sometimes
+    # cram all step outputs into the `assumptions` list (the plan schema
+    # has no plan-level outputs field, so a confused model invents one
+    # and drops them at the END of assumptions). Walk back-to-front:
+    # trim a trailing run of output-shaped items, but stop the moment we
+    # hit a real assumption — so middle-of-list ambiguous entries stay.
+    raw_assumptions = [_strip_leak(a) for a in _coerce_string_list(raw.get("assumptions"))
+                       if _strip_leak(a)]
+    clean_assumptions = list(raw_assumptions)
+    while clean_assumptions and _looks_like_output(clean_assumptions[-1]):
+        clean_assumptions.pop()
+
     return Plan(
         title=_strip_leak(str(raw.get("title") or "")),
         summary=_strip_leak(str(raw.get("summary") or "")),
         rationale=_strip_leak(str(raw.get("rationale") or "")),
-        assumptions=[_strip_leak(a) for a in _coerce_string_list(raw.get("assumptions")) if _strip_leak(a)],
+        assumptions=clean_assumptions,
         steps=norm_steps,
     )
+
+
+# Heuristic: deliverable / output strings the agent sometimes lists under
+# `assumptions`. Conservative — only catches obvious cases, leaves real
+# scientific assumptions alone.
+_OUTPUT_HINTS_RE = _re.compile(
+    r"^("
+    r"(?:[\w-]+)\.(png|csv|tsv|pdf|svg|jpg|jpeg|h5|h5ad|rds|loom|json|xlsx|parquet|pkl|tab|txt)"  # filenamy
+    r"|.*\((png|csv|tsv|pdf|svg|jpg|jpeg|h5ad|rds)\)\s*$"   # "ElbowPlot (PNG)"
+    r"|(top|cluster)\s+markers?(\s|$)"                       # "Top markers per cluster"
+    r"|(cluster|cell[-\s]?type)\s+(marker|assignment|annotation)s?(\s|$)"
+    r"|(filtered|annotated|normalized)\s+\w*\s*(object|seurat|adata|table)(\s|$)"
+    r"|(umap|tsne|pca)\s+(plot|projection|visualization|reduction)(\s|$)"
+    r"|\w+\s+object\s+with\s+\w+\s+(data|cells|info|matrix|clusters?)(\s|$)"
+    r")",
+    _re.I,
+)
+
+
+def _looks_like_output(s: str) -> bool:
+    s = s.strip()
+    if not s:
+        return False
+    return bool(_OUTPUT_HINTS_RE.match(s))
 
 
 def validate_plan(plan: Plan) -> Plan:

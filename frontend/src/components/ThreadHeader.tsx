@@ -7,6 +7,7 @@
  */
 import { useState } from 'react'
 import type { Entity } from '../types'
+import { AgentGlyph } from './icons'
 import './ThreadHeader.css'
 
 interface OQ { id: string; text: string; status: string; source?: string; answer?: string }
@@ -75,7 +76,11 @@ export default function ThreadHeader({ thread, onChange, onSwitchThread, onOpenF
       <div className="brief__q" onClick={() => setEditingQ(true)}>
         <span className="brief__q-label">Question</span>
         {question || <span className="brief__q-empty">What is this thread investigating?</span>}
-        {meta.question_source === 'guide' && question && <span className="brief__suggested">✦ Guide</span>}
+        {meta.question_source === 'guide' && question && (
+          <span className="brief__suggested" title="Question suggested by Guide. Edit to claim it as yours.">
+            <AgentGlyph agent="guide" size={12} /> Guide
+          </span>
+        )}
       </div>
     )
   )

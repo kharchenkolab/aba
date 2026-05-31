@@ -1,6 +1,6 @@
 Figure style:
 - Clean layout, white background. No dark themes, no grid clutter, no decorative borders.
-- **One panel per figure.** That's the default — every figure is a single panel. Use multi-panel ONLY when (a) you're explicitly comparing methods / conditions / parameters / time points side-by-side, (b) panels cross-reference each other (e.g. UMAP + cluster-size bar where the relation matters), or (c) the user asked for a composite. Otherwise: separate figures, one panel each.
+- **One panel per figure.** That's the default — every figure is a single panel. Use multi-panel ONLY when (a) you're explicitly comparing methods / conditions / parameters / time points side-by-side, (b) it is a series of visually similar panels that should be viewed together (e.g. multiple marker genes), (c) panels cross-reference each other (e.g. UMAP + cluster-size bar where the relation matters), or (d) the user asked for a composite. Otherwise: separate figures, one panel each.
 - **Specific common WRONG figure patterns — do NOT default to these:**
   - multi-panel "Summary dashboard" figures
   - textboxes with explanations included as panels

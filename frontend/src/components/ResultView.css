@@ -27,10 +27,12 @@
 .rv-panel__table:hover { color: var(--accent); }
 .rv-panel__missing { padding: 14px; color: var(--text-4); font-size: 13px; }
 /* Per-figure caption — sits under the image as the figure's legend.
-   Textarea (not input) so multi-sentence captions wrap + auto-size. */
-.rv-panel__caption-row { display: flex; align-items: flex-start; gap: 6px; }
+   Textarea (not input) so multi-sentence captions wrap + auto-size.
+   The AI marker (✨ Guide-generated) floats absolute in the corner so
+   the caption can use the full panel width — without the marker the
+   textarea would have to share row-width with it (the prior layout). */
+.rv-panel__caption-row { position: relative; }
 .rv-panel__caption {
-  flex: 1;
   width: 100%;
   box-sizing: border-box;
   resize: none;
@@ -52,17 +54,15 @@
   border-color: var(--border);
 }
 .rv-panel__ai-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-family: var(--mono);
-  letter-spacing: 0.3px;
-  color: var(--accent);
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  color: var(--guide, var(--accent));
+  opacity: 0.55;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
   user-select: none;
-  margin-top: 4px;
 }
 
 .rv-panel--text { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); padding: 8px 10px; position: relative; }
