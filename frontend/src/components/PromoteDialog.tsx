@@ -6,7 +6,7 @@
  *
  * Used from the FocusCanvas; closes on save (callback) or cancel.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './PromoteDialog.css'
 
 interface Props {
@@ -34,15 +34,23 @@ export default function PromoteDialog({ title, placeholder, prompt, onCancel, on
   }, [onCancel])
 
   // Pre-fill with Guide's best guess (editable). Only seeds if untouched.
+  // Fires ONCE on mount — `suggest` is typically defined inline at the
+  // call site, so depending on it would re-fire this effect on every
+  // parent re-render, leaving the dialog stuck on "Reading Guide's
+  // interpretation…" while parallel fetches piled up. The function is
+  // captured at mount via ref, sidestepping the dep-equality issue.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const suggestRef = useRef(suggest)
   useEffect(() => {
-    if (!suggest) return
+    const fn = suggestRef.current
+    if (!fn) return
     let cancelled = false
-    suggest()
+    fn()
       .then(s => { if (!cancelled && s) setText(t => (t ? t : s)) })
       .catch(() => {})
       .finally(() => { if (!cancelled) setSuggesting(false) })
     return () => { cancelled = true }
-  }, [suggest])
+  }, [])
 
   async function submit() {
     if (!text.trim() || busy) return

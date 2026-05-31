@@ -6,7 +6,7 @@
  * recent figure from this thread; + Note adds inline prose. Members are sections
  * of this one page — never separate destinations.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
 import { EntityGlyph } from './icons'
 import './ResultView.css'
@@ -23,18 +23,29 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }) {
   const members = (result.metadata?.members as ResultMember[]) ?? []
   const interpretation = (result.metadata?.interpretation as string) ?? ''
-  const interpretationOrigin = (result.metadata?.interpretation_origin as string) ?? 'user'
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
   const [titleEdit, setTitleEdit] = useState(false)
   const [title, setTitle] = useState(result.title)
   const [reading, setReading] = useState(interpretation)
+  const [synthesisOpen, setSynthesisOpen] = useState(false)
   const [picker, setPicker] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [focusMember, setFocusMember] = useState<string | null>(null)
 
   useEffect(() => { setReading(interpretation); setTitle(result.title) }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-resize the Result-level synthesis textarea (rarely used, but if
+  // the user writes one we let it grow with the content like the figure
+  // captions do).
+  const readingRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = readingRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }, [reading])
   useEffect(() => {
     if (!zoom) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoom(null) }
@@ -81,7 +92,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     onChange()
   }
   const removeMember = (mid: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'DELETE')
-  const saveCaption = (mid: string, caption: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'PATCH', { caption })
+  const saveCaption = (mid: string, caption: string, origin: 'user' = 'user') =>
+    api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'PATCH', { caption, caption_origin: origin })
   const saveText = (mid: string, text: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'PATCH', { text })
   const move = (idx: number, dir: -1 | 1) => {
     const ids = members.map(m => m.id)
@@ -106,16 +118,6 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
       )}
 
-      {/* Reading — the headline interpretation of the observation. Tagged ✨ AI
-          when interpretation_origin='ai'; first user edit flips origin to 'user'. */}
-      <div className="rv__reading-row">
-        <textarea className="rv__reading" value={reading} placeholder="What does this show? (one-line reading)"
-                  onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
-        {interpretationOrigin === 'ai' && (
-          <span className="rv__ai-tag" title="AI-generated from the thread's context. Edit to claim it as yours.">✨ AI</span>
-        )}
-      </div>
-
       <div className="rv__members">
         {members.map((m, i) => (
           <MemberPanel key={m.id} member={m} idx={i} count={members.length}
@@ -130,6 +132,23 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         ))}
         {members.length === 0 && <div className="rv__empty">Empty result — add a panel or a note below.</div>}
       </div>
+
+      {/* Result-level synthesis — OPTIONAL. The figure caption lives on the
+          MEMBER (under the image, where it belongs); this textarea is only
+          for an explicit cross-evidence synthesis the user writes (e.g.
+          "the QC + clustering together suggest…"). Quiet by default —
+          collapsed to a small "+ Add synthesis" affordance until used. */}
+      {(reading.trim() || synthesisOpen) ? (
+        <div className="rv__reading-row">
+          <textarea ref={readingRef} className="rv__reading" value={reading}
+                    placeholder="Synthesis across panels (optional)…"
+                    onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+        </div>
+      ) : (
+        <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
+          + Add a synthesis across panels (optional)
+        </button>
+      )}
 
       <div className="rv__add">
         <div className="rv__add-row">
@@ -180,7 +199,7 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   onZoom: (url: string) => void
   onRemove: (mid: string) => void
   onMove: (idx: number, dir: -1 | 1) => void
-  onCaption: (mid: string, caption: string) => void
+  onCaption: (mid: string, caption: string, origin: 'user') => void
   onText: (mid: string, text: string) => void
   onFocus: (id: string) => void
   onDiscuss?: () => void
@@ -188,6 +207,26 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const [caption, setCaption] = useState(member.caption ?? '')
   const [text, setText] = useState(member.text ?? '')
   useEffect(() => { setCaption(member.caption ?? ''); setText(member.text ?? '') }, [member.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Pick up server-side updates to the caption (background auto_interpret
+  // daemon completes ~1-3s after pin) — but only if the user hasn't started
+  // editing locally (i.e. local is still empty OR matches the OLD server
+  // value). Prevents the daemon's write from clobbering an in-flight edit.
+  useEffect(() => {
+    setCaption(prev => (prev === '' || prev === member.caption ? (member.caption ?? '') : prev))
+  }, [member.caption])
+
+  // Auto-resize the caption textarea to its content. The figure caption is
+  // a free-form paragraph (per the new prompt), not a one-liner — without
+  // auto-resize the bottom of a multi-sentence caption gets cut off.
+  const capRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = capRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }, [caption])
+
+  const captionOrigin = (member as { caption_origin?: 'ai' | 'user' }).caption_origin ?? 'user'
 
   const controls = (
     <span className="rv-panel__ctl">
@@ -219,8 +258,14 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           : <div className="rv-panel__missing">{cell?.title ?? `${member.kind} (unavailable)`}</div>}
         {controls}
       </div>
-      <input className="rv-panel__caption" value={caption} placeholder="Add a caption…"
-             onChange={e => setCaption(e.target.value)} onBlur={() => onCaption(member.id, caption)} />
+      <div className="rv-panel__caption-row">
+        <textarea ref={capRef} className="rv-panel__caption" value={caption} placeholder="Add a caption…" rows={1}
+                  onChange={e => setCaption(e.target.value)}
+                  onBlur={() => { if (caption !== (member.caption ?? '')) onCaption(member.id, caption, 'user') }} />
+        {captionOrigin === 'ai' && (
+          <span className="rv-panel__ai-tag" title="AI-generated from the figure + producing code + chat context. Edit to claim it as yours.">✨ AI</span>
+        )}
+      </div>
     </div>
   )
 }

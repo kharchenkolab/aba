@@ -2980,12 +2980,22 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
     the files it actually wants (a 10x triplet, say) without dragging derivative
     files (.h5ad, .pkl) that happen to sit in the same dir.
 
+    Targets the **active project's** data dir (`projects/<pid>/data/`) — NOT
+    the module-level `config.DATA_DIR` constant, which resolves once at import
+    to the WORKSPACE-level data dir. The kernel's `os.environ['DATA_DIR']` is
+    the per-project path, so a workspace-level bundle would land somewhere the
+    agent can't see (the 2026-05-31 live bug where the agent reported "the
+    dataset hasn't been registered in DATA_DIR yet" because its `os.listdir`
+    on the project DATA_DIR returned empty).
+
     Returns (bundle_path, present_paths, missing_paths). Hardlinks when on the
     same filesystem; copies otherwise. Numeric suffix on collision."""
     import os, re, shutil
-    from config import DATA_DIR
+    from core.config import current_project_id, project_data_dir
+    pid = current_project_id() or "default"
+    data_dir = project_data_dir(pid)
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (title or "dataset")).strip("_") or "dataset"
-    dest = os.path.join(str(DATA_DIR), slug)
+    dest = os.path.join(str(data_dir), slug)
     base, i = dest, 2
     while os.path.exists(dest):
         dest = f"{base}_{i}"; i += 1

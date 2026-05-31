@@ -132,10 +132,17 @@ function toolRunningLabel(name: string) {
 /** Per-figure pin (a cell can hold several plots — each is its own entity).
  *  Icon-only, hover-reveal in the plot's top-right corner — same style as the
  *  message toolbar buttons. */
-function FigurePin({ entity, onPin }: { entity: Entity; onPin: (id: string, pinned: boolean) => void }) {
+function FigurePin({ entity, isPinned, onPin }: {
+  entity: Entity
+  isPinned: boolean
+  onPin: (id: string, pinned: boolean) => void
+}) {
+  // Optimistic flip on click for instant feedback; reconciles with the
+  // authoritative `isPinned` (derived from active Results that include
+  // this figure) once the server confirms. Resets when isPinned changes.
   const [opt, setOpt] = useState<boolean | null>(null)
-  useEffect(() => { setOpt(null) }, [entity.pinned])
-  const pinned = opt ?? entity.pinned
+  useEffect(() => { setOpt(null) }, [isPinned])
+  const pinned = opt ?? isPinned
   return (
     <button
       className={`msg__tool msg__tool--pin ${pinned ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
@@ -233,7 +240,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void,
                       planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
-                      isStreaming?: boolean) {
+                      isStreaming?: boolean, pinnedFigureIds?: Set<string>) {
   const out: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
@@ -268,7 +275,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
             <ZoomableImg src={b.url} alt={b.alt ?? 'plot'} />
             {ent && onPin && (
               <div className="msg-image__tools">
-                <FigurePin entity={ent} onPin={onPin} />
+                <FigurePin entity={ent} isPinned={!!pinnedFigureIds?.has(ent.id)} onPin={onPin} />
               </div>
             )}
           </div>
@@ -403,6 +410,9 @@ interface Props {
   /** Entities (to resolve chat figures) + pin toggle for the capture gesture. */
   entities?: Entity[]
   onPin?: (id: string, pinned: boolean) => void
+  /** Figure IDs currently kept by an active Result — drives the chat pin
+   *  state on re-entry (replaces the dropped `entity.pinned` flag). */
+  pinnedFigureIds?: Set<string>
   /** Keep (pin) a non-entity message as a snapshot, keyed by content. */
   keptKeys?: Set<string>
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
@@ -419,7 +429,7 @@ function msgKey(s: string): string {
   return 'm' + (h >>> 0).toString(36)
 }
 
-export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust }: Props) {
+export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   const visibleBlocks = message.blocks
@@ -430,7 +440,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()

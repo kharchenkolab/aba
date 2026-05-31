@@ -15,13 +15,24 @@
   width: 56px; height: 42px; object-fit: cover; border-radius: 6px;
   border: 1px solid var(--border); cursor: pointer; flex: none; background: var(--page);
 }
+/* Body takes the FULL remaining width — actions live in the top-right
+   corner (absolute) so the caption can extend all the way to the panel's
+   right edge. Title has padding-right to clear the actions visually. */
 .pin-row__body { flex: 1; min-width: 0; }
 .pin-row__title {
   font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-right: 70px;   /* leave room for the action buttons row above */
 }
 .pin-row__title:hover { color: var(--accent); }
-.pin-row__interp { font-size: 12px; color: var(--text-2); font-style: italic; cursor: text; margin-top: 2px; line-height: 1.4; }
+/* Caption: clamped to 2 lines (italic prose). Click expands into the
+   editable input which shows the full text on edit. */
+.pin-row__interp {
+  font-size: 12px; color: var(--text-2); font-style: italic; cursor: text;
+  margin-top: 2px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .pin-row__interp.is-empty { color: var(--text-4); }
 .pin-row__note-text {
   font-size: 12px; color: var(--text-2); margin-top: 2px; line-height: 1.45;
@@ -32,10 +43,21 @@
   width: 100%; box-sizing: border-box; margin-top: 2px; font-size: 12px;
   border: 1px solid var(--accent); border-radius: 5px; padding: 3px 6px; background: var(--page);
 }
-.pin-row__actions { display: flex; align-items: flex-start; gap: 2px; flex: none; }
+/* Actions float in the top-right corner so the body's full width is
+   available for caption text. All three buttons are 14px-icon-only —
+   tightly clustered for a clean corner footprint. */
+.pin-row__actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
 .pin-row__act {
   border: none; background: none; cursor: pointer; color: var(--text-4);
-  font-size: 11px; padding: 2px 5px; border-radius: 5px; height: 20px;
+  font-size: 11px; padding: 3px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .pin-row__act:hover:not(:disabled) { background: var(--tree-active-bg); color: var(--text-2); }
 .pin-row__act:disabled { opacity: 0.4; cursor: default; }
