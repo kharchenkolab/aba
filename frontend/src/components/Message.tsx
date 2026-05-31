@@ -9,6 +9,64 @@ interface Annotation { image: string; note: string }
 const HILITE = 'rgba(253, 224, 71, 0.55)'   // highlighter yellow
 type Pt = { x: number; y: number }
 
+// Concrete shape + position descriptor for a freehand highlight stroke —
+// used in the agent-facing note so the model has explicit language ("upper-
+// right quadrant", "closed loop", "covers ~12% of the figure") instead of
+// only seeing "user marked something" abstractly. All math on normalized
+// (0–1) coords; no DOM access needed.
+function describeStroke(pts: Pt[]): string {
+  if (pts.length < 2) return 'a small mark'
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y)
+  const xmin = Math.min(...xs), xmax = Math.max(...xs)
+  const ymin = Math.min(...ys), ymax = Math.max(...ys)
+  const w = xmax - xmin, h = ymax - ymin
+  const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2
+  // Closed loop heuristic: endpoint distance vs total path length.
+  let pathLen = 0
+  for (let i = 1; i < pts.length; i++) {
+    pathLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+  }
+  const endGap = Math.hypot(pts[0].x - pts[pts.length - 1].x,
+                            pts[0].y - pts[pts.length - 1].y)
+  const closed = pathLen > 0.1 && endGap / pathLen < 0.15
+  const shape =
+    closed                            ? 'a closed loop circling'
+    : (h < 0.05 && w > 0.1)           ? 'a horizontal underline across'
+    : (w < 0.05 && h > 0.1)           ? 'a vertical mark down'
+    : (pathLen < 0.15)                ? 'a small mark on'
+                                      : 'an open stroke across'
+  // Position by bbox center → 3×3 grid label.
+  const col = cx < 0.33 ? 'left' : cx < 0.67 ? 'center' : 'right'
+  const row = cy < 0.33 ? 'top'  : cy < 0.67 ? 'middle' : 'bottom'
+  const quadrant =
+    (row === 'middle' && col === 'center') ? 'the center'
+    : (row === 'middle')                   ? `the ${col} side`
+    : (col === 'center')                   ? `the ${row} edge`
+                                           : `the ${row}-${col} region`
+  // Size as percent of cell area (bbox area, integer percent, lower bound 1).
+  const areaPct = Math.max(1, Math.round(w * h * 100))
+  return `${shape} ${quadrant} of the figure (the marked region covers ~${areaPct}% of the cell area)`
+}
+
+// If the highlighted cell contains an <img> tied to a figure entity, return
+// a short reference for the agent ("The figure is 'GSM5746260: UMAP by Cluster'
+// (fig_abc12)"). Falls back to empty string when the entity isn't known —
+// caller appends its own fallback descriptor.
+function describeHighlightedFigure(cellEl: HTMLElement | null,
+                                   entities: Entity[] | undefined): string {
+  if (!cellEl || !entities || entities.length === 0) return ''
+  const imgs = cellEl.querySelectorAll('img[src]')
+  for (const img of Array.from(imgs)) {
+    const src = (img as HTMLImageElement).getAttribute('src') || ''
+    // Match by artifact URL — figures register with artifact_path =
+    // /artifacts/<pid>/<hash>.png; img.src is the same.
+    const hit = entities.find(e =>
+      e.type === 'figure' && typeof e.artifact_path === 'string' && src.endsWith(e.artifact_path))
+    if (hit) return `The marked figure is "${hit.title}" (${hit.id}).`
+  }
+  return ''
+}
+
 /** A failed turn: error headline, a small retry icon on the right, and an
  *  expandable disclosure for the raw error detail. */
 function ErrorLine({ text, detail, onRetry }: { text: string; detail?: string; onRetry?: () => void }) {
@@ -545,11 +603,19 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
       pts.forEach((p, i) => (i ? ctx.lineTo(p.x * W, p.y * H) : ctx.moveTo(p.x * W, p.y * H)))
       ctx.stroke()
       const b64 = c.toDataURL('image/png').split(',')[1]
-      const desc = msgText ? ` The text of the highlighted message: "${msgText.slice(0, 500)}".` : ''
-      onAnnotate?.({
-        image: b64,
-        note: `The user highlighted a region of a message in the conversation — marked in translucent yellow on the attached image.${desc} Answer about the highlighted region specifically (they may refer to it as "here").`,
-      })
+      const shape = describeStroke(pts)   // shape + position + size, in concrete prose
+      const figCtx = describeHighlightedFigure(el, entities)   // figure entity ref if any
+      const onlyImage = imageUrls.length > 0 && (msgText.trim().length === 0)
+      const target = onlyImage ? 'figure' : 'message'
+      const cellDesc = msgText
+        ? `The highlighted message text: "${msgText.slice(0, 500)}".`
+        : (figCtx || `The marked element is an image in the chat.`)
+      const note =
+        `User highlight (this turn): ${shape} on the attached ${target}. ${cellDesc} ` +
+        `Answer ONLY about what's inside the yellow mark — not the rest of the ${target}. ` +
+        `If the user's question is short or generic ("what is this?", "what are these?"), ` +
+        `interpret it as a question about the marked region.`
+      onAnnotate?.({ image: b64, note })
     } catch { /* rasterize failed — drop the mark */ }
     finally { setBusy(false); onHighlightDone?.(); setStroke([]); strokeRef.current = [] }
   }
