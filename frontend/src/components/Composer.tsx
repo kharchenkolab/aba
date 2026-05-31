@@ -31,6 +31,12 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   // Restore any persisted draft for this thread (the composer unmounts when you
   // switch views, so without this the unsent text would vanish).
   const [value, setValue] = useState<string>(() => (draftKey && sessionStorage.getItem(draftKey)) || '')
+  // Visual feedback for Stop: pressed → "stopping" pulse until the backend's
+  // cancelled-SSE arrives and the parent flips `streaming` to false. Without
+  // this the click had no immediate visual signal — the user thought the
+  // button didn't register and kept hammering it.
+  const [stopping, setStopping] = useState(false)
+  useEffect(() => { if (!streaming) setStopping(false) }, [streaming])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const persist = (v: string) => {
     if (!draftKey) return
@@ -211,9 +217,12 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           <button
             type="button"
             className="composer__stop"
-            onClick={onStop}
-            title="Stop the current turn (kills running work, drops queue)"
-            aria-label="Stop"
+            onClick={() => { setStopping(true); onStop() }}
+            disabled={stopping}
+            title={stopping
+              ? "Stop requested — waiting for the agent to land at a cancel point"
+              : "Stop the current turn (kills running work, drops queue)"}
+            aria-label={stopping ? 'Stopping' : 'Stop'}
           >
             {/* Octagonal stop sign — solid red octagon, thin white
                 border (mimics the real sign), white "STOP" wordmark

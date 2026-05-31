@@ -61,7 +61,9 @@
   "reads_target_recipe",
   "plans",
   "no_premature_code",
-  "reads_then_plans_then_stops"
+  "reads_then_plans_then_stops",
+  "recipe_following",
+  "recipe_following_strict"
  ],
  "env_stubs": {
   "read_skill": "{\"status\": \"ok\", \"name\": \"seurat-scrna\", \"description\": \"Authoritative single-cell RNA-seq QC + clustering + cluster annotation with R/Seurat (v5).\", \"body\": \"scRNA-seq QC + clustering + annotation with R/Seurat v5 (standard PBMC3k workflow). Provision: ensure_capability('Seurat'), then library(Seurat). THE THREE CHOICES THAT DEFINE THE RESULT \\u2014 surface them with present_plan before committing: (1) QC thresholds (subset cutoffs on nFeature_RNA and percent.mt); (2) number of PCs/dims (read off the ElbowPlot); (3) clustering resolution (FindClusters). Steps: ReadMtx -> CreateSeuratObject(min.cells=3,min.features=200) -> PercentageFeatureSet('^MT-') -> subset QC -> NormalizeData -> FindVariableFeatures -> ScaleData -> RunPCA -> FindNeighbors -> FindClusters -> RunUMAP -> JoinLayers -> FindAllMarkers. Load ggplot2 and dplyr explicitly; never library(tidyverse).\"}",

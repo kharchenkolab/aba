@@ -582,7 +582,9 @@
  ],
  "behaviors": [
   "no_pseudoreplication",
-  "no_fabricated_replicates"
+  "no_fabricated_replicates",
+  "recipe_following",
+  "recipe_following_strict"
  ],
  "env_stubs": {
   "read_skill": "{\"status\": \"ok\", \"name\": \"deseq2-r\", \"body\": \"DESeq2 (R): pseudobulk per BIOLOGICAL SAMPLE (>=2/group); with one sample, n=1 per group is invalid \\u2014 use Wilcoxon (sc.tl.rank_genes_groups) for within-sample cluster markers, NEVER per-cell DESeq2 or fabricated replicates.\"}"

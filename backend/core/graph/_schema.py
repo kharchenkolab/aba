@@ -17,10 +17,20 @@ from typing import Optional
 # path" signal (projects.py treats either as single-project mode). Without this
 # the override only flipped SINGLE mode while DB_PATH silently stayed aba.db —
 # so harnesses using it wrote to the real dev DB (test-isolation + DB-safety bug).
+def _default_db_path() -> Path:
+    """Default workspace DB: under ABA_RUNTIME_DIR if set/defaulted; otherwise the
+    legacy backend/aba.db (pre-runtime-split). Resolved lazily so an ABA_RUNTIME_DIR
+    env-var override at startup is honored without importing config here."""
+    rd = os.environ.get("ABA_RUNTIME_DIR")
+    if rd: return Path(rd) / "aba.db"
+    # Match core.config's default so the two stay in lockstep.
+    return Path("/workspace/aba-runtime") / "aba.db"
+
+
 DB_PATH = Path(
     os.environ.get("ABA_DB_PATH")
     or os.environ.get("ABA_DB_PATH_OVERRIDE")
-    or (Path(__file__).parent.parent.parent / "aba.db")
+    or _default_db_path()
 )
 
 # Root entity that hosts any chat not yet scoped to a specific entity.

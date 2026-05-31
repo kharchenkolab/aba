@@ -136,5 +136,11 @@ def _resolve_artifact_disk_path(artifact_path: str | None) -> Path | None:
     if not artifact_path:
         return None
     if artifact_path.startswith("/artifacts/"):
-        return ARTIFACTS_DIR / Path(artifact_path).name
+        parts = artifact_path[len("/artifacts/"):].split("/")
+        if len(parts) == 2 and parts[0] and parts[1]:
+            from core.config import project_artifacts_dir
+            return project_artifacts_dir(parts[0]) / parts[1]
+        if len(parts) == 1:
+            return ARTIFACTS_DIR / parts[0]
+        return None
     return Path(artifact_path) if artifact_path else None

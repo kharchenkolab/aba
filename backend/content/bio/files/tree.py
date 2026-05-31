@@ -43,7 +43,15 @@ def _resolve_disk(artifact_path: Optional[str]) -> Optional[Path]:
     if not artifact_path:
         return None
     if artifact_path.startswith("/artifacts/"):
-        return ARTIFACTS_DIR / Path(artifact_path).name
+        parts = artifact_path[len("/artifacts/"):].split("/")
+        if len(parts) == 2 and parts[0] and parts[1]:
+            # New per-project shape: /artifacts/<pid>/<name>
+            from core.config import project_artifacts_dir
+            return project_artifacts_dir(parts[0]) / parts[1]
+        if len(parts) == 1:
+            # Legacy workspace-level: /artifacts/<name>
+            return ARTIFACTS_DIR / parts[0]
+        return None
     return Path(artifact_path)
 
 
@@ -321,19 +329,19 @@ def _run_output_dirs(entities: list[dict]) -> tuple:
 
 
 def _working_files_node(entities: list[dict]) -> Optional[dict]:
-    """A 'working' folder listing real on-disk files (the project DATA_DIR + its
-    scratch dir) that AREN'T registered entities and don't belong to a Run — so
-    nothing the agent produces is hidden, without duplicating per-Run output (which
+    """A 'working' folder listing real on-disk files (the project's data + work
+    dirs) that AREN'T registered entities and don't belong to a Run — so nothing
+    the agent produces is hidden, without duplicating per-Run output (which
     shows under threads/<t>/runs/<r>/output/). Flagged ephemeral: scratch is GC-able."""
     from pathlib import Path as _P
     try:
-        from core.config import DATA_DIR, WORK_DIR
+        from core.config import project_data_dir, project_work_dir
     except Exception:  # noqa: BLE001
         return None
-    pid = "default"
+    pid = "_workspace"
     try:
         from core.projects import current as _cur
-        pid = _cur() or "default"
+        pid = _cur() or "_workspace"
     except Exception:  # noqa: BLE001
         pass
     shown = frozenset(
@@ -341,12 +349,12 @@ def _working_files_node(entities: list[dict]) -> Optional[dict]:
         for e in entities
         for d in (_resolve_disk(e.get("artifact_path")),) if d
     )
-    run_dirs = _run_output_dirs(entities)          # Run output dirs live under WORK_DIR/<pid>
+    run_dirs = _run_output_dirs(entities)          # Run output dirs live under projects/<pid>/work/
     root = _folder("working", path="working", kind="folder")
     root["ephemeral"] = True
     root["note"] = "Scratch / unregistered files on disk — not kept unless promoted to a dataset."
     budget = [0]
-    for base, label in ((_P(DATA_DIR), "data"), (_P(WORK_DIR) / pid, "scratch")):
+    for base, label in ((_P(project_data_dir(pid)), "data"), (_P(project_work_dir(pid)), "scratch")):
         if not base.exists():
             continue
         label_node = _folder(label, path=f"working/{label}", kind="folder")

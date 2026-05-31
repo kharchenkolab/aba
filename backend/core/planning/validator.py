@@ -236,6 +236,54 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
                 if norm_steps:
                     break
 
+    # Recovery (XML-tagged): some models emit the steps as XML-ish blocks
+    # inline in a *string* field rather than the `steps` array. Pattern:
+    #   <title>...</title> <description>...</description> <expected_outputs>...</expected_outputs> <skill>...</skill>
+    # Without this the chat shows the prose AND a "plan has no steps" error
+    # (observed 2026-05-31). Scan every string value and any string list
+    # entry (assumptions often catches the spillover).
+    if not norm_steps:
+        _tag = lambda t, blob: (_re.search(rf"<{t}>(.*?)</{t}>", blob, _re.S | _re.I) or None)
+        def _emit_from_block(block: str, n: int) -> PlanStep | None:
+            mt = _tag("title", block)
+            md = _tag("description", block)
+            mo = _tag("expected_outputs", block)
+            ms = _tag("skill", block)
+            title = (mt.group(1).strip() if mt else "")
+            desc  = (md.group(1).strip() if md else "")
+            if not title and not desc:
+                return None
+            return PlanStep(
+                n=n,
+                title=title or desc[:120],
+                description=desc,
+                expected_outputs=_coerce_string_list([mo.group(1).strip()] if mo else None),
+                skill=(ms.group(1).strip() if ms else None) or None,
+            )
+
+        def _scan_strings(obj):
+            if isinstance(obj, str):
+                yield obj
+            elif isinstance(obj, list):
+                for x in obj:
+                    yield from _scan_strings(x)
+            elif isinstance(obj, dict):
+                for x in obj.values():
+                    yield from _scan_strings(x)
+
+        for v in _scan_strings(raw):
+            if "<title>" not in v.lower():
+                continue
+            # Split into one block per <title>...</title> ... boundary so each
+            # step's tags stay grouped. Lookahead splits BEFORE each <title>.
+            chunks = _re.split(r"(?=<title>)", v, flags=_re.I)
+            for chunk in chunks:
+                step = _emit_from_block(chunk, len(norm_steps) + 1)
+                if step is not None:
+                    norm_steps.append(step)
+            if norm_steps:
+                break
+
     return Plan(
         title=_strip_leak(str(raw.get("title") or "")),
         summary=_strip_leak(str(raw.get("summary") or "")),

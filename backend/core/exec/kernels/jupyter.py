@@ -103,6 +103,17 @@ def _ensure_r_kernelspec() -> str:
     return _R_SPEC_NAME
 
 
+def _project_data_artifacts() -> tuple[Path, Path]:
+    """Resolve the active project's data + artifacts dirs at session-start time.
+    Falls back to the workspace-level DATA_DIR/ARTIFACTS_DIR (no project active)."""
+    from core import projects
+    from core.config import project_data_dir, project_artifacts_dir
+    pid = projects.current()
+    if pid:
+        return project_data_dir(pid), project_artifacts_dir(pid)
+    return DATA_DIR, ARTIFACTS_DIR
+
+
 def _r_setup_code(cwd: str) -> str:
     """First cell for an R session: project R library ahead of the shared base
     on .libPaths() (r_provisioning.md), then cwd + DATA_DIR (parallel to the
@@ -119,7 +130,8 @@ def _r_setup_code(cwd: str) -> str:
     libline = libpaths_expr(projects.current() or "default")
     libline = (libline + "\n") if libline else ""
     repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
-    return (f"{libline}{repoline}DATA_DIR <- {str(DATA_DIR)!r}\n"
+    data_dir, _ = _project_data_artifacts()
+    return (f"{libline}{repoline}DATA_DIR <- {str(data_dir)!r}\n"
             f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n")
 
 
@@ -127,13 +139,14 @@ def _setup_code(cwd: str) -> str:
     """First cell: replicate the run_python environment in the kernel namespace."""
     from core.config import BIOMNI_DIR
     biomni_line = f"_sys.path.insert(0, {str(BIOMNI_DIR)!r})\n" if BIOMNI_DIR else ""
+    data_dir, _ = _project_data_artifacts()
     return (
         "import sys as _sys, os as _os\n"
         f"{biomni_line}"
         f"_sys.path.append({str(pylib_dir())!r})\n"
         f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
-        f"DATA_DIR = {str(DATA_DIR)!r}\n"
+        f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
     )
 
@@ -148,9 +161,10 @@ def _kernel_env(lang: str, cwd: str) -> dict:
     activated, so without this, packages that load via `micromamba run` fail to
     dlopen in run_r (r_provisioning.md F5)."""
     import os
+    data_dir, artifacts_dir = _project_data_artifacts()
     env = dict(os.environ)
-    env["DATA_DIR"] = str(DATA_DIR)
-    env["ARTIFACTS_DIR"] = str(ARTIFACTS_DIR)
+    env["DATA_DIR"] = str(data_dir)
+    env["ARTIFACTS_DIR"] = str(artifacts_dir)
     env["WORK_DIR"] = str(cwd)
     if lang == "r":
         tenv = tools_env()

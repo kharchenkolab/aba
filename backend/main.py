@@ -43,14 +43,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/artifacts", StaticFiles(directory=str(ARTIFACTS_DIR)), name="artifacts")
+import threading
+
+# Per-project artifacts (post 2026-05-31 reorg) live under
+# projects/<pid>/artifacts/<name>. The URL scheme is /artifacts/<pid>/<name> —
+# served by the route handler below. Legacy single-dir mount removed.
+def _artifact_url_to_path(url: str) -> Path | None:
+    """Resolve an `/artifacts/...` URL stored in an entity record to a disk path.
+    Returns None if the URL doesn't match the expected shape or escapes a project
+    boundary. Single source of truth for URL→file mapping across handlers."""
+    if not url or not url.startswith("/artifacts/"):
+        return None
+    parts = url[len("/artifacts/"):].split("/")
+    if len(parts) == 2 and parts[0] and parts[1] and ".." not in parts[0] and ".." not in parts[1]:
+        # New per-project shape: /artifacts/<pid>/<name>
+        from core.config import project_artifacts_dir
+        return project_artifacts_dir(parts[0]) / parts[1]
+    if len(parts) == 1 and parts[0] and ".." not in parts[0]:
+        # Legacy workspace-level fallback: /artifacts/<name>
+        return ARTIFACTS_DIR / parts[0]
+    return None
+
+
+@app.get("/artifacts/{pid}/{name}")
+def serve_artifact(pid: str, name: str):
+    from core.config import project_artifacts_dir
+    if "/" in name or ".." in name or "/" in pid or ".." in pid:
+        raise HTTPException(400, "invalid artifact path")
+    f = project_artifacts_dir(pid) / name
+    if not f.is_file():
+        raise HTTPException(404, f"artifact {pid}/{name} not found")
+    return FileResponse(str(f))
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
+    # Background-provision the curated shared R base (r_base.yaml: Seurat,
+    # DESeq2/limma/edger/apeglm, tidyverse, cairo, Rcpp*). When everything
+    # is already in the tools env, this completes in ~500ms (two
+    # `micromamba list --json` calls, no solve). When the env is missing a
+    # package, the solve + install runs in this thread — backend stays
+    # responsive throughout. Daemon thread = dies with the process; never
+    # blocks startup.
+    def _provision_r_base_bg():
+        import time as _t
+        try:
+            from content.bio.capabilities import provision_r_base
+            t0 = _t.perf_counter()
+            provision_r_base()
+            dt = _t.perf_counter() - t0
+            if dt > 5:
+                print(f"[r_base] provisioned curated shared R base in {dt:.0f}s", flush=True)
+            else:
+                print(f"[r_base] curated shared R base already provisioned ({dt*1000:.0f}ms)", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[r_base] provision failed (non-fatal — agent can still per-project install): {e}", flush=True)
+    threading.Thread(target=_provision_r_base_bg, name="r_base_provision", daemon=True).start()
     # Pass-E follow-up: any Turn rows in GENERATING/EXECUTING_TOOLS/
     # SUMMARIZING state are from a process that didn't survive; they
     # cannot be resumed (stream + tool dispatch are in-memory). Mark
@@ -242,12 +293,9 @@ def entities_download(entity_id: str):
     if not e.get("artifact_path"):
         raise HTTPException(400, "entity has no artifact to download")
     path_str = e["artifact_path"]
-    # Figures stored as URLs like /artifacts/abc.png — translate to disk.
-    if path_str.startswith("/artifacts/"):
-        from config import ARTIFACTS_DIR
-        path = ARTIFACTS_DIR / Path(path_str).name
-    else:
-        path = Path(path_str)
+    # Figures stored as URLs like /artifacts/<pid>/abc.png — translate to disk.
+    resolved = _artifact_url_to_path(path_str)
+    path = resolved if resolved is not None else Path(path_str)
     if not path.exists():
         raise HTTPException(404, "artifact file is missing on disk")
     # Suggest a reasonable filename based on the entity's title.
@@ -295,10 +343,10 @@ def entities_preview(entity_id: str, limit: int = 20, offset: int = 0):
     offset = max(0, offset)
     if e["type"] in ("dataset", "table") and e["artifact_path"]:
         raw = e["artifact_path"]
-        # Tables are stored as /artifacts/<id>.csv; datasets as disk paths.
-        if raw.startswith("/artifacts/"):
-            from config import ARTIFACTS_DIR
-            path = ARTIFACTS_DIR / Path(raw).name
+        # Tables are stored as /artifacts/<pid>/<id>.csv; datasets as disk paths.
+        resolved = _artifact_url_to_path(raw)
+        if resolved is not None:
+            path = resolved
         else:
             path = Path(raw)
         if path.suffix.lower() in (".csv", ".tsv") and path.exists():
@@ -890,13 +938,21 @@ def result_reorder(rid: str, req: ReorderRequest):
 
 @app.get("/api/entities/{entity_id}/suggest-interpretation")
 def suggest_interpretation(entity_id: str):
-    """Best-guess interpretation for promoting a figure → result: reuse the
-    interpretation Guide already gave in chat (the assistant text right after
-    the figure's tool result). Zero extra tokens."""
+    """Generate a structured figure caption for promoting a figure → result.
+
+    Calls the live LLM with VISION + the figure's producing_code + nearby chat
+    context. The caption has two sections:
+      - **What's shown** — panel-by-panel description (axes, encoding, notations).
+      - **Take-home** — 1-3 bullets stating what the figure demonstrates.
+
+    Earlier behavior just plucked nearby chat text ("Perfect! Now you have...")
+    which produced chat-flavored prose unfit for a permanent record. The
+    text-pluck remains as a fallback if the LLM call fails or vision can't read
+    the file."""
     e = get_entity(entity_id)
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
-    art = e.get("artifact_path")
+    art = e.get("artifact_path") or ""
     msgs = get_messages(WORKSPACE_ID)
 
     def asst_text(m):
@@ -905,7 +961,8 @@ def suggest_interpretation(entity_id: str):
         return " ".join(b.get("text", "") for b in m["content"]
                         if isinstance(b, dict) and b.get("type") == "text").strip()
 
-    # Locate the message whose tool_result produced this figure.
+    # Locate the message whose tool_result produced this figure — used for
+    # nearby chat context AND for the text-pluck fallback.
     prod_idx = None
     for i, m in enumerate(msgs):
         for blk in m["content"]:
@@ -921,20 +978,131 @@ def suggest_interpretation(entity_id: str):
             elif blk.get("type") == "image" and blk.get("url") == art:
                 prod_idx = i
 
-    text = ""
+    # Gather conversation context: a window of user + assistant turns AROUND
+    # the figure — user messages frame the ASK + intent (which the LLM can't
+    # recover from the image alone); assistant text before the figure carries
+    # plan/method context; assistant text after the figure carries the
+    # interpretation in chat. Skip tool_use / tool_result / image blocks
+    # (those are noise here — the figure itself + producing_code carry the
+    # mechanical info). Walk a ±6-turn window around the figure, cap at ~3k
+    # chars to bound token use.
+    def turn_text(m):
+        if m["role"] == "user":
+            parts = []
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    parts.append(b.get("text", ""))
+                elif isinstance(b, str):
+                    parts.append(b)
+            return " ".join(p for p in parts if p).strip()
+        if m["role"] == "assistant":
+            return asst_text(m)
+        return ""
+    chat_context = ""
     if prod_idx is not None:
-        for j in range(prod_idx, min(prod_idx + 4, len(msgs))):  # the interpreting turn follows
-            t = asst_text(msgs[j])
-            if t:
-                text = t
-                break
-    if not text:  # fallback: most recent assistant text
-        for m in reversed(msgs):
-            t = asst_text(m)
-            if t:
-                text = t
-                break
-    return {"text": text[:400]}
+        lo, hi = max(0, prod_idx - 6), min(len(msgs), prod_idx + 4)
+        chunks: list[str] = []
+        for j in range(lo, hi):
+            t = turn_text(msgs[j])
+            if not t: continue
+            role = msgs[j]["role"]
+            tag = "USER" if role == "user" else "AGENT"
+            anchor = " (← figure here)" if j == prod_idx else ""
+            chunks.append(f"[{tag}{anchor}] {t}")
+        chat_context = "\n\n".join(chunks)[:3000]
+
+    producing_code = (e.get("producing_code") or "")[:6000]
+    title = (e.get("title") or "").strip()
+
+    # Try the vision-LLM path first.
+    text = _llm_figure_caption(art, producing_code, chat_context, title)
+
+    # Fallback to text-pluck if the LLM path didn't produce a usable caption.
+    if not text:
+        if prod_idx is not None:
+            for j in range(prod_idx, min(prod_idx + 4, len(msgs))):
+                t = asst_text(msgs[j])
+                if t: text = t; break
+        if not text:
+            for m in reversed(msgs):
+                t = asst_text(m)
+                if t: text = t; break
+    return {"text": text[:1200]}
+
+
+def _llm_figure_caption(artifact_path: str, producing_code: str,
+                        chat_context: str, title: str) -> str:
+    """Generate a structured figure caption via vision LLM. Returns '' on any
+    failure (caller falls back to chat-text pluck). Reads the figure file
+    directly from ARTIFACTS_DIR; caps token usage."""
+    import base64
+    try:
+        if not artifact_path: return ""
+        # Resolve /artifacts/<pid>/<hash>.png → projects/<pid>/artifacts/<hash>.png.
+        fpath = _artifact_url_to_path(artifact_path)
+        if fpath is None or not fpath.is_file(): return ""
+        name = fpath.name
+        suffix = fpath.suffix.lower().lstrip(".")
+        media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                 "webp": "image/webp", "gif": "image/gif"}.get(suffix)
+        if not media: return ""        # PDFs/SVGs not vision-readable here; bail to fallback
+        b64 = base64.b64encode(fpath.read_bytes()).decode("ascii")
+
+        from core.llm import _llm_client
+        from core.config import MODEL
+        client = _llm_client()
+        sys_prompt = (
+            "You are writing a figure caption for a scientist's lab notebook. "
+            "This caption goes into a permanent record — no chat fillers "
+            "(no 'Perfect!', 'Now you have...', 'Great!'), no first-person "
+            "narration, no commentary on what the user should do next.\n\n"
+            "You will receive THREE sources and must use all three:\n"
+            "  - The figure itself (image) — what's actually rendered.\n"
+            "  - The producing code — the mechanical truth of what was computed.\n"
+            "  - The conversation context — the user's ASK (intent / question that\n"
+            "    motivated the figure) and the agent's surrounding commentary.\n"
+            "Cross-check: ground the take-home in what the USER asked AND in what\n"
+            "the code computed.\n\n"
+            "NUMBERS — STRICT RULE: a specific numeric value (a percentage, a\n"
+            "count, a coefficient, a p-value, a fold-change) may appear in your\n"
+            "caption ONLY if it appears VERBATIM in either (a) the producing code\n"
+            "or (b) the conversation context above. Do not 'round to a plausible\n"
+            "value', do not interpolate, do not split-the-difference between two\n"
+            "nearby numbers, do not pull a number from the figure pixels (e.g.\n"
+            "axis tick labels). When you can't quote a specific number, describe\n"
+            "qualitatively — \"the majority of cells\", \"a clear majority\",\n"
+            "\"most genes\", \"approximately three quarters\", \"~70% overlap\".\n"
+            "It is better to be vague-but-honest than precise-but-fabricated.\n\n"
+            "Output markdown with EXACTLY this structure:\n\n"
+            "**What's shown.** Describe panel-by-panel (if multi-panel) or the "
+            "whole figure (if single-panel). For each panel name: what's plotted, "
+            "what the X and Y axes are, what color / shape / size encodes, and "
+            "any notable annotations or thresholds. Be specific (\"UMAP1 vs UMAP2 "
+            "of 9282 cells, colored by Leiden cluster (18 clusters)\"), not generic "
+            "(\"a scatter plot\").\n\n"
+            "**Take-home.** 1-3 short bullet points stating what the figure "
+            "DEMONSTRATES in the context of the user's question. The visual "
+            "conclusion, not the method. Concrete and biological where appropriate.\n\n"
+            "~150 words total. No header lines other than the two bolded labels."
+        )
+        user_blocks = [
+            {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+            {"type": "text", "text":
+                (f"Figure title (from the producer): {title!r}\n\n" if title else "") +
+                f"Producing code:\n```\n{producing_code}\n```\n\n" +
+                (f"Conversation context (user asks + agent narration around the figure):\n{chat_context}\n"
+                 if chat_context else "")},
+        ]
+        r = client.messages.create(
+            model=MODEL,
+            max_tokens=600,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": user_blocks}],
+        )
+        out = " ".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
+        return out
+    except Exception:  # noqa: BLE001 — fallback handles missing-caption case
+        return ""
 
 
 class PinMessageRequest(BaseModel):
@@ -1511,11 +1679,13 @@ def _unique_path(dest: Path) -> Path:
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):
-    """Drop an uploaded file into DATA_DIR, register as a 'dataset' entity."""
+    """Drop an uploaded file into the active project's data dir + register as a
+    'dataset' entity."""
     if not file.filename:
         raise HTTPException(400, "filename missing")
     safe_name = Path(file.filename).name
-    dest = _unique_path(DATA_DIR / safe_name)
+    from core.config import current_project_id, project_data_dir
+    dest = _unique_path(project_data_dir(current_project_id()) / safe_name)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     size = dest.stat().st_size
@@ -1542,7 +1712,9 @@ async def upload_external_result(
     from content.bio.lifecycle.promote import pin_evidence
     if not file.filename:
         raise HTTPException(400, "filename missing")
-    dest = _unique_path(ARTIFACTS_DIR / Path(file.filename).name)
+    from core.config import current_project_id, project_artifacts_dir
+    pid = current_project_id()
+    dest = _unique_path(project_artifacts_dir(pid) / Path(file.filename).name)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     tid = thread_id
@@ -1554,7 +1726,7 @@ async def upload_external_result(
         evidence_kind="figure",
         evidence_payload={
             "title": Path(file.filename).stem,
-            "artifact_path": f"/artifacts/{dest.name}",
+            "artifact_path": f"/artifacts/{pid}/{dest.name}",
             "metadata": {"original_name": file.filename},
         },
         interpretation=(interpretation or None),
@@ -1620,7 +1792,9 @@ async def result_upload_evidence(
     r = _result_or_404(rid)
     if not file.filename:
         raise HTTPException(400, "filename missing")
-    dest = _unique_path(ARTIFACTS_DIR / Path(file.filename).name)
+    from core.config import current_project_id, project_artifacts_dir
+    pid = current_project_id()
+    dest = _unique_path(project_artifacts_dir(pid) / Path(file.filename).name)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     tid = (r.get("metadata") or {}).get("thread_id") or ""
@@ -1629,7 +1803,7 @@ async def result_upload_evidence(
         evidence_kind="figure",
         evidence_payload={
             "title": Path(file.filename).stem,
-            "artifact_path": f"/artifacts/{dest.name}",
+            "artifact_path": f"/artifacts/{pid}/{dest.name}",
             "metadata": {"original_name": file.filename},
         },
         caption=caption, origin="external",
@@ -1657,7 +1831,8 @@ async def upload_url(req: URLUploadRequest):
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(400, "only http(s) URLs are supported")
     name = Path(parsed.path).name or "downloaded.bin"
-    dest = _unique_path(DATA_DIR / name)
+    from core.config import current_project_id, project_data_dir
+    dest = _unique_path(project_data_dir(current_project_id()) / name)
 
     # CDNs (Cloudflare etc.) often reject the default Python-urllib UA.
     req_obj = urllib.request.Request(
@@ -1778,7 +1953,8 @@ def sample_project():
     src = Path(__file__).parent / "data" / "cells.csv"
     if not src.exists():
         raise HTTPException(500, "sample data missing")
-    dest = _unique_path(DATA_DIR / "sample_cells.csv")
+    from core.config import current_project_id, project_data_dir
+    dest = _unique_path(project_data_dir(current_project_id()) / "sample_cells.csv")
     shutil.copyfile(src, dest)
     eid = create_entity(
         entity_type="dataset", title=dest.name, artifact_path=str(dest),
@@ -1997,18 +2173,39 @@ def turn_cancel(run_id: str, req: ResumeRequest):
 
     Idempotent: a second cancel returns {killed: False} (the token's
     already fired). Safe on already-DONE turns — the DB write is a
-    no-op because cancel_turn() checks state."""
+    no-op because cancel_turn() checks state.
+
+    Fallback: if the named run_id has no live token but EXACTLY ONE
+    other turn is in flight, cancel it too. This catches the failure
+    mode where the frontend's currentRunIdRef has gone stale (e.g.
+    the agent's loop spans multiple turns and the manifest event for
+    the latest one hasn't reached the client yet) — the user clearly
+    wants the agent to stop NOW; refusing because of a stale id is
+    worse than cancelling the obvious candidate. With >1 in flight we
+    don't guess — return the active set so the client can be explicit."""
     from core.runtime import cancellation
     from core.runtime.checkpoint import cancel_turn
     reason = req.user_text.strip() or "user cancelled"
 
     killed = False
+    fallback_run_id: str | None = None
     tok = cancellation.get(run_id)
+    active = cancellation.active_run_ids()
     if tok is not None:
         killed = tok.cancel(reason=reason)
+    elif len(active) == 1 and active[0] != run_id:
+        fallback_run_id = active[0]
+        ftok = cancellation.get(fallback_run_id)
+        if ftok is not None:
+            killed = ftok.cancel(reason=reason)
 
     ok = cancel_turn(run_id, reason=reason)
-    return {"ok": ok, "killed": killed, "run_id": run_id}
+    if fallback_run_id and not ok:
+        # If the requested run_id was unknown to the DB layer too,
+        # still mark the actually-cancelled turn as failed.
+        cancel_turn(fallback_run_id, reason=reason)
+    return {"ok": ok, "killed": killed, "run_id": run_id,
+            "fallback_run_id": fallback_run_id, "active": active}
 
 
 @app.get("/api/admin/mcp")

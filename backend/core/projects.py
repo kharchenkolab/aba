@@ -21,12 +21,10 @@ from core.graph import _schema as _schema_mod
 from core.graph._schema import init_db
 from core.graph.entities import update_entity
 
-# BASE is backend/ — the projects/ data dir lives there, beside artifacts/
-# and data/, not under core/. (Pre-Pass-A this was Path(__file__).parent
-# from backend/projects.py.)
-BASE = Path(__file__).parent.parent
-# Override with ABA_PROJECTS_DIR to isolate the registry (tests, eval audits).
-PROJECTS_DIR = Path(os.environ.get("ABA_PROJECTS_DIR") or (BASE / "projects"))
+# Per-project state is consolidated under PROJECTS_DIR/<pid>/ (data, work,
+# artifacts, project.db) — see core.config.project_root() and friends.
+# ABA_PROJECTS_DIR overrides the location for tests/eval-audit isolation.
+from core.config import PROJECTS_DIR  # noqa: E402 — kept here so legacy `from core.projects import PROJECTS_DIR` keeps working
 REGISTRY = PROJECTS_DIR / "registry.json"
 SCRATCH = PROJECTS_DIR / "_scratch.db"   # parked here when no project is active
 SINGLE = bool(os.environ.get("ABA_DB_PATH") or os.environ.get("ABA_DB_PATH_OVERRIDE"))
@@ -53,7 +51,10 @@ def _save(reg: list) -> None:
 
 
 def _db_file(pid: str) -> Path:
-    return PROJECTS_DIR / f"{pid}.db"
+    """Per-project DB file: projects/<pid>/project.db (post 2026-05-31 reorg).
+    Auto-creates the parent project dir so create_project doesn't need to."""
+    from core.config import project_db_path
+    return project_db_path(pid)
 
 
 def _counts(path) -> dict:
