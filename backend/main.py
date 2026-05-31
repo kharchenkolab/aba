@@ -143,6 +143,48 @@ async def startup():
         print(f"[startup] MCP gateway init failed: {e}")
 
 
+@app.on_event("shutdown")
+async def shutdown():
+    """Cancel any in-flight Turn tasks before the worker exits.
+
+    C-1 spawns the agent loop as a background asyncio task via
+    turn_executor.start_turn — without this hook, uvicorn's `--reload`
+    SIGTERM hangs indefinitely because the task is awaiting a thread-pool
+    future (run_in_executor) that Python can't interrupt. We fire the
+    cancel token (which the loop checks at every iteration boundary) so
+    each task gets a chance to commit its in-progress state and exit
+    cleanly, then give them a brief window. Anything still pending after
+    that gets task.cancel() as a hard stop. The startup reaper will mark
+    any survivors FAILED on next boot, so we don't leak Turn rows."""
+    import asyncio
+    from core.runtime import turn_sink, cancellation
+    rids = turn_sink.active_ids()
+    if not rids:
+        return
+    print(f"[shutdown] cancelling {len(rids)} in-flight Turn task(s): {rids}")
+    # 1. Fire cancel tokens — co-operative shutdown if the loop is at an
+    #    iteration boundary or inside a cancellable tool.
+    for rid in rids:
+        tok = cancellation.get(rid)
+        if tok is not None:
+            try: tok.cancel(reason="backend shutdown")
+            except Exception: pass    # noqa: BLE001
+    # 2. Give them a short grace period to land.
+    tasks = [s._task for s in (turn_sink.get(rid) for rid in rids)
+             if s is not None and s._task is not None and not s._task.done()]
+    if tasks:
+        try:
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True),
+                                   timeout=3.0)
+        except asyncio.TimeoutError:
+            print(f"[shutdown] {sum(1 for t in tasks if not t.done())} task(s) "
+                  f"didn't honor cancel — forcing task.cancel()")
+            # 3. Hard cancel — the next startup's reaper will tidy the DB.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
+
 # ---------- Projects ----------
 
 class ProjectRequest(BaseModel):
@@ -2049,18 +2091,21 @@ async def turn_stream(run_id: str, since: int = 0):
 def thread_active_turn(thread_id: str):
     """C-0: is there an in-flight Turn on this thread? Used by the
     frontend on chat mount so a page reload during a long-running cell
-    can re-surface the Stop button (otherwise the user has no recovery
-    path — the SSE generator was cancelled by the reload, but the
-    underlying tool kept running and the DB Turn row stayed in
-    `executing_tools` with no way to clear it).
+    can re-surface the Stop button + re-attach the live stream (C-1).
 
     Source of truth is the DB (Turn rows). If the live in-memory sink
-    is also present (the loop is genuinely still streaming, not just
-    leaked from a CancelledError), include its last_seq so a future
-    C-1 reattach can resume from the right point.
+    is also present, include its last_seq so the C-1 reattach knows
+    where the in-memory tail starts.
+
+    The frontend often sends `thread_id=default` (the project's default
+    investigation, materialized on first message) — same resolution as
+    GET /api/messages: map to the real thread id before querying.
 
     Returns null if no live Turn on this thread."""
     from core.graph._schema import _conn
+    if thread_id == "default":
+        from core.graph.threads import find_default_thread
+        thread_id = find_default_thread() or "default"
     states = ("generating", "executing_tools", "summarizing")
     placeholders = ",".join("?" for _ in states)
     with _conn() as c:
