@@ -125,13 +125,26 @@ def _r_setup_code(cwd: str) -> str:
     a PPM BINARY (source-compiling only when no binary exists), instead of the
     slow source build a bare `install.packages(..., repos='cloud.r-project.org')`
     triggers. `type='source'` still forces a source build on demand."""
+    import os as _os
     from core import projects
     from core.exec.r import libpaths_expr, cran_repo, _ppm_ua_expr
     libline = libpaths_expr(projects.current() or "default")
     libline = (libline + "\n") if libline else ""
     repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
+    # Pin IRkernel's plot DPI so harvested PNGs have a consistent pixel
+    # size across sessions. IRkernel's default `repr.plot.res` varies by
+    # version (72 in older, 120 in newer) — that variation translated into
+    # huge-vs-normal fonts in chat depending on which session you were in,
+    # because the chat scales each PNG to a fixed CSS width and a 504-px
+    # plot gets upscaled much more than a 960-px one. ABA_R_PLOT_RES
+    # overrides for the rare case where a project wants different defaults.
+    try:
+        _res = max(40, int(_os.environ.get("ABA_R_PLOT_RES", "120")))
+    except ValueError:
+        _res = 120
+    plotline = f"options(repr.plot.res={_res})\n"
     data_dir, _ = _project_data_artifacts()
-    return (f"{libline}{repoline}DATA_DIR <- {str(data_dir)!r}\n"
+    return (f"{libline}{repoline}{plotline}DATA_DIR <- {str(data_dir)!r}\n"
             f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n")
 
 
