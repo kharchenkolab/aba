@@ -1,14 +1,19 @@
 """
 LLM provider seam.
 
-`open_stream(history)` returns a context-manager-shaped object that the guide
-loop iterates over (yielding content_block_start/_delta/_stop and message_stop
-events) and then calls `.get_final_message()` on.
+`open_stream(history)` returns an ASYNC context-manager-shaped object that the
+guide loop iterates over (yielding content_block_start/_delta/_stop and
+message_stop events) and then awaits `.get_final_message()` on.
 
 Two implementations:
-  - RealStream — wraps anthropic.Anthropic().messages.stream(...)
+  - RealStream — wraps anthropic.AsyncAnthropic().messages.stream(...). Async
+                 so guide.py's `async for event in stream:` doesn't park the
+                 event loop on the sync SSE iterator (the bug behind 2026-05-31
+                 "Files tab loads forever while agent is thinking"; sync iter
+                 blocks the loop between events).
   - FakeStream — replays scripted assistant turns from a JSONL file
-                 (no API calls; tool execution still runs for real)
+                 (no API calls; tool execution still runs for real). Implements
+                 the same async interface so guide.py's path is uniform.
 
 Fixture format (one JSON object per line, one object = one assistant turn):
   {"blocks": [{"type": "text", "text": "..."},
@@ -23,7 +28,7 @@ import os
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterator, List, Dict, Any
+from typing import AsyncIterator, List, Dict, Any
 
 from core.config import API_KEY, MODEL, FAKE_SESSION
 
@@ -31,7 +36,9 @@ from core.config import API_KEY, MODEL, FAKE_SESSION
 # ---------- Real provider ----------
 
 class _RealStream:
-    """Adapter around anthropic's streaming context manager — same shape we use."""
+    """Adapter around anthropic's ASYNC streaming context manager — guide.py
+    consumes it with `async with` + `async for`, so the event loop stays
+    responsive to other HTTP requests while the LLM is generating."""
     def __init__(self, client, history, tools, system: str, model: str):
         self._client = client
         self._history = history
@@ -41,7 +48,7 @@ class _RealStream:
         self._cm = None
         self._stream = None
 
-    def __enter__(self):
+    async def __aenter__(self):
         # Prompt caching: mark the large static prefix (system + tools) and the
         # conversation prefix so repeated turns re-read them cheaply instead of
         # re-charging full input each time. Up to 4 breakpoints; we use 3.
@@ -81,17 +88,17 @@ class _RealStream:
         self._cm = self._client.messages.stream(
             model=self._model, max_tokens=4096, system=system, tools=tools, messages=messages,
         )
-        self._stream = self._cm.__enter__()
+        self._stream = await self._cm.__aenter__()
         return self
 
-    def __exit__(self, *exc):
-        return self._cm.__exit__(*exc)
+    async def __aexit__(self, *exc):
+        return await self._cm.__aexit__(*exc)
 
-    def __iter__(self):
-        return iter(self._stream)
+    def __aiter__(self):
+        return self._stream.__aiter__()
 
-    def get_final_message(self):
-        return self._stream.get_final_message()
+    async def get_final_message(self):
+        return await self._stream.get_final_message()
 
 
 def _oauth_bearer():
@@ -111,16 +118,20 @@ def _oauth_bearer():
 
 
 def _llm_client():
-    """Live-agent Anthropic client. Default = project .env API key. ABA_LLM_CREDENTIAL=oauth
-    (dev/eval ONLY — never production serving on a personal subscription) uses the Claude Code
-    OAuth bearer instead, billing the subscription. Resolved per call so a refreshed stored
-    token is picked up; falls back to the .env key if no token is available."""
+    """Live-agent Anthropic ASYNC client. Default = project .env API key.
+    ABA_LLM_CREDENTIAL=oauth (dev/eval ONLY — never production serving on a personal
+    subscription) uses the Claude Code OAuth bearer instead, billing the subscription.
+    Resolved per call so a refreshed stored token is picked up; falls back to the
+    .env key if no token is available.
+
+    Returns `AsyncAnthropic` (not the sync `Anthropic`) so guide.py's streaming
+    loop can iterate events without parking the event loop — fixed 2026-05-31."""
     import anthropic
     if os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower() == "oauth":
         tok = _oauth_bearer()
         if tok:
-            return anthropic.Anthropic(auth_token=tok)
-    return anthropic.Anthropic(api_key=API_KEY)
+            return anthropic.AsyncAnthropic(auth_token=tok)
+    return anthropic.AsyncAnthropic(api_key=API_KEY)
 
 
 def _real_factory():
@@ -171,13 +182,16 @@ class _FakeStream:
             else "end_turn"
         )
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *exc):
+    async def __aexit__(self, *exc):
         return False
 
-    def __iter__(self) -> Iterator[SimpleNamespace]:
+    def __aiter__(self) -> AsyncIterator[SimpleNamespace]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[SimpleNamespace]:
         for block in self._final_content:
             if block.type == "text":
                 yield _ns(type="content_block_start",
@@ -197,7 +211,7 @@ class _FakeStream:
                 yield _ns(type="content_block_stop")
         yield _ns(type="message_stop")
 
-    def get_final_message(self):
+    async def get_final_message(self):
         return _ns(content=self._final_content, stop_reason=self._stop_reason)
 
 

@@ -514,6 +514,7 @@ async def stream_response(
     prompt_ctx = {
         "focus_is_figure": bool(focus_ent and focus_ent.get("type") in ("figure", "view")),
         "highlight_active": bool(annotation_image),
+        "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
     system = focus_text + thread_text + build_system(
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
@@ -571,8 +572,18 @@ async def stream_response(
             # Request-time safety net for middle-orphan history (assistant
             # → assistant without an intervening user). The Turn reaper
             # handles trailing orphans; this catches the rest.
+            #
+            # 2026-05-31: effective_history() may make a SYNCHRONOUS Haiku
+            # call (rolling.py's _summarize) when the conversation exceeds
+            # SUMMARY_THRESHOLD. On the asyncio loop that parked the event
+            # loop for the entire 2–3s LLM roundtrip — observed via the
+            # off-loop sampler as the cause of "Files tab spins, chat
+            # figures don't appear". Offload to a thread so other coroutines
+            # (file-tree GET, /artifacts/<pid>/<name>, SSE flush) keep
+            # running. The summarize call itself remains sync internally —
+            # only the wait is moved off the loop.
             llm_history = _ensure_tool_pair_completeness(
-                effective_history(WORKSPACE_ID, history)
+                await asyncio.to_thread(effective_history, WORKSPACE_ID, history)
             )
 
             # Open + consume the stream, retrying transient API failures
@@ -585,11 +596,16 @@ async def stream_response(
             while True:
                 emitted = False
                 try:
-                    with open_stream(llm_history, active_tools, system, model=guide_model) as stream:
-                        for event in stream:
+                    # Async stream (2026-05-31 switch to AsyncAnthropic): `async for`
+                    # awaits the underlying HTTP read, so the event loop stays free
+                    # for OTHER HTTP requests (Files tab polling, /artifacts image
+                    # GETs, etc.) while the model is generating. The pre-fix
+                    # sync iteration parked the loop on each `next()` call.
+                    async with open_stream(llm_history, active_tools, system, model=guide_model) as stream:
+                        async for event in stream:
                             # Cancel check inside the streaming loop. Bail
                             # immediately so we stop paying for tokens the
-                            # user no longer wants. The 'with' block
+                            # user no longer wants. The 'async with' block
                             # closes the underlying HTTP connection.
                             if cancel_token.cancelled:
                                 break
@@ -598,20 +614,12 @@ async def stream_response(
                                 if delta.type == "text_delta":
                                     emitted = True
                                     yield sse({"type": "delta", "text": delta.text})
-                            # Yield to the event loop on EVERY event, not just text
-                            # deltas. While the model generates a tool call, content
-                            # arrives as input_json_delta (no text yield) — without
-                            # this the async generator would monopolize the loop for
-                            # the whole generation, freezing concurrent requests
-                            # (e.g. GET /api/files/tree → stuck "Loading…" until the
-                            # action finishes).
-                            await asyncio.sleep(0)
                         if cancel_token.cancelled:
                             # Cancelled mid-stream — skip get_final_message
                             # (the partial message isn't usable) and let the
                             # outer loop check pick it up and emit cancelled.
                             break
-                        final_msg = stream.get_final_message()
+                        final_msg = await stream.get_final_message()
                     if getattr(final_msg, "usage", None):
                         u = final_msg.usage
                         usage_in += u.input_tokens or 0
@@ -888,11 +896,21 @@ async def stream_response(
                     for ev in evs:
                         yield sse({"type": "tool_progress", "name": tool_name,
                                    "message": ev.get("message"), "phase": ev.get("phase")})
+                        # 2026-05-31: explicit event-loop yield between SSE emits.
+                        # Without this, chatty cells (R/Seurat progress bars print
+                        # dozens of `0%…100%` lines per cell) churn through the
+                        # inner for-loop in tight succession — `yield sse(...)` is
+                        # a consumer-driven suspension that Starlette pulls fast,
+                        # so OTHER coroutines (GET /api/files/tree, /artifacts/…)
+                        # never get a slot. The async-LLM fix earlier covered the
+                        # LLM-streaming phase; this covers tool-progress streaming.
+                        await asyncio.sleep(0)
                     if not evs:
                         await asyncio.sleep(0.2)
                 for ev in _drain_progress():   # flush the tail
                     yield sse({"type": "tool_progress", "name": tool_name,
                                "message": ev.get("message"), "phase": ev.get("phase")})
+                    await asyncio.sleep(0)
                 result_str = await _fut
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
                 result_obj = json.loads(result_str)

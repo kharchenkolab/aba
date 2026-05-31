@@ -32,6 +32,10 @@ _BIO_ROOT = _HERE.parent  # backend/content/bio/
 # A ContextVar (not a plain global) keeps concurrent assemblies — Guide turn
 # vs. advisor/sub-agent — from clobbering each other's intent.
 _INTENT: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_intent", default="")
+# Per-assembly thread_id, so blocks can pull thread-scoped state (e.g. recipes the
+# agent declared on `present_plan.steps[].skill` in earlier turns) without changing
+# every block's render signature.
+_THREAD_ID: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_thread_id", default="")
 
 
 @lru_cache(maxsize=None)
@@ -275,6 +279,58 @@ def _highlight_relevant(c: dict) -> bool:
     return bool(c.get("highlight_active") or c.get("focus_is_figure"))
 
 
+def _has_declared_recipes(c: dict) -> bool:
+    """Render the declared-recipes block only when the agent has named >=1 recipe
+    on a present_plan step.skill field in this thread."""
+    tid = str(c.get("thread_id") or "")
+    if not tid: return False
+    try:
+        from content.bio.tools import _THREAD_DECLARED_RECIPES
+        return bool(_THREAD_DECLARED_RECIPES.get(tid))
+    except Exception:
+        return False
+
+
+def _declared_recipes_block(active_tools: list[dict]) -> str:
+    """Inject the BODIES of recipes the agent declared on its plan's step.skill
+    fields, each LABELED with the specific plan step(s) that declared it
+    (#324 Phase 3 — step-labeled). The label says e.g. "for step 4 (DESeq2…)
+    — use `deseq2-r`" so the agent can't leak APIs across steps. Agent-driven:
+    if the agent didn't bind a recipe to a step, none is pushed."""
+    tid = _THREAD_ID.get() or ""
+    if not tid: return ""
+    try:
+        from content.bio.tools import _THREAD_DECLARED_RECIPES
+        from core.skills import get_skill
+    except Exception:
+        return ""
+    bindings = _THREAD_DECLARED_RECIPES.get(tid) or []
+    if not bindings: return ""
+    # Group steps by recipe so each recipe body appears once, listing all
+    # bound steps. Preserve first-mention order across the plan.
+    by_recipe: dict[str, list[tuple[int, str]]] = {}
+    order: list[str] = []
+    for step_i, title, rn in bindings:
+        if rn not in by_recipe:
+            by_recipe[rn] = []; order.append(rn)
+        by_recipe[rn].append((step_i, title))
+    parts: list[str] = ["## Recipes you declared in your plan — bound to specific steps"]
+    for rn in order:
+        spec = get_skill(rn)
+        body = getattr(spec, "body", None) if spec else None
+        if not body: continue
+        slots = by_recipe[rn]
+        labels = ", ".join(f"step {i}" + (f" ({t[:60]})" if t else "") for i, t in slots)
+        parts.append(
+            f"\n### `{rn}` — declared for: {labels}\n"
+            f"Apply this recipe's APIs and ordering ONLY for the listed step(s); "
+            f"other steps may use a different recipe or none.\n\n{body}")
+    if len(parts) == 1: return ""   # nothing resolved → don't emit the header
+    parts.append("\nIf a step actually needs a different recipe than you bound to it, "
+                 "present a revised plan rather than coding around the binding.")
+    return "\n".join(parts)
+
+
 _BLOCKS: tuple[_Block, ...] = (
     _Block("identity",     None,                   None,             _md("identity.md")),
     # Non-negotiables (integrity invariants) — 'nonneg' arm only; isolated + salient
@@ -291,6 +347,9 @@ _BLOCKS: tuple[_Block, ...] = (
     _Block("highlighting", frozenset({"primary"}), None,             _md("highlighting.md"),
            gate=_highlight_relevant),
     _Block("conventions",  None,                   None,             _conventions),
+    # Figure-style directive — clean layout, one panel by default, ggplot2 in R,
+    # alpha-blending on dense scatters. Primary only (advisors don't draw figures).
+    _Block("figures",      frozenset({"primary"}), None,             _md("figures.md")),
     # Skills index — primary only, gated on read_skill so a deployment
     # that doesn't enable the tool also doesn't advertise the catalog.
     _Block("skills",       frozenset({"primary"}), "read_skill",     _skills_index),
@@ -306,6 +365,10 @@ _BLOCKS: tuple[_Block, ...] = (
     _Block("data_orientation", frozenset({"primary"}), None, _md("data_orientation.md"),
            gate=lambda c: (os.environ.get("ABA_DATA_SUMMARY") or "on").lower() != "off"),
     _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
+    # Agent-declared recipes pinned for the rest of the thread (#324 Phase 2).
+    # Renders only when the agent has populated >=1 step.skill on present_plan.
+    _Block("declared_recipes", frozenset({"primary"}), "present_plan",
+           _declared_recipes_block, gate=_has_declared_recipes),
 )
 
 
@@ -327,6 +390,7 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
     every turn. Missing/empty ctx → those gated blocks simply don't render."""
     token = _INTENT.set(intent or "")
     ctx = ctx or {}
+    tid_token = _THREAD_ID.set(str(ctx.get("thread_id") or ""))
     try:
         names = {t["name"] for t in active_tools}
         parts: list[str] = []
@@ -343,3 +407,4 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
         return "\n\n".join(parts)
     finally:
         _INTENT.reset(token)
+        _THREAD_ID.reset(tid_token)

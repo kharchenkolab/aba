@@ -70,3 +70,18 @@
   transition: color 0.15s, transform 0.15s;
 }
 .composer__stop:hover { color: #b91c1c; transform: scale(1.06); }
+/* While the backend hasn't yet confirmed cancel: dim + pulse the octagon so
+   the user has SOME feedback that their click registered. The state resets
+   when the assistant stream actually ends. */
+.composer__stop[disabled] {
+  cursor: progress;
+  color: #9ca3af;
+  opacity: 0.7;
+  animation: composer__stop-pulse 0.9s ease-in-out infinite;
+  transform: none;
+}
+.composer__stop[disabled]:hover { color: #9ca3af; transform: none; }
+@keyframes composer__stop-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.85; }
+}

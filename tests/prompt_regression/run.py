@@ -17,7 +17,11 @@ ap.add_argument("--cases", default="all")
 ap.add_argument("--variants", default="current")
 ap.add_argument("--reps", type=int, default=16)
 ap.add_argument("--workers", type=int, default=12, help="concurrent rollouts across the whole matrix")
-ap.add_argument("--capture", default=None, help="dir to persist full trajectories for the judge layer")
+# Capture is MANDATORY: full trajectories always persisted under results/raw/<ts>/.
+# Re-running the API to fix a scorer is the trap we keep hitting. Override path
+# with --capture <dir>; cannot be disabled (rescore.py + judge passes + manual
+# spot-check all depend on this).
+ap.add_argument("--capture", default="auto", help="dir to persist trajectories ('auto' = results/raw/<ts>/, default)")
 ap.add_argument("--baseline", default=None)         # compare to stored baseline, flag regressions
 ap.add_argument("--save-baseline", default=None)
 ap.add_argument("--noise", type=float, default=0.2)  # |delta| below this = within-noise
@@ -27,7 +31,11 @@ case_files = (sorted(glob.glob(os.path.join(HERE, "cases", "*.json"))) if a.case
               else [os.path.join(HERE, "cases", c + ".json") for c in a.cases.split(",")])
 cases = [json.load(open(cf)) for cf in case_files]
 variant_items = [(v, VARIANTS[v]) for v in a.variants.split(",")]
-capture = (a.capture if not a.capture or os.path.isabs(a.capture) else os.path.join(HERE, a.capture))
+if a.capture == "auto":
+    import datetime as _dt
+    capture = os.path.join(HERE, "results", "raw", _dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
+else:
+    capture = a.capture if os.path.isabs(a.capture) else os.path.join(HERE, a.capture)
 
 matrix = run_matrix(cases, variant_items, reps=a.reps, workers=a.workers, capture_dir=capture)
 

@@ -331,9 +331,24 @@ function ToolLine({ block, result }: {
   result?: Extract<Block, { type: 'tool_result' }>
 }) {
   const [showCode, setShowCode] = useState(false)
+  const [showOut, setShowOut] = useState(false)
   const done = !!result
   const hasError = done && 'error' in result!.result
   const code = typeof block.input?.code === 'string' ? (block.input.code as string) : ''
+  // Build a textual rendering of the tool's stdout/stderr (post-2026-05-31:
+  // chat-side counterpart to "script" — peek at what the cell actually printed).
+  // Structured fields (plots, tables) render elsewhere in the chat already;
+  // here we surface the raw text streams + the error blob when there is one.
+  const out: string = (() => {
+    if (!result) return ''
+    const r = result.result as Record<string, unknown> | undefined
+    if (!r || typeof r !== 'object') return ''
+    if (typeof r.error === 'string' && r.error) return r.error
+    const parts: string[] = []
+    if (typeof r.stdout === 'string' && r.stdout) parts.push(r.stdout)
+    if (typeof r.stderr === 'string' && r.stderr) parts.push('--- stderr ---\n' + r.stderr)
+    return parts.join('\n')
+  })()
   return (
     <div className={`tool-line ${done ? (hasError ? 'tool-line--err' : 'tool-line--done') : 'tool-line--run'}`}>
       <div className="tool-line__row">
@@ -350,11 +365,17 @@ function ToolLine({ block, result }: {
         )}
         {code && (
           <button className="tool-line__script-toggle" onClick={() => setShowCode(s => !s)}>
-            {showCode ? 'Hide script' : 'Show script'}
+            {showCode ? 'Hide script' : 'script'}
+          </button>
+        )}
+        {out && (
+          <button className="tool-line__script-toggle" onClick={() => setShowOut(s => !s)}>
+            {showOut ? 'Hide output' : 'output'}
           </button>
         )}
       </div>
       {code && showCode && <pre className="tool-line__code"><code>{code}</code></pre>}
+      {out && showOut && <pre className="tool-line__code"><code>{out}</code></pre>}
     </div>
   )
 }

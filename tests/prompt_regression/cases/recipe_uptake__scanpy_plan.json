@@ -330,7 +330,9 @@
   "reads_target_recipe",
   "plans",
   "no_premature_code",
-  "reads_then_plans_then_stops"
+  "reads_then_plans_then_stops",
+  "recipe_following",
+  "recipe_following_strict"
  ],
  "env_stubs": {
   "read_skill": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}",

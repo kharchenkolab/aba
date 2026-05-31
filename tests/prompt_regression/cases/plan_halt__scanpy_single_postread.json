@@ -74,7 +74,9 @@
  "behaviors": [
   "plans",
   "no_premature_code",
-  "reads_then_plans_then_stops"
+  "reads_then_plans_then_stops",
+  "recipe_following",
+  "recipe_following_strict"
  ],
  "env_stubs": {
   "read_skill": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy processing for ONE scRNA-seq sample.\", \"body\": \"scRNA-seq QC + first-pass clustering (scanpy). Halt and present_plan before running on an unfamiliar dataset \\u2014 the QC thresholds and the clustering resolution are dataset-dependent. Steps: sc.read_10x_mtx; calculate_qc_metrics; filter cells (n_genes>=200) & genes; filter pct_counts_mt; normalize_total(target_sum=1e4)+log1p; highly_variable_genes; scale; pca; neighbors; leiden; umap; rank_genes_groups (wilcoxon) for markers. Plots: QC violin, HVG, UMAP colored by leiden, marker dotplot.\"}",

@@ -143,6 +143,10 @@ export function useChat(
 ) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [streaming, setStreaming] = useState(false)
+  // Ref-shadow of `streaming` so the Stop button's setTimeout-retry can
+  // read the latest value (state closure would freeze at click time).
+  const streamingRef = useRef(false)
+  useEffect(() => { streamingRef.current = streaming }, [streaming])
   const [loading, setLoading] = useState(false)   // fetching a thread's history
   const [streamMsg, setStreamMsg] = useState<DisplayMessage | null>(null)
   const [manifest, setManifest] = useState<ManifestSnapshot | null>(null)
@@ -510,17 +514,26 @@ export function useChat(
   // Cancel the in-flight turn. Stop = pure cancel; queue is DROPPED
   // (user reasserts control). The 'cancelled' SSE handler sees
   // steerFlushRef=false and clears the queue without sending it.
+  //
+  // 2026-05-31: the backend's POST always returns 200 — `killed:false`
+  // when the named token isn't live (e.g. our `currentRunIdRef` went
+  // stale across turn boundaries). The backend falls back to the lone
+  // active turn when there's exactly one; we also retry once after
+  // 2.5s if streaming is still up — covers the race where the first
+  // cancel hits between turns.
   const stopTurn = useCallback(async () => {
     const rid = currentRunIdRef.current
     if (!rid) return
     steerFlushRef.current = false   // make sure cancelled-handler treats this as Stop
-    try {
-      await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-    } catch { /* best-effort; if the request fails the user can hit Stop again */ }
+    const fire = () => fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).catch(() => null)
+    await fire()
+    setTimeout(() => {
+      if (streamingRef.current && currentRunIdRef.current) fire()
+    }, 2500)
   }, [])
 
   // Enqueue: type-while-streaming. Will auto-flush when the current

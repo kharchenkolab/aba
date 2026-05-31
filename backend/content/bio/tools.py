@@ -721,14 +721,15 @@ TOOL_SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path to the dataset file or directory in the project."},
+                "path": {"type": "string", "description": "Single file or directory to register as the dataset. Use this for one-file/one-dir datasets."},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "List of specific files to bundle as ONE dataset. Use this when you want only a subset of files in a directory (e.g. just the 10x triplet, excluding a sibling .h5ad). The listed files are linked into a fresh bundle directory under DATA_DIR. Mutually exclusive with `path` — provide one OR the other."},
                 "title": {"type": "string", "description": "Human-readable dataset name."},
                 "summary": {"type": "string", "description": "One-line description (dims, organism, condition)."},
                 "source": {"type": "string", "description": "Provenance, e.g. 'GEO:GSM5746259' or 'upload'."},
                 "organism": {"type": "string"},
                 "producing_code": {"type": "string", "description": "The code that produced/fetched it (kept for provenance)."},
             },
-            "required": ["path", "title"],
+            "required": ["title"],
         },
     },
     {
@@ -878,14 +879,11 @@ def list_data_files(_input: dict) -> dict:
     files are stored globally (content-addressed) but each project only *contains*
     the datasets registered as entities in its DB, so we list those."""
     from pathlib import Path as _Path
-    from core.graph.entities import list_entities
     files = []
     registered_names = set()
-    for e in list_entities(include_archived=False):
-        if e.get("type") != "dataset":
-            continue
-        path = e.get("artifact_path")
-        name = _Path(path).name if path else e.get("title", "")
+    for d in _registered_datasets():
+        path = d.get("path")
+        name = d.get("name", "")
         if name:
             registered_names.add(name)
         size = None
@@ -896,7 +894,7 @@ def list_data_files(_input: dict) -> dict:
             pass
         files.append({"filename": name, "size_bytes": size,
                       "path": str(path) if path else None,
-                      "title": e.get("title"), "registered": True})
+                      "title": d.get("title"), "registered": True})
 
     # Also surface data files sitting in DATA_DIR that aren't registered as
     # datasets — otherwise the agent sees "no datasets", concludes the project
@@ -905,8 +903,10 @@ def list_data_files(_input: dict) -> dict:
     _DATA_EXTS = {".csv", ".tsv", ".tab", ".txt", ".xlsx", ".parquet",
                   ".h5ad", ".h5", ".loom", ".mtx", ".gz", ".tar", ".zip", ".fa", ".fasta"}
     n_unregistered = 0
+    from core.config import current_project_id, project_data_dir
+    _data_dir = project_data_dir(current_project_id())
     try:
-        for p in sorted(DATA_DIR.iterdir()):
+        for p in sorted(_data_dir.iterdir()):
             if not p.is_file() or p.name in registered_names:
                 continue
             if p.suffix.lower() not in _DATA_EXTS:
@@ -919,20 +919,33 @@ def list_data_files(_input: dict) -> dict:
 
     if not files:
         return {"files": [], "message": "This project has no datasets yet — ask the user to upload one."}
-    # Always tell the agent HOW to load them — the absolute path + the DATA_DIR
-    # convention — so it doesn't guess paths like /project/data.
-    out = {"files": files,
-           "data_dir": str(DATA_DIR),
-           "message": ("Load these via the DATA_DIR variable (already defined in run_python): "
-                       "e.g. pd.read_csv(f'{DATA_DIR}/<filename>'). Use the listed `path` "
-                       "values directly — do not hardcode other directories.")}
+    # The message has to match where the files ACTUALLY are. A dataset can be
+    # registered from anywhere (work/, an absolute path) — not just DATA_DIR —
+    # so the DATA_DIR convention applies only when every listed file sits
+    # inside DATA_DIR. Otherwise the agent should use the absolute `path`
+    # field verbatim (2026-05-31 live: the DATA_DIR template said one thing
+    # while the registered path lived in work/, the agent tried DATA_DIR/X,
+    # missed, then needed an extra turn to recover).
+    data_dir_str = str(_data_dir)
+    all_in_data_dir = all((f.get("path") or "").startswith(data_dir_str + "/") for f in files)
+    if all_in_data_dir:
+        message = ("Load these via the DATA_DIR variable (already defined in run_python): "
+                   "e.g. pd.read_csv(f'{DATA_DIR}/<filename>'). Use the listed `path` "
+                   "values directly — do not hardcode other directories.")
+    else:
+        message = ("Use the listed `path` values directly — they're absolute paths. "
+                   "These datasets do NOT live in DATA_DIR (e.g. they were registered "
+                   "from a work scratch dir or an explicit absolute path); the "
+                   "DATA_DIR/<filename> shortcut won't resolve.")
+    out = {"files": files, "data_dir": data_dir_str, "message": message}
     return out
 
 
 def read_csv_info(input_: dict) -> dict:
     import pandas as pd
     filename = input_.get("filename", "")
-    path = DATA_DIR / filename
+    from core.config import current_project_id, project_data_dir
+    path = project_data_dir(current_project_id()) / filename
     if not path.exists():
         return {"error": f"File not found: {filename}"}
     try:
@@ -981,9 +994,16 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
     """Switch the persistent kernel into `cwd` (the active Run's output dir) and
     re-point the WORK_DIR variable/env — only when it changed, so it's a no-op on
     repeat cells. Relative writes (savefig('x.png'), saveRDS(o,'x.rds')) then land
-    in the Run's folder, captured as that Run's outputs."""
+    in the Run's folder, captured as that Run's outputs.
+
+    Sets `sess._aba_cwd_just_switched` to the PREVIOUS cwd when the cwd actually
+    moves — the next run_python/run_r call reads + clears that flag and emits a
+    one-shot 'Files from prior runs' preamble so bare filenames the agent learned
+    in the old cwd are recoverable as absolute paths. (Fix B for #324 session
+    drift: less-invasive variant — cwd architecture untouched.)"""
     path = str(cwd)
-    if getattr(sess, "_aba_cwd", None) == path:
+    prev = getattr(sess, "_aba_cwd", None)
+    if prev == path:
         return
     try:
         if lang == "r":
@@ -993,8 +1013,188 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
                        f'_os.environ["WORK_DIR"]={path!r}; WORK_DIR={path!r}')
         sess.execute(snippet, timeout_s=15)
         sess._aba_cwd = path
+        if prev is not None:                       # genuine switch, not first-time set
+            sess._aba_cwd_just_switched = prev
     except Exception:  # noqa: BLE001 — best-effort; the run still works in the kernel's prior cwd
         pass
+
+
+# ── A: kernel namespace preview ────────────────────────────────────────────────
+# Run a probe cell after the user's code to enumerate user-defined objects.
+# Output marked with __ABA_NS_BEGIN__/END__ delimiters so probe stdout can't be
+# confused with the user's. Probe failure → empty list (the real result must
+# survive).
+
+_NS_PROBE_PY = """
+def __aba_ns_probe():
+    out = []
+    skip = {'In','Out','exit','quit','get_ipython','DATA_DIR','WORK_DIR','ARTIFACTS_DIR'}
+    for k, v in list(globals().items()):
+        if k.startswith('_') or k in skip: continue
+        try:
+            t = type(v)
+            if callable(v) or isinstance(v, type) or t.__name__ == 'module': continue
+            mod = getattr(t, '__module__', '') or ''
+            info = ''
+            try:
+                if hasattr(v, 'shape'):
+                    info = ' ' + 'x'.join(str(x) for x in v.shape)
+                elif hasattr(v, '__len__'):
+                    info = f' len={len(v)}'
+            except Exception: pass
+            lab = t.__name__ if mod in ('','builtins') else f"{mod}.{t.__name__}"
+            out.append(f"{k}: {lab}{info}")
+        except Exception: continue
+        if len(out) >= 30: out.append('...'); break
+    print('__ABA_NS_BEGIN__'); print(*out, sep='\\n'); print('__ABA_NS_END__')
+__aba_ns_probe(); del __aba_ns_probe
+"""
+
+_NS_PROBE_R = r"""
+local({
+  vars <- ls(envir=globalenv())
+  vars <- vars[!startsWith(vars,'.') & !(vars %in% c('DATA_DIR','WORK_DIR'))]
+  out <- character(0)
+  for (n in vars) {
+    v <- tryCatch(get(n, envir=globalenv()), error=function(e) NULL)
+    if (is.null(v) || is.function(v)) next
+    cls <- tryCatch(class(v)[1], error=function(e) 'unknown')
+    sz  <- tryCatch({
+      if (!is.null(dim(v))) paste0(dim(v), collapse='x')
+      else if (!is.null(length(v))) paste0('len=', length(v))
+      else ''
+    }, error=function(e) '')
+    out <- c(out, paste0(n, ': ', cls, if (nzchar(sz)) paste0(' ', sz) else ''))
+    if (length(out) >= 30) { out <- c(out, '...'); break }
+  }
+  cat('__ABA_NS_BEGIN__\n'); for (l in out) cat(l,'\n',sep=''); cat('__ABA_NS_END__\n')
+})
+"""
+
+
+def _kernel_namespace_preview(sess, lang: str) -> list[str]:
+    try:
+        res = sess.execute(_NS_PROBE_R if lang == "r" else _NS_PROBE_PY, timeout_s=15)
+        out = (res.stdout or "") + "\n" + (res.stderr or "")
+        if "__ABA_NS_BEGIN__" not in out: return []
+        chunk = out.split("__ABA_NS_BEGIN__", 1)[1].split("__ABA_NS_END__", 1)[0]
+        return [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+# ── B (less-invasive): one-shot prior-run files preamble on cwd switch ────────
+# When the kernel cwd just moved to a different Run's dir, list the most-recent
+# N files from EARLIER runs in this thread with their absolute paths — so bare
+# filenames the agent learned in the old cwd ("GSM5746268_processed.h5ad")
+# resolve again ("→ /workspace/.../ana_40e84b23/GSM5746268_processed.h5ad").
+# Returns "" when there's nothing to surface.
+
+_PRIOR_FILE_EXTS = (".h5ad", ".h5", ".rds", ".csv", ".tsv", ".parquet",
+                    ".npz", ".npy", ".pkl", ".png", ".pdf")
+
+
+def _prior_run_files_preamble(project_id: str, thread_id: str,
+                              current_run_id: str | None,
+                              max_runs: int = 4, max_files: int = 12,
+                              max_scratch_files: int = 8) -> str:
+    """List files reachable from THIS thread but NOT in the current cwd, so
+    bare-filename loads recover gracefully. Two sources, kept visually distinct:
+
+      1. Files written inside any of this thread's prior Runs (artifact_path).
+      2. Files in the thread's SHARED scratch dir (ad-hoc downloads / curl
+         output / intermediates not bound to any Run — the gap that caused
+         /tmp/<GSM> confusion: agents `curl`-downloaded to the kernel cwd at
+         the time, then later turns invented bogus `/tmp/...` paths trying to
+         re-reach them).
+    """
+    try:
+        from core.graph.entities import list_entities
+        from core.data.workspace import scratch_dir
+        from pathlib import Path
+        thread_id = str(thread_id or "")
+        if not thread_id: return ""
+
+        # (1) Prior-run files (group A).
+        run_mapped: list[tuple[str, str]] = []
+        seen_names: set[str] = set()
+        scanned = 0
+        for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
+            md = e.get("metadata") or {}
+            if md.get("thread_id") != thread_id: continue
+            if e["id"] == current_run_id: continue
+            ap = e.get("artifact_path") or ""
+            if not ap: continue
+            p = Path(ap)
+            if not p.is_dir(): continue
+            scanned += 1
+            files = []
+            try:
+                for f in p.iterdir():
+                    if f.is_dir(): continue
+                    if f.suffix.lower() not in _PRIOR_FILE_EXTS: continue
+                    files.append(f)
+            except OSError:
+                continue
+            files.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
+            for f in files:
+                if f.name in seen_names: continue   # newer run's copy wins
+                seen_names.add(f.name)
+                run_mapped.append((f.name, str(f)))
+                if len(run_mapped) >= max_files: break
+            if len(run_mapped) >= max_files or scanned >= max_runs: break
+
+        # (2) Thread shared-scratch files (group B) — ad-hoc downloads /
+        # intermediates not bound to a Run. Skip names already in group A
+        # (Run files dominate; scratch is fallback context).
+        scratch_mapped: list[tuple[str, str]] = []
+        try:
+            sp = scratch_dir(str(project_id or "default"), f"thread-{thread_id}")
+            if sp.is_dir():
+                cands = []
+                # Walk one level deep — curl typically lands a file, but some
+                # patterns mkdir a subdir per sample (the GSM5746268-pattern).
+                for entry in sp.iterdir():
+                    try:
+                        if entry.is_file():
+                            cands.append(entry)
+                        elif entry.is_dir():
+                            for inner in entry.iterdir():
+                                if inner.is_file(): cands.append(inner)
+                    except OSError:
+                        continue
+                cands.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
+                for f in cands:
+                    if f.name in seen_names: continue
+                    if f.suffix.lower() not in _PRIOR_FILE_EXTS and not f.name.endswith(".gz"):
+                        # tolerate .mtx.gz / .tsv.gz etc. that won't match the bare-ext set
+                        continue
+                    seen_names.add(f.name)
+                    scratch_mapped.append((f.name, str(f)))
+                    if len(scratch_mapped) >= max_scratch_files: break
+        except Exception:  # noqa: BLE001
+            pass
+
+        if not run_mapped and not scratch_mapped: return ""
+        lines: list[str] = [
+            "── Files you wrote in this thread, reachable from here — USE THESE EXACT ABSOLUTE PATHS ──",
+            "Do NOT reconstruct parent dirs from memory. The full path below is the source of truth;",
+            "copy it verbatim. Common mistake: substituting `DATA_DIR/...` (user uploads) for these paths",
+            "(your own downloads / scratch) — DATA_DIR is read-only inputs, not where you wrote files.",
+            "",
+        ]
+        if run_mapped:
+            lines.append("Files from PRIOR RUNS in this thread:")
+            for name, full in run_mapped:
+                lines.append(f"  - {name} → {full}")
+        if scratch_mapped:
+            if run_mapped: lines.append("")    # blank between groups
+            lines.append("Files in this THREAD'S SHARED SCRATCH (ad-hoc downloads / intermediates):")
+            for name, full in scratch_mapped:
+                lines.append(f"  - {name} → {full}")
+        return "\n".join(lines) + "\n"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
@@ -1071,6 +1271,21 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                    "execution_mode": "session"}
             if warns:
                 out["figure_warnings"] = warns
+            # A: namespace preview (only on success — probing a half-broken
+            # globals dict is noise). B: one-shot prior-run files preamble when
+            # the cwd just shifted, so bare filenames the agent learned in the
+            # old cwd resolve again.
+            if res.returncode == 0:
+                ns = _kernel_namespace_preview(sess, "python")
+                if ns:
+                    out["namespace"] = ns
+            if getattr(sess, "_aba_cwd_just_switched", None):
+                from content.bio.lifecycle.runs import active_run_id as _arid
+                preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
+                                                    current_run_id=_arid(str(thread_id)))
+                sess._aba_cwd_just_switched = None
+                if preamble:
+                    out["stdout"] = preamble + "\n" + (out["stdout"] or "")
             return out
         except Exception as e:  # noqa: BLE001
             # Never strand the agent on a kernel hiccup — fall back to stateless.
@@ -1130,20 +1345,66 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
            "execution_mode": "session"}
     if warns:
         out["figure_warnings"] = warns
+    # A: namespace preview. B: one-shot prior-run files preamble on cwd switch.
+    if res.returncode == 0:
+        ns = _kernel_namespace_preview(sess, "r")
+        if ns:
+            out["namespace"] = ns
+    if getattr(sess, "_aba_cwd_just_switched", None):
+        from content.bio.lifecycle.runs import active_run_id as _arid
+        preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
+                                             current_run_id=_arid(str(thread_id)))
+        sess._aba_cwd_just_switched = None
+        if preamble:
+            out["stdout"] = preamble + "\n" + (out["stdout"] or "")
+    return out
+
+
+def _registered_datasets() -> list[dict]:
+    """List of {name, path, title} for the project's registered datasets.
+    Shared by list_data_files and inspect_upload — the latter uses it to
+    auto-resolve a constructed-from-prior path to the real registered
+    path when basenames match (2026-05-31: live-session bug where the
+    agent saw the right path in list_data_files but then built a
+    DATA_DIR-shaped path from prior and hit "path not found")."""
+    from core.graph.entities import list_entities
+    out = []
+    for e in list_entities(include_archived=False):
+        if e.get("type") != "dataset":
+            continue
+        path = e.get("artifact_path")
+        name = Path(path).name if path else (e.get("title") or "")
+        if name:
+            out.append({"name": name, "path": path, "title": e.get("title")})
     return out
 
 
 def inspect_upload(input_: dict) -> dict:
     """
-    Inspect a file or directory under DATA_DIR. Auto-extracts archives.
+    Inspect a file or directory. Auto-extracts archives.
+
+    Path resolution (in order):
+      1. Absolute path that exists inside DATA_DIR → use as-is.
+      2. Relative path → resolved against DATA_DIR; if it exists, use.
+      3. Otherwise, look up registered datasets by basename. If exactly
+         ONE matches, auto-resolve to its `artifact_path` (which may
+         live in work/ or any absolute location) and continue with a
+         `path_corrected` field in the result. This handles the case
+         where the agent constructs a DATA_DIR-shaped path from prior
+         instead of using the `path` field returned by list_data_files.
+      4. No unambiguous match → return error WITH the list of
+         registered datasets so the agent can pick one.
+
     Returns:
       {
-        "root": "<resolved path relative to DATA_DIR>",
+        "root": "<resolved absolute path>",
         "kind": "file" | "directory" | "archive",
         "extracted_to": "<dir>",          # only when archive
         "files": [{"path": ..., "size": ..., "type": ...}, ...],
         "suggested_loader": "<text>",
         "summary": "<one line description>",
+        "path_corrected": {"from": "<raw>", "to": "<resolved>",
+                           "reason": "..."}   # only when auto-resolved
       }
     """
     import tarfile
@@ -1152,16 +1413,62 @@ def inspect_upload(input_: dict) -> dict:
     if not raw:
         return {"error": "path is required"}
     p = Path(raw)
+    from core.config import current_project_id, project_data_dir
+    _data_dir = project_data_dir(current_project_id())
     if not p.is_absolute():
-        p = DATA_DIR / p
+        p = _data_dir / p
+    # Snapshot the registered set once — used both for the
+    # "absolute path matches a registered dataset" accept and for
+    # the basename-match auto-resolve fallback.
+    registered = _registered_datasets()
+    registered_paths = {d.get("path"): d for d in registered if d.get("path")}
+    resolved: Optional[Path] = None
+    # 1. Exact match against a registered artifact_path — accept even
+    #    if it sits outside DATA_DIR (registered datasets are allowed
+    #    to live in work/ or any absolute location).
     try:
-        p = p.resolve()
+        rp = p.resolve()
+        if str(rp) in registered_paths and rp.exists():
+            resolved = rp
     except FileNotFoundError:
-        return {"error": f"path not found: {raw}"}
-    if not str(p).startswith(str(DATA_DIR.resolve())):
-        return {"error": "path is outside DATA_DIR"}
-    if not p.exists():
-        return {"error": f"path not found: {raw}"}
+        rp = None
+    # 2. Path resolves under DATA_DIR and exists — typical local upload.
+    if resolved is None and rp is not None:
+        if rp.exists() and str(rp).startswith(str(_data_dir.resolve())):
+            resolved = rp
+
+    path_corrected: Optional[dict] = None
+    if resolved is None:
+        # 3. Auto-resolve by basename match against registered datasets.
+        requested_basename = Path(raw).name
+        matches = [d for d in registered
+                   if d.get("name") == requested_basename and d.get("path")]
+        if len(matches) == 1:
+            mp = Path(matches[0]["path"])
+            if mp.exists():
+                resolved = mp.resolve()
+                path_corrected = {
+                    "from": raw,
+                    "to": str(resolved),
+                    "reason": ("dataset is registered at a different location "
+                               "(work-dir / absolute path); auto-resolved by "
+                               "basename. Use this `to` path verbatim next time "
+                               "— don't reconstruct DATA_DIR paths from prior."),
+                }
+        if resolved is None:
+            # Give the agent the actual options so it can pick on retry.
+            return {
+                "error": f"path not found: {raw}",
+                "hint": ("Don't construct DATA_DIR paths from prior — the "
+                         "dataset may live in work/ or another absolute "
+                         "location. Use one of the `path` values listed "
+                         "below verbatim, or call list_data_files()."),
+                "registered_datasets": [
+                    {"name": d["name"], "path": d["path"], "title": d.get("title")}
+                    for d in registered
+                ],
+            }
+    p = resolved
 
     # Auto-extract archives.
     if p.is_file() and (
@@ -1182,20 +1489,26 @@ def inspect_upload(input_: dict) -> dict:
                         tf.extractall(ext_dir, filter="data")
             except Exception as e:
                 return {"error": f"extraction failed: {e}"}
-        return _describe_directory(ext_dir, kind="archive", extracted_to=str(ext_dir),
-                                   original_path=str(p))
+        out = _describe_directory(ext_dir, kind="archive", extracted_to=str(ext_dir),
+                                  original_path=str(p))
+        if path_corrected: out["path_corrected"] = path_corrected
+        return out
 
     if p.is_dir():
-        return _describe_directory(p, kind="directory")
+        out = _describe_directory(p, kind="directory")
+        if path_corrected: out["path_corrected"] = path_corrected
+        return out
 
     # Single file.
-    return {
+    out = {
         "root": str(p),
         "kind": "file",
         "files": [_describe_file(p)],
         "suggested_loader": _suggest_single_loader(p),
         "summary": f"single file: {p.name} ({_fmt_size(p.stat().st_size)})",
     }
+    if path_corrected: out["path_corrected"] = path_corrected
+    return out
 
 
 def _describe_directory(root: Path, *, kind: str = "directory",
@@ -2647,43 +2960,102 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
         return dest, True
 
 
+def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
+    """Resolve a bare/relative path against the scratch tier first (where the
+    agent's relative downloads land), then DATA_DIR, then process cwd. Returns
+    the first existing match, or the most likely candidate if nothing exists."""
+    import os
+    from config import DATA_DIR
+    if os.path.isabs(path):
+        return os.path.normpath(path)        # also collapses `./` segments
+    cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
+    cands.append(os.path.normpath(os.path.join(str(DATA_DIR), path)))
+    cands.append(os.path.normpath(os.path.abspath(path)))
+    return next((c for c in cands if os.path.exists(c)), cands[0])
+
+
+def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[str], list[str]]:
+    """Link a specific list of files into a fresh `DATA_DIR/<slug>/` directory.
+    Used by register_dataset's multi-path mode so the agent can register only
+    the files it actually wants (a 10x triplet, say) without dragging derivative
+    files (.h5ad, .pkl) that happen to sit in the same dir.
+
+    Returns (bundle_path, present_paths, missing_paths). Hardlinks when on the
+    same filesystem; copies otherwise. Numeric suffix on collision."""
+    import os, re, shutil
+    from config import DATA_DIR
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (title or "dataset")).strip("_") or "dataset"
+    dest = os.path.join(str(DATA_DIR), slug)
+    base, i = dest, 2
+    while os.path.exists(dest):
+        dest = f"{base}_{i}"; i += 1
+    os.makedirs(dest, exist_ok=True)
+    present, missing = [], []
+    for s in srcs:
+        if not os.path.isfile(s):
+            missing.append(s); continue
+        present.append(s)
+        target = os.path.join(dest, os.path.basename(s))
+        try:
+            os.link(s, target)               # instant hardlink on same fs
+        except OSError:
+            shutil.copy2(s, target)          # cross-fs fallback
+    return dest, present, missing
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from config import DATA_DIR
     from core.config import WORK_DIR
-    path, title = input_.get("path"), input_.get("title")
-    if not path or not title:
-        return {"error": "path and title are required"}
+    title = input_.get("title")
+    if not title:
+        return {"error": "title is required"}
+    paths_list = input_.get("paths")
+    path = input_.get("path")
+    if not paths_list and not path:
+        return {"error": "either `path` (single file/dir) or `paths` (list of files) is required"}
+    if paths_list and path:
+        return {"error": "pass `path` OR `paths`, not both"}
+
     from core.graph.entities import create_entity, update_entity
-    # Resolve a bare/relative path against DATA_DIR (the kept tier), then the
-    # active Run / thread SCRATCH dir (where a relative-path download lands —
-    # the kernel cwd), then process cwd. So 'GSM…_counts' is found wherever the
-    # agent actually wrote it, without a manual move.
-    if os.path.isabs(path):
-        cands = [path]
-    else:
-        # SCRATCH first: a relative path the agent just wrote THIS run (a fresh
-        # download) must win over a stale same-named dir left in DATA_DIR by a
-        # prior session. Otherwise we'd register the OLD data and never adopt the
-        # new files (the dir name collides, the adopt is skipped, and the agent
-        # then loads the leftover). Fall back to an existing DATA_DIR dataset,
-        # then the process cwd.
-        cands = [os.path.join(b, path) for b in _scratch_bases(ctx)]
-        cands.append(os.path.join(str(DATA_DIR), path))
-        cands.append(os.path.abspath(path))
-    abspath = next((c for c in cands if os.path.exists(c)), cands[0])
-    exists = os.path.exists(abspath)
-    # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR) is
-    # hardlinked into DATA_DIR so the dataset persists past the 48h scratch GC —
-    # removing the move-then-re-register dance. Non-blocking (instant hardlink,
-    # or a background copy across filesystems).
-    adopted = materializing = False
-    if exists and _within(abspath, str(WORK_DIR)) and not _within(abspath, str(DATA_DIR)):
+
+    bundle_note = ""
+    if paths_list:
+        # Multi-path mode: resolve each, link them into a fresh DATA_DIR/<slug>/
+        # bundle, register THAT bundle. Lets the agent register only the files
+        # it actually wants without dragging derivatives that sit nearby on disk.
+        resolved = [_resolve_dataset_path(str(p), ctx) for p in paths_list]
         try:
-            abspath, materializing = _adopt_into_data_dir(abspath)
-            adopted = True
-        except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
-            pass
+            abspath, present, missing = _bundle_paths_into_data_dir(resolved, str(title))
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"failed to bundle paths into DATA_DIR: {e}"}
+        if not present:
+            return {"error": "none of the listed paths exist on disk",
+                    "missing": missing}
+        exists = True
+        adopted, materializing = True, False
+        if missing:
+            bundle_note = (
+                f" Bundle has {len(present)} file(s) linked into DATA_DIR; "
+                f"{len(missing)} listed path(s) did not exist on disk and were skipped: "
+                + ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "")
+            )
+        else:
+            bundle_note = f" Bundle has {len(present)} file(s) linked into DATA_DIR."
+    else:
+        abspath = _resolve_dataset_path(str(path), ctx)
+        exists = os.path.exists(abspath)
+        # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR) is
+        # hardlinked into DATA_DIR so the dataset persists past the 48h scratch GC —
+        # removing the move-then-re-register dance. Non-blocking (instant hardlink,
+        # or a background copy across filesystems).
+        adopted = materializing = False
+        if exists and _within(abspath, str(WORK_DIR)) and not _within(abspath, str(DATA_DIR)):
+            try:
+                abspath, materializing = _adopt_into_data_dir(abspath)
+                adopted = True
+            except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
+                pass
     summary = (input_.get("summary") or "").strip()
     eid = create_entity(
         entity_type="dataset", title=title,
@@ -2701,6 +3073,8 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         note += " Files adopted into DATA_DIR (kept past scratch cleanup)."
     elif adopted and materializing:
         note += " Files are copying into DATA_DIR in the background — fully available shortly."
+    if bundle_note:
+        note += bundle_note
     if not exists:
         note += " WARNING: path not found on disk; registered by reference only — pass a path under DATA_DIR."
     return {"status": "ok", "dataset_id": eid, "title": title,
@@ -2775,7 +3149,12 @@ def create_claim_tool(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
-    """Open an analysis Run so this pipeline's outputs group as one unit."""
+    """Open an analysis Run so this pipeline's outputs group as one unit.
+
+    Surfaces the cwd shift right here in the return so the agent doesn't write
+    its first cell with a bare relative path that no longer resolves. Without
+    this, the first `run_python` after `open_run` always hit FileNotFoundError
+    + the cwd-shift preamble landed too late (verified live 2026-05-31)."""
     tid = _ctx_thread(ctx)
     if not tid:
         return {"error": "no active thread"}
@@ -2784,9 +3163,36 @@ def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"error": "title is required — name the analysis (e.g. the approved plan's title)"}
     from content.bio.lifecycle.runs import open_run
     rid = open_run(tid, title, focus_entity_id=(ctx or {}).get("focus_entity_id"))
-    return {"status": "ok", "run_id": rid, "title": title,
-            "note": "Run opened. Figures/tables you produce and the cells you execute now "
-                    "group under this Run until you close_run or open another."}
+
+    out: dict = {"status": "ok", "run_id": rid, "title": title}
+
+    # Resolve the new cwd + prior files so the agent has all the absolute paths
+    # it might need in its very next code cell.
+    from core import projects
+    project_id = projects.current() or "default"
+    cwd_str = ""
+    try:
+        cwd_str = str(_run_scratch_cwd(str(project_id), str(tid)))
+        out["cwd"] = cwd_str
+    except Exception:  # noqa: BLE001
+        pass
+    preamble = _prior_run_files_preamble(str(project_id), tid, current_run_id=rid)
+
+    note_parts = [
+        "Run opened. Figures/tables you produce and the cells you execute now "
+        "group under this Run until you close_run or open another.",
+    ]
+    if cwd_str:
+        note_parts.append(
+            f"YOUR cwd has just shifted to `{cwd_str}`. Bare relative paths from "
+            f"earlier turns (`./geo_data/x.gz`, etc.) will NOT resolve here — "
+            f"use the ABSOLUTE paths listed below to reach prior files."
+        )
+    out["note"] = " ".join(note_parts)
+    if preamble:
+        out["prior_files"] = preamble    # structured field for completeness
+        out["note"] = out["note"] + "\n\n" + preamble
+    return out
 
 
 def close_run_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -3135,6 +3541,16 @@ _THREAD_SYNTH_TAINT: set[str] = set()
 # Recipes/skills read per thread (across turns) — so the recipe-uptake nudge credits a
 # recipe read in a PRIOR turn (e.g. read at plan time, used after Go), not only this turn.
 _THREAD_READ_SKILLS: dict = {}
+# Recipes the agent DECLARED on `present_plan` step.skill fields — pinned for the rest
+# of the thread so the system prompt can keep their bodies salient at code-gen time.
+# #324 Phase 2 (declared+injected) → Phase 3 (step-labeled): now a list of
+# (step_index, step_title, recipe_name) tuples per thread so each recipe is
+# bound to the specific plan steps that declared it. The system block uses these
+# to render "for step 4 — use `deseq2-r`" rather than a context-leaking union;
+# this halved the plan_quality regression and ~2× lifted declared_then_followed
+# in eval (matrix v6 — see misc/prompt_regression_loop.md). Agent-driven: if
+# the agent didn't declare a recipe for a step, we don't push one.
+_THREAD_DECLARED_RECIPES: dict = {}
 
 # A user can legitimately ASK for synthetic/simulated data (demos, method tests, teaching).
 # Then the anti-fabrication guards (R2 veto, synth taint, synth warning) must NOT fire —
@@ -3303,6 +3719,31 @@ def _synth_taint_steer(name: str, input_: dict, result: dict, ctx: dict | None =
         result["guardrail_warnings"] = warns
 
 
+# ── present_plan → capture declared recipes (Phase 2 of #324) ────────────────
+def _capture_declared_recipes(name: str, input_: dict, result: dict, ctx: dict | None) -> None:
+    """Stash recipes declared on `present_plan` step.skill fields, per thread, so the
+    next system render can label each recipe with the plan-step(s) that declared it.
+
+    Each present_plan call REPLACES the thread's declarations — a revised plan
+    supersedes the prior one (the agent and user negotiated a new plan, so the old
+    skill→step bindings are stale)."""
+    if name != "present_plan" or not isinstance(input_, dict): return
+    tid = str((ctx or {}).get("thread_id") or "")
+    if not tid: return
+    declared: list[tuple[int, str, str]] = []
+    for i, s in enumerate(input_.get("steps") or [], start=1):
+        if not isinstance(s, dict): continue
+        sk = (s.get("skill") or "").strip()
+        if not sk: continue
+        title = (s.get("title") or "").strip()
+        declared.append((i, title, sk))
+    if declared:
+        _THREAD_DECLARED_RECIPES[tid] = declared
+    elif tid in _THREAD_DECLARED_RECIPES:
+        # New plan with no skill fields → clear stale bindings rather than leave them.
+        del _THREAD_DECLARED_RECIPES[tid]
+
+
 # ── Tool-lifecycle hook registration ──────────────────────────────────────────
 # The guardrails above are registered into the in-process hook registry
 # (core.runtime.hooks), which adopts the Claude Agent SDK's Pre/Post/PostFailure
@@ -3316,6 +3757,158 @@ hooks.post_tool_use(label="fetch_fail_guardrail")(_fetch_fail_guardrail)
 hooks.post_tool_use("fetch_url|lookup_sra_runinfo|fetch_ensembl", label="fetch_tool_failure_steer")(_fetch_tool_failure_steer)
 hooks.post_tool_use(label="judgment_guardrails")(_judgment_guardrails)
 hooks.post_tool_use("run_python|run_r", label="synth_taint_steer")(_synth_taint_steer)
+hooks.post_tool_use("present_plan", label="capture_declared_recipes")(_capture_declared_recipes)
+
+
+# ── Path-recovery guardrail (live diagnosis 2026-05-31) ─────────────────────
+# When run_python/run_r fails with FileNotFoundError on a path whose BASENAME
+# matches a known file in this thread (a prior run's artifact OR the thread's
+# shared scratch), inject a corrective steer in the tool_result pointing at the
+# actual absolute path. Soft-prompt steers about "use the preamble's absolute
+# paths" lose to "I already had this pattern working last turn" — small models
+# pattern-match prior successful code instead of re-reading directives. This
+# hook fires AT THE FAILURE so the next turn has the right path AND the model
+# sees concretely WHY the prior path was wrong.
+
+_FILE_NOT_FOUND_RE = re.compile(
+    r"FileNotFoundError:.*?'([^']+)'"
+    r"|No such file or directory:\s*'([^']+)'"
+    r"|cannot open file '([^']+)'"           # R wording
+    r"|cannot find the file specified.*?'([^']+)'",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _path_recovery_steer(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
+    """If a run_* cell hit FileNotFoundError on a path whose basename matches a
+    file we know exists elsewhere in this thread, point the agent at the actual
+    absolute path. Best-effort & idempotent — never blocks the result."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict): return
+    if result.get("returncode") in (0, None): return
+    err = (result.get("stderr") or "") + "\n" + (result.get("stdout") or "")
+    m = _FILE_NOT_FOUND_RE.search(err)
+    if not m: return
+    bad_path = next((g for g in m.groups() if g), "").strip()
+    if not bad_path: return
+    bad_name = bad_path.rsplit("/", 1)[-1] or bad_path
+    if not bad_name: return
+
+    project_id = (ctx or {}).get("project_id") or ""
+    thread_id = str((ctx or {}).get("thread_id") or "")
+    if not thread_id: return
+    # Reuse the same walker as the cwd-shift preamble — it already enumerates
+    # prior runs + the thread scratch with absolute paths.
+    try:
+        from core.graph.entities import list_entities
+        from core.data.workspace import scratch_dir
+        from pathlib import Path
+        # Walk prior-run artifact_paths + thread-scratch (one level deep).
+        candidates: list[Path] = []
+        for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
+            md = e.get("metadata") or {}
+            if md.get("thread_id") != thread_id: continue
+            ap = e.get("artifact_path") or ""
+            if not ap: continue
+            p = Path(ap)
+            if p.is_dir(): candidates.append(p)
+        try:
+            sp = scratch_dir(str(project_id or "default"), f"thread-{thread_id}")
+            if sp.is_dir(): candidates.append(sp)
+        except Exception: pass
+
+        hits: list[str] = []
+        for root in candidates:
+            try:
+                for entry in root.iterdir():
+                    if entry.is_file() and entry.name == bad_name:
+                        hits.append(str(entry))
+                    elif entry.is_dir():
+                        for inner in entry.iterdir():
+                            if inner.is_file() and inner.name == bad_name:
+                                hits.append(str(inner))
+            except OSError:
+                continue
+            if hits: break          # closest match wins; don't enumerate every duplicate
+        if not hits: return
+        result["path_recovery_hint"] = (
+            f"The path '{bad_path}' does not exist (FileNotFoundError). The file "
+            f"`{bad_name}` exists in this thread at:\n"
+            + "\n".join(f"  {h}" for h in hits[:3])
+            + "\n\nLikely cause: a NEW Run was opened since you wrote this file, so the kernel "
+              "cwd has shifted. Relative paths like `./geo_data/...` resolve against the CURRENT cwd, "
+              "not the dir where you originally wrote the file. **Use the ABSOLUTE path above verbatim — "
+              "do not concatenate `DATA_DIR/` or invent a parent dir.** DATA_DIR is for user uploads; "
+              "files you downloaded yourself live in your previous WORK_DIR (the absolute path shown)."
+        )
+        # Also mirror into stdout so the model sees it without needing to read a custom field
+        # (some models drop non-canonical tool-result keys).
+        result["stdout"] = (result.get("stdout") or "") + "\n\n── path-recovery hint ──\n" + result["path_recovery_hint"] + "\n"
+    except Exception:                # noqa: BLE001 — guardrail must not break the result
+        return
+
+
+hooks.post_tool_use("run_python|run_r", label="path_recovery_steer")(_path_recovery_steer)
+
+
+# ── Multi-panel dashboard steer (live diagnosis 2026-05-31) ─────────────────
+# scRNA-seq tutorial canon defaults to 2×2 dashboards (QC histograms, UMAP-by-
+# variable). The soft prompt rule in figures.md loses to this training prior on
+# small models. When the agent's cell creates a >=4-panel grid AND saves it as
+# a figure, append a corrective steer for the NEXT turn — same lever as the
+# path-recovery hook. We don't undo the current figure; we curb the next one.
+
+_DASHBOARD_PATTERN_RE = re.compile(
+    # plt.subplots(N, M) / subplots(N, M, …) where N*M ≥ 4 — the typical 2×2,
+    # 2×3, 3×3 dashboards. Capture rows + cols.
+    r"\bsubplots\(\s*(\d+)\s*,\s*(\d+)",
+)
+_DASHBOARD_KEYWORDS_RE = re.compile(
+    r"\b(dashboard|executive\s+summary|comprehensive\s+(?:overview|summary)|"
+    r"summary\s+(?:figure|dashboard|panel)|key\s+findings\s+panel|overview\s+figure)\b",
+    re.IGNORECASE,
+)
+
+
+def _dashboard_pattern_steer(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
+    """If a run_* cell built a >=4-panel grid AND saved it, nudge the agent in the
+    next turn toward single-panel figures. Heuristic: subplots(N, M) where N*M ≥ 4
+    AND a `savefig`/`ggsave`/`png(` call exists in the same code. Best-effort;
+    never breaks the result."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict): return
+    if result.get("returncode") not in (0, None): return        # only on success — failures have their own signal
+    code = (input_ or {}).get("code", "") or ""
+    if not code: return
+    saved = bool(re.search(r"\bsavefig\(|\bggsave\(|\bpng\(|\bpdf\(", code))
+    if not saved: return
+    # (1) explicit dashboard keywords
+    if _DASHBOARD_KEYWORDS_RE.search(code):
+        _attach_dashboard_warning(result, reason="dashboard-keyword")
+        return
+    # (2) >=4-panel subplots grid
+    for m in _DASHBOARD_PATTERN_RE.finditer(code):
+        try:
+            n_panels = int(m.group(1)) * int(m.group(2))
+        except ValueError:
+            continue
+        if n_panels >= 4:
+            _attach_dashboard_warning(result, reason=f"{m.group(1)}x{m.group(2)}-grid")
+            return
+
+
+def _attach_dashboard_warning(result: dict, *, reason: str) -> None:
+    msg = (
+        f"You just built a multi-panel figure ({reason}) + saved it. ONE PANEL PER FIGURE is "
+        f"the default — multi-panel is justified ONLY for (a) explicit side-by-side comparison, "
+        f"(b) panels that cross-reference each other, or (c) when the user asked for a composite. "
+        f"For QC distributions (`n_genes`/`n_counts`/`pct_counts_mt`/etc.), UMAP-colored-by-variable, "
+        f"or 'summary dashboards' — produce SEPARATE figures next time, ONE panel each. "
+        f"(Tutorial canon defaults to grids; that's not what we want here.)"
+    )
+    result["figure_style_warning"] = msg
+    result["stdout"] = (result.get("stdout") or "") + "\n\n── figure-style hint ──\n" + msg + "\n"
+
+
+hooks.post_tool_use("run_python|run_r", label="dashboard_pattern_steer")(_dashboard_pattern_steer)
 
 
 def _feedlog(msg: str) -> None:

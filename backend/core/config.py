@@ -6,20 +6,33 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).parent.parent  # backend/
+BASE_DIR = Path(__file__).parent.parent  # backend/ — SOURCE root, never written at runtime
 load_dotenv(BASE_DIR.parent / ".env")
 
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR / "data")).resolve()
-ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", BASE_DIR / "artifacts")).resolve()
-# WORK_DIR is the scratch tier (data.md): per-project, per-run working dirs
-# where the sandbox writes intermediates freely. Unregistered, GC'd on a TTL.
-# Distinct from ARTIFACTS_DIR (the durable, content-addressed "kept" tier).
-WORK_DIR = Path(os.getenv("ABA_WORK_DIR", BASE_DIR / "work")).resolve()
+# ABA_RUNTIME_DIR is the roof for all mutable runtime state (data, work, artifacts,
+# envs, projects, the workspace DB). Hard-separated from the source tree so:
+#   - `git status` is clean (no `?? backend/envs/` etc.)
+#   - uvicorn `--reload` doesn't kill kernels when an `ensure_capability` install
+#     writes into envs/ (the bug behind 2026-05-31 mid-session kernel deaths)
+#   - backups / image snapshots include source-or-runtime by intent, not 33GB of mix
+#   - future multi-tenant work just adds an `{ABA_RUNTIME_DIR}/tenants/<tid>/` layer
+# Individual sub-paths (DATA_DIR, WORK_DIR, …) each have their own env-var override,
+# so a test/eval harness can repoint a single tier without moving everything.
+RUNTIME_DIR = Path(os.getenv("ABA_RUNTIME_DIR", "/workspace/aba-runtime")).resolve()
+
+# Legacy workspace-level dirs (pre-2026-05-31-reorg). Post-reorg these point at
+# the per-project equivalents of `_workspace` (the no-project-active fallback),
+# so files don't strand at the runtime root. New code goes through
+# project_{data,artifacts,work}_dir(pid) instead; these are kept as the fallback
+# for callers without a project context (background jobs, materialize helpers).
+DATA_DIR = Path(os.getenv("DATA_DIR", RUNTIME_DIR / "projects" / "_workspace" / "data")).resolve()
+ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", RUNTIME_DIR / "projects" / "_workspace" / "artifacts")).resolve()
+WORK_DIR = Path(os.getenv("ABA_WORK_DIR", RUNTIME_DIR / "projects" / "_workspace" / "work")).resolve()
 # ENVS_DIR is the materialized-tools area (capabilities.md / capdat_impl.md P1):
 # wipeable as a whole (rm -rf → repopulates on demand), kept OUT of the system
 # .venv so the backend's env stays pristine. Holds the pylib overlay (one
 # shared pip --target dir for Python libs) and conda envs for CLI tools.
-ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", BASE_DIR / "envs")).resolve()
+ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", RUNTIME_DIR / "envs")).resolve()
 # Kernelspecs hardcode the interpreter's absolute path, so they must live and die
 # with the env they point at. Scope ABA's Jupyter data dir under ENVS_DIR (not the
 # user's global ~/.local/share/jupyter): prod stays self-consistent, and tests —
@@ -30,7 +43,7 @@ os.environ["JUPYTER_DATA_DIR"] = str(ENVS_DIR / "jupyter")
 # REFS_DIR is the content-addressed reference store (data.md §4.3): shared,
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
-REFS_DIR = Path(os.getenv("ABA_REFS_DIR", BASE_DIR / "refs")).resolve()
+REFS_DIR = Path(os.getenv("ABA_REFS_DIR", RUNTIME_DIR / "refs")).resolve()
 # BIOMNI_DIR is the runtime location of the biomni capability collection
 # (collections.md): the dir to put on sys.path so `import biomni.*` works in
 # run_python / the kernel. Transitional fallback until biomni is provisioned as
@@ -57,3 +70,63 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 REFS_DIR.mkdir(parents=True, exist_ok=True)
 (ENVS_DIR / "jupyter").mkdir(parents=True, exist_ok=True)
+
+
+# ── Project-scoped runtime accessors (2026-05-31 reorg) ─────────────────────
+# Everything that belongs to a project lives under projects/<pid>/ — a single
+# directory you can back up, export, or delete atomically. Workspace-level
+# fallback dirs (the legacy DATA_DIR etc.) are kept for the "no project active"
+# case (background jobs without context, the workspace registry, scratch DBs).
+PROJECTS_DIR = Path(os.environ.get("ABA_PROJECTS_DIR") or (RUNTIME_DIR / "projects")).resolve()
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+_NO_PROJECT_FALLBACK = "_workspace"
+# Legacy callers pre-reorg used the strings "default" / "None" / passed None
+# when no project was active. Coerce them all to the same workspace-level dir
+# so we don't end up with sibling `projects/default/`, `projects/None/`,
+# `projects/_workspace/` all meaning "no project."
+_PROJECT_FALLBACKS = {"", "default", "None", "none"}
+
+
+def project_root(pid: str) -> Path:
+    """projects/<pid>/ — the per-project consolidated root. Falsy or legacy
+    fallback project IDs ('', 'default', 'None') all map to _workspace/."""
+    if not pid or pid in _PROJECT_FALLBACKS:
+        pid = _NO_PROJECT_FALLBACK
+    p = PROJECTS_DIR / pid
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def project_db_path(pid: str) -> Path:
+    return project_root(pid) / "project.db"
+
+
+def project_data_dir(pid: str) -> Path:
+    p = project_root(pid) / "data"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def project_work_dir(pid: str) -> Path:
+    p = project_root(pid) / "work"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def project_artifacts_dir(pid: str) -> Path:
+    p = project_root(pid) / "artifacts"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def current_project_id() -> str:
+    """The active project's id, or '_workspace' as the workspace-level fallback.
+    Used by code paths that need a project context but the caller didn't supply
+    one (e.g. uploads landing in the active project, kernel WORK_DIR injection)."""
+    try:
+        from core import projects   # noqa: PLC0415 — circular if hoisted
+        return projects.current() or "_workspace"
+    except Exception:
+        return "_workspace"

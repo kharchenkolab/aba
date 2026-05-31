@@ -40,7 +40,10 @@ def run_python_code(
 
     # Preamble: DATA_DIR + caller extras (biomni) prepended; the pylib overlay
     # APPENDED so the .venv wins and the overlay only supplies what's missing.
-    lines = [f"DATA_DIR = {str(DATA_DIR)!r}", "import sys as _sys"]
+    # DATA_DIR is per-project (post 2026-05-31 reorg).
+    from core.config import current_project_id, project_data_dir
+    _data_dir = project_data_dir(current_project_id())
+    lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
     for p in (extra_syspath or []):
         lines.append(f"_sys.path.insert(0, {str(p)!r})")
     lines.append(f"_sys.path.append({str(pylib_dir())!r})")
@@ -109,8 +112,15 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0) -> tuple[list, list,
                 )
                 continue
             dest_name = f"{uuid.uuid4().hex}.{ext}"
-            shutil.copy2(str(f), str(ARTIFACTS_DIR / dest_name))
-            bucket.append({"url": f"/artifacts/{dest_name}", "original_name": f.name})
+            # Project-scoped artifacts (post 2026-05-31 reorg): land in
+            # projects/<pid>/artifacts/, served at /artifacts/<pid>/<name>.
+            # Falls back to the workspace-level ARTIFACTS_DIR when no project
+            # is active (background jobs without context).
+            from core.config import current_project_id, project_artifacts_dir
+            pid = current_project_id()
+            adir = project_artifacts_dir(pid)
+            shutil.copy2(str(f), str(adir / dest_name))
+            bucket.append({"url": f"/artifacts/{pid}/{dest_name}", "original_name": f.name})
     return plots, tables, warnings
 
 
