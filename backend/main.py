@@ -81,6 +81,12 @@ async def startup():
     from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
+    # Capture the asyncio loop so worker-thread producers
+    # (auto_interpret, background jobs) can push events to the
+    # /api/notifications SSE channel.
+    from core.runtime import notifications as _notif
+    _notif.set_loop(asyncio.get_event_loop())
+
     # Background-provision the curated shared R base (r_base.yaml: Seurat,
     # DESeq2/limma/edger/apeglm, tidyverse, cairo, Rcpp*). When everything
     # is already in the tools env, this completes in ~500ms (two
@@ -1932,6 +1938,36 @@ async def trigger_probe():
 def events_list(limit: int = 50, offset: int = 0):
     """Activity / audit feed (newest first)."""
     return list_events(limit=limit, offset=offset)
+
+
+@app.get("/api/notifications")
+async def notifications_stream():
+    """Global SSE channel for OUT-OF-BAND events (caption ready, background
+    job done, entity updated, …) — things that happen outside the chat
+    turn lifecycle. Frontend opens this once on app mount and refreshes
+    on relevant events instead of guessing refresh intervals.
+
+    Event shape: `{"type": "entity_updated", "entity_id": "...", "reason": "..."}`.
+    A "hello" event fires on connect so the client knows the stream is live.
+    """
+    from core.runtime import notifications as _notif
+
+    async def gen():
+        q = _notif.subscribe()
+        try:
+            yield f"data: {json.dumps({'type': 'hello'})}\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"data: {json.dumps(ev)}\n\n"
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps proxies / load balancers from closing
+                    # the idle connection.
+                    yield ": heartbeat\n\n"
+        finally:
+            _notif.unsubscribe(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.get("/api/turns")

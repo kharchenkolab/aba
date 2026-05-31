@@ -62,7 +62,11 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   }
   const keep = (e: Entity) => matches(text(e)) && passes(e)
 
-  const pinned = entities.filter(e => (e.type === 'figure' || e.type === 'table' || e.type === 'result') && e.pinned && inThread(e) && e.status !== 'archived')
+  // A "pinned" item in the new model (post task #318) is an active Result —
+  // the wrapper entity created when the user pins a figure/table. The
+  // dropped `entity.pinned` flag is no longer the source of truth (it was
+  // never populated, so the old filter returned empty).
+  const pinned = entities.filter(e => e.type === 'result' && inThread(e) && e.status !== 'archived')
   const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived')
   const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived'
     && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)

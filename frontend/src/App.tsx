@@ -213,6 +213,21 @@ export default function App() {
   }
   useEffect(() => { refreshCurrent() }, [])
 
+  // Subscribe to /api/notifications — the global push channel for
+  // out-of-band events (caption ready, background job done, …). Replaces
+  // the prior "guess a refresh delay" hack. One EventSource per app
+  // lifetime; the browser handles reconnect on transient drops.
+  useEffect(() => {
+    const es = new EventSource('/api/notifications')
+    es.onmessage = (msg) => {
+      try {
+        const ev = JSON.parse(msg.data)
+        if (ev.type === 'entity_updated') refresh()
+      } catch {}
+    }
+    return () => { es.close() }
+  }, [refresh])
+
   // posture follows focus: entity-first when something is focused (or a
   // file is being viewed); chat-first otherwise. PostureToggle can still
   // override manually within a given URL state. Re-derived on every URL
@@ -535,15 +550,10 @@ export default function App() {
   const pinEntity = (id: string, pin: boolean) => {
     const path = pin ? 'pin' : 'unpin'
     fetch(`/api/entities/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
-      .then(() => {
-        refresh()
-        // Pin's auto_interpret daemon writes the caption + title ~1-3s
-        // after the POST returns. Re-fetch once more so the UI picks up
-        // the generated text without the user having to click anything.
-        // (Unpin doesn't need this — no async work follows.)
-        if (pin) setTimeout(refresh, 2500)
-      })
+      .then(() => refresh())
       .catch(() => {})
+    // No deferred refresh — auto_interpret's caption-ready broadcast on
+    // /api/notifications drives the follow-up refresh on demand.
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
   const keepMessage = (key: string, text: string, image_urls: string[]) => {

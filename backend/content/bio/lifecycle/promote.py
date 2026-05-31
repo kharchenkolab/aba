@@ -536,6 +536,15 @@ def auto_interpret(result_id: str) -> Optional[str]:
         # entity-PATCH "invested" flip (auto_interpret is NOT a user
         # action). Update title via the raw helper so invested stays False.
         update_entity(result_id, title=new_title)
+    # Push an out-of-band notification so the frontend refreshes
+    # without polling. Best-effort — never breaks the daemon if the
+    # event channel is unavailable.
+    try:
+        from core.runtime.notifications import broadcast
+        broadcast({"type": "entity_updated", "entity_id": result_id,
+                   "reason": "caption_ready"})
+    except Exception:  # noqa: BLE001
+        pass
     return text
 
 

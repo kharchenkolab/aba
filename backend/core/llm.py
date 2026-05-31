@@ -33,6 +33,22 @@ from typing import AsyncIterator, List, Dict, Any
 from core.config import API_KEY, MODEL, FAKE_SESSION
 
 
+def _strip_cc(content):
+    """Strip `cache_control` from any content blocks. Used when canonicalizing
+    a message list for hashing — cache_control is sender-side metadata, not
+    a semantic input to the model, and stripping it lets the hash compare
+    equal across calls that use different cache breakpoints."""
+    if not isinstance(content, list):
+        return content
+    out = []
+    for b in content:
+        if isinstance(b, dict):
+            out.append({k: v for k, v in b.items() if k != "cache_control"})
+        else:
+            out.append(b)
+    return out
+
+
 # ---------- Real provider ----------
 
 class _RealStream:
@@ -68,16 +84,34 @@ class _RealStream:
         # tool_results — unlike the distilled turn-context .md). Set ABA_RAW_REQUEST_DIR
         # to enable; one file per API call. Load it and pass straight to
         # client.messages.create(**payload) to replay/modify the real failure prompt.
-        import os as _os
-        _rawdir = _os.environ.get("ABA_RAW_REQUEST_DIR")
-        if _rawdir:
+        # Default: /tmp/aba_llm_sent. Set to "off" or "0" to disable.
+        import os as _os, hashlib as _hashlib, time as _time
+        import json as _json
+        _rawdir = _os.environ.get("ABA_RAW_REQUEST_DIR", "/tmp/aba_llm_sent")
+        if _rawdir and _rawdir.lower() not in ("off", "0", "false", ""):
             try:
-                import json as _json, time as _time
                 _os.makedirs(_rawdir, exist_ok=True)
                 _payload = {"model": self._model, "max_tokens": 4096,
                             "system": self._system, "tools": self._tools, "messages": messages}
-                with open(_os.path.join(_rawdir, f"req_{int(_time.time()*1000)}.json"), "w") as _f:
+                _ts = int(_time.time() * 1000)
+                _fn = _os.path.join(_rawdir, f"req_{_ts}.json")
+                with open(_fn, "w") as _f:
                     _json.dump(_payload, _f, default=str)
+                # Compact one-line summary on stdout so you can spot mismatches
+                # without parsing JSONs. Logs the SHA-256 of the message envelope
+                # (canonicalized, cache_control stripped — that's metadata, not
+                # input semantics) so it's directly comparable to the same hash
+                # computed from the dumped turn_context JSON.
+                _canon = _json.dumps(
+                    [{"role": m["role"], "content": _strip_cc(m.get("content"))} for m in messages],
+                    sort_keys=True, default=str,
+                ).encode("utf-8")
+                _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
+                _sys_sha = _hashlib.sha256((self._system or "").encode("utf-8")).hexdigest()[:12]
+                print(f"[llm-sent] model={self._model} sys_sha={_sys_sha} "
+                      f"hist_sha={_hist_sha} n_msgs={len(messages)} "
+                      f"sys_chars={len(self._system or '')} -> {_fn}",
+                      flush=True)
             except Exception:  # noqa: BLE001 — debug dump must never break a turn
                 pass
         if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \

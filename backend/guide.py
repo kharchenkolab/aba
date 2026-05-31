@@ -504,6 +504,14 @@ async def stream_response(
     )
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
+    # Phase 1 of the history-compaction redesign (see
+    # misc/history_compaction_redesign.md): inject a project-wide
+    # entity snapshot at the head of the system prompt. Cheap (~5
+    # SQL counts), deterministic, no LLM. Shared cross-thread state
+    # lives HERE; the thread chat history stays the conversational
+    # record.
+    from core.manifest.assembler import render_project_sidebar
+    sidebar_text = render_project_sidebar(store_tid)
     eff_intent = _effective_intent(user_text, history)
     # (the user prompt is already written to live.log as `👤 …` at run-header time;
     # no extra USER print here.)
@@ -516,7 +524,7 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
-    system = focus_text + thread_text + build_system(
+    system = sidebar_text + focus_text + thread_text + build_system(
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
@@ -583,8 +591,31 @@ async def stream_response(
             # running. The summarize call itself remains sync internally —
             # only the wait is moved off the loop.
             llm_history = _ensure_tool_pair_completeness(
-                await asyncio.to_thread(effective_history, WORKSPACE_ID, history)
+                await asyncio.to_thread(effective_history, store_tid, history)
             )
+            # Compact pre-send fingerprint — matched by `[llm-sent]` printed in
+            # core/llm.py at the moment the stream opens. If they agree:
+            # what guide.py prepared == what hit the API. If they differ:
+            # something between this line and the API mutated the messages
+            # (cache_control breakpoints are stripped before hashing so they
+            # don't cause spurious mismatches).
+            try:
+                import hashlib as _h, json as _j
+                _canon = _j.dumps(
+                    [{"role": m["role"],
+                      "content": [{k: v for k, v in b.items() if k != "cache_control"}
+                                  if isinstance(b, dict) else b
+                                  for b in m["content"]] if isinstance(m["content"], list) else m["content"]}
+                     for m in llm_history],
+                    sort_keys=True, default=str,
+                ).encode("utf-8")
+                _hist_sha = _h.sha256(_canon).hexdigest()[:12]
+                _sys_sha = _h.sha256((system or "").encode("utf-8")).hexdigest()[:12]
+                print(f"[llm-prep] run={turn.run_id} sys_sha={_sys_sha} "
+                      f"hist_sha={_hist_sha} n_raw={len(history)} n_eff={len(llm_history)}",
+                      flush=True)
+            except Exception:  # noqa: BLE001
+                pass
 
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. We only retry

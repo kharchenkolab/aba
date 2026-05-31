@@ -216,7 +216,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
     } else if (entity.status && entity.status !== 'active') {
       meta.push(<span key="status" className="state-tag state-tag--muted">{statusIcon ? `${statusIcon} ` : ''}{entity.status}</span>)
     }
-    if (entity.pinned) meta.push(<span key="pinned">pinned</span>)
+    // Pinned-tag dropped — pinning is now expressed as an active Result
+    // entity that wraps the figure/table (task #318). The bare entity has
+    // no `pinned` flag anymore; the Result IS the indicator.
     entity.tags.slice(0, 2).forEach(tag => meta.push(<span key={tag}>{tag}</span>))
     return meta
   }
@@ -355,7 +357,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                 {tShown.map(t => {
                   const claimCount = countForThread(t.id, e => e.type === 'claim')
                   const runCount = countForThread(t.id, e => e.type === 'analysis' && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
-                  const pinnedCount = countForThread(t.id, e => !!e.pinned)
+                  // "Pinned" count = active Result entities in the thread
+                  // (the wrapper created when the user pins something).
+                  const pinnedCount = countForThread(t.id, e => e.type === 'result' && e.status === 'active')
                   const isCurrent = currentThread === t.id
                   return (
                     <div
