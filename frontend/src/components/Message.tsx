@@ -612,9 +612,10 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
         : (figCtx || `The marked element is an image in the chat.`)
       const note =
         `User highlight (this turn): ${shape} on the attached ${target}. ${cellDesc} ` +
-        `Answer ONLY about what's inside the yellow mark — not the rest of the ${target}. ` +
-        `If the user's question is short or generic ("what is this?", "what are these?"), ` +
-        `interpret it as a question about the marked region.`
+        `The mark is a strong topical hint — if the question is short or demonstrative ` +
+        `("what is this?", "what are these?", "this", "here"), it's about the marked region. ` +
+        `If the question is clearly about the broader figure (axes, comparison to other parts, ` +
+        `overall layout), answer that — the mark just points at which figure they mean.`
       onAnnotate?.({ image: b64, note })
     } catch { /* rasterize failed — drop the mark */ }
     finally { setBusy(false); onHighlightDone?.(); setStroke([]); strokeRef.current = [] }
