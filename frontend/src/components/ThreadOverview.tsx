@@ -64,7 +64,8 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
 
   const pinned = entities.filter(e => (e.type === 'figure' || e.type === 'table' || e.type === 'result') && e.pinned && inThread(e) && e.status !== 'archived')
   const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived')
-  const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived')
+  const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived'
+    && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
   const oqs: OpenQ[] = ((thread.metadata?.open_questions as OpenQ[]) ?? [])
 
   const citedIds = new Set<string>()

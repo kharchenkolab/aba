@@ -47,10 +47,32 @@ class _RealStream:
         # re-charging full input each time. Up to 4 breakpoints; we use 3.
         system = [{"type": "text", "text": self._system,
                    "cache_control": {"type": "ephemeral"}}]
-        tools = self._tools
+        # Strip internal-only fields (approval_policy etc.) before sending to the
+        # Anthropic API — the API rejects unknown keys on tool definitions. The
+        # in-process layer (guide.py's per-tool approval gate) reads these fields
+        # off TOOL_SCHEMAS, not off the API request, so this is purely API hygiene.
+        _INTERNAL_KEYS = {"approval_policy"}
+        tools = [{k: v for k, v in t.items() if k not in _INTERNAL_KEYS} for t in (self._tools or [])]
         if tools:
             tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
         messages = [{"role": m["role"], "content": m["content"]} for m in self._history]
+        # Debug: persist the EXACT, replayable ("callable") request — raw system
+        # string, raw tool schemas, and the real messages (valid API format, with
+        # tool_results — unlike the distilled turn-context .md). Set ABA_RAW_REQUEST_DIR
+        # to enable; one file per API call. Load it and pass straight to
+        # client.messages.create(**payload) to replay/modify the real failure prompt.
+        import os as _os
+        _rawdir = _os.environ.get("ABA_RAW_REQUEST_DIR")
+        if _rawdir:
+            try:
+                import json as _json, time as _time
+                _os.makedirs(_rawdir, exist_ok=True)
+                _payload = {"model": self._model, "max_tokens": 4096,
+                            "system": self._system, "tools": self._tools, "messages": messages}
+                with open(_os.path.join(_rawdir, f"req_{int(_time.time()*1000)}.json"), "w") as _f:
+                    _json.dump(_payload, _f, default=str)
+            except Exception:  # noqa: BLE001 — debug dump must never break a turn
+                pass
         if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \
                 and isinstance(messages[-1]["content"][-1], dict):
             c = messages[-1]["content"]
@@ -72,11 +94,43 @@ class _RealStream:
         return self._stream.get_final_message()
 
 
-def _real_factory():
+def _oauth_bearer():
+    """Claude Code subscription OAuth bearer, or None. $CLAUDE_CODE_OAUTH_TOKEN else the
+    stored CLI credential. Re-read per call so a refreshed token is picked up."""
+    tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if tok:
+        return tok.strip()
+    cred = os.path.expanduser("~/.claude/.credentials.json")
+    if os.path.exists(cred):
+        try:
+            oa = json.load(open(cred)).get("claudeAiOauth") or {}
+            return (oa.get("accessToken") or "").strip() or None
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _llm_client():
+    """Live-agent Anthropic client. Default = project .env API key. ABA_LLM_CREDENTIAL=oauth
+    (dev/eval ONLY — never production serving on a personal subscription) uses the Claude Code
+    OAuth bearer instead, billing the subscription. Resolved per call so a refreshed stored
+    token is picked up; falls back to the .env key if no token is available."""
     import anthropic
-    client = anthropic.Anthropic(api_key=API_KEY)
+    if os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower() == "oauth":
+        tok = _oauth_bearer()
+        if tok:
+            return anthropic.Anthropic(auth_token=tok)
+    return anthropic.Anthropic(api_key=API_KEY)
+
+
+def _real_factory():
+    mode = os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower()
+    note = (" (OAuth bearer -> subscription)" if _oauth_bearer() else " but NO token -> FALLBACK to .env key") \
+        if mode == "oauth" else " (.env API key)"
+    print(f"[llm] live-agent credential mode={mode}{note}", flush=True)
+
     def open_stream(history, tools, system: str = "", model: str | None = None):
-        return _RealStream(client, history, tools, system, model or MODEL)
+        return _RealStream(_llm_client(), history, tools, system, model or MODEL)
     return open_stream
 
 

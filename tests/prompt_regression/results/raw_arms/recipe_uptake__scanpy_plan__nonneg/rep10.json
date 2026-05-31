@@ -1,0 +1,120 @@
+{
+ "case_id": "recipe_uptake__scanpy_plan",
+ "variant": {
+  "arm": "nonneg"
+ },
+ "variant_label": "nonneg",
+ "rep": 10,
+ "intent": "process the first sample with scanpy",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll process the first sample (Patient 145, Day 0) with scanpy, following the standard QC \u2192 normalization \u2192 clustering \u2192 visualization pipeline."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present the plan for processing the first sample:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "scanpy QC & clustering for GSE192391 Patient 145 Day 0",
+      "summary": "Standard single-cell QC, normalization, and clustering on the first sample (7,532 cells)",
+      "rationale": "Establish the baseline cell-type composition and quality of the day-0 sample before longitudinal comparison",
+      "steps": [
+       {
+        "title": "Load and inspect the first sample",
+        "description": "Extract GSM5746259 (Patient 145 Day 0, 7,532 cells) from the combined object and calculate QC metrics (n_genes, pct_mito, pct_ribo)",
+        "expected_outputs": [
+         "QC metrics in adata.obs",
+         "data summary (shape, gene counts, mito %ile)"
+        ]
+       },
+       {
+        "title": "QC filtering",
+        "description": "Filter cells with n_genes \u2265 200 and pct_mito < 0.20 (standard thresholds); report cells retained",
+        "expected_outputs": [
+         "Filtered AnnData object",
+         "number of cells before/after filtering"
+        ]
+       },
+       {
+        "title": "Normalize and log-transform",
+        "description": "normalize_total(1e4) + log1p",
+        "expected_outputs": [
+         "Normalized counts in adata.X"
+        ]
+       },
+       {
+        "title": "Identify highly variable genes (HVG)",
+        "description": "sc.pp.highly_variable_genes with default flavor, plot dispersion",
+        "expected_outputs": [
+         "HVG flag in adata.var",
+         "HVG scatter plot"
+        ]
+       },
+       {
+        "title": "PCA and Leiden clustering",
+        "description": "PCA on HVGs, compute neighbors (k=15), run Leiden clustering (resolution=1.0)",
+        "expected_outputs": [
+         "PCA reduction",
+         "Leiden cluster assignments in adata.obs['leiden']"
+        ]
+       },
+       {
+        "title": "UMAP visualization and marker genes",
+        "description": "Compute UMAP on PC space; visualize clusters; rank marker genes per cluster (t-test)",
+        "expected_outputs": [
+         "UMAP plot (colored by leiden cluster)",
+         "cluster marker genes table",
+         "marker genes plot"
+        ]
+       }
+      ],
+      "assumptions": [
+       "First sample = GSM5746259 (Patient 145, Day 0); 7,532 cells",
+       "Standard thresholds: n_genes \u2265 200, pct_mito < 0.20",
+       "Mitochondrial genes identified by 'MT-' prefix in HGNC symbols",
+       "Use sc.pl.* plotting functions (not matplotlib)",
+       "Resolution=1.0 for Leiden as a reasonable starting point"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

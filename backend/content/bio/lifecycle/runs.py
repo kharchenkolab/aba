@@ -60,7 +60,24 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     """Open a Run for the thread, rotating out any currently-open one first
     (a new boundary supersedes the previous Run). Returns the run (analysis) id.
     Records the run's output directory as its `artifact_path` so run_python/run_r
-    cd into it and the Files tree can show its full output."""
+    cd into it and the Files tree can show its full output.
+
+    Idempotent against redundant AGENT calls: agents frequently call open_run at the
+    start of an approved-plan execution even though a Run was already opened (server-
+    side, on plan approval) — sometimes twice, incl. a blank-title call. Without this,
+    each rotates (close+recreate), churning Runs and leaving outputs under a junk Run.
+    So for an agent call (no plan_entity_id) when a Run is already open, a redundant
+    request — no/blank title, or the same title as the open Run — returns the existing
+    Run instead of rotating. The server's plan-boundary call (plan_entity_id set) always
+    rotates, as a new approved plan should supersede the prior Run."""
+    cur = active_run_id(thread_id)
+    if cur and not plan_entity_id:
+        norm = (title or "").strip()
+        if not norm:
+            return cur   # blank-title open_run → never mint a junk duplicate
+        cur_title = (get_entity(cur) or {}).get("title") or ""
+        if norm[:120] == cur_title[:120]:
+            return cur   # same title as the already-open Run → no rotation/dup
     close_run(thread_id)
     md: dict = {"thread_id": thread_id, "run_state": "open", "origin": "internal"}
     if plan_entity_id:
@@ -100,6 +117,36 @@ def close_run(thread_id: str) -> Optional[str]:
 _FIG_EXT = {"png", "jpg", "jpeg", "svg", "webp", "gif", "pdf"}
 _TAB_EXT = {"csv", "tsv"}
 _MANIFEST_CAP = 24
+# PDF-thumbnail rasterization — for the Run-view Plots grid. The agent occasionally
+# saves figures as .pdf (recipe says PNG, but it drifts); without a thumb the grid
+# tile is unrenderable. pypdfium2 is pure-Python + no system deps. Cached as a
+# sibling .thumb.png; regenerated only if the PDF is newer than the cache.
+def _pdf_thumb_path(pdf_path) -> object:
+    from pathlib import Path as _P
+    return _P(pdf_path).with_suffix(_P(pdf_path).suffix + ".thumb.png")
+
+
+def _ensure_pdf_thumb(pdf_path) -> bool:
+    """Render PDF page 1 to a sibling .thumb.png at ~600px wide. Idempotent
+    (mtime-checked). Never raises — returns False if anything went wrong."""
+    from pathlib import Path
+    try:
+        p = Path(pdf_path)
+        thumb = _pdf_thumb_path(p)
+        if thumb.exists() and thumb.stat().st_mtime >= p.stat().st_mtime:
+            return True
+        import pypdfium2 as pdfium
+        doc = pdfium.PdfDocument(str(p))
+        if len(doc) == 0:
+            return False
+        page = doc[0]
+        # ~600 px target — scale = 600/page_width_pt × 72dpi factor
+        scale = max(0.5, min(3.0, 600 / max(50, page.get_width())))
+        bitmap = page.render(scale=scale)
+        bitmap.to_pil().save(thumb, "PNG", optimize=True)
+        return True
+    except Exception:  # noqa: BLE001 — thumbnail is best-effort; fall back to badge
+        return False
 
 
 def _human_size(n: int) -> str:
@@ -141,8 +188,14 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         ext = f.suffix.lower().lstrip(".")
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
         if ext in _FIG_EXT:
-            outputs.append({"kind": "figure", "label": rel,
-                            "thumb": plot_urls_by_name.get(f.name) or url,
+            # PDF: rasterize page 1 to a sibling .thumb.png + use that as the
+            # thumb URL so the Plots grid can actually render it.
+            thumb_url = plot_urls_by_name.get(f.name) or url
+            if ext == "pdf" and _ensure_pdf_thumb(f):
+                from urllib.parse import quote as _q
+                thumb_rel = (f.relative_to(base).as_posix() + ".thumb.png")
+                thumb_url = f"/api/runs/{run_id}/file?rel={_q(thumb_rel)}"
+            outputs.append({"kind": "figure", "label": rel, "thumb": thumb_url,
                             "href": url, "size": _human_size(sz)})
         elif ext in _TAB_EXT:
             outputs.append({"kind": "table", "label": rel, "href": url, "size": _human_size(sz)})

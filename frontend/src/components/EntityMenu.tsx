@@ -5,6 +5,7 @@
  * the project.
  */
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Entity } from '../types'
 import './EntityMenu.css'
 
@@ -12,6 +13,10 @@ interface Props {
   entity: Entity
   onChange: () => void
 }
+
+// Pin = "promote this evidence into a Result" (lifecycle/promote.pin_evidence).
+// Result / Claim / Finding ARE the curation layer — they are not pinnable themselves.
+const PINNABLE = new Set(['figure', 'table', 'cell', 'note', 'narrative'])
 
 type Editing =
   | { kind: 'rename' }
@@ -23,6 +28,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
   const [editing, setEditing] = useState<Editing>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
   // Position the popover with fixed coords from the trigger so it floats free
@@ -40,9 +46,12 @@ export default function EntityMenu({ entity, onChange }: Props) {
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const t = e.target as Node
+      // The popover is portaled to <body>, so it's NOT inside ref — check both
+      // the trigger and the portaled popover, else clicking a menu item self-closes.
+      const inTrigger = ref.current?.contains(t)
+      const inPop = popRef.current?.contains(t)
+      if (!inTrigger && !inPop) setOpen(false)
     }
     if (open) {
       document.addEventListener('mousedown', onClick)
@@ -65,6 +74,13 @@ export default function EntityMenu({ entity, onChange }: Props) {
   async function del() {
     const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, { method: 'DELETE' })
     if (!r.ok) console.error('delete failed', await r.text())
+    setOpen(false)
+    onChange()
+  }
+
+  async function pinToResult() {
+    const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}/pin`, { method: 'POST' })
+    if (!r.ok) console.error('pin failed', await r.text())
     setOpen(false)
     onChange()
   }
@@ -95,43 +111,48 @@ export default function EntityMenu({ entity, onChange }: Props) {
       >
         ⋯
       </button>
-      {open && !editing && (
-        <div className="entity-menu__pop" style={popStyle}>
-          <button onClick={() => setEditing({ kind: 'rename' })}>Rename…</button>
-          <button onClick={() => setEditing({ kind: 'tags' })}>Edit tags…</button>
-          {/* Pin is an evidence gesture — meaningless for datasets. */}
-          {entity.type !== 'dataset' && (
-            <button onClick={() => patch({ pinned: !entity.pinned })}>
-              {entity.pinned ? 'Unpin' : 'Pin'}
-            </button>
+      {open && createPortal(
+        // Portaled to <body> so the popover escapes any transformed/overflow-clipped
+        // ancestor (e.g. the slide-in rail) — position:fixed alone doesn't escape a
+        // transformed ancestor. popRef wraps it for the outside-click check.
+        <div ref={popRef} className="entity-menu__portal">
+          {!editing && (
+            <div className="entity-menu__pop" style={popStyle} onClick={e => e.stopPropagation()}>
+              <button onClick={() => setEditing({ kind: 'rename' })}>Rename…</button>
+              <button onClick={() => setEditing({ kind: 'tags' })}>Edit tags…</button>
+              {PINNABLE.has(entity.type) && (
+                <button onClick={pinToResult}>Pin</button>
+              )}
+              {canDownload && <button onClick={download}>Download…</button>}
+              {isArchived ? (
+                <button onClick={restore}>Restore</button>
+              ) : (
+                <button onClick={del} className="entity-menu__danger">Archive</button>
+              )}
+            </div>
           )}
-          {canDownload && <button onClick={download}>Download…</button>}
-          {isArchived ? (
-            <button onClick={restore}>Restore</button>
-          ) : (
-            <button onClick={del} className="entity-menu__danger">Archive</button>
+          {editing?.kind === 'rename' && (
+            <EditOne
+              label="Rename"
+              value={entity.title}
+              style={popStyle}
+              onCancel={() => setEditing(null)}
+              onSubmit={v => patch({ title: v })}
+            />
           )}
-        </div>
-      )}
-      {open && editing?.kind === 'rename' && (
-        <EditOne
-          label="Rename"
-          value={entity.title}
-          style={popStyle}
-          onCancel={() => setEditing(null)}
-          onSubmit={v => patch({ title: v })}
-        />
-      )}
-      {open && editing?.kind === 'tags' && (
-        <EditOne
-          label="Tags (comma-separated)"
-          value={entity.tags.join(', ')}
-          style={popStyle}
-          onCancel={() => setEditing(null)}
-          onSubmit={v => patch({
-            tags: v.split(',').map(s => s.trim()).filter(Boolean),
-          })}
-        />
+          {editing?.kind === 'tags' && (
+            <EditOne
+              label="Tags (comma-separated)"
+              value={entity.tags.join(', ')}
+              style={popStyle}
+              onCancel={() => setEditing(null)}
+              onSubmit={v => patch({
+                tags: v.split(',').map(s => s.trim()).filter(Boolean),
+              })}
+            />
+          )}
+        </div>,
+        document.body
       )}
     </div>
   )

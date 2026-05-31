@@ -73,9 +73,18 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
             {plots.map((p, i) => (
               <div key={i} className="rl-plot">
                 <div className="rl-plot__frame" onClick={() => setPreview(p)} title="Click to preview">
-                  {p.thumb
+                  {p.thumb && /\.(png|jpe?g|svg|webp|gif)$/i.test(p.thumb)
                     ? <img className="rl-plot__img" src={p.thumb} alt={p.label} loading="lazy" />
-                    : <span className="rl-plot__noimg"><EntityGlyph name="figure" size={18} /></span>}
+                    : <span className="rl-plot__noimg">
+                        <EntityGlyph name="figure" size={18} />
+                        {/* Non-image figures (PDF, etc.): show the extension as a small badge
+                            so the user knows what's there — img tag can't render PDFs inline. */}
+                        {p.thumb && /\.(pdf|html?|tif{1,2}f?)$/i.test(p.thumb) && (
+                          <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.7, marginTop: 4, textTransform: 'uppercase' }}>
+                            {(p.thumb.match(/\.([a-z]+)$/i) || [, ''])[1]}
+                          </span>
+                        )}
+                      </span>}
                   <PinChat item={p} onPin={onPin} onChat={onChat} />
                 </div>
                 <div className="rl-plot__label" title={p.label}>{p.label}</div>

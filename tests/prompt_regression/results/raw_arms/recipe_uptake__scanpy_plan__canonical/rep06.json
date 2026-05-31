@@ -1,0 +1,65 @@
+{
+ "case_id": "recipe_uptake__scanpy_plan",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 6,
+ "intent": "process the first sample with scanpy",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll process the first sample (Patient 145, Day 0) with a standard scanpy QC\u2192normalization\u2192clustering pipeline."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present the plan before executing:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "scRNA-seq QC + Clustering of GSM5746259 (Patient 145, Day 0)",
+      "summary": "Standard end-to-end processing: QC metrics, filtering, normalization, HVG selection, PCA, neighborhood graph, UMAP, Leiden clustering, and marker gene identification.",
+      "rationale": "Fast first-pass analysis to explore cell types and quality of the sample before deeper work.",
+      "assumptions": "\n  - Using the first sample (GSM5746259, Day 0, 7,532 cells)\n  - QC thresholds: n_genes \u2265 200, mitochondrial fraction &lt; 20%\n  - Normalization: CPM (counts per million, 1e4)\n  - Highly variable genes: default scanpy selection\n  - Leiden resolution: 1.0 (default)\n  - Output: QC plots, HVG/variance plots, UMAP, cluster markers\n",
+      "steps": "\n  <step>\n    <title>Load the first sample from the combined h5ad</title>\n    <description>Extract GSM5746259 (Patient 145, Day 0) from the registered dataset</description>\n    <expected_outputs>AnnData object with 7,532 cells \u00d7 36,601 genes</expected_outputs>\n  </step>\n  <step>\n    <title>Calculate QC metrics</title>\n    <description>Add n_genes, n_counts, and percent mitochondrial genes to .obs</description>\n    <expected_outputs>QC metrics added to adata.obs; QC distribution plots</expected_outputs>\n  </step>\n  <step>\n    <title>Filter cells</title>\n    <description>Remove cells with n_genes &lt; 200 or pct_mito &gt; 0.20</description>\n    <expected_outputs>Filtered cell count; before/after comparison</expected_outputs>\n  </step>\n  <step>\n    <title>Normalize and log-transform</title>\n    <description>CPM normalization (1e4) + log1p</description>\n    <expected_outputs>Normalized expression layer</expected_outputs>\n  </step>\n  <step>\n    <title>Identify highly variable genes (HVG)</title>\n    <description>Select top ~2,000 HVGs; plot variance explained</description>\n    <expected_outputs>HVG list + variance plot</expected_outputs>\n  </step>\n  <step>\n    <title>PCA + neighborhood graph</title>\n    <description>PCA on HVGs, then k-NN graph (k=15)</description>\n    <expected_outputs>PCA variance explained; .obsm['X_pca']</expected_outputs>\n  </step>\n  <step>\n    <title>UMAP + Leiden clustering</title>\n    <description>UMAP layout on neighborhood graph; Leiden clustering (res=1.0)</description>\n    <expected_outputs>UMAP coordinates; cluster assignments in .obs['leiden']</expected_outputs>\n  </step>\n  <step>\n    <title>Identify cluster markers</title>\n    <description>Wilcoxon rank-sum test for DE genes per cluster</description>\n    <expected_outputs>Top markers per cluster (logfoldchange, p-value, pct_nonnull)</expected_outputs>\n  </step>\n  <step>\n    <title>Save and export results</title>\n    <description>Save processed object (.h5ad); export QC plots and UMAP</description>\n    <expected_outputs>Processed AnnData, PNG figures for QC, HVG, UMAP, and marker tables (CSV)</expected_outputs>\n  </step>\n"
+     }
+    }
+   ]
+  }
+ ]
+}

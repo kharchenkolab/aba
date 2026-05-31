@@ -1,0 +1,143 @@
+{
+ "case_id": "recipe_uptake__scanpy_plan",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 11,
+ "intent": "process the first sample with scanpy",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll process the first sample (Patient 145, Day 0) with scanpy following the standard QC \u2192 normalization \u2192 HVG \u2192 PCA \u2192 clustering \u2192 UMAP workflow."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present the plan for processing the first sample:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "scanpy QC+Clustering: Patient 145 Day 0 PBMC",
+      "summary": "Standard scRNA-seq workflow on the first sample (GSM5746259): QC metrics \u2192 filtering \u2192 normalization \u2192 highly variable genes \u2192 PCA \u2192 kNN graph \u2192 UMAP \u2192 Leiden clustering \u2192 cluster marker genes.",
+      "rationale": "Produce a first-pass view of cell types and quality in a single COVID-19 patient's baseline PBMC sample.",
+      "assumptions": "\n- Using first sample only: Patient 145, Day 0 (7,532 cells)\n- Standard thresholds: n_genes \u2265 200, mitochondrial fraction < 20%\n- Leiden resolution = 1.0 (default, suitable for PBMC diversity)\n- Highly variable genes: top 2,000\n",
+      "steps": [
+       {
+        "title": "Load the first sample and calculate QC metrics",
+        "description": "Extract patient 145 day 0 from the combined object, compute n_genes, n_counts, pct_mito, ribosomal %",
+        "expected_outputs": [
+         "QC metrics computed; data summary"
+        ]
+       },
+       {
+        "title": "QC plots: pre-filter distribution",
+        "description": "Violin/scatter plots of QC metrics to inspect filtering thresholds",
+        "expected_outputs": [
+         "qc_metrics_prefilter.png"
+        ]
+       },
+       {
+        "title": "Filter cells and genes",
+        "description": "Remove cells with n_genes < 200 or pct_mito > 20%; remove genes expressed in < 3 cells",
+        "expected_outputs": [
+         "Cell/gene counts after filtering"
+        ]
+       },
+       {
+        "title": "Normalize and log-transform",
+        "description": "scanpy.pp.normalize_total(1e4) + log1p",
+        "expected_outputs": [
+         "Normalized adata"
+        ]
+       },
+       {
+        "title": "Highly variable genes",
+        "description": "scanpy.pp.highly_variable_genes (n_top_genes=2000)",
+        "expected_outputs": [
+         "hvg_scatter.png (dispersion plot)"
+        ]
+       },
+       {
+        "title": "PCA",
+        "description": "scanpy.tl.pca on HVG; compute variance explained",
+        "expected_outputs": [
+         "pca_variance.png"
+        ]
+       },
+       {
+        "title": "Build kNN graph and compute UMAP",
+        "description": "scanpy.pp.neighbors (n_neighbors=15) \u2192 scanpy.tl.umap",
+        "expected_outputs": [
+         "UMAP coordinates in adata.obsm"
+        ]
+       },
+       {
+        "title": "Leiden clustering",
+        "description": "scanpy.tl.leiden (resolution=1.0)",
+        "expected_outputs": [
+         "leiden cluster assignments"
+        ]
+       },
+       {
+        "title": "Visualize: UMAP by cluster",
+        "description": "UMAP colored by leiden cluster",
+        "expected_outputs": [
+         "umap_leiden.png"
+        ]
+       },
+       {
+        "title": "Compute cluster markers",
+        "description": "scanpy.tl.rank_genes_groups (method='wilcoxon') for each cluster",
+        "expected_outputs": [
+         "cluster_markers.csv"
+        ]
+       },
+       {
+        "title": "Marker gene dotplot",
+        "description": "Top markers per cluster as heatmap/dotplot",
+        "expected_outputs": [
+         "marker_dotplot.png"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

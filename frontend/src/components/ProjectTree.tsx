@@ -58,11 +58,15 @@ const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
   },
   results: {
     label: 'Results',
-    types: ['figure', 'table', 'result', 'note', 'narrative'],
+    // Under the unified Pin/Result model (misc/entity_pin_redesign.md), Results
+    // ARE the curated layer; figures/tables/notes/narratives live as evidence
+    // INSIDE Results (or under their Run, or in Files). The Results tab and the
+    // PinnedShelf show the same thing.
+    types: ['result'],
     icon: 'results',
-    empty: 'No results yet.',
+    empty: 'No results yet — Pin a figure or table in chat to create one.',
     sectionLabel: 'Project results',
-    filters: ['All', 'Figures', 'Tables'],
+    filters: ['All'],
   },
   files: {
     label: 'Files',
@@ -248,10 +252,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       if (filter === 'Complete') return entity.status === 'active' || entity.status === 'completed'
       return entity.status === 'active' || entity.status === 'running'
     }
-    if (section === 'results') {
-      if (filter === 'Figures') return entity.type === 'figure'
-      if (filter === 'Tables') return entity.type === 'table'
-    }
+    // Results section no longer has Figures/Tables sub-filters (Results are the
+    // unified curation layer; figures/tables aren't Results — they're evidence
+    // *inside* Results, viewable under their Run or in Files).
     return true
   }
 
@@ -351,7 +354,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                 <div className="tree__section-label">{threadFilter} questions</div>
                 {tShown.map(t => {
                   const claimCount = countForThread(t.id, e => e.type === 'claim')
-                  const runCount = countForThread(t.id, e => e.type === 'analysis')
+                  const runCount = countForThread(t.id, e => e.type === 'analysis' && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
                   const pinnedCount = countForThread(t.id, e => !!e.pinned)
                   const isCurrent = currentThread === t.id
                   return (
@@ -392,7 +395,12 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
           )
         })() : (() => {
           const section = SECTION_CONFIG[activeSection]
-          const items = visible.filter(e => section.types.includes(e.type))
+          // Ambient Runs (lifecycle/registry.py:_ensure_analysis) are catch-all
+          // analyses created to parent pre-plan ad-hoc outputs. They're structural
+          // bookkeeping — never user-facing. The producing code's own comment says
+          // "HIDDEN from the Runs UI"; this is that filter.
+          const items = visible.filter(e =>
+            section.types.includes(e.type) && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
           const sectionFilter = sectionFilters[activeSection]
           const filteredItems = items.filter(e => entityMatchesFilter(e, activeSection, sectionFilter))
           const showKey = `${activeSection}:${sectionFilter}`

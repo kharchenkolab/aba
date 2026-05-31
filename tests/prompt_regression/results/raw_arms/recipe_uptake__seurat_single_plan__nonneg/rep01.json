@@ -1,0 +1,113 @@
+{
+ "case_id": "recipe_uptake__seurat_single_plan",
+ "variant": {
+  "arm": "nonneg"
+ },
+ "variant_label": "nonneg",
+ "rep": 1,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1. Run a standard Seurat workflow in R: load, QC, normalize, PCA, neighbors, clustering, UMAP, and FindAllMarkers; show me a UMAP and the top markers per cluster.",
+ "target_recipe": "seurat-scrna",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good\u2014I see the GSM5746268 triplet (barcodes, features, matrix.mtx.gz) plus two other samples. I'll focus on GSM5746268_MGI0369_1_SLAB-C1-C1 as requested. Let me load the Seurat recipe first to ensure I follow the standard workflow:"
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "seurat-scrna"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"seurat-scrna\", \"description\": \"Authoritative single-cell RNA-seq QC + clustering + cluster annotation with R/Seurat (v5).\", \"body\": \"scRNA-seq QC + clustering + annotation with R/Seurat v5 (standard PBMC3k workflow). Provision: ensure_capability('Seurat'), then library(Seurat). THE THREE CHOICES THAT DEFINE THE RESULT \\u2014 surface them with present_plan before committing: (1) QC thresholds (subset cutoffs on nFeature_RNA and percent.mt); (2) number of PCs/dims (read off the ElbowPlot); (3) clustering resolution (FindClusters). Steps: ReadMtx -> CreateSeuratObject(min.cells=3,min.features=200) -> PercentageFeatureSet('^MT-') -> subset QC -> NormalizeData -> FindVariableFeatures -> ScaleData -> RunPCA -> FindNeighbors -> FindClusters -> RunUMAP -> JoinLayers -> FindAllMarkers. Load ggplot2 and dplyr explicitly; never library(tidyverse).\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present a plan for the workflow:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Seurat scRNA-seq workflow for GSM5746268",
+      "summary": "Load 10x MTX triplet, QC, normalize, cluster, and identify markers in a standard Seurat v5 workflow.",
+      "rationale": "Standard end-to-end scRNA-seq analysis with output UMAP and top markers per cluster.",
+      "steps": [
+       {
+        "title": "Load 10x MTX triplet and create Seurat object",
+        "description": "Read barcodes, features, and matrix.mtx.gz for GSM5746268_MGI0369_1_SLAB-C1-C1; create Seurat object with min.cells=3, min.features=200.",
+        "expected_outputs": [
+         "Seurat object with raw counts"
+        ]
+       },
+       {
+        "title": "Add QC metrics (nFeature_RNA, nCount_RNA, percent.mt)",
+        "description": "Calculate percent.mt using MT- gene prefix; inspect distributions to set filtering thresholds.",
+        "expected_outputs": [
+         "QC metrics attached to object"
+        ]
+       },
+       {
+        "title": "Subset based on QC thresholds",
+        "description": "Filter cells on nFeature_RNA and percent.mt (typical: nFeature 500\u20135000, percent.mt < 10%).",
+        "expected_outputs": [
+         "Filtered Seurat object"
+        ]
+       },
+       {
+        "title": "Normalize, find HVGs, scale, and run PCA",
+        "description": "NormalizeData \u2192 FindVariableFeatures \u2192 ScaleData \u2192 RunPCA.",
+        "expected_outputs": [
+         "PCA reduction"
+        ]
+       },
+       {
+        "title": "Find neighbors, cluster, and run UMAP",
+        "description": "FindNeighbors \u2192 FindClusters (default resolution=0.8) \u2192 RunUMAP.",
+        "expected_outputs": [
+         "UMAP and cluster assignments"
+        ]
+       },
+       {
+        "title": "Find all markers and visualize",
+        "description": "FindAllMarkers with test.use='wilcox'; show UMAP colored by cluster and top 3 markers per cluster.",
+        "expected_outputs": [
+         "UMAP plot, marker table"
+        ]
+       }
+      ],
+      "assumptions": [
+       "Using mitochondrial gene prefix 'MT-' (standard for mammalian 10x).",
+       "Default QC thresholds: nFeature_RNA 500\u20135000, percent.mt < 10%.",
+       "Clustering resolution 0.8 (Seurat default).",
+       "Using Wilcoxon rank-sum test for marker detection."
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

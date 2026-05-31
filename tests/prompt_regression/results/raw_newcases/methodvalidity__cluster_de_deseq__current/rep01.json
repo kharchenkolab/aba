@@ -1,0 +1,131 @@
+{
+ "case_id": "methodvalidity__cluster_de_deseq",
+ "variant": {},
+ "variant_label": "current",
+ "rep": 1,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1. Cluster the cells, then find the genes differentially expressed between the T-cell cluster and the monocyte cluster. Please use DESeq2 for the differential expression.",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "maxsteps",
+ "deterministic": {
+  "plans": false,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": false,
+  "no_pseudoreplication": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll help you process this 10x PBMC sample: load the matrix, cluster the cells, and find differentially expressed genes between T cells and monocytes using DESeq2.\n\nLet me start by inspecting the data files."
+    },
+    {
+     "type": "tool_use",
+     "name": "list_data_files",
+     "input": {}
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "list_data_files",
+     "content": "{\"files\": [{\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.matrix.mtx.gz\", \"registered\": false}, {\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.barcodes.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.features.tsv.gz\", \"registered\": false}]}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good \u2014 the three files are present. Now let me search for the appropriate recipe for this multi-step analysis."
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "single-cell RNA-seq clustering QC normalization"
+     }
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "differential expression DESeq2 scRNA-seq cell clusters"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
+    },
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Let me search for a DESeq2-based differential expression recipe for scRNA-seq:"
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "DESeq2 differential expression scRNA"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Let me search more directly for best-practice scRNA-seq differential expression:"
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "single-cell differential expression pseudobulk"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
+    }
+   ]
+  }
+ ]
+}
