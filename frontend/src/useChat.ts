@@ -195,18 +195,34 @@ export function useChat(
   // thread's content into the new one.
   const genRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
-  // C-0: passive-observer mode. True when this hook has set `streaming=true`
-  // because a `/api/threads/{tid}/active-turn` probe found an in-flight Turn
-  // on mount, but we don't have an open SSE to that Turn (today's SSE only
-  // attaches to the originating POST, which is the bug). The Stop button
-  // works; live SSE replay arrives with C-1.
-  const reattachedRef = useRef(false)
+  // C-1: last seq we've seen on the current stream. Persisted to
+  // localStorage per thread alongside the run_id so a hard reload can
+  // reattach with `?since=<lastSeq>` — but only if the in-flight Turn's
+  // run_id matches the one we last saw (seqs are per-run, so a stale
+  // entry from a completed Turn must not be used against a fresh one).
+  const lastSeqRef = useRef(0)
+  const lastRunIdRef = useRef<string | null>(null)
+  const lastSeqKey = (tid: string) => `aba:lastSeq:${tid}`
+  const readPersistedSeq = (tid: string): { runId: string | null; seq: number } => {
+    try {
+      const raw = localStorage.getItem(lastSeqKey(tid))
+      if (!raw) return { runId: null, seq: 0 }
+      const obj = JSON.parse(raw)
+      return { runId: typeof obj.runId === 'string' ? obj.runId : null,
+               seq: Number.isFinite(obj.seq) ? obj.seq : 0 }
+    } catch { return { runId: null, seq: 0 } }
+  }
+  const writePersistedSeq = (tid: string, runId: string, seq: number) => {
+    try { localStorage.setItem(lastSeqKey(tid), JSON.stringify({ runId, seq })) }
+    catch { /* private mode / quota — non-fatal */ }
+  }
 
   // Load the current thread's persisted conversation (ignored if superseded).
-  // C-0: also probes /active-turn so a reload during a long-running cell
-  // re-surfaces the Stop button. Without this, the SSE generator that owned
-  // the in-flight Turn is dead (cancelled by the abort), but the agent's tool
-  // is still executing — the user otherwise has no way to know or recover.
+  // C-1: after history loads, probes /active-turn — if a Turn is still in
+  // flight on this thread, reattach via /api/turns/{rid}/stream?since=
+  // <lastSeq>. The agent loop runs as a background task on the server and
+  // survives client disconnect, so we get the live stream back including
+  // any events emitted while we were away.
   const loadMessages = useCallback(async () => {
     const myGen = genRef.current
     try {
@@ -215,19 +231,29 @@ export function useChat(
       if (r.ok && genRef.current === myGen) setMessages(collapseHistory(raw))
     } catch { /* ignore */ }
     finally { if (genRef.current === myGen) setLoading(false) }
-    // After history loads, see if there's an in-flight Turn on this thread.
-    // If so, enter passive-observer mode so the Stop button appears.
     if (streamingRef.current) return    // already streaming via our own POST
     try {
       const ar = await fetch(`/api/threads/${encodeURIComponent(threadId)}/active-turn`)
       if (!ar.ok || genRef.current !== myGen) return
       const row = await ar.json()
       if (!row || !row.run_id || genRef.current !== myGen) return
-      currentRunIdRef.current = row.run_id
-      reattachedRef.current = true
-      setStreaming(true)
+      // Real reattach — open the sink stream for this Turn. Use the
+      // persisted seq ONLY if it was for THIS run_id; otherwise start
+      // from 0 (replay the in-memory tail). runStreamRef is set just
+      // below to avoid a temporal dead zone (runStream uses
+      // loadMessages indirectly).
+      const since = (lastRunIdRef.current === row.run_id) ? lastSeqRef.current : 0
+      if (since === 0) {
+        // Stale persisted entry — reset so the new run can update it.
+        lastSeqRef.current = 0
+        lastRunIdRef.current = row.run_id
+      }
+      runStreamRef.current?.({ reattachRunId: row.run_id, since })
     } catch { /* probe is best-effort */ }
   }, [threadId])
+  // Ref-shadow of runStream so loadMessages can call it without a TDZ
+  // (runStream is declared after loadMessages and depends on it).
+  const runStreamRef = useRef<((opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => Promise<void>) | null>(null)
 
   // On a project switch (reloadKey) or thread switch (threadId): reset
   // SYNCHRONOUSLY (before paint) so the chat pane never shows the previous
@@ -240,10 +266,13 @@ export function useChat(
     setStreaming(false)
     setMessages([])
     setLoading(true)
-    // C-0: reset passive-observer state too, so the next mount's
-    // active-turn probe can re-establish it cleanly for the new thread.
-    reattachedRef.current = false
     currentRunIdRef.current = null
+    // C-1: seed lastSeq + run_id from localStorage for the new thread.
+    // Used by the active-turn probe below — only applied if the live
+    // run_id matches what we last persisted.
+    const persisted = readPersistedSeq(threadId)
+    lastSeqRef.current = persisted.seq
+    lastRunIdRef.current = persisted.runId
   }, [reloadKey, threadId])
 
   // Then fetch the new thread's conversation (after paint).
@@ -257,7 +286,7 @@ export function useChat(
   //    /api/turns/{runId}/resume, which inherits thread+focus from the
   //    prior turn and drives a fresh Turn forward.
   const runStream = useCallback(
-    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject' }) => {
+    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => {
       const myGen = genRef.current
       const ac = new AbortController()
       abortRef.current = ac
@@ -275,7 +304,16 @@ export function useChat(
       const annot = opts.annotation !== undefined ? opts.annotation : annotationRef.current
 
       try {
-        const res = opts.resumeRunId
+        // C-1: three modes — reattach (GET /api/turns/{rid}/stream) for
+        // resuming an in-flight Turn after disconnect/reload, resume
+        // (POST /api/turns/{rid}/resume) for the user's reply to a paused
+        // AWAITING_USER turn, or fresh chat (POST /api/chat).
+        const res = opts.reattachRunId
+          ? await fetch(`/api/turns/${encodeURIComponent(opts.reattachRunId)}/stream?since=${opts.since ?? 0}`, {
+              method: 'GET',
+              signal: ac.signal,
+            })
+          : opts.resumeRunId
           ? await fetch(`/api/turns/${encodeURIComponent(opts.resumeRunId)}/resume`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -297,6 +335,9 @@ export function useChat(
                 ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
               }),
             })
+        // Reattach mode: we already know the run_id; set it now so Stop
+        // works before the first event arrives.
+        if (opts.reattachRunId) currentRunIdRef.current = opts.reattachRunId
         if (!res.body) throw new Error('No response body')
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -319,6 +360,25 @@ export function useChat(
               ev = JSON.parse(raw)
             } catch {
               continue
+            }
+
+            // C-1: every event carries `seq` (assigned by the TurnSink).
+            // Persist to localStorage with the run_id so a hard reload
+            // can reattach with `?since=<seq>` for the SAME run; a
+            // mismatching persisted entry is treated as 0 in the mount
+            // probe above. We persist only when we know the run_id.
+            const evSeq = (ev as { seq?: number }).seq
+            const rid = currentRunIdRef.current
+            if (typeof evSeq === 'number' && rid) {
+              if (lastRunIdRef.current !== rid) {
+                // Fresh turn — reset and start tracking under the new run_id.
+                lastRunIdRef.current = rid
+                lastSeqRef.current = 0
+              }
+              if (evSeq > lastSeqRef.current) {
+                lastSeqRef.current = evSeq
+                writePersistedSeq(threadId, rid, evSeq)
+              }
             }
 
             // Observability Console: capture every event (except chat-text
@@ -492,6 +552,10 @@ export function useChat(
     },
     [focusEntityId, threadId],
   )
+  // Expose runStream via a ref so loadMessages (declared above) can call
+  // it without a temporal dead zone. Updated on every render — refs are
+  // stable across renders even though runStream's identity changes.
+  useEffect(() => { runStreamRef.current = runStream }, [runStream])
 
   const sendMessage = useCallback(
     async (text: string, annotation?: Annotation | null) => {
@@ -557,22 +621,10 @@ export function useChat(
       body: JSON.stringify({}),
     }).catch(() => null)
     await fire()
-    // C-0: passive-observer mode — there's no SSE handler that will fire
-    // `cancelled`/`done` to clear streaming. Clean up locally and reload
-    // messages so the synthetic [cancelled] tool_result (written by
-    // cancel_turn -> repair_orphaned_tool_use_in_messages) replaces the
-    // open tool_use that was rendering as a spinner.
-    if (reattachedRef.current) {
-      reattachedRef.current = false
-      currentRunIdRef.current = null
-      setStreaming(false)
-      loadMessages()
-      return
-    }
     setTimeout(() => {
       if (streamingRef.current && currentRunIdRef.current) fire()
     }, 2500)
-  }, [loadMessages])
+  }, [])
 
   // Enqueue: type-while-streaming. Will auto-flush when the current
   // turn ends (done) OR when the user Steers (cancel+flush).

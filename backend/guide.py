@@ -372,29 +372,32 @@ async def stream_response(
     annotation_note: str | None = None,
     retry: bool = False,
     plan_entity_id: str | None = None,
-) -> AsyncGenerator[str, None]:
+    run_id: str | None = None,
+) -> AsyncGenerator[dict, None]:
     """
-    Append user message to the workspace thread, run the Guide loop, stream SSE.
-    See aba_arch2.md §2.3 for the focus context model.
+    Append user message to the workspace thread, run the Guide loop, yield
+    event dicts. See aba_arch2.md §2.3 for the focus context model.
 
     `retry=True` regenerates the reply for the existing last turn without
     appending a new user message — used after a transient API failure, where
     the user turn was already persisted but no assistant reply was produced.
+
+    `run_id` should be allocated by the caller (via core.runtime.turn_executor.
+    new_run_id()) so the TurnSink can be created upfront and subscribers can
+    attach before the body starts emitting. If omitted (callers that don't
+    care about pre-allocation), one is generated internally.
+
+    The yielded dicts are the *payloads* — SSE wire framing happens in
+    core.runtime.turn_sink.stream_from_sink (which embeds the seq from the
+    sink). Callers running the body via turn_executor.start_turn never
+    consume this generator directly; the executor's _drain does the pushing.
     """
     _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
-    def sse(obj: dict) -> str:
+    def sse(obj: dict) -> dict:
+        # The name is retained for diff-friendliness; the function no longer
+        # formats SSE wire frames — it just live-logs and returns the payload.
         _live_log_event(turn.run_id, obj, _dtbuf)
-        # C-0: mirror every SSE event into the per-Turn sink so a
-        # reconnecting client can detect an in-flight Turn and offer
-        # Stop. C-1 will flip this around so SSE is served FROM the sink.
-        try:
-            from core.runtime import turn_sink as _ts
-            s = _ts.get(turn.run_id)
-            if s is not None:
-                s.push(obj)
-        except Exception:  # noqa: BLE001
-            pass    # sink mirroring is best-effort; never block the stream
-        return f"data: {json.dumps(obj)}\n\n"
+        return obj
 
     session_id = new_session_id()
     turn_index = 0
@@ -410,7 +413,7 @@ async def stream_response(
     # state through transitions; mark DONE/FAILED at the end. Lets resume-
     # after-restart see what was in flight.
     turn = Turn(
-        run_id=gen_run_id(),
+        run_id=run_id or gen_run_id(),
         session_id=session_id,
         turn_index=0,
         agent_spec_name="guide",
@@ -431,13 +434,10 @@ async def stream_response(
     # thread, not the whole project firehose. "default" resolves to (and
     # materializes) the project's default thread entity.
     store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
-    # C-0: register a per-Turn event sink (in-memory ring buffer). Every
-    # SSE event is mirrored into it; `/api/threads/{tid}/active-turn`
-    # surfaces this Turn so a client that reloaded the page can find the
-    # in-flight work and offer Stop. Released in the same finally that
-    # releases the cancel token.
-    from core.runtime import turn_sink as _ts
-    _ts.create(turn.run_id, store_tid, turn.started_at)
+    # C-1: the per-Turn sink is allocated by core.runtime.turn_executor.
+    # start_turn BEFORE this body runs, so subscribers can attach before
+    # any event is emitted. We don't create or close it here — the
+    # executor's _drain owns the sink lifecycle.
 
     if not retry:
         # Note-FIRST ordering: when the user attached a highlight, lead
@@ -1153,12 +1153,6 @@ async def stream_response(
         # Always release the cancel token — leaking it would keep stale
         # interrupters reachable and (via the registry) a re-entrant
         # cancel on this run_id would fire them against now-defunct
-        # processes/connections.
+        # processes/connections. The TurnSink is closed by the executor's
+        # `_drain` finally (turn_executor.py); we don't touch it here.
         _cancel.release(turn.run_id)
-        # C-0: release the per-Turn sink. Closes the in-memory ring so
-        # `/api/threads/{tid}/active-turn` stops returning this Turn.
-        try:
-            from core.runtime import turn_sink as _ts
-            _ts.release(turn.run_id)
-        except Exception:  # noqa: BLE001
-            pass

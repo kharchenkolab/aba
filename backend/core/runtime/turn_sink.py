@@ -1,31 +1,38 @@
 """Per-Turn event log + process-global registry.
 
-C-0 of the durable-turns redesign (misc/durable_turns_plan.md). Today the
-agent loop in `guide.py:stream_response` is a generator whose lifetime is
-tied to the HTTP request — when the client disconnects (tab switch,
-network blip), the generator is cancelled mid-tool-await and the Turn is
-stranded in `executing_tools` forever.
+Foundation for the durable-turns redesign (misc/durable_turns_plan.md).
+Before this, the agent loop in `guide.py:stream_response` was a generator
+whose lifetime was tied to the HTTP request — client disconnect (tab
+switch, network blip) cancelled the generator mid-tool-await and the
+Turn was stranded in `executing_tools` forever.
 
-This module is the foundation. Every event the loop currently yields as
-SSE is ALSO pushed onto a per-Turn `TurnSink`. The sink keeps a bounded
-in-memory tail (so a reattaching client can replay recent events) and
-exposes a process-global registry so the frontend can ask
-"is there an in-flight Turn for thread X right now?" — which restores the
-Stop button after a reload even without the full reattachable-stream
-machinery (that's C-1).
+C-1 flips the architecture: the agent loop runs as a background task
+that emits via `TurnSink.push(obj)`. The SSE response is just a
+subscriber on the sink — client disconnect unsubscribes but the task
+keeps running. A reconnecting client opens a new subscription via
+`GET /api/turns/{rid}/stream?since=<seq>` and the sink replays missed
+events from its in-memory tail.
 
-Stays additive in C-0: `stream_response` continues to yield SSE chunks
-as before; this module is a side-channel. C-1 will flip the executor to
-emit ONLY through the sink and serve the SSE from the sink's subscribers.
+Sink lifecycle:
+  * `create(run_id, ...)` — allocate + register
+  * `push(obj)` — append + fan out to subscribers
+  * `close(run_id)` — done streaming; subscribers get a `None` sentinel
+    so their generators exit cleanly. Sink stays in the registry (with
+    its in-memory tail) so a late reconnect can still replay.
+  * `evict(run_id)` — actually remove from registry. C-2 will sweep on
+    TTL; today nothing calls it (memory leak per turn is bounded — each
+    closed sink holds ~MAX_TAIL events, freed at process exit).
 """
 from __future__ import annotations
 import asyncio
+import json
 from collections import deque
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 
 MAX_TAIL = 1000          # events kept in the in-memory ring per Turn
 SUB_QUEUE_MAX = 1000     # per-subscriber inbox; oldest dropped on overflow
+HEARTBEAT_SECONDS = 25   # SSE keepalive interval (vite/nginx idle-close guard)
 
 
 class TurnSink:
@@ -37,7 +44,7 @@ class TurnSink:
     """
 
     __slots__ = ("run_id", "thread_id", "started_at", "_seq",
-                 "_tail", "_subs", "_closed")
+                 "_tail", "_subs", "_closed", "_task")
 
     def __init__(self, run_id: str, thread_id: str | None, started_at: str):
         self.run_id = run_id
@@ -47,6 +54,7 @@ class TurnSink:
         self._tail: deque[tuple[int, dict]] = deque(maxlen=MAX_TAIL)
         self._subs: set[asyncio.Queue] = set()
         self._closed = False
+        self._task: Optional[asyncio.Task] = None   # set by turn_executor.start_turn
 
     @property
     def last_seq(self) -> int:
@@ -133,12 +141,26 @@ def get(run_id: str) -> Optional[TurnSink]:
     return _REGISTRY.get(run_id)
 
 
-def release(run_id: str) -> None:
-    """Close + drop from the registry. Called from the agent loop's
-    finally block, after the final `done` event has been pushed."""
-    s = _REGISTRY.pop(run_id, None)
+def close(run_id: str) -> None:
+    """Mark the sink closed (sentinel to subscribers). Keep it in the
+    registry so a late reconnect can still replay the in-memory tail.
+    Called from the agent loop's finally block."""
+    s = _REGISTRY.get(run_id)
     if s is not None:
         s.close()
+
+
+def release(run_id: str) -> None:
+    """Backwards-compat alias for the C-0 callsite. Now equivalent to
+    `close()` — the sink stays alive in the registry post-close so a
+    reconnecting client can replay. Use `evict()` for actual removal."""
+    close(run_id)
+
+
+def evict(run_id: str) -> None:
+    """Remove the sink from the registry entirely. C-2 sweeps closed
+    sinks on TTL; manual eviction is rarely needed."""
+    _REGISTRY.pop(run_id, None)
 
 
 def active_for_thread(thread_id: str) -> Optional[TurnSink]:
@@ -159,3 +181,53 @@ def active_for_thread(thread_id: str) -> Optional[TurnSink]:
 
 def active_ids() -> list[str]:
     return [rid for rid, s in _REGISTRY.items() if not s.closed]
+
+
+# ---- SSE consumer -----------------------------------------------------
+
+async def stream_from_sink(sink: TurnSink, *, since: int = 0
+                           ) -> AsyncGenerator[str, None]:
+    """Yield SSE wire frames from a sink: first replay any events with
+    seq > since from the in-memory tail, then live-stream new events as
+    the producer pushes them. Embeds `seq` into each event's payload so
+    the client can persist `lastSeq` and request a reattach with
+    `?since=<lastSeq>` on disconnect.
+
+    Honors `sink.close()`: subscribers receive `(seq, None)` as a
+    sentinel and this generator yields a final `done` event (if not
+    already covered by an explicit `done` push from the producer) and
+    returns cleanly.
+
+    Heartbeats (`: keepalive\n\n`, an SSE comment line ignored by
+    EventSource clients) keep proxies from idling the connection."""
+    q = sink.subscribe()
+    try:
+        # 1. Replay any events with seq > since from the in-memory tail.
+        # If the client missed events older than the tail's start, those
+        # are lost (until C-2's disk replay) — but the gap is visible
+        # via the seq jump, so a reattach with since=0 is always safe.
+        for seq, payload in sink.replay_since(since):
+            yield _format(seq, payload)
+
+        # 2. Live-stream. Heartbeat on timeout to keep the connection
+        # alive during quiet periods (e.g. mid-tool, no progress events).
+        while True:
+            try:
+                seq, payload = await asyncio.wait_for(q.get(), timeout=HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if payload is None:
+                # Sentinel — producer closed the sink. Done.
+                return
+            yield _format(seq, payload)
+    finally:
+        sink.unsubscribe(q)
+
+
+def _format(seq: int, payload: dict) -> str:
+    """Wire format: `data: {payload + seq}\n\n`. The seq lets clients
+    persist their position and request `?since=<lastSeq>` on reattach."""
+    obj = dict(payload)
+    obj["seq"] = seq
+    return f"data: {json.dumps(obj)}\n\n"
