@@ -143,7 +143,7 @@ TOOL_SCHEMAS = [
                 },
                 "timeout_s": {
                     "type": "integer",
-                    "description": "Hard time LIMIT (ceiling) in seconds; capped at 1800. The run is killed if it exceeds this. This is NOT a runtime estimate and does not affect background routing — set it generously.",
+                    "description": "Hard time LIMIT (ceiling) in seconds; default 300s, cap 1800s. The run is killed if it exceeds this. This is NOT a runtime estimate and does not affect background routing — set it generously.",
                     "minimum": 5,
                     "maximum": 1800,
                 },
@@ -194,7 +194,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "code": {"type": "string", "description": "R code to execute."},
                 "timeout_s": {"type": "integer", "minimum": 5, "maximum": 1800,
-                              "description": "Hard time limit; default 120s."},
+                              "description": "Hard time limit (seconds); default 600s, cap 1800s. Bump for long Bioconductor ops (Seurat marker genes, ScaleData on large objects, large DE, package installs)."},
             },
             "required": ["code"],
         },
@@ -733,6 +733,45 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "add_to_dataset",
+        "description": (
+            "Add one or more files to an EXISTING directory-shaped dataset. Use this "
+            "when the user says 'add this file to the dataset' or you've just fetched "
+            "an additional sample that belongs in an already-registered bundle (e.g. "
+            "another 10x triplet for the same GEO series). The files are hardlinked "
+            "into the dataset's directory; they appear in the next inspect_upload. "
+            "Fails cleanly if the dataset is a single FILE (not a directory) — those "
+            "can't grow; create a new dataset instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dataset_id": {"type": "string", "description": "Id of the dataset entity to extend (dat_*)."},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths of files to add. Existing files in the bundle with the same basename are skipped (the function reports them as `already_present`, not overwritten)."},
+            },
+            "required": ["dataset_id", "paths"],
+        },
+    },
+    {
+        "name": "remove_from_dataset",
+        "description": (
+            "Remove one or more files from an existing directory-shaped dataset. Use "
+            "this when the user says 'drop X from the dataset' (e.g. a stray file "
+            "that got bundled in, or a sample being excluded). The files can be given "
+            "as basenames OR absolute paths inside the dataset directory. Files OUTSIDE "
+            "the dataset are refused — this tool only modifies the bundle, never the "
+            "broader filesystem."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dataset_id": {"type": "string", "description": "Id of the dataset entity (dat_*)."},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Basenames or absolute paths of files to remove. Must be inside the dataset's directory."},
+            },
+            "required": ["dataset_id", "paths"],
+        },
+    },
+    {
         "name": "pin_entity",
         "description": (
             "Pin (or unpin, pass pinned=false) an entity so it stays surfaced on the "
@@ -1215,7 +1254,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     from core import projects
 
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 90), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
@@ -1316,7 +1355,7 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     if not KERNEL_ENABLED:
         return {"error": "R runs in a persistent kernel, which is currently disabled."}
     code = input_.get("code", "")
-    timeout_s = max(5, min(int(input_.get("timeout_s") or 120), 1800))
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 600), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
@@ -3091,6 +3130,114 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             "artifact_path": abspath if exists else None, "note": note}
 
 
+def add_to_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Hardlink one or more files into an existing directory-shaped
+    dataset's bundle directory. The dataset entity itself stays at the
+    same id + artifact_path; only the directory contents change. Same
+    hardlink-then-cross-fs-copy fallback as `register_dataset`'s
+    multi-path bundling."""
+    import os, shutil
+    from core.graph.entities import get_entity
+    dsid = (input_.get("dataset_id") or "").strip()
+    paths = input_.get("paths") or []
+    if not dsid:
+        return {"error": "dataset_id is required"}
+    if not isinstance(paths, list) or not paths:
+        return {"error": "paths is required (non-empty list)"}
+    ent = get_entity(dsid)
+    if not ent:
+        return {"error": f"dataset {dsid} not found"}
+    if ent.get("type") != "dataset":
+        return {"error": f"{dsid} is a {ent.get('type')}, not a dataset"}
+    dest_dir = ent.get("artifact_path")
+    if not dest_dir or not os.path.isdir(dest_dir):
+        return {"error": f"dataset {dsid} is not directory-shaped "
+                f"(artifact_path={dest_dir!r}) — files can't be added. "
+                f"Either register a new dataset bundling the originals + the "
+                f"new files, or convert this one to a directory first."}
+
+    resolved = [_resolve_dataset_path(str(p), ctx) for p in paths]
+    added, missing, already_present = [], [], []
+    for src in resolved:
+        if not os.path.isfile(src):
+            missing.append(src); continue
+        target = os.path.join(dest_dir, os.path.basename(src))
+        if os.path.exists(target):
+            already_present.append(os.path.basename(src)); continue
+        try:
+            os.link(src, target)
+        except OSError:
+            try:
+                shutil.copy2(src, target)
+            except Exception as e:  # noqa: BLE001
+                missing.append(f"{src} (copy failed: {e})"); continue
+        added.append(os.path.basename(src))
+    note = f"Added {len(added)} file(s) to dataset {dsid}."
+    if already_present:
+        note += f" Skipped {len(already_present)} already-present: {', '.join(already_present)}."
+    if missing:
+        note += f" Could not add {len(missing)} file(s): {', '.join(missing)}."
+    return {"status": "ok" if added or not missing else "partial",
+            "dataset_id": dsid, "added": added,
+            "already_present": already_present, "missing": missing,
+            "dataset_dir": dest_dir, "note": note}
+
+
+def remove_from_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Unlink one or more files from a directory-shaped dataset's bundle.
+    Safety: each path must resolve INSIDE the dataset directory; absolute
+    paths outside are refused. Accepts basenames (resolved against the
+    dataset dir) or absolute paths."""
+    import os
+    from core.graph.entities import get_entity
+    dsid = (input_.get("dataset_id") or "").strip()
+    paths = input_.get("paths") or []
+    if not dsid:
+        return {"error": "dataset_id is required"}
+    if not isinstance(paths, list) or not paths:
+        return {"error": "paths is required (non-empty list)"}
+    ent = get_entity(dsid)
+    if not ent:
+        return {"error": f"dataset {dsid} not found"}
+    if ent.get("type") != "dataset":
+        return {"error": f"{dsid} is a {ent.get('type')}, not a dataset"}
+    dest_dir = ent.get("artifact_path")
+    if not dest_dir or not os.path.isdir(dest_dir):
+        return {"error": f"dataset {dsid} is not directory-shaped "
+                f"(artifact_path={dest_dir!r}) — nothing to remove from."}
+    dest_abs = os.path.realpath(dest_dir)
+
+    removed, not_found, refused = [], [], []
+    for p in paths:
+        p = str(p).strip()
+        if not p:
+            continue
+        # Basename or absolute? If absolute, must live inside the bundle.
+        if os.path.isabs(p):
+            cand_abs = os.path.realpath(p)
+            if not (cand_abs == dest_abs or cand_abs.startswith(dest_abs + os.sep)):
+                refused.append(p); continue
+            target = cand_abs
+        else:
+            target = os.path.join(dest_dir, os.path.basename(p))
+        if not os.path.isfile(target):
+            not_found.append(os.path.basename(target)); continue
+        try:
+            os.unlink(target)
+            removed.append(os.path.basename(target))
+        except OSError as e:
+            refused.append(f"{target} (unlink failed: {e})")
+    note = f"Removed {len(removed)} file(s) from dataset {dsid}."
+    if not_found:
+        note += f" Not found: {', '.join(not_found)}."
+    if refused:
+        note += f" Refused (outside dataset dir or unlink failed): {', '.join(refused)}."
+    return {"status": "ok" if not refused else "partial",
+            "dataset_id": dsid, "removed": removed,
+            "not_found": not_found, "refused": refused,
+            "dataset_dir": dest_dir, "note": note}
+
+
 def pin_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
     eid = input_.get("entity_id")
     if not eid:
@@ -3266,6 +3413,8 @@ EXECUTORS = {
     "run_nextflow": run_nextflow,
     "list_entities": list_entities_tool,
     "register_dataset": register_dataset_tool,
+    "add_to_dataset": add_to_dataset_tool,
+    "remove_from_dataset": remove_from_dataset_tool,
     "pin_entity": pin_entity_tool,
     "promote_to_result": promote_to_result_tool,
     "create_finding": create_finding_tool,
