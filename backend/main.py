@@ -415,19 +415,31 @@ async def chat(req: ChatRequest):
     if not get_entity(req.focus_entity_id):
         raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
 
-    async def event_stream():
-        async for chunk in stream_response(
-            req.text,
-            focus_entity_id=req.focus_entity_id,
-            thread_id=req.thread_id,
-            annotation_image=req.annotation_image,
-            annotation_note=req.annotation_note,
-            retry=req.retry,
-        ):
-            yield chunk
-
+    # C-1: spawn the agent loop as a background task that owns its own
+    # lifetime; the HTTP response is just a subscriber on the resulting
+    # TurnSink. Client disconnect unsubscribes; the task keeps running.
+    # Reattach via GET /api/turns/{run_id}/stream?since=<lastSeq>.
+    from core.runtime import turn_executor, turn_sink as _ts
+    from datetime import datetime, timezone
+    run_id = turn_executor.new_run_id()
+    started_at = datetime.now(timezone.utc).isoformat()
+    body_gen = stream_response(
+        req.text,
+        focus_entity_id=req.focus_entity_id,
+        thread_id=req.thread_id,
+        annotation_image=req.annotation_image,
+        annotation_note=req.annotation_note,
+        retry=req.retry,
+        run_id=run_id,
+    )
+    sink = turn_executor.start_turn(
+        run_id=run_id,
+        thread_id=req.thread_id,
+        started_at=started_at,
+        body_gen=body_gen,
+    )
     return StreamingResponse(
-        event_stream(),
+        _ts.stream_from_sink(sink, since=0),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1989,6 +2001,50 @@ def turn_get(run_id: str):
     return t.to_row()
 
 
+@app.get("/api/turns/{run_id}/stream")
+async def turn_stream(run_id: str, since: int = 0):
+    """C-1 reattach: subscribe to an in-flight Turn's event sink and
+    stream its events as SSE. Replays any events with seq > since from
+    the in-memory tail, then live-streams new ones. Heartbeats every
+    ~25s keep the connection alive through idle periods.
+
+    Client disconnect just unsubscribes — the agent loop is untouched
+    and the next reconnect with `?since=<lastSeq>` resumes from where
+    the client left off.
+
+    Returns 410 Gone if the sink isn't in the registry (process restart
+    or evicted by future C-2 sweeper) AND the Turn is already terminal
+    in the DB — nothing to subscribe to and nothing to replay.
+    Returns 404 if the run_id is unknown."""
+    from core.runtime import turn_sink as _ts
+    from core.runtime.checkpoint import load_turn
+    sink = _ts.get(run_id)
+    if sink is None:
+        # No live sink — either the Turn never existed, completed before
+        # this process started, or was evicted. Surface what the DB says
+        # so the client knows whether to render the closed-stream state
+        # vs. error.
+        t = load_turn(run_id)
+        if t is None:
+            raise HTTPException(404, f"no such run: {run_id}")
+        if t.state.value in ("done", "failed"):
+            # Emit a synthetic single-event stream so the client's
+            # handler runs `done` and cleans up cleanly.
+            async def _terminal():
+                import json as _json
+                yield f"data: {_json.dumps({'type': 'done', 'seq': 0})}\n\n"
+            return StreamingResponse(
+                _terminal(), media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        raise HTTPException(410, f"run {run_id} sink no longer available")
+    return StreamingResponse(
+        _ts.stream_from_sink(sink, since=since),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/threads/{thread_id}/active-turn")
 def thread_active_turn(thread_id: str):
     """C-0: is there an in-flight Turn on this thread? Used by the
@@ -2107,20 +2163,30 @@ async def turn_resume(run_id: str, req: ResumeRequest):
                        [{"type": "tool_result", "tool_use_id": tool_use_id, "content": result_str}],
                        entity_id=WORKSPACE_ID, focus_entity_id=focus_eid, thread_id=thread_id)
 
-    async def event_stream():
-        async for chunk in stream_response(
-            user_text,
-            focus_entity_id=focus_eid,
-            thread_id=thread_id,
-            plan_entity_id=plan_eid,
-            # Approval resume: don't append a new user message — the held
-            # tool_result we just wrote is what advances the conversation.
-            retry=approval_mode,
-        ):
-            yield chunk
-
+    # C-1: spawn the new Turn as a background task (same pattern as
+    # POST /api/chat) so it survives client disconnect.
+    from core.runtime import turn_executor, turn_sink as _ts
+    from datetime import datetime, timezone
+    new_run_id = turn_executor.new_run_id()
+    started_at = datetime.now(timezone.utc).isoformat()
+    body_gen = stream_response(
+        user_text,
+        focus_entity_id=focus_eid,
+        thread_id=thread_id,
+        plan_entity_id=plan_eid,
+        # Approval resume: don't append a new user message — the held
+        # tool_result we just wrote is what advances the conversation.
+        retry=approval_mode,
+        run_id=new_run_id,
+    )
+    sink = turn_executor.start_turn(
+        run_id=new_run_id,
+        thread_id=thread_id,
+        started_at=started_at,
+        body_gen=body_gen,
+    )
     return StreamingResponse(
-        event_stream(),
+        _ts.stream_from_sink(sink, since=0),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -2172,19 +2238,29 @@ async def turn_tool_result(run_id: str, tool_use_id: str, req: DeferredResultReq
                    [{"type": "tool_result", "tool_use_id": tool_use_id, "content": result_str}],
                    entity_id=WORKSPACE_ID, focus_entity_id=focus_eid, thread_id=thread_id)
 
-    async def event_stream():
-        async for chunk in stream_response(
-            "",
-            focus_entity_id=focus_eid,
-            thread_id=thread_id,
-            # Retry mode: don't append a new user message — the tool_result
-            # we just wrote is what advances the conversation.
-            retry=True,
-        ):
-            yield chunk
-
+    # C-1: spawn the resume Turn as a background task (same pattern as
+    # POST /api/chat) so it survives client disconnect.
+    from core.runtime import turn_executor, turn_sink as _ts
+    from datetime import datetime, timezone
+    new_run_id = turn_executor.new_run_id()
+    started_at = datetime.now(timezone.utc).isoformat()
+    body_gen = stream_response(
+        "",
+        focus_entity_id=focus_eid,
+        thread_id=thread_id,
+        # Retry mode: don't append a new user message — the tool_result
+        # we just wrote is what advances the conversation.
+        retry=True,
+        run_id=new_run_id,
+    )
+    sink = turn_executor.start_turn(
+        run_id=new_run_id,
+        thread_id=thread_id,
+        started_at=started_at,
+        body_gen=body_gen,
+    )
     return StreamingResponse(
-        event_stream(),
+        _ts.stream_from_sink(sink, since=0),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
