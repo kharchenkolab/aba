@@ -15,6 +15,8 @@ backend/aba.db
 backend/artifacts/
 backend/data/
 backend/envs/
+# Also catches the symlink form: backend/envs -> $ABA_RUNTIME_DIR/envs
+backend/envs
 backend/projects/
 backend/refs/
 backend/work/
