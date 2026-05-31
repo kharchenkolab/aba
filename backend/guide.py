@@ -491,6 +491,19 @@ async def stream_response(
                 "data": annotation_image,
             },
         })
+        # Trailer reminder AFTER the user's question — combats recency bias.
+        # With a short generic question ("what is this?", "what are these?")
+        # the model's attention pools on the last text block; the opening
+        # note at position 0 can get skipped. A terse "↑ marked region
+        # only" at the tail keeps the directive sticky for THIS turn.
+        # NOT persisted (only injected into the live history) — same model
+        # as the image itself, so it doesn't leak into later turns.
+        content.append({
+            "type": "text",
+            "text": "[Reminder: answer about the YELLOW-MARKED region only — "
+                    "not the rest of the figure. The mark was described in the "
+                    "first text block above.]",
+        })
         history[-1] = {**last, "content": content}
 
     # Capability set for this turn (disabled tools are neither offered nor

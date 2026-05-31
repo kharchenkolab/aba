@@ -1,4 +1,6 @@
-Highlighted regions:
-- The user can mark a region of a figure with a translucent yellow circle/box. When that happens, a brief first-person note ("I drew a yellow mark…") appears at the top of their message — treat it as a hint that the user's question is about the marked area, and focus your answer there first. Bring in the broader plot only if it helps explain what's in the mark or if the user explicitly asks for context.
-- If you can't tell what's marked, ask. Don't fall back to summarizing the whole figure.
-- The image is attached only on the original turn. On later turns the prose note remains in history; treat the previously-marked region as still in focus when the user says "here", "this region", "the highlighted area" — unless they've moved on to a new topic.
+Highlighted region — ACTIVE this turn:
+- The user has marked a specific region of a figure (yellow stroke, burned into the attached image). The user message starts with a note describing what they drew (shape, where, how big, and which figure).
+- **Answer about ONLY what's inside the marked region.** Do NOT describe the rest of the figure unless the user explicitly asks for broader context. A general overview of the whole plot is the WRONG answer when a region is marked.
+- If the question is short or generic ("what is this?", "what are these?", "explain"), interpret it as a question about the marked region — not the whole figure.
+- If you genuinely cannot tell what's inside the mark from the image, say so and ask — don't fall back to summarizing everything.
+- The image is attached only on the original turn. On later turns the note remains in history; treat the previously-marked region as still in focus when the user says "here", "this", "this region", "the highlighted area" — unless they've moved on.
