@@ -291,7 +291,13 @@ def _now() -> str:
 def cancel_turn(run_id: str, *, reason: str = "user cancelled") -> bool:
     """Mark a Turn FAILED — used by POST /api/turns/{id}/cancel and as
     the explicit cleanup primitive when the UI knows an in-flight turn
-    isn't coming back."""
+    isn't coming back.
+
+    Also repairs any orphan tool_use blocks in the message log so a
+    reloaded chat doesn't render a permanent spinner for a tool whose
+    result will never arrive. Without this, the only path to clear the
+    spinner was a backend restart (which runs the same repair via
+    `reap_stale_turns`)."""
     import json
     t = load_turn(run_id)
     if t is None:
@@ -305,4 +311,10 @@ def cancel_turn(run_id: str, *, reason: str = "user cancelled") -> bool:
             (err, __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), run_id),
         )
         c.commit()
+    # Append synthetic [cancelled] tool_results for any tool_use blocks
+    # that never got a partner — clears the frontend spinner.
+    try:
+        repair_orphaned_tool_use_in_messages()
+    except Exception:  # noqa: BLE001
+        pass
     return True

@@ -195,8 +195,18 @@ export function useChat(
   // thread's content into the new one.
   const genRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
+  // C-0: passive-observer mode. True when this hook has set `streaming=true`
+  // because a `/api/threads/{tid}/active-turn` probe found an in-flight Turn
+  // on mount, but we don't have an open SSE to that Turn (today's SSE only
+  // attaches to the originating POST, which is the bug). The Stop button
+  // works; live SSE replay arrives with C-1.
+  const reattachedRef = useRef(false)
 
   // Load the current thread's persisted conversation (ignored if superseded).
+  // C-0: also probes /active-turn so a reload during a long-running cell
+  // re-surfaces the Stop button. Without this, the SSE generator that owned
+  // the in-flight Turn is dead (cancelled by the abort), but the agent's tool
+  // is still executing — the user otherwise has no way to know or recover.
   const loadMessages = useCallback(async () => {
     const myGen = genRef.current
     try {
@@ -205,6 +215,18 @@ export function useChat(
       if (r.ok && genRef.current === myGen) setMessages(collapseHistory(raw))
     } catch { /* ignore */ }
     finally { if (genRef.current === myGen) setLoading(false) }
+    // After history loads, see if there's an in-flight Turn on this thread.
+    // If so, enter passive-observer mode so the Stop button appears.
+    if (streamingRef.current) return    // already streaming via our own POST
+    try {
+      const ar = await fetch(`/api/threads/${encodeURIComponent(threadId)}/active-turn`)
+      if (!ar.ok || genRef.current !== myGen) return
+      const row = await ar.json()
+      if (!row || !row.run_id || genRef.current !== myGen) return
+      currentRunIdRef.current = row.run_id
+      reattachedRef.current = true
+      setStreaming(true)
+    } catch { /* probe is best-effort */ }
   }, [threadId])
 
   // On a project switch (reloadKey) or thread switch (threadId): reset
@@ -218,6 +240,10 @@ export function useChat(
     setStreaming(false)
     setMessages([])
     setLoading(true)
+    // C-0: reset passive-observer state too, so the next mount's
+    // active-turn probe can re-establish it cleanly for the new thread.
+    reattachedRef.current = false
+    currentRunIdRef.current = null
   }, [reloadKey, threadId])
 
   // Then fetch the new thread's conversation (after paint).
@@ -531,10 +557,22 @@ export function useChat(
       body: JSON.stringify({}),
     }).catch(() => null)
     await fire()
+    // C-0: passive-observer mode — there's no SSE handler that will fire
+    // `cancelled`/`done` to clear streaming. Clean up locally and reload
+    // messages so the synthetic [cancelled] tool_result (written by
+    // cancel_turn -> repair_orphaned_tool_use_in_messages) replaces the
+    // open tool_use that was rendering as a spinner.
+    if (reattachedRef.current) {
+      reattachedRef.current = false
+      currentRunIdRef.current = null
+      setStreaming(false)
+      loadMessages()
+      return
+    }
     setTimeout(() => {
       if (streamingRef.current && currentRunIdRef.current) fire()
     }, 2500)
-  }, [])
+  }, [loadMessages])
 
   // Enqueue: type-while-streaming. Will auto-flush when the current
   // turn ends (done) OR when the user Steers (cancel+flush).
