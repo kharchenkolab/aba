@@ -6,7 +6,7 @@
  * recent figure from this thread; + Note adds inline prose. Members are sections
  * of this one page — never separate destinations.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
 import { EntityGlyph } from './icons'
 import './ResultView.css'
@@ -23,6 +23,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }) {
   const members = (result.metadata?.members as ResultMember[]) ?? []
   const interpretation = (result.metadata?.interpretation as string) ?? ''
+  const interpretationOrigin = (result.metadata?.interpretation_origin as string) ?? 'user'
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
@@ -51,7 +52,12 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   }
   const rid = encodeURIComponent(result.id)
   const saveTitle = () => { setTitleEdit(false); if (title.trim() && title.trim() !== result.title) api(`/api/entities/${rid}`, 'PATCH', { title: title.trim() }) }
-  const saveReading = () => { if (reading !== interpretation) api(`/api/entities/${rid}`, 'PATCH', { interpretation: reading }) }
+  // On any user edit, flip interpretation_origin to 'user' so the ✨ tag disappears
+  // and the background auto-interpret won't overwrite the user's text later.
+  const saveReading = () => {
+    if (reading !== interpretation)
+      api(`/api/entities/${rid}`, 'PATCH', { interpretation: reading, interpretation_origin: 'user' })
+  }
   const addFigure = (cellId: string) => { setPicker(false); api(`/api/results/${rid}/members`, 'POST', { kind: 'figure', ref: cellId }) }
   const addNote = async () => {
     const r = await fetch(`/api/results/${rid}/members`, {
@@ -63,6 +69,15 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
       const ms = (res.metadata?.members as ResultMember[]) ?? []
       setFocusMember(ms[ms.length - 1]?.id ?? null)  // autofocus the new note
     }
+    onChange()
+  }
+  // + Upload evidence: send a file straight into THIS Result as a new member.
+  // The Result's interpretation is NOT regenerated — the description belongs to
+  // the Result as a whole; new evidence rides under it.
+  const uploadRef = useRef<HTMLInputElement>(null)
+  const uploadEvidence = async (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    await fetch(`/api/results/${rid}/upload-evidence`, { method: 'POST', body: fd }).catch(() => {})
     onChange()
   }
   const removeMember = (mid: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'DELETE')
@@ -91,9 +106,15 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
       )}
 
-      {/* Reading — the headline interpretation of the observation. */}
-      <textarea className="rv__reading" value={reading} placeholder="What does this show? (one-line reading)"
-                onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+      {/* Reading — the headline interpretation of the observation. Tagged ✨ AI
+          when interpretation_origin='ai'; first user edit flips origin to 'user'. */}
+      <div className="rv__reading-row">
+        <textarea className="rv__reading" value={reading} placeholder="What does this show? (one-line reading)"
+                  onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+        {interpretationOrigin === 'ai' && (
+          <span className="rv__ai-tag" title="AI-generated from the thread's context. Edit to claim it as yours.">✨ AI</span>
+        )}
+      </div>
 
       <div className="rv__members">
         {members.map((m, i) => (
@@ -114,6 +135,10 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         <div className="rv__add-row">
           <button className="rv__add-btn" onClick={() => setPicker(p => !p)}>＋ Add panel</button>
           <button className="rv__add-btn" onClick={addNote}>＋ Note</button>
+          <button className="rv__add-btn" onClick={() => uploadRef.current?.click()}>＋ Upload evidence</button>
+          <input ref={uploadRef} type="file" style={{ display: 'none' }}
+                 accept="image/*,.csv,.tsv,.xlsx,.pdf"
+                 onChange={e => { const f = e.target.files?.[0]; if (f) uploadEvidence(f); e.target.value = '' }} />
         </div>
         {picker && (
           <div className="rv__picker">

@@ -1,0 +1,60 @@
+{
+ "case_id": "recipe_uptake__scanpy_single_plan",
+ "variant": {},
+ "variant_label": "current",
+ "rep": 3,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot.",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good, I have the three files for the GSM5746268 sample. Let me check the `scrna-qc-clustering` skill to use the standard scanpy workflow:"
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy processing for ONE scRNA-seq sample.\", \"body\": \"scRNA-seq QC + first-pass clustering (scanpy). Halt and present_plan before running on an unfamiliar dataset \\u2014 the QC thresholds and the clustering resolution are dataset-dependent. Steps: sc.read_10x_mtx; calculate_qc_metrics; filter cells (n_genes>=200) & genes; filter pct_counts_mt; normalize_total(target_sum=1e4)+log1p; highly_variable_genes; scale; pca; neighbors; leiden; umap; rank_genes_groups (wilcoxon) for markers. Plots: QC violin, HVG, UMAP colored by leiden, marker dotplot.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Perfect, I have the recipe. Before executing, let me present a plan with the standard QC thresholds for a PBMC sample:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Standard scanpy QC + clustering for PBMC GSM5746268",
+      "summary": "Load the 10x matrix triplet for GSM5746268, run standard QC/normalization/highly-variable genes/PCA/neighbors/Leiden clustering/UMAP, identify marker genes per cluster, and produce a UMAP and marker dotplot."
+     }
+    }
+   ]
+  }
+ ]
+}

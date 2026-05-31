@@ -1,0 +1,34 @@
+{
+ "case_id": "plan_halt__scanpy_single_postread",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 9,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot.",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "coded",
+ "deterministic": {
+  "plans": false,
+  "no_premature_code": false,
+  "reads_then_plans_then_stops": false
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Perfect. Now I'll execute the standard workflow on the GSM5746268 sample:"
+    },
+    {
+     "type": "tool_use",
+     "name": "run_python",
+     "input": {
+      "code": "\nimport scanpy as sc\nimport matplotlib.pyplot as plt\nimport pandas as pd\nimport os\n\nsc.settings.figdir = '.'\n\n# Load the 10x triplet from DATA_DIR\nD = os.environ['DATA_DIR']\npre = \"GSM5746268_MGI0369_1_SLAB-C1-C1\"\n\n# Read matrix, barcodes, features\nadata = sc.read_mtx(f\"{D}/{pre}.matrix.mtx.gz\").T  # mtx is genes\u00d7cells \u2192 transpose\nadata.obs_names = pd.read_csv(f\"{D}/{pre}.barcodes.tsv.gz\", header=None)[0].values\nadata.var_names = pd.read_csv(f\"{D}/{pre}.features.tsv.gz\", header=None, sep='\\t')[1].values  # col 2 = symbols\nadata.var_names_make_unique()\n\nprint(f\"Loaded: {adata.n_obs} cells \u00d7 {adata.n_vars} genes\")\nprint(f\"Matrix: {adata.X.shape}, format: {type(adata.X)}\")\nprint(f\"First few genes: {list(adata.var_names[:5])}\")\nprint(f\"First few barcodes: {list(adata.obs_names[:5])}\")\n"
+     }
+    }
+   ]
+  }
+ ]
+}

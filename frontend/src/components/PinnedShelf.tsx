@@ -18,7 +18,9 @@ interface Props {
   onClaimFrom: (resultId: string) => void
 }
 
-const KEEPABLE = new Set(['figure', 'table', 'note', 'result'])
+// Shelf now renders Results only — every pin gesture creates (or appends to) a Result.
+// Legacy `entity.pinned` flag is no longer consulted.
+const KEEPABLE = new Set(['result'])
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
 
 interface Member { kind: string; ref?: string }
@@ -26,7 +28,7 @@ interface Member { kind: string; ref?: string }
 export default function PinnedShelf({ entities, threadId, threads, onChange, onFocus, onClaimFrom }: Props) {
   // Everything kept in this thread — figures, tables, kept notes, and Results.
   const pins = entities.filter(e =>
-    e.pinned && KEEPABLE.has(e.type) && e.status !== 'archived'
+    KEEPABLE.has(e.type) && e.status !== 'archived'
     && !!threadId && e.metadata?.thread_id === threadId)
   const byId = new Map(entities.map(e => [e.id, e]))
   // A Result's cover thumb + panel count come from its members.
@@ -93,18 +95,14 @@ function PinRow({ pin, cover, panels, threads, onChange, onFocus, onClaimFrom }:
     })
     onChange()
   }
-  // Unpinning a note toggles its kept state by content key (so the chat cell's
-  // pin indicator stays in sync); figures/tables just clear the pinned flag.
+  // Shelf shows Results — unpinning archives the Result (it falls off the shelf
+  // by virtue of status='archived'). The unpin logic for an EVIDENCE entity
+  // (figure/table/note inside a Result) lives at /api/entities/{id}/unpin and
+  // is called when the user acts on the evidence directly; the shelf works on
+  // the Result and just archives it.
   const unpin = async () => {
-    if (isNote) {
-      await fetch('/api/messages/pin', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: pin.metadata?.source_key, text: noteText }),
-      })
-      onChange()
-    } else {
-      patch({ pinned: false })
-    }
+    await fetch(`/api/entities/${encodeURIComponent(pin.id)}`, { method: 'DELETE' }).catch(() => {})
+    onChange()
   }
   const moveTargets = threads.filter(t => t.id !== pin.metadata?.thread_id)
 

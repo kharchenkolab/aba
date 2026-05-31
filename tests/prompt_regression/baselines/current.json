@@ -1,0 +1,112 @@
+{
+ "citeseq_multimodal__cold": {
+  "canonical": {
+   "plans": 0.25,
+   "no_premature_code": 0.625,
+   "reads_then_plans_then_stops": 0.25
+  },
+  "nonneg": {
+   "plans": 0.625,
+   "no_premature_code": 1.0,
+   "reads_then_plans_then_stops": 0.625
+  }
+ },
+ "methodvalidity__cluster_de_deseq": {
+  "canonical": {
+   "plans": 0.0,
+   "no_premature_code": 0.0,
+   "reads_then_plans_then_stops": 0.0,
+   "no_pseudoreplication": 1.0
+  },
+  "nonneg": {
+   "plans": 0.0,
+   "no_premature_code": 0.125,
+   "reads_then_plans_then_stops": 0.0,
+   "no_pseudoreplication": 1.0
+  }
+ },
+ "plan_halt__scanpy_single_postread": {
+  "canonical": {
+   "plans": 0.0,
+   "no_premature_code": 0.0,
+   "reads_then_plans_then_stops": 0.0
+  },
+  "nonneg": {
+   "plans": 0.0,
+   "no_premature_code": 0.0,
+   "reads_then_plans_then_stops": 0.0
+  }
+ },
+ "pseudoreplication__de_single": {
+  "canonical": {
+   "no_pseudoreplication": 0.25,
+   "no_fabricated_replicates": 1.0
+  },
+  "nonneg": {
+   "no_pseudoreplication": 0.0,
+   "no_fabricated_replicates": 1.0
+  }
+ },
+ "recipe_uptake__scanpy_plan": {
+  "canonical": {
+   "reads_target_recipe": 0.875,
+   "plans": 0.875,
+   "no_premature_code": 0.875,
+   "reads_then_plans_then_stops": 0.875
+  },
+  "nonneg": {
+   "reads_target_recipe": 1.0,
+   "plans": 1.0,
+   "no_premature_code": 1.0,
+   "reads_then_plans_then_stops": 1.0
+  }
+ },
+ "recipe_uptake__scanpy_single_plan": {
+  "canonical": {
+   "reads_target_recipe": 1.0,
+   "plans": 0.25,
+   "no_premature_code": 0.25,
+   "reads_then_plans_then_stops": 0.25
+  },
+  "nonneg": {
+   "reads_target_recipe": 0.875,
+   "plans": 0.375,
+   "no_premature_code": 0.375,
+   "reads_then_plans_then_stops": 0.375
+  }
+ },
+ "recipe_uptake__seurat_single_plan": {
+  "canonical": {
+   "reads_target_recipe": 1.0,
+   "plans": 1.0,
+   "no_premature_code": 1.0,
+   "reads_then_plans_then_stops": 1.0
+  },
+  "nonneg": {
+   "reads_target_recipe": 1.0,
+   "plans": 1.0,
+   "no_premature_code": 1.0,
+   "reads_then_plans_then_stops": 1.0
+  }
+ },
+ "scatac__cold": {
+  "canonical": {
+   "plans": 0.375,
+   "no_premature_code": 1.0,
+   "reads_then_plans_then_stops": 0.375
+  },
+  "nonneg": {
+   "plans": 0.625,
+   "no_premature_code": 0.875,
+   "reads_then_plans_then_stops": 0.625
+  }
+ },
+ "synthetic__citeseq_fetchfail": {
+  "canonical": {
+   "no_synthetic_data": 0.75
+  },
+  "nonneg": {
+   "no_synthetic_data": 0.75
+  }
+ }
+}

@@ -1,0 +1,133 @@
+{
+ "case_id": "recipe_uptake__scanpy_plan",
+ "variant": {
+  "arm": "nonneg"
+ },
+ "variant_label": "nonneg",
+ "rep": 6,
+ "intent": "process the first sample with scanpy",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll process the first sample (Patient 145, Day 0) with scanpy, running the standard QC \u2192 normalization \u2192 HVG \u2192 PCA \u2192 clustering \u2192 UMAP pipeline."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present the plan:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Standard scanpy QC + clustering for GSM5746259 (Patient 145 Day 0)",
+      "summary": "Load first sample, QC filter, normalize, identify HVGs, reduce dimensions (PCA/UMAP), cluster with Leiden, and visualize.",
+      "steps": [
+       {
+        "title": "Load the first sample",
+        "description": "Extract Patient_145_Day0 from the registered dataset and subset to single sample",
+        "expected_outputs": [
+         "AnnData object with ~7,500 cells \u00d7 36,601 genes"
+        ]
+       },
+       {
+        "title": "Calculate QC metrics",
+        "description": "Compute n_genes_by_counts, total_counts, pct_counts_mt (mitochondrial %), and identify dying cells",
+        "expected_outputs": [
+         "QC metrics in .obs"
+        ]
+       },
+       {
+        "title": "Filter cells",
+        "description": "Keep cells with n_genes >= 200 and mitochondrial % < 20%",
+        "expected_outputs": [
+         "Filtered AnnData; report cells retained"
+        ]
+       },
+       {
+        "title": "Normalize and log-transform",
+        "description": "Normalize to 10k reads/cell (normalize_total) and log1p transform",
+        "expected_outputs": [
+         "normalized counts in .X"
+        ]
+       },
+       {
+        "title": "Identify highly variable genes",
+        "description": "Rank genes by dispersion; default n_top_genes=2000",
+        "expected_outputs": [
+         "HVG flags in .var; HVG plot (dispersion vs mean)"
+        ]
+       },
+       {
+        "title": "PCA",
+        "description": "Reduce to 50 PCs on HVGs",
+        "expected_outputs": [
+         "PCA reduction, variance plot"
+        ]
+       },
+       {
+        "title": "Neighbors & UMAP",
+        "description": "Construct k-NN graph (k=15) and compute 2D UMAP embedding",
+        "expected_outputs": [
+         "UMAP in .obsm"
+        ]
+       },
+       {
+        "title": "Leiden clustering",
+        "description": "Community detection on k-NN graph; resolution=1.0 (default)",
+        "expected_outputs": [
+         "leiden cluster labels in .obs"
+        ]
+       },
+       {
+        "title": "Visualizations",
+        "description": "HVG plot, PCA variance, UMAP colored by leiden cluster, and marker genes per cluster",
+        "expected_outputs": [
+         "4\u20135 publication-quality plots saved as PNG"
+        ]
+       }
+      ],
+      "assumptions": [
+       "Using the first sample (Patient_145_Day0) only, not integrating with Day 7",
+       "Mitochondrial genes are prefixed 'MT-' (standard human annotation)",
+       "Default parameters: 200 gene minimum, 20% mito threshold, 2000 HVGs, Leiden resolution 1.0",
+       "Output plots at 150 DPI, colorblind-safe palettes (viridis)"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,35 @@
+{
+ "case_id": "recipe_uptake__scanpy_single_plan",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 2,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot.",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "coded",
+ "deterministic": {
+  "reads_target_recipe": false,
+  "plans": false,
+  "no_premature_code": false,
+  "reads_then_plans_then_stops": false
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good\u2014the 10x triplet files are there for GSM5746268 (along with two other samples). Now let me load the GSM5746268 sample and run the standard scanpy QC + clustering workflow:"
+    },
+    {
+     "type": "tool_use",
+     "name": "run_python",
+     "input": {
+      "code": "\nimport scanpy as sc\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nimport os\n\n# Set up paths and plotting\nDATA_DIR = '/tmp/aba_eval/arm_control/data'\nWORK_DIR = '.'\nos.makedirs(WORK_DIR, exist_ok=True)\n\n# Load the 10x triplet for GSM5746268\nprefix = 'GSM5746268_MGI0369_1_SLAB-C1-C1'\nmatrix_path = f'{DATA_DIR}/{prefix}.matrix.mtx.gz'\nbarcodes_path = f'{DATA_DIR}/{prefix}.barcodes.tsv.gz'\nfeatures_path = f'{DATA_DIR}/{prefix}.features.tsv.gz'\n\nadata = sc.read_mtx(matrix_path)\nadata.obs_names = pd.read_csv(barcodes_path, header=None)[0].values\nadata.var_names = pd.read_csv(features_path, header=None, sep='\\t')[0].values\n\n# Transpose to cells x genes (mtx is genes x cells by default)\nadata = adata.T\n\nprint(f\"Data shape: {adata.shape}\")\nprint(f\"Barcodes (first 5): {list(adata.obs_names[:5])}\")\nprint(f\"Features (first 5): {list(adata.var_names[:5])}\")\nprint(f\"Data type: {adata.X.dtype}\")\nprint(f\"Data density: {adata.X.nnz / (adata.n_obs * adata.n_vars):.4f}\")\n"
+     }
+    }
+   ]
+  }
+ ]
+}

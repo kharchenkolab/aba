@@ -31,7 +31,7 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('aba.drawer.tab') as Tab) || 'console')
   useEffect(() => { localStorage.setItem('aba.drawer.tab', tab) }, [tab])
 
-  const tabs: Tab[] = ['console', 'jobs', 'context']
+  const tabs: Tab[] = ['console', 'context', 'jobs']
   const label = (t: Tab) =>
     t === 'console' ? 'Console' : t === 'jobs' ? `Jobs${jobs.length ? ` (${jobs.length})` : ''}` : 'Context'
 
@@ -57,11 +57,35 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
   )
 }
 
-// ---------- Context tab (the original manifest view) ----------
+// ---------- Context tab — the FULL API context the model received on the most
+// recent user-initiated turn (system prompt + tools + history + user text). Sourced
+// from guide.py:_dump_turn_context's JSON sidecar in $ABA_TURN_LOG_DIR. ----------
+interface TurnContext {
+  run_id: string; ts: string; thread_id: string | null; model: string
+  focus_entity_id: string | null; tools: string[]; user_text: string; system: string
+  history: { role: string; content: unknown }[]
+}
+
 function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
   manifest: ManifestSnapshot | null; focusEntityId: string; threadId: string | null
 }) {
+  const [ctx, setCtx] = useState<TurnContext | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)            // refetch on user click
   const [preview, setPreview] = useState<ManifestSnapshot | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const url = threadId
+      ? `/api/dev/last-turn-context?thread_id=${encodeURIComponent(threadId)}`
+      : `/api/dev/last-turn-context`
+    fetch(url)
+      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(d => { if (!cancelled) { setCtx(d as TurnContext); setErr(null) } })
+      .catch(e => { if (!cancelled) { setCtx(null); setErr(String(e)) } })
+    return () => { cancelled = true }
+  }, [threadId, tick])
+
   useEffect(() => {
     let cancelled = false
     const params = new URLSearchParams()
@@ -70,41 +94,90 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
     fetch(`/api/manifest/preview?${params.toString()}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (!cancelled) setPreview((d?.manifest as ManifestSnapshot) ?? null) })
-      .catch(() => { /* drawer just shows empty */ })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [focusEntityId, threadId])
-
   const m = liveManifest ?? preview
-  if (!m) return <div className="drawer__empty">The agent's loaded context will appear here once a turn runs.</div>
+
   return (
     <>
-      <Section title="Focus">
-        {m.focus ? (
-          <>
-            <div className="drawer__chip">
-              <span className="drawer__type">{m.focus.entity_type}</span>
-              <span className="drawer__id">{m.focus.entity_id}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', fontSize: 11, color: 'var(--text-3)' }}>
+        <span>Full API context — most recent turn{threadId ? ' in this thread' : ''}</span>
+        <button onClick={() => setTick(t => t + 1)} style={{ marginLeft: 'auto', fontSize: 11, padding: '2px 8px' }}>↻ refresh</button>
+      </div>
+      {err && !ctx && (
+        <div className="drawer__empty">No turn context dumped yet. Send a message — it'll appear here.</div>
+      )}
+      {ctx && (
+        <>
+          <Section title="Meta">
+            <div className="drawer__kv"><span className="drawer__k">run</span><span className="drawer__v">{ctx.run_id}</span></div>
+            <div className="drawer__kv"><span className="drawer__k">ts</span><span className="drawer__v">{ctx.ts}</span></div>
+            <div className="drawer__kv"><span className="drawer__k">model</span><span className="drawer__v">{ctx.model}</span></div>
+            <div className="drawer__kv"><span className="drawer__k">thread</span><span className="drawer__v">{ctx.thread_id ?? '(default)'}</span></div>
+            <div className="drawer__kv"><span className="drawer__k">focus</span><span className="drawer__v">{ctx.focus_entity_id ?? 'workspace'}</span></div>
+            <div className="drawer__kv"><span className="drawer__k">system size</span><span className="drawer__v">{ctx.system.length.toLocaleString()} chars</span></div>
+            <div className="drawer__kv"><span className="drawer__k">history</span><span className="drawer__v">{ctx.history.length} messages</span></div>
+          </Section>
+          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>User message (this turn)</summary>
+            <pre className="drawer__pre" style={{ margin: '4px 10px' }}>{ctx.user_text || '(empty — resume/Go)'}</pre>
+          </details>
+          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>Tools offered ({ctx.tools.length})</summary>
+            <div style={{ padding: '4px 10px', fontFamily: 'monospace', fontSize: 11, columnCount: 2, columnGap: 12 }}>
+              {ctx.tools.map(t => <div key={t}>{t}</div>)}
             </div>
-            <div className="drawer__entity-title">{m.focus.title}</div>
-            {m.focus.fields_loaded.length > 0 && (
-              <div className="drawer__fields">
-                {m.focus.fields_loaded.map(f => <span key={f} className="drawer__field">{f}</span>)}
+          </details>
+          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>System prompt ({ctx.system.length.toLocaleString()} chars)</summary>
+            <pre className="drawer__pre" style={{ margin: '4px 10px', maxHeight: 500, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>{ctx.system}</pre>
+          </details>
+          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>Message history ({ctx.history.length})</summary>
+            <div style={{ padding: '4px 10px' }}>
+              {ctx.history.map((m, i) => <HistMsg key={i} idx={i} msg={m} />)}
+            </div>
+          </details>
+        </>
+      )}
+      {m && (
+        <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-3)' }}>Manifest (assembled focus/thread context)</summary>
+          {m.focus && (
+            <div style={{ padding: '4px 10px' }}>
+              <div className="drawer__chip">
+                <span className="drawer__type">{m.focus.entity_type}</span>
+                <span className="drawer__id">{m.focus.entity_id}</span>
               </div>
-            )}
-            <pre className="drawer__pre">{m.focus.text}</pre>
-          </>
-        ) : <div className="drawer__none">No entity focused — workspace scope.</div>}
-      </Section>
-      <Section title="Thread context">
-        {m.thread?.text ? <pre className="drawer__pre">{m.thread.text}</pre>
-          : <div className="drawer__none">Nothing kept in this thread yet.</div>}
-      </Section>
-      {m.policy_text && <Section title="Adaptive policy"><pre className="drawer__pre">{m.policy_text}</pre></Section>}
-      <Section title="Meta">
-        <div className="drawer__kv"><span className="drawer__k">session</span><span className="drawer__v">{m.session_id}</span></div>
-        <div className="drawer__kv"><span className="drawer__k">turn</span><span className="drawer__v">{m.turn_index}</span></div>
-      </Section>
+              <div className="drawer__entity-title">{m.focus.title}</div>
+              <pre className="drawer__pre">{m.focus.text}</pre>
+            </div>
+          )}
+          {m.thread?.text && <pre className="drawer__pre" style={{ margin: '4px 10px' }}>{m.thread.text}</pre>}
+        </details>
+      )}
     </>
+  )
+}
+
+function HistMsg({ idx, msg }: { idx: number; msg: { role: string; content: unknown } }) {
+  const role = msg.role
+  const content = msg.content
+  const blocks = Array.isArray(content) ? content
+    : typeof content === 'string' ? [{ type: 'text', text: content }]
+    : []
+  const summary = blocks.length === 0 ? '(empty)' : blocks.map(b => {
+    const bb = b as { type?: string; name?: string; text?: string; content?: unknown }
+    if (bb.type === 'text') return `text(${(bb.text || '').length})`
+    if (bb.type === 'tool_use') return `tool_use ${bb.name}`
+    if (bb.type === 'tool_result') return `tool_result(${String(bb.content ?? '').length})`
+    return bb.type || '?'
+  }).join(' · ')
+  return (
+    <details style={{ marginBottom: 4 }}>
+      <summary style={{ fontSize: 11, fontFamily: 'monospace', cursor: 'pointer' }}>
+        [{idx.toString().padStart(2, '0')}] <b>{role}</b> · {summary}
+      </summary>
+      <pre style={{ fontSize: 10, lineHeight: 1.3, background: 'var(--tree-active-bg)', padding: 6, borderRadius: 3, marginTop: 4, maxHeight: 300, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+        {JSON.stringify(content, null, 2)}
+      </pre>
+    </details>
   )
 }
 

@@ -63,3 +63,18 @@
 .rv__zoom { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 40px; }
 .rv__zoom img { max-width: 92vw; max-height: 88vh; object-fit: contain; }
 .rv__zoom-x { position: fixed; top: 16px; right: 20px; font-size: 28px; line-height: 1; color: #fff; background: none; border: none; cursor: pointer; }
+
+/* A3: ✨ AI tag next to the auto-generated interpretation; goes away on first user edit. */
+.rv__reading-row { display: flex; align-items: flex-start; gap: 8px; }
+.rv__reading-row .rv__reading { flex: 1; }
+.rv__ai-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #dbeafe;
+  color: #1e40af;
+  white-space: nowrap;
+  margin-top: 4px;
+  cursor: help;
+}

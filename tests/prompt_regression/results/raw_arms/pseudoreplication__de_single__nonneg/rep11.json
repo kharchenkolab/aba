@@ -1,0 +1,29 @@
+{
+ "case_id": "pseudoreplication__de_single",
+ "variant": {
+  "arm": "nonneg"
+ },
+ "variant_label": "nonneg",
+ "rep": 11,
+ "intent": "Yes, go ahead.",
+ "target_recipe": "deseq2-r",
+ "outcome": "coded",
+ "deterministic": {
+  "no_pseudoreplication": false,
+  "no_fabricated_replicates": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "tool_use",
+     "name": "run_r",
+     "input": {
+      "code": "\n# Load required libraries\nlibrary(DESeq2)\nlibrary(ggplot2)\n\n# Read counts and metadata\ncounts <- read.csv('counts_de.csv', row.names=1, check.names=FALSE)\nmetadata <- read.csv('metadata_de.csv', row.names=1, check.names=FALSE)\n\n# Ensure counts is integer (DESeq2 requirement)\ncounts <- as.matrix(counts)\nmode(counts) <- \"integer\"\n\n# Convert metadata$cell_type to factor with Monocyte as reference\nmetadata$cell_type <- factor(metadata$cell_type, levels=c('Monocyte', 'T_cell'))\n\n# Check consistency\nstopifnot(all(rownames(metadata) == colnames(counts)))\n\ncat(\"Counts matrix:\", dim(counts), \"\\n\")\ncat(\"Metadata:\", nrow(metadata), \"\\n\")\ncat(\"Cell type levels:\\n\")\nprint(table(metadata$cell_type))\n\n# Create DESeqDataSet\ndds <- DESeqDataSetFromMatrix(countData=counts, colData=metadata, design=~cell_type)\n\ncat(\"\\nDESeqDataSet created:\\n\")\nprint(dds)\n"
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,137 @@
+{
+ "case_id": "scatac__cold",
+ "variant": {},
+ "variant_label": "current",
+ "rep": 3,
+ "intent": "Analyse a single-cell ATAC-seq dataset. Use a small PUBLIC scATAC-seq dataset (e.g. 10x's PBMC scATAC, or a snapATAC2/episcanpy built-in). Do basic QC (TSS enrichment, fragment/feature counts), build the cell \u00d7 peak (or bin) matrix, run TF-IDF/LSI, cluster, and show a UMAP coloured by cluster.",
+ "target_recipe": null,
+ "outcome": "planned",
+ "deterministic": {
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll help you analyze a single-cell ATAC-seq dataset. Let me start by understanding what's available and planning the workflow."
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "single-cell ATAC-seq workflow snapATAC best practice"
+     }
+    },
+    {
+     "type": "tool_use",
+     "name": "list_capabilities",
+     "input": {
+      "query": "ATAC-seq analysis snapATAC episcanpy"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[]"
+    },
+    {
+     "type": "tool_result",
+     "tool": "list_capabilities",
+     "content": "{\"status\":\"ok\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Let me search more broadly for ATAC-seq and epigenomic tools:"
+    },
+    {
+     "type": "tool_use",
+     "name": "search_skills",
+     "input": {
+      "query": "ATAC-seq analysis"
+     }
+    },
+    {
+     "type": "tool_use",
+     "name": "list_capabilities",
+     "input": {
+      "query": "ATAC scATAC snapatac episcanpy chromatin"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "search_skills",
+     "content": "[]"
+    },
+    {
+     "type": "tool_result",
+     "tool": "list_capabilities",
+     "content": "{\"status\":\"ok\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good \u2014 I'll use **snapATAC2** (via Python), which is the standard modern single-cell ATAC-seq workflow. Let me ensure it's available and set up the analysis:"
+    },
+    {
+     "type": "tool_use",
+     "name": "ensure_capability",
+     "input": {
+      "name": "snapatac2"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "ensure_capability",
+     "content": "{\"status\":\"ok\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Perfect. Now let me plan the workflow:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Single-cell ATAC-seq Analysis (snapATAC2)",
+      "summary": "QC \u2192 feature matrix \u2192 TF-IDF/LSI embedding \u2192 clustering \u2192 UMAP visualization",
+      "rationale": "Demonstrates the standard modern snapATAC2 workflow on public scATAC data, from QC metrics through unsupervised discovery",
+      "assumptions": "\n  <item>Using snapATAC2 built-in demo dataset (10x PBMC scATAC-seq) \u2014 no external download needed</item>\n  <item>Analyzing as a single integrated dataset (no batch correction)</item>\n  <item>QC filtering based on standard TSS enrichment (\u22652) and fragment count thresholds</item>\n  <item>Using peak regions for the feature matrix (vs bins)</item>\n  <item>TF-IDF + SVD for dimensionality reduction, then Leiden clustering</item>\n  <item>Outputs: QC plots, feature matrix, embedding, clusters, final UMAP</item>\n</assumptions>\n<parameter name=\"steps\">\n  <item>\n    <title>Load snapATAC2 demo data (10x PBMC scATAC)</title>\n    <description>Fetch the built-in example fragment file and metadata</description>\n    <expected_outputs>\n      <item>AnnData-like object with fragments, dimensions ~10k cells</item>\n    </expected_outputs>\n  </item>\n  <item>\n    <title>QC: Compute TSS enrichment & fragment counts</title>\n    <description>Calculate TSS-enrichment score and per-cell fragment count; visualize distributions</description>\n    <expected_outputs>\n      <item>TSS enrichment histogram</item>\n      <item>Fragment count histogram</item>\n      <item>Filtered cell count</item>\n    </expected_outputs>\n  </item>\n  <item>\n    <title>Build cell \u00d7 peak feature matrix</title>\n    <description>Call peaks (or use reference peaks) and count overlaps per cell</description>\n    <expected_outputs>\n      <item>Feature matrix (cells \u00d7 peaks)</item>\n      <item>Peak annotation</item>\n    </expected_outputs>\n  </item>\n  <item>\n    <title>Normalize & reduce: TF-IDF + LSI (SVD)</title>\n    <description>Apply term-frequency / inverse-document-frequency normalization, then spectral / latent semantic indexing for dimensionality reduction</description>\n    <expected_outputs>\n      <item>Normalized counts</item>\n      <item>LSI embedding (top PCs)</item>\n    </expected_outputs>\n  </item>\n  <item>\n    <title>Leiden clustering on LSI</title>\n    <description>Graph-based clustering in the LSI space</description>\n    <expected_outputs>\n      <item>Cluster assignment per cell</item>\n    </expected_outputs>\n  </item>\n  <item>\n    <title>UMAP from LSI, colored by cluster</title>\n    <description>Non-linear layout for visualization</description>\n    <expected_outputs>\n      <item>UMAP plot with cluster colors</item>\n    </expected_outputs>\n  </item>\n"
+     }
+    }
+   ]
+  }
+ ]
+}

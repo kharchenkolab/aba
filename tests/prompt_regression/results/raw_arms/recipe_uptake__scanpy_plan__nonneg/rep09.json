@@ -1,0 +1,124 @@
+{
+ "case_id": "recipe_uptake__scanpy_plan",
+ "variant": {
+  "arm": "nonneg"
+ },
+ "variant_label": "nonneg",
+ "rep": 9,
+ "intent": "process the first sample with scanpy",
+ "target_recipe": "scrna-qc-clustering",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "I'll process the first sample (Patient 145, Day 0) with scanpy using the standard QC \u2192 normalization \u2192 HVG \u2192 PCA \u2192 clustering \u2192 UMAP workflow."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "scrna-qc-clustering"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"body\": \"scRNA-seq QC+clustering (scanpy): read 10x; calculate_qc_metrics; filter n_genes>=200 & pct_mito<0.20; normalize_total(1e4)+log1p; highly_variable_genes; pca; neighbors; umap; leiden; rank_genes_groups. Plots: HVG plot and PCA variance side-by-side; UMAP colored by leiden; use sc.pl.* not hand-rolled matplotlib.\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present a plan for processing:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Process GSE192391 Patient 145 Day 0 with scanpy",
+      "summary": "Standard scRNA-seq QC, normalization, feature selection, dimensionality reduction, clustering, and marker identification.",
+      "steps": [
+       {
+        "title": "Load the first sample (Day 0)",
+        "description": "Load GSM5746259 (Patient 145, Day 0) from the registered dataset",
+        "expected_outputs": [
+         "AnnData object, 7,532 cells \u00d7 36,601 genes"
+        ]
+       },
+       {
+        "title": "QC metrics and filtering",
+        "description": "Calculate QC metrics (n_genes, n_counts, pct_mito), identify mitochondrial genes, and filter cells (n_genes \u2265 200, pct_mito < 0.20)",
+        "expected_outputs": [
+         "QC-filtered object",
+         "QC metrics plots (n_genes, n_counts, pct_mito distributions)"
+        ]
+       },
+       {
+        "title": "Normalization and log-transformation",
+        "description": "Normalize to 1e4 counts/cell and apply log1p transformation",
+        "expected_outputs": [
+         "Normalized AnnData object"
+        ]
+       },
+       {
+        "title": "Highly variable genes and PCA",
+        "description": "Select HVGs and compute PCA (default 50 PCs)",
+        "expected_outputs": [
+         "HVG plot",
+         "PCA variance explained plot"
+        ]
+       },
+       {
+        "title": "Neighborhood graph and UMAP",
+        "description": "Build k-nearest neighbor graph (default k=15) and compute UMAP",
+        "expected_outputs": [
+         "UMAP coordinates"
+        ]
+       },
+       {
+        "title": "Leiden clustering",
+        "description": "Leiden clustering on the k-nearest neighbor graph (default resolution 1.0)",
+        "expected_outputs": [
+         "Leiden cluster assignments"
+        ]
+       },
+       {
+        "title": "Marker genes and visualizations",
+        "description": "Rank genes per cluster and produce final UMAP + marker heatmap",
+        "expected_outputs": [
+         "UMAP colored by Leiden cluster",
+         "Top marker genes per cluster",
+         "Summary statistics"
+        ]
+       }
+      ],
+      "assumptions": [
+       "Processing the first sample (GSM5746259, Day 0) in isolation",
+       "Using default QC thresholds: n_genes \u2265 200, pct_mito < 0.20",
+       "Normalization target: 1e4 counts per cell",
+       "PCA: 50 components; k-nearest neighbors: k=15; Leiden resolution: 1.0",
+       "Using scanpy (sc) for all steps; standard visualization with sc.pl.*"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

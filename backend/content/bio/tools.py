@@ -1,3 +1,4 @@
+import os
 import signal
 import subprocess
 import shutil
@@ -733,10 +734,9 @@ TOOL_SCHEMAS = [
     {
         "name": "pin_entity",
         "description": (
-            "ONLY when the user explicitly asks to pin/keep something — pinning is the "
-            "scientist's curation gesture; never auto-pin your outputs (it devalues the "
-            "shelf). Pin (or unpin) an entity so it stays surfaced — pass pinned=false to "
-            "unpin. Find the id first with list_entities."
+            "Pin (or unpin, pass pinned=false) an entity so it stays surfaced on the "
+            "shelf; find the id with list_entities. Only on the user's explicit request "
+            "— don't auto-pin your own outputs."
         ),
         "input_schema": {
             "type": "object",
@@ -750,12 +750,9 @@ TOOL_SCHEMAS = [
     {
         "name": "promote_to_result",
         "description": (
-            "ONLY when the user explicitly asks to keep/promote a figure as a result — "
-            "NEVER autonomously after a pipeline (a pile of agent-made results devalues "
-            "them). If a plot looks worth keeping, say so in prose and offer to promote "
-            "it; wait for the user. Promotes a figure into a first-class Result — an "
-            "interpreted observation (the figure becomes its evidence); the Skeptic "
-            "advisor reviews it."
+            "Promote a figure into a first-class Result — an interpreted observation "
+            "(the figure becomes its evidence); the Skeptic advisor reviews it. Only on "
+            "the user's explicit request — otherwise just offer it in prose."
         ),
         "input_schema": {
             "type": "object",
@@ -770,10 +767,9 @@ TOOL_SCHEMAS = [
     {
         "name": "create_finding",
         "description": (
-            "ONLY on the user's explicit request — never autonomously. Aggregate one or "
-            "more Results into a Finding — a synthesized conclusion backed by its "
-            "supporting results. Offer it in prose ('want me to record that as a "
-            "finding?') rather than minting one yourself."
+            "Aggregate one or more Results into a Finding — a synthesized conclusion "
+            "backed by its supporting results. Only on the user's explicit request "
+            "— otherwise just offer it in prose."
         ),
         "input_schema": {
             "type": "object",
@@ -788,12 +784,9 @@ TOOL_SCHEMAS = [
     {
         "name": "create_claim",
         "description": (
-            "ONLY when the user explicitly asks to make/record a claim — a Claim is the "
-            "scientist's epistemic assertion, NEVER something you mint on your own after "
-            "an analysis (auto-claims are noise and erode trust in the claim list). State "
-            "your interpretation in prose and ask if they want it recorded as a claim. "
-            "Records a stated assertion the analysis supports (or refutes, negative=true), "
-            "optionally citing evidence; claims carry confidence + accrue caveats over time."
+            "Record a stated assertion the analysis supports (or refutes, negative=true), "
+            "optionally citing evidence; claims carry confidence + accrue caveats over time. "
+            "Only on the user's explicit request — don't mint claims yourself."
         ),
         "input_schema": {
             "type": "object",
@@ -851,6 +844,30 @@ TOOL_SCHEMAS = [
             "discarded on close."
         ),
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        # #311 / Phase 5: closes the agent↔UI parity gap. Archive is the codebase's
+        # canonical destructive op (soft, reversible via restore). Gated by the
+        # built-in approval framework (approval_policy="always"): a confirm dialog
+        # ALWAYS opens before execution, no matter who's asking. Hard delete is a
+        # future companion (cascading-edge + artifact cleanup not yet implemented).
+        "name": "archive_entity",
+        "description": (
+            "Archive an entity (figure, table, dataset, result, …) — soft-delete, "
+            "reversible. The user is ALWAYS prompted to confirm before this runs; "
+            "you don't need to ask the user yourself first. Use when the user explicitly "
+            "asks to delete/remove/archive something, or when cleaning up clutter the "
+            "user has flagged. NEVER use to 'tidy up' on your own initiative."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "id of the entity to archive"},
+                "reason": {"type": "string", "description": "Short reason — shown in the confirm dialog so the user knows what they're approving."},
+            },
+            "required": ["entity_id"],
+        },
+        "approval_policy": "always",
     },
 ]
 
@@ -1453,6 +1470,9 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
     rc = ctx.get("recipe_ctx") if isinstance(ctx, dict) else None
     if isinstance(rc, dict):
         rc.setdefault("read", set()).add(spec.name)
+    _tid = str((ctx or {}).get("thread_id") or "")     # also persist per-thread so the uptake
+    if _tid:                                            # nudge credits a recipe read in a PRIOR turn
+        _THREAD_READ_SKILLS.setdefault(_tid, set()).add(spec.name)
 
     # #5 — surface missing required tools BEFORE returning the body. The
     # model gets a clear "you can't use this skill as-is" signal instead
@@ -2837,7 +2857,29 @@ EXECUTORS = {
     "annotate_entity": annotate_entity_tool,
     "open_run": open_run_tool,
     "close_run": close_run_tool,
+    "archive_entity": lambda input_, ctx=None: _archive_entity_tool(input_, ctx),
 }
+
+
+def _archive_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """archive_entity executor. Approval is handled by the framework BEFORE this
+    runs (approval_policy='always' on the schema) — by the time we get here the
+    user has confirmed via the UI modal."""
+    from core.graph.entities import archive_entity, get_entity
+    eid = (input_ or {}).get("entity_id") or ""
+    if not eid:
+        return {"status": "error", "note": "entity_id is required"}
+    ent = get_entity(eid)
+    if not ent:
+        return {"status": "error", "note": f"entity {eid!r} not found"}
+    if ent.get("status") == "archived":
+        return {"status": "ok", "note": "entity was already archived",
+                "entity_id": eid, "title": ent.get("title")}
+    out = archive_entity(eid)
+    if not out:
+        return {"status": "error", "note": "archive failed (workspace cannot be archived)"}
+    return {"status": "ok", "entity_id": eid, "title": out.get("title"),
+            "note": f"Archived. Reversible via restore_entity (UI: Restore on the archived entity)."}
 
 # Libraries a run_python/run_r cell pulls in — used to nudge recipe uptake.
 _PY_IMPORT_RE = re.compile(r"^[ \t]*(?:import|from)[ \t]+([A-Za-z_][\w]*)", re.M)
@@ -2888,7 +2930,8 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
         from core.skills.loader import recipes_for_capability
     except Exception:  # noqa: BLE001
         return
-    read = rc.get("read") or set()
+    _tid = str((ctx or {}).get("thread_id") or "")
+    read = (rc.get("read") or set()) | _THREAD_READ_SKILLS.get(_tid, set())
     # Recipes relevant to THIS turn's intent — the precise way to disambiguate a
     # library that MANY recipes declare. Computed once.
     intent = (ctx or {}).get("intent") if isinstance(ctx, dict) else None
@@ -2935,7 +2978,7 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
     libs = sorted({t for _, t in pairs})
     result["recipe_hint"] = (
         f"There {'is a recipe' if len(recs) == 1 else 'are recipes'} for "
-        f"{', '.join(libs)} you have not read this turn: {', '.join('`'+r+'`' for r in recs)}. "
+        f"{', '.join(libs)} you have not read yet: {', '.join('`'+r+'`' for r in recs)}. "
         "read_skill it before coding from memory — it carries the correct API, "
         "design/contrast idioms, and gotchas. (Ignore if your code is already correct.)"
     )
@@ -2961,11 +3004,12 @@ _FETCH_FAIL_RE = re.compile(
 )
 
 
-def _fetch_fail_guardrail(name: str, result: dict) -> None:
+def _fetch_fail_guardrail(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
     """If a run_python/run_r cell's OUTPUT shows a data fetch failed, warn AT THAT
     POINT not to substitute fabricated/simulated data for the requested REAL
     analysis. Point-of-use is the lever that lands (cf. the blank-figure warning,
-    which the agent obeyed); the equivalent soft prompt rule does not."""
+    which the agent obeyed); the equivalent soft prompt rule does not. Also records
+    the fetch-fail in thread state so a LATER synthetic-build can be vetoed (#305 R2)."""
     if name not in ("run_python", "run_r") or not isinstance(result, dict):
         return
     if "returncode" not in result:        # only when code actually ran
@@ -2973,6 +3017,9 @@ def _fetch_fail_guardrail(name: str, result: dict) -> None:
     blob = f"{result.get('stdout', '')}\n{result.get('stderr', '')}"
     if not _FETCH_FAIL_RE.search(blob):
         return
+    thread_id = str((ctx or {}).get("thread_id") or "")
+    if thread_id:
+        _THREAD_FETCH_FAIL.add(thread_id)   # arm the R2 pre-exec veto for this thread
     result["fetch_warning"] = (
         "A data fetch in this cell FAILED (e.g. 403/404, HTTPError, DNS). Do NOT "
         "fabricate, simulate, or 'generate representative' data to stand in for the "
@@ -2981,6 +3028,35 @@ def _fetch_fail_guardrail(name: str, result: dict) -> None:
         "user's time. STOP, say exactly which fetch failed, and ask how to proceed "
         "(first try a maintained fetch recipe/tool via search_skills, or a different "
         "accession/mirror). Build synthetic data ONLY if the user explicitly asked for a demo."
+    )
+
+
+def _fetch_tool_failure_steer(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
+    """A dedicated fetch/load TOOL (fetch_url / SRA / Ensembl) failed → arm the R2 veto
+    AND steer at the failure point — the same lever _fetch_fail_guardrail applies to fetch
+    failures surfaced in run_python OUTPUT, now extended to dedicated fetch tools (#316).
+    Without this, a dedicated-tool fetch failure did NOT arm the veto, so a later synthetic
+    build slipped through — the post-fetch-fail fabrication both prompt arms exhibit. Fetch
+    failures here are often content-based (a 200 wrapping a 403 page), so this is a
+    content-aware PostToolUse hook rather than a structured-error PostToolUseFailure one."""
+    if not isinstance(result, dict):
+        return
+    rc = result.get("returncode")
+    failed = bool(result.get("status") in ("error", "failed") or result.get("is_error")
+                  or result.get("error") or (isinstance(rc, int) and rc != 0)
+                  or _FETCH_FAIL_RE.search(json.dumps(result, default=str)))
+    if not failed:
+        return
+    thread_id = str((ctx or {}).get("thread_id") or "")
+    if thread_id:
+        _THREAD_FETCH_FAIL.add(thread_id)   # arm the R2 pre-exec veto for this thread
+    result["fetch_warning"] = (
+        f"The `{name}` fetch FAILED to obtain the requested data. Do NOT fabricate, "
+        "simulate, or 'generate representative' data to stand in for it and continue — a "
+        "labeled SYNTHETIC dataset is STILL NOT a substitute for the requested real analysis. "
+        "STOP, say exactly what failed, and ask how to proceed (try a maintained fetch "
+        "recipe/tool via search_skills, or a different accession/mirror). Build synthetic data "
+        "ONLY if the user explicitly asked for a demo."
     )
 
 
@@ -3016,7 +3092,130 @@ _SYNTH_DATA_RE = re.compile(
     re.I)
 
 
-def _judgment_guardrails(name: str, input_: dict, result: dict) -> None:
+# ── #305 PRE-EXECUTION VETO ───────────────────────────────────────────────────
+# Round-4 real-infra validation (misc/recipe_uptake_eval.md): the post-hoc WARNINGS
+# above are insufficient — (1) pseudoreplication (per-cell DESeq2) never throws the
+# n=1 error the warning keys on, so it ships invalid DE as valid; (2) the synthetic-
+# after-fetch-fail warning fired 5–6×/run and was IGNORED → "publication-ready"
+# synthetic report. Fix: refuse to EXECUTE the offending code at all (no result to
+# report), keyed on the DESIGN, not the error string. General mechanism, NOT per-
+# analysis prompt text.
+
+# R1 — pseudoreplication DE: a DE-dataset construction whose DESIGN groups by a
+# per-CELL / within-sample category (cell_type, leiden cluster, …) with NO sample-
+# level pseudobulk aggregation. That treats individual cells (or within-one-sample
+# clusters) as biological replicates → invalid, and it runs CLEAN (no n=1 error).
+_DE_CONSTRUCT_RE = re.compile(
+    r"DESeqDataSetFromMatrix|DeseqDataSet\s*\(|\bDGEList\s*\(|newCountDataSet|estimateDisp\s*\(", re.I)
+_PERCELL_DESIGN_RE = re.compile(
+    r"(?:design\s*=\s*[\"']?~|~|design_factors\s*=\s*\[?\s*[\"'])"
+    r"\s*[\w.+\"' ]*\b(?:cell[_.]?type|celltype|leiden|louvain|clusters?|sub_?clusters?|"
+    r"seurat_clusters?|cell[_.]?label|kmeans)\b", re.I)
+# Genuine pseudobulk aggregation (groups CELLS by a SAMPLE/donor → a few columns).
+# Its presence means this is NOT per-cell pseudoreplication → do not veto. Kept
+# specific to sample-level aggregation so gene-filtering sums (rowSums/.sum(axis=0))
+# don't mask the veto.
+_PSEUDOBULK_AGG_RE = re.compile(
+    r"pseudobulk|pseudo_bulk|get_pseudobulk|AggregateExpression|sc\.get\.aggregate|decoupler|"
+    r"aggregate_and_filter|"
+    r"groupby\s*\(\s*\[?[^)]*(?:sample|donor|patient|replicate|orig\.ident|batch|subject|individual)"
+    r"[^)]*\)\s*\.\s*(?:sum|agg)",
+    re.I)
+# R2 escape: the user explicitly wants a synthetic demo.
+_DEMO_ESCAPE_RE = re.compile(
+    r"\bdemo[_ ]?mode\b|synthetic[_ ]?demo|#\s*demo\b|ABA_ALLOW_SYNTHETIC", re.I)
+
+# Thread-scoped memory of a fetch-fail (so a LATER cell's synthetic build can be
+# vetoed). Lives for the process; resets on restart (then the fetch is re-attempted).
+_THREAD_FETCH_FAIL: set[str] = set()
+# Threads where synthetic/simulated data was BUILT (and not an explicit demo). Keyed off the
+# BUILD (reliably detectable) rather than the leaky fetch-fail signal — once set, downstream
+# cells are steered not to present analysis of the fabricated data as real (#317, option a).
+_THREAD_SYNTH_TAINT: set[str] = set()
+# Recipes/skills read per thread (across turns) — so the recipe-uptake nudge credits a
+# recipe read in a PRIOR turn (e.g. read at plan time, used after Go), not only this turn.
+_THREAD_READ_SKILLS: dict = {}
+
+# A user can legitimately ASK for synthetic/simulated data (demos, method tests, teaching).
+# Then the anti-fabrication guards (R2 veto, synth taint, synth warning) must NOT fire —
+# fabrication is only wrong when it SUBSTITUTES for requested REAL data. Detected from the
+# user's intent; complements the in-code `# demo_mode` escape (_DEMO_ESCAPE_RE). Kept precise
+# so an incidental word ("generate a UMAP", "random seed") does NOT disarm the guard.
+_USER_SYNTH_RE = re.compile(
+    r"\b(synthetic|simulated|fake|mock|dummy|toy|placeholder)\s+"
+    r"(data|datasets?|matri(?:x|ces)|counts|cells|anndata|adata|expression|examples?)\b"
+    r"|\b(generate|create|make|build|simulate|synthesize|fabricate)\s+"
+    r"(?:a\s+|an\s+|some\s+)?(synthetic|simulated|fake|mock|dummy|toy|placeholder)\b"
+    r"|\b(simulat\w*|synthesi\w*|fabricat\w*)\b[\s\w-]{0,25}\b"
+    r"(data|datasets?|counts|cells|matri(?:x|ces)|expression|reads|anndata|adata)\b"
+    r"|\bfor\s+(?:a\s+)?demo\b|\bdemo(?:nstration)?\s+(?:purpose|only|data)", re.I)
+
+
+def _user_wants_synthetic(ctx: dict | None) -> bool:
+    """True when the user's intent explicitly asks for synthetic/simulated data — then the
+    anti-fabrication guards stand down (the request IS for fake data)."""
+    return bool(_USER_SYNTH_RE.search(str((ctx or {}).get("intent") or "")))
+
+
+# _blocked() removed in the hook-registry migration — the typed 'blocked' shape now
+# lives in core.runtime.hooks.deny_to_result (renders a hooks.Deny -> the same dict).
+
+
+def _preexec_veto(name: str, input_: dict, ctx: dict | None) -> dict | None:
+    """Inspect run_python/run_r CODE *before* it executes; return a typed `blocked`
+    result (and skip execution) for the two hard fabrication/invalidity signatures,
+    else None. Heuristic + conservative (each branch guarded to keep false-blocks low)."""
+    if name not in ("run_python", "run_r"):
+        return None
+    if (os.environ.get("ABA_PREEXEC_VETO") or "on").lower() == "off":
+        return None   # eval isolation only; veto is ON by default (live)
+    code = (input_ or {}).get("code") or ""
+    if not code.strip():
+        return None
+    # R1 — per-cell / within-sample pseudoreplication DE design.
+    if (_DE_CONSTRUCT_RE.search(code) and _PERCELL_DESIGN_RE.search(code)
+            and not _PSEUDOBULK_AGG_RE.search(code)):
+        return hooks.Deny(
+            "PSEUDOREPLICATION_DE", "scientific_invalidity",
+            "BLOCKED (not executed): this builds a differential-expression model that groups "
+            "individual cells (or within-one-sample clusters like leiden/cell_type) as if they were "
+            "biological replicates and feeds them to DESeq2/edgeR/limma. That is PSEUDOREPLICATION — "
+            "it manufactures fake statistical power and the p-values are invalid. Note there is NO "
+            "error to 'fix' here: per-cell DESeq2 runs cleanly precisely because it has thousands of "
+            "fake replicates. The DESIGN itself is wrong.",
+            allowed=[
+                "For within-sample cluster differences: use sc.tl.rank_genes_groups (Wilcoxon) and "
+                "call them exploratory cluster markers, NOT condition-level DE.",
+                "For true DESeq2 DE: aggregate to pseudobulk per BIOLOGICAL SAMPLE (>=2 samples per "
+                "group) and run DESeq2 on the sample-level matrix.",
+                "Tell the user the per-cell DESeq2 design is invalid and offer the Wilcoxon alternative.",
+            ],
+            forbidden=["run per-cell / per-cluster DESeq2/edgeR/limma on a single sample",
+                       "report these as valid differential-expression p-values"])
+    # R2 — synthetic build standing in for a fetch that already failed this session.
+    thread_id = str((ctx or {}).get("thread_id") or "")
+    if (thread_id and thread_id in _THREAD_FETCH_FAIL
+            and _SYNTH_DATA_RE.search(code) and not _DEMO_ESCAPE_RE.search(code)
+            and not _user_wants_synthetic(ctx)):
+        return hooks.Deny(
+            "SYNTHETIC_AFTER_FETCH_FAIL", "fabrication",
+            "BLOCKED (not executed): a data fetch FAILED earlier in this session, and this code "
+            "builds a synthetic/simulated dataset to analyze in its place. A clearly-labeled synthetic "
+            "dataset is STILL NOT a substitute for the requested real analysis — presenting it (even "
+            "as 'representative' or 'publication-ready') is fabrication and wastes the user's time.",
+            allowed=[
+                "STOP and say exactly which fetch failed.",
+                "Try a maintained fetch recipe/tool (search_skills) or a different accession/mirror.",
+                "Ask the user how to proceed.",
+                "Proceed with synthetic data ONLY if the user explicitly asked for a demo — then add a "
+                "`# demo_mode` marker to the cell and label every output 'SYNTHETIC (not real data)'.",
+            ],
+            forbidden=["substitute synthetic/simulated data for the failed real fetch and present it "
+                       "as the analysis"])
+    return None
+
+
+def _judgment_guardrails(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
     """Append point-of-use steers to a run_python/run_r result for the three
     not-prompt-fixable failures: (A) invalid replicate-requiring test on n=1,
     (B) fabricated replicates in the code, (C) synthetic-data substitution."""
@@ -3041,7 +3240,7 @@ def _judgment_guardrails(name: str, input_: dict, result: dict) -> None:
             "groups to make a replicate-requiring test run. This manufactures fake statistical power; "
             "the results are INVALID and must NOT be presented as real DE. Remove the fabricated "
             "replicates and use Wilcoxon (`sc.tl.rank_genes_groups`) for single-sample cluster DE.")
-    if _SYNTH_DATA_RE.search(code):
+    if _SYNTH_DATA_RE.search(code) and not _user_wants_synthetic(ctx):
         warns.append(
             "This code appears to BUILD a synthetic/simulated dataset from random numbers and analyze "
             "it. If the user asked for REAL data and a fetch/load failed, do NOT substitute fabricated "
@@ -3074,6 +3273,97 @@ def execute_tool(name: str, input_: dict, ctx: dict | None = None) -> str:
             _progress.clear_sink()
 
 
+def _synth_taint_steer(name: str, input_: dict, result: dict, ctx: dict | None = None) -> None:
+    """Thread-level synthetic taint (#317, option-a heuristic). When an EXECUTED run cell
+    BUILDS synthetic data (and isn't an explicit demo), taint the thread; thereafter steer
+    EVERY run cell in that thread not to present analysis of the fabricated data as real —
+    catching the 'analyze already-faked data' pattern the per-cell synth regex misses (a
+    later cell has no fresh np.random, just np.corrcoef on previously-faked X). Keyed off the
+    BUILD so it does NOT depend on detecting the (leaky) upstream fetch failure. The build-time
+    HARD block stays the R2 veto; this is the persistent downstream steer."""
+    if name not in ("run_python", "run_r") or not isinstance(result, dict) or "returncode" not in result:
+        return
+    thread_id = str((ctx or {}).get("thread_id") or "")
+    if not thread_id:
+        return
+    if _user_wants_synthetic(ctx):              # user explicitly asked for synthetic data -> do not taint/steer
+        return
+    code = (input_ or {}).get("code") or ""
+    if _SYNTH_DATA_RE.search(code) and not _DEMO_ESCAPE_RE.search(code):
+        _THREAD_SYNTH_TAINT.add(thread_id)      # this cell built synthetic data -> taint the thread
+    if thread_id in _THREAD_SYNTH_TAINT:
+        warns = list(result.get("guardrail_warnings") or [])
+        warns.append(
+            "Earlier in this thread a cell BUILT synthetic/simulated data. Do NOT present any "
+            "analysis, statistics, or plots derived from fabricated data as if they were real "
+            "results. If the requested REAL data could not be obtained (a fetch/load failed or "
+            "returned nothing usable), STOP, say so plainly, and ask how to proceed — a labeled "
+            "synthetic dataset is NOT a substitute for the real analysis. Continue only if the "
+            "user explicitly asked for a synthetic demo.")
+        result["guardrail_warnings"] = warns
+
+
+# ── Tool-lifecycle hook registration ──────────────────────────────────────────
+# The guardrails above are registered into the in-process hook registry
+# (core.runtime.hooks), which adopts the Claude Agent SDK's Pre/Post/PostFailure
+# decision contract; _dispatch_tool just drives the registry. Imported here (not at
+# top) so registration runs after the hook fns are defined. See misc/ SDK decision.
+from core.runtime import hooks  # noqa: E402
+
+hooks.pre_tool_use("run_python|run_r", label="preexec_veto")(_preexec_veto)
+hooks.post_tool_use(label="recipe_uptake_hint")(_recipe_uptake_hint)
+hooks.post_tool_use(label="fetch_fail_guardrail")(_fetch_fail_guardrail)
+hooks.post_tool_use("fetch_url|lookup_sra_runinfo|fetch_ensembl", label="fetch_tool_failure_steer")(_fetch_tool_failure_steer)
+hooks.post_tool_use(label="judgment_guardrails")(_judgment_guardrails)
+hooks.post_tool_use("run_python|run_r", label="synth_taint_steer")(_synth_taint_steer)
+
+
+def _feedlog(msg: str) -> None:
+    """Concise debug trace of every tool dispatch + hook event. Writes to BOTH the rolling
+    /tmp/aba_turnlog/live.log (the file the turn-event logger writes — so it's all in one
+    place to tail) AND backend stdout. On unless ABA_FEED_LOG=off."""
+    if os.environ.get("ABA_FEED_LOG", "on").lower() == "off":
+        return
+    line = f"[feed] {msg}"
+    print(line, flush=True)
+    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    if d.strip().lower() in ("", "off", "0", "false"):
+        return
+    try:
+        import datetime as _dt
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "live.log"), "a") as f:
+            f.write(f"{_dt.datetime.now().strftime('%H:%M:%S')} 🪝 {msg}\n")
+    except Exception:  # noqa: BLE001 — never break the turn for a log write
+        pass
+
+
+def _summ_input(name, input_):
+    i = input_ or {}
+    if name in ("run_python", "run_r"):
+        code = (i.get("code") or "").strip()
+        head = code.splitlines()[0][:80] if code else ""
+        return f"code[{len(code)}ch] {head!r}"
+    if name == "present_plan":
+        steps = i.get("steps") or i.get("plan") or []
+        return f"title={i.get('title')!r} steps={len(steps) if isinstance(steps, list) else '?'}"
+    return "{" + ", ".join(f"{k}={str(i[k])[:40]!r}" for k in list(i)[:3]) + "}"
+
+
+def _summ_result(result):
+    if not isinstance(result, dict):
+        return str(result)[:60]
+    flags = []
+    for k in ("status", "returncode", "block_type", "reason_code", "entity_id", "run_id",
+              "result_id", "rid", "recipe_hint", "fetch_warning"):
+        if k in result:
+            v = result[k]
+            flags.append(f"{k}={v}" if isinstance(v, (int, bool)) else f"{k}={str(v)[:30]!r}")
+    if result.get("guardrail_warnings"):
+        flags.append(f"guardrail_warnings={len(result['guardrail_warnings'])}")
+    return "{" + ", ".join(flags) + "}"
+
+
 def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
     fn = EXECUTORS.get(name)
     if fn is None:
@@ -3087,13 +3377,22 @@ def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
         except Exception:  # noqa: BLE001
             pass    # fall through to unknown-tool error
         return json.dumps({"error": f"Unknown tool: {name}"})
+    _feedlog(f"TOOL {name} {_summ_input(name, input_)}")
     try:
+        # PreToolUse hooks (incl. the #305 veto): may block with a typed control-state
+        # result (skip execution) or rewrite the input before fn() runs.
+        decision, input_ = hooks.run_pre(name, input_, ctx)
+        if decision is not None:
+            _feedlog(f"VETO {name} -> {decision.reason_code}")
+            return json.dumps(hooks.deny_to_result(decision))
         sig_params = inspect.signature(fn).parameters
         result = fn(input_, ctx) if "ctx" in sig_params else fn(input_)
         if isinstance(result, dict):
-            _recipe_uptake_hint(name, input_, result, ctx)
-            _fetch_fail_guardrail(name, result)
-            _judgment_guardrails(name, input_, result)
+            # PostToolUse hooks (recipe-uptake nudge, fetch-fail detector, judgment
+            # steers) + PostToolUseFailure hooks (fire only on a failure result).
+            hooks.run_post(name, input_, result, ctx)
+        _feedlog(f"DONE {name} -> {_summ_result(result)}")
         return json.dumps(result)
     except Exception as e:
+        _feedlog(f"ERROR {name} -> {e}")
         return json.dumps({"error": str(e)})

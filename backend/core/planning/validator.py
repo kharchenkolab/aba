@@ -44,6 +44,19 @@ import re as _re
 _ITEM_TAG_RE = _re.compile(r"<\s*item\s*>(.*?)<\s*/\s*item\s*>", _re.DOTALL | _re.IGNORECASE)
 _LIST_PREFIX_RE = _re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 
+# Leaked function-call / XML-ish markup some models (esp. small ones) emit INTO
+# values — e.g. '<parameter name="item">', '<parameter name="title">…', '</steps>',
+# '<invoke …>'. Seen live leaking into step TITLES, turning a plan into junk steps.
+_LEAK_TAG_RE = _re.compile(r"</?(?:parameter|assumptions|steps|invoke|function_calls|antml)[^>]*>", _re.IGNORECASE)
+_LEAK_ARR_RE = _re.compile(r"\[\s*\{.*?\}\s*\]", _re.S)
+
+
+def _strip_leak(s: str) -> str:
+    """Strip leaked tool-call/XML markup and a trailing crammed JSON array."""
+    s = _LEAK_TAG_RE.sub("", s or "")
+    s = _LEAK_ARR_RE.sub("", s)
+    return s.strip()
+
 
 def _loads_loose(s: str):
     """Parse a model-emitted array/object string into Python data, tolerant of
@@ -159,33 +172,51 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
         steps_raw = []
 
     norm_steps: list[PlanStep] = []
-    for i, s in enumerate(steps_raw, start=1):
+    for s in steps_raw:
+        n = len(norm_steps) + 1   # sequential — dropped junk steps leave no gaps
         if isinstance(s, str):
-            title = s.strip()
+            title = _strip_leak(s.strip())
+            # Some models emit each step as an object-LITERAL string instead of a real
+            # object — '{title: "X", description: "Y"}', often with UNQUOTED keys, so
+            # json.loads / ast.literal_eval both reject it and it lands here as a bare
+            # string. Pull title/description out tolerantly (quote char captured so the
+            # other quote may appear inside the value).
+            if title.startswith("{") and ("title" in title or "description" in title):
+                mt = _re.search(r'title\s*:\s*(["\'])(.*?)\1', title)
+                md = _re.search(r'description\s*:\s*(["\'])(.*?)\1', title)
+                t = (mt.group(2).strip() if mt else "")
+                d = (md.group(2).strip() if md else "")
+                if t or d:
+                    norm_steps.append(PlanStep(n=n, title=(t or d[:80]), description=d))
+                    continue
             if title:
-                norm_steps.append(PlanStep(n=i, title=title))
+                norm_steps.append(PlanStep(n=n, title=title))
         elif isinstance(s, dict):
-            title = (s.get("title") or "").strip()
-            if not title and isinstance(s.get("description"), str):
+            title = _strip_leak((s.get("title") or "").strip())
+            desc = _strip_leak((s.get("description") or "").strip())
+            if not title and desc:
                 # Some models put the step text under "description" only.
-                title = s["description"][:80].strip()
+                title = desc[:80].strip()
+            if not title and not desc:
+                # Pure leaked-tag junk (e.g. a step whose title was just
+                # '<parameter name="item">') — drop it rather than show a blank step.
+                continue
             norm_steps.append(PlanStep(
-                n=i,
+                n=n,
                 title=title,
-                description=(s.get("description") or "").strip(),
+                description=desc,
                 expected_outputs=_coerce_string_list(s.get("expected_outputs")),
                 skill=(s.get("skill") or "").strip() or None,
                 parameters=dict(s.get("parameters") or {}),
             ))
         else:
             # Unsupported shape — drop with a synthesized title for traceability.
-            norm_steps.append(PlanStep(n=i, title=f"(unparsed step {i})"))
+            norm_steps.append(PlanStep(n=n, title=f"(unparsed step {n})"))
 
     # Recovery: some models cram the steps as a JSON array into a *text* field
     # (e.g. function-call XML leaking into `assumptions`), leaving `steps` empty.
     # If we have no steps, scan the raw string values for an embedded step array.
     if not norm_steps:
-        import re as _re
         for v in raw.values():
             if not (isinstance(v, str) and ("title" in v and ("description" in v or "expected_outputs" in v))):
                 continue
@@ -204,15 +235,6 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
                                 expected_outputs=_coerce_string_list(s.get("expected_outputs"))))
                 if norm_steps:
                     break
-
-    def _strip_leak(s: str) -> str:
-        # Remove leaked function-call / XML-ish tags some models emit into prose
-        # (e.g. '<parameter name="steps">', '</assumptions>', '<invoke …>') and a
-        # trailing JSON array (e.g. the steps array crammed into a text field).
-        import re as _re
-        s = _re.sub(r"</?(?:parameter|assumptions|steps|invoke|function_calls|antml)[^>]*>", "", s or "")
-        s = _re.sub(r"\[\s*\{.*?\}\s*\]", "", s, flags=_re.S)
-        return s.strip()
 
     return Plan(
         title=_strip_leak(str(raw.get("title") or "")),

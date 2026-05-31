@@ -1,0 +1,95 @@
+{
+ "case_id": "recipe_uptake__seurat_single_plan",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 0,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1. Run a standard Seurat workflow in R: load, QC, normalize, PCA, neighbors, clustering, UMAP, and FindAllMarkers; show me a UMAP and the top markers per cluster.",
+ "target_recipe": "seurat-scrna",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good! I see there are actually **three** samples here (GSM5746268, GSM5746269, GSM5746270), each with a 10x triplet. You asked for the one prefixed GSM5746268, so I'll focus on that. Let me read the Seurat workflow recipe first, then present a plan."
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "seurat-scrna"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"seurat-scrna\", \"description\": \"Authoritative single-cell RNA-seq QC + clustering + cluster annotation with R/Seurat (v5).\", \"body\": \"scRNA-seq QC + clustering + annotation with R/Seurat v5 (standard PBMC3k workflow). Provision: ensure_capability('Seurat'), then library(Seurat). THE THREE CHOICES THAT DEFINE THE RESULT \\u2014 surface them with present_plan before committing: (1) QC thresholds (subset cutoffs on nFeature_RNA and percent.mt); (2) number of PCs/dims (read off the ElbowPlot); (3) clustering resolution (FindClusters). Steps: ReadMtx -> CreateSeuratObject(min.cells=3,min.features=200) -> PercentageFeatureSet('^MT-') -> subset QC -> NormalizeData -> FindVariableFeatures -> ScaleData -> RunPCA -> FindNeighbors -> FindClusters -> RunUMAP -> JoinLayers -> FindAllMarkers. Load ggplot2 and dplyr explicitly; never library(tidyverse).\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Now let me present the workflow plan:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Seurat scRNA-seq workflow on GSM5746268",
+      "summary": "Load 10x triplet, QC, normalize, cluster, and identify top markers per cluster.",
+      "steps": [
+       {
+        "title": "Load 10x matrix triplet",
+        "description": "Read .mtx, .features, .barcodes files for GSM5746268 and create a Seurat object with standard filtering (min.cells=3, min.features=200).",
+        "skill": "seurat-scrna"
+       },
+       {
+        "title": "QC: compute mitochondrial fraction & filter",
+        "description": "Calculate percent.mt, visualize nFeature_RNA and percent.mt distributions, then subset to reasonable thresholds (we'll inspect first and use sensible defaults).",
+        "skill": "seurat-scrna"
+       },
+       {
+        "title": "Normalize, find HVG, scale, PCA",
+        "description": "NormalizeData, FindVariableFeatures, ScaleData, RunPCA with 30 dims as default (adjustable if elbow plot suggests otherwise).",
+        "skill": "seurat-scrna"
+       },
+       {
+        "title": "Neighbors, clustering, UMAP",
+        "description": "FindNeighbors, FindClusters (resolution 0.5 default), RunUMAP, then JoinLayers before marker detection.",
+        "skill": "seurat-scrna"
+       },
+       {
+        "title": "Find all markers & visualize",
+        "description": "FindAllMarkers with standard thresholds (logfc.threshold=0.25, min.pct=0.1), then create a UMAP plot and a table of top markers per cluster."
+       }
+      ],
+      "assumptions": [
+       "Loading GSM5746268 sample only (the first triplet in DATA_DIR)",
+       "Using standard Seurat QC defaults: min.cells=3, min.features=200",
+       "Using default mitochondrial gene prefix pattern (^MT- for mouse/human; will inspect features to confirm)",
+       "Using 30 PCs for PCA, resolution 0.5 for clustering, default UMAP params \u2014 will show diagnostics and can adjust if needed",
+       "R/Seurat v5 with modern layer idioms"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

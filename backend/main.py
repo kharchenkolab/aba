@@ -170,6 +170,7 @@ class EntityPatch(BaseModel):
     pinned: bool | None = None
     status: str | None = None
     interpretation: str | None = None   # one-line caption on a Result (merged into metadata)
+    interpretation_origin: str | None = None  # 'ai' | 'user' — flips to 'user' on first edit (merged into metadata)
     thread_id: str | None = None        # re-home a Result to another thread (merged into metadata)
 
 
@@ -188,7 +189,7 @@ def entities_patch(entity_id: str, req: EntityPatch):
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     # interpretation / thread_id are Result metadata, not top-level columns.
     meta_updates = {}
-    for k in ("interpretation", "thread_id"):
+    for k in ("interpretation", "interpretation_origin", "thread_id"):
         if k in fields:
             meta_updates[k] = fields.pop(k)
     if meta_updates:
@@ -261,10 +262,10 @@ def entities_download(entity_id: str):
 
 
 @app.get("/api/entities/{entity_id}/messages")
-def entities_messages(entity_id: str):
+def entities_messages(entity_id: str, thread_id: str | None = None):
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    return get_messages(entity_id)
+    return get_messages(entity_id, thread_id=thread_id) if thread_id else get_messages(entity_id)
 
 
 @app.delete("/api/entities/{entity_id}/messages")
@@ -364,6 +365,82 @@ async def chat(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/runs/{rid}/refresh-manifest")
+def runs_refresh_manifest(rid: str):
+    """Re-scan a Run's output dir and rebuild its manifest. Useful after a
+    server-side change to the manifester (e.g. new PDF-thumbnail support)."""
+    from content.bio.lifecycle.runs import refresh_output_manifest
+    e = get_entity(rid)
+    if not e or e.get("type") != "analysis":
+        raise HTTPException(404, f"run {rid} not found")
+    refresh_output_manifest(rid)
+    return {"ok": True}
+
+
+@app.post("/api/results/{rid}/regenerate-interpretation")
+def regenerate_interpretation(rid: str):
+    """Re-fire the auto-interpret background job for a single Result. Used when
+    the original schedule failed (e.g. the pre-fix sync-endpoint bug). Idempotent:
+    auto_interpret skips if interpretation_origin=='user' (the user has edited)."""
+    from content.bio.lifecycle.promote import auto_interpret
+    r = get_entity(rid)
+    if not r or r.get("type") != "result":
+        raise HTTPException(404, f"result {rid} not found")
+    text = auto_interpret(rid)
+    return {"ok": True, "wrote": bool(text), "preview": (text or "")[:200]}
+
+
+@app.post("/api/admin/backfill-tool-result-thread")
+def backfill_tool_result_threads():
+    """One-shot data fix: tool_result rows were appended with thread_id=NULL by a
+    long-standing bug at guide.py:941/993 (fixed in 2026-05-31). They became
+    invisible once /api/messages started filtering by thread_id. This backfills
+    each orphan's thread_id from the immediately-preceding assistant message
+    (same workspace) — that's the message whose tool_use the result is for."""
+    from core.graph._schema import WORKSPACE_ID
+    from core.graph.messages import _conn  # type: ignore[attr-defined]
+    with _conn() as c:
+        # Find every tool_result-bearing user row with NULL thread, and the
+        # latest preceding assistant row's thread_id in the same workspace.
+        rows = c.execute("""
+          SELECT m.id, (
+            SELECT a.thread_id FROM messages a
+            WHERE a.entity_id = m.entity_id AND a.role='assistant'
+              AND a.id < m.id AND a.thread_id IS NOT NULL
+            ORDER BY a.id DESC LIMIT 1
+          ) AS prev_thread
+          FROM messages m
+          WHERE m.role='user' AND m.thread_id IS NULL AND m.content LIKE '%"tool_result"%'
+          AND m.entity_id = ?
+        """, (WORKSPACE_ID,)).fetchall()
+        updates = [(r["prev_thread"], r["id"]) for r in rows if r["prev_thread"]]
+        c.executemany("UPDATE messages SET thread_id = ? WHERE id = ?", updates)
+        c.commit()
+    return {"backfilled": len(updates), "scanned": len(rows)}
+
+
+@app.get("/api/dev/last-turn-context")
+def dev_last_turn_context(thread_id: str | None = None):
+    """Latest turn's FULL API context (system prompt + tools + history + user_text)
+    as the model received it, read from the JSON sidecar dumped by
+    guide.py:_dump_turn_context. If thread_id is set, returns the latest matching
+    that thread; else just the most recent. Powers the drawer's Context tab."""
+    import os, glob, json as _json
+    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    if d.strip().lower() in ("", "off", "0", "false"):
+        raise HTTPException(404, "turn-log dir disabled")
+    files = sorted(glob.glob(os.path.join(d, "*_run_*.json")), reverse=True)
+    for f in files:
+        try:
+            payload = _json.load(open(f))
+        except Exception:  # noqa: BLE001
+            continue
+        if thread_id and payload.get("thread_id") != thread_id:
+            continue
+        return payload
+    raise HTTPException(404, "no turn context dumped yet")
 
 
 @app.get("/api/messages")
@@ -606,21 +683,26 @@ def run_cancel(rid: str):
 
 @app.post("/api/runs/{rid}/pin-output")
 def run_pin_output(rid: str, req: PinOutputRequest):
-    """Pin one of a run's outputs into the thread as a Result. Plots/tables we
-    can render are kept with their thumbnail; everything else is a *reference*
-    (origin=external + href) — we don't host a copy."""
+    """Pin one of a run's outputs as a Result wrapping the evidence (figure/table).
+    Plots/tables we can render are kept with their thumbnail; everything else is a
+    *reference* (origin=external + href) — we don't host a copy."""
+    from content.bio.lifecycle.promote import pin_evidence
     run = _run_or_404(rid)
-    tid = (run.get("metadata") or {}).get("thread_id")
+    tid = (run.get("metadata") or {}).get("thread_id") or ""
     etype = "table" if req.kind == "table" else "figure"
     is_img = bool(req.thumb) and req.thumb.lower().rsplit(".", 1)[-1] in ("png", "jpg", "jpeg", "svg", "webp", "gif")
-    eid = create_entity(
-        entity_type=etype, title=req.label or "result",
-        artifact_path=(req.thumb if is_img else None),
-        metadata={"thread_id": tid, "origin": "external", "interpretation": req.interpretation,
-                  "source_run": rid, "href": req.href, "out_kind": req.kind})
-    update_entity(eid, pinned=True)
-    add_edge(eid, rid, "produced_by")
-    return get_entity(eid)
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind=etype,
+        evidence_payload={
+            "title": req.label or "result",
+            "artifact_path": (req.thumb if is_img else None),
+            "metadata": {"source_run": rid, "href": req.href, "out_kind": req.kind},
+        },
+        interpretation=(req.interpretation or None),
+        origin="external", parent_run_id=rid,
+    )
+    return get_entity(out["result_id"])
 
 
 class RegisterDatasetRequest(BaseModel):
@@ -755,13 +837,15 @@ def _result_or_404(rid: str) -> dict:
 
 @app.post("/api/results")
 def create_result(req: CreateResultRequest):
-    """Create a kept Result (an observation). Usually seeded with one cell;
-    grows deliberately via add-member. The single-member case is the common one."""
+    """Create a Result (an observation). Usually seeded with one cell; grows
+    deliberately via add-member. Results are on the shelf by virtue of being
+    Results — no explicit pinned flag needed."""
     eid = create_entity(
         entity_type="result", title=req.title,
         metadata={"thread_id": req.thread_id, "origin": req.origin,
-                  "interpretation": req.interpretation, "members": []})
-    update_entity(eid, pinned=True)
+                  "interpretation": req.interpretation,
+                  "interpretation_origin": "user",
+                  "members": []})
     for m in req.members:
         add_result_member(eid, kind=m.kind, ref=m.ref, text=m.text, caption=m.caption, at=m.at)
         if m.ref:
@@ -863,26 +947,32 @@ class PinMessageRequest(BaseModel):
 
 @app.post("/api/messages/pin")
 def pin_message(req: PinMessageRequest):
-    """Keep any chat message: snapshot it as a lightweight 'note' entity that
-    shows in the thread's pinned shelf. Toggles by content key (idempotent)."""
+    """Pin a chat message: create a Note from the text+image_urls and wrap it in a
+    Result. Toggles by content key — re-pinning the same message archives its Note
+    (and the unpin logic in task #321 will handle the wrapping Result transitively)."""
     from content.bio.graph.search import find_kept_note
+    from content.bio.lifecycle.promote import pin_evidence
     from core.graph.entities import update_entity
     existing = find_kept_note(req.key)
     if existing:
-        update_entity(existing, status="archived")   # unpin
+        update_entity(existing, status="archived")   # unpin (B will refine: also archive the wrapping Result)
         return {"pinned": False}
     tid = req.thread_id
     if tid == "default":
         from core.graph.threads import get_or_create_default_thread
         tid = get_or_create_default_thread()
     title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
-    eid = create_entity(
-        entity_type="note", title=title,
-        metadata={"source_key": req.key, "text": req.text,
-                  "image_urls": req.image_urls, "thread_id": tid, "origin": "internal"},
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind="note",
+        evidence_payload={
+            "title": title,
+            "metadata": {"source_key": req.key, "text": req.text, "image_urls": req.image_urls},
+        },
+        interpretation=req.text[:500] or None,   # message text doubles as the initial interpretation
+        origin="internal",
     )
-    update_entity(eid, pinned=True, notes=req.text[:500])
-    return {"pinned": True, "id": eid}
+    return {"pinned": True, "id": out["evidence_id"], "result_id": out["result_id"]}
 
 
 @app.get("/api/search")
@@ -1448,8 +1538,8 @@ async def upload_external_result(
     interpretation: str = Form(""),
 ):
     """Bring in an external result (a gel, a wet-lab readout, a figure from
-    another tool) as a first-class, pinned Result — identical to an internal
-    one in the UI, with origin recorded for provenance."""
+    another tool) as a first-class Result wrapping the uploaded figure."""
+    from content.bio.lifecycle.promote import pin_evidence
     if not file.filename:
         raise HTTPException(400, "filename missing")
     dest = _unique_path(ARTIFACTS_DIR / Path(file.filename).name)
@@ -1459,18 +1549,92 @@ async def upload_external_result(
     if tid == "default":
         from core.graph.threads import get_or_create_default_thread
         tid = get_or_create_default_thread()
-    eid = create_entity(
-        entity_type="figure", title=Path(file.filename).stem,
-        artifact_path=f"/artifacts/{dest.name}",
-        metadata={"original_name": file.filename, "origin": "external",
-                  "thread_id": tid, "interpretation": interpretation},
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind="figure",
+        evidence_payload={
+            "title": Path(file.filename).stem,
+            "artifact_path": f"/artifacts/{dest.name}",
+            "metadata": {"original_name": file.filename},
+        },
+        interpretation=(interpretation or None),
+        origin="external",
     )
-    update_entity(eid, pinned=True)
-    # Data-upload event trigger (Phase D): new evidence may overlap a run behind
-    # active claims → N+1 proposal.
     from content.bio.proposals.scheduler import evaluate_thread
     evaluate_thread(tid, "data_upload")
-    return get_entity(eid)
+    return get_entity(out["result_id"])
+
+
+# ── NEW pin endpoints (A2) ─────────────────────────────────────────────────────
+
+@app.post("/api/entities/{entity_id}/pin")
+def pin_entity_to_result(entity_id: str):
+    """EntityMenu Pin: promote this existing evidence entity (figure/table/cell/
+    note/narrative) into a Result. Result is created immediately with a
+    ✨-placeholder interpretation; a background job (A3) replaces it with the
+    Guide's adjacent narration."""
+    from content.bio.lifecycle.promote import pin_evidence, auto_interpret
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    if ent["type"] in ("result", "claim", "finding"):
+        raise HTTPException(400, f"{ent['type']} is curation; not pinnable")
+    tid = (ent.get("metadata") or {}).get("thread_id") or ""
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind=ent["type"], evidence_id=entity_id,
+        interpretation=None, origin=(ent.get("metadata") or {}).get("origin", "internal"),
+    )
+    # NB: this endpoint is SYNC, so asyncio.get_event_loop() doesn't work here
+    # (FastAPI runs it on a worker thread w/o a loop). Use a plain Thread to fire
+    # the background interpretation job — fire-and-forget, daemon so it doesn't
+    # block shutdown. The same pattern works in async endpoints too.
+    import threading
+    threading.Thread(target=auto_interpret, args=(out["result_id"],), daemon=True).start()
+    return get_entity(out["result_id"])
+
+
+@app.post("/api/entities/{entity_id}/unpin")
+def unpin_entity(entity_id: str):
+    """Inverse of /pin — applies the unpin branching (B / #321): archive the
+    wrapping Result(s) if this is the only evidence, else just remove this
+    evidence as a member. See lifecycle.promote.unpin_evidence."""
+    from content.bio.lifecycle.promote import unpin_evidence
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    tid = (ent.get("metadata") or {}).get("thread_id")
+    return unpin_evidence(entity_id, thread_id=tid)
+
+
+@app.post("/api/results/{rid}/upload-evidence")
+async def result_upload_evidence(
+    rid: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+):
+    """Result-page Add-evidence: upload a file and append it as a NEW member of
+    this existing Result. Interpretation is NOT regenerated — the Result keeps
+    its existing description; the new evidence is added beneath it."""
+    from content.bio.lifecycle.promote import pin_evidence
+    r = _result_or_404(rid)
+    if not file.filename:
+        raise HTTPException(400, "filename missing")
+    dest = _unique_path(ARTIFACTS_DIR / Path(file.filename).name)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    tid = (r.get("metadata") or {}).get("thread_id") or ""
+    out = pin_evidence(
+        thread_id=tid, target_result_id=rid,
+        evidence_kind="figure",
+        evidence_payload={
+            "title": Path(file.filename).stem,
+            "artifact_path": f"/artifacts/{dest.name}",
+            "metadata": {"original_name": file.filename},
+        },
+        caption=caption, origin="external",
+    )
+    return get_entity(rid)
 
 
 class URLUploadRequest(BaseModel):

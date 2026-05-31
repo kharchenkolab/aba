@@ -236,6 +236,10 @@ export default function App() {
     setPosture('chat')
     setAnnotation(null)
     setInventory(false)
+    // Collapse both columns SYNCHRONOUSLY on project entry so the empty-project
+    // "zoom on chat" is in effect during the entity-fetch window; frameOnProjectEntry
+    // (below) is the sole authority to re-open them once it sees the entity counts.
+    setTreeCollapsed(true); setRightCollapsed(true)
     fetch('/api/projects/current')
       .then(r => r.json())
       .then(d => {
@@ -524,14 +528,15 @@ export default function App() {
     createClaim(stmt, [resultId])
   }
 
-  // Pin/unpin a figure. Pinning tags it to the current thread, so it always
-  // lands in this thread's shelf (not wherever it was produced).
-  const pinEntity = (id: string, pinned: boolean) => {
-    const body = pinned ? { pinned: true, thread_id: currentThread?.id ?? threadId } : { pinned: false }
-    fetch(`/api/entities/${encodeURIComponent(id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(() => refresh()).catch(() => {})
+  // Pin/unpin a chat figure. Under the unified model (misc/entity_pin_redesign.md),
+  // Pin creates a Result wrapping the evidence (and lands on the shelf by virtue
+  // of being a Result); Unpin runs the inverse branching (delete vs archive vs
+  // remove-member) via /api/entities/{id}/unpin.
+  const pinEntity = (id: string, pin: boolean) => {
+    const path = pin ? 'pin' : 'unpin'
+    fetch(`/api/entities/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
+      .then(() => refresh())
+      .catch(() => {})
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
   const keepMessage = (key: string, text: string, image_urls: string[]) => {
@@ -563,8 +568,12 @@ export default function App() {
     threads: 1 + activeEntities.filter(e => e.type === 'thread' && !e.metadata?.is_default).length,
     claims: activeEntities.filter(e => e.type === 'claim').length,
     data: activeEntities.filter(e => e.type === 'dataset').length,
-    runs: activeEntities.filter(e => e.type === 'analysis').length,
-    results: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type)).length,
+    // Exclude the ambient catch-all analysis (lifecycle/registry.py:_ensure_analysis)
+    // — structural bookkeeping, never user-facing.
+    runs: activeEntities.filter(e => e.type === 'analysis' && !(e.metadata as { ambient?: boolean } | undefined)?.ambient).length,
+    // Aligned with PinnedShelf + ProjectTree's Results tab: only Result entities
+    // count as "Results" — figures/tables live as evidence under Runs/Results.
+    results: activeEntities.filter(e => e.type === 'result').length,
     // Virtual files view shows the same artifacts as Results but via a folder
     // tree projection — count = same as results for now.
     files: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type) && e.artifact_path).length,

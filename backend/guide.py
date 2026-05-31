@@ -212,6 +212,15 @@ def _dump_turn_context(run_id, *, user_text, system, history, active_tools,
         ])
         with open(os.path.join(d, f"{ts}_{run_id}.md"), "w") as f:
             f.write(body)
+        # JSON sidecar — same payload, structured, for the drawer's Context tab.
+        with open(os.path.join(d, f"{ts}_{run_id}.json"), "w") as f:
+            _json.dump({
+                "run_id": run_id, "ts": ts, "thread_id": thread_id, "model": model,
+                "focus_entity_id": focus_entity_id, "tools": tools,
+                "user_text": user_text or "",
+                "system": system or "",
+                "history": history,
+            }, f, default=str)
         # Rolling live transcript: a USER header per turn; events appended by
         # _live_log_event. Tail this file to watch any run (incl. browser) live.
         with open(os.path.join(d, "live.log"), "a") as f:
@@ -321,6 +330,17 @@ def _summarize_tool_input(tool_name: str, tool_input) -> str:
         n_lines = code.count("\n") + 1 if code else 0
         head = code.splitlines()[0][:120] if code else ""
         return f"{n_lines} line{'s' if n_lines != 1 else ''} of Python — first line: {head!r}"
+    if tool_name == "archive_entity":
+        eid = tool_input.get("entity_id") or "?"
+        title = "?"
+        try:
+            ent = get_entity(eid)
+            if ent:
+                title = f"{ent.get('type', '?')} '{ent.get('title', '?')}'"
+        except Exception:  # noqa: BLE001
+            pass
+        reason = (tool_input.get("reason") or "").strip()
+        return f"Archive {title}" + (f" — {reason[:160]}" if reason else "")
     parts = []
     for k, v in tool_input.items():
         s = repr(v)
@@ -485,6 +505,8 @@ async def stream_response(
     focus_text, fields_preloaded = render_focus_preamble(manifest)
     thread_text = manifest.thread.text if manifest.thread else ""
     eff_intent = _effective_intent(user_text, history)
+    # (the user prompt is already written to live.log as `👤 …` at run-header time;
+    # no extra USER print here.)
     # Per-turn gate signals for build_system — only inject the scenarios /
     # highlighting blocks when the user is actually acting on a figure (focus is
     # a figure) or just highlighted; otherwise they're dead weight every turn.
@@ -713,10 +735,16 @@ async def stream_response(
                     # (handled at turn start). The agent does NOT open for plans.
                     try:
                         from content.bio.lifecycle.runs import open_run as _open_run
-                        _open_run(store_tid, plan.title or "Analysis run",
-                                  focus_entity_id=focus_entity_id, plan_entity_id=plan_eid)
-                    except Exception:  # noqa: BLE001
-                        pass
+                        from content.bio.tools import _feedlog as _fl
+                        _rid = _open_run(store_tid, plan.title or "Analysis run",
+                                         focus_entity_id=focus_entity_id, plan_entity_id=plan_eid)
+                        _fl(f"SERVER open_run @present_plan title={(plan.title or 'Analysis run')!r} "
+                            f"plan_eid={plan_eid} -> run={_rid}")
+                    except Exception as _e:  # noqa: BLE001
+                        try:
+                            from content.bio.tools import _feedlog as _fl
+                            _fl(f"SERVER open_run @present_plan FAILED: {_e}")
+                        except Exception: pass  # noqa: BLE001, E701
                     yield sse({"type": "plan", "entity_id": plan_eid, **plan.to_dict()})
                     ack = {
                         "status": "presented",
@@ -920,7 +948,8 @@ async def stream_response(
                     # deferred tool's result — webhook does that on completion.
                     if tool_result_blocks:
                         append_message("user", tool_result_blocks,
-                                       entity_id=entity_id, focus_entity_id=focus_entity_id)
+                                       entity_id=entity_id, focus_entity_id=focus_entity_id,
+                                       thread_id=store_tid)
                     turn.transition(TurnState.AWAITING_TOOL_RESULT)
                     checkpoint(turn)
                     yield sse({"type": "usage", "input": usage_in, "output": usage_out,
@@ -972,7 +1001,8 @@ async def stream_response(
             # 'approval') prevents orphan-fill from clobbering it.
             if tool_result_blocks:
                 append_message("user", tool_result_blocks,
-                               entity_id=entity_id, focus_entity_id=focus_entity_id)
+                               entity_id=entity_id, focus_entity_id=focus_entity_id,
+                               thread_id=store_tid)
             # All this iteration's tool_uses have matching tool_results in
             # the message log now — clear the in-flight set (A1). Approval
             # halt leaves the held tool's id in pending_tool_ids; the

@@ -1,0 +1,34 @@
+{
+ "id": "scatac__cold",
+ "source": "req_1780156999380.json",
+ "model": "claude-haiku-4-5-20251001",
+ "render": {
+  "role": "primary",
+  "ctx": {}
+ },
+ "intent": "Analyse a single-cell ATAC-seq dataset. Use a small PUBLIC scATAC-seq dataset (e.g. 10x's PBMC scATAC, or a snapATAC2/episcanpy built-in). Do basic QC (TSS enrichment, fragment/feature counts), build the cell \u00d7 peak (or bin) matrix, run TF-IDF/LSI, cluster, and show a UMAP coloured by cluster.",
+ "target_recipe": null,
+ "messages": [
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "Analyse a single-cell ATAC-seq dataset. Use a small PUBLIC scATAC-seq dataset (e.g. 10x's PBMC scATAC, or a snapATAC2/episcanpy built-in). Do basic QC (TSS enrichment, fragment/feature counts), build the cell \u00d7 peak (or bin) matrix, run TF-IDF/LSI, cluster, and show a UMAP coloured by cluster."
+    }
+   ]
+  }
+ ],
+ "behaviors": [
+  "plans",
+  "no_premature_code",
+  "reads_then_plans_then_stops"
+ ],
+ "env_stubs": {
+  "search_skills": [],
+  "list_data_files": {
+   "files": []
+  }
+ },
+ "scenario": "Cold-start (single prompt): analyse a PUBLIC scATAC-seq dataset (10x PBMC scATAC or snapATAC2/episcanpy built-in); QC (TSS, fragment/feature counts), peak/bin matrix, TF-IDF/LSI, cluster, UMAP. No local data \u2014 agent must fetch. Re-runnable as-is."
+}

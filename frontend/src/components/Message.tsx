@@ -159,9 +159,15 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   const steps = (Array.isArray(block.steps) ? block.steps : []) as (
     string | { n?: number; title: string; description?: string; expected_outputs?: string[]; skill?: string | null; parameters?: Record<string, unknown> }
   )[]
-  const concerns = block.concerns ?? []
-  const planConcerns = concerns.filter(c => c.step_n == null)
-  const stepConcerns = (n: number) => concerns.filter(c => c.step_n === n)
+  // The model occasionally emits non-array shapes (string, object, null) — normalize
+  // at ingestion so a bad payload doesn't crash the message and white-screen the chat.
+  // See [[feedback_render_robustness]] in memory.
+  const assumptions: string[] = Array.isArray(block.assumptions)
+    ? (block.assumptions as unknown[]).map(a => typeof a === 'string' ? a : JSON.stringify(a))
+    : []
+  const concerns = (Array.isArray(block.concerns) ? block.concerns : []) as { step_n?: number | null; text?: string }[]
+  const planConcerns = concerns.filter(c => c && c.step_n == null)
+  const stepConcerns = (n: number) => concerns.filter(c => c && c.step_n === n)
   return (
     <div className="plan-card">
       <div className="plan-card__head">
@@ -169,10 +175,10 @@ function PlanCard({ block, active, onGo, onAdjust }: {
       </div>
       {block.summary && <div className="plan-card__summary">{block.summary}</div>}
       {block.rationale && <div className="plan-card__why">{block.rationale}</div>}
-      {block.assumptions && block.assumptions.length > 0 && (
+      {assumptions.length > 0 && (
         <div className="plan-card__assumptions">
           <div className="plan-card__assumptions-label">Assumptions</div>
-          <ul>{block.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          <ul>{assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
         </div>
       )}
       <ol className="plan-card__steps">

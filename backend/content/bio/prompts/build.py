@@ -60,7 +60,15 @@ def _capabilities_block(active_tools: list[dict]) -> str:
         # (a naive split(". ") truncated tool descriptions right at "(e.g").
         first = re.split(r"(?<![ei]\.[ge])\.\s", desc, maxsplit=1)[0].rstrip(".")
         lines.append(f"- {t['name']}: {first}.")
-    return "\n".join(lines) + "\n\n" + _prompt("sandbox_libs.md")
+    body = "\n".join(lines)
+    # nonneg eval arm: drop the "Libraries available in the run_python sandbox" list.
+    # It names scanpy/pandas/… as ready-to-use, which reads as "you already have it,
+    # just code it" and competes with reading the analysis recipe (PK hypothesis on the
+    # scanpy recipe-uptake gap). The sandbox stack is still noted in behavior_slim, so
+    # the agent won't redundantly ensure_capability it.
+    if _is_nonneg():
+        return body
+    return body + "\n\n" + _prompt("sandbox_libs.md")
 
 
 @dataclass(frozen=True)
@@ -139,6 +147,19 @@ _GOTCHA_HDR = re.compile(
 
 def _current_arm() -> str:
     return (os.environ.get("ABA_PROMPT_ARM") or "control").strip() or "control"
+
+
+# ── prompt-STRUCTURE arm: 'nonneg' ───────────────────────────────────────────
+# Tests the invariant-vs-dilution hypothesis (the 5 integrity invariants are
+# already hard-phrased but drowned in a 20-bullet bold wall). 'nonneg' hoists them
+# into an isolated, salient "Ground rules" block at the top (after identity) and
+# renders a de-bolded, slimmed behavior block. control = current behavior.md.
+def _is_nonneg() -> bool:
+    return _current_arm() == "nonneg"
+
+
+def _behavior_block(_tools: list[dict]) -> str:
+    return _prompt("behavior_slim.md" if _is_nonneg() else "behavior.md")
 
 
 def _split_sections(body: str) -> list[tuple[str, str]]:
@@ -256,13 +277,17 @@ def _highlight_relevant(c: dict) -> bool:
 
 _BLOCKS: tuple[_Block, ...] = (
     _Block("identity",     None,                   None,             _md("identity.md")),
+    # Non-negotiables (integrity invariants) — 'nonneg' arm only; isolated + salient
+    # at the top so they don't compete with the operational wall. control = no-op.
+    _Block("nonnegotiables", frozenset({"primary"}), None, _md("nonnegotiables.md"),
+           gate=lambda c: _is_nonneg()),
     _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
     _Block("recipes",      frozenset({"primary"}), None,             _md("recipes.md")),
     # scenarios + highlighting only render when there's actually a figure to act
     # on (focus is a figure) or a fresh highlight — not on every turn.
     _Block("scenarios",    frozenset({"primary"}), "create_scenario", _md("scenarios.md"),
            gate=_has_focus_figure),
-    _Block("behavior",     None,                   None,             _md("behavior.md")),
+    _Block("behavior",     None,                   None,             _behavior_block),
     _Block("highlighting", frozenset({"primary"}), None,             _md("highlighting.md"),
            gate=_highlight_relevant),
     _Block("conventions",  None,                   None,             _conventions),

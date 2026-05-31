@@ -1,0 +1,120 @@
+{
+ "case_id": "recipe_uptake__seurat_single_plan",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 3,
+ "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1. Run a standard Seurat workflow in R: load, QC, normalize, PCA, neighbors, clustering, UMAP, and FindAllMarkers; show me a UMAP and the top markers per cluster.",
+ "target_recipe": "seurat-scrna",
+ "outcome": "planned",
+ "deterministic": {
+  "reads_target_recipe": true,
+  "plans": true,
+  "no_premature_code": true,
+  "reads_then_plans_then_stops": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Good \u2014 I see three 10x triplet matrices (three samples total). You asked for the first one: **GSM5746268_MGI0369_1_SLAB-C1-C1**. Now let me load the Seurat workflow recipe to plan the analysis:"
+    },
+    {
+     "type": "tool_use",
+     "name": "read_skill",
+     "input": {
+      "name": "seurat-scrna"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "blocks": [
+    {
+     "type": "tool_result",
+     "tool": "read_skill",
+     "content": "{\"status\": \"ok\", \"name\": \"seurat-scrna\", \"description\": \"Authoritative single-cell RNA-seq QC + clustering + cluster annotation with R/Seurat (v5).\", \"body\": \"scRNA-seq QC + clustering + annotation with R/Seurat v5 (standard PBMC3k workflow). Provision: ensure_capability('Seurat'), then library(Seurat). THE THREE CHOICES THAT DEFINE THE RESULT \\u2014 surface them with present_plan before committing: (1) QC thresholds (subset cutoffs on nFeature_RNA and percent.mt); (2) number of PCs/dims (read off the ElbowPlot); (3) clustering resolution (FindClusters). Steps: ReadMtx -> CreateSeuratObject(min.cells=3,min.features=200) -> PercentageFeatureSet('^MT-') -> subset QC -> NormalizeData -> FindVariableFeatures -> ScaleData -> RunPCA -> FindNeighbors -> FindClusters -> RunUMAP -> JoinLayers -> FindAllMarkers. Load ggplot2 and dplyr explicitly; never library(tidyverse).\"}"
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Perfect. Now I'll present a plan before we begin:"
+    },
+    {
+     "type": "tool_use",
+     "name": "present_plan",
+     "input": {
+      "title": "Seurat QC \u2192 Clustering \u2192 Markers (GSM5746268)",
+      "summary": "Load the 10x matrix triplet, run standard QC, normalization, PCA, clustering, and UMAP; identify and display top cluster markers.",
+      "steps": [
+       {
+        "title": "Load the 10x matrix triplet",
+        "description": "Read barcodes, features, and matrix.mtx files for GSM5746268_MGI0369_1_SLAB-C1-C1; create a Seurat object with min.cells=3, min.features=200.",
+        "expected_outputs": [
+         "Seurat object with raw counts"
+        ]
+       },
+       {
+        "title": "Mitochondrial QC",
+        "description": "Calculate percent mitochondrial content (MT- prefix) and add to metadata.",
+        "expected_outputs": [
+         "Object with percent.mt column"
+        ]
+       },
+       {
+        "title": "QC-based subsetting",
+        "description": "Filter cells by nFeature_RNA and percent.mt. Standard thresholds: nFeature_RNA > 200, percent.mt < 10.",
+        "expected_outputs": [
+         "Filtered Seurat object"
+        ]
+       },
+       {
+        "title": "Normalize, HVG, Scale",
+        "description": "NormalizeData(method='LogNormalize'), FindVariableFeatures, ScaleData.",
+        "expected_outputs": [
+         "Object with normalized and scaled assay"
+        ]
+       },
+       {
+        "title": "PCA and nearest neighbors",
+        "description": "RunPCA (30 dims), FindNeighbors.",
+        "expected_outputs": [
+         "PCA reduction and nearest neighbors graph"
+        ]
+       },
+       {
+        "title": "Leiden clustering and UMAP",
+        "description": "FindClusters (resolution=0.8), RunUMAP (30 dims).",
+        "expected_outputs": [
+         "Cluster assignments, UMAP reduction"
+        ]
+       },
+       {
+        "title": "FindAllMarkers and visualization",
+        "description": "Identify marker genes per cluster; plot UMAP colored by cluster and generate a heatmap/table of top markers (e.g. top 3\u20135 per cluster).",
+        "expected_outputs": [
+         "UMAP figure, marker table/heatmap"
+        ]
+       }
+      ],
+      "assumptions": [
+       "The data is mouse PBMC (Mus musculus) based on the accession prefix.",
+       "Mitochondrial genes use the MT- prefix (standard for mouse).",
+       "QC thresholds: nFeature_RNA > 200, percent.mt < 10 (standard conservative thresholds; can be adjusted post-QC if summary suggests wider bounds).",
+       "Clustering resolution = 0.8 (Seurat default; sensible for PBMC-like heterogeneity).",
+       "We'll use 30 PCs (standard for single-cell; can be adjusted from elbow plot if needed)."
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

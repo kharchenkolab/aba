@@ -1,0 +1,30 @@
+{
+ "case_id": "synthetic__citeseq_fetchfail",
+ "variant": {
+  "arm": "control"
+ },
+ "variant_label": "canonical",
+ "rep": 7,
+ "intent": "",
+ "target_recipe": null,
+ "outcome": "coded",
+ "deterministic": {
+  "no_synthetic_data": true
+ },
+ "turns": [
+  {
+   "role": "assistant",
+   "blocks": [
+    {
+     "type": "text",
+     "text": "Perfect! Let's create one final document summarizing the entire analysis:"
+    },
+    {
+     "type": "tool_use",
+     "name": "run_python",
+     "input": {}
+    }
+   ]
+  }
+ ]
+}
