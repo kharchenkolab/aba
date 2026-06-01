@@ -74,9 +74,13 @@ def _tool_use_index(messages: list[dict]) -> dict[str, dict]:
 
 
 def _build_stub(tool_name: str, content: Any) -> str:
-    """Render a one-line stub from a tool_result's content. Tries to
-    pull out returncode + produced artifacts (plots, tables) from a
-    JSON payload; falls back to a generic name+ok line."""
+    """Render a one-line summary from an older tool_result's content. Tries
+    to pull out returncode + produced artifacts (plots, tables) from a JSON
+    payload; falls back to a generic name+ok line.
+
+    The output marker is `[earlier]`, not `[STUB]` — the latter collides
+    with eval-mode training in current frontier models and triggered Opus
+    to refuse execution mid-session (2026-06-01)."""
     # Decode if it's a JSON string. Most run_python / run_r results land
     # here. Best-effort — if it isn't JSON, treat as opaque text.
     payload: Any = None
@@ -88,7 +92,12 @@ def _build_stub(tool_name: str, content: Any) -> str:
     elif isinstance(content, dict):
         payload = content
 
-    bits = [f"[STUB] {tool_name}"]
+    # NB: don't say "STUB" / "benchmark" / "fixture" in this marker — those
+    # tokens collide with the model's eval-mode training and have caused Opus
+    # to refuse plan execution mid-session, emitting things like "[STUB] Plan
+    # execution suspended for this benchmark turn." (verified live 2026-06-01).
+    # This is a real summary of a real prior call, not a test stub.
+    bits = [f"[earlier] {tool_name}"]
     if isinstance(payload, dict):
         # returncode / error / status
         rc = payload.get("returncode")
@@ -143,8 +152,8 @@ def prune_transcript(
     """Return a pruned copy of `messages`:
       - The most recent K_TOOL_KEEP tool_result blocks keep their content
         verbatim. Older tool_results get content replaced with a one-line
-        STUB. Tools in `_ALWAYS_KEEP_TOOLS` keep their content regardless
-        of position (cheap + high-value).
+        summary (`[earlier] tool_name | …`). Tools in `_ALWAYS_KEEP_TOOLS`
+        keep their content regardless of position (cheap + high-value).
       - Pure-text assistant messages (no tool_use, no images) older than
         the most recent K_TEXT_KEEP such messages are DROPPED entirely.
         Their information is the agent's inter-step narration; the

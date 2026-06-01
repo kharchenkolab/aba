@@ -126,8 +126,15 @@ class _RealStream:
             c = messages[-1]["content"]
             messages[-1] = {**messages[-1],
                             "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
+        # max_tokens caps a single assistant turn's output. 4096 was too tight:
+        # when the agent emits a tool_use with large `code` content (e.g.
+        # writing a multi-KB markdown recipe via run_python), the stream cuts
+        # off mid-input, the SDK can't parse the partial JSON, and the tool_use
+        # ends up with empty input — silent fail downstream (verified live
+        # 2026-06-01, prj_8d699668 thr_97a96441). Env override so it's tunable.
+        max_tok = int(os.environ.get("ABA_MAX_TOKENS", "16000"))
         self._cm = self._client.messages.stream(
-            model=self._model, max_tokens=4096, system=system, tools=tools, messages=messages,
+            model=self._model, max_tokens=max_tok, system=system, tools=tools, messages=messages,
         )
         self._stream = await self._cm.__aenter__()
         return self
