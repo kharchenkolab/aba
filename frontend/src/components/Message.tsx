@@ -592,8 +592,15 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
     setBusy(true)
     try {
       const h2c = (await import('html2canvas')).default
-      const full = await h2c(el, { backgroundColor: '#ffffff', scale: 1, logging: false, useCORS: true })
-      const scale = full.width > 512 ? 512 / full.width : 1
+      // Render at 2× CSS resolution so figure text (cluster labels, axis
+      // tick numbers) is crisp before we downscale. Then cap the long side
+      // at 1568px — Anthropic's vision input is downsampled to that anyway,
+      // and pre-cap-512 we shipped 512×~380 images where individual
+      // cluster digits were ~5px tall and unreadable to the model (it
+      // could see the yellow mark but not the number under it).
+      const full = await h2c(el, { backgroundColor: '#ffffff', scale: 2, logging: false, useCORS: true })
+      const longest = Math.max(full.width, full.height)
+      const scale = longest > 1568 ? 1568 / longest : 1
       const W = Math.round(full.width * scale), H = Math.round(full.height * scale)
       const c = document.createElement('canvas'); c.width = W; c.height = H
       const ctx = c.getContext('2d')!
