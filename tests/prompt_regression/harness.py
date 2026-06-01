@@ -18,6 +18,7 @@ A `variant` transforms the system: {arm, sys_sub:[(old,new),...], ablate:[block,
 from __future__ import annotations
 import os, sys, json, re, copy
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 BACKEND = "/workspace/aba/backend"
 if BACKEND not in sys.path:
@@ -518,19 +519,68 @@ def _variant_label(v: dict) -> str:
     return "variant"
 
 
+def _rep_path(capture_dir: str, cid: str, vlabel: str, rep: int) -> str:
+    """Where a single rep's trajectory lands on disk. Stable across resume runs
+    so an existing file is a definitive 'this rep already completed' signal."""
+    safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', vlabel)
+    return os.path.join(capture_dir, f"{cid}__{safe_label}", f"rep{rep:02d}.json")
+
+
 def _persist_traj(capture_dir, cid, vlabel, rep, case, variant, trace):
-    """Write one rollout's full trajectory + deterministic flags for the judge layer."""
-    d = os.path.join(capture_dir, f"{cid}__{re.sub(r'[^A-Za-z0-9_.-]', '_', vlabel)}")
-    os.makedirs(d, exist_ok=True)
+    """Write one rollout's full trajectory + deterministic flags for the judge layer.
+    Also persists the LIVE trace fields (code, reads, steps, usage, declared_recipes,
+    read_step/plan_step/code_step) so resume runs can re-score without re-spending
+    API tokens."""
+    path = _rep_path(capture_dir, cid, vlabel, rep)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     bnames = case.get("behaviors") or list(BEHAVIORS)
     det = {b: bool(BEHAVIORS[b](trace, case)) for b in bnames}
     rec = {"case_id": cid, "variant": variant, "variant_label": vlabel, "rep": rep,
            "intent": case.get("intent") or _last_user_text(case["messages"]),
            "target_recipe": case.get("target_recipe"),
            "declared_recipes": trace.get("declared_recipes") or [],
-           "outcome": trace["outcome"], "deterministic": det, "turns": trace["traj"]}
-    with open(os.path.join(d, f"rep{rep:02d}.json"), "w") as f:
+           "outcome": trace["outcome"], "deterministic": det, "turns": trace["traj"],
+           # Resume-needed fields (everything _agg + BEHAVIORS consumes from trace):
+           "trace_fields": {
+               "steps": trace.get("steps", []),
+               "reads": trace.get("reads", []),
+               "code": trace.get("code", ""),
+               "read_step": trace.get("read_step"),
+               "plan_step": trace.get("plan_step"),
+               "code_step": trace.get("code_step"),
+               "usage": trace.get("usage") or {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0},
+           }}
+    with open(path, "w") as f:
         json.dump(rec, f, indent=1, default=str)
+
+
+def _load_traj(capture_dir: str, cid: str, vlabel: str, rep: int) -> Optional[dict]:
+    """Load a previously persisted rep into the live `trace` shape (the dict
+    rollout() returns). Returns None if not on disk OR if it was saved before
+    the resume-needed fields were added (older runs). The trace will be
+    re-rolled in that case."""
+    path = _rep_path(capture_dir, cid, vlabel, rep)
+    if not os.path.exists(path):
+        return None
+    try:
+        rec = json.load(open(path))
+    except Exception:  # noqa: BLE001
+        return None
+    tf = rec.get("trace_fields")
+    if not tf:
+        return None    # pre-resume schema; can't reuse without re-rolling
+    return {
+        "steps": tf.get("steps") or [],
+        "reads": tf.get("reads") or [],
+        "outcome": rec.get("outcome"),
+        "code": tf.get("code") or "",
+        "traj": rec.get("turns") or [],
+        "declared_recipes": rec.get("declared_recipes") or [],
+        "read_step": tf.get("read_step"),
+        "plan_step": tf.get("plan_step"),
+        "code_step": tf.get("code_step"),
+        "usage": tf.get("usage") or {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0},
+    }
 
 
 def _agg(case: dict, traces: list, reps: int) -> dict:
@@ -587,6 +637,28 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
             system, tools = render_system(case, variant)
             cells.append({"case": case, "variant": variant, "system": system,
                           "tools": tools, "vlabel": label})
+    # Resume mode: if a prior run was killed mid-sweep, pre-populate buckets
+    # from already-on-disk rep files; the live phases below skip those reps
+    # (no API call). Toggle via ABA_RESUME=1 (set by run.py --resume) — when
+    # off, an existing rep file is overwritten (legacy behavior).
+    resume = (capture_dir and os.environ.get("ABA_RESUME") == "1")
+    resumed_count = 0
+    pre_buckets: dict = {}
+    if resume:
+        for ci, cell in enumerate(cells):
+            cid = cell["case"].get("id", "case")
+            for rep in range(reps):
+                t = _load_traj(capture_dir, cid, cell["vlabel"], rep)
+                if t is not None:
+                    pre_buckets.setdefault(ci, {})[rep] = t
+                    resumed_count += 1
+        if resumed_count:
+            print(f"[run_matrix] RESUME: loaded {resumed_count} previously-completed "
+                  f"reps from {capture_dir}", file=sys.stderr, flush=True)
+
+    def already_done(ci: int, rep: int) -> bool:
+        return resume and rep in pre_buckets.get(ci, {})
+
     # Warm-then-flood for prompt-cache efficiency: run rep 0 of EACH cell
     # serially in parallel (one per cell, distinct prefixes don't contend),
     # let those writes land, THEN fan out reps 1..N-1 across the worker pool.
@@ -595,9 +667,10 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
     # per cell. Toggle off with ABA_NO_WARMUP=1 for the legacy single-phase
     # behavior.
     warm = (os.environ.get("ABA_NO_WARMUP") != "1") and reps > 1
-    warm_tasks = [(ci, 0) for ci in range(len(cells))] if warm else []
+    warm_tasks = [(ci, 0) for ci in range(len(cells)) if not already_done(ci, 0)] if warm else []
     flood_start = 1 if warm else 0
-    flood_tasks = [(ci, rep) for ci in range(len(cells)) for rep in range(flood_start, reps)]
+    flood_tasks = [(ci, rep) for ci in range(len(cells))
+                   for rep in range(flood_start, reps) if not already_done(ci, rep)]
     tasks = warm_tasks + flood_tasks    # legacy "tasks" still used for total count
 
     def run_one(task):
@@ -619,9 +692,37 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
 
     from concurrent.futures import as_completed
     buckets: dict = {}                                  # phase 2: fan out all rollouts
+    # Seed with resumed reps so the aggregator sees them — but keep them in a
+    # set-by-rep-index style so duplicates can't happen if a resumed cell also
+    # gets re-rolled.
+    for ci, reps_map in pre_buckets.items():
+        buckets[ci] = list(reps_map.values())
     fails, done, total = 0, 0, len(tasks)
+    # Continuous summary flush — re-aggregate + write _summary.json after each
+    # cell completes its share so even a killed sweep has a usable partial
+    # picture, and so the user can `tail -f` partial rates while a slow run is
+    # still in flight.
+    summary_path = os.path.join(capture_dir, "_summary.json") if capture_dir else None
+    completed_per_cell = {ci: len(reps_map) for ci, reps_map in pre_buckets.items()}
+    def _flush_partial_summary():
+        if not summary_path: return
+        snap: dict = {}
+        for ci, cell in enumerate(cells):
+            traces = buckets.get(ci, [])
+            agg = _agg(cell["case"], traces, len(traces) or 1) if traces else {
+                "rates": {}, "n": 0, "outcomes": {},
+                "usage": {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}}
+            snap.setdefault(cell["case"]["id"], {})[cell["vlabel"]] = {
+                **agg, "completed": len(traces), "target": reps}
+        try:
+            with open(summary_path, "w") as f:
+                json.dump(snap, f, indent=1, default=str)
+        except Exception:  # noqa: BLE001 — flush is best-effort
+            pass
+    _flush_partial_summary()    # initial snapshot incl. resumed reps
     print(f"[run_matrix] starting {total} rollouts ({len(cells)} cells x {reps} reps, "
-          f"workers={workers}, warmup={'yes' if warm else 'no'})", file=sys.stderr, flush=True)
+          f"workers={workers}, warmup={'yes' if warm else 'no'}, "
+          f"resumed={resumed_count})", file=sys.stderr, flush=True)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         # Phase A: warm — one rep per cell, in parallel across cells (distinct
         # prefixes, no contention). Wait for ALL to land before flood begins.
@@ -637,8 +738,10 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
                 if done % max(1, len(warm_tasks) // 3) == 0 or done == len(warm_tasks):
                     print(f"[run_matrix] warmup {done}/{len(warm_tasks)} ({fails} failed)",
                           file=sys.stderr, flush=True)
+            _flush_partial_summary()    # warmup phase landed; flush once
         # Phase B: flood — remaining reps fanned out, hits the now-warm cache.
         futs = [ex.submit(run_one, t) for t in flood_tasks]
+        flush_every = max(1, total // 10)   # ~10 snapshots over the flood phase
         for fut in as_completed(futs):
             ci, t = fut.result()
             done += 1
@@ -649,6 +752,9 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
             if done % max(1, total // 20) == 0 or done == total:
                 print(f"[run_matrix] progress {done}/{total} rollouts ({fails} failed)",
                       file=sys.stderr, flush=True)
+            if done % flush_every == 0:
+                _flush_partial_summary()
+    _flush_partial_summary()    # final snapshot
     if fails:
         print(f"[run_matrix] WARNING: {fails}/{total} rollouts failed after retries "
               f"(skipped; rates are over completed reps only)", file=sys.stderr, flush=True)

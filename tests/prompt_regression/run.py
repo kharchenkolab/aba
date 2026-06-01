@@ -32,11 +32,21 @@ ap.add_argument("--cache-1h", action="store_true",
 ap.add_argument("--no-warmup", action="store_true",
                 help="skip warm-then-flood (each cell's first rep runs serially "
                      "before parallel reps). Disables the cache-write optimization")
+ap.add_argument("--resume", default=None,
+                help="resume a partial run from a capture dir: skips reps whose "
+                     "trajectory JSON is already on disk and reuses it (no API "
+                     "spend). Use the timestamped dir from a prior killed sweep. "
+                     "Sets --capture to the same dir so new reps land beside the "
+                     "old ones. Continuous summary at <dir>/_summary.json.")
 a = ap.parse_args()
 if a.cache_1h:
     os.environ["ABA_CACHE_TTL"] = "1h"
 if a.no_warmup:
     os.environ["ABA_NO_WARMUP"] = "1"
+if a.resume:
+    os.environ["ABA_RESUME"] = "1"
+    # Pin capture to the resume dir so new reps land beside the old ones.
+    a.capture = a.resume
 
 case_files = (sorted(glob.glob(os.path.join(HERE, "cases", "*.json"))) if a.cases == "all"
               else [os.path.join(HERE, "cases", c + ".json") for c in a.cases.split(",")])
