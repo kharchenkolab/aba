@@ -25,7 +25,18 @@ ap.add_argument("--capture", default="auto", help="dir to persist trajectories (
 ap.add_argument("--baseline", default=None)         # compare to stored baseline, flag regressions
 ap.add_argument("--save-baseline", default=None)
 ap.add_argument("--noise", type=float, default=0.2)  # |delta| below this = within-noise
+ap.add_argument("--cache-1h", action="store_true",
+                help="use Anthropic 1h prompt-cache TTL instead of default 5min "
+                     "(higher cache_creation cost, but amortizes across sessions "
+                     "for long-running A/B campaigns)")
+ap.add_argument("--no-warmup", action="store_true",
+                help="skip warm-then-flood (each cell's first rep runs serially "
+                     "before parallel reps). Disables the cache-write optimization")
 a = ap.parse_args()
+if a.cache_1h:
+    os.environ["ABA_CACHE_TTL"] = "1h"
+if a.no_warmup:
+    os.environ["ABA_NO_WARMUP"] = "1"
 
 case_files = (sorted(glob.glob(os.path.join(HERE, "cases", "*.json"))) if a.cases == "all"
               else [os.path.join(HERE, "cases", c + ".json") for c in a.cases.split(",")])
@@ -40,6 +51,7 @@ else:
 matrix = run_matrix(cases, variant_items, reps=a.reps, workers=a.workers, capture_dir=capture)
 
 results = {}
+totals = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
 for cid, byv in matrix.items():
     print(f"\n=== {cid}  (n={a.reps}) ===")
     for v, _ in variant_items:
@@ -47,6 +59,18 @@ for cid, byv in matrix.items():
         results.setdefault(cid, {})[v] = r["rates"]
         rate_str = "  ".join(f"{b}={x}" for b, x in r["rates"].items())
         print(f"  {v:18} {rate_str}   outcomes={r['outcomes']}")
+        for k in totals:
+            totals[k] += (r.get("usage") or {}).get(k, 0) or 0
+# Cache-efficiency summary — high cache_read/(cache_read+cache_write) = good
+# (the prefix-cache is being reused across reps). Low ratio = each rep is
+# writing a fresh cache and not reading anyone else's, the contention bug
+# the warm-then-flood is meant to fix.
+denom = totals["cache_read"] + totals["cache_write"]
+if denom > 0:
+    hit_pct = round(100 * totals["cache_read"] / denom, 1)
+    print(f"\ntokens: in={totals['in']:,}  out={totals['out']:,}  "
+          f"cache_read={totals['cache_read']:,}  cache_write={totals['cache_write']:,}  "
+          f"hit-ratio={hit_pct}%")
 if capture:
     print(f"\ntrajectories captured under {capture}")
 

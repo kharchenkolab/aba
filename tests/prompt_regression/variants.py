@@ -183,6 +183,91 @@ VARIANTS = {
         "reading it — verbal mention is not invocation; `read_skill(X)` is.**",
     )]},
 
+    # ── Plan-faithfulness variants (2026-06-01) ────────────────────────────
+    # All use continue_after_plan=True so the rollout proceeds past
+    # present_plan into codegen, where recipe_following_strict can be measured.
+    # `current_go` is the existing baseline-with-continue.
+
+    # A. Convergence rule — divergence is allowed but the model must converge
+    # back. The default is faithful execution; "I'll do it my way" is the
+    # failure mode.
+    "pf_converge_back": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "When following an approved plan, your code at each step should "
+        "implement the bound recipe (declared in `step.skill`). Divergence "
+        "is allowed ONLY when the recipe demonstrably doesn't fit the data, "
+        "or the user asked for a change — in that case, name the reason in "
+        "one sentence and try to converge back to the plan's next step "
+        "rather than improvising onward. The default is faithful execution; "
+        "'I'll do it my way' is the failure mode.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
+    # B. Restate-before-code — name step + bound recipe section before each
+    # run_python/run_r. Anchors codegen to the plan.
+    "pf_restate_before_code": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "Before each `run_python`/`run_r` call during plan execution, "
+        "briefly state which step number you're executing and which bound "
+        "recipe section it implements. One sentence is enough — this "
+        "anchors the code to the plan. If you can't name the step, the "
+        "code is probably scope-creep; stop and re-read the plan.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
+    # C. Plan-as-contract — strengthen the framing that the plan IS what
+    # was approved; deviations need surfacing.
+    "pf_plan_as_contract": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "The approved plan is a CONTRACT with the user — the steps you "
+        "proposed are the steps you'll execute. Implementing them "
+        "faithfully (with the bound recipe's APIs) is what was approved. "
+        "You don't need to ask permission to execute the plan, but you DO "
+        "need to flag any meaningful deviation (a different normalization, "
+        "a different statistical test, a skipped step) in one sentence "
+        "before doing it.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
+    # D. Present_plan-hint — system-level reminder about what's bound.
+    "pf_present_plan_hint": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "After the user approves the plan, your job is to execute those "
+        "steps in order, applying the APIs of the bound recipes (the ones "
+        "you put in `step.skill`) — not to redesign on the fly. The plan "
+        "is fixed at approval time; codegen is the FOLLOWING-THROUGH step, "
+        "not a fresh planning loop.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
+    # E. Combined A + B — convergence + restate
+    "pf_combined_AB": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "When following an approved plan, your code at each step should "
+        "implement the bound recipe (declared in `step.skill`). Default to "
+        "faithful execution; divergence is allowed only when the recipe "
+        "doesn't fit the data, named in one sentence, and you try to "
+        "converge back to the plan's next step. Before each "
+        "`run_python`/`run_r`, briefly state which step + recipe section "
+        "you're executing.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
+    # F. Combined E + recipe-body-injection (the upper-bound stack).
+    "pf_combined_AB_plus_body": {
+        "continue_after_plan": True,
+        "append_recipe_body": True,
+        "sys_sub": [(
+            "Execute the plan one step at a time",
+            "When following an approved plan, your code at each step should "
+            "implement the bound recipe. Default to faithful execution; "
+            "divergence only when the recipe doesn't fit, named in one "
+            "sentence, converge back when possible. Before each `run_python`/"
+            "`run_r`, briefly state which step + recipe section.\n"
+            "- Execute the plan one step at a time",
+        )],
+    },
+
     # surprise_v2_strong forced onto the nonneg base (live arm) to verify the
     # rule transfers — the canonical-based test left this open. Uses the same
     # anchor text from behavior_slim.md (the nonneg-arm behavior file).
