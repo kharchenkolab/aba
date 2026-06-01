@@ -272,7 +272,14 @@
   background: rgba(0, 0, 0, 0.78); cursor: zoom-out; padding: 24px;
 }
 .lightbox__img {
-  max-width: 95vw; max-height: 95vh; object-fit: contain;
+  /* Fill the viewport (with aspect preserved) — was max-width/max-height
+     which displayed at NATIVE size when smaller than the viewport, so a
+     900×600 dotplot in a 1920×1080 window showed at ~900px wide, same
+     as in chat. Click-to-zoom should actually zoom. width+height with
+     object-fit:contain scales up to fill viewport for small-native
+     images (with some upscaling-blur on low-res plots — the real
+     remedy is generating plots with higher native res). */
+  width: 95vw; height: 95vh; object-fit: contain;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); background: #fff; border-radius: 4px;
 }
 .lightbox__close {
