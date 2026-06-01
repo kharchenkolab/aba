@@ -116,4 +116,128 @@ VARIANTS = {
             "ONLY for the step(s) you bound it to."
         )],
     },
+
+    # ── Session-audit fixes (2026-06-01, from thr_e3bdc7f6 root-cause) ─────────
+    # Each variant maps to one fix in misc/prompt_quality_test_plan.md.
+    # Targeted at the two new cases:
+    #   recipe_skip_subtask__annotate_clusters  (B2)
+    #   scope_creep_on_surprise__celltypist_disagrees  (B4)
+
+    # Fix #1: drop "more than one step" qualifier — sub-tasks need micro-plans.
+    # Behavior.md:18 ('first name the concrete thing you need to do RIGHT NOW')
+    # gives lip service to per-task planning, but plan_first.md:1 qualifier
+    # gives Haiku permission to skip planning on what looks like a short task
+    # ("annotate the clusters" feels like one step).
+    "subtask_plans": {"sys_sub": [(
+        "Before running ANY analysis that takes more than one step",
+        "Before running ANY analysis with a deliverable (a figure, a table, a "
+        "registered result) — even if it feels like one step (annotate, DE, "
+        "embedding, scoring)",
+    )]},
+
+    # Fix #3: promote "search_skills hit → read_skill is mandatory next call".
+    # Live failure: agent ran search_skills, got annotate-celltype-scrna as a
+    # hit, then verbally named it ("using the annotate-celltype-scrna skill")
+    # and went straight to coding. Naming ≠ using. Recipes.md says "prefer it"
+    # softly; this variant adds the hard sequencing rule.
+    "forced_read_after_search": {"sys_sub": [(
+        "When one matches what you're doing, it will give a more correct and "
+        "cleaner result than improvising the pipeline from memory — so prefer it.",
+        "When one matches what you're doing, it will give a more correct and "
+        "cleaner result than improvising the pipeline from memory — so prefer "
+        "it. **If you ran `search_skills` and it returned a hit relevant to "
+        "what you're about to do, your VERY NEXT tool call must be "
+        "`read_skill(<top_hit_name>)`. Naming a recipe in your prose ('I'll "
+        "use the X skill') is NOT using it — you have to read the body. "
+        "Coding before reading is the #1 cause of wrong-API errors and "
+        "cluster-driven (not marker-driven) cell-type labels.**",
+    )]},
+
+    # Fix #2 (small variant — single new rule, not full reorg): explicit
+    # surprise→report+ask clause as a new bullet in behavior.md. The full
+    # nonneg-v2 reorganization is heavier; this isolates the rule change.
+    "surprise_report_not_investigate": {"sys_sub": [(
+        "- **The approved plan's steps ARE the scope**",
+        "- **A surprising result is a finding to REPORT, not a tangent to "
+        "PURSUE.** When two methods disagree, an annotation looks wrong, a "
+        "QC metric is unexpected, or any result contradicts your earlier "
+        "claim — summarize the surprise in 1-2 sentences with the numbers, "
+        "and ASK the user whether to investigate. Do NOT autonomously launch "
+        "a discrepancy investigation: extra confusion matrices, per-cell "
+        "marker breakdowns, 'why-it-disagrees' figures, 'critical issue' or "
+        "'executive summary' reports are scope-creep even if no new sample "
+        "is touched. Offer in one sentence; let the user decide.\n"
+        "- **The approved plan's steps ARE the scope**",
+    )]},
+
+    # Fix #4: add a negative-example pair to the recipes.md positive framing.
+    # Pattern lifted from behavior.md:17 ("Substituting DATA_DIR/geo_data is
+    # the single most common path-failure mode") — pair every rule with its
+    # known trap so Haiku has a refusal anchor, not just an aspiration.
+    "negative_examples": {"sys_sub": [(
+        "When one matches what you're doing, it will give a more correct and "
+        "cleaner result than improvising the pipeline from memory — so prefer it.",
+        "When one matches what you're doing, it will give a more correct and "
+        "cleaner result than improvising the pipeline from memory — so prefer "
+        "it. **The trap is naming a recipe ('I'll use the X skill') without "
+        "reading it — verbal mention is not invocation; `read_skill(X)` is.**",
+    )]},
+
+    # surprise_v2: stronger language than v1 — name the tool-call failure
+    # mode explicitly. The v1 rule allowed "summary first, then investigate"
+    # because the model reads "ask the user whether to investigate" and
+    # interprets "create a summary plot first" as part of the asking.
+    "surprise_v2_strong": {"sys_sub": [(
+        "- **The approved plan's steps ARE the scope**",
+        "- **Surprises end the turn.** When two methods disagree, an "
+        "annotation looks wrong, or any result contradicts your earlier "
+        "claim — your IMMEDIATE next action is to STOP, summarize the "
+        "surprise in 2-3 sentences with the actual numbers, and ASK the "
+        "user (end_turn). Do NOT call ANY tool in the same turn: not "
+        "`run_python`, not `run_r`, not 'one more summary plot', not a "
+        "comparison figure, not a 'Now let me investigate' analysis. The "
+        "literal pattern 'Now let me create / investigate / generate one "
+        "more X' is the failure mode — recognize it and stop. End_turn with "
+        "prose; let the user decide whether to investigate.\n"
+        "- **The approved plan's steps ARE the scope**",
+    )]},
+    # nonneg arm + surprise rule combined (hoists rule into invariants).
+    "nonneg_with_surprise": {"arm": "nonneg", "sys_sub": [(
+        "- **The approved plan's steps ARE the scope**",
+        "- **Surprises end the turn.** When two methods disagree or a "
+        "result contradicts your earlier claim — STOP, summarize in 2-3 "
+        "sentences with numbers, ASK the user (end_turn). Do NOT call any "
+        "tool ('Now let me create one more summary / investigate' is the "
+        "failure mode).\n"
+        "- **The approved plan's steps ARE the scope**",
+    )]},
+
+    # Combined bet: fix #1 + fix #3 + surprise rule, the three highest-leverage
+    # changes from the meta-analysis.
+    "combined_v1": {"sys_sub": [
+        (
+            "Before running ANY analysis that takes more than one step",
+            "Before running ANY analysis with a deliverable (a figure, a table, "
+            "a registered result) — even if it feels like one step (annotate, "
+            "DE, embedding, scoring)",
+        ),
+        (
+            "When one matches what you're doing, it will give a more correct and "
+            "cleaner result than improvising the pipeline from memory — so prefer it.",
+            "When one matches what you're doing, it will give a more correct and "
+            "cleaner result than improvising the pipeline from memory — so prefer "
+            "it. **If you ran `search_skills` and got a hit, the VERY NEXT tool "
+            "call must be `read_skill(<top_hit>)`. Naming ≠ using.**",
+        ),
+        (
+            "- **The approved plan's steps ARE the scope**",
+            "- **A surprising result is a finding to REPORT, not a tangent to "
+            "PURSUE.** When two methods disagree or a result contradicts your "
+            "earlier claim — summarize in 1-2 sentences with numbers, ASK the "
+            "user. Do NOT autonomously launch a discrepancy investigation "
+            "(extra confusion matrices, 'why-it-disagrees' plots, 'critical "
+            "issue' reports are scope-creep).\n"
+            "- **The approved plan's steps ARE the scope**",
+        ),
+    ]},
 }
