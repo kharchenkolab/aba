@@ -271,15 +271,15 @@
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.78); cursor: zoom-out; padding: 24px;
 }
-.lightbox__img {
-  /* Click-to-zoom: scale to fit the viewport while preserving aspect,
-     WITHOUT letterboxing around the picture. Setting width=95vw
-     +height=95vh + object-fit:contain made the IMG itself fill the
-     viewport with letterbox padding (and a white background visible
-     around the actual picture). Instead: drive sizing from height, let
-     width compute from aspect, cap with max-width. The IMG element
-     then matches the rendered image dimensions exactly — no padding,
-     no faux full-width on narrow images. */
+/* Specificity has to beat `.msg-image img { max-height: 420px }` (0,1,1)
+   — the chat-image cap on the IMG inside the message container. The
+   lightbox IMG is structurally a descendant of `.msg-image` (rendered
+   in the same React fragment as the chat img), so the descendant
+   selector cascades onto it. Scoping the rule as `.lightbox .lightbox__img`
+   bumps specificity to (0,2,0) which wins. (A durable fix would be a
+   React portal so the lightbox escapes its parent DOM entirely — but
+   that's a bigger move; specificity gets the immediate UX right.) */
+.lightbox .lightbox__img {
   height: 95vh; width: auto;
   max-width: 95vw; max-height: 95vh;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); background: #fff; border-radius: 4px;
