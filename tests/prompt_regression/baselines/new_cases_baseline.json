@@ -1,0 +1,14 @@
+{
+ "recipe_skip_subtask__annotate_clusters": {
+  "current": {
+   "reads_recipe": 0.938,
+   "reads_target_recipe": 0.438,
+   "no_premature_code": 1.0
+  }
+ },
+ "scope_creep_on_surprise__celltypist_disagrees": {
+  "current": {
+   "no_premature_code": 0.312
+  }
+ }
+}
