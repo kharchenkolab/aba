@@ -36,9 +36,58 @@ def _client():
     return anthropic.Anthropic(api_key=key)
 
 
-def build_judge_messages(trajectories: list[dict]) -> tuple[str, list[dict]]:
+def _load_recipe_body(name: str) -> str | None:
+    """Look up the actual recipe body via the live skills registry. Returns
+    None if absent. The judge needs the BODY not just the name, otherwise
+    Sonnet fills in 'best practices' from training prior and judges against
+    a recipe that doesn't exist (verified Jun-01: matplotlib clause was
+    hallucinated in 11/16 verdicts on scanpy_plan)."""
+    if not name: return None
+    try:
+        sys.path.insert(0, "/workspace/aba/backend")
+        import content.bio  # noqa: F401 — registers skill builders
+        from core.skills import get_skill
+        s = get_skill(name)
+        return getattr(s, "body", None) if s else None
+    except Exception:
+        return None
+
+
+def build_judge_messages(trajectories: list[dict], max_code_turns: int = 6) -> tuple[str, list[dict]]:
     """Format the trajectories as a single user message; instructions go in system.
-    Returns (system, messages)."""
+    Returns (system, messages).
+
+    Two methodology fixes (v3, 2026-06-01):
+    1. Embed the recipe BODY (not just the name) for any trajectory with a
+       target_recipe. Prevents the judge from hallucinating "best practices"
+       constraints that aren't actually in the recipe.
+    2. Tell the judge about the harness rollout-cap (max_code_turns). The
+       trajectory may end at step N due to the cap; the judge should NOT
+       interpret early termination as plan abandonment.
+    """
+    # Collect unique recipe names across the batch + load their bodies once.
+    recipe_bodies: dict[str, str] = {}
+    for t in trajectories:
+        name = (t or {}).get("target_recipe")
+        if name and name not in recipe_bodies:
+            body = _load_recipe_body(name)
+            if body:
+                recipe_bodies[name] = body
+    recipe_section = ""
+    if recipe_bodies:
+        parts = []
+        for name, body in recipe_bodies.items():
+            parts.append(f"### Recipe `{name}`:\n```\n{body}\n```")
+        recipe_section = (
+            "\n\nRECIPE BODIES (you MUST judge against THESE actual texts, not against "
+            "your prior beliefs about what recipes 'usually' say):\n\n"
+            + "\n\n".join(parts)
+            + "\n\nIMPORTANT: when citing `evidence` for recipe-following, quote either "
+            "(a) text from a trajectory turn or (b) text from these recipe bodies. Do NOT "
+            "invent a recipe constraint — if a constraint you want to flag isn't in the "
+            "recipe body above, don't flag it."
+        )
+
     system = (
         "You are a STRICT evaluation judge for a bioinformatics agent. You read TRAJECTORY "
         "files (agent assistant blocks + stubbed tool_results) and score them against a "
@@ -46,11 +95,18 @@ def build_judge_messages(trajectories: list[dict]) -> tuple[str, list[dict]]:
         "judge from the `turns` alone.\n\n"
         "Use ONLY:\n"
         "- intent — the user's request\n"
-        "- target_recipe — the recipe name that fits this task\n"
+        "- target_recipe — the recipe name that fits this task (its BODY is below)\n"
         "- declared_recipes — recipes the agent named on plan-step `skill` fields\n"
         "- turns — the agent's actual blocks (text, tool_use with `input.code`) and stubbed tool_results\n\n"
+        "**Harness rollout-cap context (read this carefully):** Trajectories were captured "
+        f"under a max-code-turns cap of {max_code_turns}. A trajectory may TERMINATE because the cap "
+        "was hit (agent emitted {max_code_turns} code-emitting turns then the harness stopped), NOT "
+        "because the agent abandoned its plan. Do NOT call this 'drift', 'truncation', or 'plan "
+        "abandonment'. Only mark plan_drift_and_recovery as drift if the agent explicitly STOPPED, "
+        "PIVOTED to unrelated work, or wrote code that doesn't match the plan. A trajectory that "
+        "ran 5-6 plan steps faithfully and then ended is 'no_drift', period.\n\n"
         "Score these dimensions (each gets a verdict from its allowed set, a confidence "
-        "high|med|low, an `evidence` quote from the turns, and a one-line `why`):\n"
+        "high|med|low, an `evidence` quote from the turns OR from the recipe body, and a one-line `why`):\n"
         f"{_rubric_text()}\n\n"
         "Use 'n/a' where a dimension doesn't apply (e.g. recipe_followed_in_code / method_validity / "
         "plan_drift_and_recovery when no analysis code was run; plan_quality when no present_plan; "
@@ -59,6 +115,7 @@ def build_judge_messages(trajectories: list[dict]) -> tuple[str, list[dict]]:
         f'{{"case_id":..., "variant_label":..., "rep":..., "rubric_version":"{RUBRIC_VERSION}", '
         '"<dimension>": {"verdict":..., "confidence":..., "evidence":"<quote>", "why":...}, ...}}\n\n'
         "Return ONLY the JSON array — no prose around it, no markdown code fences."
+        + recipe_section
     )
     # Pack trajectories into one user message. Trim turns' deterministic / outcome / declared_recipes
     # echoes that might bias the judge; keep only what the rubric actually needs.

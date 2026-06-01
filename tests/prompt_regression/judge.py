@@ -14,7 +14,8 @@ Versioned: bump RUBRIC_VERSION on any rubric change (rates aren't comparable acr
 """
 import os, sys, json, glob
 
-RUBRIC_VERSION = "v2"   # 2026-06-01: added plan_drift_and_recovery dimension
+RUBRIC_VERSION = "v3"   # 2026-06-01: judge gets the actual recipe body + rollout-cap context
+                        # v2: added plan_drift_and_recovery dimension
 
 # dimension -> (what to assess, allowed verdicts incl. an explicit n/a for non-applicable)
 RUBRIC = {
