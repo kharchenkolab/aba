@@ -30,11 +30,46 @@ regressions. Complements the slow end-to-end tier (`tests/e2e/eval_arms.py` +
 python run.py --cases recipe_uptake__scanpy_plan --variants current,planfirst_old --reps 16
 # arm the gate
 python run.py --variants current --save-baseline baselines/current.json --reps 16
+# resume a partial / killed run (re-uses on-disk reps, only re-rolls what's missing)
+python run.py --cases pf_recipe_uptake_seurat --variants current_go --reps 32 \
+              --resume results/raw/20260601_110506
+# long A/B campaign: 1h cache TTL amortizes writes across sessions
+python run.py --cases all --variants current,nonneg_with_surprise --reps 48 --cache-1h
 # regression check (CI / pre-ship)
 python run.py --variants current --baseline baselines/current.json --reps 16   # exits 1 on regression
 # ablate a block to measure its contribution
 python run.py --variants ablate_recipes --reps 16
 ```
+
+## Cost: caching, resume, partial results
+
+A sweep over the corpus easily fires 1-5K model calls. Three mechanisms keep that cheap and resumable; you can see them working at the bottom of every run's printed output (`tokens: in=… out=… cache_read=… cache_write=… hit-ratio=X%`).
+
+### Anthropic prompt caching (always on)
+
+Every call sets `cache_control: ephemeral` on (a) the system prompt and (b) the last tool. So everything up through the tool catalog is cached — that's the ~25K-char prefix, the most expensive part of the request. Subsequent calls with the same prefix read from cache at ~10% of the input-token price.
+
+Default TTL is 5 min. For a multi-hour A/B campaign, pass `--cache-1h` to use the 1h TTL (slightly more expensive cache writes, but one write amortizes across many reruns within the hour).
+
+### Warm-then-flood (always on, toggle off with `--no-warmup`)
+
+Without this, the flat task list `[(cell_0, rep_0), …, (cell_0, rep_N), (cell_1, rep_0), …]` under `workers=12` would dispatch 12 reps of cell-0 simultaneously, all racing past each other's cache writes — ~12× wasted writes per cell.
+
+Instead, `run_matrix` runs in two phases:
+1. **Warmup** — one rep per cell, parallel across cells (distinct prefixes, no contention). Wait for ALL to land.
+2. **Flood** — reps 1..N-1 fan out across the pool, hitting the now-warm cache.
+
+Measured on a control case: **81-92% cache-hit ratio** with this on, vs ~25-40% without.
+
+### Resume + continuous partial summary
+
+Trajectories persist to `results/raw/<ts>/<case>__<variant>/rep_NN.json` as each rep completes. The saved JSON now includes the full trace fields (code, reads, steps, usage) — enough to re-aggregate without a re-roll.
+
+- **Continuous summary**: every ~10% of rollouts, `<capture_dir>/_summary.json` is rewritten with current rates / outcomes / token totals + `completed: N, target: M` per cell. You can `tail`/cat this during a long run, or inspect it after a kill.
+- **Resume a killed run**: `python run.py … --resume <capture_dir>` loads any on-disk reps and SKIPS them (no API call). Only the missing reps are rolled. Pins capture to the same dir so new reps land beside the old.
+- **Add reps**: re-run the same command at higher `--reps` with `--resume` — completed reps stay, new ones fill in.
+
+Reps loaded from disk contribute their original `usage` numbers to the run's reported token totals — so the printed summary reflects total spend across the campaign, not just this session.
 
 ## Credential / budget
 Replays default to the **Claude Code subscription OAuth bearer** (`auth_token=`), so the
