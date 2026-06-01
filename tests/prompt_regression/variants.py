@@ -203,6 +203,31 @@ VARIANTS = {
         "- Execute the plan one step at a time",
     )]},
 
+    # checkbox_plan_rewrite — biomni-borrow A. Restate the entire plan as a
+    # checkbox checklist at the START of EVERY assistant turn, including
+    # explicit `[✗] (failed because…) + [ ] modified step` recovery syntax.
+    # Hypothesis: pull the plan back to recency every turn so it doesn't
+    # decay into history under accumulating observations, AND provide the
+    # template for drift-recovery that Haiku never invents on its own
+    # (zero drift_recovered outcomes across 224 verdicts in prior round).
+    # Biomni reference: a1.py:1098-1143 (checklist with [ ] [✓] [✗]).
+    "checkbox_plan_rewrite": {"continue_after_plan": True, "sys_sub": [(
+        "Execute the plan one step at a time",
+        "**Restate and update the plan at the start of EVERY assistant turn** "
+        "as a checkbox checklist:\n"
+        "  1. [✓] First step (completed)\n"
+        "  2. [ ] Second step  ← about to execute\n"
+        "  3. [ ] Third step\n"
+        "Marker semantics: `[ ]` pending; `[✓]` done; `[✗]` failed/modified "
+        "with the reason in parens. If a step fails or no longer fits the "
+        "data, mark it `[✗] (failed because <reason>)` and insert a "
+        "`[ ] modified step <what>` immediately below it, then continue. "
+        "The most recent message in our conversation must ALWAYS show the "
+        "current plan state — this keeps you on track and lets the user "
+        "see progress.\n"
+        "- Execute the plan one step at a time",
+    )]},
+
     # B. Restate-before-code — name step + bound recipe section before each
     # run_python/run_r. Anchors codegen to the plan.
     "pf_restate_before_code": {"continue_after_plan": True, "sys_sub": [(
