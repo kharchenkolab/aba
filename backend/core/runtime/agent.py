@@ -46,14 +46,34 @@ def _resolve_prompt(prompt_field: str, anchor_dir: Path) -> str:
 
 def load_agent_spec(spec_path: str | Path) -> AgentSpec:
     """Load an AgentSpec from a YAML file. Path is absolute, or relative
-    to the caller's content directory (callers know their layout)."""
+    to the caller's content directory (callers know their layout).
+
+    Primary-agent model can be overridden at runtime via env vars:
+      ABA_PRIMARY_MODEL — applies ONLY to role: primary (the chat-handling
+                          agent). Use this to swap the live chat model.
+      ABA_MODEL         — same effect; kept as a back-compat alias.
+    Advisor models stay on their YAML-declared values (typically Haiku) —
+    overriding ALL agents on a primary swap would 5×-cost every side task.
+    """
+    import os as _os
     p = Path(spec_path)
     raw = yaml.safe_load(p.read_text()) or {}
     tools = raw.get("tool_allowlist", ())
+    role = raw.get("role", "advisor")
+    model = raw.get("model", "claude-haiku-4-5-20251001")
+    if role == "primary":
+        yaml_model = model
+        override = (_os.environ.get("ABA_PRIMARY_MODEL")
+                    or _os.environ.get("ABA_MODEL"))
+        if override:
+            model = override
+        src = "env override" if override else "yaml"
+        print(f"[agent-spec] {raw.get('name','?')} (primary): model={model} ({src}, yaml={yaml_model})",
+              flush=True)
     return AgentSpec(
         name=raw["name"],
-        role=raw.get("role", "advisor"),
-        model=raw.get("model", "claude-haiku-4-5-20251001"),
+        role=role,
+        model=model,
         system_prompt=_resolve_prompt(raw.get("system_prompt", ""), p.parent),
         manifest_role=raw.get("manifest_role", raw.get("name", "advisor")),
         tool_allowlist=tuple(tools) if isinstance(tools, (list, tuple)) else (tools,),

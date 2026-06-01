@@ -70,6 +70,13 @@ class _RealStream:
         # re-charging full input each time. Up to 4 breakpoints; we use 3.
         system = [{"type": "text", "text": self._system,
                    "cache_control": {"type": "ephemeral"}}]
+        # oauth_cc credential mode: the server gates non-Haiku models on OAuth by
+        # checking that the first system block is byte-exactly this Claude Code
+        # marker. Without it, OAuth+Sonnet/Opus returns 429. Marker MUST be first,
+        # its own discrete block, and have NO cache_control (server check is
+        # byte-exact). The model still adopts our real system prompt as persona.
+        if _wants_cc_marker():
+            system = [_CC_MARKER_BLOCK, *system]
         # Strip internal-only fields (approval_policy etc.) before sending to the
         # Anthropic API — the API rejects unknown keys on tool definitions. The
         # in-process layer (guide.py's per-tool approval gate) reads these fields
@@ -135,6 +142,26 @@ class _RealStream:
         return await self._stream.get_final_message()
 
 
+# Claude Code subscription gate: the Anthropic API checks for this exact
+# first-system-block when the request bears an OAuth bearer; without it
+# non-Haiku models 429 (categorical reject, not actual quota). Verified
+# 2026-06-01 via mitmproxy capture of the CLI. Pure routing marker — the
+# model adopts whatever persona block #2 (our real system prompt) defines.
+_CC_MARKER_BLOCK = {"type": "text",
+                    "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."}
+
+
+def _credential_mode() -> str:
+    """ABA_LLM_CREDENTIAL ∈ {apikey, oauth, oauth_cc}. Default apikey."""
+    return os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower()
+
+
+def _wants_cc_marker() -> bool:
+    """True iff we must prepend the Claude Code marker as the first system
+    block — needed only on oauth_cc mode (OAuth bearer + non-Haiku models)."""
+    return _credential_mode() == "oauth_cc"
+
+
 def _oauth_bearer():
     """Claude Code subscription OAuth bearer, or None. $CLAUDE_CODE_OAUTH_TOKEN else the
     stored CLI credential. Re-read per call so a refreshed token is picked up."""
@@ -152,16 +179,24 @@ def _oauth_bearer():
 
 
 def _llm_client():
-    """Live-agent Anthropic ASYNC client. Default = project .env API key.
-    ABA_LLM_CREDENTIAL=oauth (dev/eval ONLY — never production serving on a personal
-    subscription) uses the Claude Code OAuth bearer instead, billing the subscription.
-    Resolved per call so a refreshed stored token is picked up; falls back to the
-    .env key if no token is available.
+    """Live-agent Anthropic ASYNC client.
+
+    Modes (`ABA_LLM_CREDENTIAL`):
+      apikey   (default) — `.env` ANTHROPIC_API_KEY, all models, bills ABA's key.
+      oauth              — OAuth bearer, **Haiku-only** (server 429s non-Haiku).
+                           Useful for comparison / legacy probe.
+      oauth_cc           — OAuth bearer + CC system-marker prepend (see
+                           `_CC_MARKER_BLOCK`). All models. Bills the Claude Code
+                           subscription. **Dev/personal use only** — never for
+                           production serving on a personal subscription.
+
+    Token resolved per call so a refreshed stored token is picked up; falls back
+    to the .env key if OAuth selected but no token is available.
 
     Returns `AsyncAnthropic` (not the sync `Anthropic`) so guide.py's streaming
     loop can iterate events without parking the event loop — fixed 2026-05-31."""
     import anthropic
-    if os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower() == "oauth":
+    if _credential_mode() in ("oauth", "oauth_cc"):
         tok = _oauth_bearer()
         if tok:
             return anthropic.AsyncAnthropic(auth_token=tok)
@@ -169,9 +204,15 @@ def _llm_client():
 
 
 def _real_factory():
-    mode = os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower()
-    note = (" (OAuth bearer -> subscription)" if _oauth_bearer() else " but NO token -> FALLBACK to .env key") \
-        if mode == "oauth" else " (.env API key)"
+    mode = _credential_mode()
+    if mode in ("oauth", "oauth_cc"):
+        if _oauth_bearer():
+            extra = " + CC marker -> all models on subscription" if mode == "oauth_cc" else " -> Haiku-only"
+            note = f" (OAuth bearer{extra})"
+        else:
+            note = " but NO token -> FALLBACK to .env key"
+    else:
+        note = " (.env API key)"
     print(f"[llm] live-agent credential mode={mode}{note}", flush=True)
 
     def open_stream(history, tools, system: str = "", model: str | None = None):

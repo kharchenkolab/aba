@@ -67,6 +67,31 @@ function describeHighlightedFigure(cellEl: HTMLElement | null,
   return ''
 }
 
+/** One-line label for a subcard the highlight stroke touched. Hits each known
+ *  rendered-block class (see SUBCARD_SEL); falls back to a short text snippet
+ *  so the model gets a pointer even for unclassified blocks. */
+function describeSubcard(sc: HTMLElement): string {
+  if (sc.classList.contains('msg-image')) {
+    const title = sc.querySelector('.msg-image__title')?.textContent?.trim()
+    return title ? `figure "${title}"` : 'a figure'
+  }
+  if (sc.classList.contains('tool-line')) {
+    const label = sc.querySelector('.tool-line__label')?.textContent?.trim()
+    return label ? `tool step "${label}"` : 'a tool step'
+  }
+  if (sc.classList.contains('plan-card')) {
+    const head = sc.querySelector('.plan-card__head')?.textContent?.trim()
+    return head ? `plan card "${head}"` : 'the plan card'
+  }
+  if (sc.classList.contains('msg-error')) return 'an error notice'
+  if (sc.classList.contains('msg-notice')) return 'a notice'
+  if (sc.classList.contains('msg-text')) {
+    const txt = (sc.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+    return txt ? `text "${txt}${txt.length >= 80 ? '…' : ''}"` : 'a text block'
+  }
+  return ''
+}
+
 /** A failed turn: error headline, a small retry icon on the right, and an
  *  expandable disclosure for the raw error detail. */
 function ErrorLine({ text, detail, onRetry }: { text: string; detail?: string; onRetry?: () => void }) {
@@ -301,23 +326,46 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
                       isStreaming?: boolean, pinnedFigureIds?: Set<string>,
                       fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>) {
   const out: React.ReactNode[] = []
-  // Override inline `code` so basenames the agent quotes resolve to a link
-  // (only when the basename actually corresponds to a file written this thread).
-  // Bare code (variable names, identifiers) renders unchanged.
-  const mdComponents = fileMap && fileMap.size > 0 ? {
-    code: (props: { inline?: boolean; children?: React.ReactNode; className?: string }) => {
-      const raw = String(props.children ?? '').trim()
-      const hit = !props.className /* not a fenced block */ && fileMap.get(raw)
-      if (!hit) return <code className={props.className}>{props.children}</code>
-      const title = `Open ${raw}`
-      return (
-        <a className={`msg-filelink msg-filelink--${hit.kind}`}
-           href={hit.url} target="_blank" rel="noreferrer" title={title}>
-          <code>{props.children}</code>
-        </a>
-      )
-    },
-  } : undefined
+  // Browsers refuse `file://` URLs from a web page, so any `file:///path` the
+  // agent emits would render as a broken `<img>` or a dead `<a>`. Rewrite to
+  // the matching same-origin server path (`file:///artifacts/...` → `/artifacts/...`,
+  // `file:///path/that/doesn't/start/with/a/known/route` → leave it; the
+  // backend's /artifacts route serves the project's artifact dir). The
+  // markdown image is still duplicative with the UI-rendered figure from
+  // the tool_result, but the prompt steers the agent away from that.
+  const fixFileUrl = (u: string | undefined): string => {
+    if (!u) return ''
+    return u.startsWith('file://') ? u.replace(/^file:\/\//, '') : u
+  }
+  // Markdown overrides. Always present so the `img`/`a` rewrites apply even
+  // when fileMap is empty.
+  const mdComponents = {
+    img: (props: { src?: string; alt?: string }) => (
+      <img src={fixFileUrl(props.src)} alt={props.alt ?? ''} />
+    ),
+    a: (props: { href?: string; children?: React.ReactNode; title?: string }) => (
+      <a href={fixFileUrl(props.href)} title={props.title}
+         target={(props.href || '').startsWith('/artifacts/') ? '_blank' : undefined}
+         rel="noreferrer">{props.children}</a>
+    ),
+    // Override inline `code` so basenames the agent quotes resolve to a link
+    // (only when the basename actually corresponds to a file written this
+    // thread). Bare code (variable names, identifiers) renders unchanged.
+    ...(fileMap && fileMap.size > 0 ? {
+      code: (props: { inline?: boolean; children?: React.ReactNode; className?: string }) => {
+        const raw = String(props.children ?? '').trim()
+        const hit = !props.className /* not a fenced block */ && fileMap.get(raw)
+        if (!hit) return <code className={props.className}>{props.children}</code>
+        const title = `Open ${raw}`
+        return (
+          <a className={`msg-filelink msg-filelink--${hit.kind}`}
+             href={hit.url} target="_blank" rel="noreferrer" title={title}>
+            <code>{props.children}</code>
+          </a>
+        )
+      },
+    } : {}),
+  }
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
     if (b.type === 'plan') {
@@ -591,30 +639,89 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
     if (!el || pts.length < 2) { onHighlightDone?.(); setStroke([]); strokeRef.current = []; return }
     setBusy(true)
     try {
+      const elRect = el.getBoundingClientRect()
+      // Stroke pts are normalized [0,1] of el; convert to el-local CSS pixels.
+      const strokeLocal = pts.map(p => ({ x: p.x * elRect.width, y: p.y * elRect.height }))
+
+      // Subcard hit-test: each rendered top-level block has a known class.
+      // Capture only the union of those the stroke actually touched, so the
+      // model sees a tight crop (one figure + caption) instead of the whole
+      // message body (which on a plan turn can be 5000+ CSS pixels tall and
+      // dilutes the figure to unreadable when downscaled to the 1024px cap).
+      const SUBCARD_SEL = '.msg-text, .msg-image, .msg-notice, .msg-error, .plan-card, .tool-line'
+      const subcards = Array.from(el.querySelectorAll(SUBCARD_SEL)) as HTMLElement[]
+      const PAD = 4
+      const hits = subcards
+        .map(sc => ({ sc, r: sc.getBoundingClientRect() }))
+        .filter(({ r }) => {
+          const lL = r.left - elRect.left, lT = r.top - elRect.top
+          const lR = r.right - elRect.left, lB = r.bottom - elRect.top
+          return strokeLocal.some(p =>
+            p.x >= lL - PAD && p.x <= lR + PAD && p.y >= lT - PAD && p.y <= lB + PAD)
+        })
+      // Drop ancestors when a descendant is also touched — keeps the crop on
+      // the inner element (e.g. .msg-image inside a tool_result wrapper) rather
+      // than the surrounding card the user wasn't actually pointing at.
+      const touched = hits.filter(({ sc }) =>
+        !hits.some(other => other.sc !== sc && sc.contains(other.sc)))
+
+      // Crop box in el-local CSS pixels. Touched subcards' union, else a tight
+      // box around the stroke (user drew between subcards / in a margin).
+      let cropL: number, cropT: number, cropW: number, cropH: number
+      if (touched.length > 0) {
+        const ls = touched.map(t => t.r.left - elRect.left)
+        const ts = touched.map(t => t.r.top - elRect.top)
+        const rs = touched.map(t => t.r.right - elRect.left)
+        const bs = touched.map(t => t.r.bottom - elRect.top)
+        cropL = Math.max(0, Math.min(...ls) - PAD)
+        cropT = Math.max(0, Math.min(...ts) - PAD)
+        cropW = Math.min(elRect.width - cropL, Math.max(...rs) + PAD - cropL)
+        cropH = Math.min(elRect.height - cropT, Math.max(...bs) + PAD - cropT)
+      } else {
+        const xs = strokeLocal.map(p => p.x), ys = strokeLocal.map(p => p.y)
+        const SPAD = 20
+        cropL = Math.max(0, Math.min(...xs) - SPAD)
+        cropT = Math.max(0, Math.min(...ys) - SPAD)
+        cropW = Math.min(elRect.width - cropL, Math.max(...xs) + SPAD - cropL)
+        cropH = Math.min(elRect.height - cropT, Math.max(...ys) + SPAD - cropT)
+      }
+
       const h2c = (await import('html2canvas')).default
-      // scale=1 (1× CSS pixels) + 1024px cap on the long side. The
-      // 1024 cap is below Anthropic's ~1568 ceiling but generally enough
-      // for figure-with-mark questions; scale=1 avoids the html2canvas
-      // overhead of 2× rasterization.
+      // scale=1 (1× CSS pixels) — html2canvas returns a canvas whose w/h match
+      // el's CSS box; crop coords are CSS pixels so they index it directly.
       const full = await h2c(el, { backgroundColor: '#ffffff', scale: 1, logging: false, useCORS: true })
-      const longest = Math.max(full.width, full.height)
-      const scale = longest > 1024 ? 1024 / longest : 1
-      const W = Math.round(full.width * scale), H = Math.round(full.height * scale)
+      // Crop, then downscale the crop (not the whole element) so the kept
+      // pixels go to the touched subcards.
+      const cropC = document.createElement('canvas')
+      cropC.width = Math.max(1, Math.round(cropW)); cropC.height = Math.max(1, Math.round(cropH))
+      cropC.getContext('2d')!.drawImage(full, cropL, cropT, cropW, cropH, 0, 0, cropC.width, cropC.height)
+      const longest = Math.max(cropC.width, cropC.height)
+      const dscale = longest > 1024 ? 1024 / longest : 1
+      const W = Math.round(cropC.width * dscale), H = Math.round(cropC.height * dscale)
       const c = document.createElement('canvas'); c.width = W; c.height = H
       const ctx = c.getContext('2d')!
-      ctx.drawImage(full, 0, 0, W, H)
+      ctx.drawImage(cropC, 0, 0, W, H)
       ctx.strokeStyle = HILITE; ctx.lineWidth = Math.max(10, W / 32); ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
-      pts.forEach((p, i) => (i ? ctx.lineTo(p.x * W, p.y * H) : ctx.moveTo(p.x * W, p.y * H)))
+      // Translate stroke from el-local → crop-local → downscaled-canvas pixels.
+      strokeLocal.forEach((p, i) => {
+        const cx = (p.x - cropL) * dscale, cy = (p.y - cropT) * dscale
+        if (i) ctx.lineTo(cx, cy); else ctx.moveTo(cx, cy)
+      })
       ctx.stroke()
       const b64 = c.toDataURL('image/png').split(',')[1]
       const shape = describeStroke(pts)   // shape + position + size, in concrete prose
       const figCtx = describeHighlightedFigure(el, entities)   // figure entity ref if any
+      // Per-subcard description for the model: lets it pinpoint which figure
+      // was marked instead of guessing from "the message".
+      const touchedDesc = touched.map(t => describeSubcard(t.sc)).filter(Boolean).join('; ')
       const onlyImage = imageUrls.length > 0 && (msgText.trim().length === 0)
-      const target = onlyImage ? 'figure' : 'message'
-      const cellDesc = msgText
-        ? `The highlighted message text: "${msgText.slice(0, 500)}".`
-        : (figCtx || `The marked element is an image in the chat.`)
+      const target = touchedDesc ? 'region' : (onlyImage ? 'figure' : 'message')
+      const cellDesc = touchedDesc
+        ? `The mark touches: ${touchedDesc}.`
+        : msgText
+          ? `The highlighted message text: "${msgText.slice(0, 500)}".`
+          : (figCtx || `The marked element is an image in the chat.`)
       const note =
         `User highlight (this turn): ${shape} on the attached ${target}. ${cellDesc} ` +
         `The mark is a strong topical hint — if the question is short or demonstrative ` +
