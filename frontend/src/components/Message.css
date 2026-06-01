@@ -265,29 +265,26 @@
   opacity: 0.85;
 }
 
-/* Plot lightbox — click a chat plot to view it full-viewport at native res. */
+/* Plot lightbox — visually consistent with the Results-view lightbox
+   (.rv__zoom in ResultView.css). Shows image at NATIVE size, capped to
+   viewport via max-width/max-height + object-fit:contain. Specificity:
+   `.lightbox .lightbox__img` (0,2,0) beats `.msg-image img` (0,1,1)
+   which would otherwise cap the lightbox IMG at 420px (the chat-cap
+   rule cascades down because the lightbox IMG is a DOM descendant of
+   .msg-image). Durable fix: render via React Portal to escape the
+   parent DOM hierarchy entirely. */
 .lightbox {
   position: fixed; inset: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, 0.78); cursor: zoom-out; padding: 24px;
+  background: rgba(0, 0, 0, 0.6); cursor: zoom-out; padding: 40px;
 }
-/* Specificity has to beat `.msg-image img { max-height: 420px }` (0,1,1)
-   — the chat-image cap on the IMG inside the message container. The
-   lightbox IMG is structurally a descendant of `.msg-image` (rendered
-   in the same React fragment as the chat img), so the descendant
-   selector cascades onto it. Scoping the rule as `.lightbox .lightbox__img`
-   bumps specificity to (0,2,0) which wins. (A durable fix would be a
-   React portal so the lightbox escapes its parent DOM entirely — but
-   that's a bigger move; specificity gets the immediate UX right.) */
 .lightbox .lightbox__img {
-  height: 95vh; width: auto;
-  max-width: 95vw; max-height: 95vh;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); background: #fff; border-radius: 4px;
+  max-width: 92vw; max-height: 88vh; object-fit: contain;
 }
 .lightbox__close {
-  position: fixed; top: 14px; right: 18px; width: 34px; height: 34px;
-  border: none; border-radius: 50%; background: rgba(255, 255, 255, 0.9);
-  color: #222; font-size: 20px; line-height: 1; cursor: pointer;
+  position: fixed; top: 16px; right: 20px;
+  font-size: 28px; line-height: 1; color: #fff;
+  background: none; border: none; cursor: pointer;
 }
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
