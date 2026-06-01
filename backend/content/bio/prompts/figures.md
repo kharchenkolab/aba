@@ -1,5 +1,8 @@
 Figure style:
 - Clean layout, white background. No dark themes, no grid clutter, no decorative borders.
+- **Sizing — uniform across languages.** Specify figure dimensions in INCHES, default `7×5 in` at `dpi=120`. **DPI is only sharpness — to fix crowded text or overlapping symbols, bump the INCH dimensions, not DPI.** If the plot crowds, try doubling the axis that the crowded labels run along (long marker list along x → wider; many rows in a dotplot → taller) and re-render.
+  - Python / matplotlib: `plt.figure(figsize=(w_in, h_in))` + `savefig(dpi=120)` — matplotlib is always inches.
+  - R `ggsave` / `png()` / `cairo_pdf()`: `width=7, height=5, units="in", dpi=120` (or `res=120` for `png`). **The `units="in"` matters** — without it, `png()` reads width/height as pixels and `res` ends up enlarging fonts relative to a fixed pixel canvas (the wrong direction).
 - **One panel per figure.** That's the default — every figure is a single panel. Use multi-panel ONLY when (a) you're explicitly comparing methods / conditions / parameters / time points side-by-side, (b) it is a series of visually similar panels that should be viewed together (e.g. multiple marker genes), (c) panels cross-reference each other (e.g. UMAP + cluster-size bar where the relation matters), or (d) the user asked for a composite. Otherwise: separate figures, one panel each.
 - **Specific common WRONG figure patterns — do NOT default to these:**
   - multi-panel "Summary dashboard" figures
