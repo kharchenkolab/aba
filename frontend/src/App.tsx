@@ -331,14 +331,31 @@ export default function App() {
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // Right column auto-reopens on any view-context change — but only once the
-  // project has earned output to show there. While the project is still fresh
-  // (no results/runs/claims) the start-slowly framing keeps it collapsed; the
-  // 0→>0 transition in this same effect is what reveals it when earned.
+  // Right column auto-reopens on USER view-context changes (scene/focus/thread
+  // navigation) — but NOT on AI-driven data growth. After the user manually
+  // collapses the rail, the agent updating a question / adding a caption /
+  // creating a figure must not silently reopen it (PK 2026-06-01). View
+  // navigation still counts as user intent so it does reopen.
+  //
+  // `downstreamCount` is read via ref so that count changes don't refire this
+  // effect — only view-context changes do.
+  const dsCountRef = useRef(downstreamCount)
+  useEffect(() => { dsCountRef.current = downstreamCount }, [downstreamCount])
   useEffect(() => {
-    if (downstreamCount === 0) return
+    if (dsCountRef.current === 0) return
     setRightCollapsed(false)
-  }, [posture, focusedId, threadId, overview, inventory, downstreamCount])
+  }, [posture, focusedId, threadId, overview, inventory])
+  // Earn-it first reveal: edge-triggered on the 0→>0 downstreamCount transition.
+  // Fires once when the project produces its first downstream output, then
+  // subsequent additions are silent (the AI growing the inventory doesn't
+  // reopen a user-collapsed rail).
+  const prevDsCountRef = useRef(downstreamCount)
+  useEffect(() => {
+    if (prevDsCountRef.current === 0 && downstreamCount > 0) {
+      setRightCollapsed(false)
+    }
+    prevDsCountRef.current = downstreamCount
+  }, [downstreamCount])
 
   // Mid-session: the first dataset landing in a still-fresh project reveals the
   // tree on the Data tab (mirrors the project-entry framing). Edge-triggered on
@@ -552,6 +569,11 @@ export default function App() {
     fetch(`/api/entities/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
       .then(() => refresh())
       .catch(() => {})
+    // User-initiated pin/unpin reveals the right rail — the result they're
+    // pinning lands there, so they want to see it. (AI-driven pinning, e.g.
+    // auto_interpret's caption write-back, goes through a different code path
+    // and intentionally does NOT call this — see the right-rail effect above.)
+    if (pin) setRightCollapsed(false)
     // No deferred refresh — auto_interpret's caption-ready broadcast on
     // /api/notifications drives the follow-up refresh on demand.
   }

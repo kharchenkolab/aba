@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DisplayMessage, Entity, PendingClarification, PendingApproval } from '../types'
 import { AGENTS, AgentGlyph } from './icons'
 import Message from './Message'
@@ -188,6 +188,23 @@ export default function ChatPane({
     lastMsgCountRef.current = messages.length
   }
 
+  // Any user-initiated send (composer, plan Go, scenario chip, etc.) should
+  // re-pin to the bottom even if the user was scrolled up reading history —
+  // typing a new message implies "I want to see what comes next".
+  const sendAndPin = useCallback((text: string) => {
+    isAtBottomRef.current = true
+    setShowJump(false)
+    setNewCount(0)
+    onSend(text)
+    // Nudge on the next frame so the new optimistic user message lands
+    // in view immediately; the auto-scroll effect handles subsequent
+    // stream tokens.
+    requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }, [onSend])
+
   const all = streamMsg ? [...messages, streamMsg] : messages
   // basename → {url, kind} map for inline filename mentions in agent prose.
   // Walk every tool_result and pick the LAST-SEEN entry per basename (later
@@ -301,7 +318,7 @@ export default function ChatPane({
                 keptKeys={keptKeys}
                 onKeepMessage={onKeepMessage}
                 planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
-                onPlanGo={(saveAsRun: boolean) => onSend(saveAsRun
+                onPlanGo={(saveAsRun: boolean) => sendAndPin(saveAsRun
                   ? 'Go ahead with the plan as proposed.'
                   : 'Go ahead with the plan as proposed. Do not save this as a run.')}
                 onPlanAdjust={() => setExtraFocus(n => n + 1)}
@@ -312,7 +329,7 @@ export default function ChatPane({
               <div className="chat-starters">
                 {starters.map((s, i) => (
                   <button key={i} className="chat-starter" disabled={streaming}
-                          onClick={() => onSend(`${s} — plan it first.`)}
+                          onClick={() => sendAndPin(`${s} — plan it first.`)}
                           title="Ask the Guide to do this (it'll show a plan first)">
                     <span className="chat-starter__spark">✦</span>{s}
                   </button>
@@ -422,7 +439,7 @@ export default function ChatPane({
               </div>
             )}
             <Composer
-              onSend={onSend}
+              onSend={sendAndPin}
               disabled={false}
               streaming={streaming}
               onSteer={onSteer}
