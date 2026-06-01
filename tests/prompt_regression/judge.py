@@ -14,7 +14,7 @@ Versioned: bump RUBRIC_VERSION on any rubric change (rates aren't comparable acr
 """
 import os, sys, json, glob
 
-RUBRIC_VERSION = "v1"
+RUBRIC_VERSION = "v2"   # 2026-06-01: added plan_drift_and_recovery dimension
 
 # dimension -> (what to assess, allowed verdicts incl. an explicit n/a for non-applicable)
 RUBRIC = {
@@ -38,6 +38,18 @@ RUBRIC = {
         "Did it do what was asked, or sprawl into unrequested work (extra analyses, combining datasets, "
         "creating entities) the user didn't ask for?",
         ["disciplined", "minor_sprawl", "major_sprawl"]),
+    "plan_drift_and_recovery": (
+        "Once a plan was approved, did the agent FAITHFULLY execute that plan, or drift from it? "
+        "'Faithful' means each code chunk implements one of the planned steps with the recipe's APIs "
+        "(when a recipe was bound). Divergence is OK ONLY if (a) the agent named a real reason "
+        "(the recipe didn't fit / the user changed direction / a step prerequisite failed) AND "
+        "(b) it tried to converge back to the plan rather than improvising onward. Verdicts:\n"
+        "  no_drift          — code follows the plan steps in order with the bound recipe\n"
+        "  drift_recovered   — diverged with a stated reason, then returned to the plan\n"
+        "  drift_uncovered   — diverged with a stated reason, did NOT return\n"
+        "  unjustified_drift — diverged without explanation (e.g. silent extra steps / wrong API)\n"
+        "  n/a               — no code emitted or no plan presented",
+        ["no_drift", "drift_recovered", "drift_uncovered", "unjustified_drift", "n/a"]),
     "plan_quality": (
         "If it presented a plan, is the plan substantive and grounded in the recipe/data, or thin "
         "boilerplate / busywork?",
