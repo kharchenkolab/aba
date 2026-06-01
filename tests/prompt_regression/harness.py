@@ -223,16 +223,28 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
     system prompt for the rest of the rollout, and keep going. This tests the
     declared-recipes → injected-at-codegen hypothesis on cold-start cases."""
     msgs = copy.deepcopy(messages)
-    syslist = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-    toolsc = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}] if tools else tools
+    # Honor ABA_CACHE_TTL=1h for long A/B campaigns (amortizes cache writes
+    # across many sweep runs over the day). Default 5-min ephemeral.
+    _cc = {"type": "ephemeral", "ttl": "1h"} if os.environ.get("ABA_CACHE_TTL") == "1h" else {"type": "ephemeral"}
+    syslist = [{"type": "text", "text": system, "cache_control": _cc}]
+    toolsc = [*tools[:-1], {**tools[-1], "cache_control": _cc}] if tools else tools
     steps = []
     reads = []
     traj = []                       # full per-turn record (assistant blocks + stubbed results) for the judge layer
     code_chunks: list[str] = []     # all run_python/run_r code chunks in order
     declared: list[str] = []        # recipes the agent named on its plan steps
     outcome = "maxsteps"
+    # Token-usage accumulators (per-rollout sums). Reported in _agg so a sweep
+    # surfaces actual cache-hit vs cache-write ratios instead of inferring.
+    u_in = u_out = u_cr = u_cw = 0
     for _ in range(max_steps):
         r = _create_with_retry(client, model=model, max_tokens=max_tokens, system=syslist, tools=toolsc, messages=msgs)
+        if getattr(r, "usage", None):
+            u = r.usage
+            u_in += getattr(u, "input_tokens", 0) or 0
+            u_out += getattr(u, "output_tokens", 0) or 0
+            u_cr += getattr(u, "cache_read_input_tokens", 0) or 0
+            u_cw += getattr(u, "cache_creation_input_tokens", 0) or 0
         tu = [b for b in r.content if b.type == "tool_use"]
         names = [b.name for b in tu]
         steps.append(names)
@@ -273,7 +285,7 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
                 syslist = [{"type": "text",
                             "text": system + "".join(addendum_parts) +
                                     "\n\nStay faithful to these recipes' APIs and step ordering.",
-                            "cache_control": {"type": "ephemeral"}}]
+                            "cache_control": _cc}]
             # (F) Optional mid-plan recheck steer: tacked onto the user's "Go"
             # tool_result for present_plan, asking the agent to reconsider
             # recipe-fit for step 1 BEFORE coding it.
@@ -321,6 +333,7 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
         "read_step": first(lambda s: any(n in ("read_skill", "search_skills") for n in s)),
         "plan_step": first(lambda s: "present_plan" in s),
         "code_step": first(lambda s: any(n in ("run_python", "run_r") for n in s)),
+        "usage": {"in": u_in, "out": u_out, "cache_read": u_cr, "cache_write": u_cw},
     }
 
 
@@ -524,7 +537,16 @@ def _agg(case: dict, traces: list, reps: int) -> dict:
     names = case.get("behaviors") or list(BEHAVIORS)
     n = len(traces) or 1
     rates = {b: round(sum(bool(BEHAVIORS[b](t, case)) for t in traces) / n, 3) for b in names}
-    return {"rates": rates, "n": len(traces), "outcomes": _counter(t["outcome"] for t in traces)}
+    # Sum token usage across the cell's reps so a sweep can surface actual
+    # cache-hit ratios (saved in the matrix-level summary by run.py).
+    usage = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+    for t in traces:
+        u = t.get("usage") or {}
+        for k in usage:
+            usage[k] += int(u.get(k, 0) or 0)
+    return {"rates": rates, "n": len(traces),
+            "outcomes": _counter(t["outcome"] for t in traces),
+            "usage": usage}
 
 
 def run_case(case: dict, variant: dict, reps: int = 16, workers: int = 6,
@@ -565,7 +587,18 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
             system, tools = render_system(case, variant)
             cells.append({"case": case, "variant": variant, "system": system,
                           "tools": tools, "vlabel": label})
-    tasks = [(ci, rep) for ci in range(len(cells)) for rep in range(reps)]
+    # Warm-then-flood for prompt-cache efficiency: run rep 0 of EACH cell
+    # serially in parallel (one per cell, distinct prefixes don't contend),
+    # let those writes land, THEN fan out reps 1..N-1 across the worker pool.
+    # Without this, the flat task list dispatched 12 reps of cell-0 at once
+    # and they all raced past each other's cache writes — ~12x wasted writes
+    # per cell. Toggle off with ABA_NO_WARMUP=1 for the legacy single-phase
+    # behavior.
+    warm = (os.environ.get("ABA_NO_WARMUP") != "1") and reps > 1
+    warm_tasks = [(ci, 0) for ci in range(len(cells))] if warm else []
+    flood_start = 1 if warm else 0
+    flood_tasks = [(ci, rep) for ci in range(len(cells)) for rep in range(flood_start, reps)]
+    tasks = warm_tasks + flood_tasks    # legacy "tasks" still used for total count
 
     def run_one(task):
         ci, rep = task
@@ -588,9 +621,24 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
     buckets: dict = {}                                  # phase 2: fan out all rollouts
     fails, done, total = 0, 0, len(tasks)
     print(f"[run_matrix] starting {total} rollouts ({len(cells)} cells x {reps} reps, "
-          f"workers={workers})", file=sys.stderr, flush=True)
+          f"workers={workers}, warmup={'yes' if warm else 'no'})", file=sys.stderr, flush=True)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(run_one, t) for t in tasks]   # as_completed -> true live progress
+        # Phase A: warm — one rep per cell, in parallel across cells (distinct
+        # prefixes, no contention). Wait for ALL to land before flood begins.
+        if warm_tasks:
+            warm_futs = [ex.submit(run_one, t) for t in warm_tasks]
+            for fut in as_completed(warm_futs):
+                ci, t = fut.result()
+                done += 1
+                if t is None:
+                    fails += 1
+                else:
+                    buckets.setdefault(ci, []).append(t)
+                if done % max(1, len(warm_tasks) // 3) == 0 or done == len(warm_tasks):
+                    print(f"[run_matrix] warmup {done}/{len(warm_tasks)} ({fails} failed)",
+                          file=sys.stderr, flush=True)
+        # Phase B: flood — remaining reps fanned out, hits the now-warm cache.
+        futs = [ex.submit(run_one, t) for t in flood_tasks]
         for fut in as_completed(futs):
             ci, t = fut.result()
             done += 1
