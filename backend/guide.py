@@ -712,18 +712,58 @@ async def stream_response(
             assistant_blocks = []
             text_out = ""
             tool_calls_this_turn: list[str] = []
+            truncated_tool_uses: list[str] = []
+            stop_reason = getattr(final_msg, "stop_reason", None)
             for block in final_msg.content:
                 if block.type == "text":
                     assistant_blocks.append({"type": "text", "text": block.text})
                     text_out += block.text
                 elif block.type == "tool_use":
+                    inp = block.input if isinstance(block.input, dict) else {}
+                    # max_tokens hit mid-tool-input → SDK couldn't parse the
+                    # partial JSON → block.input == {} for a tool whose schema
+                    # requires fields. Flag it so the user isn't left wondering
+                    # "where's the draft?" (verified live 2026-06-01).
+                    if not inp and stop_reason == "max_tokens":
+                        truncated_tool_uses.append(block.name)
                     assistant_blocks.append({
                         "type": "tool_use",
                         "id": block.id,
                         "name": block.name,
-                        "input": block.input,
+                        "input": inp,
                     })
                     tool_calls_this_turn.append(block.name)
+            if truncated_tool_uses:
+                names = ", ".join(truncated_tool_uses)
+                # Tell the AGENT (not just the user) that the cap was hit.
+                # The agent has no other way to know — it just sees its own
+                # malformed tool_use with empty input and has no signal it
+                # was due to a token cap rather than its own mistake (Opus
+                # 2026-06-01: diagnosed the empty input correctly and STILL
+                # reproduced it on next turn, because it had no cause-and-
+                # effect signal). Injecting this as a user-role text block
+                # gets it into history; the next agent turn sees it before
+                # acting. The same text also goes to the user's chat UI as
+                # a notice — transparent + symmetric.
+                agent_note = (
+                    f"[system notice: your previous turn's tool call(s) ({names}) hit the "
+                    "per-turn output token cap before their `input` could finish streaming, "
+                    "so the API returned an unparseable partial JSON and the tool dispatch "
+                    "was skipped (no tool_result was produced). When retrying, BREAK LARGE "
+                    "content into smaller pieces: write the file in multiple run_python "
+                    "calls using append mode (`open(path,'a').write(chunk)`), or output the "
+                    "content directly as chat text and skip run_python entirely. Do not "
+                    "repeat the same single large call — it will hit the cap again."
+                )
+                append_message("user", [{"type": "text", "text": agent_note}],
+                               entity_id=entity_id, focus_entity_id=focus_entity_id,
+                               thread_id=store_tid)
+                # User-facing version (one-line, no jargon).
+                ui_note = (
+                    f"⚠ The {names} call was cut off by the per-turn output cap. The agent "
+                    "has been told to break the content into smaller writes — ask it to retry."
+                )
+                yield sse({"type": "notice", "text": ui_note})
 
             append_message("assistant", assistant_blocks, entity_id=entity_id,
                            focus_entity_id=focus_entity_id, thread_id=store_tid)
