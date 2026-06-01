@@ -183,6 +183,24 @@ VARIANTS = {
         "reading it — verbal mention is not invocation; `read_skill(X)` is.**",
     )]},
 
+    # surprise_v2_strong forced onto the nonneg base (live arm) to verify the
+    # rule transfers — the canonical-based test left this open. Uses the same
+    # anchor text from behavior_slim.md (the nonneg-arm behavior file).
+    "surprise_v2_strong_nonneg": {"arm": "nonneg", "sys_sub": [(
+        "- **The approved plan's steps ARE the scope**",
+        "- **Surprises end the turn.** When two methods disagree, an "
+        "annotation looks wrong, or any result contradicts your earlier "
+        "claim — your IMMEDIATE next action is to STOP, summarize the "
+        "surprise in 2-3 sentences with the actual numbers, and ASK the "
+        "user (end_turn). Do NOT call ANY tool in the same turn: not "
+        "`run_python`, not `run_r`, not 'one more summary plot', not a "
+        "comparison figure, not a 'Now let me investigate' analysis. The "
+        "literal pattern 'Now let me create / investigate / generate one "
+        "more X' is the failure mode — recognize it and stop. End_turn with "
+        "prose; let the user decide whether to investigate.\n"
+        "- **The approved plan's steps ARE the scope**",
+    )]},
+
     # surprise_v2: stronger language than v1 — name the tool-call failure
     # mode explicitly. The v1 rule allowed "summary first, then investigate"
     # because the model reads "ask the user whether to investigate" and
