@@ -391,19 +391,22 @@ def _diversify(pool: list[SkillSpec], k: int, *, reserve: int = 3) -> list[Skill
     return chosen[:k]
 
 
-def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
-    """The skills slice embedded in the system prompt. Two tiers, by visibility:
+def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None,
+                       *, tier: str = "all") -> str:
+    """The skills slice — by tier (CC-convergence Phase 4):
 
-      • Core (visibility 'always') — the curated operating + strategy skills,
-        listed in full every turn so the agent never loses them.
-      • Recipes (visibility 'local') — the domain cookbook, *retrieval-gated*:
-        a small catalog (≤ FULL_LIST_MAX) is listed in full; past that, only the
-        top-K relevant to `query` plus a `search_skills` pointer, so the prompt
-        imprint stays bounded as the cookbook grows to hundreds.
+      • tier='all'     → both Core and Recipes (legacy behavior).
+      • tier='core'    → Core only (visibility 'always'). Stable per-turn —
+                         goes in the cached system prompt.
+      • tier='recipes' → Recipes only (visibility 'local'). Per-turn dynamic
+                         (BM25 over `query`). Lives in a system-reminder
+                         injected into the latest user message so it doesn't
+                         bust the system-prompt prefix cache.
 
-    Anything in neither tier is discoverable remotely (search_nf_core /
-    search_mcp_registry / search_pypi). Use Skill(skill=name, args=…) to
-    expand a body. Returns '' when the registry is empty."""
+    Core is the curated operating + strategy skills, listed in full every turn.
+    Recipes are the domain cookbook, retrieval-gated: ≤ FULL_LIST_MAX listed
+    in full, past that only the top-K relevant to `query` plus a search_skills
+    pointer. Returns '' when the requested tier is empty."""
     if not _REGISTRY:
         return ""
     q = (query or "").strip()
@@ -411,19 +414,39 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
     core = [s for s in all_skills if s.visibility == "always"]
     cookbook = [s for s in all_skills if s.visibility != "always"]
 
-    lines = [
-        "### Skills you can reference by name",
-        "Use `Skill(skill=name, args=...)` to load the full procedure. **If your task "
-        "matches one of these recipes — especially anything using a specific library/tool "
-        "or a multi-step method — invoke `Skill` on it BEFORE writing run_python/run_r "
-        "code.** The recipe carries the correct API, parameters, and gotchas; coding a "
-        "known library from memory is the top cause of wrong-API fumbles here.",
-    ]
+    want_core = tier in ("all", "core")
+    want_recipes = tier in ("all", "recipes")
+    if want_core and not core and want_recipes and not cookbook:
+        return ""
+    if not want_core and not cookbook:
+        return ""
 
-    if core:
+    # Header — slightly different framing for the per-turn reminder vs the
+    # always-on system-prompt slice. Both teach the Skill envelope.
+    if tier == "recipes":
+        lines = [
+            "### Recipes you can reference by name (relevant to this turn)",
+            "Use `Skill(skill=name, args=...)` to load the full procedure. **If your "
+            "task matches one of these — especially anything using a specific "
+            "library/tool or a multi-step method — invoke `Skill` on it BEFORE writing "
+            "run_python/run_r code.** The recipe carries the correct API, parameters, "
+            "and gotchas; coding a known library from memory is the top cause of "
+            "wrong-API fumbles here.",
+        ]
+    else:
+        lines = [
+            "### Skills you can reference by name",
+            "Use `Skill(skill=name, args=...)` to load the full procedure. **If your task "
+            "matches one of these recipes — especially anything using a specific library/tool "
+            "or a multi-step method — invoke `Skill` on it BEFORE writing run_python/run_r "
+            "code.** The recipe carries the correct API, parameters, and gotchas; coding a "
+            "known library from memory is the top cause of wrong-API fumbles here.",
+        ]
+
+    if want_core and core:
         lines += ["", "**Core skills** (always available):", *_skill_bullets(core)]
 
-    if cookbook:
+    if want_recipes and cookbook:
         total = len(cookbook)
         lines.append("")
         if total <= FULL_LIST_MAX:
@@ -431,14 +454,12 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
             shown = cookbook
         else:
             k = limit or GATED_TOP_K
-            # Over-fetch a deeper pool (search_skills spans the whole registry),
-            # drop core hits, then diversify by domain so one topic can't take
-            # every slot and crowd out the action-relevant recipe.
+            # Over-fetch a deeper pool, drop core hits, diversify by domain.
             raw = search_skills(q, limit=k * 3 + len(core)) if q else []
             pool = [s for s in raw if s.visibility != "always"]
             shown = _diversify(pool, k)
             relevant = bool(q and shown)
-            if not shown:  # no query, or no lexical overlap → stable default slice
+            if not shown:                          # no query, or no lexical overlap
                 shown = cookbook[:k]
             rel = " most relevant to the current request" if relevant else ""
             lines.append(
@@ -450,7 +471,24 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
                 lines.append(f"Domains: {' · '.join(doms)} — narrow with search_skills(query, domain=…).")
         lines += _skill_bullets(shown)
 
-    lines += ["",
-              "Need a tool or pipeline that isn't listed? `search_nf_core`, "
-              "`search_mcp_registry`, `search_pypi` / `search_bioconda` discover external ones."]
+    # Closing "discover external" pointer only on tiers that include the cookbook
+    # (it's a recipe-adjacent hint, not a core-tier matter).
+    if want_recipes:
+        lines += ["",
+                  "Need a tool or pipeline that isn't listed? `search_nf_core`, "
+                  "`search_mcp_registry`, `search_pypi` / `search_bioconda` discover external ones."]
     return "\n".join(lines)
+
+
+def recipes_reminder_block(query: Optional[str] = None, limit: Optional[int] = None) -> str:
+    """Per-turn recipes catalog as a Claude Code-style system-reminder.
+
+    Returns the recipes slice wrapped in `<system-reminder>` tags, or '' when
+    the slice would be empty (registry has no `visibility='local'` skills, or
+    they all got filtered out). This is what gets spliced into the LATEST user
+    message at LLM-call time (see guide.py), instead of living in the system
+    prompt — so per-turn intent changes don't invalidate the system cache."""
+    body = skills_index_block(query=query, limit=limit, tier="recipes")
+    if not body:
+        return ""
+    return f"<system-reminder>\n{body}\n</system-reminder>"

@@ -3,7 +3,7 @@ import asyncio
 from typing import AsyncGenerator
 
 from config import FAKE_SESSION
-from content.bio.prompts.build import build_system
+from content.bio.prompts.build import build_system, build_recipes_reminder
 from core.graph._schema import WORKSPACE_ID
 from core.graph.audit import log_context_assembly, session_assembly_summary, add_context_suggestion
 from core.graph.entities import get_entity, update_entity
@@ -79,6 +79,46 @@ def _dedup_tool_results(messages: list) -> list:
             new_content.append(b)
         if new_content:
             out.append(dict(m, content=new_content))
+    return out
+
+
+def _splice_recipes_reminder(messages: list, reminder: str) -> list:
+    """CC-convergence Phase 4: prepend the recipes catalog (wrapped in
+    `<system-reminder>` tags) to the latest user-text message of the
+    LLM payload. No-op when:
+      • `reminder` is empty (registry has no `visibility='local'` skills);
+      • the latest message isn't a user-text (i.e. it's a tool_result from
+        an in-progress agent loop — the model already saw the catalog at
+        the start of this turn, no need to re-show);
+      • messages is empty.
+
+    Does not mutate the input list. The injected text block is transient
+    (only in the outgoing payload), so we don't have to strip it from
+    history later — history doesn't see it."""
+    if not reminder or not messages:
+        return messages
+    last = messages[-1]
+    if last.get("role") != "user":
+        return messages
+    content = last.get("content")
+    if isinstance(content, str):
+        # Legacy/simple shape: a plain string. Promote to a blocks list with
+        # the reminder prepended so we don't lose the user text.
+        new_content = [
+            {"type": "text", "text": reminder},
+            {"type": "text", "text": content},
+        ]
+    elif isinstance(content, list):
+        # Block shape. Only inject if there's a user-text block — refuse to
+        # touch tool_result-only messages (mid-loop turns).
+        has_text = any(isinstance(b, dict) and b.get("type") == "text" for b in content)
+        if not has_text:
+            return messages
+        new_content = [{"type": "text", "text": reminder}, *content]
+    else:
+        return messages
+    out = list(messages[:-1])
+    out.append({**last, "content": new_content})
     return out
 
 
@@ -560,6 +600,12 @@ async def stream_response(
     }
     system = sidebar_text + focus_text + thread_text + build_system(
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
+    # CC-convergence Phase 4: per-turn recipes catalog as a <system-reminder>.
+    # Lives OUTSIDE the system prompt (which stays cache-stable across user
+    # turns) — gets spliced into the latest user-text message at LLM-call time.
+    # Empty when there are no `visibility='local'` skills, e.g. advisor roles.
+    recipes_reminder = build_recipes_reminder(intent=eff_intent, ctx=prompt_ctx) \
+        if guide_role == "primary" else ""
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
                        focus_entity_id=focus_entity_id)
@@ -627,6 +673,12 @@ async def stream_response(
             llm_history = _ensure_tool_pair_completeness(
                 await asyncio.to_thread(effective_history, store_tid, history)
             )
+            # CC-convergence Phase 4: prepend the recipes catalog as a
+            # <system-reminder> on the latest user-text message. The splice is a
+            # no-op when the latest message is a tool_result (in-progress agent
+            # loop) — the catalog was already presented on the first iteration
+            # of this turn.
+            llm_history = _splice_recipes_reminder(llm_history, recipes_reminder)
             # Compact pre-send fingerprint — matched by `[llm-sent]` printed in
             # core/llm.py at the moment the stream opens. If they agree:
             # what guide.py prepared == what hit the API. If they differ:

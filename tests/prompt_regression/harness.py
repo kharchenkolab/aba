@@ -210,6 +210,33 @@ def _declared_recipes_with_steps(plan_input: dict) -> list[tuple[str, list[tuple
     return [(rn, by_recipe[rn]) for rn in order]
 
 
+def _splice_recipes_reminder(messages: list, reminder: str) -> list:
+    """Harness mirror of guide.py's reminder splice (CC-convergence Phase 4) —
+    prepend the recipes catalog to the latest user-text message of the replay.
+    No-op when reminder is empty or the latest message has no user-text block."""
+    if not reminder or not messages:
+        return messages
+    last = messages[-1]
+    if last.get("role") != "user":
+        return messages
+    content = last.get("content")
+    if isinstance(content, str):
+        new_content = [
+            {"type": "text", "text": reminder},
+            {"type": "text", "text": content},
+        ]
+    elif isinstance(content, list):
+        has_text = any(isinstance(b, dict) and b.get("type") == "text" for b in content)
+        if not has_text:
+            return messages
+        new_content = [{"type": "text", "text": reminder}, *content]
+    else:
+        return messages
+    out = list(messages[:-1])
+    out.append({**last, "content": new_content})
+    return out
+
+
 def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max_tokens=2048,
             max_code_turns=6, continue_after_plan: bool = False,
             step_labeled_injection: bool = False, plan_recheck_steer: bool = False) -> dict:
@@ -229,6 +256,20 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
     system prompt for the rest of the rollout, and keep going. This tests the
     declared-recipes → injected-at-codegen hypothesis on cold-start cases."""
     msgs = copy.deepcopy(messages)
+    # CC-convergence Phase 4: splice the per-turn recipes catalog (a
+    # <system-reminder> block) onto the latest user-text message — mirroring
+    # what guide.py does for live rollouts. Without this, the harness would
+    # send rollouts a system prompt that no longer carries the recipes catalog
+    # (it now lives in the reminder), and the model would have no way to pick
+    # a recipe — a false regression. Builds with the live build_recipes_reminder
+    # so any tier/wording changes ride along.
+    try:
+        from content.bio.prompts.build import build_recipes_reminder
+        _intent = _last_user_text(messages) or ""
+        _reminder = build_recipes_reminder(intent=_intent)
+        msgs = _splice_recipes_reminder(msgs, _reminder)
+    except Exception:  # noqa: BLE001 — never break a rollout on optional reminder
+        pass
     # Honor ABA_CACHE_TTL=1h for long A/B campaigns (amortizes cache writes
     # across many sweep runs over the day). Default 5-min ephemeral.
     _cc = {"type": "ephemeral", "ttl": "1h"} if os.environ.get("ABA_CACHE_TTL") == "1h" else {"type": "ephemeral"}
