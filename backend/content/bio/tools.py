@@ -15,7 +15,14 @@ from config import DATA_DIR, ARTIFACTS_DIR
 TOOL_SCHEMAS = [
     {
         "name": "list_data_files",
-        "description": "List the datasets in THIS project (the project's Data facet). Returns each dataset's filename and size. This is the data the user has added to this project — reason about these, not the wider filesystem.",
+        "description": (
+            "List the datasets in THIS project — both user-uploaded AND "
+            "agent-downloaded-then-registered. Returns each dataset's name + "
+            "size + ABSOLUTE PATH. Use this whenever you need the path of any "
+            "dataset; never guess `DATA_DIR/<name>` (DATA_DIR is just the "
+            "user-upload root and is often empty when datasets came from "
+            "agent downloads). Copy returned paths verbatim into your code."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -132,7 +139,10 @@ TOOL_SCHEMAS = [
             "Set fresh=true for a one-off ISOLATED run that neither reads "
             "nor changes the session (use for reproducible/self-contained code). "
             "Set background=true for a long pipeline that shouldn't block the chat. "
-            "timeout_s caps a run (max 1800s)."
+            "timeout_s caps a run (max 1800s). "
+            "NOTE: for AUTHORING text files (markdown drafts, scripts, configs), "
+            "use `write_file` / `edit_file` / `read_file` instead — they avoid "
+            "the Python string-escape overhead of `open(path,'w').write(...)`."
         ),
         "input_schema": {
             "type": "object",
@@ -187,7 +197,11 @@ TOOL_SCHEMAS = [
             "ggtitle()/aes() or the %>% pipe + group_by()/top_n(). There is NO 'tidyverse' "
             "meta-package; never library(tidyverse) — load ggplot2 and dplyr directly. "
             "Use for Bioconductor / DESeq2 / edgeR / limma / Seurat work that's "
-            "awkward in Python. First R use installs the R kernel (slow, one-time)."
+            "awkward in Python. First R use installs the R kernel (slow, one-time). "
+            "NOTE: for AUTHORING text files (markdown drafts, scripts, configs), "
+            "use `write_file` / `edit_file` / `read_file` instead — they avoid "
+            "the R string-escape overhead of `writeLines(x, path)` with embedded "
+            "quotes."
         ),
         "input_schema": {
             "type": "object",
@@ -909,6 +923,117 @@ TOOL_SCHEMAS = [
         },
         "approval_policy": "always",
     },
+    {
+        "name": "write_file",
+        "description": (
+            "Author a text file (markdown notes/drafts/reports/recipes, JSON/YAML "
+            "configs, scripts/code as files) inside this project's working tree. "
+            "Use THIS instead of `run_python({\"code\":\"open(path,'w').write(...)\"})` "
+            "— the content goes in `body` directly, with no Python string-escape "
+            "overhead (roughly half the token cost for the same payload). Relative "
+            "paths resolve under the current run's cwd; absolute paths must be "
+            "inside the project sandbox. Refuses to overwrite an existing file "
+            "unless you pass `overwrite=true`; use `mode='a'` to append a section "
+            "(safe — never destroys). For surgical edits to a file you already "
+            "wrote, use `edit_file` instead of rewriting the whole body. For "
+            "long-form documents you're building incrementally, write a first "
+            "chunk with `mode='w'` and append additional sections in subsequent "
+            "turns with `mode='a'` (or `edit_file` for revisions) — keeps each "
+            "tool call comfortably under the per-turn output cap."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Path under the project sandbox (relative → run cwd / "
+                        "thread-scratch). Examples: 'draft_recipe.md', "
+                        "'sections/methods.md'. Refused if it escapes the "
+                        "project's WORK_DIR or DATA_DIR."
+                    ),
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Full text content of the file. UTF-8.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["w", "a"],
+                    "description": (
+                        "'w' creates/overwrites (refused if file exists unless "
+                        "overwrite=true); 'a' appends (always allowed). Default 'w'."
+                    ),
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": (
+                        "Only meaningful with mode='w'. Set true to silently replace "
+                        "an existing file. Default false — safer: forces an explicit "
+                        "yes before clobbering."
+                    ),
+                },
+            },
+            "required": ["path", "body"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": (
+            "Targeted replacement in an existing text file inside the project "
+            "sandbox. Cheapest way to iterate on a long document — don't re-emit "
+            "the whole file via write_file when you can change a section. "
+            "`old_string` must be a byte-exact substring; include enough surrounding "
+            "context to make it unique within the file (otherwise the call fails "
+            "with a count). Use `replace_all=true` to change every occurrence "
+            "(e.g. renaming a variable across a script)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the existing file (same sandbox rules as write_file)."},
+                "old_string": {
+                    "type": "string",
+                    "description": (
+                        "Byte-exact substring to find. Must be unique in the file "
+                        "unless replace_all=true. Include surrounding context (a "
+                        "preceding line, an enclosing tag) to disambiguate."
+                    ),
+                },
+                "new_string": {"type": "string", "description": "Replacement text."},
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence. Default false (require uniqueness).",
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": (
+            "Read a text file from the project sandbox — your own writes, files "
+            "in this run's cwd, prior-run artifacts, or thread-scratch. Prefer "
+            "this over `run_python({\"code\":\"open(path).read()\"})` for plain "
+            "reads. Use `offset` + `limit` (1-based line range) for large files "
+            "to avoid shoveling the whole body through the model — e.g. "
+            "`read_file(path='big.fastq.gz', limit=20)` peeks at the first 20 "
+            "lines without loading the rest. Transparently decompresses .gz / "
+            ".bz2 / .xz so you can peek at text-in-container formats (FASTQ, "
+            "GTF.gz, VCF.gz, etc.) directly. For genuinely binary files (BAM, "
+            "BCF, .h5ad, .rds, images), use `run_python` / `run_r` with the "
+            "right loader."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path under the project sandbox."},
+                "offset": {"type": "integer", "description": "1-based starting line (default 1)."},
+                "limit": {"type": "integer", "description": "Max lines to read (default: all, capped at 5000)."},
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 # ---------- Executors ----------
@@ -1129,23 +1254,33 @@ def _kernel_namespace_preview(sess, lang: str) -> list[str]:
 # resolve again ("→ /workspace/.../ana_40e84b23/GSM5746268_processed.h5ad").
 # Returns "" when there's nothing to surface.
 
-_PRIOR_FILE_EXTS = (".h5ad", ".h5", ".rds", ".csv", ".tsv", ".parquet",
-                    ".npz", ".npy", ".pkl", ".png", ".pdf")
+# Skip noise from cache/aux/build files in prior-run dirs (these clutter the
+# listing without ever being inputs the agent would want to re-open).
+_PREAMBLE_SKIP_SUFFIXES = (".log", ".pyc", ".cache", ".tmp", ".lock", ".swp")
+_PREAMBLE_SKIP_PREFIXES = (".", "_")
 
 
 def _prior_run_files_preamble(project_id: str, thread_id: str,
                               current_run_id: str | None,
                               max_runs: int = 4, max_files: int = 12,
-                              max_scratch_files: int = 8) -> str:
-    """List files reachable from THIS thread but NOT in the current cwd, so
-    bare-filename loads recover gracefully. Two sources, kept visually distinct:
+                              max_scratch_files: int = 12,
+                              cwd: str | None = None) -> str:
+    """Inject a small, focused orientation block at the moment the cwd shifts
+    (a new run opens, the kernel restarts, etc.). Lists what's reachable from
+    the new cwd that ISN'T in it, so bare-filename loads recover gracefully.
+    Three sources, kept visually distinct:
 
-      1. Files written inside any of this thread's prior Runs (artifact_path).
-      2. Files in the thread's SHARED scratch dir (ad-hoc downloads / curl
-         output / intermediates not bound to any Run — the gap that caused
-         /tmp/<GSM> confusion: agents `curl`-downloaded to the kernel cwd at
-         the time, then later turns invented bogus `/tmp/...` paths trying to
-         re-reach them).
+      1. Registered datasets in this project (canonical paths + layout
+         hints when known). Earlier confusion: agents guessed
+         `DATA_DIR/<dataset>` instead of using the registered path.
+      2. Files written inside any of this thread's prior Runs.
+      3. Files in the thread's SHARED scratch dir (ad-hoc downloads, the
+         /tmp/<GSM>-confusion gap).
+
+    Filtering: includes directories (registered dataset roots are dirs); skips
+    obvious noise (dotfiles, .log/.pyc/etc.); no extension whitelist, so .gz
+    triplets, .mtx, etc. all surface. The block is text appended ABOVE the
+    tool's stdout in the SAME tool_result, fires only at cwd shifts.
     """
     try:
         from core.graph.entities import list_entities
@@ -1154,7 +1289,26 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         thread_id = str(thread_id or "")
         if not thread_id: return ""
 
-        # (1) Prior-run files (group A).
+        def _keep(name: str) -> bool:
+            if not name: return False
+            if name.startswith(_PREAMBLE_SKIP_PREFIXES): return False
+            n = name.lower()
+            return not any(n.endswith(s) for s in _PREAMBLE_SKIP_SUFFIXES)
+
+        # (1) Registered datasets — name + path + layout_hint (if recorded).
+        datasets: list[tuple[str, str, str]] = []   # (title, path, hint)
+        try:
+            for d in list_entities(type_filter="dataset", include_archived=False):
+                ap = d.get("artifact_path") or ""
+                if not ap: continue
+                title = (d.get("title") or d.get("id") or "").strip()
+                md = d.get("metadata") or {}
+                hint = (md.get("layout_hint") or "").strip()
+                datasets.append((title, ap, hint))
+        except Exception:  # noqa: BLE001
+            pass
+
+        # (2) Prior-run files.
         run_mapped: list[tuple[str, str]] = []
         seen_names: set[str] = set()
         scanned = 0
@@ -1171,67 +1325,65 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             try:
                 for f in p.iterdir():
                     if f.is_dir(): continue
-                    if f.suffix.lower() not in _PRIOR_FILE_EXTS: continue
+                    if not _keep(f.name): continue
                     files.append(f)
             except OSError:
                 continue
             files.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
             for f in files:
-                if f.name in seen_names: continue   # newer run's copy wins
+                if f.name in seen_names: continue
                 seen_names.add(f.name)
                 run_mapped.append((f.name, str(f)))
                 if len(run_mapped) >= max_files: break
             if len(run_mapped) >= max_files or scanned >= max_runs: break
 
-        # (2) Thread shared-scratch files (group B) — ad-hoc downloads /
-        # intermediates not bound to a Run. Skip names already in group A
-        # (Run files dominate; scratch is fallback context).
+        # (3) Thread shared-scratch files + dirs.
         scratch_mapped: list[tuple[str, str]] = []
         try:
             sp = scratch_dir(str(project_id or "default"), f"thread-{thread_id}")
             if sp.is_dir():
                 cands = []
-                # Walk one level deep — curl typically lands a file, but some
-                # patterns mkdir a subdir per sample (the GSM5746268-pattern).
                 for entry in sp.iterdir():
-                    try:
-                        if entry.is_file():
-                            cands.append(entry)
-                        elif entry.is_dir():
-                            for inner in entry.iterdir():
-                                if inner.is_file(): cands.append(inner)
-                    except OSError:
-                        continue
+                    if not _keep(entry.name): continue
+                    cands.append(entry)
                 cands.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
                 for f in cands:
                     if f.name in seen_names: continue
-                    if f.suffix.lower() not in _PRIOR_FILE_EXTS and not f.name.endswith(".gz"):
-                        # tolerate .mtx.gz / .tsv.gz etc. that won't match the bare-ext set
+                    # Skip directories that are registered datasets — they
+                    # already appear in section (1).
+                    if f.is_dir() and any(str(f) == ap for _, ap, _ in datasets):
                         continue
                     seen_names.add(f.name)
-                    scratch_mapped.append((f.name, str(f)))
+                    suffix = "/" if f.is_dir() else ""
+                    scratch_mapped.append((f.name + suffix, str(f)))
                     if len(scratch_mapped) >= max_scratch_files: break
         except Exception:  # noqa: BLE001
             pass
 
-        if not run_mapped and not scratch_mapped: return ""
+        if not datasets and not run_mapped and not scratch_mapped: return ""
         lines: list[str] = [
-            "── Files you wrote in this thread, reachable from here — USE THESE EXACT ABSOLUTE PATHS ──",
-            "Do NOT reconstruct parent dirs from memory. The full path below is the source of truth;",
-            "copy it verbatim. Common mistake: substituting `DATA_DIR/...` (user uploads) for these paths",
-            "(your own downloads / scratch) — DATA_DIR is read-only inputs, not where you wrote files.",
-            "",
+            "── Workspace orientation (cwd just shifted) ──",
         ]
+        if cwd:
+            lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
+        lines.append("")
+        if datasets:
+            lines.append("Registered datasets in this project (canonical paths — use verbatim):")
+            for title, path, hint in datasets:
+                label = title or path.rsplit("/", 1)[-1]
+                tail = f"  [{hint}]" if hint else ""
+                lines.append(f"  - {label} → {path}{tail}")
+            lines.append("")
         if run_mapped:
-            lines.append("Files from PRIOR RUNS in this thread:")
+            lines.append("Files from prior runs in this thread:")
             for name, full in run_mapped:
                 lines.append(f"  - {name} → {full}")
+            lines.append("")
         if scratch_mapped:
-            if run_mapped: lines.append("")    # blank between groups
-            lines.append("Files in this THREAD'S SHARED SCRATCH (ad-hoc downloads / intermediates):")
+            lines.append("Thread shared-scratch (your ad-hoc downloads / intermediates):")
             for name, full in scratch_mapped:
                 lines.append(f"  - {name} → {full}")
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines).rstrip() + "\n"
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1321,7 +1473,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             if getattr(sess, "_aba_cwd_just_switched", None):
                 from content.bio.lifecycle.runs import active_run_id as _arid
                 preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
-                                                    current_run_id=_arid(str(thread_id)))
+                                                    current_run_id=_arid(str(thread_id)),
+                                                    cwd=getattr(sess, "cwd", None))
                 sess._aba_cwd_just_switched = None
                 if preamble:
                     out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -1392,7 +1545,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     if getattr(sess, "_aba_cwd_just_switched", None):
         from content.bio.lifecycle.runs import active_run_id as _arid
         preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
-                                             current_run_id=_arid(str(thread_id)))
+                                             current_run_id=_arid(str(thread_id)),
+                                             cwd=getattr(sess, "cwd", None))
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -3127,8 +3281,66 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         note += bundle_note
     if not exists:
         note += " WARNING: path not found on disk; registered by reference only — pass a path under DATA_DIR."
+    # S3 (2026-06-02): include a one-line layout hint + the canonical path back
+    # in the tool_result so the agent's next turn has the location in
+    # conversation context. Removes the "I just registered it — now where does
+    # it live?" round-trip that was costing 3-5 tool calls (prj_8d699668).
+    layout_hint = _dataset_layout_hint(abspath) if exists else ""
+    if layout_hint:
+        # Persist the hint on the entity so the cwd-shift preamble can surface it later.
+        try:
+            md = (input_.get("metadata") or {}) if isinstance(input_, dict) else {}
+            update_entity(eid, metadata={**md, "layout_hint": layout_hint})
+        except Exception:  # noqa: BLE001
+            pass
     return {"status": "ok", "dataset_id": eid, "title": title,
-            "artifact_path": abspath if exists else None, "note": note}
+            "artifact_path": abspath if exists else None,
+            "layout_hint": layout_hint or None,
+            "note": note}
+
+
+def _dataset_layout_hint(path: str) -> str:
+    """One-line description of what's at this dataset path. Helps the agent's
+    next turn pick the right loader without re-inspecting the dir.
+
+    Examples:
+      "1 file (.h5ad)"
+      "9 flat files (.gz), pattern: GSM*_{barcodes,features,matrix}.{tsv,mtx}.gz"
+      "3 sample subdirs (each with 10x triplet)"
+    """
+    try:
+        import os
+        if not path or not os.path.exists(path):
+            return ""
+        if os.path.isfile(path):
+            ext = os.path.splitext(path)[1].lower()
+            return f"1 file ({ext})" if ext else "1 file"
+        entries = []
+        try:
+            entries = sorted(os.listdir(path))[:50]
+        except OSError:
+            return ""
+        if not entries:
+            return "empty directory"
+        files = [e for e in entries if os.path.isfile(os.path.join(path, e))]
+        dirs = [e for e in entries if os.path.isdir(os.path.join(path, e))]
+        if files and not dirs:
+            exts = sorted({_compound_ext(f) for f in files if _compound_ext(f)})
+            ext_str = ", ".join(exts[:4]) if exts else "various"
+            return f"{len(files)} flat file(s) ({ext_str})"
+        if dirs and not files:
+            return f"{len(dirs)} subdir(s); first: {dirs[0]}/"
+        return f"{len(files)} file(s) + {len(dirs)} subdir(s)"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _compound_ext(name: str) -> str:
+    """Two-suffix extension for .tar.gz / .tsv.gz / .mtx.gz; otherwise one."""
+    parts = name.lower().rsplit(".", 2)
+    if len(parts) >= 3 and parts[-1] in ("gz", "bz2", "xz", "zip"):
+        return "." + parts[-2] + "." + parts[-1]
+    return "." + parts[-1] if len(parts) >= 2 else ""
 
 
 def add_to_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -3334,7 +3546,8 @@ def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
         out["cwd"] = cwd_str
     except Exception:  # noqa: BLE001
         pass
-    preamble = _prior_run_files_preamble(str(project_id), tid, current_run_id=rid)
+    preamble = _prior_run_files_preamble(str(project_id), tid, current_run_id=rid,
+                                         cwd=cwd_str or None)
 
     note_parts = [
         "Run opened. Figures/tables you produce and the cells you execute now "
@@ -3381,6 +3594,222 @@ def annotate_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "entity_id": eid, "updated": list(fields.keys())}
 
 
+# ---------- File-authoring tools (write_file / edit_file / read_file) ----------
+# Pattern borrowed from Claude Code's Write/Edit/Read: dedicated tools for text
+# I/O so the agent doesn't pay the run_python(open().write(...)) overhead of
+# Python string-literal escaping for the body. All three share one sandbox:
+# the resolved abspath must sit inside this project's WORK_DIR/<pid>/ or
+# DATA_DIR/<pid>/. write_file additionally refuses to clobber an existing file
+# unless overwrite=true (so the agent can't silently nuke a prior write —
+# forcing edit_file for changes, write_file for net-new creations).
+
+_FILE_TOOL_MAX_BODY = 5 * 1024 * 1024     # write_file body cap
+_FILE_TOOL_MAX_FILE = 10 * 1024 * 1024    # edit_file in-memory cap
+_FILE_TOOL_MAX_READ_BYTES = 200_000       # read_file output cap
+_FILE_TOOL_MAX_READ_LINES = 5000          # read_file line cap
+
+
+def _resolve_project_path(path_str: str, ctx: dict | None,
+                          must_exist: bool = False) -> tuple[str, str | None]:
+    """Resolve a file path for write_file / edit_file / read_file.
+    Returns (abspath, error_or_None). Sandboxes to the current project's
+    WORK_DIR/<pid>/ or DATA_DIR/<pid>/ — paths outside those are refused."""
+    from core import projects
+    from core.config import project_work_dir, project_data_dir
+    if not isinstance(path_str, str) or not path_str.strip():
+        return "", "path is required"
+    raw = path_str.strip()
+    pid = (projects.current() or "default")
+    work_root = project_work_dir(pid).resolve()
+    data_root = project_data_dir(pid).resolve()
+
+    p = Path(raw)
+    if not p.is_absolute():
+        # Relative: anchor at the active run's cwd if one is open, else the
+        # thread's shared scratch.
+        anchor: Path | None = None
+        try:
+            tid = str((ctx or {}).get("thread_id") or "")
+            if tid:
+                # Run cwd if a run is open, else scratch.
+                from content.bio.lifecycle.runs import active_run_id
+                from core.data.workspace import scratch_dir
+                rid = active_run_id(tid)
+                if rid:
+                    # Mirror run_python's _run_scratch_cwd convention.
+                    anchor = (work_root / rid).resolve()
+                else:
+                    anchor = scratch_dir(pid, f"thread-{tid}").resolve()
+        except Exception:  # noqa: BLE001
+            anchor = None
+        if anchor is None:
+            anchor = work_root
+        p = (anchor / raw).resolve()
+    else:
+        p = p.resolve()
+
+    # Sandbox: must be under work_root or data_root for THIS project.
+    try:
+        is_work = p.is_relative_to(work_root)
+        is_data = p.is_relative_to(data_root)
+    except AttributeError:
+        # py<3.9 fallback (shouldn't apply — server is on 3.12).
+        s = str(p)
+        is_work = s.startswith(str(work_root) + os.sep) or s == str(work_root)
+        is_data = s.startswith(str(data_root) + os.sep) or s == str(data_root)
+    if not (is_work or is_data):
+        return "", (f"path is outside the project sandbox; allowed roots: "
+                    f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
+                    f"Got: {p}")
+    if must_exist and not p.exists():
+        return "", f"file not found: {p}"
+    return str(p), None
+
+
+def write_file_tool(input_: dict, ctx: dict | None = None) -> dict:
+    body = input_.get("body")
+    if not isinstance(body, str):
+        return {"error": "body is required (string)"}
+    if len(body.encode("utf-8")) > _FILE_TOOL_MAX_BODY:
+        return {"error": f"body exceeds {_FILE_TOOL_MAX_BODY} bytes — write a smaller chunk or use edit_file"}
+    mode = (input_.get("mode") or "w").strip()
+    if mode not in ("w", "a"):
+        return {"error": f"mode must be 'w' or 'a' (got {mode!r})"}
+    overwrite = bool(input_.get("overwrite", False))
+    abspath, err = _resolve_project_path(input_.get("path") or "", ctx)
+    if err:
+        return {"error": err}
+    p = Path(abspath)
+    was_existing = p.exists()
+    if mode == "w" and was_existing and not overwrite:
+        return {"error": (f"file already exists; refusing to overwrite without "
+                          f"overwrite=true. Path: {abspath}. To change part of "
+                          f"the file, use edit_file. To append, use mode='a'.")}
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, mode, encoding="utf-8") as f:
+            f.write(body)
+    except OSError as e:
+        return {"error": f"write failed: {e}", "path": abspath}
+    return {"status": "ok", "path": abspath, "bytes_written": len(body.encode("utf-8")),
+            "was_existing": was_existing, "mode": mode}
+
+
+def edit_file_tool(input_: dict, ctx: dict | None = None) -> dict:
+    old_string = input_.get("old_string")
+    new_string = input_.get("new_string")
+    if not isinstance(old_string, str) or old_string == "":
+        return {"error": "old_string is required (non-empty string)"}
+    if not isinstance(new_string, str):
+        return {"error": "new_string is required (string)"}
+    replace_all = bool(input_.get("replace_all", False))
+    abspath, err = _resolve_project_path(input_.get("path") or "", ctx, must_exist=True)
+    if err:
+        return {"error": err}
+    p = Path(abspath)
+    try:
+        if p.stat().st_size > _FILE_TOOL_MAX_FILE:
+            return {"error": f"file too large for edit_file ({p.stat().st_size} bytes; cap {_FILE_TOOL_MAX_FILE})", "path": abspath}
+        with open(p, encoding="utf-8") as f:
+            content = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        return {"error": f"read failed: {e}", "path": abspath}
+    count = content.count(old_string)
+    if count == 0:
+        return {"error": "old_string not found in file — check exact bytes "
+                          "(whitespace, line endings) and try again",
+                "path": abspath}
+    if count > 1 and not replace_all:
+        return {"error": (f"old_string is ambiguous: matches {count} times. "
+                          "Include more surrounding context to make it unique, "
+                          "or set replace_all=true to change every occurrence."),
+                "path": abspath, "matches": count}
+    new_content = (content.replace(old_string, new_string) if replace_all
+                   else content.replace(old_string, new_string, 1))
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except OSError as e:
+        return {"error": f"write failed: {e}", "path": abspath}
+    replacements = count if replace_all else 1
+    return {"status": "ok", "path": abspath, "replacements": replacements,
+            "bytes_written": len(new_content.encode("utf-8"))}
+
+
+def _open_text_streaming(path: Path):
+    """Open a text or text-in-compressed-container file for streaming line reads.
+    Transparently handles .gz / .bz2 / .xz. Caller is responsible for the with-
+    statement. Returns an open file-like object yielding str lines."""
+    name = path.name.lower()
+    if name.endswith(".gz"):
+        import gzip
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    if name.endswith(".bz2"):
+        import bz2
+        return bz2.open(path, "rt", encoding="utf-8", errors="replace")
+    if name.endswith(".xz"):
+        import lzma
+        return lzma.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, encoding="utf-8", errors="replace")
+
+
+def read_file_tool(input_: dict, ctx: dict | None = None) -> dict:
+    offset = input_.get("offset") or 1
+    limit = input_.get("limit")
+    try:
+        offset = max(1, int(offset))
+    except (TypeError, ValueError):
+        return {"error": f"offset must be a positive integer (got {offset!r})"}
+    try:
+        limit = int(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        return {"error": f"limit must be an integer if provided (got {input_.get('limit')!r})"}
+    if limit is not None and limit <= 0:
+        return {"error": "limit must be a positive integer"}
+    cap = min(limit, _FILE_TOOL_MAX_READ_LINES) if limit is not None else _FILE_TOOL_MAX_READ_LINES
+    abspath, err = _resolve_project_path(input_.get("path") or "", ctx, must_exist=True)
+    if err:
+        return {"error": err}
+    p = Path(abspath)
+    size_on_disk = p.stat().st_size if p.exists() else 0
+
+    # Stream-read line-by-line so a 50 GB fastq.gz doesn't load into memory.
+    # Auto-decompresses .gz/.bz2/.xz so the agent can `read_file` a fastq.gz to
+    # peek at the format without round-tripping through `run_python` + gzip.
+    kept: list[str] = []
+    bytes_kept = 0
+    truncated = False
+    lines_seen = 0          # total lines visited (offset + kept + any beyond cap)
+    skipped = offset - 1
+    try:
+        with _open_text_streaming(p) as f:
+            for raw_line in f:
+                lines_seen += 1
+                if lines_seen <= skipped:
+                    continue
+                ln = len(raw_line.encode("utf-8"))
+                if bytes_kept + ln > _FILE_TOOL_MAX_READ_BYTES:
+                    truncated = True; break
+                kept.append(raw_line); bytes_kept += ln
+                if len(kept) >= cap:
+                    # Don't keep walking — but check if the file has more
+                    # by peeking one more line; cheap and gives `truncated`
+                    # the right meaning ("more to read past this slice").
+                    try: more = next(f); truncated = True  # noqa: F841
+                    except StopIteration: pass
+                    break
+    except (OSError, UnicodeDecodeError) as e:
+        return {"error": f"read failed: {e}", "path": abspath}
+
+    body = "".join(kept)
+    return {"status": "ok", "path": abspath, "body": body,
+            "lines_returned": len(kept),
+            "truncated": truncated,
+            "offset": offset, "limit": limit,
+            "bytes": size_on_disk,
+            "compressed": any(p.name.lower().endswith(s) for s in (".gz", ".bz2", ".xz"))}
+
+
 EXECUTORS = {
     "list_data_files": list_data_files,
     "read_csv_info": read_csv_info,
@@ -3424,6 +3853,9 @@ EXECUTORS = {
     "open_run": open_run_tool,
     "close_run": close_run_tool,
     "archive_entity": lambda input_, ctx=None: _archive_entity_tool(input_, ctx),
+    "write_file": write_file_tool,
+    "edit_file": edit_file_tool,
+    "read_file": read_file_tool,
 }
 
 
@@ -3484,6 +3916,12 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
     if name not in ("run_python", "run_r") or not isinstance(result, dict):
         return
     if "returncode" not in result:   # only when code actually ran (skip timeout/cancel/launch-error)
+        return
+    # R1 (2026-06-02): don't nudge when the call ERRORED. The agent is
+    # debugging; an unrelated "you haven't read recipe X yet" hint distracts
+    # from the actual failure cause and was repeatedly seen confusing it
+    # in live sessions (prj_8d699668).
+    if result.get("returncode") != 0:
         return
     rc = (ctx or {}).get("recipe_ctx") if isinstance(ctx, dict) else None
     if not isinstance(rc, dict) or rc.get("nudged"):

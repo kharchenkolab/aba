@@ -750,10 +750,13 @@ async def stream_response(
                     "per-turn output token cap before their `input` could finish streaming, "
                     "so the API returned an unparseable partial JSON and the tool dispatch "
                     "was skipped (no tool_result was produced). When retrying, BREAK LARGE "
-                    "content into smaller pieces: write the file in multiple run_python "
-                    "calls using append mode (`open(path,'a').write(chunk)`), or output the "
-                    "content directly as chat text and skip run_python entirely. Do not "
-                    "repeat the same single large call — it will hit the cap again."
+                    "content into smaller pieces. For text/document content prefer "
+                    "`write_file(path, body)` for the first chunk + `write_file(path, body, "
+                    "mode='a')` (or `edit_file` for surgical changes) for subsequent pieces "
+                    "— `write_file`'s `body` field has no Python string-escape overhead, "
+                    "so the same content fits in roughly half the tokens vs `run_python` "
+                    "with `open().write(...)`. Do not repeat the same single large call — "
+                    "it will hit the cap again."
                 )
                 append_message("user", [{"type": "text", "text": agent_note}],
                                entity_id=entity_id, focus_entity_id=focus_entity_id,
