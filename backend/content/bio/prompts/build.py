@@ -125,8 +125,9 @@ def _skills_index(_tools: list[dict]) -> str:
     """B2: per-turn skills catalog. Retrieval-gated: a large recipe library
     surfaces only the top-K skills relevant to this turn's intent plus a
     pointer to search_skills, so the prompt imprint stays bounded. The agent
-    uses read_skill(name) to expand a body on demand. Empty until bio.skills
-    register at import time (registry returns '', which the assembler drops)."""
+    uses Skill(skill=name, args=…) to expand a body on demand. Empty until
+    bio.skills register at import time (registry returns '', which the
+    assembler drops)."""
     from core.skills import skills_index_block
     return skills_index_block(query=_INTENT.get(""))
 
@@ -186,7 +187,7 @@ def _gotchas_card(s) -> str:
     from a recipe — the caveat/rule/plotting sections + its `produces` list —
     without the full procedure. Tests whether the gotchas alone suffice."""
     out = [f"### Most-relevant recipe `{s.name}` — key rules + expected outputs",
-           f"(Gotchas slice; `read_skill('{s.name}')` for the full procedure.)"]
+           f"(Gotchas slice; `Skill(skill=\"{s.name}\")` for the full procedure.)"]
     if getattr(s, "produces", None):
         out.append(f"- **Done = produce:** {', '.join(s.produces)}.")
     picked = [f"{h}\n{txt}" for h, txt in _split_sections(s.body or "")
@@ -226,8 +227,8 @@ def _recipe_arm_block(_tools: list[dict]) -> str:
     if arm == "forced_triage":
         names = ", ".join(f"`{h.name}`" for h in hits)
         return ("### REQUIRED before any run_python/run_r on a multi-step analysis\n"
-                f"Your task matches these recipes: {names}. You MUST `read_skill` the "
-                f"best-matching one (likely `{top.name}`) FIRST, then state in one line "
+                f"Your task matches these recipes: {names}. You MUST invoke `Skill(skill=...)` "
+                f"on the best-matching one (likely `{top.name}`) FIRST, then state in one line "
                 "which recipe you'll follow (or why none fits), and only THEN write code. "
                 "Coding a known library from memory is the top cause of wrong-API errors "
                 "here — the recipe has the correct idioms and the expected outputs.")
@@ -238,9 +239,9 @@ def _recipe_arm_block(_tools: list[dict]) -> str:
             "run_python/run_r)\n"
             "You are in a customized environment whose recipes carry the correct tool "
             "choices, parameters, and known failure modes for THIS setup — do not design "
-            "the pipeline from your pretrained priors. First `read_skill` the candidate(s) "
-            "you might use, then emit this decision record (and nothing analysis-wise until "
-            "you have):\n\n"
+            "the pipeline from your pretrained priors. First invoke `Skill(skill=…)` on the "
+            "candidate(s) you might use, then emit this decision record (and nothing "
+            "analysis-wise until you have):\n\n"
             "```\n## Recipe triage\n"
             "| recipe | use / partial / reject | why (grounded in THIS task) | section(s) I'll rely on | mismatch/risk |\n"
             "|---|---|---|---|---|\n"
@@ -350,11 +351,11 @@ _BLOCKS: tuple[_Block, ...] = (
     # Figure-style directive — clean layout, one panel by default, ggplot2 in R,
     # alpha-blending on dense scatters. Primary only (advisors don't draw figures).
     _Block("figures",      frozenset({"primary"}), None,             _md("figures.md")),
-    # Skills index — primary only, gated on read_skill so a deployment
+    # Skills index — primary only, gated on Skill so a deployment
     # that doesn't enable the tool also doesn't advertise the catalog.
-    _Block("skills",       frozenset({"primary"}), "read_skill",     _skills_index),
+    _Block("skills",       frozenset({"primary"}), "Skill",          _skills_index),
     # Recipe-uptake strategy arm (eval). Empty for control → no effect live.
-    _Block("recipe_arm",   frozenset({"primary"}), "read_skill",     _recipe_arm_block),
+    _Block("recipe_arm",   frozenset({"primary"}), "Skill",          _recipe_arm_block),
     # Memory index — primary only, gated on read_memory. Always rendered
     # for primary turns when the tool is on; the block itself returns ''
     # when no memories exist, which the assembler drops.

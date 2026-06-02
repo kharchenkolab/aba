@@ -61,6 +61,11 @@ class SkillSpec:
     source:         str = ""
     body:           str = ""
     source_path:    str = ""           # for diagnostics; not part of identity
+    # Bundled-resource paths (Phase 2 of the Skill CC-convergence refactor):
+    # files alongside SKILL.md inside a skill folder (references/, scripts/,
+    # assets/). Empty for flat .md skills. Surfaced in the Skill tool result
+    # as a "Bundled resources" appendix so the agent knows what to read_file.
+    resources:      tuple[str, ...] = ()
 
 
 _SPLIT = "---"
@@ -193,6 +198,25 @@ def read_skill(name: str) -> Optional[str]:
     return s.body if s else None
 
 
+def invoke_skill(name: str, args: str = "") -> Optional[dict]:
+    """Canonical entrypoint for the `Skill` tool (Phase 1 of CC convergence).
+
+    Returns a dict with:
+      - spec:       the SkillSpec
+      - body:       body with $ARGUMENTS substituted (empty string if args is "")
+      - resources:  list[str] of bundled-resource paths (Phase 2 populates these)
+
+    Returns None if `name` isn't registered. The Skill tool wraps this with the
+    same orchestration read_skill has (recipe-uptake tracking, requires_tools
+    check, capabilities note) — the substitution + resources are the only new
+    things here."""
+    s = _REGISTRY.get(name)
+    if s is None:
+        return None
+    body = (s.body or "").replace("$ARGUMENTS", args or "")
+    return {"spec": s, "body": body, "resources": list(s.resources)}
+
+
 # Above this many registered skills, the in-prompt index stops listing every
 # skill (that would grow unbounded as the recipe library reaches 100+) and
 # switches to a retrieval-gated top-K slice + a pointer to search_skills.
@@ -308,8 +332,8 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
         imprint stays bounded as the cookbook grows to hundreds.
 
     Anything in neither tier is discoverable remotely (search_nf_core /
-    search_mcp_registry / search_pypi). Use read_skill(name) to expand a body.
-    Returns '' when the registry is empty."""
+    search_mcp_registry / search_pypi). Use Skill(skill=name, args=…) to
+    expand a body. Returns '' when the registry is empty."""
     if not _REGISTRY:
         return ""
     q = (query or "").strip()
@@ -319,11 +343,11 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None)
 
     lines = [
         "### Skills you can reference by name",
-        "Use `read_skill(name)` to load the full procedure. **If your task matches one of "
-        "these recipes — especially anything using a specific library/tool or a multi-step "
-        "method — `read_skill` it BEFORE writing run_python/run_r code.** The recipe carries "
-        "the correct API, parameters, and gotchas; coding a known library from memory is the "
-        "top cause of wrong-API fumbles here.",
+        "Use `Skill(skill=name, args=...)` to load the full procedure. **If your task "
+        "matches one of these recipes — especially anything using a specific library/tool "
+        "or a multi-step method — invoke `Skill` on it BEFORE writing run_python/run_r "
+        "code.** The recipe carries the correct API, parameters, and gotchas; coding a "
+        "known library from memory is the top cause of wrong-API fumbles here.",
     ]
 
     if core:
