@@ -1,0 +1,85 @@
+{
+  "id": "plan_halt__scanpy_single_postread",
+  "source": "req_1780158086712.json",
+  "model": "claude-haiku-4-5-20251001",
+  "render": {
+    "role": "primary",
+    "ctx": {}
+  },
+  "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot.",
+  "target_recipe": "scrna-qc-clustering",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll start by inspecting the data and then running the standard single-cell workflow on this PBMC sample."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01Ro7t8y6CEWFwBq5FgqB8Yy",
+          "name": "list_data_files",
+          "input": {}
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01Ro7t8y6CEWFwBq5FgqB8Yy",
+          "content": "{\"files\": [{\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.barcodes.tsv.gz\", \"size_bytes\": 48237, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746268_MGI0369_1_SLAB-C1-C1.barcodes.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.features.tsv.gz\", \"size_bytes\": 333437, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746268_MGI0369_1_SLAB-C1-C1.features.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746268_MGI0369_1_SLAB-C1-C1.matrix.mtx.gz\", \"size_bytes\": 57782546, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746268_MGI0369_1_SLAB-C1-C1.matrix.mtx.gz\", \"registered\": false}, {\"filename\": \"GSM5746269_MGI0369_1_SLAB-C2-C2.barcodes.tsv.gz\", \"size_bytes\": 41858, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746269_MGI0369_1_SLAB-C2-C2.barcodes.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746269_MGI0369_1_SLAB-C2-C2.features.tsv.gz\", \"size_bytes\": 333437, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746269_MGI0369_1_SLAB-C2-C2.features.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746269_MGI0369_1_SLAB-C2-C2.matrix.mtx.gz\", \"size_bytes\": 47731587, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746269_MGI0369_1_SLAB-C2-C2.matrix.mtx.gz\", \"registered\": false}, {\"filename\": \"GSM5746270_MGI0369_1_SLAB-C4-C4.barcodes.tsv.gz\", \"size_bytes\": 44967, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746270_MGI0369_1_SLAB-C4-C4.barcodes.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746270_MGI0369_1_SLAB-C4-C4.features.tsv.gz\", \"size_bytes\": 333437, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746270_MGI0369_1_SLAB-C4-C4.features.tsv.gz\", \"registered\": false}, {\"filename\": \"GSM5746270_MGI0369_1_SLAB-C4-C4.matrix.mtx.gz\", \"size_bytes\": 48509928, \"path\": \"/tmp/aba_eval/arm_control/data/GSM5746270_MGI0369_1_SLAB-C4-C4.matrix.mtx.gz\", \"registered\": false}], \"data_dir\": \"/tmp/aba_eval/arm_control/data\", \"message\": \"Load these via the DATA_DIR variable (already defined in run_python): e.g. pd.read_csv(f'{DATA_DIR}/<filename>'). Use the listed `path` values directly \\u2014 do not hardcode other directories.\"}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Good\u2014the triplet files are present. Let me read the skill for standard scRNA-seq QC and clustering, then execute the workflow."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01MFvwHbxzvwynTmhEs5EyWy",
+          "name": "read_skill",
+          "input": {
+            "name": "scrna-qc-clustering"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01MFvwHbxzvwynTmhEs5EyWy",
+          "content": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy processing for ONE scRNA-seq sample \\u2014 QC, filtering, normalization, highly variable genes, PCA, Leiden clustering, UMAP and cluster markers. The quick end-to-end first pass on a count matrix.\", \"when_to_use\": \"You have a single scRNA-seq sample (10x mtx / h5ad / raw count matrix) and want to process it with scanpy \\u2014 basic/standard processing and a first-pass clustering (QC \\u2192 normalize \\u2192 cluster \\u2192 UMAP \\u2192 markers) before any biology. For principled MAD-based QC instead, see bp-quality-control; for FASTQ\\u2192counts see bp-raw-data-processing.\", \"requires_tools\": [\"run_python\"], \"capabilities_needed\": [\"scanpy\", \"leidenalg\"], \"produces\": [\"violin_qc.png\", \"scatter_qc.png\", \"hvg_pca.png\", \"umap_leiden.png\", \"dotplot markers png\", \"leiden_markers.csv\", \"processed.h5ad\"], \"body\": \"# scRNA-seq QC + first-pass clustering (scanpy)\\n\\nThe one canonical compact single-cell flow: load \\u2192 QC \\u2192 filter \\u2192 normalize \\u2192 HVG\\n\\u2192 PCA \\u2192 neighbors/UMAP/leiden \\u2192 markers, for **one sample**. Halt and\\n`present_plan` before running on an unfamiliar dataset \\u2014 the defaults are\\nsensible but the QC thresholds and the clustering resolution are dataset-dependent.\\n\\n## Multiple samples: keep them SEPARATE \\u2014 do NOT naively concatenate\\nSeveral samples/donors/runs are **multiple datasets, not one matrix**. `sc.concat`-ing\\nraw counts and clustering the result confounds batch with biology (the clusters\\njust separate by sample). \\\"Register them **together**\\\" = ONE dataset entity\\nspanning the per-sample files, NOT a merged matrix. Combine samples only as the\\nexplicit first step of a **batch-aware integration** (`harmony-integration`,\\n`scvi-integration`, `conos-integration`) \\u2014 never a concatenate-then-cluster\\nshortcut. One sample = this recipe; two+ jointly = an integration recipe.\\n\\n**Honor the requested scope \\u2014 don't upsell integration.** This guardrail stops\\n*naive concatenation*; it is NOT a reason to push integration. If the user asks\\nto process one sample (e.g. \\\"the second sample\\\"), run this recipe on exactly that\\nsample and stop. Other samples existing is not a cue to propose batch correction \\u2014\\nintegration is a separate, explicit request. Make the plan about the sample asked\\nfor, nothing more.\\n\\n## Plotting rules (so the figures actually show, and stay legible)\\n- **First line of the run:** `sc.settings.figdir = '.'`. Otherwise `sc.pl.*(save=\\u2026)`\\n  writes to a `figures/` subdir the harness does NOT harvest and the plots never\\n  appear. Hand-built figures: `plt.savefig('name.png', dpi=120)` into the cwd.\\n- **At most ~3 panels per figure.** Three QC violins side-by-side = fine; a dense\\n  8-panel grid with text = too much. One idea per figure.\\n- We deliberately **do not `sc.pp.scale`** \\u2014 PCA runs on log-normalized HVGs, which\\n  keeps `adata.X` log-normalized so `rank_genes_groups` and gene overlays read real\\n  expression. (Scaling X in place silently corrupts marker detection.)\\n\\n## Procedure\\n```python\\nimport scanpy as sc, matplotlib.pyplot as plt\\nsc.settings.figdir = '.'        # harvested cwd, not figures/\\n\\n# 1. Load. Files live under DATA_DIR (get the path from list_data_files; do NOT\\n#    guess WORK_DIR). Two common layouts \\u2014 pick the one that matches:\\nimport os, pandas as pd\\nD = os.environ['DATA_DIR']\\n#  (a) Standard CellRanger DIR (barcodes/features/matrix.mtx[.gz] inside it):\\n#      adata = sc.read_10x_mtx(f\\\"{D}/<sample_dir>\\\", var_names='gene_symbols')\\n#  (b) GEO LOOSE, GSM-PREFIXED triplet (\\u2026matrix.mtx.gz / \\u2026barcodes.tsv.gz /\\n#      \\u2026features.tsv.gz all sitting in one dir) \\u2014 read_10x_mtx will NOT find these\\n#      (non-standard names), so read the three parts EXPLICITLY. This is the usual\\n#      GEO supplementary layout and the #1 source of \\\"lost gene names\\\" flailing:\\npre = \\\"<GSM..._sample_prefix>\\\"                                  # the shared file prefix\\nadata = sc.read_mtx(f\\\"{D}/{pre}.matrix.mtx.gz\\\").T               # mtx is genes\\u00d7cells \\u2192 transpose\\nadata.obs_names = pd.read_csv(f\\\"{D}/{pre}.barcodes.tsv.gz\\\", header=None)[0].values\\nadata.var_names = pd.read_csv(f\\\"{D}/{pre}.features.tsv.gz\\\", header=None, sep='\\\\t')[1].values  # col 2 = symbols\\nadata.var_names_make_unique()                                  # do NOT skip \\u2014 duplicate symbols are common\\n\\n# 2. QC metrics (flag mito genes first)\\nadata.var['mt'] = adata.var_names.str.upper().str.startswith('MT-')\\nsc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)\\n\\n# 3. Pre-filter QC \\u2014 three distributions side by side, plus a counts/genes scatter\\nsc.pl.violin(adata, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'],\\n             jitter=0.4, multi_panel=True, show=False, save='_qc.png')      # violin_qc.png\\nsc.pl.scatter(adata, x='total_counts', y='n_genes_by_counts', color='pct_counts_mt',\\n              show=False, save='_qc.png')                                   # scatter_qc.png\\n\\n# 4. Filter (human PBMC defaults \\u2014 see the tissue table for others)\\nn0 = adata.n_obs\\nsc.pp.filter_cells(adata, min_genes=200)\\nsc.pp.filter_genes(adata, min_cells=3)\\nadata = adata[adata.obs.pct_counts_mt < 20].copy()\\nprint(f'cells: {n0} -> {adata.n_obs}')\\n\\n# 5. Normalize + log1p\\nsc.pp.normalize_total(adata, target_sum=1e4)\\nsc.pp.log1p(adata)\\n\\n# 6. Highly variable genes \\u2014 default flavor expects LOG data (do NOT use\\n#    flavor='seurat_v3' here; it needs raw counts)\\nsc.pp.highly_variable_genes(adata, n_top_genes=2000)\\n\\n# 7. PCA on the HVGs\\nsc.pp.pca(adata, n_comps=50, use_highly_variable=True)\\n\\n# 8. HVG selection + PCA top-components, paired in one 2-panel figure\\nfig, ax = plt.subplots(1, 2, figsize=(9, 3.8))\\nhv = adata.var['highly_variable'].values\\nax[0].scatter(adata.var['means'][~hv], adata.var['dispersions_norm'][~hv], s=3, c='#cbd5e1', label='other')\\nax[0].scatter(adata.var['means'][hv],  adata.var['dispersions_norm'][hv],  s=3, c='#0f766e', label='HVG')\\nax[0].set(xscale='log', xlabel='mean expression', ylabel='normalized dispersion',\\n          title=f'Highly variable genes (n={int(hv.sum())})')\\nax[0].legend(frameon=False, markerscale=2)\\nvr = adata.uns['pca']['variance_ratio']\\nax[1].plot(range(1, len(vr) + 1), vr, 'o-', ms=3, c='#0f766e')\\nax[1].set(xlabel='principal component', ylabel='variance ratio', title='PCA \\u2014 top components')\\nfig.tight_layout(); fig.savefig('hvg_pca.png', dpi=120); plt.close(fig)\\n\\n# 9. Neighbors + UMAP + Leiden \\u2014 ONE resolution (no multi-resolution sweep)\\nsc.pp.neighbors(adata, n_neighbors=15, n_pcs=30)\\nsc.tl.umap(adata)\\nsc.tl.leiden(adata, resolution=0.5)\\n\\n# 10. UMAP by cluster. legend_loc='on data' prints each cluster label ON the\\n#     plot \\u2014 the robust way to show the cluster legend (a right-margin legend\\n#     with many clusters gets clipped when the figure is saved).\\nsc.pl.umap(adata, color='leiden', legend_loc='on data', frameon=False,\\n           title='Leiden clusters', show=False, save='_leiden.png')        # umap_leiden.png\\n\\n# 11. Markers per cluster \\u2014 table + a COMPACT dotplot (not a dense heatmap)\\nsc.tl.rank_genes_groups(adata, 'leiden', method='wilcoxon')\\nsc.get.rank_genes_groups_df(adata, group=None).to_csv('leiden_markers.csv', index=False)\\nsc.pl.rank_genes_groups_dotplot(adata, n_genes=5, show=False, save='_markers.png')\\n\\n# 12. Save the processed object for downstream work\\nadata.write('processed.h5ad')\\n```\\n\\n## Outputs\\n- `violin_qc.png` \\u2014 n_genes / total_counts / pct_mt distributions (3 panels)\\n- `scatter_qc.png` \\u2014 counts vs genes, coloured by mito %\\n- `hvg_pca.png` \\u2014 HVG selection + PCA variance per component, side by side\\n- `umap_leiden.png` \\u2014 UMAP coloured by Leiden cluster (labels on the clusters)\\n- dotplot of top markers (`dotplot_*.png`) + `leiden_markers.csv`\\n- `processed.h5ad` \\u2014 the processed AnnData, ready for annotation / DE / etc.\\n\\n## Common adjustments\\n- **Mitochondrial %** \\u2014 20 % is a fresh-tissue default; frozen tissue \\u2192 ~10 %. Ask.\\n- **Resolution** \\u2014 one value (0.5 = moderate); 0.2\\u20130.3 coarser, 0.8\\u20131.2 finer.\\n  Pick one for the first pass; don't sweep resolutions unless the user asks.\\n- **HVG count** \\u2014 2000 is standard; drop to 1000 if memory-constrained.\\n\\n## Suggested thresholds by tissue\\n- Human PBMC: pct_mt < 20 %, n_genes \\u2208 [200, 2500]\\n- Mouse PBMC: pct_mt < 10 %, n_genes \\u2208 [200, 4000]\\n- Tumor (heterogeneous): pct_mt < 25 %, broader n_genes range\\n\\n## \\\"What if we tighten QC?\\\"\\nThat's a scenario \\u2014 use the `create_scenario_variant` flow: take the producing\\ncode, change the threshold, re-run. The new artifacts edge back to the baseline\\n(`variantOf`) and the Compare toggle flips between the two.\", \"note\": \"This skill uses these capabilities: scanpy, leidenalg. Call ensure_capability(name) for any not already available before run_python.\"}"
+        }
+      ]
+    }
+  ],
+  "behaviors": [
+    "plans",
+    "no_premature_code",
+    "reads_then_plans_then_stops",
+    "recipe_following",
+    "recipe_following_strict"
+  ],
+  "env_stubs": {
+    "read_skill": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy processing for ONE scRNA-seq sample.\", \"body\": \"scRNA-seq QC + first-pass clustering (scanpy). Halt and present_plan before running on an unfamiliar dataset \\u2014 the QC thresholds and the clustering resolution are dataset-dependent. Steps: sc.read_10x_mtx; calculate_qc_metrics; filter cells (n_genes>=200) & genes; filter pct_counts_mt; normalize_total(target_sum=1e4)+log1p; highly_variable_genes; scale; pca; neighbors; leiden; umap; rank_genes_groups (wilcoxon) for markers. Plots: QC violin, HVG, UMAP colored by leiden, marker dotplot.\"}",
+    "search_skills": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
+  }
+}

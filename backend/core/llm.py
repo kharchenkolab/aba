@@ -55,21 +55,27 @@ class _RealStream:
     """Adapter around anthropic's ASYNC streaming context manager — guide.py
     consumes it with `async with` + `async for`, so the event loop stays
     responsive to other HTTP requests while the LLM is generating."""
-    def __init__(self, client, history, tools, system: str, model: str):
+    def __init__(self, client, history, tools, system: str, model: str,
+                 dynamic_system: str = ""):
         self._client = client
         self._history = history
         self._tools = tools
         self._system = system
+        # CC-convergence Phase 4 (cache split): per-turn-dynamic system tail
+        # (BM25 recipes catalog). Sent as its own block AFTER the cached prefix
+        # so per-intent catalog changes don't bust the system-prefix cache.
+        self._dynamic_system = dynamic_system or ""
         self._model = model
         self._cm = None
         self._stream = None
 
     async def __aenter__(self):
-        # Prompt caching: mark the large static prefix (system + tools) and the
-        # conversation prefix so repeated turns re-read them cheaply instead of
-        # re-charging full input each time. Up to 4 breakpoints; we use 3.
+        # Prompt caching: stable prefix (cache_control) + dynamic tail (no cache).
+        # Up to 4 breakpoints total: stable system, tools, last-message — 3 used.
         system = [{"type": "text", "text": self._system,
                    "cache_control": {"type": "ephemeral"}}]
+        if self._dynamic_system:
+            system.append({"type": "text", "text": self._dynamic_system})
         # oauth_cc credential mode: the server gates non-Haiku models on OAuth by
         # checking that the first system block is byte-exactly this Claude Code
         # marker. Without it, OAuth+Sonnet/Opus returns 429. Marker MUST be first,
@@ -99,7 +105,9 @@ class _RealStream:
             try:
                 _os.makedirs(_rawdir, exist_ok=True)
                 _payload = {"model": self._model, "max_tokens": 4096,
-                            "system": self._system, "tools": self._tools, "messages": messages}
+                            "system": (self._system + ("\n\n" + self._dynamic_system
+                                                       if self._dynamic_system else "")),
+                            "tools": self._tools, "messages": messages}
                 _ts = int(_time.time() * 1000)
                 _fn = _os.path.join(_rawdir, f"req_{_ts}.json")
                 with open(_fn, "w") as _f:
@@ -114,10 +122,12 @@ class _RealStream:
                     sort_keys=True, default=str,
                 ).encode("utf-8")
                 _hist_sha = _hashlib.sha256(_canon).hexdigest()[:12]
-                _sys_sha = _hashlib.sha256((self._system or "").encode("utf-8")).hexdigest()[:12]
+                _full_sys = (self._system or "") + (self._dynamic_system or "")
+                _sys_sha = _hashlib.sha256(_full_sys.encode("utf-8")).hexdigest()[:12]
                 print(f"[llm-sent] model={self._model} sys_sha={_sys_sha} "
                       f"hist_sha={_hist_sha} n_msgs={len(messages)} "
-                      f"sys_chars={len(self._system or '')} -> {_fn}",
+                      f"sys_chars={len(_full_sys)}"
+                      f" (stable={len(self._system or '')}+dyn={len(self._dynamic_system or '')}) -> {_fn}",
                       flush=True)
             except Exception:  # noqa: BLE001 — debug dump must never break a turn
                 pass
@@ -222,8 +232,10 @@ def _real_factory():
         note = " (.env API key)"
     print(f"[llm] live-agent credential mode={mode}{note}", flush=True)
 
-    def open_stream(history, tools, system: str = "", model: str | None = None):
-        return _RealStream(_llm_client(), history, tools, system, model or MODEL)
+    def open_stream(history, tools, system: str = "", model: str | None = None,
+                    dynamic_system: str = ""):
+        return _RealStream(_llm_client(), history, tools, system, model or MODEL,
+                           dynamic_system=dynamic_system)
     return open_stream
 
 
@@ -307,7 +319,8 @@ def _fake_factory(path: Path):
         turns.append(json.loads(line))
     cursor = {"i": 0}
 
-    def open_stream(history, tools, system: str = "", model: str | None = None):  # noqa: ARG001
+    def open_stream(history, tools, system: str = "", model: str | None = None,
+                    dynamic_system: str = ""):  # noqa: ARG001
         i = cursor["i"]
         if i >= len(turns):
             # Stream ran out — emit a polite final turn so the loop terminates.

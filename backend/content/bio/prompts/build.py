@@ -95,6 +95,13 @@ class _Block:
     required_tool: Optional[str]
     render:        Callable[[list[dict]], str]
     gate:          Optional[Callable[[dict], bool]] = None
+    # CC-convergence Phase 4 (cache split): blocks marked dynamic=True render
+    # INTO THE SECOND SYSTEM CACHE BLOCK — uncached. Everything else is in the
+    # cached prefix. The only block that genuinely varies per turn at intent
+    # granularity is the BM25 recipes slice, so we split there. Stable prefix
+    # caches across the whole session; dynamic tail is small (~3-4K) and cheap
+    # to recompute. See open_stream in core/llm.py for the wire-format split.
+    dynamic:       bool = False
 
 
 def _md(name: str) -> Callable[[list[dict]], str]:
@@ -121,17 +128,20 @@ def _conventions(_tools: list[dict]) -> str:
     return _CONVENTIONS_ESSENTIALS
 
 
-def _skills_index(_tools: list[dict]) -> str:
-    """B2: in-system-prompt skills index. Renders both Core (always-on) and the
-    relevance-gated Recipes slice — the model has a strong learned prior for
-    finding the catalog in the system prompt, and dropping the Recipes slice
-    out of it broke recipe selection on n=4 (seurat target rate 1.0→0.25,
-    2026-06-02). The Phase 4 system-reminder injected on the latest user
-    message (see build_recipes_reminder) reinforces the same recipes — the two
-    paths are deliberately duplicative until we have stronger evidence the
-    model can find the catalog in the reminder alone."""
+def _skills_index_core(_tools: list[dict]) -> str:
+    """Core skills slice — always-on operating + strategy skills. Stable across
+    turns (the registered Core set doesn't change at user-message granularity),
+    so this lives in the cached system prefix."""
     from core.skills import skills_index_block
-    return skills_index_block(query=_INTENT.get(""), tier="all")
+    return skills_index_block(query=_INTENT.get(""), tier="core")
+
+
+def _skills_index_recipes(_tools: list[dict]) -> str:
+    """Recipes slice — BM25-ranked top-K relevant to this turn's intent. The
+    only genuinely per-turn-dynamic system content; lives in the uncached tail
+    block so per-intent catalog changes don't bust the system-prefix cache."""
+    from core.skills import skills_index_block
+    return skills_index_block(query=_INTENT.get(""), tier="recipes")
 
 
 def build_recipes_reminder(intent: str = "", ctx: Optional[dict] = None) -> str:
@@ -365,9 +375,10 @@ _BLOCKS: tuple[_Block, ...] = (
     # Figure-style directive — clean layout, one panel by default, ggplot2 in R,
     # alpha-blending on dense scatters. Primary only (advisors don't draw figures).
     _Block("figures",      frozenset({"primary"}), None,             _md("figures.md")),
-    # Skills index — primary only, gated on Skill so a deployment
-    # that doesn't enable the tool also doesn't advertise the catalog.
-    _Block("skills",       frozenset({"primary"}), "Skill",          _skills_index),
+    # Skills index, Core tier — always-on, stable. Cached with the rest of the
+    # system prefix. Renders the leading "### Skills you can reference..." prose
+    # + the Core skills bullets.
+    _Block("skills_core",  frozenset({"primary"}), "Skill",          _skills_index_core),
     # Recipe-uptake strategy arm (eval). Empty for control → no effect live.
     _Block("recipe_arm",   frozenset({"primary"}), "Skill",          _recipe_arm_block),
     # Memory index — primary only, gated on read_memory. Always rendered
@@ -384,31 +395,41 @@ _BLOCKS: tuple[_Block, ...] = (
     # Renders only when the agent has populated >=1 step.skill on present_plan.
     _Block("declared_recipes", frozenset({"primary"}), "present_plan",
            _declared_recipes_block, gate=_has_declared_recipes),
+    # Recipes catalog — BM25-ranked, varies per intent. Marked dynamic=True so
+    # build_system emits it as the SECOND (uncached) system block. Everything
+    # above is the stable, cached prefix.
+    _Block("skills_recipes", frozenset({"primary"}), "Skill",
+           _skills_index_recipes, dynamic=True),
 )
 
 
 def build_system(active_tools: list[dict], role: str = "primary", intent: str = "",
-                 ctx: Optional[dict] = None) -> str:
-    """Assemble a role-appropriate system prompt for this turn.
+                 ctx: Optional[dict] = None) -> tuple[str, str]:
+    """Assemble a role-appropriate system prompt as TWO cache blocks
+    (CC-convergence Phase 4 cache split):
 
-    role defaults to "primary" (the Guide). Advisor roles (e.g.
-    "skeptic", "methodologist") get a trimmed prompt — no recipes,
-    no scenarios, no plan_first, and no capabilities listing when
-    they have no tools.
+      • (stable, dynamic)
+      • stable: identity, behavior, capabilities, plan rules, tool descriptions,
+        Core skills, declared-recipes, etc. Stable across turns within a session →
+        caches with `cache_control: ephemeral` on the API side.
+      • dynamic: the BM25 recipes catalog only. Varies per intent (the relevant
+        top-K can shift turn-to-turn). NOT cached.
 
-    `intent` (the user's message for this turn) feeds the retrieval-gated
-    skills index so a large recipe library surfaces only the relevant slice.
+    role defaults to "primary" (the Guide). Advisor roles get a trimmed prompt.
 
-    `ctx` carries per-turn signals for gated blocks — currently
-    `focus_is_figure` and `highlight_active` — so blocks that only matter when
-    the user is acting on a figure (scenarios, highlighting) aren't injected on
-    every turn. Missing/empty ctx → those gated blocks simply don't render."""
+    `intent` feeds the retrieval-gated skills index. `ctx` carries per-turn
+    signals for gated blocks. Missing/empty ctx → gated blocks just don't render.
+
+    Backward-compat: legacy callers that did `system = build_system(...)` (one
+    string) now get a tuple; either join it with "\\n\\n" or pass both to the
+    transport layer as a 2-block system."""
     token = _INTENT.set(intent or "")
     ctx = ctx or {}
     tid_token = _THREAD_ID.set(str(ctx.get("thread_id") or ""))
     try:
         names = {t["name"] for t in active_tools}
-        parts: list[str] = []
+        stable_parts: list[str] = []
+        dynamic_parts: list[str] = []
         for blk in _BLOCKS:
             if blk.roles is not None and role not in blk.roles:
                 continue
@@ -417,9 +438,10 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
             if blk.gate is not None and not blk.gate(ctx):
                 continue
             text = blk.render(active_tools)
-            if text:
-                parts.append(text)
-        return "\n\n".join(parts)
+            if not text:
+                continue
+            (dynamic_parts if blk.dynamic else stable_parts).append(text)
+        return "\n\n".join(stable_parts), "\n\n".join(dynamic_parts)
     finally:
         _INTENT.reset(token)
         _THREAD_ID.reset(tid_token)

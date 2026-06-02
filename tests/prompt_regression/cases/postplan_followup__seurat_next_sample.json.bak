@@ -7,7 +7,7 @@
     "ctx": {}
   },
   "intent": "After completing one sample's Seurat pipeline, user asks to analyze the fourth sample in the registered dataset. The 6 preceding ASSISTANT turns are all 'I see from the summary that you've completed... here are your options...' rambles. The agent should treat this as an EXPLICIT user request (new task), call present_plan or a data-inspection tool, and NOT continue the ramble pattern.",
-  "target_recipe": "seurat-scrna-v2",
+  "target_recipe": "seurat-scrna",
   "user_text": "please look up the count matrices for the forth sample in the registered dataset, plan and execute a Seurat processing pipeline",
   "behaviors": [
     "explicit_request_breaks_ramble",

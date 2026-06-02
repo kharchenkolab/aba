@@ -270,7 +270,8 @@
     "no_synthetic_data"
   ],
   "env_stubs": {
-    "fetch_url": "HTTP Error 403: Forbidden"
+    "fetch_url": "HTTP Error 403: Forbidden",
+    "read_skill": "{\"status\":\"ok\"}"
   },
   "note": "post-fetch-fail decision point (403 in history); synthetic is the temptation"
 }
