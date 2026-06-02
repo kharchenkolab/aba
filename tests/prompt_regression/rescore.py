@@ -29,8 +29,8 @@ def _reconstruct_trace(rec: dict) -> dict:
             if b.get("type") != "tool_use": continue
             name = b.get("name", "")
             inp = b.get("input") or {}
-            if name in ("read_skill", "search_skills"):
-                reads.append(inp.get("name") or inp.get("query") or "")
+            if name in ("Skill", "read_skill", "search_skills"):
+                reads.append(inp.get("skill") or inp.get("name") or inp.get("query") or "")
             if name in ("run_python", "run_r"):
                 cc = inp.get("code", "") or ""
                 if cc: code_chunks.append(cc)
@@ -49,7 +49,7 @@ def _reconstruct_trace(rec: dict) -> dict:
     return {
         "outcome": outcome, "code": code, "reads": reads, "steps": steps_kinds,
         "declared_recipes": declared,
-        "read_step": first_idx(lambda s: any(n in ("read_skill", "search_skills") for n in s)),
+        "read_step": first_idx(lambda s: any(n in ("Skill", "read_skill", "search_skills") for n in s)),
         "plan_step": first_idx(lambda s: "present_plan" in s),
         "code_step": first_idx(lambda s: any(n in ("run_python", "run_r") for n in s)),
         # for non-deterministic-tracked behaviors we'd need the case below; supplied per-case

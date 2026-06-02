@@ -17,7 +17,7 @@ path that already exists.
 ## Discover first — do NOT hand-roll
 Before writing code to fetch external data or drive a library you don't already
 have loaded:
-1. **Is there a recipe?** `search_skills(<intent>)` → `read_skill`. For a public
+1. **Is there a recipe?** `search_skills(<intent>)` → `Skill(skill=...)`. For a public
    database (GEO/SRA/ENA/ArrayExpress/…) there's almost always one. Follow it.
 2. **Find the maintained package.** `search_pypi` / `search_bioconda` /
    `list_capabilities` (e.g. GEO → `GEOparse`; SRA → `pysradb`/`sra-tools`) →

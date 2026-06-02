@@ -313,20 +313,52 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "Skill",
+        "description": (
+            "Execute a skill within the main conversation.\n\n"
+            "When users ask you to perform tasks, check if any of the available skills match. "
+            "Skills provide specialized capabilities and domain knowledge.\n\n"
+            "How to invoke:\n"
+            "- Set `skill` to the exact name of an available skill (no leading slash).\n"
+            "- Set `args` to pass optional arguments (the skill body may interpolate `$ARGUMENTS`).\n\n"
+            "Important:\n"
+            "- Available skills are listed in the skills index in your system prompt (and may also "
+            "appear in system-reminder messages later).\n"
+            "- Only invoke a skill that appears in that list. Do not guess or invent skill names.\n"
+            "- This loads the skill's full procedure body — call it whenever you've decided to use "
+            "a skill and need its step-by-step details. Returns the body plus the capabilities the "
+            "skill needs, with `$ARGUMENTS` substituted from `args`."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "The name of a skill from the skills index, e.g. 'scrna-qc-clustering'. Do not guess names.",
+                },
+                "args": {
+                    "type": "string",
+                    "description": "Optional arguments for the skill (interpolated into $ARGUMENTS in the body).",
+                },
+            },
+            "required": ["skill"],
+        },
+    },
+    {
+        # Legacy alias for `Skill` — kept for one release of the CC-convergence
+        # refactor so a model that emits the old name still gets the procedure.
+        # Drop after live validation confirms `Skill` is consistently used.
         "name": "read_skill",
         "description": (
-            "Load the full body (procedure / recipe) of a registered skill by name. "
-            "The system prompt shows you a one-line description for each skill — call "
-            "this when you've decided to use one and need the step-by-step details. "
-            "Returns the markdown body plus the capabilities the skill needs, or an "
-            "error if the name isn't registered."
+            "Deprecated — use `Skill` instead. Loads the full body of a registered "
+            "skill by name."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Skill name as shown in the skills index, e.g. 'scrna-qc-clustering'.",
+                    "description": "Skill name, e.g. 'scrna-qc-clustering'.",
                 },
             },
             "required": ["name"],
@@ -340,8 +372,8 @@ TOOL_SCHEMAS = [
             "a relevant slice of a larger library. Search by what you want to do "
             "('differential expression', 'cluster single-cell data', 'call "
             "variants'), not by exact name. Returns ranked skills with their "
-            "descriptions and the capabilities each needs; follow with read_skill "
-            "to load one."
+            "descriptions and the capabilities each needs; follow with "
+            "`Skill(skill=name)` to load one."
         ),
         "input_schema": {
             "type": "object",
@@ -422,7 +454,7 @@ TOOL_SCHEMAS = [
             "returns its exported symbols + function signatures (Python) or exports "
             "+ vignettes + R6 methods (R), and optional detail on one function/class. "
             "The package must already be importable (ensure_capability first). Use "
-            "this — and read_skill/the tool's docs — instead of guessing API names."
+            "this — and Skill/the tool's docs — instead of guessing API names."
         ),
         "input_schema": {
             "type": "object",
@@ -1012,17 +1044,19 @@ TOOL_SCHEMAS = [
     {
         "name": "read_file",
         "description": (
-            "Read a text file from the project sandbox — your own writes, files "
-            "in this run's cwd, prior-run artifacts, or thread-scratch. Prefer "
-            "this over `run_python({\"code\":\"open(path).read()\"})` for plain "
-            "reads. Use `offset` + `limit` (1-based line range) for large files "
-            "to avoid shoveling the whole body through the model — e.g. "
-            "`read_file(path='big.fastq.gz', limit=20)` peeks at the first 20 "
-            "lines without loading the rest. Transparently decompresses .gz / "
-            ".bz2 / .xz so you can peek at text-in-container formats (FASTQ, "
-            "GTF.gz, VCF.gz, etc.) directly. For genuinely binary files (BAM, "
-            "BCF, .h5ad, .rds, images), use `run_python` / `run_r` with the "
-            "right loader."
+            "Read a text file. Reads from anywhere the server process has "
+            "access to — your own writes in this project, prior-run artifacts, "
+            "thread-scratch, AND global skills/recipes, shared references, "
+            "system files (no project sandbox on reads, only on writes). "
+            "Prefer this over `run_python({\"code\":\"open(path).read()\"})` "
+            "for plain reads. Use `offset` + `limit` (1-based line range) for "
+            "large files to avoid shoveling the whole body through the model "
+            "— e.g. `read_file(path='big.fastq.gz', limit=20)` peeks at the "
+            "first 20 lines without loading the rest. Transparently "
+            "decompresses .gz / .bz2 / .xz so you can peek at text-in-container "
+            "formats (FASTQ, GTF.gz, VCF.gz, etc.) directly. For genuinely "
+            "binary files (BAM, BCF, .h5ad, .rds, images), use `run_python` / "
+            "`run_r` with the right loader."
         ),
         "input_schema": {
             "type": "object",
@@ -1948,41 +1982,37 @@ def write_memory_tool(input_: dict) -> dict:
     return {"status": "ok", "name": e.name, "type": e.type, "description": e.description}
 
 
-def read_skill(input_: dict, ctx: dict | None = None) -> dict:
-    """Return the body of a registered skill, or an error if absent.
-
-    #5 — Skill-to-tool linkage: if the skill declares `requires_tools` in
-    its frontmatter and any of those aren't currently active for this
-    turn, return a structured error so the model knows to either pick a
-    different approach or ask the user to enable the missing tools.
-    Linkage check is skipped when ctx is absent (legacy callers / tests
-    without dispatch ctx).
+def _invoke_skill_core(name: str, args: str, ctx: dict | None,
+                       *, tool_label: str) -> dict:
+    """Shared orchestration for the canonical `Skill` tool and the legacy
+    `read_skill` alias. Performs recipe-uptake tracking, requires_tools check,
+    capabilities-needed note, and $ARGUMENTS substitution. tool_label is the
+    name used in error messages so the agent sees the same tool it called.
     """
-    from core.skills import get_skill
-    name = (input_.get("name") or "").strip() if isinstance(input_, dict) else ""
+    from core.skills import invoke_skill as _invoke
+    name = (name or "").strip()
     if not name:
-        return {"status": "error", "note": "read_skill needs a non-empty `name`."}
-    spec = get_skill(name)
-    if spec is None:
+        return {"status": "error", "note": f"{tool_label} needs a non-empty skill name."}
+    inv = _invoke(name, args or "")
+    if inv is None:
         from core.skills import list_skills
         avail = [s.name for s in list_skills()]
         return {
             "status": "unknown_skill",
             "note": f"No skill named {name!r}. Available: {', '.join(avail) or '(none)'}.",
         }
+    spec = inv["spec"]
 
     # Record that this recipe was read this turn, so the run_python/run_r
     # recipe-uptake nudge doesn't remind the agent to read what it already read.
     rc = ctx.get("recipe_ctx") if isinstance(ctx, dict) else None
     if isinstance(rc, dict):
         rc.setdefault("read", set()).add(spec.name)
-    _tid = str((ctx or {}).get("thread_id") or "")     # also persist per-thread so the uptake
-    if _tid:                                            # nudge credits a recipe read in a PRIOR turn
+    _tid = str((ctx or {}).get("thread_id") or "")
+    if _tid:
         _THREAD_READ_SKILLS.setdefault(_tid, set()).add(spec.name)
 
-    # #5 — surface missing required tools BEFORE returning the body. The
-    # model gets a clear "you can't use this skill as-is" signal instead
-    # of reading the body and then having a tool call fail.
+    # Surface missing required tools BEFORE returning the body.
     missing: list[str] = []
     if ctx and spec.requires_tools:
         active = {t.get("name") for t in (ctx.get("active_tools") or [])}
@@ -1999,9 +2029,12 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
             ),
         }
 
-    # Skill→capability funnel: the skill names the catalog capabilities it
-    # uses; tell the agent which aren't ready yet so it can ensure_capability
-    # them before run_python (rather than hitting an ImportError mid-run).
+    body = inv["body"]
+    if inv["resources"]:
+        body = (body.rstrip()
+                + "\n\n--- Bundled resources (use read_file to load on demand) ---\n"
+                + "\n".join(inv["resources"]))
+
     out = {
         "status": "ok",
         "name": spec.name,
@@ -2010,7 +2043,8 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
         "requires_tools": list(spec.requires_tools),
         "capabilities_needed": list(spec.capabilities_needed),
         "produces": list(spec.produces),
-        "body": spec.body,
+        "resources": list(inv["resources"]),
+        "body": body,
     }
     if spec.capabilities_needed:
         out["note"] = (
@@ -2019,6 +2053,27 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
             "Call ensure_capability(name) for any not already available before run_python."
         )
     return out
+
+
+def skill_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Canonical Skill envelope (CC-convergence Phase 1). Loads the skill's
+    SKILL.md body with `$ARGUMENTS` substituted from `args`, and includes a
+    list of bundled resources the agent can read_file on demand."""
+    if not isinstance(input_, dict):
+        input_ = {}
+    name = input_.get("skill") or input_.get("name") or ""
+    args = input_.get("args") or ""
+    return _invoke_skill_core(name, args, ctx, tool_label="Skill")
+
+
+def read_skill(input_: dict, ctx: dict | None = None) -> dict:
+    """Deprecated alias for `Skill` (no $ARGUMENTS substitution since the
+    legacy tool has no `args` field). Kept for one release of CC-convergence
+    Phase 1 so a model that falls back to the old name still works."""
+    if not isinstance(input_, dict):
+        input_ = {}
+    name = input_.get("name") or input_.get("skill") or ""
+    return _invoke_skill_core(name, "", ctx, tool_label="read_skill")
 
 
 def ask_clarification(input_: dict) -> dict:
@@ -2818,7 +2873,7 @@ def lookup_sra_runinfo(input_: dict, ctx: dict | None = None) -> dict:
                          "run/study accessions (SRR/SRP/ERR/PRJNA…) and can't list a "
                          "GEO study's samples or metadata. To list samples / fetch "
                          "processed matrices, call search_skills('fetch GEO data') and "
-                         "read_skill('fetch-geo-processed-matrices'). To get raw reads, "
+                         "Skill(skill='fetch-geo-processed-matrices'). To get raw reads, "
                          "first resolve the GEO accession to an SRA study with the "
                          "fetch-sequencing-fastq recipe (pysradb), then call this tool "
                          "with the resulting SRP/SRR.")}
@@ -3610,10 +3665,21 @@ _FILE_TOOL_MAX_READ_LINES = 5000          # read_file line cap
 
 
 def _resolve_project_path(path_str: str, ctx: dict | None,
-                          must_exist: bool = False) -> tuple[str, str | None]:
+                          must_exist: bool = False,
+                          enforce_sandbox: bool = True) -> tuple[str, str | None]:
     """Resolve a file path for write_file / edit_file / read_file.
-    Returns (abspath, error_or_None). Sandboxes to the current project's
-    WORK_DIR/<pid>/ or DATA_DIR/<pid>/ — paths outside those are refused."""
+    Returns (abspath, error_or_None).
+
+    With `enforce_sandbox=True` (default — write_file / edit_file): refuses paths
+    outside this project's WORK_DIR/<pid>/ or DATA_DIR/<pid>/. Modifications
+    have to stay inside the project the agent is working in, so a stray
+    `/etc/passwd` write or stomping on another project's data is impossible.
+
+    With `enforce_sandbox=False` (read_file): no sandbox — read anything the
+    server process has filesystem access to. Lets the agent inspect global
+    skills/recipes, log files, shared references, etc. without a round-trip
+    through run_python. Reads are inherently safe; the only risk is the agent
+    being misled by content it didn't ask for, which is its own problem."""
     from core import projects
     from core.config import project_work_dir, project_data_dir
     if not isinstance(path_str, str) or not path_str.strip():
@@ -3648,19 +3714,20 @@ def _resolve_project_path(path_str: str, ctx: dict | None,
     else:
         p = p.resolve()
 
-    # Sandbox: must be under work_root or data_root for THIS project.
-    try:
-        is_work = p.is_relative_to(work_root)
-        is_data = p.is_relative_to(data_root)
-    except AttributeError:
-        # py<3.9 fallback (shouldn't apply — server is on 3.12).
-        s = str(p)
-        is_work = s.startswith(str(work_root) + os.sep) or s == str(work_root)
-        is_data = s.startswith(str(data_root) + os.sep) or s == str(data_root)
-    if not (is_work or is_data):
-        return "", (f"path is outside the project sandbox; allowed roots: "
-                    f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
-                    f"Got: {p}")
+    if enforce_sandbox:
+        # Sandbox: must be under work_root or data_root for THIS project.
+        try:
+            is_work = p.is_relative_to(work_root)
+            is_data = p.is_relative_to(data_root)
+        except AttributeError:
+            # py<3.9 fallback (shouldn't apply — server is on 3.12).
+            s = str(p)
+            is_work = s.startswith(str(work_root) + os.sep) or s == str(work_root)
+            is_data = s.startswith(str(data_root) + os.sep) or s == str(data_root)
+        if not (is_work or is_data):
+            return "", (f"path is outside the project sandbox; allowed roots: "
+                        f"{work_root} (WORK_DIR) and {data_root} (DATA_DIR). "
+                        f"Got: {p}")
     if must_exist and not p.exists():
         return "", f"file not found: {p}"
     return str(p), None
@@ -3767,7 +3834,8 @@ def read_file_tool(input_: dict, ctx: dict | None = None) -> dict:
     if limit is not None and limit <= 0:
         return {"error": "limit must be a positive integer"}
     cap = min(limit, _FILE_TOOL_MAX_READ_LINES) if limit is not None else _FILE_TOOL_MAX_READ_LINES
-    abspath, err = _resolve_project_path(input_.get("path") or "", ctx, must_exist=True)
+    abspath, err = _resolve_project_path(input_.get("path") or "", ctx,
+                                          must_exist=True, enforce_sandbox=False)
     if err:
         return {"error": err}
     p = Path(abspath)
@@ -3821,6 +3889,7 @@ EXECUTORS = {
     "create_scenario": create_scenario,
     "present_plan": present_plan,
     "ask_clarification": ask_clarification,
+    "Skill": skill_tool,
     "read_skill": read_skill,
     "search_skills": search_skills_tool,
     "read_memory": read_memory_tool,
@@ -3983,8 +4052,9 @@ def _recipe_uptake_hint(name: str, input_: dict, result: dict, ctx: dict | None)
     result["recipe_hint"] = (
         f"There {'is a recipe' if len(recs) == 1 else 'are recipes'} for "
         f"{', '.join(libs)} you have not read yet: {', '.join('`'+r+'`' for r in recs)}. "
-        "read_skill it before coding from memory — it carries the correct API, "
-        "design/contrast idioms, and gotchas. (Ignore if your code is already correct.)"
+        "Invoke `Skill(skill=...)` on it before coding from memory — it carries the "
+        "correct API, design/contrast idioms, and gotchas. (Ignore if your code is "
+        "already correct.)"
     )
 
 

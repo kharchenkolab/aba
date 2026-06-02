@@ -132,6 +132,11 @@ def render_system(case: dict, variant: dict) -> tuple[str, list]:
 
 def _stub(name: str, env_stubs: dict) -> str:
     v = env_stubs.get(name)
+    # CC-convergence Phase 1: cases captured before Skill replaced read_skill key
+    # their stubs under "read_skill". When the agent now calls `Skill`, fall back
+    # to the legacy key so historical stubs keep serving the same body.
+    if v is None and name == "Skill":
+        v = env_stubs.get("read_skill")
     if v is None:
         return '{"status":"ok"}'
     return v if isinstance(v, str) else json.dumps(v)
@@ -251,8 +256,10 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
         steps.append(names)
         traj.append({"role": "assistant", "blocks": _ser_blocks(r.content)})
         for b in tu:
-            if b.name in ("read_skill", "search_skills"):
-                reads.append(b.input.get("name") or b.input.get("query"))
+            if b.name in ("Skill", "read_skill", "search_skills"):
+                # `Skill` carries the skill name in input.skill; the legacy
+                # `read_skill` alias uses input.name; search_skills uses input.query.
+                reads.append(b.input.get("skill") or b.input.get("name") or b.input.get("query"))
             if b.name in ("run_python", "run_r"):
                 cc = b.input.get("code", "") or ""
                 if cc: code_chunks.append(cc)
@@ -331,7 +338,7 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
     return {
         "steps": steps, "reads": reads, "outcome": outcome, "code": code, "traj": traj,
         "declared_recipes": declared,
-        "read_step": first(lambda s: any(n in ("read_skill", "search_skills") for n in s)),
+        "read_step": first(lambda s: any(n in ("Skill", "read_skill", "search_skills") for n in s)),
         "plan_step": first(lambda s: "present_plan" in s),
         "code_step": first(lambda s: any(n in ("run_python", "run_r") for n in s)),
         "usage": {"in": u_in, "out": u_out, "cache_read": u_cr, "cache_write": u_cw},
@@ -431,7 +438,16 @@ def recipe_apis_used(code: str, recipe: str) -> dict:
 # Behaviour predicates over a rollout trace + the case. Deterministic, tool-call based.
 def _read_target(t, c):
     tgt = c.get("target_recipe")
-    return any(r == tgt for r in t["reads"]) if tgt else (t["read_step"] is not None)
+    if not tgt:
+        return t["read_step"] is not None
+    # Recipes versioned with a `-v<digit>+` suffix (e.g. scrna-qc-clustering →
+    # scrna-qc-clustering-v2) are the same recipe for scoring purposes. Match
+    # base-name so cases survive in-place rename to a later version.
+    import re as _re
+    def base(n: str) -> str:
+        return _re.sub(r"-v\d+$", "", n or "")
+    tgt_b = base(tgt)
+    return any(base(r) == tgt_b for r in t["reads"])
 
 BEHAVIORS = {
     "reads_recipe":               lambda t, c: t["read_step"] is not None,

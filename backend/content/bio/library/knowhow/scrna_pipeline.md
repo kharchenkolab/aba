@@ -1,7 +1,7 @@
 # scRNA-seq — principles + where the canonical flow lives
 
 The executable single-cell QC + first-pass clustering pipeline is the
-**`scrna-qc-clustering`** recipe (find it with `search_skills` / `read_skill`).
+**`scrna-qc-clustering`** recipe (find it with `search_skills` / `Skill(skill=...)`).
 That is the ONE canonical flow — load → QC → filter → normalize → HVG → PCA →
 UMAP → leiden → markers, with the plots interleaved. Use it for a single sample;
 do not re-derive the steps here.
