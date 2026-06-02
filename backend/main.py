@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -2544,6 +2544,33 @@ def files_download_zip(path: str = ""):
     node = find_node(tree, path)
     if node is None:
         raise HTTPException(404, f"no node at {path!r}")
+
+    # Single file → stream it directly. (Earlier behavior zipped a one-file
+    # download with an empty arcname → corrupt .zip. PK 2026-06-02: tried to
+    # download seurat_scrna_v2_draft.md from the Files tab, got an invalid
+    # zip back.) Real on-disk files use FileResponse so the browser gets the
+    # right MIME + filename; synthesized text nodes (READMEs, claim .md
+    # bodies) stream the text body inline.
+    if node.get("kind") in ("file", "readme"):
+        name = node.get("name") or (path.rsplit("/", 1)[-1] if path else "file")
+        if node.get("kind") == "readme":
+            return Response(
+                content=node.get("content") or "",
+                media_type="text/markdown; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+        if node.get("synthesized"):
+            return Response(
+                content=node.get("synthesized_content") or "",
+                media_type="text/plain; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+        if node.get("artifact_path"):
+            src = _resolve_artifact_disk_path(node["artifact_path"])
+            if src and src.exists():
+                return FileResponse(str(src), filename=name, media_type=None)
+        raise HTTPException(404, f"file at {path!r} is not on disk")
+
     leaves = iter_files(node)
     if not leaves:
         raise HTTPException(404, f"no files under {path!r}")
