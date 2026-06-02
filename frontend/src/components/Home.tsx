@@ -145,7 +145,14 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     } finally { setBusy(false) }
   }
 
-  const list = projects ?? []
+  // Sort by most-recently touched (descending) so the project you used last
+  // is at the top of the side rail. Stable: fall back to id for equal mtimes.
+  const list = [...(projects ?? [])].sort((a, b) => {
+    const da = a.last_touched || a.created_at || ''
+    const db = b.last_touched || b.created_at || ''
+    if (da === db) return a.id.localeCompare(b.id)
+    return da < db ? 1 : -1
+  })
   const startCreate = () => setModal({ kind: 'create', name: 'Untitled project', file: null })
   const current = list.find(p => p.current) ?? null
   const q = query.trim().toLowerCase()

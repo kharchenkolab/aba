@@ -177,6 +177,31 @@ export default function ChatPane({
     }
   }, [messages, streamMsg])
 
+  // Bottom of new figure (or any deferred-layout content) isn't visible after
+  // the initial autoscroll, because images load AFTER the message hits the DOM
+  // and grow the layout AFTER we set scrollTop. Re-snap whenever any message's
+  // rendered size grows — but ONLY if the user was still pinned at the moment,
+  // so reading mid-thread is never yanked. (Browsers don't fire `scroll` on
+  // pure content growth, so isAtBottomRef stays at whatever it was the last
+  // time the user actually scrolled.)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      if (raf) return    // coalesce — many images can finish on the same frame
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        if (isAtBottomRef.current) el.scrollTop = el.scrollHeight
+      })
+    })
+    const observeChildren = () => { Array.from(el.children).forEach(c => ro.observe(c)) }
+    observeChildren()
+    const mo = new MutationObserver(observeChildren)
+    mo.observe(el, { childList: true })
+    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf) }
+  }, [])
+
   const jumpToBottom = () => {
     const el = scrollRef.current
     if (!el) return

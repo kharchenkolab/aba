@@ -331,20 +331,20 @@ export default function App() {
   )
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // Right column auto-reopens on USER view-context changes (scene/focus/thread
-  // navigation) — but NOT on AI-driven data growth. After the user manually
-  // collapses the rail, the agent updating a question / adding a caption /
-  // creating a figure must not silently reopen it (PK 2026-06-01). View
-  // navigation still counts as user intent so it does reopen.
-  //
-  // `downstreamCount` is read via ref so that count changes don't refire this
-  // effect — only view-context changes do.
+  // Right column auto-reopens ONLY when the user navigates to a scene that
+  // lives in the right column (overview, inventory). It does NOT reopen on
+  // thread switch / focus change / posture change — those are chat-pane
+  // navigation, and the right column may have nothing to do with the switch.
+  // (PK 2026-06-02: minimized rail was popping out on every thread switch.)
+  // AI-driven data growth also doesn't reopen (the dsCountRef gate already
+  // handles that). Earn-it first reveal stays in the separate effect below.
   const dsCountRef = useRef(downstreamCount)
   useEffect(() => { dsCountRef.current = downstreamCount }, [downstreamCount])
   useEffect(() => {
     if (dsCountRef.current === 0) return
+    if (!overview && !inventory) return    // only when the active scene IS one that lives in the rail
     setRightCollapsed(false)
-  }, [posture, focusedId, threadId, overview, inventory])
+  }, [overview, inventory])
   // Earn-it first reveal: edge-triggered on the 0→>0 downstreamCount transition.
   // Fires once when the project produces its first downstream output, then
   // subsequent additions are silent (the AI growing the inventory doesn't

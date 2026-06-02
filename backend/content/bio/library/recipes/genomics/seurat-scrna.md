@@ -37,6 +37,86 @@ library(dplyr)     # %>%, group_by, slice_max — for marker post-processing
 
 ---
 
+## Figure style
+
+The figures in this pipeline share a deliberate visual language. The full code blocks live with each step below, but the choices that distinguish them from Seurat's stock plots are restated here as a checklist — re-read the relevant bullet immediately before you write each figure's code, so the styling survives translation from "I read the recipe" to "I write ggplot2". These are **overrides** for the global figure defaults (`figures.md`); where this section is silent, the global defaults apply.
+
+**Universal**
+- Skin every figure with `theme_cowplot()` — the pipeline's figures need to read as one set.
+- `ggsave(..., bg = "white", dpi = 120)`. Use `dpi = 180` only for the PCA heatmap (more sub-panels per inch need more pixels).
+- Titles 12pt bold (`element_text(size = 12, face = "bold")`); subtitles 9pt grey40 where used.
+- Panel grid: major in grey92 (or grey85 on top of darker fills), `linewidth = 0.3`; no minor grid (`panel.grid.minor = element_blank()`).
+
+**Color**
+- Diverging signal — anything centered on zero, including DimHeatmap and DotPlot's `avg_log2FC`:
+  `scale_*_gradient2(low = "#2166ac", mid = "grey90", high = "#b2182b", midpoint = 0)`. Don't substitute viridis here — viridis is sequential by design and squashes the meaning of "zero." Drop the per-sub-panel legends in DimHeatmap with `& theme(legend.position = "none")` (use `&` not `+` so it broadcasts to every patchwork sub-panel).
+- Sequential signal — FeaturePlot, expression-on-UMAP, single-sided positives:
+  `scale_colour_gradient(low = "grey85", high = "#b2182b")`. Neutral end near-white, signal in saturated red.
+
+**Dense scatter / jitter** — pre-filter QC scatters, jitter on QC violins
+- `alpha = 0.10` (yes, that low — let density carry the visual weight), `size = 0.9` for scatters, `size = 0.20` for violin jitter.
+- Two-tone kept/filtered: `scale_colour_manual(values = c(kept = "black", filtered = "red"), guide = guide_legend(override.aes = list(alpha = 1, size = 1.5)))` — the override is essential or the legend dots are invisible.
+- Threshold lines: `geom_hline(..., colour = "red", linetype = "dashed", linewidth = 0.5)`.
+
+**QC violins** (pre and post)
+- `geom_violin(width = 0.85, colour = "black", linewidth = 0.4, scale = "width", trim = FALSE, alpha = 0.85)`.
+- Per-metric fill from a qualitative palette: `scale_fill_brewer(palette = "Set2", guide = "none")` (no legend — the violin shape carries the meaning).
+- Facet by metric with `facet_wrap(~ metric, scales = "free_x", ncol = 1, strip.position = "left")`, then `coord_flip()` so metrics read left-to-right at the top.
+- Strip styling: `strip.background = element_blank()`, `strip.text.y.left = element_text(angle = 0, hjust = 1, face = "bold")`. Strip the y-axis: `axis.text.y / axis.ticks.y / axis.line.y = element_blank()`. `panel.spacing.y = unit(2, "pt")`.
+- Pre-filter adds `geom_jitter` colored by `qc_kept` + the threshold `geom_hline`s; post-filter has neither (everything's kept; no threshold to draw).
+- Save: 7×4.7 in (pre) and 7×4.5 in (post).
+
+**HVG plot**
+- Re-skin Seurat's `VariableFeaturePlot` with `theme_cowplot()`, then **alpha-poke** the underlying point layer to 0.35 (the HVG MA-style scatter is sparser than the QC scatters; 0.35 reads better than 0.1 here). `VariableFeaturePlot` has no `alpha` argument — walk `p$layers` for `GeomPoint` and set `aes_params$alpha`.
+- Label the **top 10** HVGs with `LabelPoints(p_hvg, points = top10, repel = TRUE)` — not top 20; the plot becomes a label soup beyond ten.
+- Title: `ggtitle(sprintf("HVG selection (vst, top %d of %d genes); top 10 labeled", ...))`.
+- Save 8×5.5 in.
+
+**PCA elbow**
+- **One chart, two curves** on the same axis — not two side-by-side panels.
+- Per-PC variance: solid blue (`#1f77b4`); cumulative variance: grey dashed (`grey40`). `geom_line(linewidth = 0.6) + geom_point(size = 1.4)`.
+- Y-axis as percent of TOTAL HVG-matrix variance (not of the 50 PCs' variance) — `scale_y_continuous(labels = scales::percent_format(accuracy = 1), breaks = seq(0, 0.4, 0.05))`. This makes the cumulative curve plateau at the true fraction the PCs capture (~30% is typical), instead of misleadingly hitting 100%.
+- Annotate the chosen `dims` with a red dashed `geom_vline(xintercept = DIMS_CHOSEN, ...)` + a small `annotate("text", ..., "dims = 1:N (chosen)")` to its left.
+- Subtitle = heuristic markers: 1%/0.5%/2nd-diff knee — context only, not a decision rule (`element_text(size = 9, colour = "grey40")`).
+- Legend inside the plot area, top-right: `legend.position = c(0.98, 0.55)`, `legend.justification = c(1, 0.5)`, semi-transparent background. No legend title.
+- Save 7×4.8 in.
+
+**PCA heatmap (DimHeatmap)**
+- `DimHeatmap(obj, dims = 1:10, cells = 500, balanced = TRUE, fast = FALSE, combine = TRUE, ncol = 5)` — 2×5 grid uses horizontal space; `fast = FALSE` returns real ggplots so the scale below applies.
+- `& scale_fill_gradient2(low = "#2166ac", mid = "grey90", high = "#b2182b", midpoint = 0)` (the diverging palette; `&` not `+` so it broadcasts to every sub-panel).
+- `& theme(legend.position = "none")` — drops the 10 identical per-panel legends.
+- Larger canvas + denser dpi: `ggsave(..., width = 20, height = 9, dpi = 180)`. Wrap in `suppressMessages()` — ggplot emits one "Scale for fill is already present" per panel; harmless.
+
+**UMAP (DimPlot)**
+- `DimPlot(obj, reduction = "umap", label = TRUE, repel = TRUE, pt.size = 0.4) + NoLegend()` — labels live on the embedding, no side legend.
+- Title summarizes the run: `ggtitle(sprintf("Louvain res=%.1f · dims=1:%d · n=%d cells · %d clusters", ...))`.
+- `coord_fixed()` so distances aren't distorted by aspect ratio.
+- Restyle: `theme_cowplot()`, light panel grid (`grey92`, 0.3), axis line in black at 0.4.
+- **Alpha-poke** the GeomPoint to 0.6 (DimPlot doesn't expose `alpha`; walk `p$layers`).
+- Save 7×6.5 in.
+
+**Dotplot (cluster markers)**
+- `DotPlot(obj, features = genes_to_show, cluster.idents = FALSE) + RotatedAxis()` — keep clusters in their numeric order; the rotation handles long gene-name x-axis.
+- Diverging palette (same as the heatmap): `scale_colour_gradient2(low = "#2166ac", mid = "grey90", high = "#b2182b", midpoint = 0, name = "avg expr")`.
+- Title with marker count: `ggtitle(sprintf("Top 5 markers per cluster (Wilcoxon, only.pos, n=%d genes)", ...))`.
+- `axis.text.x = element_text(angle = 60, hjust = 1, size = 8)`; `axis.text.y = element_text(size = 10)`.
+- Width scales with gene count so labels don't squash: `width = max(12, 0.18 * length(genes_to_show))`. Height 6.5 in.
+
+**FeaturePlot (canonical lineage markers)**
+- 4–8 hand-picked canonical markers (one per major lineage). Don't paint a wall of top-N FeaturePlots — that's the Seurat-tutorial pattern this recipe explicitly avoids.
+- `FeaturePlot(obj, features = canonical, order = TRUE, pt.size = 0.3, ncol = 3) & scale_colour_gradient(low = "grey85", high = "#b2182b")` — sequential grey→red.
+- `& theme_cowplot() & theme(..., panel.grid.major = element_line(colour = "grey92", linewidth = 0.3), legend.position = "right", legend.key.size = unit(0.4, "cm"))`. Keep axes + grid (gives spatial context vs. the UMAP).
+- **Alpha-poke** each panel's GeomPoint to 0.6.
+- Height scales with the panel count: `height = max(4, 4 * n_rows)`. Width 13 in.
+
+**Pitfalls to avoid**
+- Don't substitute viridis / plasma where the recipe specifies the diverging blue-grey-red — viridis is sequential and erases the meaning of "zero" on signed metrics like `avg_log2FC`.
+- Don't strip the panel grid from UMAP / FeaturePlot — the eye uses the axis ticks to read spatial positions.
+- Don't drop the alpha-pokes on DimPlot / FeaturePlot / VariableFeaturePlot — Seurat's defaults are opaque dots and the overlap obscures structure.
+- Don't put the elbow's per-PC and cumulative curves on separate panels — the comparison only works on a shared y-axis.
+
+---
+
 ## The four decisions that define the result
 
 Surface these in your plan (`present_plan`) before running anything. The
