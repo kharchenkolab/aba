@@ -321,7 +321,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   )
 }
 
-function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void,
+function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void, isUser?: boolean,
                       planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
                       isStreaming?: boolean, pinnedFigureIds?: Set<string>,
                       fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>) {
@@ -371,11 +371,26 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
     if (b.type === 'plan') {
       out.push(<PlanCard key={i} block={b} active={!!planActive} onGo={onPlanGo} onAdjust={onPlanAdjust} />)
     } else if (b.type === 'text') {
-      out.push(
-        <div key={i} className="msg-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{b.text}</ReactMarkdown>
-        </div>,
-      )
+      // User-typed text renders as PLAIN text (pre-wrap) — pasted ascii tables,
+      // pipes, dashes, etc. shouldn't trigger markdown/gfm parsing into a
+      // half-baked rich-text render (PK 2026-06-02). What the user typed is
+      // what they see. The agent's text still goes through ReactMarkdown
+      // because it does intentionally author markdown (lists, code blocks,
+      // bold, the file-link patterns the mdComponents above rewrite).
+      if (isUser) {
+        out.push(
+          <div key={i} className="msg-text msg-text--plain"
+               style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {b.text}
+          </div>,
+        )
+      } else {
+        out.push(
+          <div key={i} className="msg-text">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{b.text}</ReactMarkdown>
+          </div>,
+        )
+      }
     } else if (b.type === 'error') {
       out.push(<ErrorLine key={i} text={b.text} detail={b.detail} onRetry={onRetry} />)
     } else if (b.type === 'notice') {
@@ -568,7 +583,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
