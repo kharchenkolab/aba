@@ -40,17 +40,26 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
         })
       }
     } else if (block.type === 'tool_result') {
-      // Orphan-fill tool_results (from a crashed prior turn) shouldn't
-      // appear in the visible chat. Two historical formats:
-      //   - new: JSON {status:'interrupted', note:...}
-      //   - legacy: plain string starting with the marker
+      // present_plan / ask_clarification: their UI is already rendered by the
+      // plan card / mini-composer, so we drop the tool_result block.
+      // Orphan-fill (server / kernel crashed mid-turn): PUSH a synthetic
+      // error-shaped result so the prior assistant's tool_use resolves out
+      // of its spinner state — earlier we `continue`d here, which left the
+      // tool_start spinning forever on reload (PK 2026-06-02, thr_705b6af3).
       const raw = block.content
-      if (typeof raw === 'string' && raw.startsWith('[tool result unavailable')) {
+      const isLegacyOrphan = typeof raw === 'string' && raw.startsWith('[tool result unavailable')
+      if (isLegacyOrphan) {
+        blocks.push({ type: 'tool_result', name: '(interrupted)',
+                      result: { error: 'tool did not complete (interrupted)' } })
         continue
       }
       try {
         const parsed = JSON.parse(raw as string)
-        if (parsed && parsed.status === 'interrupted') continue   // orphan-fill (new format)
+        if (parsed && parsed.status === 'interrupted') {
+          blocks.push({ type: 'tool_result', name: '(interrupted)',
+                        result: { error: parsed.note || 'tool did not complete (interrupted)' } })
+          continue
+        }
         if (parsed && parsed.status === 'presented') continue     // present_plan ack — the plan card already shows it
         if (parsed && parsed.status === 'asked') continue         // ask_clarification ack — the mini-composer already shows it
         blocks.push({ type: 'tool_result', name: '(result)', result: parsed })
