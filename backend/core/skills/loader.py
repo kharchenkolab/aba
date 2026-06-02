@@ -66,6 +66,15 @@ class SkillSpec:
     # assets/). Empty for flat .md skills. Surfaced in the Skill tool result
     # as a "Bundled resources" appendix so the agent knows what to read_file.
     resources:      tuple[str, ...] = ()
+    # CC-convergence Phase 3 — frontmatter parity with Claude Code SKILL.md.
+    # user_invocable surfaces the skill in the slash-command palette (Phase 5).
+    # argument_hint is a one-line palette hint (e.g. '<dataset> [--cells N]').
+    # allowed_tools is documentation-only for now (no runtime enforcement; would
+    # need a tool-gate we don't have). version is free-form provenance.
+    user_invocable: bool = False
+    argument_hint:  str = ""
+    allowed_tools:  tuple[str, ...] = ()
+    version:        str = ""
 
 
 _SPLIT = "---"
@@ -112,6 +121,13 @@ def _spec_from_text(text: str, source_path: str = "", *,
     kw = fm.get("keywords") or fm.get("tags") or ()
     if isinstance(kw, str):
         kw = (kw,)
+    # CC-convergence Phase 3: accept CC's kebab-case keys as aliases for our
+    # underscore keys. A vanilla Claude Code SKILL.md drops in unchanged.
+    user_inv = bool(fm.get("user_invocable") or fm.get("user-invocable") or False)
+    arg_hint = str(fm.get("argument_hint") or fm.get("argument-hint") or "").strip()
+    at = fm.get("allowed_tools") or fm.get("allowed-tools") or ()
+    if isinstance(at, str):
+        at = (at,)
     return SkillSpec(
         name=name,
         description=str(fm.get("description") or "").strip(),
@@ -128,6 +144,10 @@ def _spec_from_text(text: str, source_path: str = "", *,
         source=str(fm.get("source") or "").strip(),
         body=body,
         source_path=source_path,
+        user_invocable=user_inv,
+        argument_hint=arg_hint,
+        allowed_tools=tuple(str(t).strip() for t in at if str(t).strip()),
+        version=str(fm.get("version") or "").strip(),
     )
 
 
