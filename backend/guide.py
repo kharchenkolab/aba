@@ -598,14 +598,19 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
-    system = sidebar_text + focus_text + thread_text + build_system(
+    stable_sys, dynamic_sys = build_system(
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
-    # CC-convergence Phase 4: per-turn recipes catalog as a <system-reminder>.
-    # Lives OUTSIDE the system prompt (which stays cache-stable across user
-    # turns) — gets spliced into the latest user-text message at LLM-call time.
-    # Empty when there are no `visibility='local'` skills, e.g. advisor roles.
-    recipes_reminder = build_recipes_reminder(intent=eff_intent, ctx=prompt_ctx) \
-        if guide_role == "primary" else ""
+    # CC-convergence Phase 4 (cache split): system is sent as TWO blocks at the
+    # transport layer — the stable prefix (cache_control: ephemeral) plus the
+    # uncached dynamic tail (the BM25 recipes slice). Per-turn intent changes
+    # only invalidate the small tail, not the 26K stable prefix.
+    system = sidebar_text + focus_text + thread_text + stable_sys
+    # The user-message reminder injection (the 'reminder-only catalog' variant)
+    # is OFF by default after the 2026-06-02 Haiku+Sonnet study showed both
+    # models reject reminder-only catalogs (Haiku can't find them, Sonnet
+    # skips planning when recipes sit next to the user request). The helpers
+    # stay in the codebase for the future user-invocable verb palette (Phase 5).
+    recipes_reminder = ""
     _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
                        active_tools=active_tools, model=guide_model, thread_id=store_tid,
                        focus_entity_id=focus_entity_id)
@@ -718,7 +723,9 @@ async def stream_response(
                     # for OTHER HTTP requests (Files tab polling, /artifacts image
                     # GETs, etc.) while the model is generating. The pre-fix
                     # sync iteration parked the loop on each `next()` call.
-                    async with open_stream(llm_history, active_tools, system, model=guide_model) as stream:
+                    async with open_stream(llm_history, active_tools, system,
+                                           model=guide_model,
+                                           dynamic_system=dynamic_sys) as stream:
                         async for event in stream:
                             # Cancel check inside the streaming loop. Bail
                             # immediately so we stop paying for tokens the

@@ -89,6 +89,10 @@ def render_system(case: dict, variant: dict) -> tuple[str, list]:
     variant keys: arm (ABA_PROMPT_ARM), ablate (list of block names to drop),
     sys_sub (list of (old,new) string swaps applied after render)."""
     os.environ["ABA_PROMPT_ARM"] = variant.get("arm", "nonneg")
+    # CC-convergence Phase 4 study: variant['tier'] toggles whether recipes
+    # render in the system prompt ('all', the additive default) or only in the
+    # <system-reminder> ('core' = recipes-only-in-reminder, the strict variant).
+    os.environ["ABA_SKILLS_TIER"] = variant.get("tier", "all")
     import importlib
     import content.bio.prompts.build as B
     importlib.reload(B)                       # pick up live .md edits (lru_cache is per-module)
@@ -99,11 +103,17 @@ def render_system(case: dict, variant: dict) -> tuple[str, list]:
         B._BLOCKS = tuple(b for b in orig if b.name not in ablate)
     try:
         intent = case.get("intent") or _last_user_text(case["messages"])
-        system = B.build_system(TOOL_SCHEMAS, role=case.get("render", {}).get("role", "primary"),
-                                intent=intent, ctx=case.get("render", {}).get("ctx", {}))
+        stable, dynamic = B.build_system(TOOL_SCHEMAS,
+                                         role=case.get("render", {}).get("role", "primary"),
+                                         intent=intent,
+                                         ctx=case.get("render", {}).get("ctx", {}))
     finally:
         if ablate:
             B._BLOCKS = orig
+    # Apply legacy sys_sub on the full (stable + dynamic) text view, since
+    # anchors may live in either part. We re-join them by "\n\n" same way the
+    # API will see them concatenated content-wise.
+    system = stable + ("\n\n" + dynamic if dynamic else "")
     for old, new in variant.get("sys_sub", []):
         if old not in system:
             raise RuntimeError(f"sys_sub anchor not found: {old[:60]!r}")
@@ -130,7 +140,37 @@ def render_system(case: dict, variant: dict) -> tuple[str, list]:
     return system, _api_tools(TOOL_SCHEMAS)
 
 
-def _stub(name: str, env_stubs: dict) -> str:
+def _stub(name: str, env_stubs: dict, tool_input: dict | None = None) -> str:
+    # Skill/read_skill: serve the CURRENT registry's body, not the case's
+    # frozen env_stub. The captures predate the -vN rename; without this fix
+    # the harness would return a V1-labeled body for a V2 lookup, polluting
+    # the model's context with stale recipe names and confusing downstream
+    # plan-step / recipe-following predicates.
+    if name in ("Skill", "read_skill") and isinstance(tool_input, dict):
+        skill_name = tool_input.get("skill") or tool_input.get("name") or ""
+        if skill_name:
+            try:
+                from core.skills import invoke_skill
+                inv = invoke_skill(skill_name, tool_input.get("args") or "")
+                if inv is not None:
+                    spec = inv["spec"]
+                    out = {
+                        "status": "ok",
+                        "name": spec.name,
+                        "description": spec.description,
+                        "when_to_use": spec.when_to_use,
+                        "requires_tools": list(spec.requires_tools),
+                        "capabilities_needed": list(spec.capabilities_needed),
+                        "produces": list(spec.produces),
+                        "resources": list(inv["resources"]),
+                        "body": inv["body"],
+                    }
+                    return json.dumps(out)
+            except Exception:  # noqa: BLE001 — fall through to env_stub on any registry error
+                pass
+            # Unknown name → return the same unknown_skill shape live tools do.
+            return json.dumps({"status": "unknown_skill",
+                               "note": f"No skill named {skill_name!r}."})
     v = env_stubs.get(name)
     # CC-convergence Phase 1: cases captured before Skill replaced read_skill key
     # their stubs under "read_skill". When the agent now calls `Skill`, fall back
@@ -256,24 +296,24 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
     system prompt for the rest of the rollout, and keep going. This tests the
     declared-recipes → injected-at-codegen hypothesis on cold-start cases."""
     msgs = copy.deepcopy(messages)
-    # CC-convergence Phase 4: splice the per-turn recipes catalog (a
-    # <system-reminder> block) onto the latest user-text message — mirroring
-    # what guide.py does for live rollouts. Without this, the harness would
-    # send rollouts a system prompt that no longer carries the recipes catalog
-    # (it now lives in the reminder), and the model would have no way to pick
-    # a recipe — a false regression. Builds with the live build_recipes_reminder
-    # so any tier/wording changes ride along.
-    try:
-        from content.bio.prompts.build import build_recipes_reminder
-        _intent = _last_user_text(messages) or ""
-        _reminder = build_recipes_reminder(intent=_intent)
-        msgs = _splice_recipes_reminder(msgs, _reminder)
-    except Exception:  # noqa: BLE001 — never break a rollout on optional reminder
-        pass
+    # CC-convergence Phase 4: the <system-reminder> recipes-catalog injection
+    # is OFF (n=8 study on Haiku 4.5 + Sonnet 4.6 showed both models reject
+    # reminder-only catalog placement — different failure modes, both real).
+    # The recipes catalog lives in the (now uncached) dynamic system block. The
+    # splice helpers stay in the codebase for the future user-invocable
+    # slash-palette use case (Phase 5).
     # Honor ABA_CACHE_TTL=1h for long A/B campaigns (amortizes cache writes
     # across many sweep runs over the day). Default 5-min ephemeral.
     _cc = {"type": "ephemeral", "ttl": "1h"} if os.environ.get("ABA_CACHE_TTL") == "1h" else {"type": "ephemeral"}
-    syslist = [{"type": "text", "text": system, "cache_control": _cc}]
+    # OAuth bearer gates Sonnet/Opus on the Claude Code marker being the FIRST
+    # system block (byte-exact, NO cache_control). Mirrors backend/core/llm.py.
+    # Haiku passes without it. ABA_EVAL_CREDENTIAL=apikey skips this gate entirely.
+    _CC_MARKER = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+    if "haiku" not in (model or "").lower() and os.environ.get("ABA_EVAL_CREDENTIAL", "oauth") != "apikey":
+        syslist = [{"type": "text", "text": _CC_MARKER},
+                   {"type": "text", "text": system, "cache_control": _cc}]
+    else:
+        syslist = [{"type": "text", "text": system, "cache_control": _cc}]
     toolsc = [*tools[:-1], {**tools[-1], "cache_control": _cc}] if tools else tools
     steps = []
     reads = []
@@ -347,12 +387,12 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
                 {"type": "tool_result", "tool_use_id": b.id,
                  "content": ("User approved the plan. Go ahead and execute it now." + recheck_text
                              if b.name == "present_plan"
-                             else _stub(b.name, env_stubs))} for b in tu]})
+                             else _stub(b.name, env_stubs, b.input))} for b in tu]})
             traj.append({"role": "user", "blocks": [
                 {"type": "tool_result", "tool": b.name,
                  "content": ("User approved the plan. Go ahead and execute it now." + recheck_text
                              if b.name == "present_plan"
-                             else _stub(b.name, env_stubs))} for b in tu]})
+                             else _stub(b.name, env_stubs, b.input))} for b in tu]})
             continue
         if not tu:
             outcome = "text"; break
@@ -366,9 +406,9 @@ def rollout(client, model, system, messages, tools, env_stubs, max_steps=10, max
                 outcome = "coded"; break
         msgs.append({"role": "assistant", "content": r.content})
         msgs.append({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": b.id, "content": _stub(b.name, env_stubs)} for b in tu]})
+            {"type": "tool_result", "tool_use_id": b.id, "content": _stub(b.name, env_stubs, b.input)} for b in tu]})
         traj.append({"role": "user", "blocks": [
-            {"type": "tool_result", "tool": b.name, "content": _stub(b.name, env_stubs)} for b in tu]})
+            {"type": "tool_result", "tool": b.name, "content": _stub(b.name, env_stubs, b.input)} for b in tu]})
     else:
         # max_steps reached without break — if any code was emitted, mark coded.
         if code_chunks: outcome = "coded"
@@ -661,7 +701,7 @@ def run_case(case: dict, variant: dict, reps: int = 16, workers: int = 6,
     """One (case, variant) cell at n reps. For whole sweeps prefer run_matrix (parallel)."""
     client = _client()
     system, tools = render_system(case, variant)
-    model = case.get("model", "claude-haiku-4-5-20251001")
+    model = os.environ.get("ABA_EVAL_MODEL") or case.get("model", "claude-haiku-4-5-20251001")
     env = case.get("env_stubs", {})
     cid, vlabel = case.get("id", "case"), _variant_label(variant)
 
@@ -735,7 +775,7 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
         cell = cells[ci]
         case = cell["case"]
         try:
-            t = rollout(client, case.get("model", "claude-haiku-4-5-20251001"), cell["system"],
+            t = rollout(client, os.environ.get("ABA_EVAL_MODEL") or case.get("model", "claude-haiku-4-5-20251001"), cell["system"],
                         case["messages"], cell["tools"], case.get("env_stubs", {}),
                         continue_after_plan=bool(cell["variant"].get("continue_after_plan", False)),
                         step_labeled_injection=bool(cell["variant"].get("step_labeled_injection", False)),

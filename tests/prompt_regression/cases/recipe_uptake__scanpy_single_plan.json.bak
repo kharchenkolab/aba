@@ -7,7 +7,7 @@
     "ctx": {}
   },
   "intent": "In DATA_DIR there is a 10x matrix triplet for one PBMC sample \u2014 files prefixed GSM5746268_MGI0369_1_SLAB-C1-C1 (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz). Using scanpy, do standard QC, normalization, highly-variable genes, PCA, neighbors, Leiden clustering and a UMAP, then identify marker genes per cluster and show me a UMAP and a marker dotplot.",
-  "target_recipe": "scrna-qc-clustering-v2",
+  "target_recipe": "scrna-qc-clustering",
   "messages": [
     {
       "role": "user",
@@ -56,6 +56,7 @@
     "declared_then_followed_strict"
   ],
   "env_stubs": {
+    "read_skill": "{\"status\": \"ok\", \"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy processing for ONE scRNA-seq sample.\", \"body\": \"scRNA-seq QC + first-pass clustering (scanpy). Halt and present_plan before running on an unfamiliar dataset \\u2014 the QC thresholds and the clustering resolution are dataset-dependent. Steps: sc.read_10x_mtx; calculate_qc_metrics; filter cells (n_genes>=200) & genes; filter pct_counts_mt; normalize_total(target_sum=1e4)+log1p; highly_variable_genes; scale; pca; neighbors; leiden; umap; rank_genes_groups (wilcoxon) for markers. Plots: QC violin, HVG, UMAP colored by leiden, marker dotplot.\"}",
     "search_skills": "[{\"name\": \"scrna-qc-clustering\", \"description\": \"Standard scanpy QC, filtering, normalization, HVG, PCA, Leiden, UMAP, markers for ONE sample.\"}]"
   }
 }

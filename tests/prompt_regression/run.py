@@ -32,6 +32,10 @@ ap.add_argument("--cache-1h", action="store_true",
 ap.add_argument("--no-warmup", action="store_true",
                 help="skip warm-then-flood (each cell's first rep runs serially "
                      "before parallel reps). Disables the cache-write optimization")
+ap.add_argument("--model", default=None,
+                help="override per-case `model` field for every rollout. e.g. "
+                     "claude-sonnet-4-6, claude-haiku-4-5-20251001. When unset, "
+                     "each case uses its own captured `model` (defaults to Haiku).")
 ap.add_argument("--resume", default=None,
                 help="resume a partial run from a capture dir: skips reps whose "
                      "trajectory JSON is already on disk and reuses it (no API "
@@ -47,6 +51,8 @@ if a.resume:
     os.environ["ABA_RESUME"] = "1"
     # Pin capture to the resume dir so new reps land beside the old ones.
     a.capture = a.resume
+if a.model:
+    os.environ["ABA_EVAL_MODEL"] = a.model
 
 case_files = (sorted(glob.glob(os.path.join(HERE, "cases", "*.json"))) if a.cases == "all"
               else [os.path.join(HERE, "cases", c + ".json") for c in a.cases.split(",")])
