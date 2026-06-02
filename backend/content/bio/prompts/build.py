@@ -122,14 +122,28 @@ def _conventions(_tools: list[dict]) -> str:
 
 
 def _skills_index(_tools: list[dict]) -> str:
-    """B2: per-turn skills catalog. Retrieval-gated: a large recipe library
-    surfaces only the top-K skills relevant to this turn's intent plus a
-    pointer to search_skills, so the prompt imprint stays bounded. The agent
-    uses Skill(skill=name, args=…) to expand a body on demand. Empty until
-    bio.skills register at import time (registry returns '', which the
-    assembler drops)."""
+    """B2: in-system-prompt skills index. Renders both Core (always-on) and the
+    relevance-gated Recipes slice — the model has a strong learned prior for
+    finding the catalog in the system prompt, and dropping the Recipes slice
+    out of it broke recipe selection on n=4 (seurat target rate 1.0→0.25,
+    2026-06-02). The Phase 4 system-reminder injected on the latest user
+    message (see build_recipes_reminder) reinforces the same recipes — the two
+    paths are deliberately duplicative until we have stronger evidence the
+    model can find the catalog in the reminder alone."""
     from core.skills import skills_index_block
-    return skills_index_block(query=_INTENT.get(""))
+    return skills_index_block(query=_INTENT.get(""), tier="all")
+
+
+def build_recipes_reminder(intent: str = "", ctx: Optional[dict] = None) -> str:
+    """Per-turn recipes catalog as a Claude Code system-reminder. Splice this
+    into the LATEST user message at LLM-call time. Returns '' when the recipes
+    tier is empty (registry has no `visibility='local'` skills)."""
+    from core.skills import recipes_reminder_block
+    token = _INTENT.set(intent or "")
+    try:
+        return recipes_reminder_block(query=intent)
+    finally:
+        _INTENT.reset(token)
 
 
 def _memory_index(_tools: list[dict]) -> str:
