@@ -1,0 +1,5 @@
+# Vendor clones (git repos cloned at install time, not committed).
+# The skill folder inside is exposed via library/vendor_skills/<name> symlinks.
+*
+!.gitkeep
+!.gitignore
