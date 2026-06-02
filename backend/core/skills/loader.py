@@ -200,12 +200,22 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
     n = 0
     consumed_dirs: set[Path] = set()
 
+    # Walk with followlinks=True so vendor_skills/<pkg> can be a symlink into
+    # an externally-cloned skill folder (e.g. backend/vendor/pagoda2/skill).
+    # pathlib's rglob doesn't descend into symlinked directories by default,
+    # which silently hides vendor packs from the loader.
+    def _walk(root: Path):
+        import os as _os
+        for dirpath, _dirnames, filenames in _os.walk(root, followlinks=True):
+            for fn in filenames:
+                yield Path(dirpath) / fn
+
+    all_md = sorted(f for f in _walk(p) if f.suffix == ".md")
+    skill_mds = [f for f in all_md if f.name == "SKILL.md"]
+
     # --- Folder-skill pre-pass: every <dir>/SKILL.md is one skill with siblings.
-    for skill_md in sorted(p.rglob("SKILL.md")):
+    for skill_md in skill_mds:
         folder = skill_md.parent
-        if folder == p:
-            # SKILL.md at the very root has no folder identity — treat as flat below.
-            continue
         rel_folder = folder.relative_to(p)
         # Domain defaults to the folder's immediate parent under `p` so a layout
         # like recipes/genomics/scrna-qc/SKILL.md classifies under 'genomics'.
@@ -218,9 +228,11 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
             continue
         # Collect every sibling file under the folder (excluding SKILL.md) as a
         # bundled resource — relative paths so the agent can read_file them.
+        # Use the same followlinks-aware walker so resources inside symlinked
+        # folders also surface.
         resources = tuple(sorted(
             str(f.relative_to(folder))
-            for f in folder.rglob("*")
+            for f in _walk(folder)
             if f.is_file() and f.name != "SKILL.md"
         ))
         spec = _spec_with_resources(spec, resources)
@@ -230,7 +242,7 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         n += 1
 
     # --- Flat-skill pass: every other .md is one self-contained skill.
-    for f in sorted(p.rglob("*.md")):
+    for f in all_md:
         if any(f.is_relative_to(d) for d in consumed_dirs):
             continue       # part of an already-registered folder skill
         if f.name == "SKILL.md":

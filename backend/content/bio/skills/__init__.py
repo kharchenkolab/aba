@@ -17,12 +17,18 @@ from core.skills import register_skill_dir
 # Content library root (sibling of the code packages under content/bio/).
 _LIB = Path(__file__).parent.parent / "library"
 
-# Two tiers, by visibility (stamped from the folder, never per-file):
+# Three tiers, by visibility (stamped from the folder, never per-file):
 #   core/             — always rendered in the system prompt (operating + meta
 #                       skills); small, hand-curated.
 #   recipes/<domain>/ — the domain cookbook, retrieval-gated via search_skills;
 #                       the <domain> subfolder supplies each recipe's facet.
+#   vendor_skills/    — third-party skill folders bundled with installed
+#                       packages (e.g. pagoda2's `inst/skill/` shape). Each
+#                       entry is `<vendor_name>/SKILL.md + references/...`
+#                       — usually a symlink into a git clone under
+#                       `backend/vendor/<package>/skill`. Same tier as recipes.
 # A generated recipe lands under recipes/ and therefore can never promote itself
 # into the always-on prompt tier.
 register_skill_dir(_LIB / "core", visibility="always")
 register_skill_dir(_LIB / "recipes", visibility="local")
+register_skill_dir(_LIB / "vendor_skills", visibility="local")
