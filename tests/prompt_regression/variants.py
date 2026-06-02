@@ -28,6 +28,7 @@ VARIANTS = {
     "ablate_recipes": {"ablate": ["recipes"]},                       # drop recipes.md value-case
     "canonical":      {"arm": "control"},                            # alias: un-restructured/default live prompt (behavior.md, sandbox libs, no nonnegotiables)
     "canonical_reminder_only": {"arm": "control", "tier": "core"},   # Phase 4 strict — recipes ONLY in <system-reminder>, not in system prompt
+    "canonical_go":   {"arm": "control", "continue_after_plan": True},  # Phase 6 composition — rollout continues past present_plan so sub-Skill chains can be observed
     "nonneg":         {"arm": "nonneg"},                             # restructured eval arm (behavior_slim.md + isolated nonnegotiables, no sandbox-libs list)
 
     # ── Recipe-following intervention variants (Phase 1 of #324) ──────────────

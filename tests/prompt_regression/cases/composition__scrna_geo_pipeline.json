@@ -1,0 +1,30 @@
+{
+  "id": "composition__scrna_geo_pipeline",
+  "source": "synthetic — Phase 6 of the Skill CC-convergence refactor",
+  "scenario": "User asks for an end-to-end scRNA pipeline starting from a GEO accession, including cell-type annotation. The orchestrator recipe scrna-geo-pipeline should be chosen, and the agent should chain three Skill(...) calls (fetch-geo-processed-matrices → scrna-qc-clustering-v2 → annotate-celltype-scrna) rather than inlining the whole pipeline in run_python.",
+  "model": "claude-haiku-4-5-20251001",
+  "max_steps": 30,
+  "max_code_turns": 18,
+  "render": {"role": "primary", "ctx": {}},
+  "intent": "do a full scRNA-seq pipeline on GSE192391 — fetch the data, QC and cluster one sample, then annotate the clusters with cell types",
+  "target_recipe": "scrna-geo-pipeline",
+  "behaviors": [
+    "reads_target_recipe",
+    "plans",
+    "no_premature_code",
+    "planned_after_orchestrator",
+    "composes_orchestrator",
+    "composes_any_subskill",
+    "chains_sub_skills"
+  ],
+  "env_stubs": {},
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text",
+         "text": "do a full scRNA-seq pipeline on GSE192391 — fetch the data, QC and cluster one sample, then annotate the clusters with cell types"}
+      ]
+    }
+  ]
+}

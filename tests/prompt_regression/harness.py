@@ -530,6 +530,117 @@ def _read_target(t, c):
     tgt_b = base(tgt)
     return any(base(r) == tgt_b for r in t["reads"])
 
+# Phase 6 — composition predicates. An orchestrator-shaped recipe body
+# explicitly tells the agent to invoke other Skills in sequence; we want to know
+# whether the agent actually chains those calls or inlines the whole pipeline
+# in run_python. The sub-Skill names are extracted by name from the
+# orchestrator body — no per-case configuration needed.
+import re as _re_for_compose
+
+def _orchestrator_subskills(target: str) -> list[str]:
+    """Pull the ordered list of `Skill(skill="name")` references out of the
+    target recipe body. Returns the first occurrences only (subsequent dupes
+    dropped) so a recipe that mentions a sub-Skill twice doesn't double-count.
+
+    Defensive against unregistered registries: lazy-registers the live recipe
+    library if the target isn't found, so rescore.py and other callers that
+    skip the bio package import still get correct sub-Skill extraction."""
+    if not target:
+        return []
+    sys.path.insert(0, BACKEND)
+    try:
+        from core.skills import get_skill, register_skill_dir
+        spec = get_skill(target)
+        if spec is None:
+            # Lazy-register both tiers — registry is keyed by skill name so
+            # this is idempotent if anyone else already registered.
+            register_skill_dir(os.path.join(BACKEND, "content/bio/library/core"),
+                              visibility="always")
+            register_skill_dir(os.path.join(BACKEND, "content/bio/library/recipes"),
+                              visibility="local")
+            spec = get_skill(target)
+    except Exception:
+        return []
+    if spec is None:
+        return []
+    seen: dict[str, int] = {}
+    for m in _re_for_compose.finditer(r'Skill\(skill\s*=\s*["\']([a-z0-9-]+)["\']', spec.body or ""):
+        n = m.group(1)
+        if n not in seen and n != target:        # don't count self-references
+            seen[n] = len(seen)
+    return list(seen.keys())
+
+
+def _composes_orchestrator(t: dict, c: dict) -> bool:
+    """The FIRST Skill the agent invokes is the case's target_recipe (the
+    orchestrator). False if it skipped the orchestrator and went straight to a
+    sub-Skill, or never read anything."""
+    tgt = c.get("target_recipe")
+    reads = t.get("reads") or []
+    if not tgt or not reads:
+        return False
+    import re as _re
+    base = lambda n: _re.sub(r"-v\d+$", "", n or "")
+    return base(reads[0]) == base(tgt)
+
+
+def _chains_sub_skills(t: dict, c: dict) -> bool:
+    """The agent invoked ALL the sub-Skills the orchestrator body lists, in
+    SOME order. Strict — partial chaining (some sub-Skills missing) is
+    captured by composes_any_subskill instead."""
+    tgt = c.get("target_recipe")
+    reads = t.get("reads") or []
+    if not tgt:
+        return False
+    subs = _orchestrator_subskills(tgt)
+    if not subs:
+        return False         # no sub-Skills declared → predicate not applicable
+    import re as _re
+    base = lambda n: _re.sub(r"-v\d+$", "", n or "")
+    read_bases = {base(r) for r in reads}
+    return all(base(s) in read_bases for s in subs)
+
+
+def _composes_any_subskill(t: dict, c: dict) -> bool:
+    """Softer composition signal: the agent invoked at least ONE sub-Skill
+    named in the orchestrator body. Useful when rollouts are capped before the
+    full chain finishes — distinguishes 'agent inlined everything' (False) from
+    'agent started chaining but ran out of room' (True)."""
+    tgt = c.get("target_recipe")
+    reads = t.get("reads") or []
+    if not tgt:
+        return False
+    subs = _orchestrator_subskills(tgt)
+    if not subs:
+        return False
+    import re as _re
+    base = lambda n: _re.sub(r"-v\d+$", "", n or "")
+    read_bases = {base(r) for r in reads}
+    return any(base(s) in read_bases for s in subs)
+
+
+def _planned_after_orchestrator(t: dict, c: dict) -> bool:
+    """The agent invoked present_plan AFTER reading the orchestrator. Required
+    when `continue_after_plan=True` — the `plans` predicate is False in that
+    mode (outcome=='planned' never fires) so we need a way to verify planning
+    actually happened. Walks the step-name sequence."""
+    steps = t.get("steps") or []
+    saw_orchestrator = False
+    tgt = c.get("target_recipe")
+    if not tgt:
+        return any("present_plan" in s for s in steps)
+    import re as _re
+    base = lambda n: _re.sub(r"-v\d+$", "", n or "")
+    tgt_b = base(tgt)
+    for step in steps:
+        # `step` is a list of tool_use names from one assistant turn
+        if "Skill" in step or "read_skill" in step:
+            saw_orchestrator = True
+        if saw_orchestrator and "present_plan" in step:
+            return True
+    return False
+
+
 BEHAVIORS = {
     "reads_recipe":               lambda t, c: t["read_step"] is not None,
     "reads_target_recipe":        _read_target,
@@ -538,6 +649,10 @@ BEHAVIORS = {
     "reads_then_plans_then_stops": lambda t, c: (
         t["outcome"] == "planned" and t["read_step"] is not None
         and (t["plan_step"] is None or t["read_step"] < t["plan_step"])),
+    "composes_orchestrator":      _composes_orchestrator,
+    "chains_sub_skills":          _chains_sub_skills,
+    "composes_any_subskill":      _composes_any_subskill,
+    "planned_after_orchestrator": _planned_after_orchestrator,
 }
 
 
@@ -706,7 +821,14 @@ def run_case(case: dict, variant: dict, reps: int = 16, workers: int = 6,
     cid, vlabel = case.get("id", "case"), _variant_label(variant)
 
     def one(i):
+        # Case- or variant-level overrides for rollout caps so multi-stage
+        # pipelines (Phase 6 composition trials) don't run out of code turns
+        # before the second/third sub-Skill chain. Defaults match the
+        # cold-start cases that drove the original cap design.
+        _ms = int(case.get("max_steps") or variant.get("max_steps") or 10)
+        _mc = int(case.get("max_code_turns") or variant.get("max_code_turns") or 6)
         t = rollout(client, model, system, case["messages"], tools, env,
+                    max_steps=_ms, max_code_turns=_mc,
                     continue_after_plan=bool(variant.get("continue_after_plan", False)),
                     step_labeled_injection=bool(variant.get("step_labeled_injection", False)),
                     plan_recheck_steer=bool(variant.get("plan_recheck_steer", False)))
@@ -775,11 +897,15 @@ def run_matrix(cases: list, variants: list, reps: int = 16, workers: int = 12,
         cell = cells[ci]
         case = cell["case"]
         try:
+            _v = cell["variant"]
+            _ms = int(case.get("max_steps") or _v.get("max_steps") or 10)
+            _mc = int(case.get("max_code_turns") or _v.get("max_code_turns") or 6)
             t = rollout(client, os.environ.get("ABA_EVAL_MODEL") or case.get("model", "claude-haiku-4-5-20251001"), cell["system"],
                         case["messages"], cell["tools"], case.get("env_stubs", {}),
-                        continue_after_plan=bool(cell["variant"].get("continue_after_plan", False)),
-                        step_labeled_injection=bool(cell["variant"].get("step_labeled_injection", False)),
-                        plan_recheck_steer=bool(cell["variant"].get("plan_recheck_steer", False)))
+                        max_steps=_ms, max_code_turns=_mc,
+                        continue_after_plan=bool(_v.get("continue_after_plan", False)),
+                        step_labeled_injection=bool(_v.get("step_labeled_injection", False)),
+                        plan_recheck_steer=bool(_v.get("plan_recheck_steer", False)))
         except Exception:  # noqa: BLE001 — one rollout dying must NOT nuke the whole sweep
             return ci, None
         if capture_dir:
