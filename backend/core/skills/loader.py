@@ -145,11 +145,28 @@ def _invalidate_index() -> None:
     _INDEX = None
 
 
+def _spec_with_resources(spec: SkillSpec, resources: tuple[str, ...]) -> SkillSpec:
+    """SkillSpec is frozen — clone with resources populated."""
+    from dataclasses import replace
+    return replace(spec, resources=resources)
+
+
 def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
     """Walk a directory tree of .md skill files and register each one. Returns
     the number registered. Idempotent on re-registration (later wins so
     overlays can override). Also feeds the plan validator's KNOWN_SKILLS
     so 'unknown skill' warnings reference the real catalog.
+
+    Two layouts are recognized (CC-convergence Phase 2):
+      • Folder skill:  `<dir>/SKILL.md`   — body comes from SKILL.md, every
+        sibling file under the folder is exposed via `SkillSpec.resources`.
+        Matches Claude Code's marketplace skill format (`<name>/SKILL.md +
+        references/ + scripts/ + assets/`).
+      • Flat skill:    `<dir>/<name>.md`  — single-file procedure as before.
+        Backward compatible — most of ABA's current cookbook is flat.
+
+    Folder skills are detected first; rglob then skips anything inside a
+    recognized folder so its references/* don't double-register as standalones.
 
     `visibility` is stamped on every file under this root (folder-driven, not
     per-file). Files in a subfolder take that subfolder's name as their default
@@ -161,22 +178,55 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
     if not p.is_dir():
         return 0
     n = 0
-    for f in sorted(p.rglob("*.md")):
-        rel = f.relative_to(p)
-        # Immediate subfolder (if any) is the default domain facet.
-        default_domain = rel.parts[0] if len(rel.parts) > 1 else ""
-        text = f.read_text()
+    consumed_dirs: set[Path] = set()
+
+    # --- Folder-skill pre-pass: every <dir>/SKILL.md is one skill with siblings.
+    for skill_md in sorted(p.rglob("SKILL.md")):
+        folder = skill_md.parent
+        if folder == p:
+            # SKILL.md at the very root has no folder identity — treat as flat below.
+            continue
+        rel_folder = folder.relative_to(p)
+        # Domain defaults to the folder's immediate parent under `p` so a layout
+        # like recipes/genomics/scrna-qc/SKILL.md classifies under 'genomics'.
+        default_domain = rel_folder.parts[0] if len(rel_folder.parts) > 1 else ""
         try:
-            spec = _spec_from_text(text, source_path=str(f),
+            spec = _spec_from_text(skill_md.read_text(), source_path=str(folder),
                                    default_domain=default_domain, visibility=visibility)
         except ValueError as e:
-            # A broken skill file is a content bug — surface it but don't
-            # abort loading. Other valid skills should still register.
+            print(f"[skills] skip {skill_md}: {e}")
+            continue
+        # Collect every sibling file under the folder (excluding SKILL.md) as a
+        # bundled resource — relative paths so the agent can read_file them.
+        resources = tuple(sorted(
+            str(f.relative_to(folder))
+            for f in folder.rglob("*")
+            if f.is_file() and f.name != "SKILL.md"
+        ))
+        spec = _spec_with_resources(spec, resources)
+        _REGISTRY[spec.name] = spec
+        register_skill(spec.name)
+        consumed_dirs.add(folder)
+        n += 1
+
+    # --- Flat-skill pass: every other .md is one self-contained skill.
+    for f in sorted(p.rglob("*.md")):
+        if any(f.is_relative_to(d) for d in consumed_dirs):
+            continue       # part of an already-registered folder skill
+        if f.name == "SKILL.md":
+            continue       # the folder pre-pass owns these
+        rel = f.relative_to(p)
+        default_domain = rel.parts[0] if len(rel.parts) > 1 else ""
+        try:
+            spec = _spec_from_text(f.read_text(), source_path=str(f),
+                                   default_domain=default_domain, visibility=visibility)
+        except ValueError as e:
             print(f"[skills] skip {f.name}: {e}")
             continue
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
         n += 1
+
     if n:
         _invalidate_index()
     return n
