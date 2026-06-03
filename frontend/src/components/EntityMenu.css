@@ -91,3 +91,38 @@
   color: white;
   border-color: var(--accent);
 }
+.entity-menu__primary.entity-menu__danger-btn {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #fff;
+}
+.entity-menu__primary.entity-menu__danger-btn:hover {
+  background: #991b1b;
+  border-color: #991b1b;
+}
+.entity-menu__delete-body {
+  font-size: 12.5px;
+  color: var(--text-2, #333);
+  line-height: 1.4;
+  max-width: 280px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.entity-menu__delete-meta {
+  font-size: 11.5px;
+  color: var(--text-3, #666);
+}
+.entity-menu__delete-error {
+  font-size: 11.5px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.entity-menu__delete-error ul {
+  margin: 4px 0 0 16px; padding: 0;
+}
+.entity-menu__delete-error em {
+  color: var(--text-4, #777);
+  font-style: normal;
+}

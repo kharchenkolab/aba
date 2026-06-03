@@ -14,7 +14,7 @@ from config import ARTIFACTS_DIR, DATA_DIR
 from content.bio.graph.result_members import add_result_member, remove_result_member, update_result_member, reorder_result_members
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
-from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity
+from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
 from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
 from content.bio.lifecycle.promote import (
@@ -356,14 +356,63 @@ def entities_patch(entity_id: str, req: EntityPatch):
 
 
 @app.delete("/api/entities/{entity_id}")
-def entities_delete(entity_id: str):
-    """Soft-delete (status='archived'). Workspace cannot be deleted."""
+def entities_delete(entity_id: str, hard: bool = False):
+    """Soft-delete (default): mark status='archived'. Workspace cannot be deleted.
+
+    With ?hard=true: hard-delete after refusing if other (non-archived) entities
+    reference this one via entity_edges. For dataset entities whose artifact is
+    a directory under the project's data dir, the directory is removed too.
+    Returns {"ok": true, "deleted": <entity>} on hard, the archived entity on
+    soft."""
     if entity_id == WORKSPACE_ID:
         raise HTTPException(400, "workspace cannot be deleted")
-    updated = archive_entity(entity_id)
-    if not updated:
+    ent = get_entity(entity_id)
+    if not ent:
         raise HTTPException(404, f"Entity {entity_id} not found")
-    return updated
+    if not hard:
+        updated = archive_entity(entity_id)
+        if not updated:
+            raise HTTPException(404, f"Entity {entity_id} not found")
+        return updated
+
+    # Hard-delete: refuse if any non-archived entity points at us (inbound),
+    # or if we point at any non-archived entity (outbound). Edges to archived
+    # entities are fine — they're already gone from the user's view.
+    blockers: list[dict] = []
+    for e in edges_to(entity_id) + edges_from(entity_id):
+        other_id = e["source_id"] if e["target_id"] == entity_id else e["target_id"]
+        if other_id == entity_id:
+            continue
+        other = get_entity(other_id)
+        if other and other.get("status") != "archived":
+            blockers.append({"id": other_id, "type": other.get("type"),
+                             "title": other.get("title"), "rel_type": e["rel_type"]})
+    if blockers:
+        raise HTTPException(409, {
+            "error": "entity has live references; archive instead, or remove the references first",
+            "references": blockers[:20],
+        })
+
+    # Delete the on-disk artifact for dataset-shaped entities. Only remove paths
+    # under the project's data dir — never traverse outside it.
+    from core.config import current_project_id, project_data_dir
+    data_root = project_data_dir(current_project_id()).resolve()
+    ap = ent.get("artifact_path")
+    if ap and ent.get("type") == "dataset":
+        try:
+            path = Path(ap).resolve()
+            if data_root in path.parents or path == data_root:
+                if path != data_root and path.exists():
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    if not delete_entity_hard(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return {"ok": True, "deleted": ent}
 
 
 @app.post("/api/entities/{entity_id}/restore")
@@ -1799,26 +1848,84 @@ def _unique_dir_path(p: Path) -> Path:
     raise RuntimeError(f"too many name collisions for {stem!r}")
 
 
+def _refresh_dataset_layout_hint(bundle: Path) -> str:
+    try:
+        from content.bio.tools import _dataset_layout_hint
+        return _dataset_layout_hint(str(bundle))
+    except Exception:
+        return ""
+
+
+def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
+    total, count = 0, 0
+    if not bundle.is_dir():
+        return (total, count)
+    for p in bundle.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+            count += 1
+    return (total, count)
+
+
+@app.post("/api/datasets")
+async def datasets_create(req: dict | None = None):
+    """Create an empty directory-shaped dataset entity. Body: {name?, project_id?}.
+    The dataset folder is created on disk so subsequent `upload-folder?append_to=`
+    calls can drop files straight into it."""
+    body = req or {}
+    _require_project_context(body.get("project_id"))
+    from core.config import current_project_id, project_data_dir
+    raw = (body.get("name") or "").strip() or "New dataset"
+    safe = Path(raw).name.strip() or "New dataset"
+    bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
+    bundle.mkdir(parents=True, exist_ok=True)
+    eid = create_entity(
+        entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        metadata={"size_bytes": 0, "file_count": 0, "layout": "directory",
+                  "layout_hint": "", "original_name": raw},
+    )
+    return get_entity(eid)
+
+
 @app.post("/api/upload-folder")
 async def upload_folder(
     folder_name: str = Form(...),
     files: list[UploadFile] = File(...),
     rel_paths: list[str] = Form(...),
+    append_to: str | None = Form(None),
+    project_id: str | None = Form(None),
 ):
     """Upload N files as ONE directory-shaped dataset entity, preserving the
     folder layout the user dropped. `files` and `rel_paths` are parallel:
-    files[i] lands under `DATA_DIR/<safe_folder>/<rel_paths[i]>`. Returns
-    the created dataset entity (matches `register_dataset`'s shape)."""
+    files[i] lands under `DATA_DIR/<safe_folder>/<rel_paths[i]>`.
+
+    If `append_to=<dataset_id>` is provided, files are appended to that
+    existing dataset (no new entity), and the dataset's size/file_count/
+    layout_hint are refreshed. Returns the (created or updated) entity."""
+    _require_project_context(project_id)
     if not files:
         raise HTTPException(400, "no files in upload")
     if len(files) != len(rel_paths):
         raise HTTPException(400, "files and rel_paths length mismatch")
     from core.config import current_project_id, project_data_dir
-    safe = Path(folder_name).name.strip() or "uploaded_folder"
-    bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
-    bundle.mkdir(parents=True, exist_ok=True)
 
-    total_bytes = 0
+    appending = bool(append_to)
+    if appending:
+        existing = get_entity(append_to)
+        if not existing or existing["type"] != "dataset":
+            raise HTTPException(404, f"Dataset {append_to} not found")
+        if (existing.get("metadata") or {}).get("layout") != "directory":
+            raise HTTPException(400, "cannot append to a single-file dataset")
+        bundle = Path(existing["artifact_path"])
+        bundle.mkdir(parents=True, exist_ok=True)
+    else:
+        safe = Path(folder_name).name.strip() or "uploaded_folder"
+        bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
+        bundle.mkdir(parents=True, exist_ok=True)
+
     written = 0
     for f, rel in zip(files, rel_paths):
         # Defang the rel path: refuse traversal + absolute paths; keep just
@@ -1827,27 +1934,33 @@ async def upload_folder(
         if not rel_clean or ".." in rel_clean.split("/"):
             continue
         dest = bundle / rel_clean
+        # Suffix on collision when appending — don't silently overwrite.
+        if appending and dest.exists():
+            dest = _unique_path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         with dest.open("wb") as out:
             shutil.copyfileobj(f.file, out)
-        total_bytes += dest.stat().st_size
         written += 1
 
     if written == 0:
-        # Nothing useful landed — clean up the empty bundle to avoid clutter.
-        try: bundle.rmdir()
-        except OSError: pass
+        if not appending:
+            try: bundle.rmdir()
+            except OSError: pass
         raise HTTPException(400, "no valid file paths in upload")
 
-    # Layout hint reuses the helper added with register_dataset's enrichment.
-    try:
-        from content.bio.tools import _dataset_layout_hint
-        hint = _dataset_layout_hint(str(bundle))
-    except Exception:
-        hint = ""
+    total_bytes, file_count = _dataset_bytes_and_count(bundle)
+    hint = _refresh_dataset_layout_hint(bundle)
+
+    if appending:
+        meta = dict((existing.get("metadata") or {}))
+        meta.update({"size_bytes": total_bytes, "file_count": file_count,
+                     "layout": "directory", "layout_hint": hint})
+        update_entity(append_to, metadata=meta)
+        return get_entity(append_to)
+
     eid = create_entity(
         entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
-        metadata={"size_bytes": total_bytes, "file_count": written,
+        metadata={"size_bytes": total_bytes, "file_count": file_count,
                   "layout": "directory", "layout_hint": hint,
                   "original_name": folder_name},
     )
