@@ -744,6 +744,21 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
     onKeepMessage?.(key, msgText, imageUrls, next)
   }
 
+  // Copy the message's text content to the clipboard. Briefly flips to a
+  // check mark so the click registers visually. Image-only cells (no text)
+  // hide the button — there's nothing to copy.
+  const [copied, setCopied] = useState(false)
+  const canCopy = msgText.length > 0 && !isStreaming
+  async function copyMessage() {
+    try {
+      await navigator.clipboard.writeText(msgText)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1100)
+    } catch (err) {
+      console.error('clipboard write failed', err)
+    }
+  }
+
   // Highlight any cell: draw a pink marker over the message, then rasterize
   // the cell (low-res) with the mark composited and attach it + the cell text.
   const contentRef = useRef<HTMLDivElement>(null)
@@ -940,6 +955,19 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
           </button>
         )}
       </div>
+      {canCopy && (
+        <div className="msg__tools msg__tools--bottom">
+          <button
+            className={`msg__tool msg__tool--hover ${copied ? 'msg__tool--on' : ''}`}
+            onClick={copyMessage}
+            title={copied ? 'Copied!' : 'Copy message text'}
+          >
+            {copied
+              ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 12 10 18 20 6"/></svg>
+              : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
