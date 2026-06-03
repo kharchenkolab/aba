@@ -390,3 +390,30 @@ class JupyterKernelSession:
             self._km.shutdown_kernel(now=True)
         except Exception:  # noqa: BLE001
             pass
+        # Belt + braces: if jupyter_client's shutdown_kernel didn't actually
+        # kill the subprocess (or the protocol-level shutdown is too slow on
+        # uvicorn's tight shutdown deadline), SIGKILL the kernel pid directly
+        # so it doesn't survive as an orphan owned by init (PK 2026-06-03 —
+        # ~10 multi-day-old orphan R kernels were eating ~15 GB resident).
+        try:
+            pid = self.kernel_pid()
+            if pid:
+                import os, signal
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # already gone — good
+        except Exception:  # noqa: BLE001
+            pass
+
+    def kernel_pid(self) -> Optional[int]:
+        """The OS pid of the kernel subprocess, or None if unknown.
+        Read from KernelManager's Popen (jupyter_client stores it as `.kernel`
+        — old API — or `.provisioner.proc` — newer)."""
+        try:
+            km = self._km
+            proc = getattr(km, "kernel", None) or getattr(
+                getattr(km, "provisioner", None), "proc", None)
+            return getattr(proc, "pid", None)
+        except Exception:  # noqa: BLE001
+            return None
