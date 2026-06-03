@@ -81,6 +81,15 @@ async def startup():
     from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
+    # Orphan-kernel reaper — SIGKILL any kernels left behind by a prior
+    # uvicorn that didn't run our shutdown handler (forced kill / crash /
+    # SIGKILL during dev bouncing). Called explicitly here (not lazily on
+    # first get_pool()) so the cleanup happens BEFORE any user load.
+    try:
+        from core.exec.kernels.pool import _reap_orphan_kernels
+        _reap_orphan_kernels()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
     # Capture the asyncio loop so worker-thread producers
     # (auto_interpret, background jobs) can push events to the
     # /api/notifications SSE channel.
@@ -183,6 +192,25 @@ async def shutdown():
             for t in tasks:
                 if not t.done():
                     t.cancel()
+    # 4. SIGKILL all owned kernel subprocesses. atexit-only doesn't fire on
+    #    SIGTERM (the reload/supervised exit path); signal-handler-in-worker
+    #    is unreliable under multiprocessing.spawn. The FastAPI shutdown
+    #    lifecycle, by contrast, IS invoked on uvicorn graceful exits — so
+    #    that's where we shoot the kernels. Prevents the orphan accumulation
+    #    PK observed (~15 GB resident, ~10 zombies, 2026-06-03).
+    try:
+        from core.exec.kernels import get_pool
+        import os, signal
+        pids = get_pool().owned_kernel_pids()
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if pids:
+            print(f"[shutdown] SIGKILLed {len(pids)} owned kernel subprocess(es)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[shutdown] kernel cleanup failed (non-fatal): {e}")
 
 
 # ---------- Projects ----------
