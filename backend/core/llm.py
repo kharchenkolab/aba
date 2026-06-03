@@ -181,7 +181,12 @@ def _wants_cc_marker() -> bool:
 
 def _oauth_bearer():
     """Claude Code subscription OAuth bearer, or None. $CLAUDE_CODE_OAUTH_TOKEN else the
-    stored CLI credential. Re-read per call so a refreshed token is picked up."""
+    stored CLI credential. Re-read per call so a refreshed token is picked up.
+
+    Treats the token as missing once `expiresAt` is past — sending an expired bearer
+    just yields a confusing 401. With a stale token we'd rather return None so the
+    caller (oauth_cc mode) can refuse with a clear, actionable error."""
+    import time
     tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if tok:
         return tok.strip()
@@ -189,10 +194,21 @@ def _oauth_bearer():
     if os.path.exists(cred):
         try:
             oa = json.load(open(cred)).get("claudeAiOauth") or {}
+            exp = oa.get("expiresAt")
+            # expiresAt is ms-since-epoch; treat expired (5s grace for clock skew)
+            # as missing so we don't ship a doomed request.
+            if isinstance(exp, (int, float)) and exp <= int(time.time() * 1000) + 5_000:
+                return None
             return (oa.get("accessToken") or "").strip() or None
         except Exception:  # noqa: BLE001
             return None
     return None
+
+
+class OAuthTokenUnavailable(RuntimeError):
+    """Raised when oauth_cc mode is configured but no usable Claude Code OAuth token
+    is available (missing file, missing $CLAUDE_CODE_OAUTH_TOKEN, or token expired).
+    Caught by guide.py's stream error handler — mapped to a friendly UI toast."""
 
 
 def _llm_client():
@@ -213,10 +229,19 @@ def _llm_client():
     Returns `AsyncAnthropic` (not the sync `Anthropic`) so guide.py's streaming
     loop can iterate events without parking the event loop — fixed 2026-05-31."""
     import anthropic
-    if _credential_mode() in ("oauth", "oauth_cc"):
+    mode = _credential_mode()
+    if mode in ("oauth", "oauth_cc"):
         tok = _oauth_bearer()
         if tok:
             return anthropic.AsyncAnthropic(auth_token=tok)
+        # No token + oauth_cc means the user explicitly chose subscription billing;
+        # silently falling back to the .env API key would burn an unrelated budget
+        # and hide the real problem. Refuse with a clear, actionable error.
+        if mode == "oauth_cc":
+            raise OAuthTokenUnavailable(
+                "Claude Code OAuth token is missing or expired. "
+                "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
+                "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
     return anthropic.AsyncAnthropic(api_key=API_KEY)
 
 

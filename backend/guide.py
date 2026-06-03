@@ -349,6 +349,19 @@ def _is_transient(exc: Exception) -> bool:
 
 def _friendly_error(exc: Exception) -> str:
     s = str(exc).lower()
+    # OAuth token expired/missing — surfaces both our pre-flight refusal
+    # (OAuthTokenUnavailable) and a stale-token 401 that slipped through.
+    from core.llm import OAuthTokenUnavailable, _credential_mode
+    if isinstance(exc, OAuthTokenUnavailable):
+        return ("Claude Code OAuth token is expired or missing. Run `claude` once "
+                "to refresh it (no server restart needed), then retry.")
+    if (getattr(exc, "status_code", None) == 401
+            or "authentication_error" in s or "invalid authentication credentials" in s):
+        if _credential_mode() == "oauth_cc":
+            return ("Claude Code OAuth token rejected (likely expired mid-session). "
+                    "Run `claude` once to refresh ~/.claude/.credentials.json, then retry.")
+        return ("The model rejected our credentials (401). Check ANTHROPIC_API_KEY in .env "
+                "or ABA_LLM_CREDENTIAL mode.")
     if "overloaded" in s or getattr(exc, "status_code", None) == 529:
         return ("The model is overloaded right now and didn't respond after a "
                 "few retries. Please try again in a moment.")
