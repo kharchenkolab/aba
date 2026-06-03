@@ -176,11 +176,24 @@ def run_advisor_one_shot(
             text = spec.fake_text
         else:
             import anthropic
-            client = anthropic.Anthropic(api_key=API_KEY)
+            from core.llm import _credential_mode, _oauth_bearer, _wants_cc_marker, _CC_MARKER_BLOCK
+            # Honor the configured credential mode (was hardcoded apikey →
+            # silently failed on oauth_cc with a zero-balance .env key,
+            # 2026-06-03). Mirrors core.llm._llm_client + the sync helper
+            # in content/bio/lifecycle/promote.py.
+            if _credential_mode() in ("oauth", "oauth_cc") and _oauth_bearer():
+                client = anthropic.Anthropic(auth_token=_oauth_bearer())
+            else:
+                client = anthropic.Anthropic(api_key=API_KEY)
+            if _wants_cc_marker():
+                system_payload = [_CC_MARKER_BLOCK,
+                                  {"type": "text", "text": spec.system_prompt}]
+            else:
+                system_payload = spec.system_prompt
             msg = client.messages.create(
                 model=spec.model,
                 max_tokens=max_tokens,
-                system=spec.system_prompt,
+                system=system_payload,
                 messages=[{"role": "user", "content": user_prompt}],
             )
             text = "".join(

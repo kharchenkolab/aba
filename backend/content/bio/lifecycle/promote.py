@@ -213,11 +213,14 @@ def _sync_anthropic_client():
     needs a SYNC client — otherwise `client.messages.create(...)` returns
     a coroutine that's never awaited and reading `.content` throws, getting
     eaten by the try/except and silently degrading to chat-text pluck (the
-    2026-05-31 hang). Mirrors `_llm_client`'s OAuth-vs-API-key selection."""
-    import anthropic, os
+    2026-05-31 hang). Mirrors `_llm_client`'s OAuth-vs-API-key selection —
+    BOTH `oauth` and `oauth_cc` route through the bearer (2026-06-03: the
+    earlier literal `== "oauth"` check silently fell through to apikey on
+    oauth_cc, hitting a zero-balance .env key → silent caption failure)."""
+    import anthropic
     from core.config import API_KEY
-    from core.llm import _oauth_bearer
-    if os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower() == "oauth":
+    from core.llm import _oauth_bearer, _credential_mode
+    if _credential_mode() in ("oauth", "oauth_cc"):
         tok = _oauth_bearer()
         if tok:
             return anthropic.Anthropic(auth_token=tok)
@@ -315,11 +318,23 @@ def _llm_annotation_request(
         user_blocks.append({"type": "text", "text": "\n\n".join(text_parts) or "(no context)"})
 
         from core.config import MODEL
+        from core.llm import _wants_cc_marker, _CC_MARKER_BLOCK
         client = _sync_anthropic_client()
+        # On oauth_cc, the Anthropic server gates non-Haiku OAuth requests on
+        # the CC marker being byte-exactly the first system block — otherwise
+        # 429 (categorical reject, not quota). Mirror what core/llm.py does for
+        # the async live-agent path; without it, captions silently fail under
+        # Sonnet+oauth_cc the same way they did under apikey-with-zero-balance
+        # (2026-06-03: both bugs surfaced together in prj_4b07b6ef).
+        if _wants_cc_marker():
+            system_payload = [_CC_MARKER_BLOCK,
+                              {"type": "text", "text": system_prompt}]
+        else:
+            system_payload = system_prompt
         r = client.messages.create(
             model=MODEL,
             max_tokens=max_tokens,
-            system=system_prompt,
+            system=system_payload,
             messages=[{"role": "user", "content": user_blocks}],
         )
         return " ".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
