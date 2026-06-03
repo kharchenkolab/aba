@@ -87,10 +87,11 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const [query, setQuery] = useState('')
 
   const load = useCallback(async () => {
+    // Initial-load: just fetch projects. Summary is fetched per-selection
+    // below (useEffect on selectedId/list[0]), so the preview matches.
     try {
-      const [pr, sr] = await Promise.all([fetch('/api/projects'), fetch('/api/home-summary')])
+      const pr = await fetch('/api/projects')
       if (pr.ok) setProjects(await pr.json())
-      if (sr.ok) setSummary(await sr.json())
     } catch { /* ignore */ }
     onProjectsChanged?.()
   }, [onProjectsChanged])
@@ -159,6 +160,19 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   // the page meaningful right after a server restart — even when no project
   // is "current" on the backend, we still show SOMETHING reasonable.
   const current = (selectedId ? list.find(p => p.id === selectedId) : null) ?? list[0] ?? null
+  // Refetch home-summary scoped to the currently-previewed project. Triggers
+  // on selection change so Recent Activity + Attention reflect THAT project,
+  // not whichever the backend's in-process current happens to be.
+  const currentId = current?.id ?? null
+  useEffect(() => {
+    if (!currentId) return
+    let cancelled = false
+    fetch(`/api/home-summary?project_id=${encodeURIComponent(currentId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(s => { if (!cancelled && s) setSummary(s) })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [currentId])
   const q = query.trim().toLowerCase()
   const projectMatches = q ? list.filter(p => p.name.toLowerCase().includes(q)) : list
   const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
@@ -236,7 +250,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
               <div className="home__main home__panel home__panel--current">
                 <div className="home__cur-head">
                   <div className="home__cur-titles">
-                    <span className="home__kicker">{current.current ? 'Current project' : 'Project'}</span>
+                    <span className="home__kicker">Project</span>
                     <h1>{current.name}</h1>
                     {current.last_touched && (
                       <span className="home__muted">Last touched {rel(current.last_touched)}</span>
@@ -258,44 +272,40 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                   ))}
                 </div>
 
-                {/* Recent-activity + Attention come from /api/home-summary,
-                    which reads the in-process current project. If we're
-                    previewing a DIFFERENT project (right-rail click is now
-                    UI-only), those numbers would be stale — hide them and
-                    show just counts + "Open project →". The user gets the
-                    full dashboard once they actually enter the project. */}
-                {current.current && (
-                  <div className="home__current-body">
-                    <div className="home__section">
-                      <div className="home__panel-head">Recent activity</div>
-                      {(summary?.recent_events.length ?? 0) === 0 ? (
-                        <div className="home__muted">No activity yet.</div>
-                      ) : (
-                        <div className="home__events">
-                          {summary?.recent_events.map(ev => (
-                            <button key={ev.id} className="home__event" onClick={() => onEnter(current.id)}>
-                              <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
-                              <span className="home__event-title">{ev.title ?? ''}</span>
-                              <span className="home__event-date">{rel(ev.ts)}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="home__section home__section--attention">
-                      <div className="home__panel-head">Attention</div>
-                      <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
-                      <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
-                      <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
-                      <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
-                      {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
-                       !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
-                        <div className="home__muted">Nothing needs your attention.</div>
-                      )}
-                    </div>
+                {/* Recent-activity + Attention come from /api/home-summary
+                    scoped to the previewed project (refetched in the effect
+                    above whenever the selection changes), so the panel is
+                    accurate for whatever project the user is browsing. */}
+                <div className="home__current-body">
+                  <div className="home__section">
+                    <div className="home__panel-head">Recent activity</div>
+                    {(summary?.recent_events.length ?? 0) === 0 ? (
+                      <div className="home__muted">No activity yet.</div>
+                    ) : (
+                      <div className="home__events">
+                        {summary?.recent_events.map(ev => (
+                          <button key={ev.id} className="home__event" onClick={() => onEnter(current.id)}>
+                            <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
+                            <span className="home__event-title">{ev.title ?? ''}</span>
+                            <span className="home__event-date">{rel(ev.ts)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+
+                  <div className="home__section home__section--attention">
+                    <div className="home__panel-head">Attention</div>
+                    <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
+                    <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
+                    <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
+                    <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
+                    {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
+                     !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
+                      <div className="home__muted">Nothing needs your attention.</div>
+                    )}
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="home__main home__panel home__panel--current home__panel--empty">
