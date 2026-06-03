@@ -16,9 +16,11 @@ export interface ToolStartBlock {
   /** Anthropic tool_use id — used to attach live `tool_chunk` events to the
    *  right tool block (#334 Phase 1). Frontend keys live-stream off this. */
   tool_use_id?: string
-  /** Live-tail of stdout accumulated from `tool_chunk` SSE events while the
-   *  tool runs. Cleared when the matching tool_result lands (which carries
-   *  the final, snipped stdout). */
+  /** Live-tail STATE populated from `tool_chunk` metadata events. Text
+   *  itself is fetched on demand (server-side buffer + replay endpoint) —
+   *  these fields are the lightweight indicator the button shows without
+   *  expanding. liveStdout/liveStderr are populated only while the drawer
+   *  is open (ToolStep polls the replay endpoint). */
   liveStdout?: string
   liveStderr?: string
   /** Cumulative bytes per stream (from coalescer's lifetime counter). */
@@ -84,8 +86,8 @@ export interface DisplayMessage {
 export interface DeltaEvent       { type: 'delta';       text: string }
 export interface ToolStartEvent   { type: 'tool_start';  name: string; input: Record<string, unknown>; tool_use_id?: string }
 export interface ToolResultEvent  { type: 'tool_result'; name: string; result: Record<string, unknown>; tool_use_id?: string }
-/** #334 Phase 1 — coalesced live stdout/stderr chunk from run_python / run_r,
- *  keyed back to the originating tool_start by `tool_use_id`. */
+/** #334 — coalesced live stdout/stderr chunk from run_python / run_r, keyed
+ *  back to the originating tool_start by `tool_use_id`. */
 export interface ToolChunkEvent {
   type: 'tool_chunk'
   tool_use_id: string

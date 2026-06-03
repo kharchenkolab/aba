@@ -458,15 +458,14 @@ export function useChat(
             } else if (ev.type === 'tool_chunk') {
               // #334 Phase 1 — live-tail of run_python / run_r stdout/stderr
               // routed to the originating tool_start block. Append per-stream;
-              // remember lifetime byte counts + elapsed for the live header.
+              // track bytes/elapsed for the button-side live indicator.
               //
-              // bytes_total dedupe (#334 Phase 2): the same chunk can arrive
-              // twice — once via the live SSE stream, once on a /tool_stream
+              // bytes_total dedupe (Phase 2): the same chunk can arrive twice
+              // — once via the live SSE stream, once on a /tool_stream
               // rehydrate or an SSE replay-from-since. Each chunk carries the
-              // CUMULATIVE byte counter; if it's ≤ what we've already applied
-              // for this stream, the chunk is already represented → skip. If
-              // PARTIALLY new (rehydrated state lands mid-chunk), apply only
-              // the tail.
+              // CUMULATIVE byte counter; if ≤ what we've already applied for
+              // this stream, the chunk is fully subsumed → skip. If only
+              // PARTIALLY new (rehydrate landed mid-chunk), apply the tail.
               const target = streamingBlocks.findLast(b => b.type === 'tool_start'
                 && (b as { tool_use_id?: string }).tool_use_id === ev.tool_use_id)
               if (target && target.type === 'tool_start') {
@@ -478,8 +477,6 @@ export function useChat(
                 }
                 const currentBytes = ev.stream === 'stderr'
                   ? (t.liveBytesStderr || 0) : (t.liveBytesStdout || 0)
-                // bytes_total > currentBytes → there's something new to apply.
-                // Otherwise fully subsumed (replayed/rehydrated chunk) → skip.
                 if (ev.bytes_total > currentBytes) {
                   const newBytes = ev.bytes_total - currentBytes
                   const tail = ev.text.length <= newBytes

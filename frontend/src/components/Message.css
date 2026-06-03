@@ -333,6 +333,20 @@
   50%      { opacity: 0.35; transform: scale(0.85); }
 }
 .tool-line__live-meta { font-variant-numeric: tabular-nums; }
+
+/* Live-indicator embedded in the "output" button itself, so the user knows
+   something is streaming WITHOUT the pane auto-opening. Pulsing dot + byte
+   count visible on the button; click to expand. */
+.tool-line__script-toggle--live {
+  display: inline-flex; align-items: center; gap: 5px;
+  border-color: rgba(220, 60, 60, 0.35);
+}
+.tool-line__script-toggle--live .tool-line__live-dot {
+  width: 6px; height: 6px; flex: 0 0 6px;
+}
+.tool-line__output-meta {
+  font-variant-numeric: tabular-nums; color: var(--text-3);
+}
 .tool-spinner {
   display: inline-block;
   width: 10px; height: 10px;
