@@ -628,9 +628,17 @@ def dev_last_turn_context(thread_id: str | None = None):
 
 
 @app.get("/api/messages")
-def messages_list(thread_id: str | None = None):
+def messages_list(thread_id: str | None = None, project_id: str | None = None):
     """The project's conversation. `thread_id` scopes to one thread
-    ("default" = the default thread, materialized or not); omitted = all."""
+    ("default" = the default thread, materialized or not); omitted = all.
+
+    `project_id` pins the project per-request — without it, a first-load
+    race condition shows an empty chat: the frontend fires this in parallel
+    with /api/projects/{pid}/open, and if it lands first the backend reads
+    from the previous project's (or scratch's) DB and returns []. The
+    second refresh works because by then the project switch has happened
+    (PK 2026-06-03)."""
+    _require_project_context(project_id)
     if thread_id == "default":
         from core.graph.threads import find_default_thread
         thread_id = find_default_thread() or "default"   # real id if materialized

@@ -237,7 +237,12 @@ export function useChat(
   const loadMessages = useCallback(async () => {
     const myGen = genRef.current
     try {
-      const r = await fetch(`/api/messages?thread_id=${encodeURIComponent(threadId)}`)
+      // project_id pinned per-request — without it the backend races with
+      // /api/projects/{pid}/open and may read from the prior project's DB,
+      // returning [] (first load after server bounce shows empty chat,
+      // refresh fixes it). PK 2026-06-03.
+      const pq = projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''
+      const r = await fetch(`/api/messages?thread_id=${encodeURIComponent(threadId)}${pq}`)
       const raw = (await r.json()) as RawMsg[]
       if (r.ok && genRef.current === myGen) setMessages(collapseHistory(raw))
     } catch { /* ignore */ }
