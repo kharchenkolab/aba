@@ -65,6 +65,43 @@ KERNEL_ENABLED = os.environ.get("ABA_KERNEL_ENABLED", "1") not in ("0", "false",
 KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "900"))   # 15 min
 KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user
 
+# ── History compaction + tool-output cap ────────────────────────────────────
+# Two layers (misc/history_compaction_redesign.md):
+#   Layer A — deterministic K-window pruning (every turn). Cheap. The K is a
+#     trade-off vs. prompt cache: every aging-out event mutates a block sitting
+#     INSIDE the cached message-tail prefix, invalidating cache from that point
+#     forward. Setting K too low ⇒ continuous cache churn; too high ⇒ wasted
+#     tokens on stale verbose tool_results. K=30 matches CC's "auto-compact
+#     rarely fires" behavior in practice — within a recipe execution the K-window
+#     almost never trims, so the message-tail prefix extends cleanly turn over turn.
+#   Layer B — LLM-based thread summary, fires only when the pruned messages
+#     STILL exceed THRESHOLD chars. Catastrophic for cache (replaces the whole
+#     message tail with a synthesized block) so the threshold sits high. 400K
+#     chars ≈ 100K tokens at ~4 chars/token — matches CC's autoCompactWindow
+#     default. Override via env to raise on Sonnet (200K ctx) or higher.
+HISTORY_K_TOOL_KEEP = int(os.environ.get("ABA_HISTORY_K_TOOL_KEEP", "30"))
+HISTORY_K_TEXT_KEEP = int(os.environ.get("ABA_HISTORY_K_TEXT_KEEP", "12"))
+HISTORY_SUMMARY_THRESHOLD_CHARS = int(
+    os.environ.get("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", "400000")
+)
+
+# Live-tail of run_r/run_python output: chunks emitted from the kernel are
+# coalesced before being forwarded as `tool_chunk` SSE events, so a chatty
+# cell (R progress bars, install logs, tqdm) doesn't flood the wire AND the
+# UI gets human-readable bursts instead of a stream-per-millisecond jitter.
+# Flush fires when EITHER cap is hit, whichever first. Tunable via env.
+TOOL_STREAM_FLUSH_BYTES = int(os.environ.get("ABA_TOOL_STREAM_FLUSH_BYTES", "10240"))
+TOOL_STREAM_FLUSH_INTERVAL_S = float(os.environ.get("ABA_TOOL_STREAM_FLUSH_INTERVAL_S", "1.0"))
+
+# Per-tool stdout/stderr cap applied AT INPUT TIME — when a kernel result
+# becomes a tool_result block. Capped text is what enters history and what
+# the prompt cache extends over; without this, a single huge dataframe print
+# can fill the Layer B threshold by itself. Middle-snip (vs. CC's tail-truncate)
+# preserves the informative head AND tail — both are signal in scientific
+# output (df.head() at the top, summary/return value at the bottom; middle is
+# typically repetition or progress lines). Set to 0 to disable capping.
+TOOL_OUTPUT_CAP_CHARS = int(os.environ.get("ABA_TOOL_OUTPUT_CAP_CHARS", "50000"))
+
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 WORK_DIR.mkdir(parents=True, exist_ok=True)

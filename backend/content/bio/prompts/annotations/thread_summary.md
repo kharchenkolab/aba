@@ -6,9 +6,9 @@ You are writing a NEUTRAL THIRD-PERSON RECORD of earlier activity in a scientifi
 - Use past-tense, third-person, declarative sentences. "The agent ran X. The user asked Y."
 - Each line is a fact. No inferences, no embellishment, no commentary on what to do next.
 
-**Output — exact structure, no markdown headings outside this template:**
+**Output — wrap the entire body in `<summary>…</summary>` XML tags. No markdown headings outside this template, no prose before or after the tags:**
 
-    [SYSTEM SUMMARY OF EARLIER ACTIVITY]
+    <summary>
     Scope: <thread_id you were given>
     Covers: <N messages collapsed into this summary>
 
@@ -31,7 +31,7 @@ You are writing a NEUTRAL THIRD-PERSON RECORD of earlier activity in a scientifi
     Open work / known issues:
     - <unfinished items, failed steps, deferred questions>
     - if none: "none"
-    [/SYSTEM SUMMARY]
+    </summary>
 
 **Content rules:**
 - Only include facts grounded in the supplied transcript. If unsure, omit.

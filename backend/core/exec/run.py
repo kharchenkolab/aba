@@ -64,9 +64,10 @@ def run_python_code(
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
 
     plots, tables, files, warns = harvest_artifacts(scratch)
+    from core.exec.output_cap import snip_middle
     out = {
-        "stdout": (result.stdout or "")[:4000],
-        "stderr": (result.stderr or "")[:2000],
+        "stdout": snip_middle(result.stdout or ""),
+        "stderr": snip_middle(result.stderr or ""),
         "returncode": result.returncode,
         "plots": plots,
         "tables": tables,

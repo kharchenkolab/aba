@@ -124,6 +124,7 @@ function logFor(ev: SSEEvent): LogEntry | null {
   switch (ev.type) {
     case 'delta': return null
     case 'tool_progress': return { t, type: ev.type, label: ev.message, level: 1 }
+    case 'tool_chunk':    return { t, type: ev.type, label: `${ev.stream}+${ev.text.length}B (${(ev.bytes_total/1024).toFixed(1)}KB total)`, level: 3 }
     case 'plan': return { t, type: ev.type, label: ev.title || 'plan', level: 1 }
     case 'notice': return { t, type: ev.type, label: ev.text, level: 1 }
     case 'error': return { t, type: ev.type, label: ev.text, level: 1 }
@@ -149,6 +150,7 @@ export function useChat(
   annotation?: Annotation | null,
   reloadKey?: unknown,
   threadId: string = 'default',
+  projectId?: string,
 ) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -317,8 +319,12 @@ export function useChat(
         // resuming an in-flight Turn after disconnect/reload, resume
         // (POST /api/turns/{rid}/resume) for the user's reply to a paused
         // AWAITING_USER turn, or fresh chat (POST /api/chat).
+        // project_id pinned per-request — never trust the backend's global
+        // "current project" state (it gets clobbered by bounces / multi-tab /
+        // side-scripts and silently misroutes writes to the wrong project DB).
+        const pidQ = projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''
         const res = opts.reattachRunId
-          ? await fetch(`/api/turns/${encodeURIComponent(opts.reattachRunId)}/stream?since=${opts.since ?? 0}`, {
+          ? await fetch(`/api/turns/${encodeURIComponent(opts.reattachRunId)}/stream?since=${opts.since ?? 0}${pidQ}`, {
               method: 'GET',
               signal: ac.signal,
             })
@@ -330,6 +336,7 @@ export function useChat(
               body: JSON.stringify({
                 user_text: opts.text ?? '',
                 ...(opts.approvalAction ? { action: opts.approvalAction } : {}),
+                ...(projectId ? { project_id: projectId } : {}),
               }),
             })
           : await fetch('/api/chat', {
@@ -341,6 +348,7 @@ export function useChat(
                 retry: !!opts.retry,
                 focus_entity_id: focusEntityId,
                 thread_id: threadId,
+                ...(projectId ? { project_id: projectId } : {}),
                 ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
               }),
             })
@@ -430,18 +438,66 @@ export function useChat(
               }
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'tool_start') {
-              streamingBlocks.push({ type: 'tool_start', name: ev.name, input: ev.input })
+              streamingBlocks.push({
+                type: 'tool_start', name: ev.name, input: ev.input,
+                tool_use_id: ev.tool_use_id,
+              })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
             } else if (ev.type === 'tool_progress') {
               // Surface the live phase line on the running tool so a long
               // install/compile/download shows movement, not a dead spinner.
-              const last = streamingBlocks[streamingBlocks.length - 1]
-              if (last && last.type === 'tool_start') {
-                ;(last as { type: 'tool_start'; progress?: string }).progress = ev.message
+              // Match by tool_use_id when provided (post-#334), else last block.
+              const target = ev.tool_use_id
+                ? streamingBlocks.findLast(b => b.type === 'tool_start'
+                    && (b as { tool_use_id?: string }).tool_use_id === ev.tool_use_id)
+                : streamingBlocks[streamingBlocks.length - 1]
+              if (target && target.type === 'tool_start') {
+                ;(target as { type: 'tool_start'; progress?: string }).progress = ev.message
                 setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               }
+            } else if (ev.type === 'tool_chunk') {
+              // #334 Phase 1 — live-tail of run_python / run_r stdout/stderr
+              // routed to the originating tool_start block. Append per-stream;
+              // remember lifetime byte counts + elapsed for the live header.
+              //
+              // bytes_total dedupe (#334 Phase 2): the same chunk can arrive
+              // twice — once via the live SSE stream, once on a /tool_stream
+              // rehydrate or an SSE replay-from-since. Each chunk carries the
+              // CUMULATIVE byte counter; if it's ≤ what we've already applied
+              // for this stream, the chunk is already represented → skip. If
+              // PARTIALLY new (rehydrated state lands mid-chunk), apply only
+              // the tail.
+              const target = streamingBlocks.findLast(b => b.type === 'tool_start'
+                && (b as { tool_use_id?: string }).tool_use_id === ev.tool_use_id)
+              if (target && target.type === 'tool_start') {
+                const t = target as {
+                  type: 'tool_start';
+                  liveStdout?: string; liveStderr?: string;
+                  liveBytesStdout?: number; liveBytesStderr?: number;
+                  liveElapsedS?: number; lastChunkAt?: number;
+                }
+                const currentBytes = ev.stream === 'stderr'
+                  ? (t.liveBytesStderr || 0) : (t.liveBytesStdout || 0)
+                // bytes_total > currentBytes → there's something new to apply.
+                // Otherwise fully subsumed (replayed/rehydrated chunk) → skip.
+                if (ev.bytes_total > currentBytes) {
+                  const newBytes = ev.bytes_total - currentBytes
+                  const tail = ev.text.length <= newBytes
+                    ? ev.text : ev.text.slice(-newBytes)
+                  if (ev.stream === 'stderr') {
+                    t.liveStderr = (t.liveStderr || '') + tail
+                    t.liveBytesStderr = ev.bytes_total
+                  } else {
+                    t.liveStdout = (t.liveStdout || '') + tail
+                    t.liveBytesStdout = ev.bytes_total
+                  }
+                  t.liveElapsedS = ev.elapsed_s
+                  t.lastChunkAt = Date.now()
+                  setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+                }
+              }
             } else if (ev.type === 'tool_result') {
-              streamingBlocks.push({ type: 'tool_result', name: ev.name, result: ev.result })
+              streamingBlocks.push({ type: 'tool_result', name: ev.name, result: ev.result, tool_use_id: ev.tool_use_id })
               const plots = (ev.result as Record<string, unknown>).plots as
                 | { url: string; original_name: string }[]
                 | undefined
@@ -687,5 +743,9 @@ export function useChat(
     stopTurn,
     queuedMessage, enqueue, dropQueue, steer,
     eventLog, jobs,
+    // #334 Phase 2 — passed to <Message> → <ToolStep> so an orphan tool_start
+    // (cancelled run, completed-but-tab-refreshed) can rehydrate its live
+    // output via GET /api/turns/{currentRunId}/tool_stream/{tool_use_id}.
+    currentRunId: currentRunIdRef.current,
   }
 }

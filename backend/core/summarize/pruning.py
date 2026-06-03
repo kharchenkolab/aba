@@ -21,18 +21,26 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# Defaults — tunable per call. K = "the last K of each, keep verbatim".
-K_TOOL_KEEP_DEFAULT = 6
-K_TEXT_KEEP_DEFAULT = 12
+# Defaults sourced from core.config (single tunable source — env-overridable).
+# K = "the last K of each, keep verbatim". Bumped from K=6 → K=30 (2026-06-03)
+# to stop aging out tool_results inside the cached prefix during normal recipe
+# execution. See core/config.py:HISTORY_K_TOOL_KEEP for the cache-interaction
+# rationale.
+from core.config import HISTORY_K_TOOL_KEEP, HISTORY_K_TEXT_KEEP
+K_TOOL_KEEP_DEFAULT = HISTORY_K_TOOL_KEEP
+K_TEXT_KEEP_DEFAULT = HISTORY_K_TEXT_KEEP
 
 # Tools whose tool_result we ALWAYS keep verbatim regardless of position
 # — they carry structural / navigation info the agent needs to find
 # files, see what's in the project, etc. Cheap to keep (their results
-# are short), high cost to lose.
+# are short), high cost to lose. Skill/read_skill bodies are reference
+# material the recipe executes against turn after turn — aging them out
+# breaks recipe execution and dirties the cache prefix.
 _ALWAYS_KEEP_TOOLS = frozenset({
     "list_data_files", "list_entities",
     "open_run", "close_run", "present_plan",
     "register_dataset", "register_reference",
+    "Skill", "read_skill",
 })
 
 

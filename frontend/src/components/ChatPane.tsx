@@ -60,6 +60,9 @@ interface Props {
   onSteer?: (text: string) => void
   /** Current thread id — used to persist the composer draft per thread. */
   threadId?: string | null
+  /** #334 Phase 2 — current run_id, threaded to <Message> → <ToolStep> so an
+   *  orphan tool_start can rehydrate live output via the buffer endpoint. */
+  currentRunId?: string | null
 }
 
 export default function ChatPane({
@@ -97,6 +100,7 @@ export default function ChatPane({
   onDropQueue,
   onSteer,
   threadId,
+  currentRunId,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -328,6 +332,7 @@ export default function ChatPane({
                 key={m.id}
                 message={m}
                 fileMap={fileMap}
+                currentRunId={currentRunId}
                 isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
                 collapseTools={i !== all.length - 1}
                 onAnnotate={onAnnotate}
