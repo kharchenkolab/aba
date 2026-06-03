@@ -175,7 +175,16 @@ export default function App() {
   // transient "give me room for THIS view" gesture — it auto-reopens whenever the
   // view context changes (posture, focused entity, thread, overview/inventory), so
   // the user never loses the contextual right column silently after navigating.
-  const [rightCollapsed, _setRightCollapsedRaw] = useState(false)
+  // Initial state read from localStorage so a hard reload doesn't ignore the
+  // user's last collapse choice (PK 2026-06-03 — the rail was popping back
+  // open on every reload because frameOnProjectEntry's "established → open"
+  // branch overrode the sticky on initial mount).
+  const _RAIL_LS_KEY = 'aba.rightCollapsed'
+  const _railFromLS = (() => {
+    try { return window.localStorage.getItem(_RAIL_LS_KEY) === '1' }
+    catch { return false }
+  })()
+  const [rightCollapsed, _setRightCollapsedRaw] = useState(_railFromLS)
   // Sticky user-collapse: once the user explicitly hides the right rail, no
   // automatic trigger (focus shift, agent-driven entity update, scene change,
   // first-downstream-output reveal) reopens it. Cleared when the user
@@ -183,7 +192,13 @@ export default function App() {
   // Prior fix attempts (commit 7e02798 + dependency narrowing) constrained
   // WHEN auto-reveal could fire; they didn't track USER INTENT, so any
   // remaining trigger still betrayed a deliberate collapse. PK 2026-06-02.
-  const userCollapsedRef = useRef(false)
+  const userCollapsedRef = useRef(_railFromLS)
+  // Persist on every change — both user-driven toggles and programmatic
+  // frame() calls update the sticky, so a reload restores the right state.
+  const _persistRail = (collapsed: boolean) => {
+    try { window.localStorage.setItem(_RAIL_LS_KEY, collapsed ? '1' : '0') }
+    catch { /* ignore */ }
+  }
   // For automated openers — bail when the user has stickied collapsed.
   const autoRevealRail = () => {
     if (userCollapsedRef.current) return
@@ -196,13 +211,21 @@ export default function App() {
     _setRightCollapsedRaw(prev => {
       const next = !prev
       userCollapsedRef.current = next   // true if collapsing
+      _persistRail(next)
       return next
     })
   }
-  // For project-entry framing — reset the sticky to match the initial frame.
+  // For project-entry framing — set the initial frame, but DON'T override
+  // a sticky user-collapse. Reload-driven re-frame previously clobbered
+  // userCollapsedRef.current unconditionally; honoring the sticky on
+  // 'open' (collapsed=false) calls preserves the user's choice across
+  // reloads. 'close' (collapsed=true) still wins — empty-project framing
+  // legitimately wants the rail hidden.
   const frameRail = (collapsed: boolean) => {
+    if (!collapsed && userCollapsedRef.current) return  // sticky says NO
     userCollapsedRef.current = collapsed
     _setRightCollapsedRaw(collapsed)
+    _persistRail(collapsed)
   }
   const [prefill, setPrefill] = useState('')
   // Files-tab deep-link target (e.g. a Run's "Browse in Files tab"); nonce so a
@@ -602,7 +625,7 @@ export default function App() {
     // auto_interpret's caption write-back, goes through a different code path
     // and intentionally does NOT call this — see the right-rail effect above.)
     // User-initiated pin/unpin is intentional — clear the sticky and reveal.
-    if (pin) { userCollapsedRef.current = false; _setRightCollapsedRaw(false) }
+    if (pin) { userCollapsedRef.current = false; _setRightCollapsedRaw(false); _persistRail(false) }
     // No deferred refresh — auto_interpret's caption-ready broadcast on
     // /api/notifications drives the follow-up refresh on demand.
   }
