@@ -30,6 +30,14 @@ frontend/dist/
 # E2E test outputs
 tests/e2e/screenshots/
 
+# Prompt-regression harness outputs — generated per-run, timestamped, ~MBs each
+tests/prompt_regression/results/raw/
+tests/prompt_regression/results/verdicts/
+tests/prompt_regression/results/*.log
+
 # Large local-only assets (kept out of git)
 misc/ui3/*.png
 eval/audits/vendor/
+
+# Local-only research/working notes (not project-track material)
+misc/acquisition_research/
