@@ -226,12 +226,18 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         except ValueError as e:
             print(f"[skills] skip {skill_md}: {e}")
             continue
-        # Collect every sibling file under the folder (excluding SKILL.md) as a
-        # bundled resource — relative paths so the agent can read_file them.
-        # Use the same followlinks-aware walker so resources inside symlinked
-        # folders also surface.
+        # Collect every sibling file under the folder (excluding SKILL.md) as
+        # an ABSOLUTE path bundled-resource. Previously stored as folder-relative
+        # paths like `references/foo.md`; the agent passed those verbatim to
+        # read_file, which resolves relative paths against the active Run's cwd
+        # (NOT the skill folder) → file-not-found (PK 2026-06-03, prj_4b07b6ef
+        # thr_f8e8278a). Absolute paths just work with read_file's resolver,
+        # and they incidentally discourage the agent from re-passing them as
+        # `Skill(args="references/foo.md")` (the other broken pattern observed
+        # in the same session). Follows the followlinks-aware _walk so resources
+        # under symlinked vendor packs surface too.
         resources = tuple(sorted(
-            str(f.relative_to(folder))
+            str(f.resolve())
             for f in _walk(folder)
             if f.is_file() and f.name != "SKILL.md"
         ))
