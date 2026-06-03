@@ -20,6 +20,9 @@ interface Props {
    *  "Browse in Files tab"). `targetNonce` makes repeat requests re-fire. */
   targetPath?: string
   targetNonce?: number
+  /** Pin per-request so the tree fetch isn't subject to the backend's
+   *  in-process current-project state (PK 2026-06-03). */
+  projectId?: string
 }
 
 function countFiles(n: TreeNode | null): number {
@@ -29,7 +32,7 @@ function countFiles(n: TreeNode | null): number {
   return c
 }
 
-export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, targetPath, targetNonce }: Props) {
+export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, targetPath, targetNonce, projectId }: Props) {
   const [root, setRoot] = useState<TreeNode | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -39,13 +42,13 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, t
   useEffect(() => {
     let cancelled = false
     setLoading(true); setError(null)
-    fetch('/api/files/tree')
+    fetch(`/api/files/tree${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
       .then(d => { if (!cancelled) setRoot(d as TreeNode) })
       .catch(e => { if (!cancelled) setError(String(e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [reloadKey, bump])
+  }, [reloadKey, bump, projectId])
 
   async function materialize() {
     setNotice('Building folder…')

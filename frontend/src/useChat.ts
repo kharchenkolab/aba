@@ -249,7 +249,7 @@ export function useChat(
     finally { if (genRef.current === myGen) setLoading(false) }
     if (streamingRef.current) return    // already streaming via our own POST
     try {
-      const ar = await fetch(`/api/threads/${encodeURIComponent(threadId)}/active-turn`)
+      const ar = await fetch(`/api/threads/${encodeURIComponent(threadId)}/active-turn${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)
       if (!ar.ok || genRef.current !== myGen) return
       const row = await ar.json()
       if (!row || !row.run_id || genRef.current !== myGen) return
@@ -266,7 +266,14 @@ export function useChat(
       }
       runStreamRef.current?.({ reattachRunId: row.run_id, since })
     } catch { /* probe is best-effort */ }
-  }, [threadId])
+    // deps MUST include projectId — without it, the closure captures whatever
+    // projectId was at first mount (often undefined briefly, or stale from a
+    // prior project), and the &project_id=... pin is wrong → backend reads
+    // from the wrong DB → user sees another project's chat (PK 2026-06-03
+    // observed: opening test0 showed Sp9's chat). The useEffect that calls
+    // loadMessages depends on loadMessages's identity, so re-deriving the
+    // callback on projectId change also re-fires the fetch.
+  }, [threadId, projectId])
   // Ref-shadow of runStream so loadMessages can call it without a TDZ
   // (runStream is declared after loadMessages and depends on it).
   const runStreamRef = useRef<((opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => Promise<void>) | null>(null)
@@ -617,7 +624,14 @@ export function useChat(
         ])
       }
     },
-    [focusEntityId, threadId],
+    // projectId MUST be in deps — without it the closure captures whatever
+    // projectId was at first mount, and POST /api/chat sends the STALE pid in
+    // the request body → backend _require_project_context dutifully switches
+    // to the wrong project → messages get saved in the wrong DB. PK 2026-06-03
+    // observed: live thread in prj_4b07b6ef, but the "add a gene" turn landed
+    // in prj_7b97dad2 because the closure was holding the prior pid. Same
+    // bug shape as loadMessages had — fixed there in commit cb8658e.
+    [focusEntityId, threadId, projectId],
   )
   // Expose runStream via a ref so loadMessages (declared above) can call
   // it without a temporal dead zone. Updated on every render — refs are

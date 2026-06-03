@@ -267,7 +267,9 @@ def entities_list(
     include_archived: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    project_id: str | None = None,
 ):
+    _require_project_context(project_id)
     """
     Project tree feed. Workspace root is included unless filtered out.
     Pagination via limit/offset; left None by default so small projects
@@ -2057,8 +2059,15 @@ def jobs_cancel(job_id: str):
 
 
 @app.get("/api/home-summary")
-def home_summary():
-    """Dashboard data for the Home screen: counts, recent activity, attention."""
+def home_summary(project_id: str | None = None):
+    """Dashboard data for the Home screen: counts, recent activity, attention.
+
+    `project_id` pins the project per-request so the Home page can preview
+    any project's activity by selecting it in the right rail — without it
+    the response always reflected whichever project the backend's in-process
+    `current` happened to be, which was confusing when the user was just
+    browsing project cards (PK 2026-06-03)."""
+    _require_project_context(project_id)
     ents = list_entities(exclude_workspace=True, include_archived=False)
     counts: dict[str, int] = {}
     for e in ents:
@@ -2228,7 +2237,7 @@ async def turn_stream(run_id: str, since: int = 0, project_id: str | None = None
 
 
 @app.get("/api/threads/{thread_id}/active-turn")
-def thread_active_turn(thread_id: str):
+def thread_active_turn(thread_id: str, project_id: str | None = None):
     """C-0: is there an in-flight Turn on this thread? Used by the
     frontend on chat mount so a page reload during a long-running cell
     can re-surface the Stop button + re-attach the live stream (C-1).
@@ -2241,7 +2250,12 @@ def thread_active_turn(thread_id: str):
     investigation, materialized on first message) — same resolution as
     GET /api/messages: map to the real thread id before querying.
 
+    `project_id` pins the project per-request — without it the read
+    races with /api/projects/{pid}/open and can hit the wrong project's
+    Turn rows (similar to the /api/messages race fixed in cb8658e).
+
     Returns null if no live Turn on this thread."""
+    _require_project_context(project_id)
     from core.graph._schema import _conn
     if thread_id == "default":
         from core.graph.threads import find_default_thread
@@ -2649,7 +2663,8 @@ def manifest_preview(focus_entity_id: str | None = None, thread_id: str | None =
 
 
 @app.get("/api/files/tree")
-def files_tree(include_archived: bool = False):
+def files_tree(include_archived: bool = False, project_id: str | None = None):
+    _require_project_context(project_id)
     """Virtual files view — the nested project hierarchy (files.md §3.3).
     Threads → runs/results/claims, runs → child files, results → member
     files. Multi-rooted: the same canonical artifact may appear at
