@@ -318,14 +318,14 @@
 .tool-line__live-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 7px; border-radius: 4px;
-  background: rgba(220, 60, 60, 0.12); color: #d34040;
+  background: rgba(80, 160, 90, 0.14); color: #4a8c55;
   font-weight: 600; font-size: 10px; letter-spacing: 0.04em;
 }
 .tool-line__live-badge--done {
   background: rgba(80, 160, 90, 0.14); color: #4a8c55;
 }
 .tool-line__live-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: #d34040;
+  width: 7px; height: 7px; border-radius: 50%; background: #4a8c55;
   animation: tool-line-live-pulse 1.2s ease-in-out infinite;
 }
 @keyframes tool-line-live-pulse {
@@ -339,7 +339,7 @@
    count visible on the button; click to expand. */
 .tool-line__script-toggle--live {
   display: inline-flex; align-items: center; gap: 5px;
-  border-color: rgba(220, 60, 60, 0.35);
+  border-color: rgba(80, 160, 90, 0.35);
 }
 .tool-line__script-toggle--live .tool-line__live-dot {
   width: 6px; height: 6px; flex: 0 0 6px;

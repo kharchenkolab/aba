@@ -91,7 +91,7 @@ HISTORY_SUMMARY_THRESHOLD_CHARS = int(
 # UI gets human-readable bursts instead of a stream-per-millisecond jitter.
 # Flush fires when EITHER cap is hit, whichever first. Tunable via env.
 TOOL_STREAM_FLUSH_BYTES = int(os.environ.get("ABA_TOOL_STREAM_FLUSH_BYTES", "10240"))
-TOOL_STREAM_FLUSH_INTERVAL_S = float(os.environ.get("ABA_TOOL_STREAM_FLUSH_INTERVAL_S", "1.0"))
+TOOL_STREAM_FLUSH_INTERVAL_S = float(os.environ.get("ABA_TOOL_STREAM_FLUSH_INTERVAL_S", "0.5"))
 
 # Per-tool stdout/stderr cap applied AT INPUT TIME — when a kernel result
 # becomes a tool_result block. Capped text is what enters history and what
