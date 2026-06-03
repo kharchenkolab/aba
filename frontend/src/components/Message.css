@@ -15,6 +15,12 @@
   top: 5px; right: 10px;
   display: flex; align-items: center; gap: 4px;
 }
+/* Mirror of the top-right toolbar but at the bottom-right — currently houses
+   the "copy message text" hover button. Same hover-reveal behavior as the eye. */
+.msg__tools--bottom {
+  top: auto;
+  bottom: 5px;
+}
 .msg__tool {
   display: flex; align-items: center; justify-content: center; gap: 3px;
   height: 20px; min-width: 20px; padding: 0 5px;
