@@ -379,7 +379,13 @@ function DatasetFiles({ entity, onFocus, onChatResult, onChange, projectId }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [modalNode])
 
-  const isDirectoryDataset = entity.metadata?.layout === 'directory'
+  // Trust the tree endpoint's authoritative is_directory flag (derived from
+  // disk), not the metadata.layout field — older datasets and agent-registered
+  // ones often lack the flag even when the artifact_path IS a directory.
+  // While the tree is still loading, fall back to the metadata flag so the
+  // "Add files" button doesn't flicker.
+  const treeFlag = (tree as { is_directory?: boolean } | null)?.is_directory
+  const isDirectoryDataset = treeFlag ?? (entity.metadata?.layout === 'directory')
   const empty = !tree || (tree.children?.length ?? 0) === 0
   // Append-mode requires a directory-shaped dataset (backend refuses single-
   // file datasets). Render the section even when empty so the user has the
