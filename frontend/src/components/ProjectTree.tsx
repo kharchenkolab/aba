@@ -5,6 +5,7 @@ import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
 import { RailIcon, type RailIconName } from './icons'
 import FilesView from './FilesView'
+import UploadDrop from './UploadDrop'
 import type { FileNode } from '../viewers/types'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
@@ -112,6 +113,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [sectionFilters, setSectionFilters] = useState<Record<ProjectSection, string>>(DEFAULT_FILTERS)
 
   const workspace = entities.find(e => e.id === 'workspace')
@@ -131,8 +133,12 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   const visible = entities.filter(filterFn)
   const byId = new Map(entities.map(e => [e.id, e]))
   // Named threads only; the default thread is represented by the "Main thread"
-  // chip (selects the 'default' alias), not a duplicate named row.
-  const threads = entities.filter(e => e.type === 'thread' && e.status !== 'archived' && !e.metadata?.is_default)
+  // chip (selects the 'default' alias), not a duplicate named row. Respects
+  // showArchived so the "show archived" footer checkbox actually surfaces
+  // archived threads in the Threads section (PK 2026-06-02: the toggle was
+  // appearing but doing nothing because this list pre-excluded archived).
+  const threads = entities.filter(e => e.type === 'thread' && !e.metadata?.is_default
+                                       && (showArchived || e.status !== 'archived'))
   const hasArchived = entities.some(e => e.status === 'archived' && !e.metadata?.is_default)
   const projectTitle = workspace?.title ?? 'Workspace'
 
@@ -322,10 +328,11 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       <div className="tree__scroll">
         {activeSection === 'threads' ? (() => {
           const threadList = [
-            { id: 'default', title: 'Main thread', q: '', lifecycle: 'open' },
+            { id: 'default', title: 'Main thread', q: '', lifecycle: 'open', entity: null as Entity | null },
             ...threads.map(t => ({
               id: t.id, title: t.title, q: (t.metadata?.question as string) || '',
               lifecycle: (t.metadata?.lifecycle as string) || 'open',
+              entity: t as Entity,
             })),
           ]
           const threadFilter = sectionFilters.threads
@@ -377,6 +384,11 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                           {!claimCount && !runCount && !pinnedCount && t.q && <span>question brief</span>}
                         </span>
                       </button>
+                      {t.entity && (
+                        <span onClick={e => e.stopPropagation()}>
+                          <EntityMenu entity={t.entity} onChange={onChange} />
+                        </span>
+                      )}
                       <button
                         className="tree__overview-button"
                         title="Thread overview — all items by status"
@@ -419,6 +431,10 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                     {section.label}
                     <span className="tree__pill tree__pill--green">{items.length}</span>
                   </span>
+                  {activeSection === 'data' && (
+                    <button className="tree__add-button" title="Add data (drop files or folders)"
+                            onClick={() => setUploadOpen(true)}>+</button>
+                  )}
                 </div>
               </div>
               <div className="tree__filter-row" aria-label={`${section.label} filters`}>
@@ -471,6 +487,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
             show archived
           </label>
         </div>
+      )}
+      {uploadOpen && (
+        <UploadDrop onClose={() => setUploadOpen(false)} onUploaded={onChange} />
       )}
     </aside>
   )
