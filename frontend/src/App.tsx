@@ -175,57 +175,42 @@ export default function App() {
   // transient "give me room for THIS view" gesture — it auto-reopens whenever the
   // view context changes (posture, focused entity, thread, overview/inventory), so
   // the user never loses the contextual right column silently after navigating.
-  // Initial state read from localStorage so a hard reload doesn't ignore the
-  // user's last collapse choice (PK 2026-06-03 — the rail was popping back
-  // open on every reload because frameOnProjectEntry's "established → open"
-  // branch overrode the sticky on initial mount).
-  const _RAIL_LS_KEY = 'aba.rightCollapsed'
-  const _railFromLS = (() => {
-    try { return window.localStorage.getItem(_RAIL_LS_KEY) === '1' }
-    catch { return false }
-  })()
-  const [rightCollapsed, _setRightCollapsedRaw] = useState(_railFromLS)
-  // Sticky user-collapse: once the user explicitly hides the right rail, no
-  // automatic trigger (focus shift, agent-driven entity update, scene change,
-  // first-downstream-output reveal) reopens it. Cleared when the user
-  // explicitly re-toggles or on hard project-entry (frameOnProjectEntry).
-  // Prior fix attempts (commit 7e02798 + dependency narrowing) constrained
-  // WHEN auto-reveal could fire; they didn't track USER INTENT, so any
-  // remaining trigger still betrayed a deliberate collapse. PK 2026-06-02.
-  const userCollapsedRef = useRef(_railFromLS)
-  // Persist on every change — both user-driven toggles and programmatic
-  // frame() calls update the sticky, so a reload restores the right state.
-  const _persistRail = (collapsed: boolean) => {
-    try { window.localStorage.setItem(_RAIL_LS_KEY, collapsed ? '1' : '0') }
-    catch { /* ignore */ }
-  }
+  const [rightCollapsed, _setRightCollapsedRaw] = useState(false)
+  // Sticky user-collapse: once the user explicitly hides the right rail in
+  // THIS browser session, no automatic in-session trigger (focus shift,
+  // agent-driven entity update, scene change, first-downstream-output reveal)
+  // reopens it. Session-scoped only — no localStorage persistence (PK
+  // 2026-06-03: that crossed a line; UI state shouldn't survive reload).
+  // On a fresh page, frameOnProjectEntry's CONTENT-driven decision is the
+  // sole authority; sticky doesn't enter the picture.
+  const userCollapsedRef = useRef(false)
   // For automated openers — bail when the user has stickied collapsed.
   const autoRevealRail = () => {
     if (userCollapsedRef.current) return
     _setRightCollapsedRaw(false)
   }
-  // For the user-driven toggle handle: sets the sticky bit. Collapsing sets
-  // it true; expanding clears it (the user wants the rail back, and future
-  // auto-reveals are welcome again until they collapse explicitly).
+  // User-driven toggle: sets the in-session sticky bit. Collapsing sets it
+  // true (in-session auto-reveals will respect it); expanding clears it.
   const userToggleRail = () => {
     _setRightCollapsedRaw(prev => {
       const next = !prev
-      userCollapsedRef.current = next   // true if collapsing
-      _persistRail(next)
+      userCollapsedRef.current = next
       return next
     })
   }
-  // For project-entry framing — set the initial frame, but DON'T override
-  // a sticky user-collapse. Reload-driven re-frame previously clobbered
-  // userCollapsedRef.current unconditionally; honoring the sticky on
-  // 'open' (collapsed=false) calls preserves the user's choice across
-  // reloads. 'close' (collapsed=true) still wins — empty-project framing
-  // legitimately wants the rail hidden.
+  // Programmatic project-entry framing — sets state + sticky. The rail
+  // doesn't get auto-revealed by drive-by effects on a freshly framed
+  // project unless the user toggles back open.
   const frameRail = (collapsed: boolean) => {
-    if (!collapsed && userCollapsedRef.current) return  // sticky says NO
     userCollapsedRef.current = collapsed
     _setRightCollapsedRaw(collapsed)
-    _persistRail(collapsed)
+  }
+  // Transient close (no sticky touch) — used by the pre-load flicker hide
+  // that the URL-change effect issues SYNCHRONOUSLY before /api/entities
+  // returns. Leaving sticky alone lets the post-load frameRail honor the
+  // genuine user intent (or lack thereof).
+  const _setRightTransient = (collapsed: boolean) => {
+    _setRightCollapsedRaw(collapsed)
   }
   const [prefill, setPrefill] = useState('')
   // Files-tab deep-link target (e.g. a Run's "Browse in Files tab"); nonce so a
@@ -305,7 +290,10 @@ export default function App() {
     // Collapse both columns SYNCHRONOUSLY on project entry so the empty-project
     // "zoom on chat" is in effect during the entity-fetch window; frameOnProjectEntry
     // (below) is the sole authority to re-open them once it sees the entity counts.
-    setTreeCollapsed(true); frameRail(true)
+    // Use _setRightTransient for the rail — this is a flicker-prevention close,
+    // NOT a user-intent collapse, so it must not flip the sticky bit (which
+    // would then refuse the post-load frameRail(false) for established projects).
+    setTreeCollapsed(true); _setRightTransient(true)
     fetch('/api/projects/current')
       .then(r => r.json())
       .then(d => {
@@ -323,22 +311,40 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url.pid])
 
-  // Apply the initial column framing when a project is opened:
-  //   • empty project              → full-chat view (both side columns collapsed)
-  //   • dataset(s), no output yet  → left open on the Data tab, right collapsed
-  //   • established (has output)   → normal full layout (both columns open)
-  const frameOnProjectEntry = (rows: { status?: string; type?: string }[]) => {
+  // Apply the initial column framing when a project is opened. Two decisions,
+  // made INDEPENDENTLY:
+  //
+  // Left tree:
+  //   • empty project              → collapsed (focus the conversation)
+  //   • dataset(s), no output yet  → open on Data tab (orient to data)
+  //   • established (has output)   → open
+  //
+  // Right rail (PK 2026-06-03): the rail's job is to surface user-curated
+  //   content — currently pinned figures and the user-set Question. If
+  //   either exists, reveal. Otherwise stay collapsed — the rail hosting
+  //   only AI-generated content (a guide-refined question, no pins) isn't
+  //   worth taking screen real-estate from the conversation by default.
+  //   The user can always toggle it open.
+  type _Row = { type?: string; status?: string; metadata?: Record<string, unknown> }
+  const frameOnProjectEntry = (rows: _Row[]) => {
     const active = rows.filter(e => e.status !== 'archived' && e.status !== 'superseded')
     const ds = active.filter(e => e.type === 'dataset').length
     const downstream = active.filter(e =>
       ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type ?? '')).length
-    if (downstream > 0) {            // established — show the full layout
-      setTreeCollapsed(false); frameRail(false)
-    } else if (ds > 0) {             // fresh but data is loaded — orient to it
-      setTreeCollapsed(false); setProjectSection('data'); frameRail(true)
-    } else {                         // empty — focus the conversation
-      setTreeCollapsed(true); frameRail(true)
-    }
+
+    // Left tree — same three-way as before.
+    if (downstream > 0) setTreeCollapsed(false)
+    else if (ds > 0)    { setTreeCollapsed(false); setProjectSection('data') }
+    else                setTreeCollapsed(true)
+
+    // Right rail — content-driven.
+    const hasPinnedFigure = active.some(e =>
+      e.type === 'result' &&
+      Array.isArray(e.metadata?.members) &&
+      (e.metadata!.members as Array<{ kind?: string }>).some(m => m.kind === 'figure'))
+    const hasUserQuestion = active.some(e =>
+      e.type === 'thread' && (e.metadata?.question_source === 'user'))
+    frameRail(!(hasPinnedFigure || hasUserQuestion))
   }
 
   // Enter a project picked in Home: pure navigation; the useEffect above
@@ -625,7 +631,7 @@ export default function App() {
     // auto_interpret's caption write-back, goes through a different code path
     // and intentionally does NOT call this — see the right-rail effect above.)
     // User-initiated pin/unpin is intentional — clear the sticky and reveal.
-    if (pin) { userCollapsedRef.current = false; _setRightCollapsedRaw(false); _persistRail(false) }
+    if (pin) { userCollapsedRef.current = false; _setRightCollapsedRaw(false) }
     // No deferred refresh — auto_interpret's caption-ready broadcast on
     // /api/notifications drives the follow-up refresh on demand.
   }
