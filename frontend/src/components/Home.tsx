@@ -72,6 +72,14 @@ function baseName(fn: string): string {
 
 export default function Home({ onEnter, onProjectsChanged }: Props) {
   const [projects, setProjects] = useState<Project[] | null>(null)
+  // The project currently PREVIEWED in the central column. UI-only — selecting
+  // a project here doesn't touch backend state (the server's "current project"
+  // only changes when the user actually enters one via onEnter). PK 2026-06-03:
+  // clicking a card in the right rail used to /open the project server-side,
+  // which both was a wrong abstraction and made post-restart state confusing.
+  // Defaults to null; the effect below seeds it to the most-recently-touched
+  // project once projects load.
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
   const [modal, setModal] = useState<Modal>(null)
@@ -88,20 +96,12 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   }, [onProjectsChanged])
   useEffect(() => { load() }, [load])
 
-  async function selectProject(id: string) {
-    if (projects?.find(p => p.id === id)?.current) return
-    const prev = projects
-    setProjects(ps => ps?.map(p => ({ ...p, current: p.id === id })) ?? ps)
+  // Right-rail click: pure UI selection — just preview this project in the
+  // central column. No backend call; the server's current-project state
+  // changes only when the user actually enters via onEnter.
+  function selectProject(id: string) {
+    setSelectedId(id)
     setMenuFor(null)
-    try {
-      const opened = await fetch(`/api/projects/${encodeURIComponent(id)}/open`, { method: 'POST' })
-      if (!opened.ok) throw new Error('project open failed')
-      const sr = await fetch('/api/home-summary')
-      if (sr.ok) setSummary(await sr.json())
-      onProjectsChanged?.()
-    } catch {
-      setProjects(prev)
-    }
   }
   async function submitCreate(name: string, file: File | null) {
     setBusy(true)
@@ -154,7 +154,11 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     return da < db ? 1 : -1
   })
   const startCreate = () => setModal({ kind: 'create', name: 'Untitled project', file: null })
-  const current = list.find(p => p.current) ?? null
+  // Central-column preview: explicit user selection wins; otherwise default to
+  // the most-recently-touched project (= list[0] after the sort above). Keeps
+  // the page meaningful right after a server restart — even when no project
+  // is "current" on the backend, we still show SOMETHING reasonable.
+  const current = (selectedId ? list.find(p => p.id === selectedId) : null) ?? list[0] ?? null
   const q = query.trim().toLowerCase()
   const projectMatches = q ? list.filter(p => p.name.toLowerCase().includes(q)) : list
   const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
@@ -232,7 +236,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
               <div className="home__main home__panel home__panel--current">
                 <div className="home__cur-head">
                   <div className="home__cur-titles">
-                    <span className="home__kicker">Current project</span>
+                    <span className="home__kicker">{current.current ? 'Current project' : 'Project'}</span>
                     <h1>{current.name}</h1>
                     {current.last_touched && (
                       <span className="home__muted">Last touched {rel(current.last_touched)}</span>
@@ -254,36 +258,44 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                   ))}
                 </div>
 
-                <div className="home__current-body">
-                  <div className="home__section">
-                    <div className="home__panel-head">Recent activity</div>
-                    {(summary?.recent_events.length ?? 0) === 0 ? (
-                      <div className="home__muted">No activity yet.</div>
-                    ) : (
-                      <div className="home__events">
-                        {summary?.recent_events.map(ev => (
-                          <button key={ev.id} className="home__event" onClick={() => onEnter(current.id)}>
-                            <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
-                            <span className="home__event-title">{ev.title ?? ''}</span>
-                            <span className="home__event-date">{rel(ev.ts)}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                {/* Recent-activity + Attention come from /api/home-summary,
+                    which reads the in-process current project. If we're
+                    previewing a DIFFERENT project (right-rail click is now
+                    UI-only), those numbers would be stale — hide them and
+                    show just counts + "Open project →". The user gets the
+                    full dashboard once they actually enter the project. */}
+                {current.current && (
+                  <div className="home__current-body">
+                    <div className="home__section">
+                      <div className="home__panel-head">Recent activity</div>
+                      {(summary?.recent_events.length ?? 0) === 0 ? (
+                        <div className="home__muted">No activity yet.</div>
+                      ) : (
+                        <div className="home__events">
+                          {summary?.recent_events.map(ev => (
+                            <button key={ev.id} className="home__event" onClick={() => onEnter(current.id)}>
+                              <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
+                              <span className="home__event-title">{ev.title ?? ''}</span>
+                              <span className="home__event-date">{rel(ev.ts)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
-                  <div className="home__section home__section--attention">
-                    <div className="home__panel-head">Attention</div>
-                    <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
-                    <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
-                    <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
-                    <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
-                    {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
-                     !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
-                      <div className="home__muted">Nothing needs your attention.</div>
-                    )}
+                    <div className="home__section home__section--attention">
+                      <div className="home__panel-head">Attention</div>
+                      <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
+                      <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
+                      <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
+                      <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
+                      {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
+                       !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
+                        <div className="home__muted">Nothing needs your attention.</div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : (
               <div className="home__main home__panel home__panel--current home__panel--empty">
@@ -321,7 +333,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                       return (
                         <div
                           key={p.id}
-                          className={`home__side-item ${p.current ? 'is-current' : ''}`}
+                          className={`home__side-item ${current && current.id === p.id ? 'is-current' : ''}`}
                           role="button"
                           onClick={() => selectProject(p.id)}
                         >
@@ -332,7 +344,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                           <div className="home__side-item-meta">
                             {stats.length ? stats.map(t => `${p.counts[t]} ${t}${p.counts[t] > 1 ? 's' : ''}`).join(' · ') : 'empty'}
                           </div>
-                          <div className="home__side-item-foot">{p.current ? 'Current project' : `Last touched ${rel(p.last_touched)}`}</div>
+                          <div className="home__side-item-foot">Last touched {rel(p.last_touched)}</div>
                         </div>
                       )
                     })}
