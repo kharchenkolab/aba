@@ -208,6 +208,17 @@
   display: flex;
   flex-direction: column;
 }
+/* Quieter, no-action style when there is no current project (scratch parked).
+   The panel still occupies the main column but reads as a notice, not a
+   project card. */
+.home__panel--empty .home__cur-head {
+  background: #f1f4f9;
+  border-bottom: 1px dashed #d6dde8;
+}
+.home__panel--empty .home__cur-titles h1 {
+  font-weight: 700;
+  color: #475569;
+}
 .home__cur-head {
   display: flex;
   align-items: center;

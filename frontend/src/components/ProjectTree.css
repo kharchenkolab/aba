@@ -368,6 +368,11 @@
   width: 22px;
   overflow: visible;
 }
+/* Thread rows also have the overview button at right:8px, so shift the
+   kebab left of it (22px button + 6px gap = 28px → kebab at right:36px). */
+.tree__index--threads .tree__index-row .entity-menu {
+  right: 36px;
+}
 .tree__index-row .entity-menu__btn {
   width: 22px;
   height: 22px;
