@@ -85,16 +85,20 @@ def _park_scratch() -> None:
 
 
 def init() -> None:
-    """Startup: in test mode just init the harness DB; otherwise resume the most
-    recent project, or park on scratch when there are none (true empty state)."""
+    """Startup: in test mode just init the harness DB; otherwise PARK on scratch.
+
+    We deliberately do NOT auto-pick a project here. Earlier behavior set
+    current = reg[-1] (last in registry), which silently routed any pid-less
+    request to the wrong project after a server bounce — including chat turns
+    when the frontend lost context. The page URL knows which project it's on;
+    each request now carries project_id, and the handler set_current()s before
+    doing DB work. If a request arrives without project_id and the global is
+    None, the handler can refuse loudly instead of writing to a misleading
+    default."""
     if SINGLE:
         init_db()
         return
-    reg = _load()
-    if not reg:
-        _park_scratch()
-        return
-    set_current(reg[-1]["id"])
+    _park_scratch()
 
 
 def set_current(pid: str) -> None:
@@ -103,7 +107,12 @@ def set_current(pid: str) -> None:
     _schema_mod.set_db_path(_db_file(pid))
     _state["current"] = pid
     init_db()          # idempotent — ensures tables exist
-    _touch(pid)
+    # Note: deliberately NOT calling _touch(pid) here. Project selection (= the
+    # user clicking a project on the Home screen) is a navigation event, not a
+    # work event — PK 2026-06-02 wanted the right-column ordering driven by
+    # actual project activity (chat, entities, runs), not by mere "I clicked
+    # this to look at it." last_touched is now derived from the DB file's
+    # mtime in list_projects(), so it reflects real work automatically.
     # F3: backfill display_path for any entity in this project that
     # predates the column / bio's layout computers. Cheap; idempotent.
     try:
@@ -135,13 +144,35 @@ def _touch(pid: str) -> None:
     _save(reg)
 
 
+def _db_mtime_iso(pid: str) -> str | None:
+    """Project DB mtime as ISO-8601. None if the DB doesn't exist yet
+    (briefly the case right after create_project, before any activity)."""
+    try:
+        from datetime import datetime, timezone
+        p = _db_file(pid)
+        if not p.exists():
+            return None
+        return datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def list_projects() -> list:
     if SINGLE:
         return [{"id": "single", "name": "Project", "created_at": _now(),
                  "last_touched": _now(), "current": True, "counts": _counts(_schema_mod.DB_PATH)}]
     cur = _state["current"]
-    return [{**p, "current": p["id"] == cur, "counts": _counts(_db_file(p["id"]))}
-            for p in _load()]
+    out = []
+    for p in _load():
+        # last_touched ← DB file mtime if available, else the registry value
+        # (which is set on creation). The DB mtime captures real activity
+        # automatically — selecting a project doesn't write to the DB, so it
+        # doesn't bump the time.
+        last = _db_mtime_iso(p["id"]) or p.get("last_touched") or p.get("created_at")
+        out.append({**p, "last_touched": last,
+                    "current": p["id"] == cur,
+                    "counts": _counts(_db_file(p["id"]))})
+    return out
 
 
 def create_project(name: str) -> dict:
