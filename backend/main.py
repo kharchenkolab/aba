@@ -975,7 +975,12 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest):
 def dataset_tree(did: str):
     """The dataset's subtree from the files tree (its directory contents, or the
     single registered file) — so the Dataset view can browse a folder dataset
-    with the shared FileBrowser instead of showing one opaque 'file' row."""
+    with the shared FileBrowser instead of showing one opaque 'file' row.
+
+    Adds `is_directory: bool` to the root response — the authoritative signal
+    of whether the dataset is shaped as a directory on disk (so the UI can
+    show "Add files" appropriately, without depending on metadata.layout
+    which older datasets often lack)."""
     ent = get_entity(did)
     if not ent or ent["type"] != "dataset":
         raise HTTPException(404, f"Dataset {did} not found")
@@ -993,14 +998,22 @@ def dataset_tree(did: str):
                 return hit
         return None
 
+    # is_directory: trust the disk. An on-disk directory is appendable
+    # regardless of whether metadata.layout was set. Empty directories
+    # (e.g. just-created datasets that build_files_tree skipped) still
+    # count — Path.is_dir() is the source of truth.
+    ap = ent.get("artifact_path")
+    is_directory = bool(ap) and Path(ap).is_dir()
+
     node = _find(tree)
     if node is None:
-        return {"kind": "root", "name": ent.get("title") or "dataset", "path": "", "children": []}
+        return {"kind": "root", "name": ent.get("title") or "dataset", "path": "",
+                "children": [], "is_directory": is_directory}
     if node.get("kind") == "folder":
-        return {**node, "kind": "root"}
+        return {**node, "kind": "root", "is_directory": True}
     # Single-file dataset → present the one file under a root.
     return {"kind": "root", "name": ent.get("title") or "dataset", "path": "",
-            "children": [node]}
+            "children": [node], "is_directory": is_directory}
 
 
 @app.get("/api/runs/{rid}/tree")
@@ -1917,10 +1930,20 @@ async def upload_folder(
         existing = get_entity(append_to)
         if not existing or existing["type"] != "dataset":
             raise HTTPException(404, f"Dataset {append_to} not found")
-        if (existing.get("metadata") or {}).get("layout") != "directory":
+        # Trust the disk, not metadata.layout. Older datasets and agent-
+        # registered ones often lack the layout flag even when the
+        # artifact_path is a directory; the disk shape is what matters.
+        ap = existing.get("artifact_path") or ""
+        if not ap or (Path(ap).exists() and not Path(ap).is_dir()):
             raise HTTPException(400, "cannot append to a single-file dataset")
-        bundle = Path(existing["artifact_path"])
+        bundle = Path(ap)
         bundle.mkdir(parents=True, exist_ok=True)
+        # Backfill the layout flag so future UI checks don't need the
+        # disk probe; harmless if already set.
+        if (existing.get("metadata") or {}).get("layout") != "directory":
+            meta = dict((existing.get("metadata") or {}))
+            meta["layout"] = "directory"
+            update_entity(append_to, metadata=meta)
     else:
         safe = Path(folder_name).name.strip() or "uploaded_folder"
         bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
