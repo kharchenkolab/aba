@@ -484,10 +484,9 @@ function ToolLine({ block, result, currentRunId }: {
   const hasError = done && 'error' in result!.result
   const code = typeof block.input?.code === 'string' ? (block.input.code as string) : ''
 
-  // #334 Phase 1 — live-stream view from tool_chunk events accumulated on the
-  // block. While !done, prefer the live buffer; on completion, switch to the
-  // finalized result.stdout/stderr (which is the snipped 50K version the model
-  // also saw — see core/exec/output_cap.py snip_middle).
+  // #334 live-stream view from tool_chunk events accumulated on the block.
+  // While !done, prefer the live buffer; on completion, switch to the
+  // finalized result.stdout/stderr (the snipped 50K version the model saw).
   const liveStdout = (block as { liveStdout?: string }).liveStdout || ''
   const liveStderr = (block as { liveStderr?: string }).liveStderr || ''
   const liveBytesStdout = (block as { liveBytesStdout?: number }).liveBytesStdout || 0
@@ -529,20 +528,18 @@ function ToolLine({ block, result, currentRunId }: {
   })()
   const out = done ? finalOut : liveOut
   const showOutToggleable = !!out
-  // Auto-open the live drawer the first time chunks land, so the user doesn't
-  // need to click "output" to see live activity. Toggle remains available for
-  // collapse if they want to hide it.
-  useEffect(() => {
-    if (!done && liveHas && !showOut) setShowOut(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveHas])
+  // Output pane stays HIDDEN by default — opening it on every tool call
+  // makes long runs feel like a popup storm (PK 2026-06-03). Liveness is
+  // surfaced via a small pulsing dot + byte counter on the "output" button
+  // itself, so the user sees something is happening without the pane
+  // taking over the chat.
 
-  // #334 Phase 2 — rehydrate orphan tool_starts from the buffer. Runs once
-  // on mount. Fires only when: we have a tool_use_id + a currentRunId, we
-  // don't yet have a final result, AND we don't already have live output
-  // (SSE replay would have populated it). 404 = buffer GC'd → no-op.
-  // Subsequent SSE chunks are dedupe-gated by bytes_total in useChat, so
-  // a replay landing AFTER this rehydrate won't duplicate output.
+  // #334 Phase 2 — rehydrate orphan tool_starts from the server buffer on
+  // mount. Runs once. Fires only when: we have a tool_use_id + currentRunId,
+  // no final result yet, no live text yet (SSE replay would have populated
+  // it). 404 = buffer GC'd → silent no-op. Subsequent SSE chunks are
+  // dedupe-gated by bytes_total in useChat so a replay landing AFTER this
+  // rehydrate won't duplicate output.
   const blockUseId = (block as { tool_use_id?: string }).tool_use_id
   const rehydratedRef = useRef(false)
   useEffect(() => {
@@ -551,10 +548,7 @@ function ToolLine({ block, result, currentRunId }: {
     if (done || liveHas) return
     rehydratedRef.current = true
     const url = `/api/turns/${encodeURIComponent(currentRunId)}/tool_stream/${encodeURIComponent(blockUseId)}`
-    fetch(url).then(r => {
-      if (!r.ok) return null
-      return r.json()
-    }).then(snap => {
+    fetch(url).then(r => r.ok ? r.json() : null).then(snap => {
       if (!snap) return
       const b = block as {
         liveStdout?: string; liveStderr?: string;
@@ -567,9 +561,8 @@ function ToolLine({ block, result, currentRunId }: {
       b.liveBytesStderr = snap.bytes_stderr || 0
       b.liveElapsedS = snap.elapsed_s || 0
       b.lastChunkAt = Date.now()
-      // Force re-render — mutating block in place doesn't trigger React.
       setTick(n => n + 1)
-    }).catch(() => { /* network error — silent, drawer stays empty */ })
+    }).catch(() => { /* silent — drawer keeps whatever it had */ })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -602,8 +595,20 @@ function ToolLine({ block, result, currentRunId }: {
           </button>
         )}
         {showOutToggleable && (
-          <button className="tool-line__script-toggle" onClick={() => setShowOut(s => !s)}>
+          <button
+            className={`tool-line__script-toggle ${!done && liveHas ? 'tool-line__script-toggle--live' : ''}`}
+            onClick={() => setShowOut(s => !s)}
+            title={!done && liveHas
+              ? `live: ${bytesFmt(totalLiveBytes)} streamed · click to view`
+              : undefined}
+          >
+            {!done && liveHas && <span className="tool-line__live-dot" />}
             {showOut ? 'Hide output' : 'output'}
+            {!done && liveHas && (
+              <span className="tool-line__output-meta">
+                {' '}{bytesFmt(totalLiveBytes)}
+              </span>
+            )}
           </button>
         )}
       </div>

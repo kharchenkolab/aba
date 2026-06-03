@@ -1076,6 +1076,13 @@ async def stream_response(
                     #       per-(run_id, tool_use_id) buffer (#334 Phase 2) so a
                     #       reconnect/refresh can rehydrate the drawer.
                     if isinstance(ev, dict) and ev.get("type") == "chunk":
+                        # Record into the buffer (Phase 2 — backs the replay
+                        # endpoint for reconnects) AND stream the text over
+                        # SSE so the live drawer renders without a follow-up
+                        # fetch. We tried metadata-only with on-open buffer
+                        # fetch (2026-06-03) but it complicated the render
+                        # path and the byte-streaming overhead is tiny in
+                        # practice — most cells emit <50KB total.
                         from core.runtime import tool_stream_buffer as _tsb
                         _tsb.record_chunk(
                             run_id=turn.run_id,
