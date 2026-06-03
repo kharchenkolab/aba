@@ -51,9 +51,23 @@ def run_python_code(
 
     ex = MaterializingExecutor()
     env = ex.materialize(Provisioning())          # base venv + tools-env PATH overlay
+    # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
+    # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
+    # `os.environ[...]` since they're set up that way for run_python (kernel
+    # path). Background jobs run through the SAME script the agent writes, so
+    # the same env shape must be present — otherwise a backgrounded download
+    # crashes with KeyError: 'WORK_DIR' before doing any work (live, 2026-06-03,
+    # prj_413593e1 job_53df2f2734). MPLBACKEND=Agg keeps matplotlib headless.
+    env_vars = {
+        "WORK_DIR": str(scratch),
+        "DATA_DIR": str(_data_dir),
+        "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
+        "MPLBACKEND": "Agg",
+    }
     result = ex.exec(
         env, [env.python or sys.executable, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
+        env_vars=env_vars,
     )
 
     if result.timed_out:
