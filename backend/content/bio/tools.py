@@ -1491,7 +1491,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
-            out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+            from core.exec.output_cap import snip_middle
+            out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
                    "returncode": res.returncode, "plots": plots, "tables": tables,
                    "files": files, "execution_mode": "session"}
             if warns:
@@ -1566,7 +1567,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
     plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
-    out = {"stdout": (res.stdout or "")[:4000], "stderr": (res.stderr or "")[:2000],
+    from core.exec.output_cap import snip_middle
+    out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
            "returncode": res.returncode, "plots": plots, "tables": tables,
            "files": files, "execution_mode": "session"}
     if warns:
@@ -3059,12 +3061,13 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     if op.exists():
         plots, tables, files, _warns = harvest_artifacts(op)
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
+    from core.exec.output_cap import snip_middle
     return {
         "status": "ok" if res.returncode == 0 else "error",
         "command": " ".join(cmd),
         "returncode": res.returncode,
-        "stdout": (res.stdout or "")[:4000],
-        "stderr": (res.stderr or "")[:3000],
+        "stdout": snip_middle(res.stdout or ""),
+        "stderr": snip_middle(res.stderr or ""),
         "outdir": outdir,
         "outputs": out_files,
         "plots": plots,

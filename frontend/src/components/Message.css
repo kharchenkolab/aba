@@ -254,7 +254,14 @@
 }
 .tool-line__row { display: flex; align-items: center; gap: 6px; }
 .tool-line--done { color: var(--ok); }
-.tool-line--err  { color: var(--warn-fg); }
+.tool-line--err  {
+  color: var(--warn-fg);
+  background: #fde7ec;             /* soft pink */
+  border-left: 3px solid #d4456e;
+  padding: 2px 6px 2px 6px;
+  border-radius: 3px;
+  margin: 2px 0;
+}
 .tool-line__icon { font-weight: 700; width: 12px; text-align: center; }
 .tool-line__label { font-style: italic; }
 .tool-line--done .tool-line__label,
@@ -298,6 +305,34 @@
   border-radius: 8px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre;
 }
 .tool-line__code code { font-family: inherit; color: inherit; background: none; }
+
+/* #334 Phase 1 — live-tail header above the output pane while the tool runs.
+   Pulsing red dot + "LIVE" badge + elapsed / bytes / idle indicator. Done
+   state mirrors the same layout in muted-green so the eye lands in the same
+   place after the script finishes. */
+.tool-line__output { margin-top: 2px; }
+.tool-line__live-header {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 0 18px; font-size: 10.5px; color: var(--text-3);
+}
+.tool-line__live-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px; border-radius: 4px;
+  background: rgba(220, 60, 60, 0.12); color: #d34040;
+  font-weight: 600; font-size: 10px; letter-spacing: 0.04em;
+}
+.tool-line__live-badge--done {
+  background: rgba(80, 160, 90, 0.14); color: #4a8c55;
+}
+.tool-line__live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #d34040;
+  animation: tool-line-live-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tool-line-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.85); }
+}
+.tool-line__live-meta { font-variant-numeric: tabular-nums; }
 .tool-spinner {
   display: inline-block;
   width: 10px; height: 10px;

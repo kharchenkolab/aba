@@ -28,15 +28,14 @@ from typing import Optional
 from core.graph._schema import _conn, _utcnow
 
 
-# Budget threshold (message-side chars). Conservative default — fires
-# only on truly long threads. Heuristic: chars/4 ≈ tokens, so 100K chars
-# ≈ 25K tokens, leaving room for system + tools + headroom under
-# Haiku 4.5's 200K context window.
+# Budget threshold (message-side chars). Default and env-var override live
+# in core.config.HISTORY_SUMMARY_THRESHOLD_CHARS (consolidated 2026-06-03).
+# Default 400K chars (~100K tokens) matches CC's autoCompactWindow default —
+# fires rarely, lets the prompt cache extend across long sessions instead of
+# flushing the message-tail prefix every few turns.
 def _threshold() -> int:
-    try:
-        return int(os.environ.get("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", "100000"))
-    except ValueError:
-        return 100_000
+    from core.config import HISTORY_SUMMARY_THRESHOLD_CHARS
+    return HISTORY_SUMMARY_THRESHOLD_CHARS
 
 
 TAIL_KEEP = 20         # how many recent messages to leave verbatim
@@ -169,13 +168,16 @@ def _synthesize(thread_id: str, old_messages: list[dict],
         if out.endswith("```"):
             out = out.rsplit("\n", 1)[0]
         out = out.strip()
-        # If the LLM didn't honor the wrapping markers, wrap it ourselves.
-        if "[SYSTEM SUMMARY OF EARLIER ACTIVITY]" not in out:
-            out = ("[SYSTEM SUMMARY OF EARLIER ACTIVITY]\n"
+        # If the LLM didn't honor the wrapping tags, wrap it ourselves. We use
+        # <summary>…</summary> (CC's convention) — XML-style tags from the
+        # same family as <system-reminder>, which the model is heavily trained
+        # to recognize as meta-context rather than user prose.
+        if "<summary>" not in out:
+            out = ("<summary>\n"
                    f"Scope: {thread_id}\n"
                    f"Covers: {len(old_messages)} messages\n\n"
                    + out
-                   + "\n[/SYSTEM SUMMARY]")
+                   + "\n</summary>")
         return out
     except Exception:  # noqa: BLE001 — summary is best-effort
         return ""
@@ -213,11 +215,19 @@ def maybe_summarize(thread_id: Optional[str], messages: list[dict]) -> list[dict
 
     _save(thread_id, to_cover_n, summary_text)
 
-    # Single user-role message carries the summary, prefixed with the
-    # explicit SYSTEM SUMMARY marker (the prompt enforces wrapping; we
-    # belt-and-braces wrap above too if the model didn't).
+    # Single user-role message carries the summary, prefixed with the same
+    # handoff framing Claude Code uses on its own continuing-session injection
+    # ("This session is being continued from a previous conversation…").
+    # Pattern: the model has been trained on CC's transcripts where this
+    # exact framing appears at the start of a continued session — using it
+    # primes the model to read what follows as meta-context, not user request.
+    handoff = (
+        "This session is being continued from a previous conversation that "
+        "ran out of context. The summary below covers the earlier portion of "
+        "the conversation.\n\n"
+    )
     summary_msg = {
         "role": "user",
-        "content": [{"type": "text", "text": summary_text}],
+        "content": [{"type": "text", "text": handoff + summary_text}],
     }
     return [summary_msg] + tail

@@ -443,6 +443,11 @@ class ChatRequest(BaseModel):
     # The thread (line of inquiry) this turn belongs to. "default" = the
     # implicit default thread (small projects never name one).
     thread_id: str = "default"
+    # The project this chat belongs to. Per-request so the backend's global
+    # "current project" state can't silently misroute requests after a server
+    # bounce / multi-tab / side-script set_current() (PK 2026-06-02). The
+    # handler set_current()s on entry if it differs.
+    project_id: str | None = None
     # Spatial reference (Phase 25): base64 PNG of the figure with the user's
     # annotation composited on, plus a short note describing the gesture.
     annotation_image: str | None = None
@@ -452,8 +457,24 @@ class ChatRequest(BaseModel):
     retry: bool = False
 
 
+def _require_project_context(project_id: str | None) -> None:
+    """Pin the project per-request (A+B fix, 2026-06-02). Each chat-related
+    handler calls this on entry so the backend's global "current project" can't
+    silently misroute writes after a server bounce / multi-tab / side-script
+    mutation. If the request didn't carry a pid AND the global is unset
+    (post-bounce park-on-scratch), refuse with 412 instead of defaulting."""
+    from core import projects as _projects
+    if project_id:
+        if _projects.current() != project_id:
+            _projects.set_current(project_id)
+    elif _projects.current() is None:
+        raise HTTPException(412, "no project context — page should include project_id "
+                                  "in the request body, or call /api/projects/{pid}/open first")
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    _require_project_context(req.project_id)
     if not get_entity(req.focus_entity_id):
         raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
 
@@ -485,6 +506,21 @@ async def chat(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/turns/{run_id}/tool_stream/{tool_use_id}")
+def turns_tool_stream(run_id: str, tool_use_id: str):
+    """Replay snapshot of a live-tailed run_python / run_r output (#334 Phase 2).
+
+    Frontend calls this on initial chat load + on SSE reconnect/tab-focus
+    for any tool_start whose tool_use_id has no matching tool_result yet
+    (or that just landed and the user reopened the tab while the buffer is
+    still warm). Returns 404 once the buffer is GC'd."""
+    from core.runtime import tool_stream_buffer as _tsb
+    snap = _tsb.get(run_id, tool_use_id)
+    if snap is None:
+        raise HTTPException(404, "no live-stream buffer for that tool_use_id")
+    return snap
 
 
 @app.post("/api/runs/{rid}/refresh-manifest")
@@ -1713,6 +1749,73 @@ async def upload(file: UploadFile = File(...)):
     return get_entity(eid)
 
 
+def _unique_dir_path(p: Path) -> Path:
+    """Sibling-name collisions: append ' (2)', ' (3)', ... until unique."""
+    if not p.exists():
+        return p
+    parent, stem = p.parent, p.name
+    for n in range(2, 1000):
+        cand = parent / f"{stem} ({n})"
+        if not cand.exists():
+            return cand
+    raise RuntimeError(f"too many name collisions for {stem!r}")
+
+
+@app.post("/api/upload-folder")
+async def upload_folder(
+    folder_name: str = Form(...),
+    files: list[UploadFile] = File(...),
+    rel_paths: list[str] = Form(...),
+):
+    """Upload N files as ONE directory-shaped dataset entity, preserving the
+    folder layout the user dropped. `files` and `rel_paths` are parallel:
+    files[i] lands under `DATA_DIR/<safe_folder>/<rel_paths[i]>`. Returns
+    the created dataset entity (matches `register_dataset`'s shape)."""
+    if not files:
+        raise HTTPException(400, "no files in upload")
+    if len(files) != len(rel_paths):
+        raise HTTPException(400, "files and rel_paths length mismatch")
+    from core.config import current_project_id, project_data_dir
+    safe = Path(folder_name).name.strip() or "uploaded_folder"
+    bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
+    bundle.mkdir(parents=True, exist_ok=True)
+
+    total_bytes = 0
+    written = 0
+    for f, rel in zip(files, rel_paths):
+        # Defang the rel path: refuse traversal + absolute paths; keep just
+        # the in-bundle portion. Slashes are allowed (subfolders); '..' is not.
+        rel_clean = Path(rel).as_posix().lstrip("/")
+        if not rel_clean or ".." in rel_clean.split("/"):
+            continue
+        dest = bundle / rel_clean
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as out:
+            shutil.copyfileobj(f.file, out)
+        total_bytes += dest.stat().st_size
+        written += 1
+
+    if written == 0:
+        # Nothing useful landed — clean up the empty bundle to avoid clutter.
+        try: bundle.rmdir()
+        except OSError: pass
+        raise HTTPException(400, "no valid file paths in upload")
+
+    # Layout hint reuses the helper added with register_dataset's enrichment.
+    try:
+        from content.bio.tools import _dataset_layout_hint
+        hint = _dataset_layout_hint(str(bundle))
+    except Exception:
+        hint = ""
+    eid = create_entity(
+        entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        metadata={"size_bytes": total_bytes, "file_count": written,
+                  "layout": "directory", "layout_hint": hint,
+                  "original_name": folder_name},
+    )
+    return get_entity(eid)
+
+
 @app.post("/api/results/external")
 async def upload_external_result(
     file: UploadFile = File(...),
@@ -2044,7 +2147,8 @@ def turn_get(run_id: str):
 
 
 @app.get("/api/turns/{run_id}/stream")
-async def turn_stream(run_id: str, since: int = 0):
+async def turn_stream(run_id: str, since: int = 0, project_id: str | None = None):
+    _require_project_context(project_id)
     """C-1 reattach: subscribe to an in-flight Turn's event sink and
     stream its events as SSE. Replays any events with seq > since from
     the in-memory tail, then live-streams new ones. Heartbeats every
@@ -2135,10 +2239,13 @@ class ResumeRequest(BaseModel):
     # (run + remember for this session), 'reject' (don't run; return
     # rejection to the model).
     action: str | None = None
+    # See ChatRequest.project_id — same per-request pinning.
+    project_id: str | None = None
 
 
 @app.post("/api/turns/{run_id}/resume")
 async def turn_resume(run_id: str, req: ResumeRequest):
+    _require_project_context(req.project_id)
     """Resume an AWAITING_USER turn by streaming a new turn that picks up
     the user's reply (plan Go/Adjust, ask_clarification answer, future
     approval flows).
@@ -2609,6 +2716,37 @@ def _write_zip_text(zf, arcname: str, content: str, mtime: float | None) -> None
         info.date_time = (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
     info.compress_type = zipfile.ZIP_DEFLATED
     zf.writestr(info, content)
+
+
+@app.post("/api/skills/reload")
+def skills_reload():
+    """Re-register every skill root (core/, recipes/, vendor_skills/) into the
+    in-process skill registry. Lets vendor-skill edits (e.g. a `git pull` in
+    `backend/vendor/<pkg>/` whose `skill/SKILL.md` we expose via
+    `library/vendor_skills/<pkg>`) take effect without a backend bounce.
+
+    Why an explicit endpoint instead of relying on uvicorn's --reload watcher:
+    the vendor clones live under `--reload-exclude vendor/*` so a `git pull`
+    doesn't restart the process — but that also means edits to the SKILL.md
+    inside them don't propagate. This endpoint is the manual refresh seam."""
+    from pathlib import Path as _Path
+    from core.skills import register_skill_dir
+    from core.skills.loader import _REGISTRY
+    _LIB = _Path(__file__).parent / "content" / "bio" / "library"
+    before = len(_REGISTRY)
+    _REGISTRY.clear()
+    n_core    = register_skill_dir(_LIB / "core",          visibility="always")
+    n_recipes = register_skill_dir(_LIB / "recipes",       visibility="local")
+    n_vendor  = register_skill_dir(_LIB / "vendor_skills", visibility="local")
+    after = len(_REGISTRY)
+    return {
+        "status": "ok",
+        "before": before,
+        "after": after,
+        "core": n_core,
+        "recipes": n_recipes,
+        "vendor": n_vendor,
+    }
 
 
 @app.post("/api/projects/{pid}/materialize")

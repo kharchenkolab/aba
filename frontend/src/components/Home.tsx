@@ -159,19 +159,25 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const projectMatches = q ? list.filter(p => p.name.toLowerCase().includes(q)) : list
   const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
 
-  const menu = (p: Project) => (
-    <>
-      <button className="home__proj-menu" title="Project actions"
-              onClick={e => { e.stopPropagation(); setMenuFor(menuFor === p.id ? null : p.id) }}>⋯</button>
-      {menuFor === p.id && (
-        <div className="home__menu" onClick={e => e.stopPropagation()}>
-          <button onClick={() => { setMenuFor(null); setModal({ kind: 'rename', pid: p.id, name: p.name }) }}>Rename</button>
-          <button className="home__menu-danger"
-                  onClick={() => { setMenuFor(null); setModal({ kind: 'delete', pid: p.id, name: p.name }) }}>Delete project</button>
-        </div>
-      )}
-    </>
-  )
+  // Scope menu visibility by render-site (`central` vs `side`) so the current
+  // project, which appears in BOTH columns, doesn't open two menus at once
+  // when only one was clicked. The key is `${slot}:${pid}`.
+  const menu = (p: Project, slot: 'central' | 'side') => {
+    const key = `${slot}:${p.id}`
+    return (
+      <>
+        <button className="home__proj-menu" title="Project actions"
+                onClick={e => { e.stopPropagation(); setMenuFor(menuFor === key ? null : key) }}>⋯</button>
+        {menuFor === key && (
+          <div className="home__menu" onClick={e => e.stopPropagation()}>
+            <button onClick={() => { setMenuFor(null); setModal({ kind: 'rename', pid: p.id, name: p.name }) }}>Rename</button>
+            <button className="home__menu-danger"
+                    onClick={() => { setMenuFor(null); setModal({ kind: 'delete', pid: p.id, name: p.name }) }}>Delete project</button>
+          </div>
+        )}
+      </>
+    )
+  }
 
   // First-render guard: projects===null means /api/projects hasn't resolved
   // yet. Without this, we'd flash the zero-project "three cards" empty state
@@ -218,66 +224,82 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
           </div>
 
           <div className={`home__cols ${list.length > 1 ? 'has-side' : ''}`}>
-            {/* Main column — current project detail */}
-            <div className="home__main home__panel home__panel--current">
-              <div className="home__cur-head">
-                <div className="home__cur-titles">
-                  <span className="home__kicker">Current project</span>
-                  <h1>{current?.name ?? summary?.project_title ?? 'Project'}</h1>
-                  {(current?.last_touched || summary?.last_touched) && (
-                    <span className="home__muted">Last touched {rel(current?.last_touched ?? summary!.last_touched!)}</span>
-                  )}
-                </div>
-                <div className="home__cur-actions">
-                  {current && menu(current)}
-                  <button className="home__btn home__btn--primary" disabled={busy || !current}
-                          onClick={() => current && onEnter(current.id)}>Open project →</button>
-                </div>
-              </div>
-
-              <div className="home__stats">
-                {HOME_STATS.map(stat => (
-                  <div key={stat.key} className="home__stat">
-                    <span className="home__stat-n">{projectCount(currentCounts, stat.key)}</span>
-                    <span className="home__stat-t">{stat.label}</span>
+            {/* Main column — current project detail.
+                When no project is open (backend parked on scratch), show a
+                "no current project" panel instead of pretending the
+                scratch's "Workspace" placeholder is a real project. */}
+            {current ? (
+              <div className="home__main home__panel home__panel--current">
+                <div className="home__cur-head">
+                  <div className="home__cur-titles">
+                    <span className="home__kicker">Current project</span>
+                    <h1>{current.name}</h1>
+                    {current.last_touched && (
+                      <span className="home__muted">Last touched {rel(current.last_touched)}</span>
+                    )}
                   </div>
-                ))}
-                {Object.keys(summary?.counts ?? {}).length === 0 && !current && (
-                  <div className="home__muted">Empty — open the project to add data.</div>
-                )}
-              </div>
+                  <div className="home__cur-actions">
+                    {menu(current, 'central')}
+                    <button className="home__btn home__btn--primary" disabled={busy}
+                            onClick={() => onEnter(current.id)}>Open project →</button>
+                  </div>
+                </div>
 
-              <div className="home__current-body">
-                <div className="home__section">
-                  <div className="home__panel-head">Recent activity</div>
-                  {(summary?.recent_events.length ?? 0) === 0 ? (
-                    <div className="home__muted">No activity yet.</div>
-                  ) : (
-                    <div className="home__events">
-                      {summary?.recent_events.map(ev => (
-                        <button key={ev.id} className="home__event" onClick={() => current && onEnter(current.id)}>
-                          <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
-                          <span className="home__event-title">{ev.title ?? ''}</span>
-                          <span className="home__event-date">{rel(ev.ts)}</span>
-                        </button>
-                      ))}
+                <div className="home__stats">
+                  {HOME_STATS.map(stat => (
+                    <div key={stat.key} className="home__stat">
+                      <span className="home__stat-n">{projectCount(currentCounts, stat.key)}</span>
+                      <span className="home__stat-t">{stat.label}</span>
                     </div>
-                  )}
+                  ))}
                 </div>
 
-                <div className="home__section home__section--attention">
-                  <div className="home__panel-head">Attention</div>
-                  <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
-                  <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
-                  <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
-                  <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
-                  {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
-                   !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
-                    <div className="home__muted">Nothing needs your attention.</div>
-                  )}
+                <div className="home__current-body">
+                  <div className="home__section">
+                    <div className="home__panel-head">Recent activity</div>
+                    {(summary?.recent_events.length ?? 0) === 0 ? (
+                      <div className="home__muted">No activity yet.</div>
+                    ) : (
+                      <div className="home__events">
+                        {summary?.recent_events.map(ev => (
+                          <button key={ev.id} className="home__event" onClick={() => onEnter(current.id)}>
+                            <span className="home__event-kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
+                            <span className="home__event-title">{ev.title ?? ''}</span>
+                            <span className="home__event-date">{rel(ev.ts)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="home__section home__section--attention">
+                    <div className="home__panel-head">Attention</div>
+                    <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
+                    <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
+                    <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
+                    <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
+                    {!summary?.attention.advisor_notes && !summary?.attention.pending_suggestions &&
+                     !summary?.attention.active_jobs && !summary?.attention.failed_jobs && (
+                      <div className="home__muted">Nothing needs your attention.</div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="home__main home__panel home__panel--current home__panel--empty">
+                <div className="home__cur-head">
+                  <div className="home__cur-titles">
+                    <span className="home__kicker">No project open</span>
+                    <h1>Pick a project to get started</h1>
+                    <span className="home__muted">
+                      {list.length > 1
+                        ? 'Select one from the list, or create a new project.'
+                        : 'Open your project from the list above, or create a new one.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Side column — project list */}
             {list.length > 1 && (
@@ -305,7 +327,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                         >
                           <div className="home__side-item-head">
                             <span className="home__side-item-name">{p.name}</span>
-                            {menu(p)}
+                            {menu(p, 'side')}
                           </div>
                           <div className="home__side-item-meta">
                             {stats.length ? stats.map(t => `${p.counts[t]} ${t}${p.counts[t] > 1 ? 's' : ''}`).join(' · ') : 'empty'}

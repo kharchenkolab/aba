@@ -995,7 +995,12 @@ async def stream_response(
                     pending_halt_signal = "approval"
                     break    # stop processing further tool_use blocks this turn
 
-                yield sse({"type": "tool_start", "name": tool_name, "input": tool_input})
+                # tool_use_id (block.id) lets the frontend key live-output and
+                # the final tool_result back to the SAME UI block — the drawer
+                # opens here, fills via `tool_chunk` SSE during execution, and
+                # finalizes when the matching `tool_result` arrives.
+                yield sse({"type": "tool_start", "name": tool_name,
+                           "input": tool_input, "tool_use_id": block.id})
 
                 # Background path: submit a job and return immediately.
                 if tool_name == "run_python" and isinstance(tool_input, dict) \
@@ -1012,7 +1017,8 @@ async def stream_response(
                         "note": "Submitted as a background job. Figures will register when it finishes; watch the Queues panel.",
                     }
                     yield sse({"type": "job_submitted", "job": job})
-                    yield sse({"type": "tool_result", "name": tool_name, "result": result_obj})
+                    yield sse({"type": "tool_result", "name": tool_name,
+                               "result": result_obj, "tool_use_id": block.id})
                     tool_result_blocks.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -1058,11 +1064,40 @@ async def stream_response(
                         pass
                     return out
 
+                def _emit_progress_event(ev: dict):
+                    # Two payload shapes share the same queue:
+                    #   - chat-line tick (legacy): {message, phase}
+                    #     → emitted as `tool_progress`, drives the message-line
+                    #       "running R · Loading dataset" indicator.
+                    #   - live-tail chunk (#334 Phase 1): {type:"chunk", stream,
+                    #     text, bytes_total, elapsed_s}
+                    #     → emitted as `tool_chunk` keyed by tool_use_id, drives
+                    #       the output-drawer live pane. ALSO recorded into the
+                    #       per-(run_id, tool_use_id) buffer (#334 Phase 2) so a
+                    #       reconnect/refresh can rehydrate the drawer.
+                    if isinstance(ev, dict) and ev.get("type") == "chunk":
+                        from core.runtime import tool_stream_buffer as _tsb
+                        _tsb.record_chunk(
+                            run_id=turn.run_id,
+                            tool_use_id=block.id,
+                            stream=ev.get("stream", "stdout"),
+                            text=ev.get("text", ""),
+                            bytes_total=ev.get("bytes_total", 0),
+                            elapsed_s=ev.get("elapsed_s", 0.0),
+                        )
+                        return {"type": "tool_chunk", "tool_use_id": block.id,
+                                "stream": ev.get("stream", "stdout"),
+                                "text": ev.get("text", ""),
+                                "bytes_total": ev.get("bytes_total", 0),
+                                "elapsed_s": ev.get("elapsed_s", 0.0)}
+                    return {"type": "tool_progress", "name": tool_name,
+                            "tool_use_id": block.id,
+                            "message": ev.get("message"), "phase": ev.get("phase")}
+
                 while not _fut.done():
                     evs = _drain_progress()
                     for ev in evs:
-                        yield sse({"type": "tool_progress", "name": tool_name,
-                                   "message": ev.get("message"), "phase": ev.get("phase")})
+                        yield sse(_emit_progress_event(ev))
                         # 2026-05-31: explicit event-loop yield between SSE emits.
                         # Without this, chatty cells (R/Seurat progress bars print
                         # dozens of `0%…100%` lines per cell) churn through the
@@ -1075,8 +1110,7 @@ async def stream_response(
                     if not evs:
                         await asyncio.sleep(0.2)
                 for ev in _drain_progress():   # flush the tail
-                    yield sse({"type": "tool_progress", "name": tool_name,
-                               "message": ev.get("message"), "phase": ev.get("phase")})
+                    yield sse(_emit_progress_event(ev))
                     await asyncio.sleep(0)
                 result_str = await _fut
                 _t_end = _dt.datetime.now(_dt.timezone.utc)
@@ -1171,7 +1205,16 @@ async def stream_response(
                     if ent:
                         yield sse({"type": "entity_registered", "entity": ent})
 
-                yield sse({"type": "tool_result", "name": tool_name, "result": result_obj})
+                # Mark the live-tail buffer as done — flips its TTL to short
+                # retention (5 min) for slow reconnects, then GC drops it.
+                try:
+                    from core.runtime import tool_stream_buffer as _tsb
+                    _tsb.mark_done(turn.run_id, block.id)
+                except Exception:  # noqa: BLE001 — buffer is best-effort
+                    pass
+
+                yield sse({"type": "tool_result", "name": tool_name,
+                           "result": result_obj, "tool_use_id": block.id})
 
                 tool_result_blocks.append({
                     "type": "tool_result",

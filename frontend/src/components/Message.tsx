@@ -324,7 +324,8 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void, isUser?: boolean,
                       planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
                       isStreaming?: boolean, pinnedFigureIds?: Set<string>,
-                      fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>) {
+                      fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>,
+                      currentRunId?: string | null) {
   const out: React.ReactNode[] = []
   // Browsers refuse `file://` URLs from a web page, so any `file:///path` the
   // agent emits would render as a broken `<img>` or a dead `<a>`. Rewrite to
@@ -426,7 +427,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
       const result = blocks
         .slice(i + 1)
         .find(x => x.type === 'tool_result') as Extract<Block, { type: 'tool_result' }> | undefined
-      out.push(<ToolLine key={i} block={b} result={result} />)
+      out.push(<ToolLine key={i} block={b} result={result} currentRunId={currentRunId} />)
     } else if (b.type === 'tool_result') {
       // Rendered together with its tool_start above; skip.
       continue
@@ -472,20 +473,44 @@ function ZoomableImg({ src, alt }: { src: string; alt: string }) {
 }
 
 // to carry, now available per cell.
-function ToolLine({ block, result }: {
+function ToolLine({ block, result, currentRunId }: {
   block: Extract<Block, { type: 'tool_start' }>
   result?: Extract<Block, { type: 'tool_result' }>
+  currentRunId?: string | null
 }) {
   const [showCode, setShowCode] = useState(false)
   const [showOut, setShowOut] = useState(false)
   const done = !!result
   const hasError = done && 'error' in result!.result
   const code = typeof block.input?.code === 'string' ? (block.input.code as string) : ''
+
+  // #334 Phase 1 — live-stream view from tool_chunk events accumulated on the
+  // block. While !done, prefer the live buffer; on completion, switch to the
+  // finalized result.stdout/stderr (which is the snipped 50K version the model
+  // also saw — see core/exec/output_cap.py snip_middle).
+  const liveStdout = (block as { liveStdout?: string }).liveStdout || ''
+  const liveStderr = (block as { liveStderr?: string }).liveStderr || ''
+  const liveBytesStdout = (block as { liveBytesStdout?: number }).liveBytesStdout || 0
+  const liveBytesStderr = (block as { liveBytesStderr?: number }).liveBytesStderr || 0
+  const liveElapsedS = (block as { liveElapsedS?: number }).liveElapsedS || 0
+  const lastChunkAt = (block as { lastChunkAt?: number }).lastChunkAt
+  const liveHas = !!(liveStdout || liveStderr)
+
+  // Re-render the "Xs ago" / elapsed counter at ~1Hz while live so the header
+  // doesn't sit frozen between coalescer flushes.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (done || !liveHas) return
+    const h = window.setInterval(() => setTick(n => n + 1), 1000)
+    return () => window.clearInterval(h)
+  }, [done, liveHas])
+  void tick
+
   // Build a textual rendering of the tool's stdout/stderr (post-2026-05-31:
   // chat-side counterpart to "script" — peek at what the cell actually printed).
   // Structured fields (plots, tables) render elsewhere in the chat already;
   // here we surface the raw text streams + the error blob when there is one.
-  const out: string = (() => {
+  const finalOut: string = (() => {
     if (!result) return ''
     const r = result.result as Record<string, unknown> | undefined
     if (!r || typeof r !== 'object') return ''
@@ -495,6 +520,68 @@ function ToolLine({ block, result }: {
     if (typeof r.stderr === 'string' && r.stderr) parts.push('--- stderr ---\n' + r.stderr)
     return parts.join('\n')
   })()
+  const liveOut: string = (() => {
+    if (!liveHas) return ''
+    const parts: string[] = []
+    if (liveStdout) parts.push(liveStdout)
+    if (liveStderr) parts.push('--- stderr ---\n' + liveStderr)
+    return parts.join('\n')
+  })()
+  const out = done ? finalOut : liveOut
+  const showOutToggleable = !!out
+  // Auto-open the live drawer the first time chunks land, so the user doesn't
+  // need to click "output" to see live activity. Toggle remains available for
+  // collapse if they want to hide it.
+  useEffect(() => {
+    if (!done && liveHas && !showOut) setShowOut(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveHas])
+
+  // #334 Phase 2 — rehydrate orphan tool_starts from the buffer. Runs once
+  // on mount. Fires only when: we have a tool_use_id + a currentRunId, we
+  // don't yet have a final result, AND we don't already have live output
+  // (SSE replay would have populated it). 404 = buffer GC'd → no-op.
+  // Subsequent SSE chunks are dedupe-gated by bytes_total in useChat, so
+  // a replay landing AFTER this rehydrate won't duplicate output.
+  const blockUseId = (block as { tool_use_id?: string }).tool_use_id
+  const rehydratedRef = useRef(false)
+  useEffect(() => {
+    if (rehydratedRef.current) return
+    if (!blockUseId || !currentRunId) return
+    if (done || liveHas) return
+    rehydratedRef.current = true
+    const url = `/api/turns/${encodeURIComponent(currentRunId)}/tool_stream/${encodeURIComponent(blockUseId)}`
+    fetch(url).then(r => {
+      if (!r.ok) return null
+      return r.json()
+    }).then(snap => {
+      if (!snap) return
+      const b = block as {
+        liveStdout?: string; liveStderr?: string;
+        liveBytesStdout?: number; liveBytesStderr?: number;
+        liveElapsedS?: number; lastChunkAt?: number;
+      }
+      if (typeof snap.stdout === 'string' && snap.stdout) b.liveStdout = snap.stdout
+      if (typeof snap.stderr === 'string' && snap.stderr) b.liveStderr = snap.stderr
+      b.liveBytesStdout = snap.bytes_stdout || 0
+      b.liveBytesStderr = snap.bytes_stderr || 0
+      b.liveElapsedS = snap.elapsed_s || 0
+      b.lastChunkAt = Date.now()
+      // Force re-render — mutating block in place doesn't trigger React.
+      setTick(n => n + 1)
+    }).catch(() => { /* network error — silent, drawer stays empty */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const totalLiveBytes = liveBytesStdout + liveBytesStderr
+  const elapsedFmt = (s: number) => {
+    if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`
+    const m = Math.floor(s / 60), r = Math.floor(s % 60)
+    return `${m}:${String(r).padStart(2, '0')}`
+  }
+  const bytesFmt = (b: number) => b < 1024 ? `${b} B` : `${(b / 1024).toFixed(1)} KB`
+  const sinceLastChunk = lastChunkAt ? Math.floor((Date.now() - lastChunkAt) / 1000) : 0
+
   return (
     <div className={`tool-line ${done ? (hasError ? 'tool-line--err' : 'tool-line--done') : 'tool-line--run'}`}>
       <div className="tool-line__row">
@@ -514,14 +601,33 @@ function ToolLine({ block, result }: {
             {showCode ? 'Hide script' : 'script'}
           </button>
         )}
-        {out && (
+        {showOutToggleable && (
           <button className="tool-line__script-toggle" onClick={() => setShowOut(s => !s)}>
             {showOut ? 'Hide output' : 'output'}
           </button>
         )}
       </div>
       {code && showCode && <pre className="tool-line__code"><code>{code}</code></pre>}
-      {out && showOut && <pre className="tool-line__code"><code>{out}</code></pre>}
+      {showOutToggleable && showOut && (
+        <div className="tool-line__output">
+          {!done && (
+            <div className="tool-line__live-header" aria-live="polite">
+              <span className="tool-line__live-badge"><span className="tool-line__live-dot" />LIVE</span>
+              <span className="tool-line__live-meta">
+                {elapsedFmt(liveElapsedS)} · {bytesFmt(totalLiveBytes)}
+                {sinceLastChunk > 3 ? ` · idle ${sinceLastChunk}s` : ''}
+              </span>
+            </div>
+          )}
+          {done && liveHas && (
+            <div className="tool-line__live-header tool-line__live-header--done">
+              <span className="tool-line__live-badge tool-line__live-badge--done">✓ DONE</span>
+              <span className="tool-line__live-meta">{bytesFmt(totalLiveBytes)} streamed</span>
+            </div>
+          )}
+          <pre className="tool-line__code"><code>{out}</code></pre>
+        </div>
+      )}
     </div>
   )
 }
@@ -529,6 +635,9 @@ function ToolLine({ block, result }: {
 interface Props {
   message: DisplayMessage
   isStreaming?: boolean
+  /** #334 Phase 2 — current Turn's run_id, threaded to ToolStep so an
+   *  orphan tool_start can rehydrate via /api/turns/{runId}/tool_stream/{tu}. */
+  currentRunId?: string | null
   /** Collapse (hide) tool indicators — used on non-latest messages. */
   collapseTools?: boolean
   /** Attach a highlighted region from a chat figure to the next message. */
@@ -572,7 +681,7 @@ function msgKey(s: string): string {
   return 'm' + (h >>> 0).toString(36)
 }
 
-export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap }: Props) {
+export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   const visibleBlocks = message.blocks
@@ -583,7 +692,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()

@@ -13,11 +13,29 @@ export interface ToolStartBlock {
   /** Latest live tool_progress message while the tool runs (installs, compiles,
    *  downloads) — shown next to the spinner so a long call isn't a dead spin. */
   progress?: string
+  /** Anthropic tool_use id — used to attach live `tool_chunk` events to the
+   *  right tool block (#334 Phase 1). Frontend keys live-stream off this. */
+  tool_use_id?: string
+  /** Live-tail of stdout accumulated from `tool_chunk` SSE events while the
+   *  tool runs. Cleared when the matching tool_result lands (which carries
+   *  the final, snipped stdout). */
+  liveStdout?: string
+  liveStderr?: string
+  /** Cumulative bytes per stream (from coalescer's lifetime counter). */
+  liveBytesStdout?: number
+  liveBytesStderr?: number
+  /** Elapsed seconds since the first chunk landed — the in-kernel time, not
+   *  wall-clock since tool_start (cells can sit before output begins). */
+  liveElapsedS?: number
+  /** ms timestamp of the most recent chunk — drives "last activity Xs ago". */
+  lastChunkAt?: number
 }
 export interface ToolResultBlock {
   type: 'tool_result'
   name: string
   result: Record<string, unknown>
+  /** Mirrors ToolStartBlock.tool_use_id when present — same purpose. */
+  tool_use_id?: string
 }
 /** A structured step in a presented plan (T2.5). Models may also emit a
  *  plain string, which is coerced to {n, title} server-side. */
@@ -64,8 +82,18 @@ export interface DisplayMessage {
 
 // SSE events from backend
 export interface DeltaEvent       { type: 'delta';       text: string }
-export interface ToolStartEvent   { type: 'tool_start';  name: string; input: Record<string, unknown> }
-export interface ToolResultEvent  { type: 'tool_result'; name: string; result: Record<string, unknown> }
+export interface ToolStartEvent   { type: 'tool_start';  name: string; input: Record<string, unknown>; tool_use_id?: string }
+export interface ToolResultEvent  { type: 'tool_result'; name: string; result: Record<string, unknown>; tool_use_id?: string }
+/** #334 Phase 1 — coalesced live stdout/stderr chunk from run_python / run_r,
+ *  keyed back to the originating tool_start by `tool_use_id`. */
+export interface ToolChunkEvent {
+  type: 'tool_chunk'
+  tool_use_id: string
+  stream: 'stdout' | 'stderr'
+  text: string
+  bytes_total: number     // cumulative bytes for this stream (lifetime counter)
+  elapsed_s: number       // seconds since execute() began
+}
 export interface DoneEvent        { type: 'done' }
 export interface ErrorEvent       { type: 'error';       text: string; detail?: string }
 export interface NoticeEvent      { type: 'notice';      text: string }
@@ -154,6 +182,7 @@ export interface ToolProgressEvent {
   name: string
   message: string
   phase?: string
+  tool_use_id?: string
 }
 
 /** A background job was submitted (run_python background=true). */
@@ -184,6 +213,7 @@ export type SSEEvent =
   | ToolStartEvent
   | ToolResultEvent
   | ToolProgressEvent
+  | ToolChunkEvent
   | JobSubmittedEvent
   | EntityRegisteredEvent
   | DoneEvent

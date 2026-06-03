@@ -214,6 +214,8 @@ class JupyterKernelSession:
 
     def execute(self, code: str, *, cancel_token=None, timeout_s: int = 90) -> ExecResult:
         from core.runtime import progress
+        from core.exec.stream_coalesce import Coalescer
+        from core.config import TOOL_STREAM_FLUSH_BYTES, TOOL_STREAM_FLUSH_INTERVAL_S
         stdout: list[str] = []
         stderr: list[str] = []
         err_tb: Optional[str] = None
@@ -234,20 +236,52 @@ class JupyterKernelSession:
             _last_emit[0] = now
             progress.emit(line[:200], phase="run")
 
+        # Live-tail of full stdout/stderr to the per-turn progress queue, in
+        # 1s/10KB coalesced bursts (see core/config.py + stream_coalesce.py).
+        # Independent of the one-line _emit_live tick: the latter feeds the
+        # chat-line "running R · Loading dataset" indicator; this feeds the
+        # output-drawer live pane keyed by tool_use_id.
+        # Pushes the dict DIRECTLY onto the sink (bypassing progress.emit,
+        # which str()-coerces its message arg — would clobber our payload).
+        def _emit_chunk(ev: dict) -> None:
+            q = progress.current_sink()
+            if q is None:
+                return
+            try:
+                q.put_nowait({
+                    "type": "chunk",
+                    "stream": ev.get("stream", "stdout"),
+                    "text": ev.get("text", ""),
+                    "bytes_total": ev.get("bytes_total", 0),
+                    "elapsed_s": ev.get("elapsed_s", 0.0),
+                    "reason": ev.get("reason"),
+                })
+            except Exception:  # noqa: BLE001 — live-tail must never break a run
+                pass
+
+        coalescer = Coalescer(
+            flush_bytes=TOOL_STREAM_FLUSH_BYTES,
+            flush_interval_s=TOOL_STREAM_FLUSH_INTERVAL_S,
+            on_flush=_emit_chunk,
+        )
+
         def hook(msg):
             nonlocal err_tb
             mtype = msg["header"]["msg_type"]
             content = msg.get("content", {})
             if mtype == "stream":
                 txt = content.get("text", "")
-                (stderr if content.get("name") == "stderr" else stdout).append(txt)
-                _emit_live(txt)   # stdout *and* stderr — progress bars often go to stderr
+                name = "stderr" if content.get("name") == "stderr" else "stdout"
+                (stderr if name == "stderr" else stdout).append(txt)
+                _emit_live(txt)         # one-line chat tick
+                coalescer.push(name, txt)   # full coalesced live stream
             elif mtype == "error":
                 err_tb = _ANSI.sub("", "\n".join(content.get("traceback", [])))
             elif mtype in ("execute_result", "display_data"):
                 txt = (content.get("data") or {}).get("text/plain")
                 if txt:
                     stdout.append(str(txt) + "\n")
+                    coalescer.push("stdout", str(txt) + "\n")
 
         # Run the blocking interactive execute in a worker thread so THIS thread
         # can poll the cancel token and bound how long we wait after Stop. A cell
@@ -280,12 +314,22 @@ class JupyterKernelSession:
         try:
             while worker.is_alive():
                 worker.join(timeout=0.2)
+                # Time-flush pending bytes — covers slow-trickle output where
+                # neither the 10KB byte cap nor the in-hook 1s check fired
+                # (e.g. a single 2KB print every 4s).
+                coalescer.maybe_flush()
                 if cancel_token is not None and getattr(cancel_token, "cancelled", False):
                     cancelled = True
                     break
         finally:
             if unregister is not None:
                 unregister()
+            # Final flush — emit any pending tail bytes accumulated since the
+            # last interval/byte-cap flush. Idempotent if buffers are empty.
+            try:
+                coalescer.flush(reason="final")
+            except Exception:  # noqa: BLE001
+                pass
 
         if cancelled:
             # SIGINT already fired via the token. Give the cell a short grace to
