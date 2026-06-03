@@ -153,7 +153,7 @@ export default function App() {
     if (!path) { setViewedFile(null); return }
     if (viewedFile?.path === path) return    // already have the node from a click
     let cancelled = false
-    fetch('/api/files/tree')
+    fetch(`/api/files/tree${url.pid ? `?project_id=${encodeURIComponent(url.pid)}` : ''}`)
       .then(r => r.json())
       .then((root: FileNode) => {
         if (cancelled) return
@@ -231,7 +231,7 @@ export default function App() {
   const [hasProject, setHasProject] = useState(true)
   const [chatReload, setChatReload] = useState(0)       // bump to refetch the thread's messages
   const orientedRef = useRef<Set<string>>(new Set())    // cold-start orient attempts
-  const { entities, refresh } = useEntities()
+  const { entities, refresh } = useEntities(url.pid ?? undefined)
 
   // Active (non-archived) entities + the content tallies the "start-slowly"
   // framing needs. Computed up here (before the Home early-return) so the
@@ -304,7 +304,7 @@ export default function App() {
       .then(() => { refresh(); refreshCurrent() })
       // Start-slowly framing from a FRESH snapshot — an empty `entities` array
       // can't tell "still loading" from "genuinely empty", so we re-fetch here.
-      .then(() => fetch('/api/entities'))
+      .then(() => fetch(`/api/entities?project_id=${encodeURIComponent(pid)}`))
       .then(r => (r && r.ok) ? r.json() : [])
       .then((rows: { status?: string; type?: string }[]) => frameOnProjectEntry(rows))
       .catch(() => {})
@@ -331,9 +331,18 @@ export default function App() {
     const ds = active.filter(e => e.type === 'dataset').length
     const downstream = active.filter(e =>
       ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type ?? '')).length
+    const threadCount = active.filter(e => e.type === 'thread').length
 
-    // Left tree — same three-way as before.
-    if (downstream > 0) setTreeCollapsed(false)
+    // Left tree:
+    //   • empty project              → collapsed (focus the conversation)
+    //   • dataset(s), no output yet  → open on Data tab (orient to data)
+    //   • established (has output)   → open, UNLESS the user is on the Threads
+    //     tab with ≤1 thread — there's nothing to navigate in the rail then,
+    //     so collapse and let the chat have the room (PK 2026-06-03).
+    if (downstream > 0) {
+      const onThreadsTab = projectSection === 'threads'
+      setTreeCollapsed(onThreadsTab && threadCount <= 1)
+    }
     else if (ds > 0)    { setTreeCollapsed(false); setProjectSection('data') }
     else                setTreeCollapsed(true)
 
@@ -809,6 +818,7 @@ export default function App() {
           onOpenOverview={() => setOverview(true)}
           onOpenThreadOverview={openThreadOverview}
           filesTarget={filesTarget}
+          projectId={url.pid ?? undefined}
         />
       )}
       <HResizer
