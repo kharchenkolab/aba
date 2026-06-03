@@ -562,9 +562,10 @@
   font-size: 12px; color: #b91c1c;
 }
 /* Fixed thumbnail regardless of the captured cell's aspect ratio, so the
-   chip text + close button always fit. */
+   chip text + close button always fit. Bumped 30% (38→50, 52→68) so the
+   highlighted region is a bit more legible (PK 2026-06-03). */
 .annot-attached img {
-  width: 52px; height: 38px; flex-shrink: 0;
+  width: 68px; height: 50px; flex-shrink: 0;
   object-fit: cover; object-position: top left;
   border-radius: 4px; border: 1px solid #fca5a5; background: #fff;
 }

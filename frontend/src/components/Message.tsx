@@ -481,7 +481,21 @@ function ToolLine({ block, result, currentRunId }: {
   const [showCode, setShowCode] = useState(false)
   const [showOut, setShowOut] = useState(false)
   const done = !!result
-  const hasError = done && 'error' in result!.result
+  // Failure detection from structured fields — no need to interpret output
+  // text. Covers all three failure shapes (PK 2026-06-03):
+  //   - top-level `error` string: tool-wrapper failed (timeout, kernel crash)
+  //   - status === 'error': nextflow runner's failure shape
+  //   - returncode !== 0: the cell itself raised
+  // status === 'cancelled' is a user action (Stop), explicitly NOT an error.
+  const hasError = (() => {
+    if (!done) return false
+    const r = result!.result as Record<string, unknown>
+    if (typeof r.error === 'string' && r.error) return true
+    if (r.status === 'cancelled') return false
+    if (r.status === 'error') return true
+    if (typeof r.returncode === 'number' && r.returncode !== 0) return true
+    return false
+  })()
   const code = typeof block.input?.code === 'string' ? (block.input.code as string) : ''
 
   // #334 live-stream view from tool_chunk events accumulated on the block.
@@ -594,23 +608,35 @@ function ToolLine({ block, result, currentRunId }: {
             {showCode ? 'Hide script' : 'script'}
           </button>
         )}
-        {showOutToggleable && (
-          <button
-            className={`tool-line__script-toggle ${!done && liveHas ? 'tool-line__script-toggle--live' : ''}`}
-            onClick={() => setShowOut(s => !s)}
-            title={!done && liveHas
-              ? `live: ${bytesFmt(totalLiveBytes)} streamed · click to view`
-              : undefined}
-          >
-            {!done && liveHas && <span className="tool-line__live-dot" />}
-            {showOut ? 'Hide output' : 'output'}
-            {!done && liveHas && (
-              <span className="tool-line__output-meta">
-                {' '}{bytesFmt(totalLiveBytes)}
-              </span>
-            )}
-          </button>
-        )}
+        {showOutToggleable && (() => {
+          // Three states:
+          //   - running with live activity: pulsing green dot + byte count
+          //   - done with error: fixed red dot + red border (no pulse — pulse
+          //     means "live"; fixed means "status")
+          //   - else: plain "output"
+          const liveActive = !done && liveHas
+          const cls = liveActive
+            ? 'tool-line__script-toggle tool-line__script-toggle--live'
+            : (done && hasError)
+              ? 'tool-line__script-toggle tool-line__script-toggle--err'
+              : 'tool-line__script-toggle'
+          const title = liveActive
+            ? `live: ${bytesFmt(totalLiveBytes)} streamed · click to view`
+            : (done && hasError) ? 'tool returned an error — click to view'
+            : undefined
+          return (
+            <button className={cls} onClick={() => setShowOut(s => !s)} title={title}>
+              {liveActive && <span className="tool-line__live-dot" />}
+              {done && hasError && <span className="tool-line__err-dot" />}
+              {showOut ? 'Hide output' : 'output'}
+              {liveActive && (
+                <span className="tool-line__output-meta">
+                  {' '}{bytesFmt(totalLiveBytes)}
+                </span>
+              )}
+            </button>
+          )
+        })()}
       </div>
       {code && showCode && <pre className="tool-line__code"><code>{code}</code></pre>}
       {showOutToggleable && showOut && (

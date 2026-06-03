@@ -347,6 +347,17 @@
 .tool-line__output-meta {
   font-variant-numeric: tabular-nums; color: var(--text-3);
 }
+
+/* Error designation on the output button: fixed (non-pulsing) red dot +
+   subtle red border. Pulse is reserved for "live"; fixed = "status". */
+.tool-line__script-toggle--err {
+  display: inline-flex; align-items: center; gap: 5px;
+  border-color: rgba(220, 60, 60, 0.45);
+}
+.tool-line__err-dot {
+  width: 6px; height: 6px; flex: 0 0 6px;
+  border-radius: 50%; background: #d34040;
+}
 .tool-spinner {
   display: inline-block;
   width: 10px; height: 10px;
