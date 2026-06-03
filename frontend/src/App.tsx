@@ -284,9 +284,16 @@ export default function App() {
   useEffect(() => {
     if (!url.pid) return
     const pid = url.pid
-    setPosture('chat')
     setAnnotation(null)
-    setInventory(false)
+    // Do NOT reset posture or scene here — they're derived from the URL.
+    // A reload of /p/<pid>/data/e/<did> deliberately encodes "data tab, this
+    // dataset focused"; clobbering posture to 'chat' here desyncs the central
+    // column from the rail (rail stays on the dataset row but central reverts
+    // to chat, and re-clicking the already-selected row is a no-op). Same
+    // shape for setInventory(false) — it mutates url.scene out from under a
+    // reload landing on an inventory view. The focusedId-driven useEffect
+    // above is the sole authority for posture; url.scene is the sole
+    // authority for overview/inventory. (2026-06-04 reload-clobber fix.)
     // Collapse both columns SYNCHRONOUSLY on project entry so the empty-project
     // "zoom on chat" is in effect during the entity-fetch window; frameOnProjectEntry
     // (below) is the sole authority to re-open them once it sees the entity counts.
@@ -339,11 +346,20 @@ export default function App() {
     //   • established (has output)   → open, UNLESS the user is on the Threads
     //     tab with ≤1 thread — there's nothing to navigate in the rail then,
     //     so collapse and let the chat have the room (PK 2026-06-03).
+    // "Bare URL" = /p/<pid> with no explicit section / thread / entity / scene.
+    // Reload of a deep URL counts as NOT-bare; respect what the URL encodes
+    // (don't auto-snap a data-only project to the Data tab if the user
+    // explicitly landed on Threads or focused an entity).
+    const bareUrl = url.eid === 'workspace' && url.tid === 'default'
+      && url.scene === null && url.section === 'threads'
     if (downstream > 0) {
       const onThreadsTab = projectSection === 'threads'
       setTreeCollapsed(onThreadsTab && threadCount <= 1)
     }
-    else if (ds > 0)    { setTreeCollapsed(false); setProjectSection('data') }
+    else if (ds > 0)    {
+      setTreeCollapsed(false)
+      if (bareUrl) setProjectSection('data')
+    }
     else                setTreeCollapsed(true)
 
     // Right rail — content-driven.
