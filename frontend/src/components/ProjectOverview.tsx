@@ -13,6 +13,12 @@ import './ProjectOverview.css'
 interface Props {
   entities: Entity[]
   onGoTo: (id: string) => void
+  /** Clicking a thread row should enter that thread (chat-centric layout),
+   *  matching what a Threads-tab click does. Without this, the row would
+   *  go through onGoTo → openEntity → focus-the-thread-entity, which puts
+   *  the thread in the right column instead of switching to its chat
+   *  (PK 2026-06-03 — wanted consistency with the rail behavior). */
+  onSelectThread: (id: string) => void
   onClose: () => void
   onChange: () => void
   onAsk: (text: string) => void
@@ -28,7 +34,7 @@ const CONF_ORDER = ['validated', 'contested', 'supported', 'preliminary', 'refut
 const isAttention = (e: Entity) =>
   e.metadata?.confidence === 'contested' || e.metadata?.confidence === 'refuted'
 
-export default function ProjectOverview({ entities, onGoTo, onChange, onAsk }: Props) {
+export default function ProjectOverview({ entities, onGoTo, onSelectThread, onChange, onAsk }: Props) {
   const [dataDialog, setDataDialog] = useState(false)
   const addThread = async (text: string) => {
     await jpost('/api/threads', { title: text.slice(0, 60), question: text, question_source: 'user' })
@@ -70,7 +76,9 @@ export default function ProjectOverview({ entities, onGoTo, onChange, onAsk }: P
       label={(e.metadata?.statement as string) || e.title}
       badge={e.type === 'claim' ? String(e.metadata?.confidence || 'preliminary') : undefined}
       tone={e.metadata?.confidence === 'refuted' ? 'retired' : isAttention(e) ? 'attention' : undefined}
-      onClick={() => onGoTo(e.id)}
+      // Threads → enter the thread (chat-centric layout, matches the rail
+      // Threads-tab behavior). Everything else → entity-first center view.
+      onClick={() => e.type === 'thread' ? onSelectThread(e.id) : onGoTo(e.id)}
       menu={<EntityMenu entity={e} onChange={onChange} />} />
   )
   const grp = (label: string, items: Entity[], tone?: Tone): OvGroup =>

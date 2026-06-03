@@ -876,6 +876,7 @@ export default function App() {
             <ProjectOverview
               entities={entities}
               onGoTo={goToEntity}
+              onSelectThread={(id) => { setOverview(false); selectThread(id) }}
               onClose={() => setOverview(false)}
               onChange={refresh}
               onAsk={askGuide}
