@@ -296,6 +296,43 @@
   gap: 5px;
   cursor: pointer;
 }
+.tree__index-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 780;
+  color: var(--text);
+  background: var(--surface-1, #fff);
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+}
+/* Rail-row drop landing pad: invisible until a file is dragged over a dataset
+ * row; highlights with the accent color while the drag is over it (F3). */
+.tree__index-row.is-drop-target {
+  outline: 2px dashed var(--accent, #5b8def);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent, #5b8def) 8%, transparent);
+}
+.tree__index-row.is-appending {
+  opacity: 0.85;
+}
+.tree__index-spinner {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--accent, #5b8def);
+  animation: tree-spin 1s linear infinite;
+  margin-left: 4px;
+}
+@keyframes tree-spin {
+  to { transform: rotate(360deg); }
+}
+.tree__index-files--empty {
+  color: var(--text-4);
+  font-style: italic;
+}
 .tree__index-title-row {
   min-width: 0;
   display: flex;

@@ -9,6 +9,7 @@ import ThreadHeader from './ThreadHeader'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
+import UploadDrop from './UploadDrop'
 import './FocusCanvas.css'
 
 interface Annotation { image: string; note: string }
@@ -29,6 +30,8 @@ interface Props {
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
   /** Run view → switch the left rail to the Files tab, deep-linking to a folder. */
   onBrowseFiles?: (path?: string) => void
+  /** Per-request project pin for upload routing (dataset "Add files"). */
+  projectId?: string
 }
 
 interface TablePreview {
@@ -47,7 +50,7 @@ type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles, projectId }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
@@ -157,7 +160,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles)}
+          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -350,13 +353,17 @@ function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: ()
 /** Browse a dataset's directory contents with the shared FileBrowser (folders +
  *  every file), viewing files in a modal — so a folder dataset isn't a single
  *  opaque "file" row. Renders nothing for a dataset with no browsable tree. */
-function DatasetFiles({ entity, onFocus, onChatResult }: {
+function DatasetFiles({ entity, onFocus, onChatResult, onChange, projectId }: {
   entity: Entity
   onFocus: (id: string) => void
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  onChange: () => void
+  projectId?: string
 }) {
   const [tree, setTree] = useState<TreeNode | null>(null)
   const [modalNode, setModalNode] = useState<TreeNode | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [treeNonce, setTreeNonce] = useState(0)
   useEffect(() => {
     let cancelled = false
     fetch(`/api/datasets/${encodeURIComponent(entity.id)}/tree`)
@@ -364,14 +371,21 @@ function DatasetFiles({ entity, onFocus, onChatResult }: {
       .then(d => { if (!cancelled) setTree(d as TreeNode) })
       .catch(() => { if (!cancelled) setTree(null) })
     return () => { cancelled = true }
-  }, [entity.id])
+  }, [entity.id, treeNonce])
   useEffect(() => {
     if (!modalNode) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModalNode(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [modalNode])
-  if (!tree || (tree.children?.length ?? 0) === 0) return null
+
+  const isDirectoryDataset = entity.metadata?.layout === 'directory'
+  const empty = !tree || (tree.children?.length ?? 0) === 0
+  // Append-mode requires a directory-shaped dataset (backend refuses single-
+  // file datasets). Render the section even when empty so the user has the
+  // "Add files" landing pad — the dataset was just created.
+  if (empty && !isDirectoryDataset) return null
+
   const fileHref = (n: FileNode) => {
     const ap = n.artifact_path || ''
     return ap.startsWith('/artifacts/') || ap.startsWith('http') ? ap : `/api/files/content?path=${encodeURIComponent(n.path)}`
@@ -382,10 +396,23 @@ function DatasetFiles({ entity, onFocus, onChatResult }: {
   }
   return (
     <section className="focus__dataset-files">
-      <div className="focus__dataset-files-head">Files</div>
-      <FileBrowser root={tree} variant="wide" focusedId="" onFocus={onFocus}
-        onViewFile={n => setModalNode(n as TreeNode)}
-        actions={onChatResult ? { onDiscuss: discuss } : undefined} />
+      <div className="focus__dataset-files-head">
+        <span>Files</span>
+        {isDirectoryDataset && (
+          <button className="focus__add-files-btn"
+                  onClick={() => setUploadOpen(true)}
+                  title="Drop more files into this dataset">+ Add files</button>
+        )}
+      </div>
+      {empty ? (
+        <div className="focus__dataset-empty">
+          This dataset has no files yet. Click <strong>+ Add files</strong> to drop in a file or folder.
+        </div>
+      ) : (
+        <FileBrowser root={tree!} variant="wide" focusedId="" onFocus={onFocus}
+          onViewFile={n => setModalNode(n as TreeNode)}
+          actions={onChatResult ? { onDiscuss: discuss } : undefined} />
+      )}
       {modalNode && (
         <div className="runview__modal" onClick={() => setModalNode(null)}>
           <div className="runview__modal-box" onClick={e => e.stopPropagation()}>
@@ -395,6 +422,14 @@ function DatasetFiles({ entity, onFocus, onChatResult }: {
             </div>
           </div>
         </div>
+      )}
+      {uploadOpen && (
+        <UploadDrop
+          appendTo={{ id: entity.id, title: entity.title }}
+          projectId={projectId}
+          onClose={() => setUploadOpen(false)}
+          onUploaded={() => { onChange(); setTreeNonce(n => n + 1) }}
+        />
       )}
     </section>
   )
@@ -441,6 +476,7 @@ function renderBody(
   onAsk?: (t: string) => void,
   onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void,
   onBrowseFiles?: (path?: string) => void,
+  projectId?: string,
 ) {
   switch (e.type) {
     case 'figure':
@@ -492,7 +528,7 @@ function renderBody(
           {preview?.kind === 'error' && (
             <div className="focus__placeholder">preview error: {preview.error}</div>
           )}
-          <DatasetFiles entity={e} onFocus={onFocus} onChatResult={onChatResult} />
+          <DatasetFiles entity={e} onFocus={onFocus} onChatResult={onChatResult} onChange={onChange} projectId={projectId} />
         </div>
       )
 

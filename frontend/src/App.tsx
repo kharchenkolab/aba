@@ -762,6 +762,7 @@ export default function App() {
           onAsk={askGuide}
           onChatResult={chatAboutResult}
           onBrowseFiles={(path?: string) => { openProjectSection('files'); setFilesTarget(t => ({ path: path ?? '', n: t.n + 1 })) }}
+          projectId={url.pid ?? undefined}
         />
       )}
     </div>

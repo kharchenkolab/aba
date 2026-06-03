@@ -36,6 +36,11 @@
   border-color: var(--accent, #4f46e5);
   background: color-mix(in srgb, var(--accent, #4f46e5) 8%, transparent);
 }
+.updrop__zone--append {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent, #4f46e5) 40%, transparent);
+  background: color-mix(in srgb, var(--accent, #4f46e5) 4%, transparent);
+}
 .updrop__zone-main { font-size: 14px; color: var(--text-2, #444); font-weight: 500; }
 .updrop__zone-sep { font-size: 12px; color: var(--text-4, #999); margin: 8px 0; }
 .updrop__pick-btn {

@@ -25,16 +25,39 @@ type UploadItem = {
   error?: string
 }
 
-type Walked =
+export type Walked =
   | { kind: 'file'; file: File }
   | { kind: 'folder'; name: string; files: { file: File; rel: string }[] }
 
 interface Props {
   onClose: () => void
   onUploaded: () => void
+  /** When set, files are appended to this existing dataset (no new entity).
+   *  Each top-level file/folder dropped goes into the dataset. The pin both
+   *  routes the upload server-side and gates the close-confirm copy. */
+  appendTo?: { id: string; title: string }
+  /** Per-request project pin (mirrors the rest of the app's project_id flow).
+   *  Passed as a form field; the server uses it before falling back to its
+   *  current_project_id() global. Important when uploads can race a project
+   *  switch on another tab. */
+  projectId?: string
 }
 
 const newId = () => 'u' + Math.random().toString(36).slice(2, 10)
+
+/** Walk every top-level entry of a DataTransfer into a Walked[]. Folders
+ *  recurse; files become single-file Walkeds. Exported so other drop zones
+ *  (e.g. the dataset rail-row landing pad) share the same traversal logic. */
+export async function walkDropEntries(dt: DataTransfer): Promise<Walked[]> {
+  const items = Array.from(dt.items).filter(it => it.kind === 'file')
+  const entries = items.map(it => it.webkitGetAsEntry())
+  const out: Walked[] = []
+  for (const entry of entries) {
+    const walked = await readEntry(entry)
+    if (walked) out.push(walked)
+  }
+  return out
+}
 
 // Walk a DataTransferEntry recursively. Returns one Walked per top-level
 // entry (file → 1 file, folder → 1 folder with all descendant files).
@@ -76,7 +99,8 @@ async function walkDir(
   }
 }
 
-export default function UploadDrop({ onClose, onUploaded }: Props) {
+export default function UploadDrop({ onClose, onUploaded, appendTo, projectId }: Props) {
+  const appending = !!appendTo
   const [items, setItems] = useState<UploadItem[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -115,11 +139,24 @@ export default function UploadDrop({ onClose, onUploaded }: Props) {
       loaded: 0, total: file.size,
     }
     setItems(prev => [...prev, item])
+    // In append mode, a single dropped file goes INTO the existing dataset
+    // (not as its own /api/upload entity). Reuse upload-folder with one file.
+    if (appending) {
+      const fd = new FormData()
+      fd.append('folder_name', file.name)
+      fd.append('files', file)
+      fd.append('rel_paths', file.name)
+      fd.append('append_to', appendTo!.id)
+      if (projectId) fd.append('project_id', projectId)
+      const xhr = xhrUpload('/api/upload-folder', fd, id)
+      updateItem(id, { xhr })
+      return
+    }
     const fd = new FormData()
     fd.append('file', file)
     const xhr = xhrUpload('/api/upload', fd, id)
     updateItem(id, { xhr })
-  }, [xhrUpload, updateItem])
+  }, [appending, appendTo, projectId, xhrUpload, updateItem])
 
   const uploadFolder = useCallback((folderName: string, files: { file: File; rel: string }[]) => {
     if (files.length === 0) return     // empty folder — silently skip
@@ -136,9 +173,11 @@ export default function UploadDrop({ onClose, onUploaded }: Props) {
       fd.append('files', f.file)
       fd.append('rel_paths', f.rel)
     })
+    if (appending) fd.append('append_to', appendTo!.id)
+    if (projectId) fd.append('project_id', projectId)
     const xhr = xhrUpload('/api/upload-folder', fd, id)
     updateItem(id, { xhr })
-  }, [xhrUpload, updateItem])
+  }, [appending, appendTo, projectId, xhrUpload, updateItem])
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
@@ -186,17 +225,23 @@ export default function UploadDrop({ onClose, onUploaded }: Props) {
     <div className="updrop__backdrop" onClick={handleClose}>
       <div className="updrop__dialog" onClick={e => e.stopPropagation()}>
         <div className="updrop__header">
-          <span className="updrop__title">Add data to this project</span>
+          <span className="updrop__title">
+            {appending ? <>Add files to <em>{appendTo!.title}</em></> : 'Add data to this project'}
+          </span>
           <button className="updrop__close" onClick={handleClose} title="Close">×</button>
         </div>
 
         <div
-          className={`updrop__zone${dragging ? ' updrop__zone--active' : ''}`}
+          className={`updrop__zone${dragging ? ' updrop__zone--active' : ''}${appending ? ' updrop__zone--append' : ''}`}
           onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragging(true) }}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
-          <div className="updrop__zone-main">Drop files or folders here</div>
+          <div className="updrop__zone-main">
+            {appending
+              ? <>Drop files or folders <strong>into this dataset</strong></>
+              : 'Drop files or folders here'}
+          </div>
           <div className="updrop__zone-sep">— or —</div>
           <button className="updrop__pick-btn" onClick={handleClickPicker}>click to pick files…</button>
           <div className="updrop__hint">(folders: drag-and-drop only — the OS picker can't mix modes)</div>
@@ -240,4 +285,34 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+/** Fire-and-forget upload of a Walked[] into an existing dataset. Resolves
+ *  when all uploads finish (success or error). No progress UI — used by the
+ *  rail-row landing pad where the modal's pills aren't visible. */
+export async function uploadWalkedAppend(
+  walked: Walked[],
+  datasetId: string,
+  projectId?: string,
+): Promise<void> {
+  const jobs = walked.map(w => {
+    const fd = new FormData()
+    fd.append('append_to', datasetId)
+    if (projectId) fd.append('project_id', projectId)
+    if (w.kind === 'file') {
+      fd.append('folder_name', w.file.name)
+      fd.append('files', w.file)
+      fd.append('rel_paths', w.file.name)
+    } else {
+      fd.append('folder_name', w.name)
+      w.files.forEach(f => {
+        fd.append('files', f.file)
+        fd.append('rel_paths', f.rel)
+      })
+    }
+    return fetch('/api/upload-folder', { method: 'POST', body: fd })
+      .then(r => { if (!r.ok) console.error('append upload failed', r.status) })
+      .catch(err => console.error('append upload error', err))
+  })
+  await Promise.all(jobs)
 }

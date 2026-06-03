@@ -325,8 +325,25 @@
 .focus__dataset-desc:focus { outline: none; border-color: var(--accent); background: var(--bg); }
 .focus__dataset-files { margin-top: 12px; }
 .focus__dataset-files-head {
+  display: flex; align-items: center; justify-content: space-between;
   font-size: 10px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px;
   color: var(--text-4); margin-bottom: 6px;
+}
+.focus__add-files-btn {
+  font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0;
+  background: var(--surface-1, #fff); color: var(--accent, #4f46e5);
+  border: 1px solid color-mix(in srgb, var(--accent, #4f46e5) 40%, transparent);
+  border-radius: 5px; padding: 3px 9px; cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.focus__add-files-btn:hover {
+  background: color-mix(in srgb, var(--accent, #4f46e5) 8%, transparent);
+  border-color: var(--accent, #4f46e5);
+}
+.focus__dataset-empty {
+  font-size: 13px; color: var(--text-3, #777);
+  border: 1px dashed var(--border, #ddd); border-radius: 6px;
+  padding: 16px 14px; background: var(--surface-2, #fafafa);
 }
 .focus__rows    { display: flex; flex-direction: column; gap: 4px; }
 

@@ -21,12 +21,17 @@ const PINNABLE = new Set(['figure', 'table', 'cell', 'note', 'narrative'])
 type Editing =
   | { kind: 'rename' }
   | { kind: 'tags' }
+  | { kind: 'delete' }
   | null
+
+interface Blocker { id: string; type?: string; title?: string; rel_type?: string }
 
 export default function EntityMenu({ entity, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [delError, setDelError] = useState<{ msg: string; refs?: Blocker[] } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -78,6 +83,33 @@ export default function EntityMenu({ entity, onChange }: Props) {
     onChange()
   }
 
+  async function hardDelete() {
+    setDeleting(true); setDelError(null)
+    try {
+      const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}?hard=true`,
+        { method: 'DELETE' })
+      if (r.ok) {
+        setOpen(false); setEditing(null); onChange()
+        return
+      }
+      // 409 (live refs) returns detail = {error, references}
+      let msg = `HTTP ${r.status}`
+      let refs: Blocker[] | undefined
+      try {
+        const j = await r.json()
+        if (j?.detail && typeof j.detail === 'object') {
+          msg = j.detail.error || msg
+          refs = j.detail.references as Blocker[] | undefined
+        } else if (typeof j?.detail === 'string') {
+          msg = j.detail
+        }
+      } catch { /* keep default */ }
+      setDelError({ msg, refs })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   async function pinToResult() {
     const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}/pin`, { method: 'POST' })
     if (!r.ok) console.error('pin failed', await r.text())
@@ -124,12 +156,26 @@ export default function EntityMenu({ entity, onChange }: Props) {
                 <button onClick={pinToResult}>Pin</button>
               )}
               {canDownload && <button onClick={download}>Download…</button>}
+              {!isArchived && (
+                <button onClick={() => { setDelError(null); setEditing({ kind: 'delete' }) }}
+                        className="entity-menu__danger">Delete…</button>
+              )}
               {isArchived ? (
                 <button onClick={restore}>Restore</button>
               ) : (
                 <button onClick={del} className="entity-menu__danger">Archive</button>
               )}
             </div>
+          )}
+          {editing?.kind === 'delete' && (
+            <DeleteConfirm
+              entity={entity}
+              style={popStyle}
+              busy={deleting}
+              error={delError}
+              onCancel={() => { setEditing(null); setDelError(null) }}
+              onConfirm={hardDelete}
+            />
           )}
           {editing?.kind === 'rename' && (
             <EditOne
@@ -154,6 +200,66 @@ export default function EntityMenu({ entity, onChange }: Props) {
         </div>,
         document.body
       )}
+    </div>
+  )
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function DeleteConfirm({
+  entity, onCancel, onConfirm, busy, error, style,
+}: {
+  entity: Entity
+  onCancel: () => void
+  onConfirm: () => void
+  busy: boolean
+  error: { msg: string; refs?: Blocker[] } | null
+  style?: React.CSSProperties
+}) {
+  const isDataset = entity.type === 'dataset'
+  const fc = entity.metadata?.file_count as number | undefined
+  const bytes = entity.metadata?.size_bytes as number | undefined
+  return (
+    <div className="entity-menu__pop entity-menu__edit" style={style}>
+      <div className="entity-menu__label entity-menu__danger">Delete this {entity.type}?</div>
+      <div className="entity-menu__delete-body">
+        <div><strong>{entity.title}</strong></div>
+        {isDataset && typeof fc === 'number' && (
+          <div className="entity-menu__delete-meta">
+            {fc === 0
+              ? <span>empty dataset — folder will be removed.</span>
+              : <span>{fc} {fc === 1 ? 'file' : 'files'}{typeof bytes === 'number' ? ` · ${formatBytes(bytes)}` : ''}<br />
+                The dataset folder and its contents will be permanently removed.</span>}
+          </div>
+        )}
+        {!isDataset && (
+          <div className="entity-menu__delete-meta">This entity will be permanently removed (use Archive for a reversible alternative).</div>
+        )}
+        {error && (
+          <div className="entity-menu__delete-error">
+            <div>{error.msg}</div>
+            {error.refs && error.refs.length > 0 && (
+              <ul>
+                {error.refs.map((b, i) => (
+                  <li key={i}>{b.title || b.id} <em>({b.type || 'entity'}, {b.rel_type})</em></li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="entity-menu__buttons">
+        <button onClick={onCancel} disabled={busy}>Cancel</button>
+        <button onClick={onConfirm} disabled={busy}
+                className="entity-menu__primary entity-menu__danger-btn">
+          {busy ? 'Deleting…' : 'Delete'}
+        </button>
+      </div>
     </div>
   )
 }

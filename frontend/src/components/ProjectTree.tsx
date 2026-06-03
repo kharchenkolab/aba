@@ -5,7 +5,7 @@ import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
 import { RailIcon, type RailIconName } from './icons'
 import FilesView from './FilesView'
-import UploadDrop from './UploadDrop'
+import UploadDrop, { walkDropEntries, uploadWalkedAppend } from './UploadDrop'
 import type { FileNode } from '../viewers/types'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
@@ -100,6 +100,13 @@ const STATUS_ICON: Record<string, string> = {
 
 const SECTION_CAP = 8   // items shown per section before "show all"
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
 function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { className?: string; size?: number }) {
   return (
     <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
@@ -118,6 +125,13 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
   const [uploadOpen, setUploadOpen] = useState(false)
   const [sectionFilters, setSectionFilters] = useState<Record<ProjectSection, string>>(DEFAULT_FILTERS)
+  // Inline rename state for newly-created datasets (Datasets `+` flow).
+  // Reused by any entity row that opts into rename (F5 polish).
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  // Per-row drag-over highlight + in-flight upload spinner for the
+  // experimental rail-row drop landing pad (drag a file → append to dataset).
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  const [appendingIds, setAppendingIds] = useState<Set<string>>(() => new Set())
 
   const workspace = entities.find(e => e.id === 'workspace')
 
@@ -151,6 +165,51 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       body: JSON.stringify({ title: 'New investigation' }),
     })
     if (r.ok) { const t = await r.json(); onChange(); onSelectThread(t.id) }
+  }
+
+  async function createEmptyDataset() {
+    const r = await fetch('/api/datasets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, name: 'New dataset' }),
+    })
+    if (!r.ok) return
+    const e = await r.json()
+    onChange()
+    onFocus(e.id)
+    setRenamingId(e.id)
+  }
+
+  async function handleRowDrop(e: React.DragEvent, dataset: Entity) {
+    // Only directory-shaped datasets accept appends — backend enforces this,
+    // but skip silently here so single-file dataset rows don't act as targets.
+    if (dataset.metadata?.layout !== 'directory') {
+      setDropTargetId(null)
+      return
+    }
+    e.preventDefault(); e.stopPropagation()
+    setDropTargetId(null)
+    const walked = await walkDropEntries(e.dataTransfer)
+    if (walked.length === 0) return
+    setAppendingIds(s => new Set(s).add(dataset.id))
+    try {
+      await uploadWalkedAppend(walked, dataset.id, projectId)
+    } finally {
+      setAppendingIds(s => { const n = new Set(s); n.delete(dataset.id); return n })
+      onChange()
+    }
+  }
+
+  async function commitRename(id: string, value: string) {
+    setRenamingId(null)
+    const t = value.trim()
+    if (!t) return
+    const ent = entities.find(x => x.id === id)
+    if (ent && ent.title === t) return
+    await fetch(`/api/entities/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: t }),
+    })
+    onChange()
   }
 
   async function renameProject(name: string) {
@@ -211,6 +270,14 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
       values.filter((value): value is string => !!value).forEach((value, i) => meta.push(<span key={`text-${i}`}>{value}</span>))
     }
     if (entity.type === 'dataset') {
+      const fc = entity.metadata?.file_count as number | undefined
+      const bytes = entity.metadata?.size_bytes as number | undefined
+      if (typeof fc === 'number') {
+        const fileLine = fc === 0
+          ? <span key="files" className="tree__index-files--empty">empty</span>
+          : <span key="files">{fc} {fc === 1 ? 'file' : 'files'}{typeof bytes === 'number' ? ` · ${formatBytes(bytes)}` : ''}</span>
+        meta.push(fileLine)
+      }
       const description = firstText(entity.metadata?.description, entity.metadata?.summary, entity.metadata?.text, entity.notes, entity.metadata?.source, entity.metadata?.path)
       // Keep the tree line short — the full text lives in the center detail view.
       if (description) meta.push(<span key="description">{description.length > 80 ? description.slice(0, 80).trimEnd() + '…' : description}</span>)
@@ -435,8 +502,8 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                     <span className="tree__pill tree__pill--green">{items.length}</span>
                   </span>
                   {activeSection === 'data' && (
-                    <button className="tree__add-button" title="Add data (drop files or folders)"
-                            onClick={() => setUploadOpen(true)}>+</button>
+                    <button className="tree__add-button" title="Create a new dataset"
+                            onClick={createEmptyDataset}>+</button>
                   )}
                 </div>
               </div>
@@ -451,21 +518,58 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                 <div className="tree__section-label">{sectionFilter === 'All' ? section.sectionLabel : `${sectionFilter} ${section.label.toLowerCase()}`}</div>
                 {filteredItems.length === 0 ? (
                   <div className="tree__empty">{items.length === 0 ? section.empty : 'No items match this filter.'}</div>
-                ) : shown.map(e => (
+                ) : shown.map(e => {
+                  // Rail-row drop landing pad is dataset-only (experimental).
+                  const isDataset = e.type === 'dataset' && e.metadata?.layout === 'directory'
+                  const isDropTarget = isDataset && dropTargetId === e.id
+                  const isAppending = appendingIds.has(e.id)
+                  return (
                   <div
                     key={e.id}
-                    className={`tree__index-row tree__index-row--entity ${focusedId === e.id ? 'is-current' : ''} ${e.status === 'failed' || e.status === 'running' ? 'is-warning' : ''}`}
-                    onClick={() => onFocus(e.id)}
+                    className={`tree__index-row tree__index-row--entity ${focusedId === e.id ? 'is-current' : ''} ${e.status === 'failed' || e.status === 'running' ? 'is-warning' : ''} ${isDropTarget ? 'is-drop-target' : ''} ${isAppending ? 'is-appending' : ''}`}
+                    onClick={() => { if (renamingId !== e.id) onFocus(e.id) }}
                     data-entity-id={e.id}
                     data-entity-type={e.type}
+                    onDragOver={isDataset ? (ev => {
+                      // Only handle file drops; ignore react-dnd / internal drags.
+                      if (!Array.from(ev.dataTransfer.types).includes('Files')) return
+                      ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'
+                      setDropTargetId(e.id)
+                    }) : undefined}
+                    onDragLeave={isDataset ? (() => setDropTargetId(t => t === e.id ? null : t)) : undefined}
+                    onDrop={isDataset ? (ev => handleRowDrop(ev, e)) : undefined}
                   >
-                    <button className="tree__index-main">
-                      <span className="tree__index-title">{e.title}</span>
-                      <span className="tree__index-meta">{entityMeta(e)}</span>
-                    </button>
+                    {renamingId === e.id ? (
+                      <input
+                        className="tree__index-rename"
+                        defaultValue={e.title}
+                        autoFocus
+                        onFocus={ev => ev.currentTarget.select()}
+                        onClick={ev => ev.stopPropagation()}
+                        onBlur={ev => commitRename(e.id, ev.target.value)}
+                        onKeyDown={ev => {
+                          if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur()
+                          if (ev.key === 'Escape') { setRenamingId(null); (ev.target as HTMLInputElement).blur() }
+                        }}
+                      />
+                    ) : (
+                      <button className="tree__index-main">
+                        <span
+                          className="tree__index-title"
+                          title={e.type === 'dataset' ? 'Double-click to rename' : undefined}
+                          onDoubleClick={e.type === 'dataset' ? (ev => {
+                            ev.stopPropagation(); ev.preventDefault()
+                            setRenamingId(e.id)
+                          }) : undefined}
+                        >{e.title}</span>
+                        <span className="tree__index-meta">{entityMeta(e)}</span>
+                      </button>
+                    )}
+                    {isAppending && <span className="tree__index-spinner" title="Uploading…">⟳</span>}
                     <EntityMenu entity={e} onChange={onChange} />
                   </div>
-                ))}
+                  )
+                })}
                 {filteredItems.length > SECTION_CAP && (
                   <button className="tree__more"
                           onClick={() => setShowAll(s => ({ ...s, [showKey]: !s[showKey] }))}>

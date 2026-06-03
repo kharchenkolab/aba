@@ -186,6 +186,20 @@ def archive_entity(entity_id: str) -> Optional[dict]:
     return get_entity(entity_id)
 
 
+def delete_entity_hard(entity_id: str) -> bool:
+    """Hard-delete: remove the row + its edges. Caller is responsible for
+    removing any on-disk artifact and for refusing if external references
+    exist. Workspace cannot be deleted. Returns True if a row was removed."""
+    if entity_id == WORKSPACE_ID:
+        return False
+    with _conn() as c:
+        c.execute("DELETE FROM entity_edges WHERE source_id = ? OR target_id = ?",
+                  (entity_id, entity_id))
+        cur = c.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+        c.commit()
+        return cur.rowcount > 0
+
+
 def restore_entity(entity_id: str) -> Optional[dict]:
     now = _utcnow()
     with _conn() as c:
