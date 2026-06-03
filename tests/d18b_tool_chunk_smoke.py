@@ -151,5 +151,37 @@ def main():
     return 0
 
 
+def test_small_output_emits_chunk():
+    """Regression for the 2026-06-03 bug: a short run (<10KB stdout) emitted
+    ZERO chunks because the interval-flush + tail-flush fired from the main
+    thread, where the progress sink is unset (thread-local). Without an
+    in-thread byte-cap hit, every chunk was silently dropped — symptom was
+    "no live indicator ever appears for short tools" in the UI."""
+    import queue, time
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+    from content.bio import tools
+    from core.runtime import progress
+    q: queue.Queue = queue.Queue()
+    progress.set_sink(q)
+    try:
+        tools.run_python({"code": "print('hello')\nprint('world')\n", "timeout_s": 10},
+                         ctx={"thread_id": f"small_{int(time.time())}", "session_id": "small"})
+    finally:
+        progress.clear_sink()
+    events = []
+    try:
+        while True:
+            events.append(q.get_nowait())
+    except queue.Empty:
+        pass
+    chunks = [e for e in events if isinstance(e, dict) and e.get("type") == "chunk"]
+    print(f"[small-output] {len(chunks)} chunk events for a 2-line print")
+    assert chunks, "no chunk events emitted for a small run — the fix didn't take"
+    # And the chunk should have the actual text
+    chunk_text = "".join(c.get("text", "") for c in chunks if c.get("stream") == "stdout")
+    assert "hello" in chunk_text and "world" in chunk_text, chunk_text
+    print("OK small-output run emits at least one chunk (fix landed)")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or test_small_output_emits_chunk() or 0)

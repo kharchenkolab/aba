@@ -241,14 +241,20 @@ class JupyterKernelSession:
         # Independent of the one-line _emit_live tick: the latter feeds the
         # chat-line "running R · Loading dataset" indicator; this feeds the
         # output-drawer live pane keyed by tool_use_id.
-        # Pushes the dict DIRECTLY onto the sink (bypassing progress.emit,
-        # which str()-coerces its message arg — would clobber our payload).
+        # Capture the sink ONCE here (main thread, sink is set by the caller)
+        # and close over it — coalescer flushes fire from BOTH the worker
+        # thread (byte-cap, via hook→push) AND the main thread (interval via
+        # maybe_flush + final flush in `finally`). progress.current_sink() is
+        # thread-local, so re-looking-it-up inside _emit_chunk silently
+        # returned None on the main-thread flushes (2026-06-03 — symptom was
+        # NO live tool_chunk events for short-output runs because the byte
+        # cap never fired in-thread). Closing over the queue fixes both.
+        _chunk_q = progress.current_sink()
         def _emit_chunk(ev: dict) -> None:
-            q = progress.current_sink()
-            if q is None:
+            if _chunk_q is None:
                 return
             try:
-                q.put_nowait({
+                _chunk_q.put_nowait({
                     "type": "chunk",
                     "stream": ev.get("stream", "stdout"),
                     "text": ev.get("text", ""),
