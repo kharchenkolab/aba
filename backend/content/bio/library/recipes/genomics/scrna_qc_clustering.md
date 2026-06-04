@@ -1,5 +1,6 @@
 ---
 name: scrna-qc-clustering-v2
+aliases: [scrna-qc-clustering]
 description: Standard scanpy processing for ONE scRNA-seq sample — QC, filtering, normalization, highly variable genes, PCA, Leiden clustering, UMAP and cluster markers. Tissue/species-agnostic recipe with data-driven QC thresholds visualized on the cells they remove, PCA elbow showing per-PC and cumulative variance, and a top-5 marker dotplot + canonical-marker UMAP overlay for cluster characterization.
 when_to_use: You have a single scRNA-seq sample (10x mtx / h5ad / raw count matrix) and want to process it with scanpy — basic/standard processing and a first-pass clustering (QC → normalize → cluster → UMAP → markers) before any biology. For principled MAD-based QC instead, see bp-quality-control; for FASTQ→counts see bp-raw-data-processing. For an R/Seurat session use the analogous seurat-scrna-v2 recipe (same biology, same steps, shared visual language).
 avoid_when: "Multiple samples/donors you intend to INTEGRATE jointly (use harmony/scvi/seurat-integration — do not concat-then-cluster); bulk RNA-seq; only a gene list with no count matrix; cross-condition DE across donors (needs pseudobulk + a DE recipe, not this single-sample clustering)."
