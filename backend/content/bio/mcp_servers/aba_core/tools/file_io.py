@@ -10,6 +10,8 @@ resolution (different bases per project).
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from mcp.server.fastmcp import FastMCP
 
 
@@ -33,7 +35,7 @@ def register_file_io_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def write_file(path: str, body: str,
-                   mode: str = "text",
+                   mode: Literal["w", "a"] = "w",
                    overwrite: bool = False,
                    aba_ctx_id: str | None = None) -> dict:
         """Write a file inside the project workspace. Paths must

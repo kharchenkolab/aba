@@ -10,6 +10,8 @@ or cancel_token (long-running installs).
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from mcp.server.fastmcp import FastMCP
 
 
@@ -51,7 +53,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     # --- inspect + capability ops (ctx-using) ---
 
     @mcp.tool()
-    def inspect_package(name: str, language: str = "python",
+    def inspect_package(name: str,
+                        language: Literal["python", "r"] = "python",
                         object: str | None = None,
                         aba_ctx_id: str | None = None) -> dict:
         """Inspect a package — list submodules / classes / functions,
@@ -76,9 +79,10 @@ def register_discovery_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def propose_capability(name: str,
-                           archetype: str | None = None,
+                           archetype: Literal["library", "cli", "r_package",
+                                              "mcp_server", "pipeline"] | None = None,
                            channel: str | None = None,
-                           source: str | None = None,
+                           source: Literal["cran", "bioconductor", "github"] | None = None,
                            package: str | None = None,
                            library: str | None = None,
                            ref: str | None = None,
@@ -113,7 +117,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                      peek_ctx(aba_ctx_id))
 
     @mcp.tool()
-    def fetch_ensembl(species: str, kind: str,
+    def fetch_ensembl(species: str,
+                      kind: Literal["cdna", "dna", "gtf"],
                       release: str | None = None,
                       aba_ctx_id: str | None = None) -> dict:
         """Fetch Ensembl reference data (genome/GTF/cdna/…) for a
