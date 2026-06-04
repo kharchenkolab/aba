@@ -39,8 +39,18 @@ class _InProcessConfigShim:
     """Tiny shim so `_handles` items with both transports report a
     `.config.name` (the gateway's status() endpoint dereferences this).
     The in-process handle has no ServerConfig because it isn't loaded
-    from yaml — name + default_timeout_s are passed in directly."""
-    def __init__(self, name: str, default_timeout_s: int = 30):
+    from yaml — name + default_timeout_s are passed in directly.
+
+    default_timeout_s defaults to None for in-process (was 30s, dropped
+    after the 2026-06-04 pagoda2 regression — see
+    project_bg_jobs_threshold_signal memory). The bio impl owns its own
+    timeout policy (run_python/run_r 1800s cap, ensure_capability and
+    run_nextflow can be longer); wrapping that in a 30s gateway ceiling
+    cancels legitimate long-running calls mid-flight. For external
+    stdio servers, the 30s default still makes sense — there the impl
+    is opaque and a hung subprocess needs an outer guard. For
+    in-process the bio impl is the guard."""
+    def __init__(self, name: str, default_timeout_s: int | None = None):
         self.name = name
         self.default_timeout_s = default_timeout_s
 
@@ -133,11 +143,26 @@ class InProcessServerHandle:
                             f"(state={self.state.value}); last error: {self.last_error}"}
         deadline = timeout_s if timeout_s is not None else self.config.default_timeout_s
         try:
+            # deadline=None → wait indefinitely; that's the right default
+            # for in-process (the bio impl's own timeout is the source
+            # of truth — see _InProcessConfigShim docstring).
             result = await asyncio.wait_for(
                 self._session.call_tool(raw_name, arguments),
                 timeout=deadline,
             )
         except asyncio.TimeoutError:
+            # A wait_for cancellation propagates into the memory
+            # transport's anyio task group and leaves the in-memory
+            # session in an unclean state (downstream symptom: the
+            # 'cancel scope in a different task' RuntimeError that
+            # spammed the 2026-06-04 log + the SECOND tool call after
+            # the timeout failing identically because the session is
+            # broken). Force a reconnect so the next call gets a
+            # healthy session — same recovery the generic-except branch
+            # already does for unexpected errors.
+            self.last_error = f"TimeoutError after {deadline}s"
+            self.state = HandleState.DISCONNECTED
+            asyncio.create_task(self._maybe_restart())
             return {"status": "error",
                     "note": f"MCP call to {self.config.name}:{raw_name} timed out after {deadline}s"}
         except Exception as e:  # noqa: BLE001
