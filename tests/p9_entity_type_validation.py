@@ -34,7 +34,7 @@ _schema.init_db()
 
 # Importing bio loads the entity-type YAMLs.
 import content.bio  # noqa: E402, F401
-from core.graph.entities import create_entity  # noqa: E402
+from core.graph.entities import create_entity, update_entity, archive_entity  # noqa: E402
 from core.graph.edges import add_edge  # noqa: E402
 
 
@@ -135,6 +135,61 @@ def test_unknown_endpoint_silently_skipped():
     assert not msgs, f"missing endpoint should not warn: {msgs}"
 
 
+# --- Phase 4.4: status-transition validation ---
+
+
+def test_status_transition_to_undeclared_state_warns():
+    eid = create_entity(entity_type="figure", title="trans1",
+                        artifact_path="/x/y.png")
+    h = _capture()
+    try:
+        update_entity(eid, status="completely_bogus_state")
+    finally:
+        _drop(h)
+    msgs = [r.getMessage() for r in h.records
+            if "status" in r.getMessage() or "transition" in r.getMessage()]
+    assert msgs, "expected a warning about the bogus target state"
+
+
+def test_status_transition_declared_silent():
+    eid = create_entity(entity_type="figure", title="trans2",
+                        artifact_path="/x/y.png")
+    # figure.yaml: active → superseded is declared.
+    h = _capture()
+    try:
+        update_entity(eid, status="superseded")
+    finally:
+        _drop(h)
+    msgs = [r.getMessage() for r in h.records if "transition" in r.getMessage()]
+    assert not msgs, f"declared transition should be silent: {msgs}"
+
+
+def test_archive_entity_validates_silent():
+    # All real types declare 'X → archived'.
+    eid = create_entity(entity_type="figure", title="arch1",
+                        artifact_path="/x/y.png")
+    h = _capture()
+    try:
+        archive_entity(eid)
+    finally:
+        _drop(h)
+    # figure.yaml: 'archived' is a declared state; transition allowed.
+    msgs = [r.getMessage() for r in h.records if "archived" in r.getMessage()]
+    assert not msgs, f"archive should be silent: {msgs}"
+
+
+def test_workspace_cannot_transition():
+    # workspace.yaml status_model has states=['active'], transitions={}.
+    # Any status update should be flagged.
+    h = _capture()
+    try:
+        update_entity("workspace", status="archived")
+    finally:
+        _drop(h)
+    msgs = [r.getMessage() for r in h.records if "workspace" in r.getMessage()]
+    assert msgs, "expected warning that workspace can't transition"
+
+
 def main() -> int:
     tests = [
         test_good_create_no_warning,
@@ -143,6 +198,10 @@ def main() -> int:
         test_good_edge_no_warning,
         test_bad_edge_warns,
         test_unknown_endpoint_silently_skipped,
+        test_status_transition_to_undeclared_state_warns,
+        test_status_transition_declared_silent,
+        test_archive_entity_validates_silent,
+        test_workspace_cannot_transition,
     ]
     failed = []
     for t in tests:

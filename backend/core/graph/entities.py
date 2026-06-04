@@ -166,6 +166,21 @@ def count_entities(
 def update_entity(entity_id: str, **fields) -> Optional[dict]:
     """Partial update. Accepted fields: title, notes, tags, pinned, status,
     metadata, artifact_path. Other keys silently ignored."""
+    # Phase 4.4 — validate status transitions against the registered
+    # status_model. Warning-only; the update proceeds either way.
+    if "status" in fields and fields["status"] is not None:
+        try:
+            from core.lifecycle import validate_transition
+            current = get_entity(entity_id)
+            if current is not None:
+                for msg in validate_transition(
+                    entity_type=current["type"],
+                    from_status=current.get("status"),
+                    to_status=fields["status"],
+                ):
+                    _log.warning("entity_types: %s", msg)
+        except Exception:  # noqa: BLE001 — validation never blocks
+            pass
     allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path",
                "display_path", "producing_code", "producing_params"}
     sets = []
@@ -195,6 +210,20 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
 
 def archive_entity(entity_id: str) -> Optional[dict]:
     """Soft-delete: mark as archived and record deleted_at."""
+    # Phase 4.4 — warn if 'archived' isn't a declared state for this type
+    # or the current → archived transition isn't declared. Doesn't block.
+    try:
+        from core.lifecycle import validate_transition
+        current = get_entity(entity_id)
+        if current is not None:
+            for msg in validate_transition(
+                entity_type=current["type"],
+                from_status=current.get("status"),
+                to_status="archived",
+            ):
+                _log.warning("entity_types: %s", msg)
+    except Exception:  # noqa: BLE001
+        pass
     now = _utcnow()
     with _conn() as c:
         cur = c.execute(
