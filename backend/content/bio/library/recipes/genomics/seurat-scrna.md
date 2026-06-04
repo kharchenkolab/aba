@@ -1,5 +1,6 @@
 ---
 name: seurat-scrna-v2
+aliases: [seurat-scrna]
 description: Generic single-sample scRNA-seq QC + clustering + markers with R/Seurat (v5) — tissue/species-agnostic recipe with data-driven QC thresholds visualized on the cells they remove, PCA elbow showing per-PC and cumulative variance, and a top-5 marker dotplot + canonical-marker FeaturePlot for cluster characterization. SCTransform alternative noted.
 when_to_use: scRNA-seq dataset for ANY tissue/organism (10x CellRanger output, .h5, or a counts matrix) and you want QC, clustering, a UMAP, and cluster markers. Use THIS (R/Seurat) when the session is already R-based, when the user asks for Seurat/R, or when downstream work depends on the Bioconductor/Seurat ecosystem. For a Python session (anndata/scanpy already in play), prefer the scanpy equivalent scrna-qc-clustering.
 requires_tools: [run_r]

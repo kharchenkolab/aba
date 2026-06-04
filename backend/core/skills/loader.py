@@ -30,7 +30,14 @@ class SkillSpec:
     """One skill: identity + minimal metadata + body. Body is the
     procedural text returned by read_skill(name)."""
     name:           str
-    description:    str
+    # Historical / alternate names this skill ALSO answers to. Use this
+    # when bumping a name version (e.g. `scrna-qc-clustering` → `-v2`)
+    # so cross-references in sibling recipes, prompts, and the agent's
+    # learned priors keep resolving instead of silently going unknown.
+    # The validator's KNOWN_SKILLS gets every alias too, so a plan that
+    # uses the old name validates without warnings.
+    aliases:        tuple[str, ...] = ()
+    description:    str = ""
     when_to_use:    str = ""
     # When NOT to use — applicability anti-conditions, for selection/triage.
     avoid_when:     str = ""
@@ -121,6 +128,9 @@ def _spec_from_text(text: str, source_path: str = "", *,
     kw = fm.get("keywords") or fm.get("tags") or ()
     if isinstance(kw, str):
         kw = (kw,)
+    al = fm.get("aliases") or ()
+    if isinstance(al, str):
+        al = (al,)
     # CC-convergence Phase 3: accept CC's kebab-case keys as aliases for our
     # underscore keys. A vanilla Claude Code SKILL.md drops in unchanged.
     user_inv = bool(fm.get("user_invocable") or fm.get("user-invocable") or False)
@@ -130,6 +140,7 @@ def _spec_from_text(text: str, source_path: str = "", *,
         at = (at,)
     return SkillSpec(
         name=name,
+        aliases=tuple(str(a).strip() for a in al if str(a).strip() and str(a).strip() != name),
         description=str(fm.get("description") or "").strip(),
         when_to_use=str(fm.get("when_to_use") or "").strip(),
         avoid_when=str(fm.get("avoid_when") or "").strip(),
@@ -154,6 +165,12 @@ def _spec_from_text(text: str, source_path: str = "", *,
 # In-process registry. Content packs populate it via register_skill_dir;
 # get_skill/read_skill/list_skills read from it.
 _REGISTRY: dict[str, SkillSpec] = {}
+
+# Alias → canonical name. Populated alongside _REGISTRY in register_skill_dir.
+# get_skill/read_skill/invoke_skill consult this on registry miss so a stale
+# pre-rename reference (e.g. `scrna-qc-clustering` after the v2 rename) still
+# resolves to the current SkillSpec. list_skills lists canonicals only.
+_ALIASES: dict[str, str] = {}
 
 # Lazily-built BM25 index over the registry; invalidated whenever the
 # registry changes (cheap to rebuild at this scale).
@@ -244,6 +261,9 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         spec = _spec_with_resources(spec, resources)
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
+        for a in spec.aliases:
+            _ALIASES[a] = spec.name
+            register_skill(a)
         consumed_dirs.add(folder)
         n += 1
 
@@ -263,6 +283,9 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
             continue
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
+        for a in spec.aliases:
+            _ALIASES[a] = spec.name
+            register_skill(a)
         n += 1
 
     if n:
@@ -276,13 +299,19 @@ def list_skills() -> list[SkillSpec]:
 
 
 def get_skill(name: str) -> Optional[SkillSpec]:
-    return _REGISTRY.get(name)
+    """Lookup by canonical name or alias. Alias resolves to the SAME spec
+    (whose .name is the canonical name)."""
+    s = _REGISTRY.get(name)
+    if s is not None:
+        return s
+    canon = _ALIASES.get(name)
+    return _REGISTRY.get(canon) if canon else None
 
 
 def read_skill(name: str) -> Optional[str]:
     """Return the full body of the named skill, or None if absent. This
     is what the `read_skill` tool returns to the agent."""
-    s = _REGISTRY.get(name)
+    s = get_skill(name)
     return s.body if s else None
 
 
@@ -298,7 +327,7 @@ def invoke_skill(name: str, args: str = "") -> Optional[dict]:
     same orchestration read_skill has (recipe-uptake tracking, requires_tools
     check, capabilities note) — the substitution + resources are the only new
     things here."""
-    s = _REGISTRY.get(name)
+    s = get_skill(name)
     if s is None:
         return None
     body = (s.body or "").replace("$ARGUMENTS", args or "")
@@ -315,10 +344,13 @@ GATED_TOP_K = 8
 
 def _doc_text(s: SkillSpec) -> str:
     """Searchable text for one skill. Name is included both hyphenated and
-    space-split so 'rna seq' matches 'bulk-rnaseq-de'."""
+    space-split so 'rna seq' matches 'bulk-rnaseq-de'. Aliases are folded
+    in so a search for the historical pre-rename name still finds the
+    versioned canonical."""
     return " ".join([
         s.name,
         s.name.replace("-", " ").replace("_", " "),
+        " ".join(s.aliases),
         s.description,
         s.when_to_use,
         " ".join(s.keywords),
