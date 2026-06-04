@@ -22,6 +22,11 @@ from content.bio.graph.result_members import (
     add_result_member, remove_result_member, update_result_member,
     reorder_result_members,
 )
+from content.bio.lifecycle.promote import (
+    promote_figure_to_result, promote_results_to_finding,
+    add_result_to_finding, remove_result_from_finding,
+)
+from content.bio.advisors.runner import skeptic_review
 
 
 router = APIRouter()
@@ -356,3 +361,226 @@ def result_remove_member(rid: str, member_id: str):
 def result_reorder(rid: str, req: ReorderRequest):
     _result_or_404(rid)
     return reorder_result_members(rid, req.order)
+
+
+@router.post("/api/results/{rid}/regenerate-interpretation")
+def regenerate_interpretation(rid: str):
+    """Re-fire the auto-interpret background job for a single Result. Used
+    when the original schedule failed. Idempotent: auto_interpret skips
+    if interpretation_origin=='user' (the user has edited)."""
+    from content.bio.lifecycle.promote import auto_interpret
+    r = get_entity(rid)
+    if not r or r.get("type") != "result":
+        raise HTTPException(404, f"result {rid} not found")
+    text = auto_interpret(rid)
+    return {"ok": True, "wrote": bool(text), "preview": (text or "")[:200]}
+
+
+# ============================================================================
+# Phase 8.B-2 — Promotion chain (figure → result → finding) + pin gestures
+# ============================================================================
+
+
+class PromoteFigureRequest(BaseModel):
+    interpretation: str
+    title: str | None = None
+
+
+class PromoteResultsRequest(BaseModel):
+    result_ids: list[str]
+    text: str
+    title: str | None = None
+
+
+@router.post("/api/entities/{figure_id}/promote-to-result")
+async def promote_to_result(figure_id: str, req: PromoteFigureRequest):
+    import asyncio
+    try:
+        rid = promote_figure_to_result(figure_id, req.interpretation, req.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # Fire the Skeptic asynchronously so the user gets the result back
+    # promptly. The note shows up when the advisor rail next reloads.
+    asyncio.get_event_loop().run_in_executor(None, skeptic_review, rid)
+    return get_entity(rid)
+
+
+@router.post("/api/findings")
+def create_finding(req: PromoteResultsRequest):
+    try:
+        fid = promote_results_to_finding(req.result_ids, req.text, req.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return get_entity(fid)
+
+
+class NarrativeRequest(BaseModel):
+    title: str
+    text: str = ""
+
+
+@router.post("/api/narratives")
+def create_narrative(req: NarrativeRequest):
+    eid = create_entity(
+        entity_type="narrative",
+        title=req.title or "Untitled section",
+        metadata={"text": req.text},
+    )
+    return get_entity(eid)
+
+
+class FindingResultRequest(BaseModel):
+    result_id: str
+
+
+class DraftFindingRequest(BaseModel):
+    text: str = ""                 # concatenated text of selected messages
+    title_hint: str = ""           # e.g. the first user message in the selection
+    image_urls: list[str] = []     # figure/plot urls in the selection
+
+
+@router.post("/api/findings/draft")
+def draft_finding(req: DraftFindingRequest):
+    """Selection-to-finding draft. Heuristic for now (no tokens): title
+    from the ask, summary from the discussion, evidence resolved from
+    the figures referenced in the selection."""
+    from core.graph.entities import list_entities as _le
+    text = req.text.strip()
+    first = (req.title_hint or text).strip().split("\n")[0]
+    title = (first[:80] + ("…" if len(first) > 80 else "")) or "Untitled finding"
+    summary = text[:600] + ("…" if len(text) > 600 else "")
+    urls = set(req.image_urls or [])
+    evidence = []
+    if urls:
+        for e in _le():
+            if e.get("artifact_path") in urls and e["type"] in ("figure", "table"):
+                evidence.append({"id": e["id"], "type": e["type"], "title": e["title"]})
+    return {"title": title, "summary": summary, "evidence": evidence, "caveats": []}
+
+
+class CreateFindingRequest(BaseModel):
+    title: str
+    summary: str = ""
+    evidence_ids: list[str] = []
+    caveats: list[dict] = []
+    status: str = "candidate"
+
+
+@router.post("/api/findings/from-draft")
+def create_finding_endpoint(req: CreateFindingRequest):
+    from content.bio.lifecycle.promote import create_finding_from_draft
+    fid = create_finding_from_draft(req.title, req.summary, req.evidence_ids,
+                                    req.caveats, req.status)
+    return get_entity(fid)
+
+
+class FindingFieldsRequest(BaseModel):
+    summary: str | None = None
+    caveats: list[dict] | None = None
+    status: str | None = None
+    title: str | None = None
+
+
+@router.post("/api/findings/{finding_id}/fields")
+def finding_fields(finding_id: str, req: FindingFieldsRequest):
+    from content.bio.lifecycle.promote import set_finding_fields
+    try:
+        return set_finding_fields(finding_id, summary=req.summary,
+                                  caveats=req.caveats, status=req.status,
+                                  title=req.title)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post("/api/findings/{finding_id}/add-result")
+def finding_add_result(finding_id: str, req: FindingResultRequest):
+    try:
+        return add_result_to_finding(finding_id, req.result_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/api/findings/{finding_id}/remove-result")
+def finding_remove_result(finding_id: str, req: FindingResultRequest):
+    try:
+        return remove_result_from_finding(finding_id, req.result_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# --- Pin gestures: entities/pin, entities/unpin, messages/pin ---
+
+
+@router.post("/api/entities/{entity_id}/pin")
+def pin_entity_to_result(entity_id: str):
+    """EntityMenu Pin: promote this existing evidence entity (figure /
+    table / cell / note / narrative) into a Result. Result is created
+    immediately with a placeholder interpretation; a background job
+    replaces it with the Guide's adjacent narration."""
+    from content.bio.lifecycle.promote import pin_evidence, auto_interpret
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    if ent["type"] in ("result", "claim", "finding"):
+        raise HTTPException(400, f"{ent['type']} is curation; not pinnable")
+    tid = (ent.get("metadata") or {}).get("thread_id") or ""
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind=ent["type"], evidence_id=entity_id,
+        interpretation=None,
+        origin=(ent.get("metadata") or {}).get("origin", "internal"),
+    )
+    # SYNC endpoint, so asyncio.get_event_loop() doesn't work here.
+    # Use a plain Thread for the background interpretation job —
+    # fire-and-forget, daemon so it doesn't block shutdown.
+    import threading
+    threading.Thread(target=auto_interpret, args=(out["result_id"],),
+                     daemon=True).start()
+    return get_entity(out["result_id"])
+
+
+@router.post("/api/entities/{entity_id}/unpin")
+def unpin_entity(entity_id: str):
+    """Inverse of /pin — archive the wrapping Result(s) if this is the
+    only evidence, else just remove this evidence as a member."""
+    from content.bio.lifecycle.promote import unpin_evidence
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    tid = (ent.get("metadata") or {}).get("thread_id")
+    return unpin_evidence(entity_id, thread_id=tid)
+
+
+class PinMessageRequest(BaseModel):
+    key: str                       # stable content hash from the client
+    text: str = ""
+    title: str = ""
+    image_urls: list[str] = []
+    thread_id: str = "default"
+
+
+@router.post("/api/messages/pin")
+def pin_message(req: PinMessageRequest):
+    """Pin a chat message: create a Note from the text + image_urls and
+    wrap it in a Result. Toggles by content key — re-pinning the same
+    message archives its Note."""
+    from content.bio.graph.search import find_kept_note
+    from content.bio.lifecycle.promote import pin_evidence
+    existing = find_kept_note(req.key)
+    if existing:
+        update_entity(existing, status="archived")
+        return {"pinned": False}
+    tid = _resolve_thread(req.thread_id)
+    title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind="note",
+        evidence_payload={
+            "title": title,
+            "metadata": {"source_key": req.key, "text": req.text,
+                         "image_urls": req.image_urls},
+        },
+        interpretation=req.text[:500] or None,
+        origin="internal",
+    )
+    return {"pinned": True, "id": out["evidence_id"], "result_id": out["result_id"]}
