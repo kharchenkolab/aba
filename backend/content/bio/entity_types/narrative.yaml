@@ -42,3 +42,6 @@ advisors:
   on_create: []
   on_pin: []
   on_status_change: {}
+  # AdvisorStrip auto-triggers /advise after focus — the Stylist reads
+  # the narrative on focus to surface prose-quality nudges.
+  on_focus_auto: true

@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { AGENTS, AgentGlyph, agentColor, type AgentKey } from './icons'
+import { typeOf } from '../entityTypes'
 import './AdvisorStrip.css'
 
 interface AdvisorNote {
@@ -52,7 +53,10 @@ export default function AdvisorStrip({ focusedId, focusedType, onTry, onFocus }:
     }
     setNotes([]); setOpen(null); load()
     let adviseTimer: ReturnType<typeof setTimeout> | undefined
-    if (focusedType === 'dataset' || focusedType === 'narrative') {
+    // Bio entity-types opt into auto-advise via advisors.on_focus_auto
+    // in their YAML (today: dataset, narrative). The previous inline OR
+    // check baked bio knowledge into a platform-shell component.
+    if (typeOf(focusedType)?.advisors?.on_focus_auto === true) {
       adviseTimer = setTimeout(() => {
         fetch(`/api/entities/${encodeURIComponent(focusedId)}/advise`, { method: 'POST' })
           .then(() => { if (!stop) load() }).catch(() => {})
