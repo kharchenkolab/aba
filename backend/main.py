@@ -1104,11 +1104,20 @@ def history_clear_legacy():
     return {"ok": True}
 
 
-# ---------- Jobs (Phase 17) ----------
+# ---------- Jobs (Phase 17 + Phase A) ----------
 
 @app.get("/api/jobs")
 def jobs_list(limit: int = 50):
     return list_jobs(limit=limit)
+
+
+@app.get("/api/jobs/worker")
+def jobs_worker_status():
+    """Liveness probe for the background-job worker. Phase A — the (i)
+    drawer's Jobs tab uses this to flag a stalled/dead worker rather
+    than silently lying about 'queued' rows that aren't progressing."""
+    from core.jobs.runner import worker_status
+    return worker_status()
 
 
 @app.get("/api/jobs/{job_id}")

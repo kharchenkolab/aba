@@ -56,6 +56,24 @@ def _conn():
     return c
 
 
+def _project_conn(project_id: Optional[str] = None):
+    """Open a sqlite connection to a SPECIFIC project's DB without mutating
+    the global DB_PATH. Used by the job runner — workers are global but
+    jobs live in per-project DBs, so the worker has to address a specific
+    project's DB without disturbing whatever project the HTTP path is
+    currently serving.
+
+    `project_id=None` falls back to the current DB_PATH — preserves the
+    legacy callsite behaviour."""
+    if project_id is None:
+        return _conn()
+    from core.config import project_db_path
+    p = project_db_path(project_id)
+    c = sqlite3.connect(p)
+    c.row_factory = sqlite3.Row
+    return c
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
