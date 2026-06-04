@@ -1,0 +1,230 @@
+"""Plan / scenario / write-memory / runtime-control bio tool impls
+(WU-3-tail). Mix of pure (create_scenario, present_plan, ask_clarification
+stubs, write_memory_tool) and ctx-using (restart_kernel_tool, run_nextflow
++ its env-checking helpers).
+
+`present_plan` and `ask_clarification` are intercepted by guide.py
+BEFORE the dispatcher runs (the bio impls here are stubs returning a
+placeholder status); they remain registered on aba_core so the agent's
+tool catalog learns about them."""
+
+from __future__ import annotations
+import os
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Optional
+
+
+# Container / env profile names — used by the nextflow runner's env-check
+# helpers (`_available_container_engines`, `_nextflow_env_blocker`).
+_CONTAINER_ENGINES = ("docker", "singularity", "apptainer", "podman", "charliecloud", "shifter", "sarus")
+_CONDA_PROFILES = ("conda", "mamba", "micromamba")
+
+
+def create_scenario(input_: dict) -> dict:
+    from content.bio.lifecycle.scenarios import create_scenario_variant
+    from core.graph.provenance import downstream
+    try:
+        variant = create_scenario_variant(
+            baseline_id=input_.get("baseline_id", ""),
+            description=input_.get("description", ""),
+            code=input_.get("code"),
+        )
+    except (ValueError, RuntimeError) as e:
+        return {"error": str(e)}
+    # Surface baseline dependents the user may want to revisit under the scenario.
+    dependents = downstream(input_.get("baseline_id", ""))
+    review = [d for d in dependents if d["type"] in ("result", "finding", "claim")]
+    return {
+        "scenario": {"id": variant["id"], "title": variant["title"]},
+        "dependents_to_review": [
+            {"id": d["id"], "type": d["type"], "title": d["title"]} for d in review
+        ],
+        "note": (
+            "Scenario created. " + (
+                f"{len(review)} downstream "
+                f"{'entity references' if len(review)==1 else 'entities reference'} "
+                f"the baseline — consider whether they still hold under this "
+                f"scenario." if review else "No downstream results to review."
+            )
+        ),
+    }
+
+
+def present_plan(input_: dict) -> dict:
+    """No-op server-side: the plan is surfaced to the UI and the turn halts in
+    guide.py. The result just acknowledges so the conversation stays well-formed."""
+    return {"status": "presented",
+            "note": "Plan shown to the user with Go / Adjust controls. Stop here and "
+                    "wait for their decision before executing the steps."}
+
+
+def write_memory_tool(input_: dict) -> dict:
+    from core.memory import write_memory as _wm, MEMORY_TYPES
+    if not isinstance(input_, dict):
+        return {"status": "error", "note": "write_memory needs an object input."}
+    name = (input_.get("name") or "").strip()
+    body = input_.get("body") or ""
+    typ  = (input_.get("type") or "").strip()
+    desc = (input_.get("description") or "").strip()
+    if not name:
+        return {"status": "error", "note": "write_memory needs `name`."}
+    if not body.strip():
+        return {"status": "error", "note": "write_memory needs `body`."}
+    if typ not in MEMORY_TYPES:
+        return {"status": "error",
+                "note": f"`type` must be one of {list(MEMORY_TYPES)}; got {typ!r}."}
+    try:
+        e = _wm(name=name, body=body, type=typ, description=desc)
+    except Exception as ex:  # noqa: BLE001
+        return {"status": "error", "note": str(ex)}
+    return {"status": "ok", "name": e.name, "type": e.type, "description": e.description}
+
+
+def ask_clarification(input_: dict) -> dict:
+    """No-op server-side, like present_plan. The actual halt + SSE emission
+    happens in guide.py's tool-dispatch branch; this stub exists so
+    EXECUTORS.get('ask_clarification') doesn't fall through to 'Unknown tool'
+    if the dispatch order ever changes."""
+    return {"status": "asked",
+            "note": "Question shown to the user. Stop here and wait for "
+                    "their reply before continuing."}
+
+
+def _available_container_engines() -> list[str]:
+    """Container/runtime engines actually on PATH (nf-core needs one to run a
+    pipeline's processes). conda-as-backend is handled separately."""
+    import shutil
+    return [e for e in _CONTAINER_ENGINES if shutil.which(e)]
+
+
+def _nextflow_env_blocker(pipeline: str, profile: Optional[str]) -> Optional[dict]:
+    """F6: fail fast (instead of timing out) when the run can't possibly execute
+    here. Two cases: (a) the profile names a container engine that isn't
+    installed; (b) it's an nf-core pipeline with no backend profile and no
+    container engine on the box. Returns an error dict, or None to proceed."""
+    tokens = {t.strip() for t in (profile or "").split(",") if t.strip()}
+    avail = _available_container_engines()
+    requested = tokens & set(_CONTAINER_ENGINES)
+    if requested and not (requested & set(avail)):
+        return {"status": "unsupported_environment", "pipeline": pipeline,
+                "note": f"profile requests {sorted(requested)} but none are available here "
+                        f"(PATH has: {avail or 'no container engine'}). nf-core needs a container "
+                        f"engine (docker/singularity/apptainer) or a conda profile — install one, "
+                        f"use -profile test,conda, or run on HPC/remote (deferred)."}
+    if (not requested and not (tokens & set(_CONDA_PROFILES)) and not avail
+            and pipeline.lower().startswith("nf-core/")):
+        return {"status": "unsupported_environment", "pipeline": pipeline,
+                "note": "No container engine (docker/singularity/apptainer) detected and no "
+                        "conda profile requested. nf-core pipelines need a software backend to run "
+                        "their processes — add a backend profile (test,docker / test,singularity / "
+                        "test,conda) once one is available, or run on HPC/remote (deferred)."}
+    return None
+
+
+def _nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
+                      params: dict | None = None, extra_args=None) -> list[str]:
+    """Build the `nextflow run …` argv. Pure function — unit-tested separately."""
+    cmd = ["nextflow", "run", pipeline]
+    if revision:
+        cmd += ["-r", str(revision)]
+    if profile:
+        cmd += ["-profile", str(profile)]
+    cmd += ["-ansi-log", "false", "--outdir", str(outdir)]
+    for k, v in (params or {}).items():
+        cmd += [f"--{k}", str(v)]
+    cmd += list(extra_args or [])
+    return cmd
+
+
+def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
+    """Run a Nextflow / nf-core pipeline. Installs nextflow on demand (conda),
+    runs `nextflow run <pipeline>` in the project workspace, returns logs +
+    output files. Local execution today; the ExecutionRouter seam is where
+    HPC/remote submission plugs in later (kernels.md / capdat_impl.md)."""
+    pipeline = (input_.get("pipeline") or "").strip()
+    if not pipeline:
+        return {"status": "error",
+                "note": "run_nextflow needs `pipeline` (e.g. 'nf-core/rnaseq' or 'nextflow-io/hello')."}
+
+    # Remote/HPC seam: many pipelines will eventually run off-box. That routing
+    # decision lives here; for now only local synchronous execution is wired.
+    if input_.get("remote") or input_.get("background"):
+        return {"status": "unsupported_location",
+                "note": "Remote/HPC nextflow execution isn't wired yet — only local. "
+                        "Re-run without remote/background (long pipelines will move to HPC later)."}
+
+    revision = input_.get("revision")
+    profile = input_.get("profile")
+    # F6: fail fast if the environment can't run this (e.g. profile needs a
+    # container engine that isn't installed) instead of letting nextflow time out.
+    blocked = _nextflow_env_blocker(pipeline, profile)
+    if blocked is not None:
+        return blocked
+    params = input_.get("params") or {}
+    timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
+    cancel_token = (ctx or {}).get("cancel_token")
+    from core import projects
+    from core.data.workspace import scratch_dir
+    project_id = projects.current() or "default"
+    run_id = (ctx or {}).get("run_id") or uuid.uuid4().hex
+    scratch = scratch_dir(str(project_id), f"nf-{run_id}")
+    outdir = input_.get("outdir") or str(Path(scratch) / "results")
+
+    from core.exec import MaterializingExecutor, Provisioning
+    ex = MaterializingExecutor()
+    try:
+        env = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}),
+                             cancel_token=cancel_token)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "note": f"Could not install nextflow: {e}"}
+
+    from core.runtime import progress
+    progress.emit(f"nextflow: launching {pipeline}"
+                  + (f" (-profile {profile})" if profile else "") + "…", phase="nextflow")
+    cmd = _nextflow_command(pipeline, revision=revision, profile=profile,
+                            outdir=outdir, params=params)
+    res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s)
+    if res.timed_out:
+        return {"status": "error",
+                "note": f"nextflow run timed out ({timeout_s}s). Long pipelines should run "
+                        f"on HPC/remote (not yet wired)."}
+    if getattr(res, "cancelled", False):
+        return {"status": "cancelled", "note": "nextflow run cancelled by the user."}
+
+    from core.exec.run import harvest_artifacts
+    plots, tables, files, out_files = [], [], [], []
+    op = Path(outdir)
+    if op.exists():
+        plots, tables, files, _warns = harvest_artifacts(op)
+        out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
+    from core.exec.output_cap import snip_middle
+    return {
+        "status": "ok" if res.returncode == 0 else "error",
+        "command": " ".join(cmd),
+        "returncode": res.returncode,
+        "stdout": snip_middle(res.stdout or ""),
+        "stderr": snip_middle(res.stderr or ""),
+        "outdir": outdir,
+        "outputs": out_files,
+        "plots": plots,
+        "tables": tables,
+        "files": files,
+        "execution_mode": "stateless",
+    }
+
+
+def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Clear the current thread's persistent Python session (kernels.md §6)."""
+    from core.config import KERNEL_ENABLED
+    if not KERNEL_ENABLED:
+        return {"status": "noop", "note": "Persistent sessions are disabled; run_python is already stateless."}
+    from core.exec.kernels import get_pool
+    thread_id = (ctx or {}).get("thread_id") or "default"
+    pool = get_pool()
+    cleared = [lang for lang in ("python", "r") if pool.restart(str(thread_id), lang)]
+    return {"status": "restarted" if cleared else "no_active_session",
+            "cleared": cleared,
+            "note": "Session(s) cleared; variables reset. The next run_python/run_r starts fresh."}
