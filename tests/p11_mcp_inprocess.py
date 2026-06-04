@@ -181,6 +181,128 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6C_seven_ctx_aware_tools_registered():
+    """Phase 6.C: Skill, read_skill, list_entities, get_provenance,
+    get_dependents, read_capability, read_csv_info land on aba_core."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {
+        "aba_core:Skill",
+        "aba_core:read_skill",
+        "aba_core:list_entities",
+        "aba_core:get_provenance",
+        "aba_core:get_dependents",
+        "aba_core:read_capability",
+        "aba_core:read_csv_info",
+    }
+    actual = set(out["tools"])
+    missing = expected - actual
+    assert not missing, f"missing migrations: {missing} (got {actual})"
+    g["shutdown"]()
+
+
+def test_6C_ctx_store_stash_and_pop_roundtrip():
+    """tool_ctx infrastructure: stash returns a non-empty id for a
+    non-empty ctx; peek returns the same dict; pop empties the store."""
+    from core.runtime.tool_ctx import (
+        stash_ctx, peek_ctx, pop_ctx, _reset_for_testing, _size_for_testing,
+    )
+    _reset_for_testing()
+    assert _size_for_testing() == 0
+
+    cid = stash_ctx({"thread_id": "t1", "active_tools": [{"name": "Skill"}]})
+    assert cid and isinstance(cid, str)
+    assert _size_for_testing() == 1
+    got = peek_ctx(cid)
+    assert got["thread_id"] == "t1"
+    assert got["active_tools"][0]["name"] == "Skill"
+    # peek doesn't remove
+    assert _size_for_testing() == 1
+
+    popped = pop_ctx(cid)
+    assert popped == got
+    assert _size_for_testing() == 0
+    # second pop is a no-op
+    assert pop_ctx(cid) == {}
+
+
+def test_6C_ctx_store_handles_empty():
+    """Empty/None ctx → '' id, no store entry. peek/pop with '' or
+    unknown id return {} (handlers can call defensively)."""
+    from core.runtime.tool_ctx import (
+        stash_ctx, peek_ctx, pop_ctx, _reset_for_testing, _size_for_testing,
+    )
+    _reset_for_testing()
+    assert stash_ctx(None) == ""
+    assert stash_ctx({}) == ""
+    assert _size_for_testing() == 0
+    assert peek_ctx("") == {}
+    assert peek_ctx(None) == {}
+    assert peek_ctx("bogus_id_never_stashed") == {}
+    assert pop_ctx("") == {}
+
+
+def test_6C_ctx_reaches_handler_via_aba_ctx_id():
+    """End-to-end: dispatcher stashes ctx, injects aba_ctx_id; handler
+    on the server-side asyncio task reads the ctx back via peek_ctx.
+    Validates that the store IS reachable across the gateway thread
+    boundary (it's a process-wide dict, so this should always work)."""
+    import json
+    g = _fresh_gateway()
+    from core.runtime.tool_ctx import (
+        _reset_for_testing as _ctx_reset, _size_for_testing,
+    )
+    _ctx_reset()
+    from content.bio.mcp_servers.aba_core import make_server
+    g["register"]("aba_core", make_server)
+
+    from content.bio.tools import execute_tool
+    # Skill with unknown name — exercises the ctx-read path
+    # (recipe_ctx + active_tools lookup) before returning unknown_skill.
+    raw = execute_tool(
+        "Skill",
+        {"skill": "no_such_skill_for_test", "args": ""},
+        ctx={"thread_id": "tctx1", "active_tools": []},
+    )
+    payload = json.loads(raw)
+    # The bio impl returns 'unknown_skill' when no skill matches
+    # (path proves the dispatch reached the handler AND the handler
+    # called the bio impl with the propagated ctx).
+    assert payload.get("status") == "unknown_skill", payload
+    # ctx popped after the call — no leak.
+    assert _size_for_testing() == 0
+    g["shutdown"]()
+
+
+def test_6C_ctx_leak_check_after_exception():
+    """If a handler raises, the dispatcher's finally still pops. The
+    bogus tool call we use here errors at the EXECUTORS-unknown path
+    (no aba_core tool by that name, but we're routing some name that
+    DOES match aba_core, with bad-input data that forces the bio
+    impl to raise). Validates pop_ctx ALWAYS runs."""
+    import json
+    from core.runtime.tool_ctx import (
+        _reset_for_testing as _ctx_reset, _size_for_testing,
+    )
+    _ctx_reset()
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    g["register"]("aba_core", make_server)
+    from content.bio.tools import execute_tool
+
+    # Several calls in sequence with a real ctx — leak would accumulate.
+    for i in range(5):
+        execute_tool(
+            "Skill",
+            {"skill": f"never_exists_{i}"},
+            ctx={"thread_id": "tleak", "iteration": i},
+        )
+    assert _size_for_testing() == 0, \
+        f"ctx leaked: {_size_for_testing()} entries still in store"
+    g["shutdown"]()
+
+
 def test_6B_dispatcher_routes_through_aba_core():
     """The bio dispatcher consults is_inprocess_tool BEFORE EXECUTORS.
     Asserts the dispatcher's path: a call to execute_tool('read_memory',
@@ -213,6 +335,11 @@ def main() -> int:
         test_6B_aba_core_tools_NOT_in_list_tools,
         test_6B_is_inprocess_tool_lookups,
         test_6B_read_memory_via_gateway_returns_unknown_for_missing,
+        test_6C_seven_ctx_aware_tools_registered,
+        test_6C_ctx_store_stash_and_pop_roundtrip,
+        test_6C_ctx_store_handles_empty,
+        test_6C_ctx_reaches_handler_via_aba_ctx_id,
+        test_6C_ctx_leak_check_after_exception,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []

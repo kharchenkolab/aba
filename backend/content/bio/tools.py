@@ -4629,22 +4629,36 @@ def _summ_result(result):
 
 
 def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
-    # Phase 6.B: a migrated tool lives on the in-process aba_core MCP
+    # Phase 6.B+: a migrated tool lives on the in-process aba_core MCP
     # server. The agent still sees the bare name (TOOL_SCHEMAS hasn't
     # been pruned yet), so we route to MCP by name lookup. Failure on
     # the MCP route surfaces loudly — no fall-through to EXECUTORS, so
     # a bug in the aba_core handler is visible rather than masked.
+    #
+    # Phase 6.C: ctx propagation. Non-serializable runtime objects
+    # (cancel_token, progress_q, kernel sess, etc.) can't cross the
+    # MCP arg wire — we stash ctx in a thread-safe store and inject
+    # an `aba_ctx_id` arg the handler uses to peek_ctx() back. Always
+    # pop in the finally block so a crashed handler doesn't leak.
     try:
         from core.runtime.mcp import is_inprocess_tool, call as mcp_call
         if is_inprocess_tool(name):
             cancel_token = (ctx or {}).get("cancel_token")
+            from core.runtime.tool_ctx import stash_ctx, pop_ctx
+            cid = stash_ctx(ctx)
             _feedlog(f"TOOL {name} {_summ_input(name, input_)}  (route: aba_core)")
             try:
                 decision, input_ = hooks.run_pre(name, input_, ctx)
                 if decision is not None:
                     _feedlog(f"VETO {name} -> {decision.reason_code}")
                     return json.dumps(hooks.deny_to_result(decision))
-                wire = mcp_call(f"aba_core:{name}", input_ or {},
+                # Inject the ctx id so the handler can retrieve the
+                # stashed ctx. Hidden field — TOOL_SCHEMAS doesn't
+                # advertise it, so the model never sees it.
+                args = {**(input_ or {})}
+                if cid:
+                    args["aba_ctx_id"] = cid
+                wire = mcp_call(f"aba_core:{name}", args,
                                 cancel_token=cancel_token)
                 # The gateway returns {status, content, is_error};
                 # `content` is the JSON-stringified tool result (FastMCP
@@ -4664,6 +4678,8 @@ def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
             except Exception as e:  # noqa: BLE001
                 _feedlog(f"ERROR {name} (aba_core) -> {e}")
                 return json.dumps({"error": str(e)})
+            finally:
+                pop_ctx(cid)
     except Exception:  # noqa: BLE001 — gateway import / lookup failed; let EXECUTORS handle it
         pass
 

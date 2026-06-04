@@ -17,6 +17,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from .tools.simple import register_simple_tools
+from .tools.ctx_read import register_ctx_read_tools
 
 
 def make_server() -> FastMCP:
@@ -39,9 +40,10 @@ def make_server() -> FastMCP:
         ),
     )
 
-    # Per-cluster registrations — each is a no-op today, populated by
-    # subsequent sub-phases. Keeping them as explicit calls makes the
-    # migration progress legible at a glance.
-    register_simple_tools(mcp)
+    # Per-cluster registrations — keeping them as explicit calls makes
+    # the migration progress legible at a glance.
+    register_simple_tools(mcp)      # 6.B: list_capabilities, read_memory, search_pypi
+    register_ctx_read_tools(mcp)    # 6.C: Skill, read_skill, list_entities, get_provenance,
+                                    #      get_dependents, read_capability, read_csv_info
 
     return mcp
