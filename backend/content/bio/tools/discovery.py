@@ -16,6 +16,13 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+# Cross-cluster helpers — inspect_package dispatches to either run_python
+# or run_r (with the language-specific introspection snippet) depending
+# on the requested language. Both run functions live in run_exec.py;
+# the snippets live in ctx_read.py (alongside the other read tools).
+from .run_exec import run_python, run_r
+from .ctx_read import _py_inspect_code, _r_inspect_code
+
 
 # Indirection so tests can stub the network without monkeypatching urllib.
 _HTTP_GET_JSON = None  # late-bound below to _http_get_json

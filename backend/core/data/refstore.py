@@ -67,9 +67,25 @@ def register_reference(
     """Place a reference into the content-addressed store (dedup by content) and
     register it as a `reference` entity. Returns the entity id — the existing one
     if identical content is already stored (no re-copy)."""
-    src = Path(src_path)
+    src = Path(src_path).resolve()
     if not src.exists():
         raise FileNotFoundError(f"reference source not found: {src}")
+    # Refuse pathological paths. The content-addressed copy + hash is
+    # O(bytes) so handing register_reference a system-temp / home-root
+    # / fs-root recursively walks + duplicates the entire tree —
+    # 2026-06-04 a test bug pointed it at /tmp and burnt 304 GB across
+    # six invocations before being caught. Better to fail loudly than
+    # silently duplicate a multi-GB-of-junk directory.
+    forbidden = {Path("/tmp").resolve(), Path("/var/tmp").resolve(),
+                 Path("/").resolve(), Path.home().resolve()}
+    if src in forbidden:
+        raise ValueError(
+            f"register_reference refuses pathological source {src!r}. "
+            f"Reference data should be a specific dataset/genome/index dir, "
+            f"not a system temp / home / root directory. If this is "
+            f"genuinely intentional, copy what you want into a "
+            f"purpose-named subdirectory first."
+        )
     sha = content_sha(src)
 
     existing = _find_by_sha(sha)
