@@ -58,9 +58,10 @@ def check(label, cond, detail=""):
 def main() -> int:
     print("registration")
     names = {t["name"] for t in TOOL_SCHEMAS}
-    check("all 7 entity tools in TOOL_SCHEMAS", set(NEW) <= names, str(set(NEW) - names))
-    # Phase 6.I: replaced "in EXECUTORS" — tools now route via aba_core
-    # MCP. is_inprocess_tool returns True when aba_core has the handler.
+    # WU-1: TOOL_SCHEMAS is now empty; the agent's tool catalog comes
+    # from aba_core via mcp_list_tools (bare names via
+    # strip_prefix_in_catalog=True). Check via is_inprocess_tool, which
+    # interrogates aba_core directly.
     not_on_aba_core = {n for n in NEW if not is_inprocess_tool(n)}
     check("all 7 entity tools registered on aba_core",
           not not_on_aba_core, str(not_on_aba_core))

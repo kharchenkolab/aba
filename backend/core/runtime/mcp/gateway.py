@@ -94,7 +94,9 @@ async def _connect_all() -> None:
 
 
 def register_inprocess_server(name: str, server_factory,
-                              default_timeout_s: int | None = None) -> dict:
+                              default_timeout_s: int | None = None,
+                              expose_in_catalog: bool = False,
+                              strip_prefix_in_catalog: bool = False) -> dict:
     """Adopt an IN-PROCESS MCP server (memory transport) — Phase 6 hook.
     `server_factory` is a zero-arg callable that returns a fresh FastMCP
     server (called on every (re)connect). Idempotent on name. Returns
@@ -105,7 +107,17 @@ def register_inprocess_server(name: str, server_factory,
     source of truth, and wrapping it cancels legitimate long-runs
     (see project_bg_jobs_threshold_signal). Stdio servers default
     to 30s in their ServerConfig because their subprocess impl is
-    opaque from this side."""
+    opaque from this side.
+
+    expose_in_catalog (default False) — when True, this server's tools
+    are included in `list_tools()`. Bio flips it to True post WU-1
+    (TOOL_SCHEMAS prune) so aba_core IS the agent's tool catalog.
+
+    strip_prefix_in_catalog (default False) — when True, list_tools()
+    emits each tool's bare name (no `<server>:` prefix). Bio uses this
+    to preserve compatibility with build.py gate keys, behavior_slim.md
+    copy, and existing recipe references to bare tool names. See the
+    `_InProcessConfigShim` and `InProcessServerHandle` docstrings."""
     from .in_process import InProcessServerHandle, _InProcessConfigShim
     global _started
     existing = _handles.get(name)
@@ -115,6 +127,8 @@ def register_inprocess_server(name: str, server_factory,
     h = existing if existing is not None else InProcessServerHandle(
         server_factory=server_factory,
         config=_InProcessConfigShim(name=name, default_timeout_s=default_timeout_s),
+        expose_in_catalog=expose_in_catalog,
+        strip_prefix_in_catalog=strip_prefix_in_catalog,
     )
     _handles[name] = h
     _started = True
@@ -173,18 +187,24 @@ def list_tools() -> list[dict[str, Any]]:
     input_schema), one entry per MCP-exposed tool across all CONNECTED
     servers. Disconnected/dead servers contribute nothing.
 
-    Handles with `expose_in_catalog=False` (the in-process aba_core
-    during Phase 6 migration) are SKIPPED — their tools are already
-    advertised via TOOL_SCHEMAS and dispatched via `is_inprocess_tool`."""
+    Handles with `expose_in_catalog=False` are SKIPPED (used during the
+    Phase 6 migration; no longer needed post-WU-1 since TOOL_SCHEMAS
+    is pruned).
+
+    Handles with `strip_prefix_in_catalog=True` (aba_core after WU-1)
+    contribute their tools at the RAW name — bare `Skill` rather than
+    `aba_core:Skill` — preserving the model's existing tool catalog and
+    every downstream reference to tool names by bare key."""
     out: list[dict[str, Any]] = []
     for h in _handles.values():
         if h.state != HandleState.CONNECTED:
             continue
         if not getattr(h, "expose_in_catalog", True):
             continue
+        strip = getattr(h, "strip_prefix_in_catalog", False)
         for t in h.tools:
             out.append({
-                "name":         t.name,
+                "name":         t.raw_name if strip else t.name,
                 "description":  t.description,
                 "input_schema": t.input_schema,
             })
