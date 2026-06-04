@@ -5,6 +5,7 @@
 name: narrative
 display: Narrative
 icon: results
+category: leaf
 
 schema:
   required: [title]

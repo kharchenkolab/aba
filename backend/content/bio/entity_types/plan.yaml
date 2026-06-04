@@ -5,6 +5,7 @@
 name: plan
 display: Plan
 icon: runs
+category: plan
 
 schema:
   required: [title]

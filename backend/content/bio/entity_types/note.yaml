@@ -5,6 +5,7 @@
 name: note
 display: Note
 icon: notes
+category: leaf
 
 schema:
   required: [title]

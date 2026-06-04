@@ -6,6 +6,7 @@
 name: result
 display: Result
 icon: results
+category: result
 
 schema:
   required: [title]
