@@ -1,0 +1,45 @@
+# Capability — a registered tool/library/CLI/MCP server, declared per
+# capabilities.md. Hidden infrastructure (HIDDEN_TYPES in
+# core/graph/entities.py): not surfaced in the tree, the feed, or the
+# rail by default; the capability catalog UI is the only consumer.
+name: capability
+display: Capability
+icon: data
+hidden: true   # Phase 4.2 loader honors this — hides from default lists.
+
+schema:
+  required: [title]
+  optional: [parent_entity_id, metadata, tags, notes]
+  # metadata carries the full capability spec: archetype, install_recipe,
+  # binary_path, conda_env, version, status (resolved | proposed),
+  # source, etc. — see capabilities.md §4 + §13.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: []
+  in:  []
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, archetype, install_recipe_summary, tags, notes]
+
+ui:
+  panel: capability
+  list_fields: [title, archetype]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [register_capability]
+  user_gestures_chat: []
+  user_gestures_focus: []
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

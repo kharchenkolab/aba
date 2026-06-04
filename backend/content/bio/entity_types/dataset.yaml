@@ -1,0 +1,48 @@
+# Dataset — raw input the user analyzes. An uploaded file (one-file
+# layout) or a folder of files (directory layout, e.g. a 10x triplet).
+# Cited evidence from a collaborator (a gel, a wet-lab readout) is an
+# external Result, NOT a Dataset.
+name: dataset
+display: Dataset
+icon: data
+
+schema:
+  required: [title, artifact_path]
+  optional: [producing_code, producing_params, parent_entity_id,
+             scenario_of, metadata, tags, notes]
+  # metadata commonly carries: size_bytes, file_count, layout
+  # ('directory' | absent for single-file), layout_hint, original_name,
+  # source, description, organism.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: []
+  in:  [used]   # an Analysis run that used this dataset
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, artifact_path, layout_hint, source, organism,
+               size_bytes, file_count, description, tags, notes]
+
+ui:
+  panel: dataset
+  list_fields: [title, file_count, size_bytes]
+  thumbnail: null
+
+creation:
+  rail_plus: true            # the Datasets-tab "+" creates an empty dataset
+  agent_tools: [register_dataset]
+  user_gestures_chat: []     # not pinned/claimed — datasets are inputs, not curation
+  user_gestures_focus: [add_files, rename]  # in the dataset focus view
+
+advisors:
+  on_create: []
+  # The Explorer advisor surfaces "what's in this dataset" when a fresh
+  # dataset is opened — see content/bio/advisors/runner.py.
+  on_pin: []
+  on_status_change: {}
