@@ -179,7 +179,16 @@ async def startup():
         start_mcp(Path(__file__).parent / "content" / "bio" / "mcp" / "servers.yaml")
         try:
             from content.bio.mcp_servers.aba_core import make_server as make_aba_core
-            register_inprocess_server("aba_core", make_aba_core)
+            # WU-1: expose_in_catalog=True so aba_core IS the agent's
+            # tool catalog (TOOL_SCHEMAS is pruned). strip_prefix_in_catalog
+            # =True so tools show as `Skill`/`run_python`/... rather than
+            # `aba_core:Skill` — preserves build.py gate keys + behavior_slim
+            # references + existing recipe text without a coordinated rename.
+            register_inprocess_server(
+                "aba_core", make_aba_core,
+                expose_in_catalog=True,
+                strip_prefix_in_catalog=True,
+            )
         except Exception as e:  # noqa: BLE001
             print(f"[startup] aba_core in-process server failed: {e}")
         s = mcp_status()

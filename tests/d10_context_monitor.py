@@ -23,7 +23,20 @@ os.environ["ABA_DB_PATH"] = os.path.join(tempfile.mkdtemp(prefix="aba_ctx10_"), 
 from core.graph._schema import init_db  # noqa: E402
 init_db()
 import content.bio  # noqa: E402,F401
-from content.bio.tools import TOOL_SCHEMAS  # noqa: E402
+# Post-WU-1: tools come from aba_core's MCP catalog. TOOL_SCHEMAS
+# is empty; the agent's active_tools list is built from mcp_list_tools().
+# Register aba_core here so list_tools() actually returns the 46
+# tools — without this the build_system gates that key on tool
+# names (memory/scenarios/skills/...) wouldn't fire.
+from core.runtime.mcp import (  # noqa: E402
+    register_inprocess_server, list_tools as mcp_list_tools, _reset_for_testing,
+)
+from content.bio.mcp_servers.aba_core import make_server  # noqa: E402
+_reset_for_testing()
+register_inprocess_server("aba_core", make_server,
+                          expose_in_catalog=True,
+                          strip_prefix_in_catalog=True)
+
 from content.bio.prompts.build import build_system  # noqa: E402
 
 _failures: list[str] = []
@@ -37,7 +50,9 @@ def check(label, cond, detail=""):
 
 def prompt_for(msg: str) -> str:
     # Realistic: the guide gets ALL tools (allowlist '*').
-    return build_system(TOOL_SCHEMAS, role="primary", intent=msg)
+    # Post-WU-1 the tool catalog comes from mcp_list_tools (aba_core's
+    # bare-name listing), not the now-empty TOOL_SCHEMAS.
+    return build_system(mcp_list_tools(), role="primary", intent=msg)
 
 
 # (message, [recipe/skill names that MUST appear in the prompt's skills slice])

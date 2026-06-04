@@ -67,13 +67,27 @@ class InProcessServerHandle:
     tools: list[ToolInfo] = field(default_factory=list)
     last_error: Optional[str] = None
     restart_attempts: int = 0
-    # During the Phase 6 migration (6.B–6.H), aba_core's tools are ALSO
-    # declared in TOOL_SCHEMAS (legacy in-process catalog), so including
-    # them in the gateway's `list_tools()` would double-list. The bio
-    # dispatcher routes to aba_core by bare-name lookup instead. Default
-    # False for in-process handles; flip to True (in 6.I) when
-    # TOOL_SCHEMAS is removed and aba_core becomes the source of truth.
+    # WU-1 (post-Phase-6): with TOOL_SCHEMAS pruned, aba_core IS the
+    # agent's tool catalog. expose_in_catalog must be True so its tools
+    # show up in `list_tools()` that guide.py concatenates into
+    # active_tools. (Was False during 6.B-6.I to avoid double-listing
+    # with TOOL_SCHEMAS.)
     expose_in_catalog: bool = False
+    # Bio chose to expose its tools at their bare names (Skill, run_python,
+    # ...) rather than aba_core-prefixed (aba_core:Skill, ...). When this
+    # flag is True, list_tools() emits each tool's RAW name (no prefix)
+    # AND is_mcp_tool / call also accept the bare form so the gateway
+    # routes correctly. Stdio servers keep their prefix (default False)
+    # because they have no opinion about bio's chosen naming.
+    #
+    # Why bare names: the alternative — renaming everything to
+    # `aba_core:Skill` etc. — would require coordinated edits to
+    # build.py gate keys, behavior_slim.md model-facing copy, skill
+    # recipes that reference tools by name, and the entire captured
+    # prompt-regression corpus. The bare-name path is structurally
+    # equivalent (one MCP server, uniform dispatch via the gateway)
+    # without the blast radius.
+    strip_prefix_in_catalog: bool = False
     _stack: Optional[AsyncExitStack] = None
     _session: Any = None    # ClientSession — kept opaque to avoid SDK import churn
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
