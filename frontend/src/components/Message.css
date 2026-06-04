@@ -115,6 +115,26 @@
 .msg-text p:last-child { margin-bottom: 0; }
 .msg-text ul, .msg-text ol { margin: 4px 0 6px 18px; padding: 0; }
 .msg-text li { margin-bottom: 2px; }
+/* Chat headings render at a small step up from body text — not the
+   browser-default H1/H2/H3 jumps, which are huge in this dense layout.
+   The agent's recipe sometimes echoes "## Step N — …" headers; without
+   these rules they balloon to 24px+ and dominate the message. */
+.msg-text h1, .msg-text h2, .msg-text h3,
+.msg-text h4, .msg-text h5, .msg-text h6 {
+  margin: 10px 0 4px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.3;
+}
+.msg-text h1 { font-size: 15px; }
+.msg-text h2 { font-size: 14px; }
+.msg-text h3 { font-size: 13.5px; }
+.msg-text h4,
+.msg-text h5,
+.msg-text h6 { font-size: 13px; color: var(--text-2); }
+.msg-text h1:first-child,
+.msg-text h2:first-child,
+.msg-text h3:first-child { margin-top: 0; }
 .msg-text code {
   background: var(--bg-soft);
   border: 1px solid var(--panel-bd);
