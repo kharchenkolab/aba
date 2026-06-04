@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
-import AnnotatedFigure from './AnnotatedFigure'
+import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
 // Importing the bio side has the side-effect of registering all bio
 // focus-view components against the registry. The shell below dispatches

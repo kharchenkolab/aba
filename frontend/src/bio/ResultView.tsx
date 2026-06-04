@@ -8,7 +8,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
-import { EntityGlyph, AgentGlyph } from './icons'
+import { EntityGlyph, AgentGlyph } from '../components/icons'
 import './ResultView.css'
 
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i

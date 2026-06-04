@@ -7,8 +7,8 @@
  */
 import { useState } from 'react'
 import type { Entity } from '../types'
-import { OverviewColumn, OverviewRow, RowMenu, InlineAdd, AddResourceDialog, type OvGroup, type Tone } from './OverviewKit'
-import EntityMenu from './EntityMenu'
+import { OverviewColumn, OverviewRow, RowMenu, InlineAdd, AddResourceDialog, type OvGroup, type Tone } from '../components/OverviewKit'
+import EntityMenu from '../components/EntityMenu'
 import './ProjectOverview.css'
 
 interface OpenQ { id: string; text: string; status: string; promoted_to?: string }
