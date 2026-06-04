@@ -183,6 +183,41 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6I_executors_empty_aba_core_canonical():
+    """Phase 6.I: legacy EXECUTORS dict is empty. All bio tools live
+    exclusively on aba_core. A new bio tool means one @mcp.tool() in
+    aba_core/tools/<cluster>.py — no edit of bio/tools.py's monolith."""
+    from content.bio.tools import EXECUTORS
+    # Empty in steady state. The dict survives as a mutable container
+    # because d7_progress_cancel + ad-hoc deferred-tool tests
+    # temporarily add scaffolding entries to it.
+    assert EXECUTORS == {}, \
+        f"EXECUTORS should be empty post-6.I, has: {list(EXECUTORS.keys())}"
+
+
+def test_6I_full_bio_set_routes_via_aba_core():
+    """Every bio tool the agent can call MUST be reachable via the MCP
+    route. Cross-check: every tool in TOOL_SCHEMAS that isn't a
+    framework-intercepted gesture (present_plan, ask_clarification
+    DO have aba_core handlers anyway) is_inprocess_tool() returns
+    True for it."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    g["register"]("aba_core", make_server)
+
+    from content.bio.tools import TOOL_SCHEMAS
+    from core.runtime.mcp import is_inprocess_tool
+    not_on_aba_core: list[str] = []
+    for t in TOOL_SCHEMAS:
+        name = t["name"]
+        if not is_inprocess_tool(name):
+            not_on_aba_core.append(name)
+    assert not not_on_aba_core, \
+        f"{len(not_on_aba_core)} TOOL_SCHEMAS entries with no aba_core " \
+        f"handler: {not_on_aba_core}"
+    g["shutdown"]()
+
+
 def test_6H_run_exec_tools_registered():
     """Phase 6.H: run_python + run_r — the heavy two."""
     g = _fresh_gateway()
@@ -502,6 +537,8 @@ def main() -> int:
         test_6H_run_exec_tools_registered,
         test_6H_in_tool_ctx_binds_progress_sink,
         test_6H_in_tool_ctx_handles_missing_progress_q,
+        test_6I_executors_empty_aba_core_canonical,
+        test_6I_full_bio_set_routes_via_aba_core,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []

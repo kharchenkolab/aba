@@ -27,7 +27,15 @@ import content.bio  # noqa: E402,F401  (registers skills incl. core/manage-entit
 import content.bio.advisors.runner as _runner  # noqa: E402
 _runner.skeptic_review = lambda *a, **k: None   # fake the advisor
 
-from content.bio.tools import execute_tool, TOOL_SCHEMAS, EXECUTORS  # noqa: E402
+from content.bio.tools import execute_tool, TOOL_SCHEMAS  # noqa: E402
+# Phase 6.I: tools route via aba_core in-process MCP server; the
+# legacy EXECUTORS dict is now empty. The assertion below switched
+# from "in EXECUTORS" to "is_inprocess_tool" — same intent (the
+# 7 entity ops have an active dispatch target).
+from core.runtime.mcp import register_inprocess_server, is_inprocess_tool, _reset_for_testing  # noqa: E402
+from content.bio.mcp_servers.aba_core import make_server  # noqa: E402
+_reset_for_testing()
+register_inprocess_server("aba_core", make_server)
 from core.skills.loader import get_skill  # noqa: E402
 from core.graph.entities import create_entity, get_entity  # noqa: E402
 
@@ -51,7 +59,11 @@ def main() -> int:
     print("registration")
     names = {t["name"] for t in TOOL_SCHEMAS}
     check("all 7 entity tools in TOOL_SCHEMAS", set(NEW) <= names, str(set(NEW) - names))
-    check("all 7 entity tools in EXECUTORS", set(NEW) <= set(EXECUTORS), str(set(NEW) - set(EXECUTORS)))
+    # Phase 6.I: replaced "in EXECUTORS" — tools now route via aba_core
+    # MCP. is_inprocess_tool returns True when aba_core has the handler.
+    not_on_aba_core = {n for n in NEW if not is_inprocess_tool(n)}
+    check("all 7 entity tools registered on aba_core",
+          not not_on_aba_core, str(not_on_aba_core))
     sk = get_skill("manage-entities")
     check("manage-entities core skill loaded", sk is not None)
     check("  ...visibility=always (always in prompt)", bool(sk) and sk.visibility == "always",
