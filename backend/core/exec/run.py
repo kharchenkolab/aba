@@ -103,19 +103,63 @@ _FILE_EXTS = (
 _MAX_HARVEST_BYTES = 50 * 1024 * 1024   # 50 MB — bigger files are link-only, not copied
 
 
+# Directory names harvest never descends into — caches/state that pile up
+# during a run but aren't user-facing outputs.
+_HARVEST_SKIP_DIRS = frozenset((
+    "__pycache__", ".ipynb_checkpoints", ".git", ".cache",
+    "node_modules", ".pytest_cache", ".mypy_cache",
+))
+
+
+def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
+    """Walk `scratch` recursively for files whose suffix matches `suffixes`
+    (lowercased compare). Yields Path objects mtime-filtered by since_ts;
+    skips hidden files, thumb sidecars, and known-transient subdirs.
+
+    Recursive harvest fixes the case where a recipe writes per-sample
+    plots into a subdir (e.g. pagoda2's pagoda2_GSM.../qc_*.png) — those
+    used to be invisible to the chat tool-result even though they showed
+    up in the Run view (2026-06-04)."""
+    suff = tuple(s.lower() for s in suffixes)
+    for f in scratch.rglob("*"):
+        # Skip any path under a transient subdir at any depth.
+        if any(part in _HARVEST_SKIP_DIRS for part in f.parts):
+            continue
+        if not f.is_file():
+            continue
+        if f.name.startswith("."):
+            continue
+        if f.name.endswith(".thumb.png"):
+            continue
+        if f.suffix.lower() not in suff:
+            continue
+        try:
+            if f.stat().st_mtime < since_ts:
+                continue
+        except OSError:
+            continue
+        yield f
+
+
 def harvest_artifacts(scratch: Path, since_ts: float = 0.0
                       ) -> tuple[list, list, list, list]:
     """Copy kept outputs from a working dir into the artifact store and return
     `(plots, tables, files, warnings)`.
 
     - `plots` — `*.png` / `*.jpg` figures, rendered inline in chat.
-    - `tables` — `*.csv` — surfaced as data viewers.
+    - `tables` — `*.csv` / `*.tsv` — surfaced as data viewers.
     - `files` — anything else useful (PDF, HTML, RDS, h5/h5ad, parquet/xlsx,
       JSON/YAML/Markdown/TXT, NumPy arrays, SVG, TSV). Each gets a hashed copy
       served at `/artifacts/<pid>/<hash><ext>` so chat can link to it by name.
       Caps at 50 MB per file — bigger files are listed in the Files tab but
       not auto-copied (would balloon disk).
     - `warnings` — blank-PNG detections + size-skips.
+
+    Walks the scratch dir RECURSIVELY (rglob) so that recipes which organize
+    outputs into per-sample subdirectories (e.g. pagoda2's pagoda2_<sample>/
+    qc_*.png + umap_*.png) surface those plots in the chat tool-result, not
+    only in the Run view (2026-06-04 fix). Transient dirs (__pycache__ etc.)
+    are skipped — see `_HARVEST_SKIP_DIRS`.
 
     `since_ts` filters to files created/modified at-or-after that time —
     needed for a PERSISTENT kernel cwd where earlier cells' files remain
@@ -136,17 +180,19 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
         dest_name = f"{uuid.uuid4().hex}{ext}"
         shutil.copy2(str(f), str(adir / dest_name))
+        # original_name preserves the subdir context so the agent knows
+        # WHERE the file lived (e.g. 'pagoda2_GSM.../qc_violin.png'), not
+        # just the bare leaf — useful when multiple subdirs each have
+        # qc_violin.png and the agent needs to distinguish them.
+        try:
+            display = str(f.relative_to(scratch))
+        except ValueError:
+            display = f.name
         bucket.append({"url": f"/artifacts/{pid}/{dest_name}",
-                       "original_name": f.name})
+                       "original_name": display})
 
     # 1) Figures
-    for f in scratch.glob("*.png"):
-        if f.name.startswith("."): continue
-        if f.name.endswith(".thumb.png"): continue   # sidecar; not a real plot
-        try:
-            if f.stat().st_mtime < since_ts: continue
-        except OSError:
-            continue
+    for f in _iter_kept(scratch, (".png",), since_ts):
         if _png_is_blank(f):
             warnings.append(
                 f"Figure '{f.name}' came out BLANK (one flat colour — no data was "
@@ -158,35 +204,25 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0
         _copy_and_record(f, plots, ".png")
 
     # 2) Tables
-    for ext in (".csv", ".tsv"):
-        for f in scratch.glob(f"*{ext}"):
-            if f.name.startswith("."): continue
-            try:
-                if f.stat().st_mtime < since_ts: continue
-            except OSError:
-                continue
-            _copy_and_record(f, tables, ext)
+    for f in _iter_kept(scratch, (".csv", ".tsv"), since_ts):
+        _copy_and_record(f, tables, f.suffix.lower())
 
-    # 3) Other useful files — PDFs, HTML, RDS, h5ad, etc. Skip hidden + thumb
-    # sidecars. Cap each at MAX_HARVEST_BYTES; oversize ones go to warnings so
-    # the agent can mention them but they're not auto-copied to /artifacts.
-    for ext in _FILE_EXTS:
-        for f in scratch.glob(f"*{ext}"):
-            if f.name.startswith("."): continue
-            if f.name.endswith(".thumb.png"): continue
-            try:
-                st = f.stat()
-                if st.st_mtime < since_ts: continue
-            except OSError:
-                continue
-            if st.st_size > _MAX_HARVEST_BYTES:
-                warnings.append(
-                    f"File '{f.name}' is {st.st_size // (1024*1024)}MB — too "
-                    f"large to auto-copy; it's still on disk in WORK_DIR but "
-                    f"won't be linkable from chat."
-                )
-                continue
-            _copy_and_record(f, files, ext)
+    # 3) Other useful files — PDFs, HTML, RDS, h5ad, etc. Cap each at
+    # MAX_HARVEST_BYTES; oversize ones go to warnings so the agent can
+    # mention them but they're not auto-copied to /artifacts.
+    for f in _iter_kept(scratch, _FILE_EXTS, since_ts):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if st.st_size > _MAX_HARVEST_BYTES:
+            warnings.append(
+                f"File '{f.name}' is {st.st_size // (1024*1024)}MB — too "
+                f"large to auto-copy; it's still on disk in WORK_DIR but "
+                f"won't be linkable from chat."
+            )
+            continue
+        _copy_and_record(f, files, f.suffix.lower())
 
     return plots, tables, files, warnings
 
