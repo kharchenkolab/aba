@@ -21,6 +21,7 @@ from .tools.ctx_read import register_ctx_read_tools
 from .tools.curation import register_curation_tools
 from .tools.discovery import register_discovery_tools
 from .tools.file_io import register_file_io_tools
+from .tools.plan_etc import register_plan_etc_tools
 
 
 def make_server() -> FastMCP:
@@ -51,5 +52,7 @@ def make_server() -> FastMCP:
     register_curation_tools(mcp)    # 6.D: pin/promote/findings/claims/datasets/runs/refs
     register_discovery_tools(mcp)   # 6.E: search_*/inspect_package/ensure/propose/fetch_*
     register_file_io_tools(mcp)     # 6.F: list_data_files, inspect_upload, write/edit/read_file
+    register_plan_etc_tools(mcp)    # 6.G: present_plan, ask_clarification, create_scenario,
+                                    #      write_memory, restart_kernel, run_nextflow
 
     return mcp
