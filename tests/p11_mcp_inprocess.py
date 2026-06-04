@@ -181,6 +181,31 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6E_ten_discovery_tools_registered():
+    """Phase 6.E: search/inspect/capability/fetch cluster."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {
+        "aba_core:search_skills",
+        "aba_core:search_bioconda",
+        "aba_core:search_nf_core",
+        "aba_core:search_mcp_registry",
+        "aba_core:inspect_package",
+        "aba_core:ensure_capability",
+        "aba_core:propose_capability",
+        "aba_core:fetch_url",
+        "aba_core:fetch_ensembl",
+        "aba_core:lookup_sra_runinfo",
+    }
+    actual = set(out["tools"])
+    missing = expected - actual
+    assert not missing, f"missing discovery migrations: {missing}"
+    # Cumulative: 3+7+13+10 = 33
+    assert len(actual) >= 33, f"expected >=33 tools, got {len(actual)}"
+    g["shutdown"]()
+
+
 def test_6D_thirteen_curation_tools_registered():
     """Phase 6.D: curation cluster — pin/promote/findings/claims, dataset
     ops (register/add/remove), run lifecycle (open/close), reference
@@ -371,6 +396,7 @@ def main() -> int:
         test_6C_ctx_reaches_handler_via_aba_ctx_id,
         test_6C_ctx_leak_check_after_exception,
         test_6D_thirteen_curation_tools_registered,
+        test_6E_ten_discovery_tools_registered,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []
