@@ -371,34 +371,39 @@ function PlanCard({ block, active, onGo, onAdjust }: {
           {c.level === 'warn' ? '⚠' : c.level === 'error' ? '⛔' : '·'} {c.message}
         </div>
       ))}
-      {active && (
-        <div className="plan-card__actions">
-          <button className="plan-card__go" onClick={fire}>Go</button>
-          {hasGo && (() => {
-            const R = 6, C = 2 * Math.PI * R
-            const frac = Math.max(0, Math.min(1, remainingMs / PLAN_AUTOFIRE_MS))
-            const secs = Math.ceil(remainingMs / 1000)
-            return (
-              <span className="plan-card__timer" role="timer"
-                    title={`Runs automatically in ${secs}s — click Go to run now, or Adjust to cancel`}
-                    aria-label={`Plan runs automatically in ${secs} seconds`}>
-                <svg viewBox="0 0 16 16" width="16" height="16">
-                  <circle className="plan-card__timer-track" cx="8" cy="8" r={R} />
-                  <circle className="plan-card__timer-fill" cx="8" cy="8" r={R}
-                          style={{ strokeDasharray: C, strokeDashoffset: C * (1 - frac) }} />
-                </svg>
-              </span>
-            )
-          })()}
-          <button className="plan-card__adjust" onClick={adjust}>Adjust…</button>
-          <label className="plan-card__saverun"
-                 title="Group this plan's outputs into one Run in the project tree">
-            <input type="checkbox" checked={saveAsRun}
-                   onChange={e => setSaveAsRun(e.target.checked)} />
-            Save as a run
-          </label>
-        </div>
-      )}
+      {active && (() => {
+        // Timer state for the Go button's auto-fire indicator. `frac` is the
+        // share of time STILL REMAINING — the solid pie wedge below "Go"
+        // sweeps that arc and shrinks to nothing at zero, then fires.
+        const frac = hasGo
+          ? Math.max(0, Math.min(1, remainingMs / PLAN_AUTOFIRE_MS))
+          : 0
+        const secs = Math.ceil(remainingMs / 1000)
+        const goTitle = hasGo
+          ? `Auto-runs in ${secs}s — click to run now, or Adjust… to cancel`
+          : 'Run this plan'
+        return (
+          <div className="plan-card__actions">
+            <button className="plan-card__go" onClick={fire} title={goTitle}
+                    aria-label={hasGo ? `Run plan (auto-runs in ${secs} seconds)` : 'Run plan'}>
+              <span className="plan-card__go-label">Go</span>
+              {hasGo && (
+                <span className="plan-card__go-timer" aria-hidden="true"
+                      style={{ ['--frac' as string]: `${frac * 360}deg` }} />
+              )}
+            </button>
+            <button className="plan-card__adjust" onClick={adjust}
+                    title={hasGo ? 'Cancel the auto-run and revise the plan'
+                                 : 'Revise the plan'}>Adjust…</button>
+            <label className="plan-card__saverun"
+                   title="Group this plan's outputs into one Run in the project tree">
+              <input type="checkbox" checked={saveAsRun}
+                     onChange={e => setSaveAsRun(e.target.checked)} />
+              Save as a run
+            </label>
+          </div>
+        )
+      })()}
     </div>
   )
 }
