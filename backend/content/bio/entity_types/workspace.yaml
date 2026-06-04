@@ -1,0 +1,44 @@
+# Workspace — the singleton project-root entity. There is exactly one
+# per project, with id == 'workspace' (see core/graph/_schema.py
+# WORKSPACE_ID). Holds the project title; everything else attaches by
+# parent_entity_id reference. Created at init_db; cannot be archived
+# or deleted (enforced in core/graph/entities.archive_entity /
+# delete_entity_hard).
+name: workspace
+display: Project
+icon: brand
+
+schema:
+  required: [title]
+  optional: [metadata, tags, notes]
+
+status_model:
+  initial: active
+  states: [active]   # singleton — workspace can't be archived
+  transitions: {}
+
+allowed_edges:
+  out: []
+  in:  []
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, project_snapshot, tags, notes]
+  # The workspace focus emits the "[PROJECT — current snapshot]" block
+  # via render_project_sidebar (core/manifest/assembler.py).
+
+ui:
+  panel: workspace
+  list_fields: [title]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: []
+  user_gestures_chat: []
+  user_gestures_focus: [rename]   # title edit is the only operation
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

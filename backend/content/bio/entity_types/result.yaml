@@ -1,0 +1,48 @@
+# Result — the curated wrapper around evidence (figures, tables, notes,
+# narrative). Created when a user "pins" or "promotes" evidence; the
+# unified Pin/Result model from misc/entity_pin_redesign.md.
+# Internal origin = produced by an in-project Run. External origin =
+# imported (a gel, a wet-lab figure, an upload from another tool).
+name: result
+display: Result
+icon: results
+
+schema:
+  required: [title]
+  optional: [artifact_path, producing_code, producing_params,
+             parent_entity_id, scenario_of, metadata, tags, notes]
+  # metadata commonly carries: members (ordered list of {ref, kind}
+  # pointing at figures/tables/notes/narrative entities), origin
+  # ('internal' | 'external'), interpretation, thread_id, source_run,
+  # question_source, question.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: [supports]      # a Result can support a Claim
+  in:  [supports]      # members reference back
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, interpretation, members_summary, origin,
+               parent_summary, tags, notes]
+
+ui:
+  panel: result
+  list_fields: [title, members_count]
+  thumbnail: null            # rendered from the first figure member
+
+creation:
+  rail_plus: false
+  agent_tools: [promote_to_result, promote_figure_to_result]
+  user_gestures_chat: [pin, promote_to_result, group_figures]
+  user_gestures_focus: [add_member, remove_member, edit_interpretation]
+
+advisors:
+  on_create: []
+  on_pin: [skeptic]
+  on_status_change: {}

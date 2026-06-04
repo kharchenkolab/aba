@@ -1,0 +1,45 @@
+# Reference — a registered reference dataset (genome, annotation, etc.)
+# declared per data.md. Hidden infrastructure (HIDDEN_TYPES in
+# core/graph/entities.py): not surfaced in the everyday tree; the data
+# catalog is the consumer.
+name: reference
+display: Reference
+icon: data
+hidden: true
+
+schema:
+  required: [title]
+  optional: [artifact_path, parent_entity_id, metadata, tags, notes]
+  # metadata carries: organism, assembly, version, source_url,
+  # checksum, size_bytes, layout — see data.md §6.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: []
+  in:  [used]
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, organism, assembly, version, source_url,
+               size_bytes, tags, notes]
+
+ui:
+  panel: reference
+  list_fields: [title, organism, assembly]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [register_reference]
+  user_gestures_chat: []
+  user_gestures_focus: []
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

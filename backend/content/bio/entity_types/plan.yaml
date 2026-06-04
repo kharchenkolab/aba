@@ -1,0 +1,46 @@
+# Plan — a structured analysis plan the agent presents BEFORE running
+# (the present_plan / approve gate). Once approved, it opens an Analysis
+# Run that executes its steps. Plan is the typed thing the user clicks
+# Go on; Run is the typed thing that produced outputs.
+name: plan
+display: Plan
+icon: runs
+
+schema:
+  required: [title]
+  optional: [parent_entity_id, metadata, tags, notes]
+  # metadata commonly carries: steps (the plan body), status_label
+  # ('proposed' | 'approved' | 'rejected' | 'in_progress' | 'completed'),
+  # thread_id, run_id (if executed), question.
+
+status_model:
+  initial: active
+  states: [active, completed, archived]
+  transitions:
+    active: [completed, archived]
+    completed: [archived]
+
+allowed_edges:
+  out: []
+  in:  []   # plans aren't first-class edge targets
+
+focus:
+  card_builder: bio.cards.plan.build_plan_card
+  agent_sees: [title, steps_summary, status_label, parent_summary,
+               tags, notes]
+
+ui:
+  panel: plan
+  list_fields: [title, status]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [present_plan]   # the agent creates plans via present_plan
+  user_gestures_chat: []
+  user_gestures_focus: [approve, reject, edit_steps]
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

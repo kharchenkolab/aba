@@ -1,0 +1,42 @@
+# Narrative — long-form prose attached as a Result member. Captures
+# the interpretive paragraph the user wants kept ("we see two clear
+# clusters; the smaller one expresses NK markers strongly…") as a
+# first-class entity rather than a metadata field.
+name: narrative
+display: Narrative
+icon: results
+
+schema:
+  required: [title]
+  optional: [parent_entity_id, metadata, tags, notes]
+  # metadata.text holds the prose body.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: []
+  in:  [supports]    # referenced by a Result as a member
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, text, parent_summary, tags, notes]
+
+ui:
+  panel: narrative
+  list_fields: [title, status]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [create_narrative]
+  user_gestures_chat: [pin_text]
+  user_gestures_focus: [edit_text]
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

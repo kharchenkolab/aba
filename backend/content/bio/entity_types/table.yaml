@@ -1,0 +1,43 @@
+# Table — a structured-data output of an analysis run (CSV/TSV/parquet)
+# or an imported tabular result. The non-image sister of `figure`;
+# treated nearly identically in curation flows.
+name: table
+display: Table
+icon: table
+
+schema:
+  required: [title, artifact_path]
+  optional: [producing_code, producing_params, parent_entity_id,
+             scenario_of, metadata, tags, notes]
+
+status_model:
+  initial: active
+  states: [active, superseded, archived]
+  transitions:
+    active: [superseded, archived]
+    superseded: [archived]
+
+allowed_edges:
+  out: [wasGeneratedBy, wasDerivedFrom, supports, commented_on]
+  in:  [supports]
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, artifact_path, producing_code, parent_summary,
+               tags, notes]
+
+ui:
+  panel: table
+  list_fields: [title, status, parent_title]
+  # Tables don't have a thumbnail — the panel renders a paginated preview.
+
+creation:
+  rail_plus: false
+  agent_tools: [run_python, run_r]
+  user_gestures_chat: [pin]
+  user_gestures_focus: []
+
+advisors:
+  on_create: []
+  on_pin: [skeptic]
+  on_status_change: {}

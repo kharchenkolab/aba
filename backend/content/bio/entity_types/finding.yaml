@@ -1,0 +1,47 @@
+# Finding — a kept observation with interpretation. In the v3 entity
+# model (entity_model_v3.md §2) "Finding" was largely subsumed by the
+# unified Result/Claim model — a Result is now the curated wrapper, and
+# a Claim is the deliberate position. Finding still exists for back-
+# compat and for cases where the user wants something between "pinned"
+# and "a statement about the world."
+name: finding
+display: Finding
+icon: results
+
+schema:
+  required: [title]
+  optional: [artifact_path, producing_code, producing_params,
+             parent_entity_id, metadata, tags, notes]
+  # metadata carries: text (the interpretation), evidence (refs to
+  # supporting figures/tables/results), thread_id, source.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: [supports]
+  in:  [supports]
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, text, evidence_summary, parent_summary,
+               tags, notes]
+
+ui:
+  panel: finding
+  list_fields: [title, status]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [create_finding]
+  user_gestures_chat: [pin_with_interpretation]
+  user_gestures_focus: [add_evidence, edit_text]
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}

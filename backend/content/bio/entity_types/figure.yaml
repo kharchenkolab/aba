@@ -1,0 +1,53 @@
+# Figure — an image produced by an analysis run or imported externally.
+# The most common entity type; everything else in the curation ladder
+# (Result, Claim) typically references one or more figures as evidence.
+name: figure
+display: Figure
+icon: chart
+
+# --- A. Storage + lifecycle (create-and-manage side) ---
+schema:
+  required: [title, artifact_path]
+  optional: [producing_code, producing_params, parent_entity_id,
+             scenario_of, metadata, tags, notes]
+
+status_model:
+  initial: active
+  states: [active, superseded, archived]
+  transitions:
+    active: [superseded, archived]
+    superseded: [archived]
+    # 'restore' (archived → active) is supported by restore_entity but
+    # NOT declared as a normal transition — restore is an admin action,
+    # not part of the everyday lifecycle.
+
+allowed_edges:
+  out: [wasGeneratedBy, wasDerivedFrom, variantOf, supports, commented_on]
+  in:  [supports]   # an evidence edge from Claim/Finding points at this figure
+
+# --- B. Navigation + shared reference frame (navigate side) ---
+focus:
+  # The agent's view when this figure is focused — the producing code
+  # context is what makes "regenerate with X different" possible.
+  card_builder: bio.cards.figure.build_card_for_figure
+  agent_sees: [title, artifact_path, producing_code, producing_params,
+               parent_summary, advisor_notes, tags, notes]
+
+ui:
+  panel: figure              # Frontend dispatch key for Phase 9 registry.
+  list_fields: [title, status, parent_title]
+  thumbnail: artifact_path   # the image itself is the thumbnail
+
+# --- C. UX gestures (per-surface, descriptive) ---
+creation:
+  rail_plus: false           # no "+" in a rail tab creates a bare figure
+  agent_tools: [run_python, run_r]   # auto-harvested from tool outputs
+  user_gestures_chat: [pin]          # the chat-centric pin gesture
+  user_gestures_focus: []
+
+advisors:
+  on_create: []
+  # The Skeptic flags concerns when a figure is pinned/promoted into a
+  # Result — pin is the moment the user signals "this matters."
+  on_pin: [skeptic]
+  on_status_change: {}

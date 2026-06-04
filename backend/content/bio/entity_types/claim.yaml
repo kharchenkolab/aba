@@ -1,0 +1,71 @@
+# Claim — a kept POSITION: a statement, its evidence, its caveats.
+# The only entity that carries a confidence ladder
+# (preliminary → supported → validated; side-states contested / refuted)
+# in metadata.confidence — distinct from the platform `status` column,
+# which carries the normal active/archived lifecycle.
+name: claim
+display: Claim
+icon: claims
+
+schema:
+  required: [title]
+  optional: [parent_entity_id, metadata, tags, notes]
+  # metadata REQUIRED for claims (set on create_claim) — carries:
+  # statement, negative (bool), evidence_ids, caveats, alternatives,
+  # confidence ('preliminary' | 'supported' | 'validated' | 'contested'
+  # | 'refuted'), thread_id, status_log (audit trail of confidence
+  # transitions).
+
+status_model:
+  # Platform-column status, NOT the confidence ladder. Confidence is in
+  # metadata.confidence; it has its own transition rules (see
+  # entity_model_v3.md §2). Phase 4.4 may eventually express that here
+  # under a separate `confidence_model` key, but today it stays in code.
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+# Confidence model (descriptive — enforced today in content/bio code,
+# not by the engine. Listed here so the YAML is the canonical reference
+# for what the confidence ladder actually is.)
+confidence_model:
+  initial: preliminary
+  states: [preliminary, supported, validated, contested, refuted]
+  transitions:
+    preliminary: [supported, contested, refuted]
+    supported:   [validated, contested, refuted]
+    validated:   [contested, refuted]
+    contested:   [preliminary, supported, refuted]
+    refuted:     []   # terminal
+
+allowed_edges:
+  out: [supports]    # claim "supports" another claim (rare; cross-claim)
+  in:  [supports]    # Result → supports → this claim (the canonical edge)
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, statement, confidence, evidence_summary,
+               caveats, alternatives, status_log_tail, tags, notes]
+
+ui:
+  panel: claim
+  list_fields: [title, confidence]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: [create_claim]
+  user_gestures_chat: [claim_from_selection, claim_from_result]
+  user_gestures_focus: [add_evidence, add_caveat, add_alternative,
+                        edit_statement, transition_confidence]
+
+advisors:
+  # The Skeptic surfaces concerns when a claim's evidence weakens
+  # (e.g. an N+1 dataset arrives or a referenced figure is superseded).
+  on_create: [skeptic]
+  on_pin: []
+  on_status_change:
+    # The Methodologist auto-fires on confidence transitions in
+    # content/bio/advisors/handlers.py. Wired here for documentation.
+    archived: []

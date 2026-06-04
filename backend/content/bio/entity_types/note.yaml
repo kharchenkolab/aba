@@ -1,0 +1,42 @@
+# Note — freeform, off-spine annotation or to-do. Not evidence, not a
+# claim; just a place to jot something. Kept intentionally minimal —
+# overloading it with question-tracking or structured-todo work would
+# slip away from its role as marginalia.
+name: note
+display: Note
+icon: notes
+
+schema:
+  required: [title]
+  optional: [parent_entity_id, metadata, tags, notes]
+  # metadata.text holds the body if title is too short.
+
+status_model:
+  initial: active
+  states: [active, archived]
+  transitions:
+    active: [archived]
+
+allowed_edges:
+  out: [commented_on]   # a note can be attached to another entity
+  in:  []
+
+focus:
+  card_builder: bio.cards.generic.build_generic_card
+  agent_sees: [title, text, parent_summary, tags, notes]
+
+ui:
+  panel: note
+  list_fields: [title, status]
+  thumbnail: null
+
+creation:
+  rail_plus: false
+  agent_tools: []
+  user_gestures_chat: [keep_message]   # pin a chat message as a note
+  user_gestures_focus: [edit_text]
+
+advisors:
+  on_create: []
+  on_pin: []
+  on_status_change: {}
