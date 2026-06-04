@@ -207,24 +207,12 @@ _PROMPT_CACHE: dict[str, str] = {}
 
 
 def _sync_anthropic_client():
-    """Sync Anthropic client for the caption helper. The shared `_llm_client()`
-    now returns `AsyncAnthropic` (so guide.py's streaming loop doesn't park
-    the event loop), but caption_via_vision_llm runs in a worker thread and
-    needs a SYNC client — otherwise `client.messages.create(...)` returns
-    a coroutine that's never awaited and reading `.content` throws, getting
-    eaten by the try/except and silently degrading to chat-text pluck (the
-    2026-05-31 hang). Mirrors `_llm_client`'s OAuth-vs-API-key selection —
-    BOTH `oauth` and `oauth_cc` route through the bearer (2026-06-03: the
-    earlier literal `== "oauth"` check silently fell through to apikey on
-    oauth_cc, hitting a zero-balance .env key → silent caption failure)."""
-    import anthropic
-    from core.config import API_KEY
-    from core.llm import _oauth_bearer, _credential_mode
-    if _credential_mode() in ("oauth", "oauth_cc"):
-        tok = _oauth_bearer()
-        if tok:
-            return anthropic.Anthropic(auth_token=tok)
-    return anthropic.Anthropic(api_key=API_KEY)
+    """Sync Anthropic client. Thin alias kept for bio-internal callers
+    (caption helper). The full implementation lives in
+    `core.llm.sync_anthropic_client` since the SDK construction is
+    domain-neutral (Phase C.2 of misc/modularity_audit.md, 2026-06-04)."""
+    from core.llm import sync_anthropic_client as _impl
+    return _impl()
 
 
 def _image_block(disk_path):

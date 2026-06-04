@@ -245,6 +245,28 @@ def _llm_client():
     return anthropic.AsyncAnthropic(api_key=API_KEY)
 
 
+def sync_anthropic_client():
+    """Sync Anthropic client. Mirrors `_llm_client` (mode selection, token
+    handling, oauth_cc enforcement) but returns the sync `Anthropic` class —
+    used by worker-thread callers that need `client.messages.create(...)`
+    to block until the response is available (e.g., caption-generation,
+    thread-history summarization). Lifted from
+    `content.bio.lifecycle.promote._sync_anthropic_client` (Phase C.2 of
+    misc/modularity_audit.md) — the SDK construction is domain-neutral."""
+    import anthropic
+    mode = _credential_mode()
+    if mode in ("oauth", "oauth_cc"):
+        tok = _oauth_bearer()
+        if tok:
+            return anthropic.Anthropic(auth_token=tok)
+        if mode == "oauth_cc":
+            raise OAuthTokenUnavailable(
+                "Claude Code OAuth token is missing or expired. "
+                "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
+                "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
+    return anthropic.Anthropic(api_key=API_KEY)
+
+
 def _real_factory():
     mode = _credential_mode()
     if mode in ("oauth", "oauth_cc"):
