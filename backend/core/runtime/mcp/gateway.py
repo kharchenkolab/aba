@@ -93,6 +93,37 @@ async def _connect_all() -> None:
                          return_exceptions=True)
 
 
+def register_inprocess_server(name: str, server_factory, default_timeout_s: int = 30) -> dict:
+    """Adopt an IN-PROCESS MCP server (memory transport) — Phase 6 hook.
+    `server_factory` is a zero-arg callable that returns a fresh FastMCP
+    server (called on every (re)connect). Idempotent on name. Returns
+    {status, server, tools|note} once the connect attempt settles.
+
+    Used by content (bio) at startup to expose its tool catalogue
+    through the same channel as external stdio servers, without
+    spawning a subprocess."""
+    from .in_process import InProcessServerHandle, _InProcessConfigShim
+    global _started
+    existing = _handles.get(name)
+    if existing is not None and existing.state == HandleState.CONNECTED:
+        return {"status": "already_connected", "server": name,
+                "tools": [t.name for t in existing.tools]}
+    h = existing if existing is not None else InProcessServerHandle(
+        server_factory=server_factory,
+        config=_InProcessConfigShim(name=name, default_timeout_s=default_timeout_s),
+    )
+    _handles[name] = h
+    _started = True
+    # Memory-transport connect needs the gateway loop running.
+    _ensure_loop()
+    _submit(h.connect())
+    if h.state == HandleState.CONNECTED:
+        return {"status": "connected", "server": name,
+                "tools": [t.name for t in h.tools]}
+    return {"status": "error", "server": name,
+            "note": h.last_error or "in-process connect failed"}
+
+
 def add_server(cfg: ServerConfig) -> dict:
     """Adopt + connect a server at RUNTIME (not from servers.yaml) — the
     materialization path for an mcp_server-archetype capability. Idempotent on
