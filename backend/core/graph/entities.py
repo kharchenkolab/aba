@@ -2,10 +2,13 @@
 opaque strings. Per arch3_plan.md Pass B."""
 from __future__ import annotations
 import json
+import logging
 from typing import Optional
 
 from core.graph._schema import _conn, _utcnow, gen_entity_id, WORKSPACE_ID
 from core.graph.audit import log_event
+
+_log = logging.getLogger(__name__)
 
 # Infrastructure entity kinds — real entities, but not user-facing analysis
 # artifacts. Hidden from the tree / entity feed / activity by default; a caller
@@ -26,6 +29,25 @@ def create_entity(
     metadata: Optional[dict] = None,
     entity_id: Optional[str] = None,
 ) -> str:
+    # Phase 4.5 — schema validation. Warning-only initially; log via the
+    # entity_types registry but don't raise. After a week of real use the
+    # caller can flip to 422 (a tighter contract for new content packs).
+    # Unknown types pass through (legacy data, synthetic test types).
+    try:
+        from core.entity_types import check_create_fields
+        warnings = check_create_fields(entity_type, {
+            "title": title,
+            "artifact_path": artifact_path,
+            "producing_code": producing_code,
+            "producing_params": producing_params,
+            "parent_entity_id": parent_entity_id,
+            "scenario_of": scenario_of,
+            "metadata": metadata,
+        })
+        for msg in warnings:
+            _log.warning("entity_types: %s", msg)
+    except Exception:  # noqa: BLE001 — validation is advisory, never blocks
+        pass
     eid = entity_id or gen_entity_id(prefix=entity_type[:3])
     now = _utcnow()
     with _conn() as c:

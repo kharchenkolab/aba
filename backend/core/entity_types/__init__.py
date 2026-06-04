@@ -10,6 +10,7 @@ card-builder registry): content registers at startup; platform looks up.
 from core.entity_types.registry import (  # noqa: F401
     load_types, get_type, list_types, list_type_names,
     valid_status_transition, valid_edge,
+    check_create_fields, check_edge,
     is_hidden, hidden_types,
     card_builder_ref, ui_panel_ref,
 )
