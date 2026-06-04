@@ -28,6 +28,48 @@ def register_card_builder(entity_type: str, builder: CardBuilder) -> None:
     _BUILDERS[entity_type] = builder
 
 
+# Thread-context renderer: content provides the per-thread text shape
+# (which entities to surface, how to summarize). Platform just calls into
+# whatever's registered. Phase C.3 inversion (was a lazy
+# `from content.bio.cards.thread import render_thread_context`).
+ThreadContextRenderer = Callable[[str], str]
+_THREAD_CONTEXT_RENDERER: ThreadContextRenderer | None = None
+
+
+def register_thread_context_renderer(fn: ThreadContextRenderer) -> None:
+    """Content registers at startup; platform calls it when assembling
+    a primary-agent manifest. Idempotent."""
+    global _THREAD_CONTEXT_RENDERER
+    _THREAD_CONTEXT_RENDERER = fn
+
+
+# Policy provider: content decides what policy text (e.g. "you've used N
+# advisors; consider a methodologist review") applies per entity type or
+# scope. Platform fetches via `_policy_for(scope_or_type)`. Phase C.3
+# inversion (was two lazy `from content.bio.lifecycle.adaptive import
+# policy_for` calls).
+PolicyProvider = Callable[[str], "str | None"]
+_POLICY_PROVIDER: PolicyProvider | None = None
+
+
+def register_policy_provider(fn: PolicyProvider) -> None:
+    """Content registers at startup; platform calls it when building
+    a focus card. Idempotent."""
+    global _POLICY_PROVIDER
+    _POLICY_PROVIDER = fn
+
+
+def _policy_for(scope_or_type: str) -> str:
+    """Look up policy text via the registered provider. Empty string if
+    nothing's registered, or the provider returned None / raised."""
+    if _POLICY_PROVIDER is None:
+        return ""
+    try:
+        return _POLICY_PROVIDER(scope_or_type) or ""
+    except Exception:  # noqa: BLE001 — policy is advisory; never block
+        return ""
+
+
 def _generic_card(entity: dict) -> tuple[str, list[str]]:
     """Fallback builder used when no per-type builder is registered. Renders
     the universal fields (type, title, status, artifact_path, producing_code,
@@ -83,9 +125,7 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
     if not focus_entity_id or focus_entity_id == WORKSPACE_ID:
         # The "workspace" focus is the no-focus case: just the optional
         # policy text for workspace-scoped guidance.
-        from content.bio.lifecycle.adaptive import policy_for  # noqa: seam — Phase C.3 (policy provider registry inversion)
-        policy = policy_for("workspace") or ""  # noqa: seam (workspace pseudo-type)
-        return None, policy
+        return None, _policy_for("workspace")  # noqa: seam (workspace pseudo-type)
 
     e = get_entity(focus_entity_id)
     if not e:
@@ -96,8 +136,7 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
     # The card text includes a trailing "answer in this context" line
     # the renderer appends, so it's not duplicated by per-type builders.
 
-    from content.bio.lifecycle.adaptive import policy_for  # noqa: seam — Phase C.3 (policy provider registry inversion)
-    policy = policy_for(e["type"]) or ""
+    policy = _policy_for(e["type"])
 
     card = FocusCard(
         entity_id=e["id"],
@@ -224,14 +263,18 @@ def build_manifest(
     focus, policy_text = _build_focus(focus_entity_id)
 
     thread: ThreadContext | None = None
-    if thread_id and role == "primary":
-        # Bio owns the thread-context text shape (pinned figures, claims).
-        # Deferred import to avoid pulling bio at module-load time.
-        # Advisors don't get the thread firehose — they're invoked for
-        # a focused critique, not to drive a conversation forward.
-        from content.bio.cards.thread import render_thread_context  # noqa: seam
-        text = render_thread_context(thread_id)
-        thread = ThreadContext(thread_id=thread_id, text=text)
+    if thread_id and role == "primary" and _THREAD_CONTEXT_RENDERER is not None:
+        # Content owns the thread-context text shape (pinned figures,
+        # claims). Phase C.3: looked up via the registered renderer;
+        # if nothing's registered (e.g. running the platform alone in
+        # tests), the thread slot stays None. Advisors don't get the
+        # thread firehose — they're invoked for a focused critique.
+        try:
+            text = _THREAD_CONTEXT_RENDERER(thread_id)
+        except Exception:  # noqa: BLE001
+            text = ""
+        if text:
+            thread = ThreadContext(thread_id=thread_id, text=text)
 
     return Manifest(
         session_id=session_id,
