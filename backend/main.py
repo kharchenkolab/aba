@@ -213,6 +213,21 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         print(f"[startup] MCP gateway init failed: {e}")
 
+    # C-2: kick off the TurnSink TTL sweeper. Runs every hour, deletes
+    # JSONL files older than 7d (`turn_events/*.jsonl`) and evicts
+    # closed sinks older than 1h from the in-memory registry. One
+    # sweep_once() at startup catches anything stale from the previous
+    # process; the background loop keeps it tidy going forward.
+    try:
+        import asyncio as _asyncio
+        from core.runtime import turn_sink as _ts
+        first = _ts.sweep_once()
+        if first["sinks_evicted"] or first["files_deleted"]:
+            print(f"[startup] turn_sink sweep: {first}")
+        _asyncio.create_task(_ts.sweep_forever(), name="turn_sink_sweeper")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] turn_sink sweeper init failed: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -1204,10 +1219,29 @@ async def turn_stream(run_id: str, since: int = 0, project_id: str | None = None
     from core.runtime.checkpoint import load_turn
     sink = _ts.get(run_id)
     if sink is None:
-        # No live sink — either the Turn never existed, completed before
-        # this process started, or was evicted. Surface what the DB says
-        # so the client knows whether to render the closed-stream state
-        # vs. error.
+        # No live sink — either the Turn never existed, completed
+        # before this process started, or was evicted by the TTL
+        # sweeper. C-2: try a disk replay from the JSONL file. If we
+        # have it on disk, replay everything since `since` and then
+        # close (the agent loop is gone — there's no live tail).
+        disk = _ts.rehydrate(run_id, since=since)
+        if disk:
+            async def _disk_replay():
+                import json as _json
+                for seq, payload in disk:
+                    obj = dict(payload)
+                    obj["seq"] = seq
+                    yield f"data: {_json.dumps(obj, default=str)}\n\n"
+                # No terminal `done` injection — if the loop finished
+                # cleanly, the original `done` event is in the JSONL.
+                # If it didn't (process crash mid-flight), the reaper
+                # marked the Turn FAILED and the client renders that
+                # via /api/turns/{rid} polling.
+            return StreamingResponse(
+                _disk_replay(), media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        # No disk file either — fall through to DB-state check.
         t = load_turn(run_id)
         if t is None:
             raise HTTPException(404, f"no such run: {run_id}")
