@@ -15,7 +15,28 @@ Mix of pure (create_scenario, write_memory) and ctx-using
 """
 from __future__ import annotations
 
+from typing import Literal, TypedDict
+
 from mcp.server.fastmcp import FastMCP
+
+
+class PlanStep(TypedDict, total=False):
+    """One step of a present_plan list.
+
+    NOTE: this typed shape exists so FastMCP emits per-item properties in the
+    generated JSON schema (`steps.items.properties = {title, ...}`). Without it,
+    the schema is just `array of anything` and the model has to *infer* field
+    names from prose — Opus 4.7 was caught using `step` instead of `title`
+    (commit history: this contract was carried by the manual TOOL_SCHEMAS
+    pre-WU-1 commit 862d55b; restored here at the MCP layer post-WU-1)."""
+    # title is the user-facing label — required in the *intended* contract.
+    # `total=False` keeps the field schema-described-but-optional so a plain
+    # string is still tolerated by the tool dispatcher (the bio impl coerces).
+    title: str
+    description: str
+    expected_outputs: list[str]
+    skill: str
+    parameters: dict
 
 
 def register_plan_etc_tools(mcp: FastMCP) -> None:
@@ -32,14 +53,22 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                       "code": code})
 
     @mcp.tool()
-    def present_plan(steps: list,
+    def present_plan(steps: list[PlanStep],
                      title: str | None = None,
                      summary: str | None = None,
                      assumptions: list[str] | None = None,
                      rationale: str | None = None) -> dict:
-        """Present a stepwise plan to the user for approval. The
-        framework intercepts this and pauses the turn — the user
-        approves with `go` or asks for adjustments."""
+        """Present a stepwise plan to the user for approval. The framework
+        intercepts this and pauses the turn — the user approves with Go (or
+        the auto-fire timer) or asks for adjustments.
+
+        Each step is an object with `title` (the user-facing one-line label;
+        REQUIRED — do not name this field `step` or `name`), optional
+        `description` (one sentence of detail), optional `expected_outputs`
+        (filenames/figures this step will produce), optional `skill` (name of
+        a recipe the step follows — e.g. `'scrna-qc-clustering'`), and
+        optional `parameters` (a dict of resolved choices). A plain string is
+        accepted and coerced to {title}."""
         from content.bio.tools import present_plan as _impl
         return _impl({"steps": steps, "title": title, "summary": summary,
                       "assumptions": assumptions, "rationale": rationale})
@@ -52,7 +81,9 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
         return _impl({"question": question})
 
     @mcp.tool()
-    def write_memory(name: str, type: str, body: str,
+    def write_memory(name: str,
+                     type: Literal["user", "feedback", "project", "reference"],
+                     body: str,
                      description: str | None = None) -> dict:
         """Save a note (memory file) that's restorable in future
         sessions via read_memory. Use sparingly — for orientation
