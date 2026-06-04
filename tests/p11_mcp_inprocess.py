@@ -181,6 +181,24 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6F_five_file_io_tools_registered():
+    """Phase 6.F: list_data_files, inspect_upload, write/edit/read_file."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {
+        "aba_core:list_data_files",
+        "aba_core:inspect_upload",
+        "aba_core:write_file",
+        "aba_core:edit_file",
+        "aba_core:read_file",
+    }
+    actual = set(out["tools"])
+    assert expected.issubset(actual), f"missing: {expected - actual}"
+    assert len(actual) >= 38, f"expected >=38 tools, got {len(actual)}"
+    g["shutdown"]()
+
+
 def test_6E_ten_discovery_tools_registered():
     """Phase 6.E: search/inspect/capability/fetch cluster."""
     g = _fresh_gateway()
@@ -397,6 +415,7 @@ def main() -> int:
         test_6C_ctx_leak_check_after_exception,
         test_6D_thirteen_curation_tools_registered,
         test_6E_ten_discovery_tools_registered,
+        test_6F_five_file_io_tools_registered,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []

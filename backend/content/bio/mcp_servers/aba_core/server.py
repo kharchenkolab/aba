@@ -20,6 +20,7 @@ from .tools.simple import register_simple_tools
 from .tools.ctx_read import register_ctx_read_tools
 from .tools.curation import register_curation_tools
 from .tools.discovery import register_discovery_tools
+from .tools.file_io import register_file_io_tools
 
 
 def make_server() -> FastMCP:
@@ -49,5 +50,6 @@ def make_server() -> FastMCP:
                                     #      get_dependents, read_capability, read_csv_info
     register_curation_tools(mcp)    # 6.D: pin/promote/findings/claims/datasets/runs/refs
     register_discovery_tools(mcp)   # 6.E: search_*/inspect_package/ensure/propose/fetch_*
+    register_file_io_tools(mcp)     # 6.F: list_data_files, inspect_upload, write/edit/read_file
 
     return mcp
