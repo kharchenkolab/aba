@@ -174,3 +174,54 @@ def card_builder_ref(type_name: str) -> Optional[str]:
 def ui_panel_ref(type_name: str) -> Optional[str]:
     t = _TYPES.get(type_name)
     return (t.ui.get("panel") if t else None)
+
+
+# --- Write-side validators (Phase 4.5) -----------------------------
+# Warning-only initially. Callers should log the returned messages and
+# proceed; after a week of real use, a follow-up commit may flip them
+# to raise. Unknown types yield no warnings — legacy data + synthetic
+# test types pass through untouched.
+
+
+def check_create_fields(type_name: str, fields_present: dict) -> list[str]:
+    """Return a list of human-readable warning messages — one per
+    required field that's missing from `fields_present`. Empty list =
+    OK or unknown type.
+
+    `fields_present` is a dict of {field_name: value}; only truthy
+    values count as present (None / "" / [] / {} are absent). This
+    matches the natural call-site convention where callers pass
+    {"title": title, "artifact_path": artifact_path, ...}.
+    """
+    t = _TYPES.get(type_name)
+    if t is None:
+        return []
+    required = t.schema.get("required") or []
+    return [
+        f"{type_name}: required field '{f}' is missing or empty"
+        for f in required
+        if not fields_present.get(f)
+    ]
+
+
+def check_edge(src_type: str, tgt_type: str, rel: str) -> list[str]:
+    """Warning messages for a disallowed edge. Empty list = OK or
+    unknown types (one or both not in the registry)."""
+    s = _TYPES.get(src_type)
+    t = _TYPES.get(tgt_type)
+    if s is None or t is None:
+        return []
+    src_out = s.allowed_edges.get("out") or []
+    tgt_in = t.allowed_edges.get("in") or []
+    msgs: list[str] = []
+    if rel not in src_out:
+        msgs.append(
+            f"edge {src_type}--{rel}-->{tgt_type}: "
+            f"rel '{rel}' not in {src_type}.allowed_edges.out ({src_out or '[]'})"
+        )
+    if rel not in tgt_in:
+        msgs.append(
+            f"edge {src_type}--{rel}-->{tgt_type}: "
+            f"rel '{rel}' not in {tgt_type}.allowed_edges.in ({tgt_in or '[]'})"
+        )
+    return msgs
