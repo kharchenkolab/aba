@@ -866,37 +866,8 @@ def oq_promote(tid: str, oqid: str):
 
 # ---------- Proactive proposals (Phase D) ----------
 
-class EvaluateRequest(BaseModel):
-    trigger: str = "post_turn"
-
-
-@app.get("/api/threads/{tid}/proposals")
-def thread_proposals(tid: str, status: str = "pending"):
-    from core.graph.proposals_store import list_proposals
-    rtid = _resolve_thread(tid)
-    return list_proposals(thread_id=rtid, status=(status or None))
-
-
-@app.post("/api/threads/{tid}/evaluate")
-def thread_evaluate(tid: str, req: EvaluateRequest):
-    """Run the proposal detectors for a thread on demand (used by the
-    thread-open event trigger). Post-turn evaluation is fired from guide.py."""
-    from content.bio.proposals.scheduler import evaluate_thread
-    from core.graph.proposals_store import list_proposals
-    rtid = _resolve_thread(tid)
-    evaluate_thread(rtid, req.trigger)
-    return list_proposals(thread_id=rtid, status="pending")
-
-
-@app.post("/api/threads/{tid}/orient")
-def thread_orient(tid: str):
-    """Cold-start orientation: the Guide summarizes the project's data + suggests
-    next steps as an opening message. Idempotent — no-ops once the thread has a
-    conversation or has already been oriented."""
-    from content.bio.lifecycle.orientation import orient_thread
-    rtid = _resolve_thread(tid)
-    result = orient_thread(rtid)
-    return {"oriented": bool(result), "result": result}
+# Phase 8.E: /api/threads/{tid}/proposals|evaluate|orient + EvaluateRequest
+# moved to content/bio/web/routes.py.
 
 
 # Phase 8.D: /api/proposals/* (accept, dismiss, undo) moved to bio.
@@ -969,45 +940,8 @@ def entities_edges(entity_id: str):
     }
 
 
-@app.get("/api/entities/{entity_id}/history")
-def entities_history(entity_id: str):
-    """Version chain for a figure (newest first)."""
-    if not get_entity(entity_id):
-        raise HTTPException(404, f"Entity {entity_id} not found")
-    return figure_history(entity_id)
-
-
-@app.get("/api/entities/{entity_id}/provenance")
-def entities_provenance(entity_id: str):
-    """Upstream/downstream neighborhood for the canvas Provenance panel."""
-    if not get_entity(entity_id):
-        raise HTTPException(404, f"Entity {entity_id} not found")
-    from core.graph.provenance import neighborhood
-    return neighborhood(entity_id)
-
-
-# ---------- Scenarios ----------
-
-class ScenarioRequest(BaseModel):
-    description: str
-    # Optional: skip the LLM rewrite by supplying the new code directly.
-    code: str | None = None
-    title: str | None = None
-
-
-@app.post("/api/entities/{baseline_id}/create-scenario")
-async def create_scenario(baseline_id: str, req: ScenarioRequest):
-    try:
-        new_entity = await asyncio.get_event_loop().run_in_executor(
-            None,
-            create_scenario_variant,
-            baseline_id, req.description, req.code, req.title,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(400, str(e))
-    return new_entity
+# Phase 8.E: /api/entities/{id}/history, /provenance, /create-scenario
+# (with ScenarioRequest) moved to content/bio/web/routes.py.
 
 
 # ---------- Upload ----------
@@ -1089,75 +1023,10 @@ def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
 # stays — still used by /api/upload + remaining bio file handlers.
 
 
-@app.post("/api/results/external")
-async def upload_external_result(
-    file: UploadFile = File(...),
-    thread_id: str = Form("default"),
-    interpretation: str = Form(""),
-):
-    """Bring in an external result (a gel, a wet-lab readout, a figure from
-    another tool) as a first-class Result wrapping the uploaded figure."""
-    from content.bio.lifecycle.promote import pin_evidence
-    if not file.filename:
-        raise HTTPException(400, "filename missing")
-    from core.config import current_project_id, project_artifacts_dir
-    pid = current_project_id()
-    dest = _unique_path(project_artifacts_dir(pid) / Path(file.filename).name)
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    tid = thread_id
-    if tid == "default":
-        from core.graph.threads import get_or_create_default_thread
-        tid = get_or_create_default_thread()
-    out = pin_evidence(
-        thread_id=tid, target_result_id=None,
-        evidence_kind="figure",
-        evidence_payload={
-            "title": Path(file.filename).stem,
-            "artifact_path": f"/artifacts/{pid}/{dest.name}",
-            "metadata": {"original_name": file.filename},
-        },
-        interpretation=(interpretation or None),
-        origin="external",
-    )
-    from content.bio.proposals.scheduler import evaluate_thread
-    evaluate_thread(tid, "data_upload")
-    return get_entity(out["result_id"])
-
+# Phase 8.E: /api/results/external + /api/results/{rid}/upload-evidence
+# moved to content/bio/web/routes.py.
 
 # Phase 8.B-2: /api/entities/{id}/pin + /api/entities/{id}/unpin moved to bio.
-
-
-@app.post("/api/results/{rid}/upload-evidence")
-async def result_upload_evidence(
-    rid: str,
-    file: UploadFile = File(...),
-    caption: str = Form(""),
-):
-    """Result-page Add-evidence: upload a file and append it as a NEW member of
-    this existing Result. Interpretation is NOT regenerated — the Result keeps
-    its existing description; the new evidence is added beneath it."""
-    from content.bio.lifecycle.promote import pin_evidence
-    r = _result_or_404(rid)
-    if not file.filename:
-        raise HTTPException(400, "filename missing")
-    from core.config import current_project_id, project_artifacts_dir
-    pid = current_project_id()
-    dest = _unique_path(project_artifacts_dir(pid) / Path(file.filename).name)
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    tid = (r.get("metadata") or {}).get("thread_id") or ""
-    out = pin_evidence(
-        thread_id=tid, target_result_id=rid,
-        evidence_kind="figure",
-        evidence_payload={
-            "title": Path(file.filename).stem,
-            "artifact_path": f"/artifacts/{pid}/{dest.name}",
-            "metadata": {"original_name": file.filename},
-        },
-        caption=caption, origin="external",
-    )
-    return get_entity(rid)
 
 
 class URLUploadRequest(BaseModel):
@@ -1254,69 +1123,8 @@ def jobs_cancel(job_id: str):
     return get_job(job_id)
 
 
-@app.get("/api/home-summary")
-def home_summary(project_id: str | None = None):
-    """Dashboard data for the Home screen: counts, recent activity, attention.
-
-    `project_id` pins the project per-request so the Home page can preview
-    any project's activity by selecting it in the right rail — without it
-    the response always reflected whichever project the backend's in-process
-    `current` happened to be, which was confusing when the user was just
-    browsing project cards (PK 2026-06-03)."""
-    _require_project_context(project_id)
-    ents = list_entities(exclude_workspace=True, include_archived=False)
-    counts: dict[str, int] = {}
-    for e in ents:
-        if e["status"] in ("superseded",):
-            continue
-        counts[e["type"]] = counts.get(e["type"], 0) + 1
-    jobs = list_jobs(limit=100)
-    suggestions = list_context_suggestions(status="pending")
-    # advisor notes across all entities
-    note_total = 0
-    for e in ents:
-        note_total += len(list_advisor_notes(e["id"]))
-    created = sorted(
-        (e for e in ents if e["type"] != "analysis"),
-        key=lambda e: e["created_at"],
-    )
-    first = created[0]["created_at"] if created else None
-    last = max((e["updated_at"] for e in ents), default=None)
-    ws = get_entity(WORKSPACE_ID)
-    return {
-        "project_title": ws["title"] if ws else "Workspace",
-        "counts": counts,
-        "n_datasets": counts.get("dataset", 0),
-        "started_at": first,
-        "last_touched": last,
-        "recent_events": list_events(limit=8),
-        "attention": {
-            "pending_suggestions": len(suggestions),
-            "active_jobs": len([j for j in jobs if j["status"] in ("queued", "running")]),
-            "failed_jobs": len([j for j in jobs if j["status"] == "failed"]),
-            "advisor_notes": note_total,
-        },
-    }
-
-
-@app.post("/api/sample-project")
-def sample_project():
-    """
-    One-click sample: register the bundled cells.csv as a dataset so a new
-    user has something to explore immediately. Idempotent-ish (creates a
-    fresh dataset each call).
-    """
-    src = Path(__file__).parent / "data" / "cells.csv"
-    if not src.exists():
-        raise HTTPException(500, "sample data missing")
-    from core.config import current_project_id, project_data_dir
-    dest = _unique_path(project_data_dir(current_project_id()) / "sample_cells.csv")
-    shutil.copyfile(src, dest)
-    eid = create_entity(
-        entity_type="dataset", title=dest.name, artifact_path=str(dest),
-        metadata={"size_bytes": dest.stat().st_size, "sample": True},
-    )
-    return get_entity(eid)
+# Phase 8.E: /api/home-summary + /api/sample-project moved to
+# content/bio/web/routes.py.
 
 
 @app.post("/api/run-probe")
