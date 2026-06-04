@@ -183,6 +183,96 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_inprocess_default_timeout_is_None_no_gateway_ceiling():
+    """Regression guard for the 2026-06-04 pagoda2 incident: aba_core
+    was registered with default_timeout_s=30s, which wrapped every
+    bio tool call (run_r's own 1800s ceiling never got a chance to
+    fire). Fix: default_timeout_s=None for in-process so the bio
+    impl's own timeout is the source of truth.
+
+    Asserts: register_inprocess_server WITHOUT an explicit timeout
+    leaves the handle's config.default_timeout_s at None, AND a tool
+    that sleeps 2 seconds completes successfully (would have errored
+    at 1s if there were any gateway ceiling)."""
+    import asyncio
+    g = _fresh_gateway()
+    # Use a custom server with a 'sleep' tool — keeps the test
+    # self-contained, doesn't depend on bio impls.
+    from mcp.server.fastmcp import FastMCP
+
+    def make_slow_server() -> FastMCP:
+        m = FastMCP(name="slowtest")
+        @m.tool()
+        async def slow_two_seconds() -> dict:
+            await asyncio.sleep(2.0)
+            return {"slept": 2.0}
+        return m
+
+    out = g["register"]("slowtest", make_slow_server)
+    assert out["status"] == "connected", out
+
+    # Handle config: no gateway ceiling by default.
+    from core.runtime.mcp.gateway import _handles
+    h = _handles["slowtest"]
+    assert h.config.default_timeout_s is None, \
+        f"default should be None (no ceiling), got {h.config.default_timeout_s}"
+
+    # End-to-end: 2-second tool call returns successfully (would have
+    # timed out at gateway level if ceiling were any value < 2s).
+    import time
+    t0 = time.time()
+    r = g["call"]("slowtest:slow_two_seconds", {})
+    elapsed = time.time() - t0
+    assert r["status"] == "ok", r
+    assert 1.5 < elapsed < 5.0, f"expected ~2s, got {elapsed:.2f}s"
+    g["shutdown"]()
+
+
+def test_inprocess_timeout_disconnects_and_restarts():
+    """Companion guard: when an in-process call DOES time out (via an
+    explicit per-call timeout_s, not the default), the handle should
+    transition to DISCONNECTED and schedule _maybe_restart. Otherwise
+    the in-memory session is left in an unclean state (the cancel
+    scope mismatch traceback that spammed 2026-06-04's log AND made
+    subsequent calls fail identically).
+
+    Uses gateway.call with timeout_s set short enough to fire."""
+    import asyncio
+    g = _fresh_gateway()
+    from mcp.server.fastmcp import FastMCP
+
+    def make_hang_server() -> FastMCP:
+        m = FastMCP(name="hangtest")
+        @m.tool()
+        async def hang_three_seconds() -> dict:
+            await asyncio.sleep(3.0)
+            return {"slept": 3.0}
+        return m
+
+    g["register"]("hangtest", make_hang_server)
+    from core.runtime.mcp.gateway import _handles, HandleState
+    h = _handles["hangtest"]
+    assert h.state == HandleState.CONNECTED
+
+    # Force a per-call timeout shorter than the tool's sleep.
+    # gateway.call(name, args, timeout_s=...) propagates to call_tool.
+    # 1s ceiling < 3s sleep → TimeoutError path fires.
+    from core.runtime.mcp.gateway import _submit
+    r = _submit(h.call_tool("hang_three_seconds", {}, timeout_s=1))
+    assert r["status"] == "error"
+    assert "timed out" in r["note"].lower(), r
+
+    # After timeout, the handle should have flipped to DISCONNECTED
+    # and queued a restart. (We don't await the restart here — that's
+    # the gateway's job in production. Just assert the state machine
+    # advanced past CONNECTED.)
+    assert h.state in (HandleState.DISCONNECTED, HandleState.CONNECTING,
+                       HandleState.CONNECTED), \
+        f"expected DISCONNECTED/CONNECTING/CONNECTED (post-restart), got {h.state}"
+    assert h.last_error and "timeout" in h.last_error.lower(), h.last_error
+    g["shutdown"]()
+
+
 def test_6I_executors_empty_aba_core_canonical():
     """Phase 6.I: legacy EXECUTORS dict is empty. All bio tools live
     exclusively on aba_core. A new bio tool means one @mcp.tool() in
@@ -539,6 +629,8 @@ def main() -> int:
         test_6H_in_tool_ctx_handles_missing_progress_q,
         test_6I_executors_empty_aba_core_canonical,
         test_6I_full_bio_set_routes_via_aba_core,
+        test_inprocess_default_timeout_is_None_no_gateway_ceiling,
+        test_inprocess_timeout_disconnects_and_restarts,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []

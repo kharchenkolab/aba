@@ -93,15 +93,19 @@ async def _connect_all() -> None:
                          return_exceptions=True)
 
 
-def register_inprocess_server(name: str, server_factory, default_timeout_s: int = 30) -> dict:
+def register_inprocess_server(name: str, server_factory,
+                              default_timeout_s: int | None = None) -> dict:
     """Adopt an IN-PROCESS MCP server (memory transport) — Phase 6 hook.
     `server_factory` is a zero-arg callable that returns a fresh FastMCP
     server (called on every (re)connect). Idempotent on name. Returns
     {status, server, tools|note} once the connect attempt settles.
 
-    Used by content (bio) at startup to expose its tool catalogue
-    through the same channel as external stdio servers, without
-    spawning a subprocess."""
+    default_timeout_s=None (no gateway-level ceiling) is the right
+    default for in-process — the hosted tool's own timeout is the
+    source of truth, and wrapping it cancels legitimate long-runs
+    (see project_bg_jobs_threshold_signal). Stdio servers default
+    to 30s in their ServerConfig because their subprocess impl is
+    opaque from this side."""
     from .in_process import InProcessServerHandle, _InProcessConfigShim
     global _started
     existing = _handles.get(name)
