@@ -24,6 +24,7 @@ Public API:
 from .gateway import (
     start_all,
     add_server,
+    register_inprocess_server,
     shutdown,
     list_tools,
     call,
@@ -33,5 +34,6 @@ from .gateway import (
 )
 from .config import ServerConfig
 
-__all__ = ["start_all", "add_server", "shutdown", "list_tools", "call", "is_mcp_tool",
+__all__ = ["start_all", "add_server", "register_inprocess_server",
+           "shutdown", "list_tools", "call", "is_mcp_tool",
            "status", "ServerConfig", "_reset_for_testing"]

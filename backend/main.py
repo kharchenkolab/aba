@@ -165,11 +165,23 @@ async def startup():
     except Exception as e:  # noqa: BLE001
         print(f"[startup] display_path backfill failed: {e}")
 
-    # P3 #1 — bring up the MCP gateway. Empty config = no-op.
+    # P3 #1 — bring up the MCP gateway. Empty config = no-op for stdio
+    # servers. Phase 6.A also registers the in-process `aba_core` server
+    # so bio's own tools flow through the same channel as external
+    # stdio servers (see misc/phase6_mcp_wrapping.md). 6.A registers
+    # zero tools today; subsequent sub-phases populate clusters.
     try:
-        from core.runtime.mcp import start_all as start_mcp, status as mcp_status
+        from core.runtime.mcp import (
+            start_all as start_mcp, status as mcp_status,
+            register_inprocess_server,
+        )
         from pathlib import Path
         start_mcp(Path(__file__).parent / "content" / "bio" / "mcp" / "servers.yaml")
+        try:
+            from content.bio.mcp_servers.aba_core import make_server as make_aba_core
+            register_inprocess_server("aba_core", make_aba_core)
+        except Exception as e:  # noqa: BLE001
+            print(f"[startup] aba_core in-process server failed: {e}")
         s = mcp_status()
         n_up = sum(1 for srv in s["servers"] if srv["state"] == "connected")
         n_tot = len(s["servers"])
