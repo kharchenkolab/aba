@@ -57,6 +57,13 @@ class InProcessServerHandle:
     tools: list[ToolInfo] = field(default_factory=list)
     last_error: Optional[str] = None
     restart_attempts: int = 0
+    # During the Phase 6 migration (6.B–6.H), aba_core's tools are ALSO
+    # declared in TOOL_SCHEMAS (legacy in-process catalog), so including
+    # them in the gateway's `list_tools()` would double-list. The bio
+    # dispatcher routes to aba_core by bare-name lookup instead. Default
+    # False for in-process handles; flip to True (in 6.I) when
+    # TOOL_SCHEMAS is removed and aba_core becomes the source of truth.
+    expose_in_catalog: bool = False
     _stack: Optional[AsyncExitStack] = None
     _session: Any = None    # ClientSession — kept opaque to avoid SDK import churn
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)

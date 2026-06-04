@@ -1,18 +1,20 @@
-"""Simple bio tools — no ctx, pure (args) → result functions.
+"""Simple bio tools — no `ctx`, pure (args) → result functions.
 
-6.A: stub (no tools registered yet).
-6.B: migrate `list_capabilities`, `read_memory`, `search_pypi` here.
+Phase 6.B (misc/phase6_mcp_wrapping.md): the FIRST migration cluster.
+Three tools whose signatures take only `input_: dict` today:
+`list_capabilities`, `read_memory`, `search_pypi`. None of them touch
+runtime objects (cancel_token, kernel session, progress queue, etc.) —
+ideal as the pattern-establisher.
 
-The pattern, anticipated for 6.B:
+Each handler delegates to the existing bio/tools.py impl. The legacy
+EXECUTORS entries stay in place for the duration of the migration
+(belt-and-suspenders); the bio dispatcher prefers the aba_core route
+via `is_inprocess_tool`. Phase 6.I removes both EXECUTORS and
+TOOL_SCHEMAS entries for everything that's been migrated.
 
-    @mcp.tool()
-    def list_capabilities(category: str = "") -> dict:
-        from content.bio.tools import list_capabilities_tool
-        return list_capabilities_tool({"category": category})
-
-The FastMCP `@tool` decorator generates the JSON schema from the
-function signature + docstring, so a single Python annotation replaces
-the duplicate TOOL_SCHEMAS dictionary entry today.
+The @mcp.tool() decorator generates the JSON schema from the function
+signature + docstring, so this file is the single source of truth for
+both impl and schema once 6.I lands.
 """
 from __future__ import annotations
 
@@ -20,7 +22,31 @@ from mcp.server.fastmcp import FastMCP
 
 
 def register_simple_tools(mcp: FastMCP) -> None:
-    """No-op until 6.B. Called by aba_core/server.py once it starts
-    populating clusters. Kept as a module so the wiring point is
-    obvious and future sub-phases just edit this file (or its peers)."""
-    return None
+    """Register the no-ctx, pure-input tools onto `mcp`. Imports the
+    bio impls lazily inside each handler to keep the server-construction
+    cheap (the factory runs on every reconnect)."""
+
+    @mcp.tool()
+    def list_capabilities(query: str | None = None,
+                          tags: list[str] | None = None) -> dict:
+        """Search the capability catalog. Intent-ranked (BM25 + substring)
+        when a query is given, plain tag-filter otherwise. Returns a trimmed
+        view for the model."""
+        from content.bio.tools import list_capabilities_tool
+        return list_capabilities_tool({"query": query, "tags": tags})
+
+    @mcp.tool()
+    def read_memory(name: str) -> dict:
+        """Read one of your own saved notes from a past session by name.
+        Returns body + caveat — these are reference notes, NOT facts to
+        cite; verify against the live source before relying on specifics."""
+        from content.bio.tools import read_memory_tool
+        return read_memory_tool({"name": name})
+
+    @mcp.tool()
+    def search_pypi(query: str | None = None, name: str | None = None) -> dict:
+        """Look up a Python package on PyPI. Resolves PEP-503 / separator
+        variants. Use when list_capabilities didn't find a library and
+        you want to confirm it exists on PyPI before proposing it."""
+        from content.bio.tools import search_pypi as _impl
+        return _impl({"query": query, "name": name})

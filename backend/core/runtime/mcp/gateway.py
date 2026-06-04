@@ -167,10 +167,16 @@ def shutdown() -> None:
 def list_tools() -> list[dict[str, Any]]:
     """Tool schemas in Anthropic wire shape (name, description,
     input_schema), one entry per MCP-exposed tool across all CONNECTED
-    servers. Disconnected/dead servers contribute nothing."""
+    servers. Disconnected/dead servers contribute nothing.
+
+    Handles with `expose_in_catalog=False` (the in-process aba_core
+    during Phase 6 migration) are SKIPPED — their tools are already
+    advertised via TOOL_SCHEMAS and dispatched via `is_inprocess_tool`."""
     out: list[dict[str, Any]] = []
     for h in _handles.values():
         if h.state != HandleState.CONNECTED:
+            continue
+        if not getattr(h, "expose_in_catalog", True):
             continue
         for t in h.tools:
             out.append({
@@ -179,6 +185,20 @@ def list_tools() -> list[dict[str, Any]]:
                 "input_schema": t.input_schema,
             })
     return out
+
+
+def is_inprocess_tool(raw_name: str, server: str = "aba_core") -> bool:
+    """Phase 6 dispatcher hook — returns True iff `{server}:{raw_name}`
+    is a registered tool on the named in-process server. The bio
+    dispatcher consults this for every tool call so migrated tools
+    route through MCP even though their bare name (no prefix) is what
+    the agent uses. Returns False when the server isn't registered, is
+    disconnected, or doesn't have a tool by that name."""
+    h = _handles.get(server)
+    if h is None or h.state != HandleState.CONNECTED:
+        return False
+    full = f"{server}:{raw_name}"
+    return any(t.name == full for t in h.tools)
 
 
 def is_mcp_tool(name: str) -> bool:
