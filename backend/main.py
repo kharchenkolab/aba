@@ -1113,84 +1113,9 @@ def run_file(rid: str, rel: str, download: int = 0):
     return FileResponse(str(target), media_type=media, headers=headers)
 
 
-# ---------- Results (kept observations — a grouping of panels) ----------
-
-class MemberRequest(BaseModel):
-    kind: str = "figure"            # figure | table | value | text
-    ref: str | None = None         # cell entity id (for figure/table/value)
-    text: str | None = None        # inline prose (for text panels)
-    caption: str = ""
-    caption_origin: str | None = None   # 'ai' | 'user' — set by the UI on first edit
-    at: int | None = None          # insert position (append if None)
-
-
-class CreateResultRequest(BaseModel):
-    thread_id: str = "default"
-    title: str = "Result"
-    interpretation: str = ""
-    origin: str = "internal"
-    members: list[MemberRequest] = []
-
-
-def _result_or_404(rid: str) -> dict:
-    e = get_entity(rid)
-    if not e or e["type"] != "result":
-        raise HTTPException(404, f"Result {rid} not found")
-    return e
-
-
-@app.post("/api/results")
-def create_result(req: CreateResultRequest):
-    """Create a Result (an observation). Usually seeded with one cell; grows
-    deliberately via add-member. Results are on the shelf by virtue of being
-    Results — no explicit pinned flag needed."""
-    eid = create_entity(
-        entity_type="result", title=req.title,
-        metadata={"thread_id": req.thread_id, "origin": req.origin,
-                  "interpretation": req.interpretation,
-                  "interpretation_origin": "user",
-                  "members": []})
-    for m in req.members:
-        add_result_member(eid, kind=m.kind, ref=m.ref, text=m.text, caption=m.caption, at=m.at)
-        if m.ref:
-            add_edge(eid, m.ref, "includes")
-    return get_entity(eid)
-
-
-@app.post("/api/results/{rid}/members")
-def result_add_member(rid: str, req: MemberRequest):
-    _result_or_404(rid)
-    out = add_result_member(rid, kind=req.kind, ref=req.ref, text=req.text, caption=req.caption, at=req.at)
-    if req.ref:
-        add_edge(rid, req.ref, "includes")
-    return out
-
-
-@app.patch("/api/results/{rid}/members/{member_id}")
-def result_update_member(rid: str, member_id: str, req: MemberRequest):
-    _result_or_404(rid)
-    return update_result_member(rid, member_id, caption=req.caption,
-                                text=req.text, caption_origin=req.caption_origin)
-
-
-@app.delete("/api/results/{rid}/members/{member_id}")
-def result_remove_member(rid: str, member_id: str):
-    e = _result_or_404(rid)
-    ref = next((m.get("ref") for m in (e.get("metadata") or {}).get("members", []) if m.get("id") == member_id), None)
-    out = remove_result_member(rid, member_id)
-    if ref:
-        remove_edge(rid, ref, "includes")
-    return out
-
-
-class ReorderRequest(BaseModel):
-    order: list[str] = []
-
-
-@app.post("/api/results/{rid}/reorder")
-def result_reorder(rid: str, req: ReorderRequest):
-    _result_or_404(rid)
-    return reorder_result_members(rid, req.order)
+# Phase 8.B-1: /api/results/* CRUD (create + members + reorder) +
+# helpers (_result_or_404, MemberRequest, CreateResultRequest,
+# ReorderRequest) moved to content/bio/web/routes.py.
 
 
 @app.get("/api/entities/{entity_id}/suggest-interpretation")
