@@ -65,10 +65,39 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   }
 
   // Reload the draft + history if the thread (draftKey) changes without a remount.
+  //
+  // Subtle: when the user opens a project on the URL placeholder threadId
+  // ('default'), draftKey is 'chatdraft:default'. As soon as a real thread
+  // entity resolves (entity-list load, or server creates one mid-turn),
+  // draftKey upgrades to 'chatdraft:thr_xyz' WHILE the user is typing into
+  // the still-mounted composer. Without the guard below, this effect would
+  // see no saved data at the new key and clobber the user's typing with ''.
+  // The original text would be safe in sessionStorage[chatdraft:default],
+  // but it'd be orphaned — feels like the textarea ate the keystrokes
+  // (sporadic "what I typed just disappears" bug, 2026-06-04).
+  //
+  // Guard: if the previous draftKey was a ':default' placeholder AND the
+  // new key has no saved data AND we have typing in flight, MIGRATE rather
+  // than clobber. Genuine thread-to-thread switches (no placeholder in the
+  // prev key) still load the new thread's saved draft as expected.
   const firstDraftKey = useRef(true)
+  const prevDraftKey = useRef(draftKey)
+  const valueRef = useRef(value); valueRef.current = value
   useEffect(() => {
+    const prev = prevDraftKey.current
+    prevDraftKey.current = draftKey
     if (firstDraftKey.current) { firstDraftKey.current = false; return }
-    setValue((draftKey && sessionStorage.getItem(draftKey)) || '')
+    const newSaved = draftKey ? sessionStorage.getItem(draftKey) : null
+    const wasPlaceholder = !!prev && prev.endsWith(':default')
+    if (newSaved != null) {
+      setValue(newSaved)
+    } else if (wasPlaceholder && valueRef.current) {
+      // Carry typing-in-flight across the placeholder→real upgrade.
+      if (draftKey) { try { sessionStorage.setItem(draftKey, valueRef.current) } catch { /* */ } }
+      // setValue is intentionally NOT called — the existing live value stays.
+    } else {
+      setValue('')
+    }
     histIdx.current = null
     try { setHistory(draftKey ? JSON.parse(sessionStorage.getItem(histKey(draftKey)) || '[]') : []) }
     catch { setHistory([]) }
