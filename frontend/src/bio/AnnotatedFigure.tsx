@@ -4,7 +4,7 @@
  * share one control.
  */
 import type { Entity } from '../types'
-import HighlightableImage from './HighlightableImage'
+import HighlightableImage from '../components/HighlightableImage'
 
 interface Annotation { image: string; note: string }
 interface Props { entity: Entity; onAttach: (a: Annotation) => void; clearSignal?: number }

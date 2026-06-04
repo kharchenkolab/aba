@@ -7,7 +7,7 @@
  */
 import { useRef, useState } from 'react'
 import type { Entity } from '../types'
-import { EntityGlyph } from './icons'
+import { EntityGlyph } from '../components/icons'
 import './PinnedShelf.css'
 
 interface Props {

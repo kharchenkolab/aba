@@ -7,9 +7,9 @@
  */
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
-import { EntityGlyph } from './icons'
-import ResultList, { type OutputItem } from './ResultList'
-import FileBrowser, { type TreeNode } from './FileBrowser'
+import { EntityGlyph } from '../components/icons'
+import ResultList, { type OutputItem } from '../components/ResultList'
+import FileBrowser, { type TreeNode } from '../components/FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
 import './RunView.css'
