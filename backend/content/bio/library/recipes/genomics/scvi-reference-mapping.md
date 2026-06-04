@@ -55,7 +55,9 @@ scvi_ref.save(REF_PATH, overwrite=True)
 - **scANVI reference → free label transfer** — if the reference is scANVI, the query
   model's `predict()` gives query cell-type labels.
 - **hardware** — cheaper than training a reference; still a **background job** for
-  larger queries; GPU helps, CPU OK for small.
+  larger queries; GPU helps, CPU OK for small. For the reference-training step, use
+  the **scvi-integration** step-4 flags (`scvi.settings.dl_num_workers = 4`; `train(...,
+  batch_size=1024, load_sparse_tensor=True, precision="16-mixed")`).
 
 ## Mapping the query
 

@@ -35,8 +35,22 @@ Distilled from a biomni implementation. In ABA, implement with the tools below �
    `normalize_total`/`log1p`).
 3. Set up scVI on the counts layer + batch column:
    `scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key="sample")`.
-4. Train scVI model: `model = scvi.model.SCVI(adata); model.train()` — `train()`
-   auto-uses the GPU (no flag needed; confirmed working on the box).
+4. Train scVI model. The `train()` defaults underuse the GPU (single-process loader
+   + tiny batch → one CPU core pegged while the GPU idles); these run parameters fix
+   it. CPU thread count is already set sanely by the run_python kernel.
+   ```python
+   import torch
+   scvi.settings.dl_num_workers = 4               # multiprocess host-side loading (default 0)
+   use_gpu = torch.cuda.is_available()            # preflight; False => CPU-only torch install
+   if use_gpu: torch.set_float32_matmul_precision("high")   # use Tensor Cores
+   model = scvi.model.SCVI(adata)
+   model.train(
+       accelerator="gpu" if use_gpu else "cpu", devices=1,
+       batch_size=1024,                           # bigger batches = fuller GPU kernels (256–512 on OOM)
+       load_sparse_tensor=use_gpu,                # densify sparse counts on GPU, not one CPU core
+       precision="16-mixed" if use_gpu else "32-true",   # mixed precision ≈ free throughput
+   )
+   ```
 5. Extract latent representation: `adata.obsm["X_scVI"] = model.get_latent_representation()`,
    then use it like a PCA embedding: `sc.pp.neighbors(adata, use_rep="X_scVI")` →
    `sc.tl.umap(adata)` → `sc.tl.leiden(adata)`.
@@ -51,8 +65,9 @@ Distilled from a biomni implementation. In ABA, implement with the tools below �
 - scANVI is semi-supervised and benefits from even a small fraction of labeled cells.
 
 ## Caveats
-- `train()` auto-uses the GPU when present (confirmed working on the box); it also
-  works on CPU but large datasets are slow there.
+- `train()` auto-detects the GPU, but the **defaults underuse it** (single-process
+  data loading + tiny batches → one CPU core pegged, GPU idle). Use the step-4 flags.
+  CPU also works but is slow for large data.
 - Raw (unnormalized) integer counts are required — keep them in `adata.layers["counts"]`
   (set BEFORE normalization) and point setup at it via `layer="counts"`. Do not feed
   log-normalized data to scVI.

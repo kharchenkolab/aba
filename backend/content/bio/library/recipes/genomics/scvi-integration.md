@@ -39,8 +39,10 @@ the QC'd object — but feed it **raw counts**, not log-normalized scaled data.
   `flavor="seurat_v3"` on counts and `batch_key=` set** before setup; keep the
   full counts in a layer if you need all genes later.
 - **epochs / hardware** — `train()` auto-picks a sensible epoch count. Training is
-  **long-running**: run it as a **background job**. A **GPU** gives a large speedup;
-  **CPU is fine for small data** (≲50k cells) but slow for atlas scale.
+  **long-running**: run it as a **background job**. A **GPU** gives a large speedup —
+  but use the loader/batch/precision flags in **step 4 below**, or the defaults peg
+  one CPU core and leave the GPU mostly idle (~4× slower in practice). **CPU is fine
+  for small data** (≲50k cells) but slow for atlas scale.
 
 ## Procedure
 
@@ -79,8 +81,22 @@ sc.pp.highly_variable_genes(
 scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key="batch")
 
 # 4) Build + train the model (run this step as a background job).
+#    The train() defaults underuse the GPU — single-process loader + tiny batch
+#    peg one CPU core while the GPU idles. The flags below feed it properly.
+#    (CPU thread count is already set sanely by the run_python kernel; nothing to
+#    do for threads here.)
+import torch
+scvi.settings.dl_num_workers = 4                  # multiprocess host-side loading (default 0)
+use_gpu = torch.cuda.is_available()               # preflight; False => CPU-only torch install
+if use_gpu: torch.set_float32_matmul_precision("high")   # use Tensor Cores for fp32 matmul
 model = scvi.model.SCVI(adata, n_layers=2, n_latent=30, gene_likelihood="nb")
-model.train()                      # add max_epochs=N to cap; accelerator auto-detected
+model.train(                       # add max_epochs=N to cap
+    accelerator="gpu" if use_gpu else "cpu", devices=1,
+    batch_size=1024,                              # bigger batches = bigger, fuller GPU kernels (drop to 256–512 on OOM)
+    load_sparse_tensor=use_gpu,                   # densify sparse counts ON the GPU, not on one CPU core
+    precision="16-mixed" if use_gpu else "32-true",  # mixed precision ≈ free throughput on GPU
+)
+print("model device:", next(model.module.parameters()).device)   # expect cuda:0
 
 # 5) Latent representation -> use it like a PCA embedding.
 SCVI_LATENT_KEY = "X_scVI"

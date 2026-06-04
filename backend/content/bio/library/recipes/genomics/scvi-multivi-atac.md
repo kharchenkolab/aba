@@ -49,7 +49,10 @@ adata.var["modality"]   # 'Gene Expression' rows precede 'Peaks' rows
 - **peak set** — large peak panels are heavy; consider restricting to a sensible peak
   set. ATAC is sparse — expect slower training than RNA-only.
 - **epochs / hardware** — the heaviest of the family (two modalities, many peaks).
-  **Background job**; GPU strongly preferred, CPU only for tiny test data.
+  **Background job**; GPU strongly preferred, CPU only for tiny test data. Apply the
+  **scvi-integration** step-4 flags (`scvi.settings.dl_num_workers = 4`; `train(...,
+  batch_size=1024, load_sparse_tensor=True, precision="16-mixed")`) so the GPU stays
+  fed instead of waiting on one CPU core.
 
 ## Procedure
 
