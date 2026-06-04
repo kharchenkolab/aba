@@ -113,19 +113,21 @@ def set_current(pid: str) -> None:
     # actual project activity (chat, entities, runs), not by mere "I clicked
     # this to look at it." last_touched is now derived from the DB file's
     # mtime in list_projects(), so it reflects real work automatically.
-    # F3: backfill display_path for any entity in this project that
-    # predates the column / bio's layout computers. Cheap; idempotent.
-    try:
-        from content.bio.graph.display import backfill_missing_display_paths  # noqa: seam — Phase C.4 (on_project_open hook inversion)
-        backfill_missing_display_paths()
-    except Exception:  # noqa: BLE001
-        pass           # never block project switch on a backfill failure
     # A1: reap stale Turn rows + repair any orphaned tool_use in the
     # newly-opened project's message log. Idempotent; safe to run on
-    # every project switch.
+    # every project switch. Stays in platform — Turn reaping is a
+    # platform concern (durable-turns infrastructure).
     try:
         from core.runtime.checkpoint import reap_stale_turns
         reap_stale_turns()
+    except Exception:  # noqa: BLE001
+        pass
+    # Content-side project-open hooks (display-path backfill, etc.) run
+    # via the hook dispatcher. Errors are swallowed by dispatch() — one
+    # bad hook must not block a project switch.
+    try:
+        from core.hooks.dispatcher import dispatch
+        dispatch("on_project_open", {"pid": pid})
     except Exception:  # noqa: BLE001
         pass
 
