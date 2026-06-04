@@ -5,6 +5,7 @@
 name: dataset
 display: Dataset
 icon: data
+category: leaf
 
 schema:
   required: [title, artifact_path]

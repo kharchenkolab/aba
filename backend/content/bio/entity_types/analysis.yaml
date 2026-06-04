@@ -10,6 +10,7 @@
 name: analysis
 display: Run
 icon: runs
+category: run
 
 schema:
   required: [title]

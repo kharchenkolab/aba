@@ -22,15 +22,18 @@ from core.graph.entities import list_entities
 from core.graph.edges import edges_to
 
 
-# Per-bio-type categorization the tree composer cares about. Content
-# could register these instead — for the MVP they're a constant.
-LEAF_TYPES = {"figure", "table", "dataset", "note", "narrative"}
-CLAIM_TYPES = {"claim"}
-RESULT_TYPES = {"result"}
-RUN_TYPES = {"analysis"}
-THREAD_TYPES = {"thread"}
-FINDING_TYPES = {"finding"}
-PLAN_TYPES = {"plan"}
+# Per-bio-type categorization driven by the entity-type registry
+# (Phase 4.3 Pass 2). Each YAML declares `category: <name>`; the sets
+# below are derived once at module load. Adding a new bio type with
+# `category: leaf` automatically picks it up here without code change.
+from core.entity_types import types_in_category as _types_in_category
+LEAF_TYPES    = _types_in_category("leaf")     # figure, table, dataset, note, narrative
+CLAIM_TYPES   = _types_in_category("claim")    # claim
+RESULT_TYPES  = _types_in_category("result")   # result
+RUN_TYPES     = _types_in_category("run")      # analysis
+THREAD_TYPES  = _types_in_category("thread")   # thread
+FINDING_TYPES = _types_in_category("finding")  # finding
+PLAN_TYPES    = _types_in_category("plan")     # plan
 
 # Where a leaf lives under a run by default (subdir name → entity type).
 RUN_SUBDIRS = {"figure": "figures", "table": "tables"}

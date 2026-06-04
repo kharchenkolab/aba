@@ -6,6 +6,7 @@
 name: thread
 display: Thread
 icon: threads
+category: thread
 
 schema:
   required: [title]

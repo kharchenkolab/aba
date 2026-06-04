@@ -12,5 +12,6 @@ from core.entity_types.registry import (  # noqa: F401
     valid_status_transition, valid_edge,
     check_create_fields, check_edge,
     is_hidden, hidden_types,
+    types_in_category,
     card_builder_ref, ui_panel_ref,
 )

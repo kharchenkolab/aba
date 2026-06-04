@@ -4,6 +4,7 @@
 name: figure
 display: Figure
 icon: chart
+category: leaf
 
 # --- A. Storage + lifecycle (create-and-manage side) ---
 schema:

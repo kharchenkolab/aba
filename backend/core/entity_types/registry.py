@@ -46,6 +46,11 @@ class EntityTypeSpec:
     ui: dict
     creation: dict
     advisors: dict
+    # Coarse-grained categorization (leaf, run, thread, claim, result,
+    # finding, plan, …) — used by bio's files-tree composer to group
+    # types by role. Infrastructure types (workspace, capability,
+    # reference) leave this None. Phase 4.3 Pass 2.
+    category: Optional[str] = None
     # Optional descriptive extra-state blocks (claim's confidence,
     # thread's lifecycle). Not engine-enforced today.
     confidence_model: Optional[dict] = None
@@ -81,6 +86,7 @@ def _coerce(raw: dict, source: Path) -> EntityTypeSpec:
         ui=dict(raw.get("ui") or {}),
         creation=dict(raw.get("creation") or {}),
         advisors=dict(raw.get("advisors") or {}),
+        category=raw.get("category"),
         confidence_model=(dict(raw["confidence_model"])
                           if "confidence_model" in raw else None),
         lifecycle_model=(dict(raw["lifecycle_model"])
@@ -123,6 +129,13 @@ def list_types() -> list[EntityTypeSpec]:
 
 def list_type_names(*, include_hidden: bool = True) -> list[str]:
     return [t.name for t in _TYPES.values() if include_hidden or not t.hidden]
+
+
+def types_in_category(category: str) -> set[str]:
+    """All type names declaring `category: <category>` in their YAML.
+    Empty set for an unknown category. Stable across calls (the registry
+    is populated at startup)."""
+    return {t.name for t in _TYPES.values() if t.category == category}
 
 
 def is_hidden(name: str) -> bool:

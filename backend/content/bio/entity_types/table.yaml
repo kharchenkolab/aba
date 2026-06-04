@@ -4,6 +4,7 @@
 name: table
 display: Table
 icon: table
+category: leaf
 
 schema:
   required: [title, artifact_path]

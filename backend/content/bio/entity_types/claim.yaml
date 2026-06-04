@@ -6,6 +6,7 @@
 name: claim
 display: Claim
 icon: claims
+category: claim
 
 schema:
   required: [title]
