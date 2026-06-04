@@ -280,6 +280,31 @@ def projects_delete(pid: str):
 
 # ---------- Entities ----------
 
+@app.get("/api/entity-types")
+def entity_types_catalog():
+    """The declarative entity-type catalog (Phase 4.6 of misc/
+    phase4_entity_types.md). One entry per type with the metadata the
+    frontend needs to dispatch (display name, icon, ui.panel, hidden
+    flag, creation gestures). The frontend fetches this once on app
+    load + caches; entity-aware components look up by type instead of
+    hardcoded switch/case. Domain-neutral — the platform serves whatever
+    the loaded YAMLs declare."""
+    from core.entity_types import list_types
+    out: list[dict] = []
+    for t in list_types():
+        out.append({
+            "name": t.name,
+            "display": t.display,
+            "icon": t.icon,
+            "hidden": t.hidden,
+            "category": t.category,
+            "status_states": list(t.status_model.get("states") or []),
+            "ui": t.ui,
+            "creation": t.creation,
+        })
+    return out
+
+
 @app.get("/api/entities")
 def entities_list(
     q: str | None = None,
