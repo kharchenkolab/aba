@@ -68,6 +68,22 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _continue_after_failure(job_id: str, lookup_pid: str | None,
+                                   effective_pid: str) -> None:
+    """Fire the continuation hook for a job that just failed so the agent
+    can decide whether to retry / debug / give up, instead of pretending
+    everything's fine. The hook itself decides not to fire if the job had
+    no thread or was cancelled."""
+    try:
+        from core.jobs.continuation import enqueue_continuation
+        fresh = get_job(job_id, project_id=lookup_pid) or {}
+        result = await enqueue_continuation(fresh, str(effective_pid))
+        if result.get("state") != "skipped":
+            print(f"[jobs.continuation] job={job_id} (failure) → {result}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("continuation-after-failure", job_id, e)
+
+
 def _record_worker_failure(where: str, job_id: str | None, exc: BaseException) -> None:
     """Capture a worker-level failure for /api/jobs/worker. NOT for routine
     job failures (those land in the job's `error` column). This is for the
@@ -174,6 +190,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             update_job(job_id, project_id=project_id, status="failed",
                        error=result_obj["error"][:1000],
                        log_tail=result_obj["error"][:1500], finished_at=_utcnow())
+            await _continue_after_failure(job_id, project_id, effective_pid)
             return
 
         stdout = result_obj.get("stdout", "")
@@ -183,6 +200,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             update_job(job_id, project_id=project_id, status="failed",
                        error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
                        log_tail=log_tail, finished_at=_utcnow())
+            await _continue_after_failure(job_id, project_id, effective_pid)
             return
 
         # Register artifacts via the on_job_complete hook (bio handler). Carry
@@ -202,6 +220,20 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
         })
         update_job(job_id, project_id=project_id, status="done", log_tail=log_tail,
                    finished_at=_utcnow())
+        # Phase C — auto-continuation (#296). After the dispatch above has
+        # registered artifacts, re-enter the Guide turn loop on the
+        # originating thread so the planned downstream steps actually run
+        # (instead of leaving the agent's turn ended at the deferred-result
+        # boundary). Refresh the job row so the continuation sees the
+        # final status / log_tail we just wrote.
+        try:
+            from core.jobs.continuation import enqueue_continuation
+            fresh = get_job(job_id, project_id=project_id) or {}
+            result = await enqueue_continuation(fresh, str(effective_pid))
+            if result.get("state") != "skipped":
+                print(f"[jobs.continuation] job={job_id} → {result}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            _record_worker_failure("continuation", job_id, e)
     except Exception as e:  # noqa: BLE001
         # Surface the failure into the job row + the worker-failure log,
         # instead of silently swallowing it.
