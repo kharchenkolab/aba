@@ -52,6 +52,18 @@
    name labels or big padding. */
 .msg--user { background: var(--bg-soft); }
 
+/* Phase C — auto-continuation. A "[continuation: …]" user row was
+   synthesized by the runner when a background job finished, not typed by
+   the user. Faded background + dotted left edge + cog avatar so it reads
+   as system-driven without being mistaken for the user's words. */
+.msg--continuation { background: transparent; }
+.msg--continuation .msg__content { color: var(--text-3); font-style: italic; font-size: 12px; }
+.msg__avatar--cont {
+  background: var(--bg-soft);
+  color: var(--text-3);
+  border: 1px dashed var(--panel-bd);
+}
+
 .msg__avatar {
   flex-shrink: 0;
   width: 22px;

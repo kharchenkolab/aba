@@ -818,6 +818,13 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()
+  // Phase C — auto-continuation marker. A user-role message that starts
+  // with "[continuation:" was synthesized by the runner when a background
+  // job finished; render it with a distinct cog avatar + soft styling so
+  // it's obvious the user didn't actually type this. Phase B will move the
+  // marker into a proper messages-row metadata column; pattern-matching is
+  // the MVP.
+  const isContinuation = isUser && msgText.startsWith('[continuation:')
   const imageUrls = message.blocks.filter(b => b.type === 'image').map(b => (b as { url: string }).url)
 
   // Figures are pinned individually in their own headers (a cell can hold
@@ -997,10 +1004,17 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
 
   return (
-    <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'}`}>
-      {isUser
-        ? <div className="msg__avatar msg__avatar--user">PP</div>
-        : <AgentAvatar agent="guide" size={22} />}
+    <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'} ${isContinuation ? 'msg--continuation' : ''}`}>
+      {isContinuation
+        ? <div className="msg__avatar msg__avatar--cont" title="Auto-continuation from a background job">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 4v5h-5" />
+            </svg>
+          </div>
+        : isUser
+          ? <div className="msg__avatar msg__avatar--user">PP</div>
+          : <AgentAvatar agent="guide" size={22} />}
       <div className="msg__body"
            onMouseEnter={() => highlighting && setHovered(true)}
            onMouseLeave={() => setHovered(false)}>
