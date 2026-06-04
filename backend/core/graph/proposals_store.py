@@ -13,7 +13,9 @@ def _row_to_proposal(r) -> dict:
         "id": r["id"],
         "thread_id": r["thread_id"],
         "kind": r["kind"],
-        "advisor": r["advisor"],
+        # Returned dict still uses 'advisor' (consumer-facing) — the
+        # column is `role` after Phase C.5 (misc/modularity_audit.md).
+        "advisor": r["role"],
         "headline": r["headline"],
         "body": r["body"],
         "payload": json.loads(r["payload"]) if r["payload"] else None,
@@ -38,16 +40,17 @@ def proposal_signature_exists(signature: str) -> bool:
 
 
 def add_proposal(*, thread_id: Optional[str], kind: str, headline: str,
-                 signature: str, advisor: str = "guide", body: str = "",
+                 signature: str, advisor: str = "primary", body: str = "",
                  payload: Optional[dict] = None) -> Optional[int]:
     """Insert a pending proposal. Returns None (no-op) if an identical-signature
-    proposal already exists."""
+    proposal already exists. `advisor` is the role string written to the
+    underlying `role` column (column rename Phase C.5)."""
     if proposal_signature_exists(signature):
         return None
     now = _utcnow()
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO proposals (thread_id, kind, advisor, headline, body, "
+            "INSERT INTO proposals (thread_id, kind, role, headline, body, "
             "payload, signature, status, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
             (thread_id, kind, advisor, headline, body,

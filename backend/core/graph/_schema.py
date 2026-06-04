@@ -65,6 +65,12 @@ def _column_exists(c: sqlite3.Connection, table: str, col: str) -> bool:
     return any(r["name"] == col for r in rows)
 
 
+def _table_exists(c: sqlite3.Connection, name: str) -> bool:
+    return c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
 def gen_entity_id(prefix: str = "ent") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
@@ -141,18 +147,27 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON entity_edges(source_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON entity_edges(target_id)")
 
+        # Phase C.5 migration: old `advisor_notes` table → neutral
+        # `agent_notes`. Idempotent — only renames when the old name
+        # exists and the new doesn't. The CREATE below then no-ops on
+        # the renamed table.
+        if _table_exists(c, "advisor_notes") and not _table_exists(c, "agent_notes"):
+            c.execute("ALTER TABLE advisor_notes RENAME TO agent_notes")
+        if _table_exists(c, "agent_notes") and _column_exists(c, "agent_notes", "advisor") \
+                and not _column_exists(c, "agent_notes", "role"):
+            c.execute("ALTER TABLE agent_notes RENAME COLUMN advisor TO role")
         c.execute("""
-            CREATE TABLE IF NOT EXISTS advisor_notes (
+            CREATE TABLE IF NOT EXISTS agent_notes (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 entity_id    TEXT NOT NULL,
-                advisor      TEXT NOT NULL,
+                role         TEXT NOT NULL,
                 text         TEXT NOT NULL,
                 metadata     TEXT,
                 status       TEXT NOT NULL DEFAULT 'active',
                 created_at   TEXT NOT NULL
             )
         """)
-        c.execute("CREATE INDEX IF NOT EXISTS idx_notes_entity ON advisor_notes(entity_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_notes_entity ON agent_notes(entity_id)")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS context_assemblies (
@@ -216,12 +231,16 @@ def init_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
 
+        # Phase C.5 migration: proposals.advisor → proposals.role.
+        if _table_exists(c, "proposals") and _column_exists(c, "proposals", "advisor") \
+                and not _column_exists(c, "proposals", "role"):
+            c.execute("ALTER TABLE proposals RENAME COLUMN advisor TO role")
         c.execute("""
             CREATE TABLE IF NOT EXISTS proposals (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 thread_id   TEXT,
                 kind        TEXT NOT NULL,
-                advisor     TEXT NOT NULL DEFAULT 'guide',
+                role        TEXT NOT NULL DEFAULT 'primary',
                 headline    TEXT NOT NULL,
                 body        TEXT,
                 payload     TEXT,

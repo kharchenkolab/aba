@@ -1,8 +1,15 @@
-"""Append-only event log, advisor-notes, context-assemblies, suggestions.
+"""Append-only event log, agent-role notes, context-assemblies, suggestions.
 
-Domain-neutral logging primitives. `add_advisor_note` needs the entity
-title for a friendly event payload; it does a deferred import of
-get_entity to avoid a circular import with core.graph.entities."""
+Domain-neutral logging primitives. The notes table is `agent_notes` with
+a `role` column (Phase C.5 of misc/modularity_audit.md — was
+`advisor_notes.advisor`, bio-specific term in the platform schema).
+Python function names and the returned dict key still use the legacy
+"advisor" word for now — those are easier to clean up later without a
+DB migration; the load-bearing rename is at the schema level.
+
+`add_advisor_note` needs the entity title for a friendly event payload;
+it does a deferred import of get_entity to avoid a circular import with
+core.graph.entities."""
 from __future__ import annotations
 import json
 from typing import Optional
@@ -44,7 +51,7 @@ def add_advisor_note(entity_id: str, advisor: str, text: str,
     now = _utcnow()
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO advisor_notes (entity_id, advisor, text, metadata, created_at) "
+            "INSERT INTO agent_notes (entity_id, role, text, metadata, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (entity_id, advisor, text,
              json.dumps(metadata) if metadata else None, now),
@@ -64,7 +71,7 @@ def set_advisor_note_status(note_id: int, status: str) -> bool:
     """Mark a note 'tried'/'dismissed' so it stops surfacing as a fresh idea."""
     with _conn() as c:
         cur = c.execute(
-            "UPDATE advisor_notes SET status = ? WHERE id = ?", (status, note_id)
+            "UPDATE agent_notes SET status = ? WHERE id = ?", (status, note_id)
         )
         return cur.rowcount > 0
 
@@ -72,9 +79,9 @@ def set_advisor_note_status(note_id: int, status: str) -> bool:
 def list_advisor_notes(entity_id: str) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
-            "SELECT n.id, n.entity_id, n.advisor, n.text, n.metadata, n.status, "
+            "SELECT n.id, n.entity_id, n.role, n.text, n.metadata, n.status, "
             "       n.created_at, e.type AS e_type, e.title AS e_title "
-            "FROM advisor_notes n LEFT JOIN entities e ON e.id = n.entity_id "
+            "FROM agent_notes n LEFT JOIN entities e ON e.id = n.entity_id "
             "WHERE n.entity_id = ? AND n.status = 'active' "
             "ORDER BY n.id",
             (entity_id,),
@@ -83,7 +90,10 @@ def list_advisor_notes(entity_id: str) -> list[dict]:
         {
             "id": r["id"],
             "entity_id": r["entity_id"],
-            "advisor": r["advisor"],
+            # Returned dict still uses 'advisor' to keep API + frontend
+            # compatibility (n.advisor in AdvisorStrip.tsx). The underlying
+            # column is `role` — see Phase C.5 of misc/modularity_audit.md.
+            "advisor": r["role"],
             "text": r["text"],
             "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
             "status": r["status"],
