@@ -25,7 +25,6 @@ allowed_edges:
   in:  []
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, archetype, install_recipe_summary, tags, notes]
 
 ui:

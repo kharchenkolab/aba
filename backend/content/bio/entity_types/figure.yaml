@@ -29,7 +29,6 @@ allowed_edges:
 focus:
   # The agent's view when this figure is focused — the producing code
   # context is what makes "regenerate with X different" possible.
-  card_builder: bio.cards.figure.build_card_for_figure
   agent_sees: [title, artifact_path, producing_code, producing_params,
                parent_summary, advisor_notes, tags, notes]
 

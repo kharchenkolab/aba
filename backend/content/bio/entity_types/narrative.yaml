@@ -22,7 +22,6 @@ allowed_edges:
   in:  [supports]    # referenced by a Result as a member
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, text, parent_summary, tags, notes]
 
 ui:

@@ -24,7 +24,6 @@ allowed_edges:
   in:  [used]
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, organism, assembly, version, source_url,
                size_bytes, tags, notes]
 

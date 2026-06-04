@@ -22,7 +22,6 @@ allowed_edges:
   in:  []
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, project_snapshot, tags, notes]
   # The workspace focus emits the "[PROJECT — current snapshot]" block
   # via render_project_sidebar (core/manifest/assembler.py).
