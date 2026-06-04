@@ -83,7 +83,7 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
     if not focus_entity_id or focus_entity_id == WORKSPACE_ID:
         # The "workspace" focus is the no-focus case: just the optional
         # policy text for workspace-scoped guidance.
-        from content.bio.lifecycle.adaptive import policy_for  # deferred
+        from content.bio.lifecycle.adaptive import policy_for  # noqa: seam — Phase C.3 (policy provider registry inversion)
         policy = policy_for("workspace") or ""  # noqa: seam (workspace pseudo-type)
         return None, policy
 
@@ -96,7 +96,7 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
     # The card text includes a trailing "answer in this context" line
     # the renderer appends, so it's not duplicated by per-type builders.
 
-    from content.bio.lifecycle.adaptive import policy_for  # deferred
+    from content.bio.lifecycle.adaptive import policy_for  # noqa: seam — Phase C.3 (policy provider registry inversion)
     policy = policy_for(e["type"]) or ""
 
     card = FocusCard(
@@ -130,7 +130,7 @@ def render_project_sidebar(thread_id: Optional[str] = None) -> str:
 
     # Datasets: small N, very useful. Show name + path (the actual disk
     # location the agent can pass to inspect_upload / read straight away).
-    datasets = list_entities(type_filter="dataset", include_archived=False)
+    datasets = list_entities(type_filter="dataset", include_archived=False)  # noqa: seam — Phase 4 (declarative entity types)
     if datasets:
         parts.append(f"Datasets ({len(datasets)}):")
         for e in datasets[:10]:                          # cap at 10
@@ -145,7 +145,7 @@ def render_project_sidebar(thread_id: Optional[str] = None) -> str:
 
     # Threads: small N usually. Mark the CURRENT one. Title-only — paths/
     # detail belong on a focused-thread card, not the firehose.
-    threads = list_entities(type_filter="thread", include_archived=False)
+    threads = list_entities(type_filter="thread", include_archived=False)  # noqa: seam — Phase 4 (declarative entity types)
     if threads:
         parts.append(f"Threads ({len(threads)}):")
         for t in threads[:12]:                           # cap at 12
@@ -159,9 +159,9 @@ def render_project_sidebar(thread_id: Optional[str] = None) -> str:
     # Curation counts — Results / Claims / Findings are the user's
     # judgments. Cheap one-liner; the agent can look them up by name
     # via list_entities if needed.
-    n_results  = count_entities(type_filter="result",  include_archived=False)
-    n_claims   = count_entities(type_filter="claim",   include_archived=False)
-    n_findings = count_entities(type_filter="finding", include_archived=False)
+    n_results  = count_entities(type_filter="result",  include_archived=False)   # noqa: seam — Phase 4
+    n_claims   = count_entities(type_filter="claim",   include_archived=False)   # noqa: seam — Phase 4
+    n_findings = count_entities(type_filter="finding", include_archived=False)   # noqa: seam — Phase 4
     if n_results or n_claims or n_findings:
         parts.append(
             f"Curated entities: results={n_results}  claims={n_claims}  findings={n_findings}"

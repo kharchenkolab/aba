@@ -19,8 +19,13 @@ fi
 
 fail() { echo "SEAM VIOLATION: $*"; exit 1; }
 
-# 1. core/ must not import from content/
-if grep -rnE "^(from content|import content)" "$CORE" 2>/dev/null | grep -v "# noqa: seam"; then
+# 1. core/ must not import from content/. Catches indented (function-body /
+# lazy) imports too — anchor on optional leading whitespace, then the
+# import keyword. The earlier `^` anchor only saw column-0 imports and
+# missed five real leaks (2026-06-04). Prose mentioning "import content"
+# is excluded by requiring the import token to be at line start (after
+# optional indent), not mid-sentence.
+if grep -rnE "^[[:space:]]*(from content\.|import content[[:space:].])" "$CORE" --include='*.py' 2>/dev/null | grep -v "# noqa: seam"; then
   fail "backend/core/ imports from backend/content/"
 fi
 

@@ -116,7 +116,7 @@ def set_current(pid: str) -> None:
     # F3: backfill display_path for any entity in this project that
     # predates the column / bio's layout computers. Cheap; idempotent.
     try:
-        from content.bio.graph.display import backfill_missing_display_paths
+        from content.bio.graph.display import backfill_missing_display_paths  # noqa: seam — Phase C.4 (on_project_open hook inversion)
         backfill_missing_display_paths()
     except Exception:  # noqa: BLE001
         pass           # never block project switch on a backfill failure
