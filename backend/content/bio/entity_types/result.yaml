@@ -24,8 +24,13 @@ status_model:
     active: [archived]
 
 allowed_edges:
-  out: [supports]      # a Result can support a Claim
-  in:  [supports]      # members reference back
+  # A Result groups members (includes → figure/table/note/narrative),
+  # records derivation provenance (wasDerivedFrom → evidence/run/figure),
+  # and supports its evidence (with direction metadata).
+  out: [supports, includes, wasDerivedFrom]
+  # In: Claims/Findings support a Result (supports). Findings derive
+  # from Results (finding --wasDerivedFrom--> result).
+  in:  [supports, wasDerivedFrom]
 
 focus:
   agent_sees: [title, interpretation, members_summary, origin,

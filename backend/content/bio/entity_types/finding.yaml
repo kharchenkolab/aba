@@ -23,8 +23,11 @@ status_model:
     active: [archived]
 
 allowed_edges:
-  out: [supports]
-  in:  [supports]
+  # A Finding supports Results/evidence and records derivation
+  # (wasDerivedFrom → result/evidence). Inbound: a Claim supports/derives
+  # from a Finding (claim --wasDerivedFrom--> finding).
+  out: [supports, wasDerivedFrom]
+  in:  [supports, wasDerivedFrom]
 
 focus:
   agent_sees: [title, text, evidence_summary, parent_summary,

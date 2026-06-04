@@ -41,7 +41,9 @@ confidence_model:
     refuted:     []   # terminal
 
 allowed_edges:
-  out: [supports]    # claim "supports" another claim (rare; cross-claim)
+  # A Claim cites evidence (supports → result/finding) and records
+  # derivation (wasDerivedFrom → finding/result/evidence).
+  out: [supports, wasDerivedFrom]
   in:  [supports]    # Result → supports → this claim (the canonical edge)
 
 focus:

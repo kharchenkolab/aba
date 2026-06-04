@@ -20,7 +20,9 @@ status_model:
 
 allowed_edges:
   out: []
-  in:  [supports]    # referenced by a Result as a member
+  # Narratives are Result members (includes), derivation targets
+  # (wasDerivedFrom), and evidence (supports).
+  in:  [supports, includes, wasDerivedFrom]
 
 focus:
   agent_sees: [title, text, parent_summary, tags, notes]

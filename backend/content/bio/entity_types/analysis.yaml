@@ -32,7 +32,9 @@ status_model:
 
 allowed_edges:
   out: [used]   # the Run used a dataset / a focus entity
-  in:  [wasGeneratedBy]   # figures/tables wasGeneratedBy this Run
+  # In: figures/tables wasGeneratedBy this Run; evidence/datasets
+  # produced_by this Run; Results derive from this Run (wasDerivedFrom).
+  in:  [wasGeneratedBy, produced_by, wasDerivedFrom]
 
 focus:
   card_builder: content.bio.cards.analysis.build_analysis_card

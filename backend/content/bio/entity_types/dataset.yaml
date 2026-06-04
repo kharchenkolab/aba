@@ -22,8 +22,13 @@ status_model:
     active: [archived]
 
 allowed_edges:
-  out: []
-  in:  [used]   # an Analysis run that used this dataset
+  # A Dataset registered from a Run (produced_by → run); a by-reference
+  # Dataset can record what it was derived from (refstore — fetched data).
+  out: [produced_by, wasDerivedFrom]
+  # In: an Analysis run that used this dataset (used); figures derived
+  # from this dataset (registry.py: figure --wasDerivedFrom--> dataset
+  # when a Run focused on a dataset produces a figure).
+  in:  [used, wasDerivedFrom]
 
 focus:
   agent_sees: [title, artifact_path, layout_hint, source, organism,
