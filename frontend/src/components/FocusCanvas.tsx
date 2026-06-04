@@ -1,15 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from './AnnotatedFigure'
-import ClaimView from './ClaimView'
-import RunView from './RunView'
-import ResultView from './ResultView'
 import ThreadHeader from './ThreadHeader'
-import FileBrowser, { type TreeNode } from './FileBrowser'
-import FileCanvas from '../viewers/FileCanvas'
-import type { FileNode } from '../viewers/types'
-import UploadDrop from './UploadDrop'
+// Importing the bio side has the side-effect of registering all bio
+// focus-view components against the registry. The shell below dispatches
+// via `focus_view_for` — it never references entity-type-specific
+// components directly, so adding a new bio type needs no shell edit.
+import { focus_view_for } from '../bio/focusViews'
 import './FocusCanvas.css'
 
 interface Annotation { image: string; note: string }
@@ -34,38 +32,14 @@ interface Props {
   projectId?: string
 }
 
-interface TablePreview {
-  kind: 'table'
-  columns: string[]
-  rows: unknown[][]
-  total_rows: number
-  shown: number
-}
-
-interface NonePreview { kind: 'none' }
-interface ErrorPreview { kind: 'error'; error: string }
-type Preview = TablePreview | NonePreview | ErrorPreview
-
 type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
 export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles, projectId }: Props) {
-  const [preview, setPreview] = useState<Preview | null>(null)
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-
-  useEffect(() => {
-    setPreview(null)
-    if (!entity || entity.type !== 'dataset') return
-    let cancelled = false
-    fetch(`/api/entities/${encodeURIComponent(entity.id)}/preview?limit=10`)
-      .then(r => (r.ok ? r.json() : Promise.reject(r)))
-      .then((p: Preview) => { if (!cancelled) setPreview(p) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [entity?.id, entity?.type])
 
   if (!entity || entity.type === 'workspace') {
     return <WorkspaceCanvas entities={entities} onChange={onChange} onFocus={onFocus} />
@@ -154,13 +128,22 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
         <HistoryDrawer entity={entity} onFocus={onFocus} onClose={() => setHistoryOpen(false)} />
       )}
       <div className="focus__body">
+        {/* Body dispatch:
+            - thread: shell-level header (not a bio entity-type view)
+            - compare mode on a figure scenario: side-by-side baseline panel
+            - annotation mode on a figure: AnnotatedFigure handles the
+              click-to-region overlay; ordinary figures fall through to
+              the registry
+            - everything else: registry lookup via focus_view_for(type).
+              An unregistered type falls back to a generic placeholder so
+              a YAML without a registered view doesn't white-screen. */}
         {entity.type === 'thread'
           ? <ThreadHeader thread={entity} full onChange={onChange} onSwitchThread={onSelectThread ?? onFocus} />
           : compareOn && baseline && entity.type === 'figure'
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderBody(entity, preview, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -328,119 +311,6 @@ function renderCompareBody(scenario: Entity, baseline: Entity) {
   )
 }
 
-// One optional description for a dataset, editable inline under the title.
-// (Replaces the hidden "Edit notes…" menu item — this is where it belongs.)
-function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: () => void }) {
-  const [val, setVal] = useState(entity.notes ?? '')
-  useEffect(() => { setVal(entity.notes ?? '') }, [entity.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const save = () => {
-    if ((val ?? '') === (entity.notes ?? '')) return
-    fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }),
-    }).then(() => onChange()).catch(() => {})
-  }
-  // Auto-grow so a long description shows in full instead of being clipped to one line.
-  const ref = useRef<HTMLTextAreaElement>(null)
-  const grow = () => { const t = ref.current; if (t) { t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px` } }
-  useEffect(grow, [val])
-  return (
-    <textarea ref={ref} className="focus__dataset-desc" value={val} rows={1}
-      placeholder="Add a description… (what this dataset is, where it came from)"
-      onChange={e => setVal(e.target.value)} onBlur={save} />
-  )
-}
-
-/** Browse a dataset's directory contents with the shared FileBrowser (folders +
- *  every file), viewing files in a modal — so a folder dataset isn't a single
- *  opaque "file" row. Renders nothing for a dataset with no browsable tree. */
-function DatasetFiles({ entity, onFocus, onChatResult, onChange, projectId }: {
-  entity: Entity
-  onFocus: (id: string) => void
-  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
-  onChange: () => void
-  projectId?: string
-}) {
-  const [tree, setTree] = useState<TreeNode | null>(null)
-  const [modalNode, setModalNode] = useState<TreeNode | null>(null)
-  const [uploadOpen, setUploadOpen] = useState(false)
-  const [treeNonce, setTreeNonce] = useState(0)
-  useEffect(() => {
-    let cancelled = false
-    fetch(`/api/datasets/${encodeURIComponent(entity.id)}/tree`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (!cancelled) setTree(d as TreeNode) })
-      .catch(() => { if (!cancelled) setTree(null) })
-    return () => { cancelled = true }
-  }, [entity.id, treeNonce])
-  useEffect(() => {
-    if (!modalNode) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModalNode(null) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [modalNode])
-
-  // Trust the tree endpoint's authoritative is_directory flag (derived from
-  // disk), not the metadata.layout field — older datasets and agent-registered
-  // ones often lack the flag even when the artifact_path IS a directory.
-  // While the tree is still loading, fall back to the metadata flag so the
-  // "Add files" button doesn't flicker.
-  const treeFlag = (tree as { is_directory?: boolean } | null)?.is_directory
-  const isDirectoryDataset = treeFlag ?? (entity.metadata?.layout === 'directory')
-  const empty = !tree || (tree.children?.length ?? 0) === 0
-  // Append-mode requires a directory-shaped dataset (backend refuses single-
-  // file datasets). Render the section even when empty so the user has the
-  // "Add files" landing pad — the dataset was just created.
-  if (empty && !isDirectoryDataset) return null
-
-  const fileHref = (n: FileNode) => {
-    const ap = n.artifact_path || ''
-    return ap.startsWith('/artifacts/') || ap.startsWith('http') ? ap : `/api/files/content?path=${encodeURIComponent(n.path)}`
-  }
-  const discuss = (n: TreeNode) => {
-    const img = /\.(png|jpe?g|gif|svg|webp)$/i.test(n.name)
-    onChatResult?.(n.name, img ? fileHref(n) : undefined)
-  }
-  return (
-    <section className="focus__dataset-files">
-      <div className="focus__dataset-files-head">
-        <span>Files</span>
-        {isDirectoryDataset && (
-          <button className="focus__add-files-btn"
-                  onClick={() => setUploadOpen(true)}
-                  title="Drop more files into this dataset">+ Add files</button>
-        )}
-      </div>
-      {empty ? (
-        <div className="focus__dataset-empty">
-          This dataset has no files yet. Click <strong>+ Add files</strong> to drop in a file or folder.
-        </div>
-      ) : (
-        <FileBrowser root={tree!} variant="wide" focusedId="" onFocus={onFocus}
-          onViewFile={n => setModalNode(n as TreeNode)}
-          actions={onChatResult ? { onDiscuss: discuss } : undefined} />
-      )}
-      {modalNode && (
-        <div className="runview__modal" onClick={() => setModalNode(null)}>
-          <div className="runview__modal-box" onClick={e => e.stopPropagation()}>
-            <button className="runview__modal-close" onClick={() => setModalNode(null)} aria-label="Close (Esc)" title="Close (Esc)">×</button>
-            <div className="runview__modal-body">
-              <FileCanvas node={modalNode} onFocus={onFocus} onClose={() => setModalNode(null)} />
-            </div>
-          </div>
-        </div>
-      )}
-      {uploadOpen && (
-        <UploadDrop
-          appendTo={{ id: entity.id, title: entity.title }}
-          projectId={projectId}
-          onClose={() => setUploadOpen(false)}
-          onUploaded={() => { onChange(); setTreeNonce(n => n + 1) }}
-        />
-      )}
-    </section>
-  )
-}
-
 function renderActionButton(
   entity: Entity,
   setPromote: (m: PromoteMode | null) => void,
@@ -472,9 +342,18 @@ function renderActionButton(
   return null
 }
 
-function renderBody(
+/**
+ * Render the entity-aware body via the bio focus-view registry.
+ * The shell never references entity-type-specific components — adding
+ * a new bio type means a YAML + a `register_focus_view` call, not a
+ * FocusCanvas edit.
+ *
+ * An unregistered type falls back to a generic placeholder so a YAML
+ * that lacks a view doesn't white-screen (Phase 4.5's "warn, don't
+ * crash" stance carried into the shell).
+ */
+function renderRegistryView(
   e: Entity,
-  preview: Preview | null,
   entities: Entity[],
   onFocus: (id: string) => void,
   onChange: () => void,
@@ -484,194 +363,21 @@ function renderBody(
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
 ) {
-  switch (e.type) {
-    case 'figure':
-      return e.artifact_path ? (
-        <img className="focus__figure" src={e.artifact_path} alt={e.title} />
-      ) : (
-        <p className="focus__placeholder">No artifact attached.</p>
-      )
-
-    case 'dataset':
-      return (
-        <div className="focus__dataset">
-          <DatasetDescription entity={e} onChange={onChange} />
-          <div className="focus__rows">
-            <div className="focus__row">
-              <span className="focus__row-label">file</span>
-              <code className="focus__row-val">{e.artifact_path ?? '—'}</code>
-            </div>
-            {e.metadata?.source ? (
-              <div className="focus__row">
-                <span className="focus__row-label">source</span>
-                <span className="focus__row-val">{String(e.metadata.source)}</span>
-              </div>
-            ) : null}
-            {e.metadata?.organism ? (
-              <div className="focus__row">
-                <span className="focus__row-label">organism</span>
-                <span className="focus__row-val">{String(e.metadata.organism)}</span>
-              </div>
-            ) : null}
-            {e.metadata?.size_bytes != null && (
-              <div className="focus__row">
-                <span className="focus__row-label">size</span>
-                <span className="focus__row-val">{formatBytes(Number(e.metadata.size_bytes))}</span>
-              </div>
-            )}
-            {preview?.kind === 'table' && (
-              <div className="focus__row">
-                <span className="focus__row-label">rows × cols</span>
-                <span className="focus__row-val">
-                  {preview.total_rows} × {preview.columns.length}
-                </span>
-              </div>
-            )}
-          </div>
-          {preview?.kind === 'table' && (
-            <PreviewTable entityId={e.id} pageSize={15} />
-          )}
-          {preview?.kind === 'error' && (
-            <div className="focus__placeholder">preview error: {preview.error}</div>
-          )}
-          <DatasetFiles entity={e} onFocus={onFocus} onChatResult={onChatResult} onChange={onChange} projectId={projectId} />
-        </div>
-      )
-
-    case 'analysis':
-      return <RunView run={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
-
-    case 'result':
-      return <ResultView result={e} entities={entities} onFocus={onFocus} onChange={onChange} onAsk={onAsk} onChatResult={onChatResult} />
-
-
-    case 'result': {
-      const interpretation = (e.metadata?.interpretation as string) ?? ''
-      const evidence = (e.metadata?.evidence_figure as string) ?? null
-      const evidenceEntity = evidence ? entities.find(x => x.id === evidence) : null
-      return (
-        <div className="focus__abstract">
-          <p className="focus__interpretation">{interpretation}</p>
-          {evidenceEntity && (
-            <div className="focus__chain">
-              <div className="focus__chain-head">EVIDENCE</div>
-              <EntityRow ent={evidenceEntity} onClick={() => onFocus(evidenceEntity.id)} />
-            </div>
-          )}
-        </div>
-      )
-    }
-
-    case 'finding':
-      return (
-        <FindingBody finding={e} entities={entities} onFocus={onFocus} onChange={onChange} />
-      )
-
-    case 'note':
-      return (
-        <div className="focus__abstract">
-          <p className="focus__interpretation">{(e.metadata?.text as string) ?? e.notes ?? e.title}</p>
-          <p className="focus__placeholder">Kept from the conversation.</p>
-        </div>
-      )
-
-    case 'claim':
-      return <ClaimView claim={e} entities={entities} onFocus={onFocus} onChange={onChange} compact={compact} />
-
-    case 'table':
-      return <PreviewTable entityId={e.id} pageSize={25} />
-
-    case 'narrative':
-      return <NarrativeBody entity={e} onChange={onChange} />
-
-    default:
-      return (
-        <p className="focus__placeholder">{entityTypeBlurb(e.type)}</p>
-      )
+  const View = focus_view_for(e.type)
+  if (!View) {
+    return <p className="focus__placeholder">Detail view not yet implemented for &lsquo;{e.type}&rsquo;.</p>
   }
-}
-
-/** Paginated CSV/TSV preview. Fetches a window of rows per page via the
- *  preview endpoint's limit/offset. Used for datasets and table entities. */
-function PreviewTable({ entityId, pageSize = 25 }: { entityId: string; pageSize?: number }) {
-  const [page, setPage] = useState(0)
-  const [data, setData] = useState<TablePreview | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => { setPage(0) }, [entityId])
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    fetch(`/api/entities/${encodeURIComponent(entityId)}/preview?limit=${pageSize}&offset=${page * pageSize}`)
-      .then(r => (r.ok ? r.json() : Promise.reject(r)))
-      .then((p: Preview) => { if (!cancelled && p.kind === 'table') setData(p) })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [entityId, page, pageSize])
-
-  if (!data) return <p className="focus__placeholder">Loading table…</p>
-
-  const total = data.total_rows
-  const start = page * pageSize
-  const end = start + data.rows.length
-  const pages = Math.max(1, Math.ceil(total / pageSize))
-
-  return (
-    <div className="focus__preview-wrap">
-      <table className="focus__preview-table">
-        <thead><tr>{data.columns.map(c => <th key={c}>{c}</th>)}</tr></thead>
-        <tbody>
-          {data.rows.map((row, i) => (
-            <tr key={i}>{row.map((v, j) => <td key={j}>{v == null ? <em>·</em> : String(v)}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="focus__preview-foot">
-        <span>{total === 0 ? 'no rows' : `${start + 1}–${end} of ${total} rows`}</span>
-        {pages > 1 && (
-          <span className="focus__pager">
-            <button className="focus__pager-btn" disabled={page === 0 || loading}
-                    onClick={() => setPage(p => Math.max(0, p - 1))} title="Previous page">‹</button>
-            <span className="focus__pager-label">{page + 1} / {pages}</span>
-            <button className="focus__pager-btn" disabled={page >= pages - 1 || loading}
-                    onClick={() => setPage(p => p + 1)} title="Next page">›</button>
-          </span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function NarrativeBody({ entity, onChange }: { entity: Entity; onChange: () => void }) {
-  const [text, setText] = useState((entity.metadata?.text as string) ?? '')
-  const [dirty, setDirty] = useState(false)
-  useEffect(() => { setText((entity.metadata?.text as string) ?? ''); setDirty(false) }, [entity.id])
-
-  async function save() {
-    const meta = { ...(entity.metadata ?? {}), text }
-    await fetch(`/api/entities/${encodeURIComponent(entity.id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: text.slice(0, 200), metadata: meta }),
-    })
-    setDirty(false); onChange()
-  }
-  return (
-    <div className="focus__narrative">
-      <textarea
-        className="focus__narrative-text"
-        value={text}
-        placeholder="Write this manuscript section. Reference claims and findings as you build the argument…"
-        onChange={e => { setText(e.target.value); setDirty(true) }}
-        rows={10}
-      />
-      <div className="focus__narrative-bar">
-        {dirty ? <button className="focus__promote" onClick={save}>Save</button>
-               : <span className="focus__placeholder">Saved. The Stylist reviews on focus.</span>}
-      </div>
-    </div>
-  )
+  return <View
+    entity={e}
+    entities={entities}
+    onFocus={onFocus}
+    onChange={onChange}
+    compact={compact}
+    onAsk={onAsk}
+    onChatResult={onChatResult}
+    onBrowseFiles={onBrowseFiles}
+    projectId={projectId}
+  />
 }
 
 function HistoryDrawer({
@@ -788,158 +494,3 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
   )
 }
 
-const MATURITY = ['draft', 'candidate', 'checked', 'manuscript'] as const
-
-interface Caveat { text: string; source?: string }
-
-function FindingBody({
-  finding, entities, onFocus, onChange,
-}: {
-  finding: Entity
-  entities: Entity[]
-  onFocus: (id: string) => void
-  onChange: () => void
-}) {
-  const meta = finding.metadata ?? {}
-  const [picking, setPicking] = useState(false)
-  const [summary, setSummary] = useState((meta.summary as string) ?? (meta.text as string) ?? '')
-  const [editingSummary, setEditingSummary] = useState(false)
-  const [newCaveat, setNewCaveat] = useState('')
-
-  useEffect(() => {
-    setSummary((finding.metadata?.summary as string) ?? (finding.metadata?.text as string) ?? '')
-  }, [finding.id])
-
-  const status = (meta.maturity as string) ?? 'candidate'
-  const caveats: Caveat[] = (meta.caveats as Caveat[]) ?? []
-  // Evidence = explicit evidence list (figures/tables) ∪ supporting results.
-  const evIds = Array.from(new Set([
-    ...((meta.evidence as string[]) ?? []),
-    ...((meta.supporting_results as string[]) ?? []),
-  ]))
-  const evidenceEnts = evIds.map(id => entities.find(x => x.id === id)).filter((x): x is Entity => !!x)
-  const candidates = entities.filter(
-    e => e.type === 'result' && !evIds.includes(e.id) && e.status !== 'archived',
-  )
-
-  async function patch(body: Record<string, unknown>) {
-    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/fields`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    })
-    onChange()
-  }
-  async function addResult(resultId: string) {
-    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/add-result`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ result_id: resultId }),
-    })
-    setPicking(false); onChange()
-  }
-  async function removeResult(resultId: string) {
-    await fetch(`/api/findings/${encodeURIComponent(finding.id)}/remove-result`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ result_id: resultId }),
-    })
-    onChange()
-  }
-  function addCaveat() {
-    const t = newCaveat.trim()
-    if (!t) return
-    patch({ caveats: [...caveats, { text: t, source: 'user' }] })
-    setNewCaveat('')
-  }
-  function removeCaveat(i: number) {
-    patch({ caveats: caveats.filter((_, j) => j !== i) })
-  }
-
-  return (
-    <div className="fv">
-      {/* Maturity ladder */}
-      <div className="fv-ladder">
-        {MATURITY.map((m, i) => {
-          const done = MATURITY.indexOf(status as typeof MATURITY[number]) > i
-          const cur = status === m
-          return (
-            <button key={m} className={`fv-step ${done ? 'is-done' : ''} ${cur ? 'is-current' : ''}`}
-                    onClick={() => patch({ status: m })} title={`Mark ${m}`}>
-              <span className="fv-step__dot" />{m}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Summary (editable) */}
-      <div className="fv-section-label">Summary <button className="fv-edit" onClick={() => setEditingSummary(v => !v)}>{editingSummary ? 'done' : 'edit'}</button></div>
-      {editingSummary ? (
-        <textarea className="fv-summary-edit" value={summary} autoFocus rows={4}
-          onChange={e => setSummary(e.target.value)}
-          onBlur={() => { setEditingSummary(false); if (summary !== (meta.summary ?? meta.text)) patch({ summary }) }} />
-      ) : (
-        <p className="fv-summary" onClick={() => setEditingSummary(true)}>{summary || <em className="focus__placeholder">Click to add a summary…</em>}</p>
-      )}
-
-      {/* Evidence */}
-      <div className="fv-section-label">Evidence ({evidenceEnts.length})
-        <button className="fv-edit" onClick={() => setPicking(v => !v)} disabled={candidates.length === 0}>+ add</button>
-      </div>
-      {evidenceEnts.length === 0 && <div className="focus__placeholder">No evidence linked yet.</div>}
-      {evidenceEnts.map(s => (
-        <div key={s.id} className="focus__chain-row-wrap">
-          <EntityRow ent={s} onClick={() => onFocus(s.id)} />
-          <button className="focus__chain-remove" onClick={() => removeResult(s.id)} title="Remove from finding">×</button>
-        </div>
-      ))}
-      {picking && (
-        <div className="focus__picker">
-          <div className="focus__picker-head">Add a result</div>
-          {candidates.map(c => (
-            <button key={c.id} className="focus__picker-row" onClick={() => addResult(c.id)}>
-              <span className="focus__type focus__type--result">result</span>{c.title}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Caveats */}
-      <div className="fv-section-label">Caveats ({caveats.length})</div>
-      {caveats.map((c, i) => (
-        <div key={i} className="fv-caveat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-          <span className="fv-caveat__text">{c.text}</span>
-          {c.source && <span className="fv-caveat__src">{c.source}</span>}
-          <button className="fv-caveat__x" onClick={() => removeCaveat(i)} title="Remove caveat">×</button>
-        </div>
-      ))}
-      <div className="fv-caveat-add">
-        <input value={newCaveat} placeholder="Add a caveat…" onChange={e => setNewCaveat(e.target.value)}
-               onKeyDown={e => { if (e.key === 'Enter') addCaveat() }} />
-        <button onClick={addCaveat} disabled={!newCaveat.trim()}>Add</button>
-      </div>
-    </div>
-  )
-}
-
-function EntityRow({ ent, onClick }: { ent: Entity; onClick: () => void }) {
-  return (
-    <button className="focus__chain-row" onClick={onClick} type="button">
-      <span className={`focus__type focus__type--${ent.type}`}>{ent.type}</span>
-      <span className="focus__chain-title">{ent.title}</span>
-      <span className="focus__chain-arrow">↗</span>
-    </button>
-  )
-}
-
-function entityTypeBlurb(t: string): string {
-  switch (t) {
-    case 'table':     return 'Tabular artifact view coming in a later phase.'
-    case 'narrative': return 'A manuscript section composed from claims.'
-    default:          return 'Detail view not yet implemented for this entity type.'
-  }
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`
-}
