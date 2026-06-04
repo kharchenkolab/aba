@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +15,7 @@ from content.bio.graph.result_members import add_result_member, remove_result_me
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
 from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
+from core.web.deps import require_project
 from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
 from content.bio.lifecycle.promote import (
@@ -42,6 +43,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Project-context pinning middleware (Phase B of misc/modularity_audit.md):
+# every request that carries `?project_id=<pid>` or `X-Project-Id: <pid>` is
+# atomically pinned per-request to that project, so two tabs on different
+# projects can't race on the process-global. Endpoints that need stricter
+# 412-on-missing enforcement use Depends(require_project) on top.
+# Body-sourced project_id (chat: req.project_id in the JSON body) still
+# uses the function-form _require_project_context — middleware can't safely
+# read the request body without consuming it.
+@app.middleware("http")
+async def _pin_project_per_request(request, call_next):
+    pid = (request.query_params.get("project_id")
+           or request.headers.get("X-Project-Id"))
+    if pid:
+        from core import projects as _projects
+        if _projects.current() != pid:
+            _projects.set_current(pid)
+    return await call_next(request)
 
 import threading
 
@@ -285,7 +305,7 @@ def entities_list(
 
 
 @app.get("/api/entities/{entity_id}")
-def entities_get(entity_id: str):
+def entities_get(entity_id: str, _pid: str = Depends(require_project)):
     e = get_entity(entity_id)
     if not e:
         raise HTTPException(404, f"Entity {entity_id} not found")
@@ -304,7 +324,7 @@ class EntityPatch(BaseModel):
 
 
 @app.patch("/api/entities/{entity_id}")
-def entities_patch(entity_id: str, req: EntityPatch):
+def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require_project)):
     """Update title, notes, tags, pinned, or status."""
     if entity_id == WORKSPACE_ID:
         # Allow updating workspace title only; status/pin/notes/tags ignored.
@@ -356,7 +376,7 @@ def entities_patch(entity_id: str, req: EntityPatch):
 
 
 @app.delete("/api/entities/{entity_id}")
-def entities_delete(entity_id: str, hard: bool = False):
+def entities_delete(entity_id: str, hard: bool = False, _pid: str = Depends(require_project)):
     """Soft-delete (default): mark status='archived'. Workspace cannot be deleted.
 
     With ?hard=true: hard-delete after refusing if other (non-archived) entities
@@ -537,18 +557,13 @@ class ChatRequest(BaseModel):
 
 
 def _require_project_context(project_id: str | None) -> None:
-    """Pin the project per-request (A+B fix, 2026-06-02). Each chat-related
-    handler calls this on entry so the backend's global "current project" can't
-    silently misroute writes after a server bounce / multi-tab / side-script
-    mutation. If the request didn't carry a pid AND the global is unset
-    (post-bounce park-on-scratch), refuse with 412 instead of defaulting."""
-    from core import projects as _projects
-    if project_id:
-        if _projects.current() != project_id:
-            _projects.set_current(project_id)
-    elif _projects.current() is None:
-        raise HTTPException(412, "no project context — page should include project_id "
-                                  "in the request body, or call /api/projects/{pid}/open first")
+    """Pin the project per-request (A+B fix, 2026-06-02). Used by handlers that
+    take project_id in the REQUEST BODY (chat) — middleware can't safely parse
+    the body. For query/header sources, prefer Depends(require_project) from
+    core.web.deps (Phase B of misc/modularity_audit.md). Both share the
+    `_pin_or_412` primitive."""
+    from core.web.deps import _pin_or_412
+    _pin_or_412(project_id)
 
 
 @app.post("/api/chat")
