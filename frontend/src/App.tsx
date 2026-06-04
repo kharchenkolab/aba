@@ -248,6 +248,12 @@ export default function App() {
       .catch(() => {})
   }
   useEffect(() => { refreshCurrent() }, [])
+  // Phase 4.6: prime the entity-type catalog once on app mount so
+  // subsequent lookups in shell components (EntityMenu, etc.) hit
+  // the cache instead of falling back to the legacy hardcoded set.
+  useEffect(() => {
+    import('./entityTypes').then(m => m.loadEntityTypes().catch(() => {}))
+  }, [])
 
   // Subscribe to /api/notifications — the global push channel for
   // out-of-band events (caption ready, background job done, …). Replaces

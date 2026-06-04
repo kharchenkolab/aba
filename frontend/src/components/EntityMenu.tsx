@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Entity } from '../types'
+import { typeHasChatGesture, typeOf } from '../entityTypes'
 import './EntityMenu.css'
 
 interface Props {
@@ -15,8 +16,19 @@ interface Props {
 }
 
 // Pin = "promote this evidence into a Result" (lifecycle/promote.pin_evidence).
-// Result / Claim / Finding ARE the curation layer — they are not pinnable themselves.
-const PINNABLE = new Set(['figure', 'table', 'cell', 'note', 'narrative'])
+// Pinnability is declared per type in `creation.user_gestures_chat` of
+// the entity-type YAMLs (Phase 4.6) — entity_types/{figure,table,note,
+// narrative}.yaml include "pin"; result/claim/finding don't (they ARE
+// the curation layer, not pinnable themselves). The fallback below
+// covers the brief window before the catalog has loaded.
+const _PINNABLE_FALLBACK = new Set(['figure', 'table', 'cell', 'note', 'narrative'])
+function isPinnable(entityType: string): boolean {
+  // If the catalog isn't loaded yet, typeOf returns null — fall back
+  // to the legacy set so the UI doesn't briefly hide the affordance.
+  return typeOf(entityType)
+    ? typeHasChatGesture(entityType, 'pin')
+    : _PINNABLE_FALLBACK.has(entityType)
+}
 
 type Editing =
   | { kind: 'rename' }
@@ -152,7 +164,7 @@ export default function EntityMenu({ entity, onChange }: Props) {
             <div className="entity-menu__pop" style={popStyle} onClick={e => e.stopPropagation()}>
               <button onClick={() => setEditing({ kind: 'rename' })}>Rename…</button>
               <button onClick={() => setEditing({ kind: 'tags' })}>Edit tags…</button>
-              {PINNABLE.has(entity.type) && (
+              {isPinnable(entity.type) && (
                 <button onClick={pinToResult}>Pin</button>
               )}
               {canDownload && <button onClick={download}>Download…</button>}
