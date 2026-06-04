@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { EntityGlyph } from './icons'
-import './ProjectOverview.css'
+import '../bio/ProjectOverview.css'
 import './EntityMenu.css'
 
 export const TOP_N = 6
