@@ -51,3 +51,7 @@ advisors:
   # dataset is opened — see content/bio/advisors/runner.py.
   on_pin: []
   on_status_change: {}
+  # The AdvisorStrip on the frontend kicks off /advise ~4s after focus
+  # for types that opt into this. Used today by dataset (Explorer
+  # surfaces what's in it) and narrative (Stylist reviews the prose).
+  on_focus_auto: true

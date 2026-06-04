@@ -308,6 +308,10 @@ def entity_types_catalog():
             "status_states": list(t.status_model.get("states") or []),
             "ui": t.ui,
             "creation": t.creation,
+            # advisors block (incl. on_focus_auto flag) — drives
+            # AdvisorStrip's auto-advise-on-focus behaviour on the frontend
+            # instead of hardcoding "dataset || narrative" there.
+            "advisors": t.advisors,
         })
     return out
 

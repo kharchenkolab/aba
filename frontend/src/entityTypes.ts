@@ -28,6 +28,15 @@ export interface EntityTypeSpec {
     user_gestures_chat?: string[]
     user_gestures_focus?: string[]
   }
+  advisors?: {
+    on_create?: string[]
+    on_pin?: string[]
+    on_status_change?: Record<string, string[]>
+    /** Frontend auto-triggers /advise after focus for types that opt in.
+     *  Today: dataset (Explorer surfaces what's in it) + narrative
+     *  (Stylist reviews prose). Other types stay quiet on focus. */
+    on_focus_auto?: boolean
+  }
 }
 
 let _catalog: Record<string, EntityTypeSpec> | null = null
