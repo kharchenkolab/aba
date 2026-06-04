@@ -4629,9 +4629,47 @@ def _summ_result(result):
 
 
 def _dispatch_tool(name: str, input_: dict, ctx: dict | None, inspect) -> str:
+    # Phase 6.B: a migrated tool lives on the in-process aba_core MCP
+    # server. The agent still sees the bare name (TOOL_SCHEMAS hasn't
+    # been pruned yet), so we route to MCP by name lookup. Failure on
+    # the MCP route surfaces loudly — no fall-through to EXECUTORS, so
+    # a bug in the aba_core handler is visible rather than masked.
+    try:
+        from core.runtime.mcp import is_inprocess_tool, call as mcp_call
+        if is_inprocess_tool(name):
+            cancel_token = (ctx or {}).get("cancel_token")
+            _feedlog(f"TOOL {name} {_summ_input(name, input_)}  (route: aba_core)")
+            try:
+                decision, input_ = hooks.run_pre(name, input_, ctx)
+                if decision is not None:
+                    _feedlog(f"VETO {name} -> {decision.reason_code}")
+                    return json.dumps(hooks.deny_to_result(decision))
+                wire = mcp_call(f"aba_core:{name}", input_ or {},
+                                cancel_token=cancel_token)
+                # The gateway returns {status, content, is_error};
+                # `content` is the JSON-stringified tool result (FastMCP
+                # serializes the dict return value as text content).
+                # Parse it back so PostToolUse hooks see the real dict.
+                if isinstance(wire, dict) and "content" in wire and not wire.get("is_error"):
+                    try:
+                        result = json.loads(wire["content"])
+                    except Exception:  # noqa: BLE001
+                        result = wire    # leave as wire shape if non-JSON
+                else:
+                    result = wire
+                if isinstance(result, dict):
+                    hooks.run_post(name, input_, result, ctx)
+                _feedlog(f"DONE {name} -> {_summ_result(result)}")
+                return json.dumps(result)
+            except Exception as e:  # noqa: BLE001
+                _feedlog(f"ERROR {name} (aba_core) -> {e}")
+                return json.dumps({"error": str(e)})
+    except Exception:  # noqa: BLE001 — gateway import / lookup failed; let EXECUTORS handle it
+        pass
+
     fn = EXECUTORS.get(name)
     if fn is None:
-        # P3 #1 — try the MCP gateway. Tool names there are 'server:tool'.
+        # P3 #1 — try the MCP gateway for EXTERNAL servers ('server:tool').
         # Forward the cancel token so a Stop click can interrupt the call.
         try:
             from core.runtime.mcp import is_mcp_tool, call as mcp_call
