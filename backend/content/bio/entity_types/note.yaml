@@ -20,7 +20,9 @@ status_model:
 
 allowed_edges:
   out: [commented_on]   # a note can be attached to another entity
-  in:  []
+  # /api/messages/pin wraps a chat message into a Note + a Result that
+  # wraps the Note: result --includes/supports/wasDerivedFrom--> note.
+  in:  [supports, includes, wasDerivedFrom]
 
 focus:
   agent_sees: [title, text, parent_summary, tags, notes]

@@ -19,8 +19,11 @@ status_model:
     superseded: [archived]
 
 allowed_edges:
-  out: [wasGeneratedBy, wasDerivedFrom, supports, commented_on]
-  in:  [supports]
+  # produced_by mirrors figure.out — promote_to_result links evidence
+  # back to its parent Run (alias of wasGeneratedBy in PROV-O terms).
+  out: [wasGeneratedBy, produced_by, wasDerivedFrom, supports, commented_on]
+  # Same membership/derivation pattern as figure — tables wrapped in Results.
+  in:  [supports, includes, wasDerivedFrom]
 
 focus:
   agent_sees: [title, artifact_path, producing_code, parent_summary,

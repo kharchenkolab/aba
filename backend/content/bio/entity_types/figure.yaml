@@ -23,8 +23,16 @@ status_model:
     # not part of the everyday lifecycle.
 
 allowed_edges:
-  out: [wasGeneratedBy, wasDerivedFrom, variantOf, supports, commented_on]
-  in:  [supports]   # an evidence edge from Claim/Finding points at this figure
+  # out: PROV-O upstream + variantOf (scenario clones) + supports/
+  # commented_on (used as evidence/annotation target).
+  # produced_by is the bio-flavoured alias for wasGeneratedBy used by
+  # promote_to_result when an evidence figure links back to its parent Run.
+  out: [wasGeneratedBy, produced_by, wasDerivedFrom, variantOf,
+        supports, commented_on]
+  # in: Results wrap figures (includes, wasDerivedFrom, supports);
+  # Findings/Claims support figures directly; variantOf is symmetric
+  # (one figure points at another scenario figure).
+  in:  [supports, includes, wasDerivedFrom, variantOf]
 
 # --- B. Navigation + shared reference frame (navigate side) ---
 focus:
