@@ -661,17 +661,7 @@ def runs_refresh_manifest(rid: str):
     return {"ok": True}
 
 
-@app.post("/api/results/{rid}/regenerate-interpretation")
-def regenerate_interpretation(rid: str):
-    """Re-fire the auto-interpret background job for a single Result. Used when
-    the original schedule failed (e.g. the pre-fix sync-endpoint bug). Idempotent:
-    auto_interpret skips if interpretation_origin=='user' (the user has edited)."""
-    from content.bio.lifecycle.promote import auto_interpret
-    r = get_entity(rid)
-    if not r or r.get("type") != "result":
-        raise HTTPException(404, f"result {rid} not found")
-    text = auto_interpret(rid)
-    return {"ok": True, "wrote": bool(text), "preview": (text or "")[:200]}
+# Phase 8.B-2: /api/results/{rid}/regenerate-interpretation moved to bio.
 
 
 @app.post("/api/admin/backfill-tool-result-thread")
@@ -1225,42 +1215,7 @@ def _llm_figure_caption(artifact_path: str, producing_code: str,
     return caption_via_vision_llm(disk, producing_code, chat_context, title)
 
 
-class PinMessageRequest(BaseModel):
-    key: str                       # stable content hash from the client
-    text: str = ""
-    title: str = ""
-    image_urls: list[str] = []
-    thread_id: str = "default"     # the note belongs to the current thread
-
-
-@app.post("/api/messages/pin")
-def pin_message(req: PinMessageRequest):
-    """Pin a chat message: create a Note from the text+image_urls and wrap it in a
-    Result. Toggles by content key — re-pinning the same message archives its Note
-    (and the unpin logic in task #321 will handle the wrapping Result transitively)."""
-    from content.bio.graph.search import find_kept_note
-    from content.bio.lifecycle.promote import pin_evidence
-    from core.graph.entities import update_entity
-    existing = find_kept_note(req.key)
-    if existing:
-        update_entity(existing, status="archived")   # unpin (B will refine: also archive the wrapping Result)
-        return {"pinned": False}
-    tid = req.thread_id
-    if tid == "default":
-        from core.graph.threads import get_or_create_default_thread
-        tid = get_or_create_default_thread()
-    title = (req.title or req.text).strip().split("\n")[0][:70] or "Kept note"
-    out = pin_evidence(
-        thread_id=tid, target_result_id=None,
-        evidence_kind="note",
-        evidence_payload={
-            "title": title,
-            "metadata": {"source_key": req.key, "text": req.text, "image_urls": req.image_urls},
-        },
-        interpretation=req.text[:500] or None,   # message text doubles as the initial interpretation
-        origin="internal",
-    )
-    return {"pinned": True, "id": out["evidence_id"], "result_id": out["result_id"]}
+# Phase 8.B-2: /api/messages/pin + PinMessageRequest moved to bio.
 
 
 @app.get("/api/search")
@@ -1290,36 +1245,8 @@ def _resolve_thread(thread_id: str) -> str:
 # extract more entity-aware clusters into the same router.
 
 
-# ---------- Promotion / result chain ----------
-
-class PromoteFigureRequest(BaseModel):
-    interpretation: str
-    title: str | None = None
-
-
-class PromoteResultsRequest(BaseModel):
-    result_ids: list[str]
-    text: str
-    title: str | None = None
-
-
-class PromoteFindingsRequest(BaseModel):
-    finding_ids: list[str]
-    text: str
-    title: str | None = None
-
-
-@app.post("/api/entities/{figure_id}/promote-to-result")
-async def promote_to_result(figure_id: str, req: PromoteFigureRequest):
-    try:
-        rid = promote_figure_to_result(figure_id, req.interpretation, req.title)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    # Fire the Skeptic asynchronously so the user gets the result back
-    # promptly. The note shows up when they next reload the advisor rail
-    # (or when the focus changes — the rail re-fetches).
-    asyncio.get_event_loop().run_in_executor(None, skeptic_review, rid)
-    return get_entity(rid)
+# Phase 8.B-2: /api/entities/{figure_id}/promote-to-result + PromoteFigureRequest /
+# PromoteResultsRequest / PromoteFindingsRequest moved to bio.
 
 
 @app.get("/api/entities/{entity_id}/advisor-notes")
@@ -1408,116 +1335,9 @@ def context_suggestion_reject_all():
     return {"rejected": reject_all_pending_suggestions()}
 
 
-@app.post("/api/findings")
-def create_finding(req: PromoteResultsRequest):
-    try:
-        fid = promote_results_to_finding(req.result_ids, req.text, req.title)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return get_entity(fid)
-
-
-# NOTE: a dead-shadowed `@app.post("/api/claims")` (using
-# PromoteFindingsRequest, i.e. {finding_ids, text, title}) used to live
-# here. It was never reached at runtime — FastAPI matches the FIRST
-# registered handler for a (method, path) pair, and the legitimate
-# claim_create (with ClaimRequest) registered earlier. Removed during
-# Phase 8.A to avoid confusing the bio router include. The underlying
-# promote_findings_to_claim() in content/bio/lifecycle/promote.py is
-# kept for future direct-call use.
-
-
-class NarrativeRequest(BaseModel):
-    title: str
-    text: str = ""
-
-
-@app.post("/api/narratives")
-def create_narrative(req: NarrativeRequest):
-    eid = create_entity(
-        entity_type="narrative",
-        title=req.title or "Untitled section",
-        metadata={"text": req.text},
-    )
-    return get_entity(eid)
-
-
-class FindingResultRequest(BaseModel):
-    result_id: str
-
-
-class DraftFindingRequest(BaseModel):
-    text: str = ""                 # concatenated text of the selected messages
-    title_hint: str = ""           # e.g. the first user message in the selection
-    image_urls: list[str] = []     # figure/plot urls seen in the selection
-
-
-@app.post("/api/findings/draft")
-def draft_finding(req: DraftFindingRequest):
-    """Selection-to-finding draft (M3). Heuristic for now (no tokens): title
-    from the ask, summary from the discussion, evidence resolved from the
-    figures referenced in the selection. The user reviews before saving."""
-    from core.graph.entities import list_entities as _le
-    text = req.text.strip()
-    first = (req.title_hint or text).strip().split("\n")[0]
-    title = (first[:80] + ("…" if len(first) > 80 else "")) or "Untitled finding"
-    summary = text[:600] + ("…" if len(text) > 600 else "")
-    urls = set(req.image_urls or [])
-    evidence = []
-    if urls:
-        for e in _le():
-            if e.get("artifact_path") in urls and e["type"] in ("figure", "table"):
-                evidence.append({"id": e["id"], "type": e["type"], "title": e["title"]})
-    return {"title": title, "summary": summary, "evidence": evidence, "caveats": []}
-
-
-class CreateFindingRequest(BaseModel):
-    title: str
-    summary: str = ""
-    evidence_ids: list[str] = []
-    caveats: list[dict] = []
-    status: str = "candidate"
-
-
-@app.post("/api/findings/from-draft")
-def create_finding_endpoint(req: CreateFindingRequest):
-    from content.bio.lifecycle.promote import create_finding_from_draft
-    fid = create_finding_from_draft(req.title, req.summary, req.evidence_ids,
-                                    req.caveats, req.status)
-    return get_entity(fid)
-
-
-class FindingFieldsRequest(BaseModel):
-    summary: str | None = None
-    caveats: list[dict] | None = None
-    status: str | None = None
-    title: str | None = None
-
-
-@app.post("/api/findings/{finding_id}/fields")
-def finding_fields(finding_id: str, req: FindingFieldsRequest):
-    from content.bio.lifecycle.promote import set_finding_fields
-    try:
-        return set_finding_fields(finding_id, summary=req.summary,
-                                  caveats=req.caveats, status=req.status, title=req.title)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/findings/{finding_id}/add-result")
-def finding_add_result(finding_id: str, req: FindingResultRequest):
-    try:
-        return add_result_to_finding(finding_id, req.result_id)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/findings/{finding_id}/remove-result")
-def finding_remove_result(finding_id: str, req: FindingResultRequest):
-    try:
-        return remove_result_from_finding(finding_id, req.result_id)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+# Phase 8.B-2: /api/findings/*, /api/narratives, + their Pydantic models
+# (NarrativeRequest, FindingResultRequest, DraftFindingRequest,
+# CreateFindingRequest, FindingFieldsRequest) moved to bio.
 
 
 @app.get("/api/entities/{entity_id}/edges")
@@ -1787,46 +1607,7 @@ async def upload_external_result(
     return get_entity(out["result_id"])
 
 
-# ── NEW pin endpoints (A2) ─────────────────────────────────────────────────────
-
-@app.post("/api/entities/{entity_id}/pin")
-def pin_entity_to_result(entity_id: str):
-    """EntityMenu Pin: promote this existing evidence entity (figure/table/cell/
-    note/narrative) into a Result. Result is created immediately with a
-    ✨-placeholder interpretation; a background job (A3) replaces it with the
-    Guide's adjacent narration."""
-    from content.bio.lifecycle.promote import pin_evidence, auto_interpret
-    ent = get_entity(entity_id)
-    if not ent:
-        raise HTTPException(404, f"entity {entity_id} not found")
-    if ent["type"] in ("result", "claim", "finding"):
-        raise HTTPException(400, f"{ent['type']} is curation; not pinnable")
-    tid = (ent.get("metadata") or {}).get("thread_id") or ""
-    out = pin_evidence(
-        thread_id=tid, target_result_id=None,
-        evidence_kind=ent["type"], evidence_id=entity_id,
-        interpretation=None, origin=(ent.get("metadata") or {}).get("origin", "internal"),
-    )
-    # NB: this endpoint is SYNC, so asyncio.get_event_loop() doesn't work here
-    # (FastAPI runs it on a worker thread w/o a loop). Use a plain Thread to fire
-    # the background interpretation job — fire-and-forget, daemon so it doesn't
-    # block shutdown. The same pattern works in async endpoints too.
-    import threading
-    threading.Thread(target=auto_interpret, args=(out["result_id"],), daemon=True).start()
-    return get_entity(out["result_id"])
-
-
-@app.post("/api/entities/{entity_id}/unpin")
-def unpin_entity(entity_id: str):
-    """Inverse of /pin — applies the unpin branching (B / #321): archive the
-    wrapping Result(s) if this is the only evidence, else just remove this
-    evidence as a member. See lifecycle.promote.unpin_evidence."""
-    from content.bio.lifecycle.promote import unpin_evidence
-    ent = get_entity(entity_id)
-    if not ent:
-        raise HTTPException(404, f"entity {entity_id} not found")
-    tid = (ent.get("metadata") or {}).get("thread_id")
-    return unpin_evidence(entity_id, thread_id=tid)
+# Phase 8.B-2: /api/entities/{id}/pin + /api/entities/{id}/unpin moved to bio.
 
 
 @app.post("/api/results/{rid}/upload-evidence")
