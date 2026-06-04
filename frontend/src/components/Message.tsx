@@ -256,6 +256,12 @@ function FigurePin({ entity, isPinned, onPin }: {
   )
 }
 
+// Auto-fire countdown for the active plan card. The Go button has a 60s
+// default: if the biologist doesn't intervene, the plan runs on its own. A
+// clock-style ring beside Go shows the time draining away.
+const PLAN_AUTOFIRE_MS = 60_000
+const PLAN_TICK_MS = 250
+
 function PlanCard({ block, active, onGo, onAdjust }: {
   block: Extract<Block, { type: 'plan' }>
   active: boolean; onGo?: (saveAsRun: boolean) => void; onAdjust?: () => void
@@ -263,6 +269,47 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   // Pre-checked: by default a plan's outputs group into one Run (see open_run).
   // Unchecking rides along on the Go message as a hint to skip it.
   const [saveAsRun, setSaveAsRun] = useState(true)
+  // Remaining time on the auto-fire timer (ms). Drives the ring + auto-fire.
+  const [remainingMs, setRemainingMs] = useState(PLAN_AUTOFIRE_MS)
+  // Refs let the interval read the *latest* saveAsRun / onGo without
+  // re-arming the timer on every checkbox toggle or parent re-render.
+  const saveAsRunRef = useRef(saveAsRun); saveAsRunRef.current = saveAsRun
+  const onGoRef = useRef(onGo); onGoRef.current = onGo
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Guard against double-firing (manual click racing the final tick) and
+  // against firing after the card unmounts.
+  const firedRef = useRef(false)
+
+  const stopTimer = () => {
+    if (intervalRef.current != null) { clearInterval(intervalRef.current); intervalRef.current = null }
+  }
+  // Fire the plan exactly once, honoring the current "Save as a run" choice.
+  const fire = () => {
+    if (firedRef.current) return
+    firedRef.current = true
+    stopTimer()
+    onGoRef.current?.(saveAsRunRef.current)
+  }
+  // Adjust (or anything that drops out of the active state) cancels the timer.
+  const adjust = () => { stopTimer(); onAdjust?.() }
+
+  // Arm the countdown whenever this becomes the active plan with a Go handler.
+  // Keyed on `hasGo` (a stable boolean) rather than `onGo`'s identity so an
+  // inline parent callback doesn't restart the timer on every render.
+  const hasGo = !!onGo
+  useEffect(() => {
+    if (!active || !hasGo) return
+    firedRef.current = false
+    setRemainingMs(PLAN_AUTOFIRE_MS)
+    const startedAt = Date.now()
+    intervalRef.current = setInterval(() => {
+      const left = Math.max(0, PLAN_AUTOFIRE_MS - (Date.now() - startedAt))
+      setRemainingMs(left)
+      if (left <= 0) fire()
+    }, PLAN_TICK_MS)
+    return stopTimer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, hasGo])
   // T2.5: steps can be strings (legacy) or PlanStepShape objects with
   // title/description/expected_outputs/skill/parameters.
   const steps = (Array.isArray(block.steps) ? block.steps : []) as (
@@ -326,8 +373,24 @@ function PlanCard({ block, active, onGo, onAdjust }: {
       ))}
       {active && (
         <div className="plan-card__actions">
-          <button className="plan-card__go" onClick={() => onGo?.(saveAsRun)}>Go</button>
-          <button className="plan-card__adjust" onClick={onAdjust}>Adjust…</button>
+          <button className="plan-card__go" onClick={fire}>Go</button>
+          {hasGo && (() => {
+            const R = 6, C = 2 * Math.PI * R
+            const frac = Math.max(0, Math.min(1, remainingMs / PLAN_AUTOFIRE_MS))
+            const secs = Math.ceil(remainingMs / 1000)
+            return (
+              <span className="plan-card__timer" role="timer"
+                    title={`Runs automatically in ${secs}s — click Go to run now, or Adjust to cancel`}
+                    aria-label={`Plan runs automatically in ${secs} seconds`}>
+                <svg viewBox="0 0 16 16" width="16" height="16">
+                  <circle className="plan-card__timer-track" cx="8" cy="8" r={R} />
+                  <circle className="plan-card__timer-fill" cx="8" cy="8" r={R}
+                          style={{ strokeDasharray: C, strokeDashoffset: C * (1 - frac) }} />
+                </svg>
+              </span>
+            )
+          })()}
+          <button className="plan-card__adjust" onClick={adjust}>Adjust…</button>
           <label className="plan-card__saverun"
                  title="Group this plan's outputs into one Run in the project tree">
             <input type="checkbox" checked={saveAsRun}
