@@ -181,6 +181,26 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6G_six_plan_etc_tools_registered():
+    """Phase 6.G: present_plan, ask_clarification, create_scenario,
+    write_memory, restart_kernel, run_nextflow."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {
+        "aba_core:present_plan",
+        "aba_core:ask_clarification",
+        "aba_core:create_scenario",
+        "aba_core:write_memory",
+        "aba_core:restart_kernel",
+        "aba_core:run_nextflow",
+    }
+    actual = set(out["tools"])
+    assert expected.issubset(actual), f"missing: {expected - actual}"
+    assert len(actual) >= 44, f"expected >=44 tools, got {len(actual)}"
+    g["shutdown"]()
+
+
 def test_6F_five_file_io_tools_registered():
     """Phase 6.F: list_data_files, inspect_upload, write/edit/read_file."""
     g = _fresh_gateway()
@@ -416,6 +436,7 @@ def main() -> int:
         test_6D_thirteen_curation_tools_registered,
         test_6E_ten_discovery_tools_registered,
         test_6F_five_file_io_tools_registered,
+        test_6G_six_plan_etc_tools_registered,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []
