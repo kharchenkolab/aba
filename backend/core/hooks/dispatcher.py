@@ -9,14 +9,18 @@ Handlers run synchronously, ordered by `priority` (low first). Errors
 are logged and swallowed — one bad hook must not break the agent loop.
 
 Events used today (the names matter — handlers depend on them):
-    on_post_tool   — fired after each tool result is appended; ctx has
-                     tool_name, tool_input, result_obj, focus_entity_id,
-                     analysis_ctx, thread_id, new_entities (handlers may
-                     append)
-    on_stop        — fired after the agent loop exits; ctx has session_id,
-                     focus_entity_type, total_tool_calls, history,
-                     thread_id, focus_entity_id, suggestion (handler may
-                     set)
+    on_post_tool      — fired after each tool result is appended; ctx has
+                        tool_name, tool_input, result_obj, focus_entity_id,
+                        analysis_ctx, thread_id, new_entities (handlers may
+                        append)
+    on_stop           — fired after the agent loop exits; ctx has session_id,
+                        focus_entity_type, total_tool_calls, history,
+                        thread_id, focus_entity_id, suggestion (handler may
+                        set)
+    on_project_open   — fired when a project is opened (set_current); ctx
+                        has pid. Handlers must be cheap + idempotent —
+                        they run on every project switch. Bio uses this
+                        for display-path backfill.
 
 Adding a new event = pick a name and document it here.
 """

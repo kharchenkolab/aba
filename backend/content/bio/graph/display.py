@@ -44,6 +44,18 @@ def backfill_missing_display_paths() -> int:
     return n
 
 
+def _on_project_open(ctx: dict) -> None:
+    """Hook handler: backfill display_path on every project switch.
+    Cheap + idempotent. Registered with core.hooks.dispatcher from
+    content/bio/__init__.py (Phase C.4 of misc/modularity_audit.md)."""
+    backfill_missing_display_paths()
+
+
+# Self-register at module import time; the bio package __init__ imports
+# this module via .files.layout which doesn't pull display.py directly,
+# so registration is wired explicitly from content/bio/__init__.py.
+
+
 def recompute_many(entity_ids: Iterable[str]) -> int:
     n = 0
     for eid in entity_ids:
