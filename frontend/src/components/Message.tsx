@@ -165,6 +165,23 @@ function toolDoneLabel(name: string) {
   }
   return labels[name] ?? name.replace(/_/g, ' ')
 }
+// What specific thing did this tool act on? Shown as a dimmer suffix after
+// the verb (e.g. "read the recipe — pagoda2-qc", "tools ready — scvi-tools")
+// so the chat reads as a narrative of which recipes were loaded and which
+// capabilities were prepared, not a generic stream of "Skill / Skill / Skill".
+// Scoped tightly: only the two surfaces PK asked for. Easy to extend.
+function toolDoneDetail(name: string, input: Record<string, unknown> | undefined): string {
+  if (!input || typeof input !== 'object') return ''
+  const get = (k: string) => typeof input[k] === 'string' ? (input[k] as string) : ''
+  if (name === 'Skill' || name === 'read_skill') {
+    return get('skill') || get('name')
+  }
+  if (name === 'ensure_capability') {
+    return get('name') || get('capability')
+  }
+  return ''
+}
+
 function toolRunningLabel(name: string) {
   const labels: Record<string, string> = {
     list_data_files: 'listing data files',
@@ -599,6 +616,10 @@ function ToolLine({ block, result, currentRunId }: {
           {done
             ? (hasError ? `${toolDoneLabel(block.name)} — error` : toolDoneLabel(block.name))
             : `${toolRunningLabel(block.name)}…`}
+          {(() => {
+            const detail = toolDoneDetail(block.name, block.input as Record<string, unknown> | undefined)
+            return detail ? <span className="tool-line__detail"> — {detail}</span> : null
+          })()}
         </span>
         {!done && block.progress && (
           <span className="tool-line__progress">{block.progress}</span>
