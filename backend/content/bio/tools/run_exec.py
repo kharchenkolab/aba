@@ -11,6 +11,7 @@ All non-stdlib imports are kept lazy inside the functions — matches the
 pattern in the rest of bio/tools and keeps module-import cost low.
 """
 from __future__ import annotations
+import uuid
 from typing import Optional
 
 

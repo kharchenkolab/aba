@@ -17,6 +17,16 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+# Cross-cluster helpers — _ctx_thread is in ctx_read (alongside the other
+# small ctx helpers); register_dataset / promote_to_result / create_claim /
+# open_run / close_run all need it for thread_id resolution. Imported
+# explicitly so the bare-name reference in this file resolves.
+# open_run_tool also needs run_exec's kernel-CWD helpers (it shifts the
+# kernel's cwd into the new run's directory + emits the prior-files
+# preamble — same shape as run_python's first call after a cwd switch).
+from .ctx_read import _ctx_thread
+from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
+
 
 def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Keep a file/dir as a reusable, content-addressed reference (P4)."""
