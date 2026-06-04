@@ -218,6 +218,16 @@
 .plan-card__saverun input { margin: 0; cursor: pointer; }
 .plan-card__saverun:hover { color: var(--text-3); }
 
+/* Auto-fire countdown ring beside Go: a clock-style arc that drains from a
+   full circle (60s) to empty (0s), at which point the plan fires itself. */
+.plan-card__timer { display: inline-flex; align-items: center; flex-shrink: 0; }
+.plan-card__timer svg { transform: rotate(-90deg); transform-origin: center; }
+.plan-card__timer-track { fill: none; stroke: var(--border); stroke-width: 2.5; opacity: 0.6; }
+.plan-card__timer-fill {
+  fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
 .msg-error {
   margin: 4px 0; padding: 7px 10px;
   background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px;
