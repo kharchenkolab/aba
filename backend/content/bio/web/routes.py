@@ -601,32 +601,10 @@ def pin_message(req: PinMessageRequest):
 # ============================================================================
 
 
-# Path-collision helpers. TODO: extract to core/data/utils.py — these are
-# generic enough that platform code could use them too. For now they live
-# here as locals; main.py keeps a copy for its remaining upload handlers.
-def _unique_path(dest: Path) -> Path:
-    """Suffix the filename if it already exists in the dir."""
-    if not dest.exists():
-        return dest
-    stem, suf = dest.stem, dest.suffix
-    i = 1
-    while True:
-        candidate = dest.parent / f"{stem}_{i}{suf}"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
-def _unique_dir_path(p: Path) -> Path:
-    """Sibling-name collisions: append ' (2)', ' (3)', … until unique."""
-    if not p.exists():
-        return p
-    parent, stem = p.parent, p.name
-    for n in range(2, 1000):
-        cand = parent / f"{stem} ({n})"
-        if not cand.exists():
-            return cand
-    raise RuntimeError(f"too many name collisions for {stem!r}")
+# Path-collision helpers now live in core.data.paths.unique_path /
+# unique_dir_path (Block 1B — were duplicated between main.py and here).
+from core.data.paths import unique_path as _unique_path  # noqa: E402
+from core.data.paths import unique_dir_path as _unique_dir_path  # noqa: E402
 
 
 def _refresh_dataset_layout_hint(bundle: Path) -> str:
