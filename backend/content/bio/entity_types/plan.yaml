@@ -25,7 +25,7 @@ allowed_edges:
   in:  []   # plans aren't first-class edge targets
 
 focus:
-  card_builder: bio.cards.plan.build_plan_card
+  card_builder: content.bio.cards.plan.build_plan_card
   agent_sees: [title, steps_summary, status_label, parent_summary,
                tags, notes]
 

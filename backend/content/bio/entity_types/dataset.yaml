@@ -25,7 +25,6 @@ allowed_edges:
   in:  [used]   # an Analysis run that used this dataset
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, artifact_path, layout_hint, source, organism,
                size_bytes, file_count, description, tags, notes]
 

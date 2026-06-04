@@ -43,7 +43,6 @@ focus:
   # renderer (registered separately via register_thread_context_renderer
   # in Phase C.3) renders the per-thread firehose (pinned figures,
   # claims, open questions).
-  card_builder: bio.cards.thread.render_thread_context
   agent_sees: [title, question, lifecycle, open_questions,
                pinned_count, claim_count, recent_outputs]
 

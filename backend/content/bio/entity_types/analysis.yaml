@@ -34,7 +34,7 @@ allowed_edges:
   in:  [wasGeneratedBy]   # figures/tables wasGeneratedBy this Run
 
 focus:
-  card_builder: bio.cards.analysis.build_analysis_card
+  card_builder: content.bio.cards.analysis.build_analysis_card
   agent_sees: [title, producing_code, producing_params, parent_summary,
                run_state, run_outputs_summary, tags, notes]
 

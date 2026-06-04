@@ -44,7 +44,6 @@ allowed_edges:
   in:  [supports]    # Result → supports → this claim (the canonical edge)
 
 focus:
-  card_builder: bio.cards.generic.build_generic_card
   agent_sees: [title, statement, confidence, evidence_summary,
                caveats, alternatives, status_log_tail, tags, notes]
 
