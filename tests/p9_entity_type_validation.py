@@ -72,16 +72,17 @@ def test_good_create_no_warning():
     assert not msgs, f"unexpected warnings: {msgs}"
 
 
-def test_bad_create_warns_on_missing_artifact_path():
-    h = _capture()
+def test_bad_create_raises_on_missing_artifact_path():
+    """WU-2 flip (was warning-only through Phase 4.5): a missing
+    required field now raises ValueError, which the FastAPI boundary
+    handler converts to HTTP 422."""
     try:
-        # figure's schema.required = [title, artifact_path]; omit the latter.
         create_entity(entity_type="figure", title="missing-artifact")
-    finally:
-        _drop(h)
-    msgs = [r.getMessage() for r in h.records]
-    assert any("artifact_path" in m and "figure" in m for m in msgs), \
-        f"expected a warning about missing artifact_path, got: {msgs}"
+    except ValueError as e:
+        assert "artifact_path" in str(e) and "figure" in str(e), \
+            f"expected msg about missing artifact_path, got: {e}"
+        return
+    raise AssertionError("expected ValueError, got no exception")
 
 
 def test_unknown_type_silently_skipped():
@@ -111,17 +112,17 @@ def test_good_edge_no_warning():
     assert not msgs, f"good edge should not warn: {msgs}"
 
 
-def test_bad_edge_warns():
-    # Workspace.allowed_edges.out = [] — supports is not in it.
+def test_bad_edge_raises():
+    """WU-2 flip: an undeclared edge now raises ValueError instead of
+    warning. Workspace.allowed_edges.out = [] — supports is not in it."""
     cid = create_entity(entity_type="claim", title="c2",
                         metadata={"statement": "x", "confidence": "preliminary"})
-    h = _capture()
     try:
         add_edge("workspace", cid, "supports")
-    finally:
-        _drop(h)
-    msgs = [r.getMessage() for r in h.records if "workspace" in r.getMessage()]
-    assert msgs, "expected workspace-out-supports warning"
+    except ValueError as e:
+        assert "workspace" in str(e), f"expected workspace error, got: {e}"
+        return
+    raise AssertionError("expected ValueError, got no exception")
 
 
 def test_unknown_endpoint_silently_skipped():
@@ -138,17 +139,18 @@ def test_unknown_endpoint_silently_skipped():
 # --- Phase 4.4: status-transition validation ---
 
 
-def test_status_transition_to_undeclared_state_warns():
+def test_status_transition_to_undeclared_state_raises():
+    """WU-2 flip: an undeclared status transition raises ValueError."""
     eid = create_entity(entity_type="figure", title="trans1",
                         artifact_path="/x/y.png")
-    h = _capture()
     try:
         update_entity(eid, status="completely_bogus_state")
-    finally:
-        _drop(h)
-    msgs = [r.getMessage() for r in h.records
-            if "status" in r.getMessage() or "transition" in r.getMessage()]
-    assert msgs, "expected a warning about the bogus target state"
+    except ValueError as e:
+        s = str(e)
+        assert "status" in s or "transition" in s or "bogus" in s, \
+            f"expected msg about the bogus target state, got: {e}"
+        return
+    raise AssertionError("expected ValueError, got no exception")
 
 
 def test_status_transition_declared_silent():
@@ -179,26 +181,26 @@ def test_archive_entity_validates_silent():
 
 
 def test_workspace_cannot_transition():
-    # workspace.yaml status_model has states=['active'], transitions={}.
-    # Any status update should be flagged.
-    h = _capture()
+    """WU-2 flip: workspace.yaml has states=['active'], transitions={}.
+    Any status update raises ValueError."""
     try:
         update_entity("workspace", status="archived")
-    finally:
-        _drop(h)
-    msgs = [r.getMessage() for r in h.records if "workspace" in r.getMessage()]
-    assert msgs, "expected warning that workspace can't transition"
+    except ValueError as e:
+        assert "workspace" in str(e), \
+            f"expected workspace transition error, got: {e}"
+        return
+    raise AssertionError("expected ValueError, got no exception")
 
 
 def main() -> int:
     tests = [
         test_good_create_no_warning,
-        test_bad_create_warns_on_missing_artifact_path,
+        test_bad_create_raises_on_missing_artifact_path,
         test_unknown_type_silently_skipped,
         test_good_edge_no_warning,
-        test_bad_edge_warns,
+        test_bad_edge_raises,
         test_unknown_endpoint_silently_skipped,
-        test_status_transition_to_undeclared_state_warns,
+        test_status_transition_to_undeclared_state_raises,
         test_status_transition_declared_silent,
         test_archive_entity_validates_silent,
         test_workspace_cannot_transition,

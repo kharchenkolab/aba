@@ -29,10 +29,14 @@ def create_entity(
     metadata: Optional[dict] = None,
     entity_id: Optional[str] = None,
 ) -> str:
-    # Phase 4.5 — schema validation. Warning-only initially; log via the
-    # entity_types registry but don't raise. After a week of real use the
-    # caller can flip to 422 (a tighter contract for new content packs).
-    # Unknown types pass through (legacy data, synthetic test types).
+    # WU-2 (post-Phase-4.5): schema validation is now HARD-REJECT, not
+    # warning-only. p10 confirmed every add_edge call site is declared
+    # in the YAMLs, and the one schema-violating create_entity call
+    # site (run_register_dataset for by-reference datasets) was fixed
+    # alongside this flip. New violations raise ValueError — the bio
+    # router converts that to a 422 at the boundary; lifecycle code
+    # surfaces it directly. Unknown types still pass through (legacy
+    # data, synthetic test types).
     try:
         from core.entity_types import check_create_fields
         warnings = check_create_fields(entity_type, {
@@ -44,10 +48,10 @@ def create_entity(
             "scenario_of": scenario_of,
             "metadata": metadata,
         })
-        for msg in warnings:
-            _log.warning("entity_types: %s", msg)
-    except Exception:  # noqa: BLE001 — validation is advisory, never blocks
-        pass
+    except Exception:  # noqa: BLE001 — registry import failure ≠ data violation
+        warnings = []
+    if warnings:
+        raise ValueError("entity_types: " + "; ".join(warnings))
     eid = entity_id or gen_entity_id(prefix=entity_type[:3])
     now = _utcnow()
     with _conn() as c:
@@ -173,14 +177,18 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
             from core.lifecycle import validate_transition
             current = get_entity(entity_id)
             if current is not None:
-                for msg in validate_transition(
+                msgs = validate_transition(
                     entity_type=current["type"],
                     from_status=current.get("status"),
                     to_status=fields["status"],
-                ):
-                    _log.warning("entity_types: %s", msg)
-        except Exception:  # noqa: BLE001 — validation never blocks
-            pass
+                )
+        except Exception:  # noqa: BLE001 — registry import failure ≠ data violation
+            msgs = []
+        if msgs:
+            # WU-2: hard-reject — same flip as schema + edge validators.
+            # An undeclared transition either reveals a YAML gap (add the
+            # transition) or a buggy update (surface for the caller).
+            raise ValueError("entity_types: " + "; ".join(msgs))
     allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path",
                "display_path", "producing_code", "producing_params"}
     sets = []
@@ -210,20 +218,22 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
 
 def archive_entity(entity_id: str) -> Optional[dict]:
     """Soft-delete: mark as archived and record deleted_at."""
-    # Phase 4.4 — warn if 'archived' isn't a declared state for this type
-    # or the current → archived transition isn't declared. Doesn't block.
+    # WU-2: hard-reject if 'archived' isn't a declared state for this
+    # type or the current → archived transition isn't declared.
     try:
         from core.lifecycle import validate_transition
         current = get_entity(entity_id)
+        msgs = []
         if current is not None:
-            for msg in validate_transition(
+            msgs = validate_transition(
                 entity_type=current["type"],
                 from_status=current.get("status"),
                 to_status="archived",
-            ):
-                _log.warning("entity_types: %s", msg)
-    except Exception:  # noqa: BLE001
-        pass
+            )
+    except Exception:  # noqa: BLE001 — registry import failure ≠ data violation
+        msgs = []
+    if msgs:
+        raise ValueError("entity_types: " + "; ".join(msgs))
     now = _utcnow()
     with _conn() as c:
         cur = c.execute(
