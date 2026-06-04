@@ -80,12 +80,15 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                      outdir: str | None = None,
                      timeout_s: int | None = None,
                      aba_ctx_id: str | None = None) -> dict:
-        """Launch an nf-core pipeline. Long-running — streams phase
-        lines while it executes and honours cancel-on-Stop."""
-        from core.runtime.tool_ctx import peek_ctx
+        """Launch an nf-core pipeline. Long-running — uses in_tool_ctx
+        so phase lines stream to the chat while it executes and
+        honours cancel-on-Stop."""
+        from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_nextflow as _impl
-        return _impl(
-            {"pipeline": pipeline, "revision": revision, "profile": profile,
-             "params": params, "outdir": outdir, "timeout_s": timeout_s},
-            peek_ctx(aba_ctx_id),
-        )
+        with in_tool_ctx(aba_ctx_id) as ctx:
+            return _impl(
+                {"pipeline": pipeline, "revision": revision,
+                 "profile": profile, "params": params, "outdir": outdir,
+                 "timeout_s": timeout_s},
+                ctx,
+            )

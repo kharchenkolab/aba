@@ -71,6 +71,43 @@ def pop_ctx(cid: Optional[str]) -> dict:
         return _STORE.pop(cid, {}) or {}
 
 
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def in_tool_ctx(aba_ctx_id: Optional[str]):
+    """Peek the stashed ctx and bind any thread-local state derived
+    from it (today: the progress sink) for the duration of the with
+    block. Restores on exit so we don't leak the binding into the
+    next call on the same gateway thread.
+
+    Why this exists: when the bio dispatcher routes a tool to aba_core,
+    the handler runs on the gateway's background asyncio thread, NOT
+    on the worker thread that bound the progress sink. Without rebinding
+    here, progress.emit() calls from deep inside long-running tools
+    (ensure_capability installs, run_python/run_r kernels, nextflow)
+    are no-ops and the chat goes silent during multi-minute work.
+
+    Handlers that don't emit progress can still use peek_ctx directly
+    — this CM is a superset, useful when you don't want to think
+    about whether your handler might trigger emit() somewhere
+    transitively."""
+    from core.runtime import progress as _progress
+    ctx = peek_ctx(aba_ctx_id)
+    prev_q = _progress.current_sink()
+    pq = ctx.get("progress_q")
+    if pq is not None:
+        _progress.set_sink(pq)
+    try:
+        yield ctx
+    finally:
+        if pq is not None:
+            if prev_q is None:
+                _progress.clear_sink()
+            else:
+                _progress.set_sink(prev_q)
+
+
 def _reset_for_testing() -> None:
     """Clear the store between tests."""
     with _LOCK:
