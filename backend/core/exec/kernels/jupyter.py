@@ -164,6 +164,22 @@ def _setup_code(cwd: str) -> str:
     )
 
 
+def _kernel_threads() -> int:
+    """Thread count for the BLAS/OMP pools inside a kernel. Default
+    ``min(cpu_count, 8)`` — enough to keep numpy/torch/R BLAS and host-side data
+    loading multithreaded, capped so a fat box doesn't oversubscribe (64+ OMP
+    threads on small matrices is slower, not faster, and collides with DataLoader
+    workers). Override with ``ABA_KERNEL_THREADS``."""
+    import os
+    override = os.environ.get("ABA_KERNEL_THREADS")
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
+    return max(1, min(os.cpu_count() or 4, 8))
+
+
 def _kernel_env(lang: str, cwd: str) -> dict:
     """Environment for the kernel subprocess. Exposes DATA_DIR / WORK_DIR /
     ARTIFACTS_DIR as real env vars so Sys.getenv() (R) and os.environ (Python)
@@ -172,13 +188,24 @@ def _kernel_env(lang: str, cwd: str) -> dict:
     tools-env on LD_LIBRARY_PATH + PATH so R-package .so's resolve their conda
     system-lib deps (e.g. igraph → libglpk.so.40) — the kernel isn't conda-
     activated, so without this, packages that load via `micromamba run` fail to
-    dlopen in run_r (r_provisioning.md F5)."""
+    dlopen in run_r (r_provisioning.md F5).
+
+    Also pins the BLAS/OMP thread pools (OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS).
+    torch/numpy read these at import, so we set them at kernel LAUNCH — overriding
+    any inherited ``*_NUM_THREADS=1`` (jupyter, jax, and some launchers export 1,
+    which is what pegged scvi training to a single core while the GPU starved).
+    Set unconditionally so the kernel is deterministic regardless of what the
+    parent process exported; tune with ABA_KERNEL_THREADS."""
     import os
     data_dir, artifacts_dir = _project_data_artifacts()
     env = dict(os.environ)
     env["DATA_DIR"] = str(data_dir)
     env["ARTIFACTS_DIR"] = str(artifacts_dir)
     env["WORK_DIR"] = str(cwd)
+    nthreads = str(_kernel_threads())
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        env[var] = nthreads
     if lang == "r":
         tenv = tools_env()
         env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")

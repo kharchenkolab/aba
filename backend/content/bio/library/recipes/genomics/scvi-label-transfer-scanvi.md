@@ -36,7 +36,10 @@ reference/query/technology split during scVI setup).
   scVI (tutorial: `max_epochs=20, n_samples_per_label=100`). Subsampling per label
   keeps abundant types from dominating the classifier.
 - **hardware** — shorter than scVI but still **background-job** territory; GPU helps,
-  CPU OK for small data.
+  CPU OK for small data. So the GPU isn't starved by one CPU core, pass the same
+  loader/batch/precision flags shown in **scvi-integration** step 4 to `train()`:
+  `scvi.settings.dl_num_workers = 4` and
+  `train(accelerator="gpu", devices=1, batch_size=1024, load_sparse_tensor=True, precision="16-mixed")`.
 
 ## Procedure
 

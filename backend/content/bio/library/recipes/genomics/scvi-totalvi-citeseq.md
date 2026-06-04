@@ -37,7 +37,9 @@ protein counts**.
   background; usually leave the default.
 - **epochs / hardware** — heavier than scVI (two modalities). **Background job**;
   GPU strongly preferred for real datasets, CPU OK only for tiny test data. Use
-  `train(early_stopping=True)`.
+  `train(early_stopping=True)` plus the GPU-utilization flags from **scvi-integration**
+  step 4 (`scvi.settings.dl_num_workers = 4`; `train(..., batch_size=1024,
+  load_sparse_tensor=True, precision="16-mixed")`) so one CPU core doesn't bottleneck it.
 
 ## Procedure
 
