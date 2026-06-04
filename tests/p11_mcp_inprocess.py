@@ -181,6 +181,36 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     g["shutdown"]()
 
 
+def test_6D_thirteen_curation_tools_registered():
+    """Phase 6.D: curation cluster — pin/promote/findings/claims, dataset
+    ops (register/add/remove), run lifecycle (open/close), reference
+    data (register/find), annotate, archive."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {
+        "aba_core:pin_entity",
+        "aba_core:promote_to_result",
+        "aba_core:create_finding",
+        "aba_core:create_claim",
+        "aba_core:annotate_entity",
+        "aba_core:archive_entity",
+        "aba_core:register_dataset",
+        "aba_core:add_to_dataset",
+        "aba_core:remove_from_dataset",
+        "aba_core:open_run",
+        "aba_core:close_run",
+        "aba_core:register_reference",
+        "aba_core:find_reference",
+    }
+    actual = set(out["tools"])
+    missing = expected - actual
+    assert not missing, f"missing curation migrations: {missing}"
+    # Cumulative count: 3 (6.B) + 7 (6.C) + 13 (6.D) = 23.
+    assert len(actual) >= 23, f"expected >=23 tools, got {len(actual)}: {actual}"
+    g["shutdown"]()
+
+
 def test_6C_seven_ctx_aware_tools_registered():
     """Phase 6.C: Skill, read_skill, list_entities, get_provenance,
     get_dependents, read_capability, read_csv_info land on aba_core."""
@@ -340,6 +370,7 @@ def main() -> int:
         test_6C_ctx_store_handles_empty,
         test_6C_ctx_reaches_handler_via_aba_ctx_id,
         test_6C_ctx_leak_check_after_exception,
+        test_6D_thirteen_curation_tools_registered,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []
