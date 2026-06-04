@@ -3881,54 +3881,23 @@ def read_file_tool(input_: dict, ctx: dict | None = None) -> dict:
             "compressed": any(p.name.lower().endswith(s) for s in (".gz", ".bz2", ".xz"))}
 
 
-EXECUTORS = {
-    "list_data_files": list_data_files,
-    "read_csv_info": read_csv_info,
-    "run_python": run_python,
-    "run_r": run_r,
-    "inspect_upload": inspect_upload,
-    "get_provenance": get_provenance,
-    "get_dependents": get_dependents,
-    "create_scenario": create_scenario,
-    "present_plan": present_plan,
-    "ask_clarification": ask_clarification,
-    "Skill": skill_tool,
-    "read_skill": read_skill,
-    "search_skills": search_skills_tool,
-    "read_memory": read_memory_tool,
-    "write_memory": write_memory_tool,
-    "list_capabilities": list_capabilities_tool,
-    "read_capability": read_capability,
-    "inspect_package": inspect_package,
-    "ensure_capability": ensure_capability,
-    "search_pypi": search_pypi,
-    "search_bioconda": search_bioconda,
-    "search_nf_core": search_nf_core,
-    "search_mcp_registry": search_mcp_registry,
-    "propose_capability": propose_capability_tool,
-    "fetch_url": fetch_url,
-    "lookup_sra_runinfo": lookup_sra_runinfo,
-    "fetch_ensembl": fetch_ensembl,
-    "register_reference": register_reference_tool,
-    "find_reference": find_reference_tool,
-    "restart_kernel": restart_kernel_tool,
-    "run_nextflow": run_nextflow,
-    "list_entities": list_entities_tool,
-    "register_dataset": register_dataset_tool,
-    "add_to_dataset": add_to_dataset_tool,
-    "remove_from_dataset": remove_from_dataset_tool,
-    "pin_entity": pin_entity_tool,
-    "promote_to_result": promote_to_result_tool,
-    "create_finding": create_finding_tool,
-    "create_claim": create_claim_tool,
-    "annotate_entity": annotate_entity_tool,
-    "open_run": open_run_tool,
-    "close_run": close_run_tool,
-    "archive_entity": lambda input_, ctx=None: _archive_entity_tool(input_, ctx),
-    "write_file": write_file_tool,
-    "edit_file": edit_file_tool,
-    "read_file": read_file_tool,
-}
+# Phase 6.I (misc/phase6_mcp_wrapping.md): the legacy EXECUTORS dict
+# is now EMPTY. All 46 bio tools are hosted by the in-process aba_core
+# MCP server (content/bio/mcp_servers/aba_core/); the bio dispatcher
+# routes via is_inprocess_tool(name) → mcp_call("aba_core:name", ...).
+#
+# Kept as a mutable empty dict — d7_progress_cancel's test scaffolding
+# (and any future ad-hoc deferred-tool tests) adds _test_emit-style
+# entries here, calls them, then removes. The dispatcher's
+# EXECUTORS.get(name) fallthrough still runs for these, which is the
+# whole reason the dict survives at all.
+#
+# The bio impl functions (list_capabilities_tool, run_python, ...)
+# are NOT deleted — aba_core's handlers delegate to them directly via
+# `from content.bio.tools import <fn>`. Adding a new bio tool now is
+# one @mcp.tool() block under aba_core/tools/<cluster>.py; the
+# 4662-line monolith stays untouched for new work.
+EXECUTORS: dict = {}
 
 
 def _archive_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
