@@ -158,7 +158,9 @@ def test_6B_is_inprocess_tool_lookups():
     assert is_inprocess_tool("read_memory") is True
     assert is_inprocess_tool("search_pypi") is True
     assert is_inprocess_tool("not_yet_migrated") is False
-    assert is_inprocess_tool("run_python") is False  # 6.H, not yet
+    # As of 6.H, run_python IS on aba_core. A genuinely non-existent
+    # name still returns False.
+    assert is_inprocess_tool("no_such_bio_tool_ever") is False
     g["shutdown"]()
 
 
@@ -179,6 +181,66 @@ def test_6B_read_memory_via_gateway_returns_unknown_for_missing():
     payload = json.loads(r["content"])
     assert payload["status"] == "unknown_memory"
     g["shutdown"]()
+
+
+def test_6H_run_exec_tools_registered():
+    """Phase 6.H: run_python + run_r — the heavy two."""
+    g = _fresh_gateway()
+    from content.bio.mcp_servers.aba_core import make_server
+    out = g["register"]("aba_core", make_server)
+    expected = {"aba_core:run_python", "aba_core:run_r"}
+    actual = set(out["tools"])
+    assert expected.issubset(actual), f"missing: {expected - actual}"
+    # Cumulative: 3+7+13+10+5+6+2 = 46 — the FULL bio tool set.
+    assert len(actual) >= 46, f"expected >=46 (full bio set), got {len(actual)}"
+    g["shutdown"]()
+
+
+def test_6H_in_tool_ctx_binds_progress_sink():
+    """in_tool_ctx binds the progress sink on the calling thread for
+    the duration of the with block, restoring on exit. Validates the
+    fix that lets run_python's kernel install lines stream to the
+    chat under the MCP route."""
+    import queue
+    from core.runtime.tool_ctx import (
+        stash_ctx, pop_ctx, in_tool_ctx,
+    )
+    from core.runtime import progress as _progress
+    # Test runs in this thread — set_sink there is what we're checking
+    assert _progress.current_sink() is None
+    q = queue.Queue()
+    cid = stash_ctx({"progress_q": q, "thread_id": "t1"})
+    try:
+        with in_tool_ctx(cid) as ctx:
+            assert ctx["thread_id"] == "t1"
+            # Inside the block: sink IS bound, emit lands on our queue.
+            _progress.emit("install starting", phase="env")
+            assert _progress.current_sink() is q
+        # After exit: sink restored (was None, now None again).
+        assert _progress.current_sink() is None
+        # The emit landed:
+        msg = q.get_nowait()
+        assert msg["message"] == "install starting"
+        assert msg["phase"] == "env"
+    finally:
+        pop_ctx(cid)
+
+
+def test_6H_in_tool_ctx_handles_missing_progress_q():
+    """in_tool_ctx with a ctx that has no progress_q leaves the sink
+    alone — emit stays a no-op for tools that don't have a progress
+    channel (e.g. tests, background jobs)."""
+    from core.runtime.tool_ctx import stash_ctx, pop_ctx, in_tool_ctx
+    from core.runtime import progress as _progress
+    assert _progress.current_sink() is None
+    cid = stash_ctx({"thread_id": "t1"})  # no progress_q
+    try:
+        with in_tool_ctx(cid) as ctx:
+            assert ctx["thread_id"] == "t1"
+            assert _progress.current_sink() is None  # untouched
+        assert _progress.current_sink() is None
+    finally:
+        pop_ctx(cid)
 
 
 def test_6G_six_plan_etc_tools_registered():
@@ -437,6 +499,9 @@ def main() -> int:
         test_6E_ten_discovery_tools_registered,
         test_6F_five_file_io_tools_registered,
         test_6G_six_plan_etc_tools_registered,
+        test_6H_run_exec_tools_registered,
+        test_6H_in_tool_ctx_binds_progress_sink,
+        test_6H_in_tool_ctx_handles_missing_progress_q,
         test_6B_dispatcher_routes_through_aba_core,
     ]
     failed = []

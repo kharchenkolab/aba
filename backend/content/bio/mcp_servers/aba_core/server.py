@@ -22,6 +22,7 @@ from .tools.curation import register_curation_tools
 from .tools.discovery import register_discovery_tools
 from .tools.file_io import register_file_io_tools
 from .tools.plan_etc import register_plan_etc_tools
+from .tools.run_exec import register_run_exec_tools
 
 
 def make_server() -> FastMCP:
@@ -54,5 +55,6 @@ def make_server() -> FastMCP:
     register_file_io_tools(mcp)     # 6.F: list_data_files, inspect_upload, write/edit/read_file
     register_plan_etc_tools(mcp)    # 6.G: present_plan, ask_clarification, create_scenario,
                                     #      write_memory, restart_kernel, run_nextflow
+    register_run_exec_tools(mcp)    # 6.H: run_python, run_r
 
     return mcp

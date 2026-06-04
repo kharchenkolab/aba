@@ -66,11 +66,13 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     def ensure_capability(name: str,
                           aba_ctx_id: str | None = None) -> dict:
         """Install / make-ready a named capability (PyPI, conda,
-        bioconda, MCP server, …). Long-running for installs — the
-        progress channel streams phase lines to the chat."""
-        from core.runtime.tool_ctx import peek_ctx
+        bioconda, MCP server, …). Long-running for installs — uses
+        in_tool_ctx so progress.emit phase lines reach the handler-
+        thread sink and stream to the chat as tool_progress events."""
+        from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import ensure_capability as _impl
-        return _impl({"name": name}, peek_ctx(aba_ctx_id))
+        with in_tool_ctx(aba_ctx_id) as ctx:
+            return _impl({"name": name}, ctx)
 
     @mcp.tool()
     def propose_capability(name: str,
