@@ -2958,9 +2958,11 @@ def project_materialize(pid: str, clean: bool = False, include_archived: bool = 
     can't. Idempotent — running it twice converges.
     """
     from core.files.materialize import materialize_tree
+    from content.bio.files.tree import build_files_tree
     from core import projects
     out = projects.PROJECTS_DIR / pid / "files"
-    summary = materialize_tree(out, include_archived=include_archived, clean=clean)
+    tree = build_files_tree(include_archived=include_archived)
+    summary = materialize_tree(tree, out, clean=clean)
     return summary
 
 

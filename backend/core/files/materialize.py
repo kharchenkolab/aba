@@ -21,12 +21,14 @@ from core.config import ARTIFACTS_DIR
 
 
 def materialize_tree(
+    tree: dict,
     out_dir: Path,
     *,
-    include_archived: bool = False,
     clean: bool = False,
 ) -> dict:
-    from content.bio.files.tree import build_files_tree  # noqa: seam — Phase C.1 (move materialize.py to content/bio/files/)
+    """Walk a tree of {kind: file|folder|readme|root} nodes and write the
+    corresponding files/dirs/symlinks under out_dir. Domain-neutral —
+    the caller produces the tree (e.g., bio's build_files_tree)."""
     summary: dict = {
         "out_dir": str(out_dir),
         "linked": 0, "copied": 0, "synthesized": 0, "skipped": 0,
@@ -36,7 +38,6 @@ def materialize_tree(
         shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tree = build_files_tree(include_archived=include_archived)
     _materialize_node(tree, out_dir, summary)
     return summary
 
