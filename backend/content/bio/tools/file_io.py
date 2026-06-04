@@ -193,6 +193,20 @@ def inspect_upload(input_: dict) -> dict:
     if resolved is None and rp is not None:
         if rp.exists() and str(rp).startswith(str(_data_dir.resolve())):
             resolved = rp
+    # 2b. Path resolves under REFS_DIR and exists — content-addressed shared
+    # references the user uploaded directly (e.g. /workspace/aba-runtime/refs/
+    # GSE192391/...). Treat the refs tree as a third trusted root so the
+    # agent can `inspect_upload` files placed there before a reference
+    # entity exists. Tightening (proper reference-registration flow) is
+    # deferred — for now, accept any existing path under REFS_DIR.
+    if resolved is None and rp is not None:
+        try:
+            from core.config import REFS_DIR
+            refs_root = REFS_DIR.resolve()
+            if rp.exists() and str(rp).startswith(str(refs_root)):
+                resolved = rp
+        except Exception:
+            pass
 
     path_corrected: Optional[dict] = None
     if resolved is None:
