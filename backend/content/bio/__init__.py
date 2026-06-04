@@ -11,3 +11,9 @@ from . import skills         # noqa: F401  — registers known skills
 from . import capabilities   # noqa: F401  — registers the capability seed provider
 from .files import layout    # noqa: F401  — registers per-type display_path computers
 from . import viewers        # noqa: F401  — loads file-viewer registry
+from . import prompts        # noqa: F401  — registers named prompts (e.g. thread_summary)
+
+# Wire on_project_open hook for bio's display-path backfill (Phase C.4).
+from core.hooks.dispatcher import register as _register_hook
+from .graph.display import _on_project_open as _display_on_project_open
+_register_hook("on_project_open", _display_on_project_open, priority=10)

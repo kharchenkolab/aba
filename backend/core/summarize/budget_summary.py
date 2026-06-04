@@ -135,10 +135,11 @@ def _synthesize(thread_id: str, old_messages: list[dict],
     string on any failure — caller falls back gracefully (returns the
     pruned-but-unsummarized list, which is bigger but correct)."""
     try:
-        from content.bio.lifecycle.promote import _sync_anthropic_client, _load_annotation_prompt  # noqa: seam — Phase C.2 (move sync client to core/llm.py)
+        from core.llm import sync_anthropic_client
+        from core.prompts import get as get_prompt
         from core.config import MODEL
-        client = _sync_anthropic_client()
-        system = _load_annotation_prompt("thread_summary")
+        client = sync_anthropic_client()
+        system = get_prompt("thread_summary") or ""
         if not system:
             return ""
 
