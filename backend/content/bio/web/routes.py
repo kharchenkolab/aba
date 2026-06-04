@@ -10,9 +10,12 @@ established here is what each follow-up uses verbatim.
 """
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core.graph._schema import gen_entity_id
@@ -584,3 +587,337 @@ def pin_message(req: PinMessageRequest):
         origin="internal",
     )
     return {"pinned": True, "id": out["evidence_id"], "result_id": out["result_id"]}
+
+
+# ============================================================================
+# Phase 8.C — Runs + Datasets
+# ============================================================================
+
+
+# Path-collision helpers. TODO: extract to core/data/utils.py — these are
+# generic enough that platform code could use them too. For now they live
+# here as locals; main.py keeps a copy for its remaining upload handlers.
+def _unique_path(dest: Path) -> Path:
+    """Suffix the filename if it already exists in the dir."""
+    if not dest.exists():
+        return dest
+    stem, suf = dest.stem, dest.suffix
+    i = 1
+    while True:
+        candidate = dest.parent / f"{stem}_{i}{suf}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _unique_dir_path(p: Path) -> Path:
+    """Sibling-name collisions: append ' (2)', ' (3)', … until unique."""
+    if not p.exists():
+        return p
+    parent, stem = p.parent, p.name
+    for n in range(2, 1000):
+        cand = parent / f"{stem} ({n})"
+        if not cand.exists():
+            return cand
+    raise RuntimeError(f"too many name collisions for {stem!r}")
+
+
+def _refresh_dataset_layout_hint(bundle: Path) -> str:
+    try:
+        from content.bio.tools import _dataset_layout_hint
+        return _dataset_layout_hint(str(bundle))
+    except Exception:
+        return ""
+
+
+def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
+    total, count = 0, 0
+    if not bundle.is_dir():
+        return (total, count)
+    for p in bundle.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+            count += 1
+    return (total, count)
+
+
+def _run_or_404(rid: str) -> dict:
+    e = get_entity(rid)
+    if not e or e["type"] != "analysis":
+        raise HTTPException(404, f"Run {rid} not found")
+    return e
+
+
+# --- Runs ---
+
+
+@router.post("/api/runs/{rid}/refresh-manifest")
+def runs_refresh_manifest(rid: str):
+    """Re-scan a Run's output dir and rebuild its manifest. Useful after
+    a server-side change to the manifester (e.g. new PDF-thumbnail support)."""
+    from content.bio.lifecycle.runs import refresh_output_manifest
+    e = get_entity(rid)
+    if not e or e.get("type") != "analysis":
+        raise HTTPException(404, f"run {rid} not found")
+    refresh_output_manifest(rid)
+    return {"ok": True}
+
+
+@router.post("/api/runs/{rid}/cancel")
+def run_cancel(rid: str):
+    e = _run_or_404(rid)
+    meta = dict(e.get("metadata") or {})
+    run = dict(meta.get("run") or {})
+    run["status"] = "cancelled"
+    run["finished_at"] = _now()
+    meta["run"] = run
+    return update_entity(rid, metadata=meta)
+
+
+class PinOutputRequest(BaseModel):
+    kind: str = "figure"
+    label: str = ""
+    thumb: str | None = None
+    href: str | None = None
+    size: str | None = None
+    interpretation: str = ""
+
+
+@router.post("/api/runs/{rid}/pin-output")
+def run_pin_output(rid: str, req: PinOutputRequest):
+    """Pin one of a run's outputs as a Result wrapping the evidence
+    (figure/table). Plots/tables we can render are kept with their
+    thumbnail; everything else is a reference (origin=external + href)
+    — we don't host a copy."""
+    from content.bio.lifecycle.promote import pin_evidence
+    run = _run_or_404(rid)
+    tid = (run.get("metadata") or {}).get("thread_id") or ""
+    etype = "table" if req.kind == "table" else "figure"
+    is_img = bool(req.thumb) and req.thumb.lower().rsplit(".", 1)[-1] in (
+        "png", "jpg", "jpeg", "svg", "webp", "gif")
+    out = pin_evidence(
+        thread_id=tid, target_result_id=None,
+        evidence_kind=etype,
+        evidence_payload={
+            "title": req.label or "result",
+            "artifact_path": (req.thumb if is_img else None),
+            "metadata": {"source_run": rid, "href": req.href, "out_kind": req.kind},
+        },
+        interpretation=(req.interpretation or None),
+        origin="external", parent_run_id=rid,
+    )
+    return get_entity(out["result_id"])
+
+
+class RegisterDatasetRequest(BaseModel):
+    label: str = ""
+    path: str | None = None       # filesystem path / href the bundle lives at
+    size: str | None = None
+    summary: str = ""
+
+
+@router.post("/api/runs/{rid}/register-dataset")
+def run_register_dataset(rid: str, req: RegisterDatasetRequest):
+    """Lift a run's PRIMARY artifact (e.g. a processed-data bundle) into
+    a first-class Dataset entity — by reference: we record where it
+    lives, we do not host a copy."""
+    run = _run_or_404(rid)
+    tid = (run.get("metadata") or {}).get("thread_id")
+    eid = create_entity(
+        entity_type="dataset", title=req.label or "dataset",
+        metadata={"thread_id": tid, "origin": "external", "by_reference": True,
+                  "ref_path": req.path, "size_label": req.size,
+                  "summary": req.summary, "source_run": rid})
+    add_edge(eid, rid, "produced_by")
+    return get_entity(eid)
+
+
+@router.get("/api/runs/{rid}/tree")
+def run_tree(rid: str):
+    """The Run's subtree from the files tree (its readme, code, output/
+    dir + curated figures/tables) — so the Run view can embed the shared
+    FileBrowser and browse nested output folders."""
+    _run_or_404(rid)
+    from content.bio.files.tree import build_files_tree
+
+    tree = build_files_tree(include_archived=False)
+
+    def _find(node):
+        if node.get("entity_id") == rid and node.get("kind") == "folder":
+            return node
+        for c in node.get("children") or []:
+            hit = _find(c)
+            if hit:
+                return hit
+        return None
+
+    node = _find(tree)
+    if node is None:
+        # Run exists but isn't placed in the tree yet (e.g. no outputs) —
+        # empty root.
+        return {"kind": "root", "name": "", "path": "", "children": []}
+    return {**node, "kind": "root"}
+
+
+@router.get("/api/runs/{rid}/file")
+def run_file(rid: str, rel: str, download: int = 0):
+    """Serve a single file from a Run's output directory (its artifact_path).
+    Powers the Run view's output rows + figure thumbnails. `rel` is the
+    path relative to the run dir; traversal outside the dir is rejected.
+    Images/text render inline; `download=1` forces an attachment."""
+    import mimetypes
+    run = _run_or_404(rid)
+    base = run.get("artifact_path")
+    if not base:
+        raise HTTPException(404, "run has no output directory")
+    base_p = Path(base).resolve()
+    target = (base_p / rel).resolve()
+    if base_p != target and base_p not in target.parents:
+        raise HTTPException(400, "path escapes the run directory")
+    if not target.is_file():
+        raise HTTPException(404, f"no file {rel!r} in the run output")
+    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f'attachment; filename="{target.name}"'} if download else {}
+    return FileResponse(str(target), media_type=media, headers=headers)
+
+
+# --- Datasets ---
+
+
+@router.get("/api/datasets/{did}/tree")
+def dataset_tree(did: str):
+    """The dataset's subtree from the files tree (its directory contents,
+    or the single registered file) — so the Dataset view can browse a
+    folder dataset with the shared FileBrowser.
+
+    Adds `is_directory: bool` to the root response — the authoritative
+    signal of whether the dataset is shaped as a directory on disk."""
+    ent = get_entity(did)
+    if not ent or ent["type"] != "dataset":
+        raise HTTPException(404, f"Dataset {did} not found")
+    from content.bio.files.tree import build_files_tree
+
+    tree = build_files_tree(include_archived=False)
+
+    def _find(node):
+        if node.get("entity_id") == did:
+            return node
+        for c in node.get("children") or []:
+            hit = _find(c)
+            if hit:
+                return hit
+        return None
+
+    ap = ent.get("artifact_path")
+    is_directory = bool(ap) and Path(ap).is_dir()
+
+    node = _find(tree)
+    if node is None:
+        return {"kind": "root", "name": ent.get("title") or "dataset",
+                "path": "", "children": [], "is_directory": is_directory}
+    if node.get("kind") == "folder":
+        return {**node, "kind": "root", "is_directory": True}
+    # Single-file dataset → present the one file under a root.
+    return {"kind": "root", "name": ent.get("title") or "dataset",
+            "path": "", "children": [node], "is_directory": is_directory}
+
+
+@router.post("/api/datasets")
+async def datasets_create(req: dict | None = None):
+    """Create an empty directory-shaped dataset entity. Body:
+    {name?, project_id?}. The dataset folder is created on disk so
+    subsequent upload-folder?append_to= calls can drop files into it."""
+    from core.config import current_project_id, project_data_dir
+    from core.web.deps import _pin_or_412
+    body = req or {}
+    _pin_or_412(body.get("project_id"))
+    raw = (body.get("name") or "").strip() or "New dataset"
+    safe = Path(raw).name.strip() or "New dataset"
+    bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
+    bundle.mkdir(parents=True, exist_ok=True)
+    eid = create_entity(
+        entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        metadata={"size_bytes": 0, "file_count": 0, "layout": "directory",
+                  "layout_hint": "", "original_name": raw},
+    )
+    return get_entity(eid)
+
+
+@router.post("/api/upload-folder")
+async def upload_folder(
+    folder_name: str = Form(...),
+    files: list[UploadFile] = File(...),
+    rel_paths: list[str] = Form(...),
+    append_to: str | None = Form(None),
+    project_id: str | None = Form(None),
+):
+    """Upload N files as ONE directory-shaped dataset entity, preserving
+    the folder layout. If `append_to=<dataset_id>`, files are appended
+    to that existing dataset; the dataset's size/file_count/layout_hint
+    are refreshed. Returns the (created or updated) entity."""
+    from core.config import current_project_id, project_data_dir
+    from core.web.deps import _pin_or_412
+    _pin_or_412(project_id)
+    if not files:
+        raise HTTPException(400, "no files in upload")
+    if len(files) != len(rel_paths):
+        raise HTTPException(400, "files and rel_paths length mismatch")
+
+    appending = bool(append_to)
+    if appending:
+        existing = get_entity(append_to)
+        if not existing or existing["type"] != "dataset":
+            raise HTTPException(404, f"Dataset {append_to} not found")
+        ap = existing.get("artifact_path") or ""
+        if not ap or (Path(ap).exists() and not Path(ap).is_dir()):
+            raise HTTPException(400, "cannot append to a single-file dataset")
+        bundle = Path(ap)
+        bundle.mkdir(parents=True, exist_ok=True)
+        if (existing.get("metadata") or {}).get("layout") != "directory":
+            meta = dict((existing.get("metadata") or {}))
+            meta["layout"] = "directory"
+            update_entity(append_to, metadata=meta)
+    else:
+        safe = Path(folder_name).name.strip() or "uploaded_folder"
+        bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
+        bundle.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for f, rel in zip(files, rel_paths):
+        rel_clean = Path(rel).as_posix().lstrip("/")
+        if not rel_clean or ".." in rel_clean.split("/"):
+            continue
+        dest = bundle / rel_clean
+        if appending and dest.exists():
+            dest = _unique_path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as out:
+            shutil.copyfileobj(f.file, out)
+        written += 1
+
+    if written == 0:
+        if not appending:
+            try: bundle.rmdir()
+            except OSError: pass
+        raise HTTPException(400, "no valid file paths in upload")
+
+    total_bytes, file_count = _dataset_bytes_and_count(bundle)
+    hint = _refresh_dataset_layout_hint(bundle)
+
+    if appending:
+        meta = dict((existing.get("metadata") or {}))
+        meta.update({"size_bytes": total_bytes, "file_count": file_count,
+                     "layout": "directory", "layout_hint": hint})
+        update_entity(append_to, metadata=meta)
+        return get_entity(append_to)
+
+    eid = create_entity(
+        entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        metadata={"size_bytes": total_bytes, "file_count": file_count,
+                  "layout": "directory", "layout_hint": hint,
+                  "original_name": folder_name},
+    )
+    return get_entity(eid)
