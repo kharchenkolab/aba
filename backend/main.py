@@ -896,24 +896,15 @@ def search_endpoint(q: str = "", limit: int = 25):
     return _search(q, limit=limit)
 
 
-# ---------- Claims (v3 — the rigor core) ----------
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _resolve_thread(thread_id: str) -> str:
-    if thread_id == "default":
-        from core.graph.threads import get_or_create_default_thread
-        return get_or_create_default_thread()
-    return thread_id
-
-
 # arch3.md Phase 8.A: /api/claims/* (12 endpoints) + claim helpers +
 # Pydantic models + the CONFIDENCE constant moved to
 # content/bio/web/routes.py. main.py mounts the bio router (see the
 # include_router call near the end of file). Subsequent Phase 8 commits
 # extract more entity-aware clusters into the same router.
+#
+# Block 1B follow-up: the small helpers (`_now`, `_resolve_thread`)
+# that used to live here for the in-main handlers are gone — the bio
+# router carries its own copies (2-line stamps not worth a core module).
 
 
 # Phase 8.B-2: /api/entities/{figure_id}/promote-to-result + PromoteFigureRequest /
@@ -946,18 +937,6 @@ def entities_edges(entity_id: str):
 
 # ---------- Upload ----------
 
-def _unique_path(dest: Path) -> Path:
-    """Suffix the filename if it already exists in the dir."""
-    if not dest.exists():
-        return dest
-    stem, suf = dest.stem, dest.suffix
-    i = 1
-    while True:
-        candidate = dest.parent / f"{stem}_{i}{suf}"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):
@@ -967,7 +946,8 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(400, "filename missing")
     safe_name = Path(file.filename).name
     from core.config import current_project_id, project_data_dir
-    dest = _unique_path(project_data_dir(current_project_id()) / safe_name)
+    from core.data.paths import unique_path
+    dest = unique_path(project_data_dir(current_project_id()) / safe_name)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     size = dest.stat().st_size
@@ -983,44 +963,13 @@ async def upload(file: UploadFile = File(...)):
     return get_entity(eid)
 
 
-def _unique_dir_path(p: Path) -> Path:
-    """Sibling-name collisions: append ' (2)', ' (3)', ... until unique."""
-    if not p.exists():
-        return p
-    parent, stem = p.parent, p.name
-    for n in range(2, 1000):
-        cand = parent / f"{stem} ({n})"
-        if not cand.exists():
-            return cand
-    raise RuntimeError(f"too many name collisions for {stem!r}")
-
-
-def _refresh_dataset_layout_hint(bundle: Path) -> str:
-    try:
-        from content.bio.tools import _dataset_layout_hint
-        return _dataset_layout_hint(str(bundle))
-    except Exception:
-        return ""
-
-
-def _dataset_bytes_and_count(bundle: Path) -> tuple[int, int]:
-    total, count = 0, 0
-    if not bundle.is_dir():
-        return (total, count)
-    for p in bundle.rglob("*"):
-        if p.is_file():
-            try:
-                total += p.stat().st_size
-            except OSError:
-                pass
-            count += 1
-    return (total, count)
-
-
 # Phase 8.C: /api/datasets POST + /api/upload-folder + dataset helpers
 # (_dataset_bytes_and_count, _refresh_dataset_layout_hint, _unique_dir_path)
-# moved to content/bio/web/routes.py. The _unique_path helper above
-# stays — still used by /api/upload + remaining bio file handlers.
+# moved to content/bio/web/routes.py.
+#
+# Block 1B follow-up: dead copies of those helpers + _unique_path
+# deleted from this file. /api/upload + /api/upload-url use the shared
+# core.data.paths.unique_path.
 
 
 # Phase 8.E: /api/results/external + /api/results/{rid}/upload-evidence
@@ -1050,7 +999,8 @@ async def upload_url(req: URLUploadRequest):
         raise HTTPException(400, "only http(s) URLs are supported")
     name = Path(parsed.path).name or "downloaded.bin"
     from core.config import current_project_id, project_data_dir
-    dest = _unique_path(project_data_dir(current_project_id()) / name)
+    from core.data.paths import unique_path
+    dest = unique_path(project_data_dir(current_project_id()) / name)
 
     # CDNs (Cloudflare etc.) often reject the default Python-urllib UA.
     req_obj = urllib.request.Request(
