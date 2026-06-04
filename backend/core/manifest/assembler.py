@@ -149,70 +149,32 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
     return card, policy
 
 
+# Project sidebar renderer: content owns the SHAPE of the snapshot
+# (which entity types to surface, how to format them — those are
+# domain decisions, e.g. bio's "datasets + threads + curated counts"
+# layout). Platform owns the slot + the lookup. Phase 4.3 Pass 1
+# inversion (was: hardcoded `type_filter="dataset" / "thread" /
+# "result" / "claim" / "finding"` strings here).
+ProjectSidebarRenderer = Callable[[Optional[str]], str]
+_PROJECT_SIDEBAR: ProjectSidebarRenderer | None = None
+
+
+def register_project_sidebar(fn: ProjectSidebarRenderer) -> None:
+    """Content registers its sidebar renderer at startup. Idempotent —
+    re-registering replaces."""
+    global _PROJECT_SIDEBAR
+    _PROJECT_SIDEBAR = fn
+
+
 def render_project_sidebar(thread_id: Optional[str] = None) -> str:
-    """A compact, always-fresh snapshot of project-wide entities the agent
-    might want to reference across threads — datasets, sibling threads,
-    and counts of active curated items. Injected near the top of the
-    system prompt as STRUCTURED context (not narrative).
-
-    Per the history-compaction redesign (misc/history_compaction_redesign.md
-    §4.3): shared cross-thread state belongs HERE — queryable, deterministic,
-    no LLM. The thread's own chat history stays as the conversational
-    record. This is Phase 1 of that redesign.
-
-    Empty string when there are no entities to surface (fresh project),
-    so we don't inject a confusing "PROJECT — (nothing)" block.
-    """
-    from core.graph.entities import list_entities, count_entities
-    parts: list[str] = []
-    parts.append("[PROJECT — current snapshot]")
-
-    # Datasets: small N, very useful. Show name + path (the actual disk
-    # location the agent can pass to inspect_upload / read straight away).
-    datasets = list_entities(type_filter="dataset", include_archived=False)  # noqa: seam — Phase 4 (declarative entity types)
-    if datasets:
-        parts.append(f"Datasets ({len(datasets)}):")
-        for e in datasets[:10]:                          # cap at 10
-            title = (e.get("title") or "").strip() or e.get("id", "")
-            path = e.get("artifact_path") or ""
-            line = f"  - {title}"
-            if path:
-                line += f"  →  {path}"
-            parts.append(line)
-        if len(datasets) > 10:
-            parts.append(f"  (… {len(datasets)-10} more — list_data_files for full list)")
-
-    # Threads: small N usually. Mark the CURRENT one. Title-only — paths/
-    # detail belong on a focused-thread card, not the firehose.
-    threads = list_entities(type_filter="thread", include_archived=False)  # noqa: seam — Phase 4 (declarative entity types)
-    if threads:
-        parts.append(f"Threads ({len(threads)}):")
-        for t in threads[:12]:                           # cap at 12
-            tid = t.get("id", "")
-            title = (t.get("title") or "").strip()
-            marker = " (this thread)" if thread_id and tid == thread_id else ""
-            parts.append(f"  - {tid}{marker} — {title!r}")
-        if len(threads) > 12:
-            parts.append(f"  (… {len(threads)-12} more)")
-
-    # Curation counts — Results / Claims / Findings are the user's
-    # judgments. Cheap one-liner; the agent can look them up by name
-    # via list_entities if needed.
-    n_results  = count_entities(type_filter="result",  include_archived=False)   # noqa: seam — Phase 4
-    n_claims   = count_entities(type_filter="claim",   include_archived=False)   # noqa: seam — Phase 4
-    n_findings = count_entities(type_filter="finding", include_archived=False)   # noqa: seam — Phase 4
-    if n_results or n_claims or n_findings:
-        parts.append(
-            f"Curated entities: results={n_results}  claims={n_claims}  findings={n_findings}"
-        )
-
-    parts.append("[/PROJECT]")
-    # If we collected nothing (no datasets, no threads, no curation),
-    # don't emit a useless wrapper — the agent should not be told about
-    # an empty project state every turn.
-    if len(parts) <= 2:
+    """Dispatch to the registered renderer. Empty string if nothing's
+    registered (e.g. platform-only tests) or the renderer raised."""
+    if _PROJECT_SIDEBAR is None:
         return ""
-    return "\n".join(parts) + "\n"
+    try:
+        return _PROJECT_SIDEBAR(thread_id) or ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def render_focus_preamble(manifest: Manifest) -> tuple[str, list[str]]:
