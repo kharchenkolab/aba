@@ -26,7 +26,7 @@ def materialize_tree(
     include_archived: bool = False,
     clean: bool = False,
 ) -> dict:
-    from content.bio.files.tree import build_files_tree  # noqa: WPS433
+    from content.bio.files.tree import build_files_tree  # noqa: seam — Phase C.1 (move materialize.py to content/bio/files/)
     summary: dict = {
         "out_dir": str(out_dir),
         "linked": 0, "copied": 0, "synthesized": 0, "skipped": 0,
