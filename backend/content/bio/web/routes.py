@@ -29,7 +29,14 @@ from content.bio.lifecycle.promote import (
     promote_figure_to_result, promote_results_to_finding,
     add_result_to_finding, remove_result_from_finding,
 )
-from content.bio.advisors.runner import skeptic_review
+from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
+from core.graph.audit import (
+    list_advisor_notes, set_advisor_note_status,
+    list_context_suggestions, update_context_suggestion_status,
+    reject_all_pending_suggestions,
+)
+from core.graph.messages import get_messages
+from core.graph._schema import WORKSPACE_ID
 
 
 router = APIRouter()
@@ -921,3 +928,234 @@ async def upload_folder(
                   "original_name": folder_name},
     )
     return get_entity(eid)
+
+
+# ============================================================================
+# Phase 8.D — Proposals + Advisor-notes + Context-suggestions + Advise +
+#             Suggest-interpretation
+# ============================================================================
+
+
+@router.post("/api/proposals/{pid}/accept")
+def proposal_accept(pid: int):
+    from content.bio.proposals.scheduler import accept_proposal
+    try:
+        return accept_proposal(pid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post("/api/proposals/{pid}/dismiss")
+def proposal_dismiss(pid: int):
+    from content.bio.proposals.scheduler import dismiss_proposal
+    return dismiss_proposal(pid)
+
+
+@router.post("/api/proposals/{pid}/undo")
+def proposal_undo(pid: int):
+    from content.bio.proposals.scheduler import undo_proposal
+    try:
+        return undo_proposal(pid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/api/entities/{entity_id}/advisor-notes")
+def entities_advisor_notes(entity_id: str):
+    if not get_entity(entity_id):
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    return list_advisor_notes(entity_id)
+
+
+class AdvisorNoteStatusRequest(BaseModel):
+    status: str = "dismissed"
+
+
+@router.post("/api/advisor-notes/{note_id}/status")
+def advisor_note_status(note_id: int, req: AdvisorNoteStatusRequest):
+    """Mark a note tried/dismissed so it no longer surfaces as a fresh idea."""
+    if not set_advisor_note_status(note_id, req.status):
+        raise HTTPException(404, f"Note {note_id} not found")
+    return {"ok": True}
+
+
+@router.post("/api/entities/{entity_id}/advise")
+async def entities_advise(entity_id: str):
+    """Fire the appropriate on-focus advisor for an entity (Explorer for
+    datasets, Stylist for narratives). Idempotent — advisors that have
+    already spoken about the entity won't re-fire. Non-blocking."""
+    import asyncio
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    loop = asyncio.get_event_loop()
+    if e["type"] == "dataset":
+        loop.run_in_executor(None, explorer_suggest, entity_id)
+    elif e["type"] == "narrative":
+        loop.run_in_executor(None, stylist_review, entity_id)
+    return {"ok": True}
+
+
+# --- Adaptive context (suggestions for per-type policy text) ---
+
+
+@router.get("/api/context-suggestions")
+def context_suggestions(status: str = "pending", max_age_days: int = 14):
+    """List context-policy suggestions awaiting review (or any status).
+
+    `max_age_days` defaults to 14 — older pending items auto-stale out of
+    the badge / list. Pass 0 (or any non-positive) to include every age."""
+    return list_context_suggestions(
+        status=status,
+        max_age_days=max_age_days if max_age_days > 0 else None,
+    )
+
+
+class SuggestionAction(BaseModel):
+    action: str  # 'approve' | 'reject'
+
+
+@router.post("/api/context-suggestions/{sid}/action")
+def context_suggestion_action(sid: int, req: SuggestionAction):
+    """Apply a reviewer action:
+      approve → status='promoted' + append to the per-type policy file
+      reject  → status='rejected'"""
+    from content.bio.lifecycle.adaptive import append_to_policy
+    if req.action not in ("approve", "reject"):
+        raise HTTPException(400, "action must be 'approve' or 'reject'")
+    pending = [s for s in list_context_suggestions(status=None, max_age_days=None)
+               if s["id"] == sid]
+    if not pending:
+        raise HTTPException(404, f"suggestion {sid} not found")
+    suggestion = pending[0]
+    if req.action == "approve":
+        append_to_policy(suggestion["entity_type"], suggestion["suggestion"])
+        update_context_suggestion_status(sid, "promoted")
+    else:
+        update_context_suggestion_status(sid, "rejected")
+    return {"ok": True}
+
+
+@router.post("/api/context-suggestions/reject-all")
+def context_suggestion_reject_all():
+    """Bulk-reject every pending suggestion (any age). Returns count rejected."""
+    return {"rejected": reject_all_pending_suggestions()}
+
+
+# --- Vision-LLM figure caption (figure → result interpretation seed) ---
+
+
+def _artifact_url_to_path(url: str):
+    """Resolve a /artifacts/<pid>/<name> URL to a disk Path, or None.
+    Local copy — main.py has its own for the /artifacts/* GET route;
+    these will dedupe when an artifact-resolver moves to core."""
+    import json  # noqa: F401 (kept consistent with main.py's import block)
+    if not url:
+        return None
+    if url.startswith("/artifacts/"):
+        parts = url[len("/artifacts/"):].split("/")
+        if len(parts) == 2 and parts[0] and parts[1]:
+            from core.config import project_artifacts_dir
+            return project_artifacts_dir(parts[0]) / parts[1]
+        if len(parts) == 1:
+            from core.config import ARTIFACTS_DIR
+            return ARTIFACTS_DIR / parts[0]
+        return None
+    return Path(url) if url else None
+
+
+def _llm_figure_caption(artifact_path: str, producing_code: str,
+                        chat_context: str, title: str) -> str:
+    """Thin wrapper around the shared vision-LLM caption helper."""
+    from content.bio.lifecycle.promote import caption_via_vision_llm
+    disk = _artifact_url_to_path(artifact_path) if artifact_path else None
+    return caption_via_vision_llm(disk, producing_code, chat_context, title)
+
+
+@router.get("/api/entities/{entity_id}/suggest-interpretation")
+def suggest_interpretation(entity_id: str):
+    """Generate a structured figure caption for promoting a figure → result.
+
+    Calls the live LLM with VISION + the figure's producing_code + nearby
+    chat context. The caption has two sections:
+      - **What's shown** — panel-by-panel description.
+      - **Take-home** — 1-3 bullets stating what the figure demonstrates.
+
+    Falls back to plucking nearby chat text if the LLM call fails or
+    vision can't read the file."""
+    import json
+    e = get_entity(entity_id)
+    if not e:
+        raise HTTPException(404, f"Entity {entity_id} not found")
+    art = e.get("artifact_path") or ""
+    msgs = get_messages(WORKSPACE_ID)
+
+    def asst_text(m):
+        if m["role"] != "assistant":
+            return ""
+        return " ".join(b.get("text", "") for b in m["content"]
+                        if isinstance(b, dict) and b.get("type") == "text").strip()
+
+    # Locate the message whose tool_result produced this figure.
+    prod_idx = None
+    for i, m in enumerate(msgs):
+        for blk in m["content"]:
+            if not isinstance(blk, dict):
+                continue
+            if blk.get("type") == "tool_result":
+                try:
+                    plots = (json.loads(blk["content"]) or {}).get("plots") or []
+                    if any(p.get("url") == art for p in plots):
+                        prod_idx = i
+                except Exception:
+                    pass
+            elif blk.get("type") == "image" and blk.get("url") == art:
+                prod_idx = i
+
+    def turn_text(m):
+        if m["role"] == "user":
+            parts = []
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    parts.append(b.get("text", ""))
+                elif isinstance(b, str):
+                    parts.append(b)
+            return " ".join(p for p in parts if p).strip()
+        if m["role"] == "assistant":
+            return asst_text(m)
+        return ""
+
+    chat_context = ""
+    if prod_idx is not None:
+        lo, hi = max(0, prod_idx - 6), min(len(msgs), prod_idx + 4)
+        chunks: list[str] = []
+        for j in range(lo, hi):
+            t = turn_text(msgs[j])
+            if not t:
+                continue
+            role = msgs[j]["role"]
+            tag = "USER" if role == "user" else "AGENT"
+            anchor = " (← figure here)" if j == prod_idx else ""
+            chunks.append(f"[{tag}{anchor}] {t}")
+        chat_context = "\n\n".join(chunks)[:3000]
+
+    producing_code = (e.get("producing_code") or "")[:6000]
+    title = (e.get("title") or "").strip()
+
+    text = _llm_figure_caption(art, producing_code, chat_context, title)
+
+    # Fallback to text-pluck.
+    if not text:
+        if prod_idx is not None:
+            for j in range(prod_idx, min(prod_idx + 4, len(msgs))):
+                t = asst_text(msgs[j])
+                if t:
+                    text = t
+                    break
+        if not text:
+            for m in reversed(msgs):
+                t = asst_text(m)
+                if t:
+                    text = t
+                    break
+    return {"text": text[:1200]}
