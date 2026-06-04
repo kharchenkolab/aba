@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
+import SearchInput from './SearchInput'
 import { RailIcon, type RailIconName } from './icons'
 import FilesView from './FilesView'
 import UploadDrop, { walkDropEntries, uploadWalkedAppend } from './UploadDrop'
@@ -99,6 +100,7 @@ const STATUS_ICON: Record<string, string> = {
 }
 
 const SECTION_CAP = 8   // items shown per section before "show all"
+const SEARCH_MIN = 6    // a section reveals its filter box once it holds this many items (>5)
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -120,6 +122,12 @@ function OverviewIcon({ className = 'tree__overview-icon', size = 17 }: { classN
 
 export default function ProjectTree({ entities, focusedId, activeSection, onFocus, onViewFile, onChange, currentThread, onSelectThread, onOpenOverview, onOpenThreadOverview, filesTarget, projectId }: Props) {
   const [query, setQuery] = useState('')
+  // The filter box is per-tab: reset its text when the active section changes so
+  // a filter typed on one list never silently carries into another. Done during
+  // render (the React "reset state on prop change" pattern) to avoid a one-frame
+  // flash of the previous query's results.
+  const [prevSection, setPrevSection] = useState(activeSection)
+  if (activeSection !== prevSection) { setPrevSection(activeSection); setQuery('') }
   const [showArchived, setShowArchived] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
@@ -138,13 +146,33 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   // Apply search + archived filter client-side. Server-side same path will
   // be used when projects exceed ~hundreds of entities.
   const q = query.trim().toLowerCase()
+  const archivedOk = (e: Entity) => showArchived || e.status !== 'archived'
+  // How many items the active section holds, independent of the search box, so
+  // the box's >5 reveal never flickers as the query narrows the list. The Files
+  // tab carries its own search (in <FileBrowser>), so it's excluded here.
+  const sectionTotal = (section: ProjectSection): number => {
+    if (section === 'files') return 0
+    if (section === 'threads') {
+      return 1 + entities.filter(e => e.type === 'thread' && !e.metadata?.is_default && archivedOk(e)).length
+    }
+    const types = SECTION_CONFIG[section].types
+    return entities.filter(e =>
+      e.id !== 'workspace' && e.status !== 'superseded' && archivedOk(e) &&
+      types.includes(e.type) && !(e.metadata as { ambient?: boolean } | undefined)?.ambient).length
+  }
+  // The filter box appears only once the list is long enough to warrant it.
+  // Once shown it stays shown (the threshold reads the UNFILTERED count), and
+  // the query only bites while the box is actually visible — so navigating to a
+  // short section never leaves a hidden filter silently trimming it.
+  const searchEligible = sectionTotal(activeSection) >= SEARCH_MIN
+  const effectiveQ = searchEligible ? q : ''
   const filterFn = (e: Entity) => {
     if (e.id === 'workspace') return false
     // Superseded figures are version history — only the latest shows in the
     // tree; older versions live in the figure's history drawer.
     if (e.status === 'superseded') return false
     if (!showArchived && e.status === 'archived') return false
-    if (q && !e.title.toLowerCase().includes(q)) return false
+    if (effectiveQ && !e.title.toLowerCase().includes(effectiveQ)) return false
     return true
   }
   const visible = entities.filter(filterFn)
@@ -376,21 +404,6 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
         )}
       </div>
 
-      <div className="tree__search">
-        <svg width="13" height="13" viewBox="0 0 20 20" fill="currentColor" className="tree__search-icon">
-          <path d="M9 3a6 6 0 014.5 9.9l3.3 3.3-1.4 1.4-3.3-3.3A6 6 0 119 3zm0 2a4 4 0 100 8 4 4 0 000-8z" />
-        </svg>
-        <input
-          className="tree__search-input"
-          placeholder="Search…"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-        />
-        {query && (
-          <button className="tree__search-clear" onClick={() => setQuery('')} title="Clear">×</button>
-        )}
-      </div>
-
       {activeSection === 'files' ? (
         <FilesView focusedId={focusedId} onFocus={onFocus} onViewFile={onViewFile} reloadKey={entities.length}
                    targetPath={filesTarget?.path} targetNonce={filesTarget?.n} projectId={projectId} />
@@ -406,7 +419,9 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
             })),
           ]
           const threadFilter = sectionFilters.threads
-          const filteredThreads = threadList.filter(t => threadMatchesFilter(t, threadFilter))
+          const filteredThreads = threadList.filter(t =>
+            threadMatchesFilter(t, threadFilter) &&
+            (!effectiveQ || t.title.toLowerCase().includes(effectiveQ)))
           const showKey = `threads:${threadFilter}`
           const tExpanded = !!showAll[showKey]
           const tShown = tExpanded ? filteredThreads : filteredThreads.slice(0, SECTION_CAP)
@@ -429,6 +444,10 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   </button>
                 ))}
               </div>
+              {searchEligible && (
+                <SearchInput value={query} onChange={setQuery}
+                             placeholder="Filter threads…" ariaLabel="Filter threads by name" />
+              )}
               <div className="tree__index-list">
                 <div className="tree__section-label">{threadFilter} questions</div>
                 {tShown.map(t => {
@@ -499,7 +518,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   <span className="tree__tab-badge">
                     <RailIcon name={section.icon} size={17} />
                     {section.label}
-                    <span className="tree__pill tree__pill--green">{items.length}</span>
+                    <span className="tree__pill tree__pill--green">{sectionTotal(activeSection)}</span>
                   </span>
                   {activeSection === 'data' && (
                     <button className="tree__add-button" title="Create a new dataset"
@@ -514,10 +533,15 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   </button>
                 ))}
               </div>
+              {searchEligible && (
+                <SearchInput value={query} onChange={setQuery}
+                             placeholder={`Filter ${section.label.toLowerCase()}…`}
+                             ariaLabel={`Filter ${section.label} by name`} />
+              )}
               <div className="tree__index-list">
                 <div className="tree__section-label">{sectionFilter === 'All' ? section.sectionLabel : `${sectionFilter} ${section.label.toLowerCase()}`}</div>
                 {filteredItems.length === 0 ? (
-                  <div className="tree__empty">{items.length === 0 ? section.empty : 'No items match this filter.'}</div>
+                  <div className="tree__empty">{sectionTotal(activeSection) === 0 ? section.empty : 'No items match this filter.'}</div>
                 ) : shown.map(e => {
                   // Rail-row drop landing pad is dataset-only (experimental).
                   const isDataset = e.type === 'dataset' && e.metadata?.layout === 'directory'

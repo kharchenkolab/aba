@@ -45,27 +45,39 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
 
   type SectionDef = { key: ProjectSection; label: string; icon: ProjectSection; count: number; visible: boolean }
   const c = (k: keyof NonNullable<typeof sectionCounts>) => sectionCounts?.[k] ?? 0
-  // A tab is shown once it's "earned" (has content) — or while it's the active
-  // tab, so the user is never stranded on one that just emptied out.
+  // A tab is "earned" once it has content — or while it's the active tab, so the
+  // user is never stranded on one that just emptied out.
   const earned = (k: ProjectSection) => c(k) > 0 || activeSection === k
-  // Top group: Threads + Data are always available — you can act on them from an
-  // empty project (start a conversation, add data). Claims is earned, so it sits
-  // LAST in the group and reveals without nudging Threads/Data. Bottom group
-  // (Results · Runs · Files, in that order) is purely agent-generated — each tab
-  // appears the moment its first artifact exists.
+  // Files is the on-disk browser spanning run outputs + datasets + results, so it
+  // counts as populated the moment any Run or Result exists — including a run that
+  // wrote only an .h5ad (no figure/table entity, so files-count stays 0).
+  const hasItems = (k: ProjectSection): boolean =>
+    k === 'files' ? (c('files') > 0 || c('runs') > 0 || c('results') > 0) : c(k) > 0
+  // Second filter, on top of the earned-slot reveal: pills only appear when there
+  // is a real choice to make — ≥2 populated sections. A brand-new project (just
+  // the Main thread) or one with a single populated tab shows that list with no
+  // pills at all. The escape hatch keeps pills available if the user is parked on
+  // an otherwise-empty tab, so they can always navigate back out.
+  const ALL_SECTIONS: ProjectSection[] = ['threads', 'data', 'claims', 'results', 'runs', 'files']
+  const meaningfulCount = ALL_SECTIONS.filter(hasItems).length
+  const showPills = meaningfulCount > 1 || !hasItems(activeSection)
+  // A pill earns its FIXED slot only if its section has content (or it's the
+  // current tab). Hidden-but-present sections still reserve their slot so the
+  // visible subset never shifts.
+  const slotVisible = (k: ProjectSection, earnedSlot: boolean): boolean =>
+    showPills && earnedSlot && (hasItems(k) || activeSection === k)
+  // Top group: Threads · Data · Claims (Claims last so it reveals without nudging
+  // the others). Bottom group: Results · Runs · Files, each purely agent-generated.
   const navSections: SectionDef[] = [
-    { key: 'threads', label: 'Threads', icon: 'threads', count: c('threads'), visible: true },
-    { key: 'data', label: 'Data', icon: 'data' as const, count: c('data'), visible: true },
-    { key: 'claims', label: 'Claims', icon: 'claims' as const, count: c('claims'), visible: earned('claims') },
+    { key: 'threads', label: 'Threads', icon: 'threads', count: c('threads'), visible: slotVisible('threads', true) },
+    { key: 'data', label: 'Data', icon: 'data' as const, count: c('data'), visible: slotVisible('data', true) },
+    { key: 'claims', label: 'Claims', icon: 'claims' as const, count: c('claims'), visible: slotVisible('claims', earned('claims')) },
   ]
   const artifactSections: SectionDef[] = [
-    { key: 'results', label: 'Results', icon: 'results' as const, count: c('results'), visible: earned('results') },
-    { key: 'runs', label: 'Runs', icon: 'runs' as const, count: c('runs'), visible: earned('runs') },
-    // Files is the on-disk browser spanning run outputs + datasets + results, so
-    // it's earned as soon as any Run or Result exists — including a run that wrote
-    // only an .h5ad (not harvested as a figure/table entity, so files-count stays 0).
+    { key: 'results', label: 'Results', icon: 'results' as const, count: c('results'), visible: slotVisible('results', earned('results')) },
+    { key: 'runs', label: 'Runs', icon: 'runs' as const, count: c('runs'), visible: slotVisible('runs', earned('runs')) },
     { key: 'files', label: 'Files', icon: 'files' as const, count: c('files'),
-      visible: earned('files') || c('runs') > 0 || c('results') > 0 },
+      visible: slotVisible('files', earned('files') || c('runs') > 0 || c('results') > 0) },
   ]
 
   // Animate only tabs that transition hidden→visible (slide in from the left, as
@@ -119,7 +131,7 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
         </button>
       )}
 
-      {view === 'workspace' ? (
+      {view === 'workspace' && showPills ? (
         <nav className="rail__nav rail__nav--project" aria-label="Project navigation">
           {navSections.map(renderTab)}
           {/* Always present so the lower slots stay fixed; only the hairline
@@ -128,6 +140,8 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
           {artifactSections.map(renderTab)}
         </nav>
       ) : (
+        // No pills (brand-new project / single populated tab) or home view: an
+        // empty flex spacer keeps the user button pinned to the bottom.
         <div className="rail__home-spacer" aria-hidden="true" />
       )}
 
