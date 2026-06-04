@@ -711,10 +711,16 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest):
     lives, we do not host a copy."""
     run = _run_or_404(rid)
     tid = (run.get("metadata") or {}).get("thread_id")
+    # By-reference datasets still have an artifact_path — it's the
+    # remote/local path the data lives at. Satisfies dataset.yaml's
+    # required field; the `by_reference`+`ref_path` metadata makes
+    # the semantics explicit (we don't host a local copy).
+    ref_path = req.path or ""
     eid = create_entity(
         entity_type="dataset", title=req.label or "dataset",
+        artifact_path=ref_path or None,
         metadata={"thread_id": tid, "origin": "external", "by_reference": True,
-                  "ref_path": req.path, "size_label": req.size,
+                  "ref_path": ref_path, "size_label": req.size,
                   "summary": req.summary, "source_run": rid})
     add_edge(eid, rid, "produced_by")
     return get_entity(eid)

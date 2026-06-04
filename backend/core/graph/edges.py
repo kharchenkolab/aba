@@ -10,10 +10,12 @@ _log = logging.getLogger(__name__)
 
 
 def _edge_validate(source_id: str, target_id: str, rel_type: str) -> None:
-    """Phase 4.5 — warn (don't block) on edges that don't match the
-    registry's allowed_edges. Unknown types skip validation. The
-    lookup costs one tiny SELECT for the source/target types — only
-    fires inside add_edge, so the cost is bounded."""
+    """WU-2 (post-Phase-4.5): HARD-REJECT edges that don't match the
+    registry's allowed_edges. Unknown types skip validation (legacy
+    data, synthetic test types). The lookup costs one tiny SELECT for
+    the source/target types — only fires inside add_edge, bounded
+    cost. Raises ValueError on a real violation; the bio router
+    converts ValueError → HTTP 422 at the boundary."""
     try:
         with _conn() as c:
             rows = c.execute(
@@ -26,10 +28,15 @@ def _edge_validate(source_id: str, target_id: str, rel_type: str) -> None:
         if not s or not t:
             return  # one endpoint missing — let SQL handle it
         from core.entity_types import check_edge
-        for msg in check_edge(s, t, rel_type):
-            _log.warning("entity_types: %s", msg)
-    except Exception:  # noqa: BLE001 — validation is advisory
-        pass
+        msgs = check_edge(s, t, rel_type)
+    except Exception:  # noqa: BLE001 — registry import failure ≠ data violation
+        msgs = []
+    if msgs:
+        # WU-2: hard-reject — was warning-only through Phase 4.5;
+        # p10 enforces every add_edge() call site has a declared
+        # (src, tgt, rel) triple. A new violation here means either
+        # a YAML gap or a buggy edge — both deserve loud failure.
+        raise ValueError("entity_types: " + "; ".join(msgs))
 
 
 def add_edge(source_id: str, target_id: str, rel_type: str,

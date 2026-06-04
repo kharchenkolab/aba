@@ -44,6 +44,20 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(ValueError)
+async def _value_error_to_422(_request, exc: ValueError):
+    """WU-2: Phase 4.5 entity_types validators raise ValueError on a
+    schema/edge/transition violation. Convert to HTTP 422 at the
+    boundary so the frontend sees a structured 'bad request' error
+    rather than an opaque 500. Other ValueErrors fall through the same
+    handler — semantically still 'bad input', so 422 is appropriate."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc)},
+    )
+
+
 # Project-context pinning middleware (Phase B of misc/modularity_audit.md):
 # every request that carries `?project_id=<pid>` or `X-Project-Id: <pid>` is
 # atomically pinned per-request to that project, so two tabs on different
