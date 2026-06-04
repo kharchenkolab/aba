@@ -689,27 +689,3 @@ def set_finding_fields(
     return get_entity(finding_id)  # type: ignore[return-value]
 
 
-def promote_findings_to_claim(
-    finding_ids: list[str],
-    text: str,
-    title: Optional[str] = None,
-) -> str:
-    """Lift one or more findings into a publishable `claim`."""
-    if not finding_ids:
-        raise ValueError("a claim requires at least one supporting finding")
-    findings = [get_entity(fid) for fid in finding_ids]
-    if any(f is None for f in findings):
-        raise ValueError("one or more findings not found")
-    if any(f["type"] != "finding" for f in findings):  # type: ignore[index]
-        raise ValueError("all sources must be finding entities")
-
-    auto_title = title or text.strip().split("\n")[0][:80]
-    cid = create_entity(
-        entity_type="claim",
-        title=auto_title,
-        metadata={"text": text, "supporting_findings": finding_ids},
-    )
-    for fid in finding_ids:
-        add_edge(cid, fid, "supports", {"direction": "claim-supported-by-finding"})
-        add_edge(cid, fid, "wasDerivedFrom")
-    return cid
