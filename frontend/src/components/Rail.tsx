@@ -53,19 +53,26 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
   // wrote only an .h5ad (no figure/table entity, so files-count stays 0).
   const hasItems = (k: ProjectSection): boolean =>
     k === 'files' ? (c('files') > 0 || c('runs') > 0 || c('results') > 0) : c(k) > 0
-  // Second filter, on top of the earned-slot reveal: pills only appear when there
-  // is a real choice to make — ≥2 populated sections. A brand-new project (just
-  // the Main thread) or one with a single populated tab shows that list with no
-  // pills at all. The escape hatch keeps pills available if the user is parked on
-  // an otherwise-empty tab, so they can always navigate back out.
+  // Sections that are ALWAYS shown regardless of content, because they're
+  // the entry point for the user to START creating that kind of thing.
+  // Data: the "+ create dataset / upload" affordance lives here, so it
+  // must be reachable even on a brand-new empty project (PK policy
+  // 2026-06-05). Threads is implicitly always populated (a Main thread
+  // exists), so it doesn't need to be listed here.
+  const ALWAYS_VISIBLE: ProjectSection[] = ['data']
+  // Second filter, on top of the earned-slot reveal: pills only appear when
+  // there is a real choice to make — ≥2 populated sections, OR one of the
+  // ALWAYS_VISIBLE tabs is in play (so a brand-new project still shows the
+  // Data tab + Threads as the nav). A truly empty project with no
+  // always-visible exemption still hides the nav (back to the chat).
   const ALL_SECTIONS: ProjectSection[] = ['threads', 'data', 'claims', 'results', 'runs', 'files']
   const meaningfulCount = ALL_SECTIONS.filter(hasItems).length
-  const showPills = meaningfulCount > 1 || !hasItems(activeSection)
+  const showPills = meaningfulCount > 1 || !hasItems(activeSection) || ALWAYS_VISIBLE.length > 0
   // A pill earns its FIXED slot only if its section has content (or it's the
-  // current tab). Hidden-but-present sections still reserve their slot so the
-  // visible subset never shifts.
+  // current tab). ALWAYS_VISIBLE tabs render regardless. Hidden-but-present
+  // sections still reserve their slot so the visible subset never shifts.
   const slotVisible = (k: ProjectSection, earnedSlot: boolean): boolean =>
-    showPills && earnedSlot && (hasItems(k) || activeSection === k)
+    showPills && earnedSlot && (ALWAYS_VISIBLE.includes(k) || hasItems(k) || activeSection === k)
   // Top group: Threads · Data · Claims (Claims last so it reveals without nudging
   // the others). Bottom group: Results · Runs · Files, each purely agent-generated.
   const navSections: SectionDef[] = [
