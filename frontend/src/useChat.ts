@@ -166,6 +166,42 @@ export function useChat(
   // stream we already consume — no extra server cost.
   const [eventLog, setEventLog] = useState<LogEntry[]>([])
   const [jobs, setJobs] = useState<JobInfo[]>([])
+  // Phase A — poll /api/jobs every 5s to keep the (i) drawer's Jobs tab
+  // honest. Before this, jobs were only mutated by SSE 'job_submitted'
+  // events during a live turn — so as soon as the turn closed, the tab
+  // froze on 'queued' even after the worker finished the job (live bug
+  // 2026-06-05). 5s cadence is plenty for a status badge; the response
+  // is small and the round-trip is cheap.
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/jobs')
+        if (!r.ok || cancelled) return
+        const fresh = await r.json() as Array<{ id: string; status: string; title?: string; created_at?: string }>
+        if (cancelled) return
+        setJobs(prev => {
+          // Upsert by id. Server is canonical for status + title; we
+          // preserve a stable `t` (sort key) — falling back to the row's
+          // server-recorded created_at when no local timestamp is known.
+          const byId = new Map(prev.map(j => [j.id, j]))
+          for (const j of fresh) {
+            const existing = byId.get(j.id)
+            byId.set(j.id, {
+              id: j.id,
+              status: j.status || 'queued',
+              title: j.title,
+              t: existing?.t ?? (j.created_at ? Date.parse(j.created_at) : Date.now()),
+            })
+          }
+          return Array.from(byId.values())
+        })
+      } catch (_) { /* swallow — Jobs tab will retry next tick */ }
+    }
+    tick()
+    const h = window.setInterval(tick, 5000)
+    return () => { cancelled = true; window.clearInterval(h) }
+  }, [])
   // B1 — when the Guide pauses on ask_clarification, the UI shows an
   // inline mini-composer. Cleared when the resume turn starts streaming.
   const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(null)
