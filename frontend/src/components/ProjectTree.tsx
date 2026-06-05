@@ -83,11 +83,15 @@ const SECTION_CONFIG: Record<Exclude<ProjectSection, 'threads'>, {
   },
 }
 
+// State-filter pills (Active / Contested / All etc.) were removed
+// 2026-06-05 — every section now defaults to 'All' so nothing is
+// hidden by an implicit state filter the user can no longer toggle.
+// Archived items are still gated by the separate showArchived toggle.
 const DEFAULT_FILTERS: Record<ProjectSection, string> = {
-  threads: 'Active',
-  claims: 'Active',
-  data: 'Active',
-  runs: 'Active',
+  threads: 'All',
+  claims: 'All',
+  data: 'All',
+  runs: 'All',
   results: 'All',
   files: 'All',
 }
@@ -100,7 +104,7 @@ const STATUS_ICON: Record<string, string> = {
 }
 
 const SECTION_CAP = 8   // items shown per section before "show all"
-const SEARCH_MIN = 6    // a section reveals its filter box once it holds this many items (>5)
+const SEARCH_MIN = 5    // a section reveals its filter box once it holds this many items (5 or more — PK 2026-06-05)
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -437,28 +441,12 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   <button className="tree__add-button" title="New investigation" onClick={newThread}>+</button>
                 </div>
               </div>
-              {(() => {
-                // Per-filter counts on the UNFILTERED thread list, so the
-                // pill set never depends on the active selection (avoids the
-                // "click All, lose the other pills" footgun). A pill renders
-                // only when its count > 0 OR it's the current selection
-                // (don't strand the user on a now-empty filter). Whole row
-                // hides when ≤1 pill would show — there's nothing to choose.
-                const allFilters = ['Active', 'Attention', 'All']
-                const visibleFilters = allFilters.filter(f =>
-                  f === threadFilter ||
-                  threadList.filter(t => threadMatchesFilter(t, f)).length > 0)
-                if (visibleFilters.length <= 1) return null
-                return (
-                  <div className="tree__filter-row" aria-label="Thread filters">
-                    {visibleFilters.map(filter => (
-                      <button key={filter} className={threadFilter === filter ? 'is-on' : ''} onClick={() => selectFilter('threads', filter)}>
-                        {filter}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
+              {/* State-filter pills (Active/Attention/All) removed
+                  2026-06-05 per PK: not enough payoff at typical list
+                  sizes; the per-section search box does the real
+                  narrowing. Filter machinery kept (threadMatchesFilter
+                  + sectionFilters state) so re-introducing a saved-view
+                  affordance later is one component, not a refactor. */}
               {searchEligible && (
                 <SearchInput value={query} onChange={setQuery}
                              placeholder="Filter threads…" ariaLabel="Filter threads by name" />
@@ -541,25 +529,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   )}
                 </div>
               </div>
-              {(() => {
-                // Same rule as the threads filter row: render only pills
-                // whose unfiltered count > 0 (or the current selection);
-                // hide the whole row when ≤1 pill would be visible —
-                // nothing meaningful to choose between.
-                const visibleFilters = section.filters.filter(f =>
-                  f === sectionFilter ||
-                  items.filter(e => entityMatchesFilter(e, activeSection, f)).length > 0)
-                if (visibleFilters.length <= 1) return null
-                return (
-                  <div className="tree__filter-row" aria-label={`${section.label} filters`}>
-                    {visibleFilters.map(filter => (
-                      <button key={filter} className={sectionFilter === filter ? 'is-on' : ''} onClick={() => selectFilter(activeSection, filter)}>
-                        {filter}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
+              {/* State-filter pills removed (see Threads section above). */}
               {searchEligible && (
                 <SearchInput value={query} onChange={setQuery}
                              placeholder={`Filter ${section.label.toLowerCase()}…`}
