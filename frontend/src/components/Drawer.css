@@ -112,11 +112,20 @@
 .console__row--tool_result .console__type { color: var(--text-3); }
 
 /* Jobs tab */
-.jobs { display: flex; flex-direction: column; gap: 4px; }
+.jobs { display: flex; flex-direction: column; gap: 0; }
+.jobs__row-wrap { border-bottom: 1px solid var(--border); }
+.jobs__row-wrap--open { background: var(--bg-soft); }
 .jobs__row {
   display: flex; align-items: baseline; gap: 8px; font-size: 11.5px;
-  padding: 4px 0; border-bottom: 1px solid var(--border);
+  padding: 4px 0; width: 100%; text-align: left;
+  background: none; border: 0; cursor: pointer; color: inherit; font: inherit;
 }
+.jobs__row:hover { background: var(--tree-active-bg); }
+.jobs__caret {
+  flex: none; width: 10px; color: var(--text-4); font-family: var(--mono); font-size: 11px;
+  transition: transform 0.12s ease;
+}
+.jobs__caret--open { transform: rotate(90deg); color: var(--text-3); }
 .jobs__status {
   flex: none; font-size: 9.5px; font-family: var(--mono); text-transform: uppercase;
   padding: 1px 7px; border-radius: 9999px; background: var(--tree-active-bg); color: var(--text-3);
@@ -126,3 +135,37 @@
 .jobs__status--done { color: #2e7d32; }
 .jobs__title { color: var(--text-2); word-break: break-word; flex: 1; }
 .jobs__time { flex: none; color: var(--text-4); font-family: var(--mono); font-size: 10px; }
+
+/* Detail panel — expands directly under a clicked jobs row. Visual rhythm
+   mirrors the chat's tool-line script/output toggles for cross-surface
+   familiarity (same triangle markers, same monospaced output box). */
+.jobs__detail {
+  padding: 6px 6px 8px 18px; font-size: 11.5px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.jobs__detail--loading { color: var(--text-4); font-style: italic; }
+.jobs__detail-meta {
+  display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-3); font-size: 10.5px;
+}
+.jobs__detail-meta code { font-family: var(--mono); font-size: 10px; background: none; border: 0; padding: 0; }
+.jobs__detail-label { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+.jobs__detail-hint { color: var(--text-4); font-style: italic; font-size: 11px; }
+.jobs__mono { font-family: var(--mono); font-size: 10.5px; color: var(--text-2); }
+.jobs__section { display: flex; flex-direction: column; gap: 3px; }
+.jobs__toggle {
+  align-self: flex-start;
+  background: none; border: 0; padding: 1px 0;
+  font: inherit; font-size: 11px; color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: baseline; gap: 8px;
+}
+.jobs__toggle:hover { color: var(--text-2); }
+.jobs__toggle-meta { font-family: var(--mono); font-size: 9.5px; color: var(--text-4); }
+.jobs__pre {
+  margin: 0; padding: 6px 8px; max-height: 240px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--panel-bd); border-radius: 3px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-2);
+}
+.jobs__pre--code { background: #1e1e2e; color: #cdd6f4; border-color: transparent; }
+.jobs__pre--err  { background: #fef2f2; border-color: #fca5a5; color: #7f1d1d; max-height: 160px; }
+.jobs__error { display: flex; flex-direction: column; gap: 3px; }
