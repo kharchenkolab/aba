@@ -161,11 +161,14 @@
 .jobs__toggle:hover { color: var(--text-2); }
 .jobs__toggle-meta { font-family: var(--mono); font-size: 9.5px; color: var(--text-4); }
 .jobs__pre {
+  /* Dark terminal-style pane — same as the chat's tool-line__code so code
+     AND output read with the same visual rhythm. Error variant overrides
+     to a soft-pink so a failure jumps out. */
   margin: 0; padding: 6px 8px; max-height: 240px; overflow: auto;
-  background: var(--bg); border: 1px solid var(--panel-bd); border-radius: 3px;
+  background: #1e1e2e; color: #cdd6f4; border: 0; border-radius: 3px;
   font-family: var(--mono); font-size: 11px; line-height: 1.4;
-  white-space: pre-wrap; word-break: break-word; color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word;
 }
-.jobs__pre--code { background: #1e1e2e; color: #cdd6f4; border-color: transparent; }
-.jobs__pre--err  { background: #fef2f2; border-color: #fca5a5; color: #7f1d1d; max-height: 160px; }
+.jobs__pre--code { /* dark style is now the default — kept as a class for future overrides */ }
+.jobs__pre--err  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; max-height: 160px; }
 .jobs__error { display: flex; flex-direction: column; gap: 3px; }
