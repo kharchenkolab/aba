@@ -111,24 +111,11 @@
 .console__row--tool_start .console__type,
 .console__row--tool_result .console__type { color: var(--text-3); }
 
-/* Context tab — search/filter input + per-section match UI */
-.ctxsearch {
-  display: flex; align-items: center; gap: 6px;
-  margin: 6px 10px 4px;
-  padding: 4px 8px;
-  border: 1px solid var(--panel-bd); border-radius: 6px; background: var(--bg);
-}
-.ctxsearch__glyph { flex: none; color: var(--text-4); }
-.ctxsearch__input {
-  flex: 1; border: 0; outline: 0; background: transparent;
-  font: inherit; font-size: 12px; color: var(--text);
-}
-.ctxsearch__input::placeholder { color: var(--text-4); }
-.ctxsearch__clear {
-  flex: none; border: 0; background: transparent; cursor: pointer;
-  color: var(--text-4); font-size: 14px; line-height: 1; padding: 0 4px;
-}
-.ctxsearch__clear:hover { color: var(--text-2); }
+/* Context tab — search/filter input + per-section match UI. The input
+   itself is the shared <SearchInput> (Files-style box) so the affordance
+   matches the rail's filter; ctxsearch-host just provides the surrounding
+   margin since SearchInput is normally placed flush against its list. */
+.ctxsearch-host { margin: 4px 10px 6px; }
 .ctxsearch__summary {
   padding: 4px 10px; font-size: 12px; font-weight: 600;
   cursor: pointer; display: flex; align-items: center; gap: 8px;
@@ -148,8 +135,14 @@
   padding: 4px 0;
 }
 .ctxsearch__line {
-  display: flex; gap: 8px; padding: 0 8px;
+  display: flex; gap: 8px; padding: 2px 8px;
 }
+/* Hairline between adjacent matched lines so a wrapped long line stays
+   visually distinct from its neighbor — applies uniformly across the
+   System prompt / User message / Manifest text views AND inside each
+   message block in the history-search view. The first line of a block
+   has no top border (the message-head sits above it). */
+.ctxsearch__line + .ctxsearch__line { border-top: 1px solid var(--panel-bd); }
 .ctxsearch__lineno {
   flex: none; min-width: 32px; text-align: right;
   color: var(--text-4); user-select: none;
