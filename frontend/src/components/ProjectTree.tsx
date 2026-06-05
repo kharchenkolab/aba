@@ -437,13 +437,28 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   <button className="tree__add-button" title="New investigation" onClick={newThread}>+</button>
                 </div>
               </div>
-              <div className="tree__filter-row" aria-label="Thread filters">
-                {['Active', 'Attention', 'All'].map(filter => (
-                  <button key={filter} className={threadFilter === filter ? 'is-on' : ''} onClick={() => selectFilter('threads', filter)}>
-                    {filter}
-                  </button>
-                ))}
-              </div>
+              {(() => {
+                // Per-filter counts on the UNFILTERED thread list, so the
+                // pill set never depends on the active selection (avoids the
+                // "click All, lose the other pills" footgun). A pill renders
+                // only when its count > 0 OR it's the current selection
+                // (don't strand the user on a now-empty filter). Whole row
+                // hides when ≤1 pill would show — there's nothing to choose.
+                const allFilters = ['Active', 'Attention', 'All']
+                const visibleFilters = allFilters.filter(f =>
+                  f === threadFilter ||
+                  threadList.filter(t => threadMatchesFilter(t, f)).length > 0)
+                if (visibleFilters.length <= 1) return null
+                return (
+                  <div className="tree__filter-row" aria-label="Thread filters">
+                    {visibleFilters.map(filter => (
+                      <button key={filter} className={threadFilter === filter ? 'is-on' : ''} onClick={() => selectFilter('threads', filter)}>
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               {searchEligible && (
                 <SearchInput value={query} onChange={setQuery}
                              placeholder="Filter threads…" ariaLabel="Filter threads by name" />
@@ -526,13 +541,25 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   )}
                 </div>
               </div>
-              <div className="tree__filter-row" aria-label={`${section.label} filters`}>
-                {section.filters.map(filter => (
-                  <button key={filter} className={sectionFilter === filter ? 'is-on' : ''} onClick={() => selectFilter(activeSection, filter)}>
-                    {filter}
-                  </button>
-                ))}
-              </div>
+              {(() => {
+                // Same rule as the threads filter row: render only pills
+                // whose unfiltered count > 0 (or the current selection);
+                // hide the whole row when ≤1 pill would be visible —
+                // nothing meaningful to choose between.
+                const visibleFilters = section.filters.filter(f =>
+                  f === sectionFilter ||
+                  items.filter(e => entityMatchesFilter(e, activeSection, f)).length > 0)
+                if (visibleFilters.length <= 1) return null
+                return (
+                  <div className="tree__filter-row" aria-label={`${section.label} filters`}>
+                    {visibleFilters.map(filter => (
+                      <button key={filter} className={sectionFilter === filter ? 'is-on' : ''} onClick={() => selectFilter(activeSection, filter)}>
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               {searchEligible && (
                 <SearchInput value={query} onChange={setQuery}
                              placeholder={`Filter ${section.label.toLowerCase()}…`}
