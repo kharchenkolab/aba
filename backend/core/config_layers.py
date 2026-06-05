@@ -84,13 +84,19 @@ def load_content_layers(repo_root: Optional[Path] = None) -> list[ContentLayer]:
         repo_root = Path(__file__).resolve().parents[2]
     for candidate in _candidate_config_paths(repo_root):
         if candidate.exists():
-            return _parse_yaml(candidate)
+            return _parse_yaml(candidate, repo_root=repo_root)
     return []
 
 
-def _parse_yaml(path: Path) -> list[ContentLayer]:
+def _parse_yaml(path: Path, *, repo_root: Path) -> list[ContentLayer]:
     """Parse a deployment.yaml. Malformed file logs + returns [] (degraded
-    operation > refusing to boot)."""
+    operation > refusing to boot).
+
+    Relative `path:` values are resolved against `repo_root` (the platform
+    repo's top-level directory). This makes a sibling layout — clone
+    aba-recipes next to the platform repo — work with `path: ../aba-recipes`
+    regardless of which directory the operator invoked from. Absolute paths
+    pass through unchanged."""
     try:
         import yaml
         data = yaml.safe_load(path.read_text()) or {}
@@ -108,9 +114,12 @@ def _parse_yaml(path: Path) -> list[ContentLayer]:
         if not name or not p:
             print(f"[layers] skipping malformed entry in {path}: {entry!r}", flush=True)
             continue
+        resolved = Path(p).expanduser()
+        if not resolved.is_absolute():
+            resolved = (repo_root / resolved).resolve()
         out.append(ContentLayer(
             name=name,
-            path=Path(p).expanduser(),
+            path=resolved,
             git_url=(entry.get("git") or "").strip() or None,
             ref=(entry.get("ref") or "").strip() or None,
         ))

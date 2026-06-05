@@ -1,0 +1,15 @@
+# Development default content-layer configuration (misc/content_layers.md).
+#
+# This file is the LOWEST-PRECEDENCE candidate (last fallback in the
+# chain) — operators can override it with $ABA_DEPLOYMENT_YAML or by
+# placing a deployment.yaml at /etc/aba/ or ~/.aba/.
+#
+# Convention: relative paths resolve against the platform repo root.
+# `../aba-recipes` therefore means "the aba-recipes repo cloned as a
+# sibling of this aba clone" — the recommended dev layout.
+
+layers:
+  - name: aba-recipes
+    path: ../aba-recipes
+    # git: + ref: are L-D additions (bootstrap-content.sh uses them
+    # when set; the loader honours an absent path by warn-and-skip).
