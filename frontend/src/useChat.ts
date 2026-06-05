@@ -172,6 +172,15 @@ export function useChat(
   // froze on 'queued' even after the worker finished the job (live bug
   // 2026-06-05). 5s cadence is plenty for a status badge; the response
   // is small and the round-trip is cheap.
+  //
+  // Side effect: this poll ALSO drives the continuation-attach probe.
+  // When a Phase-C continuation fires server-side, a NEW run starts on
+  // the originating thread without the browser knowing about it (it
+  // wasn't initiated via /api/chat). We watch /active-turn alongside;
+  // if a new run_id appears while we're idle, we attach to its SSE
+  // stream so the continuation message + the agent's response show up
+  // live instead of requiring a page reload (live bug 2026-06-05,
+  // same session).
   useEffect(() => {
     let cancelled = false
     const tick = async () => {
@@ -181,9 +190,6 @@ export function useChat(
         const fresh = await r.json() as Array<{ id: string; status: string; title?: string; created_at?: string }>
         if (cancelled) return
         setJobs(prev => {
-          // Upsert by id. Server is canonical for status + title; we
-          // preserve a stable `t` (sort key) — falling back to the row's
-          // server-recorded created_at when no local timestamp is known.
           const byId = new Map(prev.map(j => [j.id, j]))
           for (const j of fresh) {
             const existing = byId.get(j.id)
@@ -196,12 +202,36 @@ export function useChat(
           }
           return Array.from(byId.values())
         })
-      } catch (_) { /* swallow — Jobs tab will retry next tick */ }
+      } catch (_) { /* swallow */ }
+      // Continuation-attach probe — runs in the same tick so we don't
+      // double our background traffic. Only fires when we're NOT already
+      // streaming our own turn, and only when a DIFFERENT run_id is live.
+      if (cancelled || streamingRef.current || !threadId) return
+      try {
+        const ar = await fetch(
+          `/api/threads/${encodeURIComponent(threadId)}/active-turn${
+            projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)
+        if (!ar.ok || cancelled) return
+        const row = await ar.json()
+        if (!row || !row.run_id) return
+        if (row.run_id === lastRunIdRef.current) return
+        // New active turn detected (a continuation fired, or a peer turn
+        // started). Refresh persisted history so any already-landed
+        // synthetic '[continuation:]' user message is in the visible
+        // log, then reattach to the live SSE stream.
+        lastRunIdRef.current = row.run_id
+        lastSeqRef.current = 0
+        await loadMessages()
+        runStreamRef.current?.({ reattachRunId: row.run_id, since: 0 })
+      } catch (_) { /* probe is best-effort */ }
     }
     tick()
     const h = window.setInterval(tick, 5000)
     return () => { cancelled = true; window.clearInterval(h) }
-  }, [])
+    // threadId + projectId in deps so a thread/project switch tears down
+    // the old probe and starts a fresh one against the new ids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, projectId])
   // B1 — when the Guide pauses on ask_clarification, the UI shows an
   // inline mini-composer. Cleared when the resume turn starts streaming.
   const [pendingClarification, setPendingClarification] = useState<PendingClarification | null>(null)
