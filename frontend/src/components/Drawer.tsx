@@ -598,13 +598,22 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
   )
 }
 
+function _pad(n: number): string { return n < 10 ? '0' + n : String(n) }
+
+/** "MM-DD HH:MM:SS" — date + time, no ms, no year (assumed current).
+ *  Used for the row-level timestamp on the Jobs panel + the detail
+ *  panel's started/finished pills. Single format keeps the column
+ *  alignment predictable. */
 function fmtTime(t: number): string {
+  if (!t) return ''
   const d = new Date(t)
-  return d.toTimeString().slice(0, 8)
+  return `${_pad(d.getMonth() + 1)}-${_pad(d.getDate())} `
+       + `${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`
 }
 
 function fmtTimeStr(iso: string): string {
-  try { return new Date(iso).toTimeString().slice(0, 8) } catch { return iso }
+  if (!iso) return ''
+  try { return fmtTime(Date.parse(iso)) } catch { return iso }
 }
 
 /** "32s" / "2m 14s" — readable elapsed between start and finish. */
