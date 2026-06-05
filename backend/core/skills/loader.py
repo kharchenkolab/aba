@@ -82,6 +82,13 @@ class SkillSpec:
     argument_hint:  str = ""
     allowed_tools:  tuple[str, ...] = ()
     version:        str = ""
+    # Content-layer attribution (misc/content_layers.md L-A). The skills
+    # loader walks N roots lowest-to-highest precedence; this field records
+    # which one provided this spec. Defaults to 'system' (the platform-
+    # shipped library/, register_skill_dir's pre-L-A behaviour). Surfaced
+    # in /api/admin/refresh-skills so operators can see how many recipes
+    # each overlay contributed.
+    layer:          str = "system"
 
 
 _SPLIT = "---"
@@ -111,7 +118,8 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _spec_from_text(text: str, source_path: str = "", *,
-                    default_domain: str = "", visibility: str = "local") -> SkillSpec:
+                    default_domain: str = "", visibility: str = "local",
+                    layer: str = "system") -> SkillSpec:
     fm, body = _split_frontmatter(text)
     name = (fm.get("name") or "").strip()
     if not name:
@@ -159,6 +167,7 @@ def _spec_from_text(text: str, source_path: str = "", *,
         argument_hint=arg_hint,
         allowed_tools=tuple(str(t).strip() for t in at if str(t).strip()),
         version=str(fm.get("version") or "").strip(),
+        layer=layer,
     )
 
 
@@ -188,7 +197,8 @@ def _spec_with_resources(spec: SkillSpec, resources: tuple[str, ...]) -> SkillSp
     return replace(spec, resources=resources)
 
 
-def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
+def register_skill_dir(path: str | Path, *, visibility: str = "local",
+                       layer: str = "system") -> int:
     """Walk a directory tree of .md skill files and register each one. Returns
     the number registered. Idempotent on re-registration (later wins so
     overlays can override). Also feeds the plan validator's KNOWN_SKILLS
@@ -239,7 +249,8 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         default_domain = rel_folder.parts[0] if len(rel_folder.parts) > 1 else ""
         try:
             spec = _spec_from_text(skill_md.read_text(), source_path=str(folder),
-                                   default_domain=default_domain, visibility=visibility)
+                                   default_domain=default_domain, visibility=visibility,
+                                   layer=layer)
         except ValueError as e:
             print(f"[skills] skip {skill_md}: {e}")
             continue
@@ -262,6 +273,15 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
         for a in spec.aliases:
+            # Overlay-as-override semantics (L-A): if an alias collides with a
+            # canonical name already in _REGISTRY (e.g. an overlay declares
+            # `aliases: [scrna-qc-clustering-v2]` to hijack the base recipe),
+            # SHADOW the base canonical so all lookups for that name now
+            # resolve through the alias to the overlay's spec. Without this,
+            # get_skill(base) still hits the base entry first and the alias
+            # is dead.
+            if a in _REGISTRY and a != spec.name:
+                del _REGISTRY[a]
             _ALIASES[a] = spec.name
             register_skill(a)
         consumed_dirs.add(folder)
@@ -277,13 +297,17 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local") -> int:
         default_domain = rel.parts[0] if len(rel.parts) > 1 else ""
         try:
             spec = _spec_from_text(f.read_text(), source_path=str(f),
-                                   default_domain=default_domain, visibility=visibility)
+                                   default_domain=default_domain, visibility=visibility,
+                                   layer=layer)
         except ValueError as e:
             print(f"[skills] skip {f.name}: {e}")
             continue
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
         for a in spec.aliases:
+            # See comment above (folder-skill pass) — alias-style override.
+            if a in _REGISTRY and a != spec.name:
+                del _REGISTRY[a]
             _ALIASES[a] = spec.name
             register_skill(a)
         n += 1

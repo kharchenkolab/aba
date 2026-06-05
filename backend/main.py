@@ -1807,32 +1807,37 @@ def _write_zip_text(zf, arcname: str, content: str, mtime: float | None) -> None
 
 @app.post("/api/skills/reload")
 def skills_reload():
-    """Re-register every skill root (core/, recipes/, vendor_skills/) into the
-    in-process skill registry. Lets vendor-skill edits (e.g. a `git pull` in
-    `backend/vendor/<pkg>/` whose `skill/SKILL.md` we expose via
-    `library/vendor_skills/<pkg>`) take effect without a backend bounce.
+    """Re-register every skill root across every configured content layer
+    (system + any overlays declared in deployment.yaml). Lets vendor-skill
+    edits OR an overlay update (e.g. `git pull` in `/srv/aba/content/
+    aba-recipes/`) take effect without a backend bounce.
 
     Why an explicit endpoint instead of relying on uvicorn's --reload watcher:
-    the vendor clones live under `--reload-exclude vendor/*` so a `git pull`
-    doesn't restart the process — but that also means edits to the SKILL.md
-    inside them don't propagate. This endpoint is the manual refresh seam."""
-    from pathlib import Path as _Path
-    from core.skills import register_skill_dir
-    from core.skills.loader import _REGISTRY
-    _LIB = _Path(__file__).parent / "content" / "bio" / "library"
+    overlay clones AND vendor clones live outside the source tree (or behind
+    --reload-exclude), so file edits there don't bounce uvicorn — but that
+    also means new content doesn't propagate. This endpoint is the manual
+    refresh seam.
+
+    Response includes per-layer counts so operators can confirm the overlay
+    they expected to load actually loaded (L-A, misc/content_layers.md)."""
+    from core.skills.loader import _REGISTRY, _ALIASES
+    from content.bio.skills import register_all_layers
     before = len(_REGISTRY)
     _REGISTRY.clear()
-    n_core    = register_skill_dir(_LIB / "core",          visibility="always")
-    n_recipes = register_skill_dir(_LIB / "recipes",       visibility="local")
-    n_vendor  = register_skill_dir(_LIB / "vendor_skills", visibility="local")
+    _ALIASES.clear()
+    by_layer = register_all_layers()
     after = len(_REGISTRY)
     return {
         "status": "ok",
         "before": before,
         "after": after,
-        "core": n_core,
-        "recipes": n_recipes,
-        "vendor": n_vendor,
+        "by_layer": by_layer,
+        # Back-compat: the previous response carried flat core/recipes/vendor
+        # totals. Surface the system-layer numbers under the same keys so
+        # older callers don't break.
+        "core":    by_layer.get("system", {}).get("core", 0),
+        "recipes": by_layer.get("system", {}).get("recipes", 0),
+        "vendor":  by_layer.get("system", {}).get("vendor", 0),
     }
 
 
