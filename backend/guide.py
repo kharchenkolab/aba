@@ -700,11 +700,29 @@ async def stream_response(
                 # Background path: submit a job and return immediately.
                 if tool_name == "run_python" and isinstance(tool_input, dict) \
                         and tool_input.get("background"):
+                    # Capture thread + project + active-run context so the
+                    # Phase-C continuation can wake the right Guide loop
+                    # when the job lands. Without these, the job row's
+                    # params carry thread_id=null/project_id=null and
+                    # continuation can't decide where to fire (live bug
+                    # 2026-06-05, prj_840cd021 — first user attempt at
+                    # sleep-test backgrounding).
+                    from core import projects as _projects
+                    from content.bio.lifecycle.runs import active_run_id as _arid
+                    _pid = _projects.current() or "default"
+                    _arid_val = None
+                    try:
+                        _arid_val = _arid(str(store_tid))
+                    except Exception:  # noqa: BLE001
+                        pass
                     job = submit_python_job(
                         code=tool_input.get("code", ""),
                         title=tool_input.get("title") or "Background analysis",
                         focus_entity_id=focus_entity_id,
                         timeout_s=int(tool_input.get("timeout_s") or 300),
+                        project_id=str(_pid),
+                        thread_id=str(store_tid),
+                        run_id=_arid_val,
                     )
                     result_obj = {
                         "job_id": job["id"],
