@@ -73,6 +73,12 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
   const [err, setErr] = useState<string | null>(null)
   const [tick, setTick] = useState(0)            // refetch on user click
   const [preview, setPreview] = useState<ManifestSnapshot | null>(null)
+  // Search/filter — sits below Meta + applies per-section. Grain varies:
+  //   • tools / history → item-level (match → row visible)
+  //   • user_text / system / manifest texts → line-level (match → line
+  //     visible, leading lines kept as 1-line numeric breadcrumb)
+  // Matches highlighted inline; sections auto-expand when q has matches.
+  const [q, setQ] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -119,22 +125,34 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
             <div className="drawer__kv"><span className="drawer__k">system size</span><span className="drawer__v">{ctx.system.length.toLocaleString()} chars</span></div>
             <div className="drawer__kv"><span className="drawer__k">history</span><span className="drawer__v">{ctx.history.length} messages</span></div>
           </Section>
-          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>User message (this turn)</summary>
-            <pre className="drawer__pre" style={{ margin: '4px 10px' }}>{ctx.user_text || '(empty — resume/Go)'}</pre>
-          </details>
-          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>Tools offered ({ctx.tools.length})</summary>
-            <div style={{ padding: '4px 10px', fontFamily: 'monospace', fontSize: 11, columnCount: 2, columnGap: 12 }}>
-              {ctx.tools.map(t => <div key={t}>{t}</div>)}
-            </div>
-          </details>
-          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>System prompt ({ctx.system.length.toLocaleString()} chars)</summary>
-            <pre className="drawer__pre" style={{ margin: '4px 10px', maxHeight: 500, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>{ctx.system}</pre>
-          </details>
-          <details><summary style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>Message history ({ctx.history.length})</summary>
-            <div style={{ padding: '4px 10px' }}>
-              {ctx.history.map((m, i) => <HistMsg key={i} idx={i} msg={m} />)}
-            </div>
-          </details>
+          <div className="ctxsearch">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                 strokeWidth="1.6" strokeLinecap="round" aria-hidden="true" className="ctxsearch__glyph">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5L13.5 13.5" />
+            </svg>
+            <input
+              className="ctxsearch__input"
+              type="text"
+              placeholder="Filter sections below…  (case-insensitive substring)"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              aria-label="Filter context sections"
+              spellCheck={false}
+            />
+            {q && (
+              <button className="ctxsearch__clear" onClick={() => setQ('')} title="Clear" aria-label="Clear filter">×</button>
+            )}
+          </div>
+          <FilterableSection title="User message (this turn)"
+                             q={q} mode="text" content={ctx.user_text || ''}
+                             emptyHint="(empty — resume/Go)" />
+          <FilterableSection title="Tools offered"
+                             q={q} mode="list" items={ctx.tools} count={ctx.tools.length} />
+          <FilterableSection title={`System prompt (${ctx.system.length.toLocaleString()} chars)`}
+                             q={q} mode="text" content={ctx.system}
+                             maxHeight={500} />
+          <FilterableHistorySection title="Message history" q={q} history={ctx.history} />
         </>
       )}
       {m && (
@@ -156,7 +174,157 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
   )
 }
 
-function HistMsg({ idx, msg }: { idx: number; msg: { role: string; content: unknown } }) {
+/** Highlight every case-insensitive substring match of q in s. Empty q
+ *  returns s as a single text node. */
+function highlight(s: string, q: string): React.ReactNode {
+  if (!q) return s
+  const ql = q.toLowerCase()
+  const out: React.ReactNode[] = []
+  let i = 0, k = 0
+  while (i < s.length) {
+    const hit = s.toLowerCase().indexOf(ql, i)
+    if (hit < 0) { out.push(s.slice(i)); break }
+    if (hit > i) out.push(s.slice(i, hit))
+    out.push(<mark key={k++} className="ctxsearch__hit">{s.slice(hit, hit + q.length)}</mark>)
+    i = hit + q.length
+  }
+  return out
+}
+
+/** Line-grain filter for a long text body. Returns the original text when
+ *  q is empty; otherwise only lines that contain a match (line numbers
+ *  preserved as a left gutter so the user can locate context in the full
+ *  document). matchCount = total occurrences, used by section headers. */
+function filterTextByLines(text: string, q: string): { rendered: React.ReactNode; matchCount: number } {
+  if (!q) return { rendered: text, matchCount: 0 }
+  const ql = q.toLowerCase()
+  const lines = text.split('\n')
+  const kept: { lineNum: number; text: string }[] = []
+  let total = 0
+  lines.forEach((line, i) => {
+    if (line.toLowerCase().includes(ql)) {
+      kept.push({ lineNum: i + 1, text: line })
+      // Crude per-line occurrence count for the header badge.
+      let from = 0
+      const lo = line.toLowerCase()
+      while (true) {
+        const k = lo.indexOf(ql, from); if (k < 0) break
+        total++; from = k + ql.length
+      }
+    }
+  })
+  if (kept.length === 0) return { rendered: null, matchCount: 0 }
+  return {
+    matchCount: total,
+    rendered: (
+      <>
+        {kept.map(k => (
+          <div key={k.lineNum} className="ctxsearch__line">
+            <span className="ctxsearch__lineno">{k.lineNum}</span>
+            <span className="ctxsearch__linetxt">{highlight(k.text, q)}</span>
+          </div>
+        ))}
+      </>
+    ),
+  }
+}
+
+/** A filterable section — wraps content in a <details> with an
+ *  auto-expand-on-match behavior + a match counter in the header.
+ *  Three modes:
+ *    'text' — content is a string; filter line-by-line; highlight matches.
+ *    'list' — items are short strings; filter to matching items.
+ */
+function FilterableSection({ title, q, mode, content, items, count, emptyHint, maxHeight }: {
+  title: string
+  q: string
+  mode: 'text' | 'list'
+  content?: string
+  items?: string[]
+  count?: number
+  emptyHint?: string
+  maxHeight?: number
+}) {
+  let body: React.ReactNode = null
+  let matchCount = 0
+  let hasContent = true
+  if (mode === 'text') {
+    const text = content ?? ''
+    if (!q) {
+      body = <pre className="drawer__pre" style={{ margin: '4px 10px', ...(maxHeight ? { maxHeight, overflowY: 'auto' } : {}), whiteSpace: 'pre-wrap' }}>{text || emptyHint || ''}</pre>
+      hasContent = !!text || !!emptyHint
+    } else {
+      const { rendered, matchCount: mc } = filterTextByLines(text, q)
+      matchCount = mc
+      body = mc > 0
+        ? <div className="ctxsearch__lines" style={maxHeight ? { maxHeight, overflowY: 'auto' } : undefined}>{rendered}</div>
+        : <div className="ctxsearch__none">No matches in this section.</div>
+    }
+  } else {
+    const list = items ?? []
+    const filtered = q ? list.filter(t => t.toLowerCase().includes(q.toLowerCase())) : list
+    matchCount = q ? filtered.length : 0
+    if (q && filtered.length === 0) {
+      body = <div className="ctxsearch__none">No matches in this section.</div>
+    } else {
+      body = (
+        <div style={{ padding: '4px 10px', fontFamily: 'monospace', fontSize: 11, columnCount: 2, columnGap: 12 }}>
+          {filtered.map(t => <div key={t}>{q ? highlight(t, q) : t}</div>)}
+        </div>
+      )
+    }
+  }
+  // Header text — show "(M of N matches)" when filtering; "(N)" for the list mode default.
+  const totalLabel = mode === 'list' ? ` (${count ?? items?.length ?? 0})` : ''
+  const matchBadge = q ? (matchCount > 0
+      ? <span className="ctxsearch__badge">{matchCount} match{matchCount === 1 ? '' : 'es'}</span>
+      : <span className="ctxsearch__badge ctxsearch__badge--none">no match</span>) : null
+  // Auto-expand when a query is active AND this section has matches.
+  const openWhenFilter = q.length > 0 && matchCount > 0
+  return (
+    <details open={openWhenFilter || undefined}>
+      <summary className="ctxsearch__summary">
+        <span className="ctxsearch__title">{title}{totalLabel}</span>
+        {matchBadge}
+      </summary>
+      {hasContent && body}
+    </details>
+  )
+}
+
+/** Filterable Message-history section. Item-grain: any block matches → show
+ *  the whole message. The visible JSON dump keeps the same structure, with
+ *  the in-message matches highlighted inside the pre. */
+function FilterableHistorySection({ title, q, history }: {
+  title: string
+  q: string
+  history: { role: string; content: unknown }[]
+}) {
+  const ql = q.toLowerCase()
+  const matches = history
+    .map((m, i) => ({ m, i, hit: !q || JSON.stringify(m.content).toLowerCase().includes(ql) }))
+    .filter(x => x.hit)
+  const totalLabel = ` (${history.length})`
+  const matchBadge = q ? (matches.length > 0
+      ? <span className="ctxsearch__badge">{matches.length} msg{matches.length === 1 ? '' : 's'}</span>
+      : <span className="ctxsearch__badge ctxsearch__badge--none">no match</span>) : null
+  const openWhenFilter = q.length > 0 && matches.length > 0
+  return (
+    <details open={openWhenFilter || undefined}>
+      <summary className="ctxsearch__summary">
+        <span className="ctxsearch__title">{title}{totalLabel}</span>
+        {matchBadge}
+      </summary>
+      <div style={{ padding: '4px 10px' }}>
+        {q && matches.length === 0
+          ? <div className="ctxsearch__none">No matches in this section.</div>
+          : matches.map(x => <HistMsg key={x.i} idx={x.i} msg={x.m} q={q} />)}
+      </div>
+    </details>
+  )
+}
+
+function HistMsg({ idx, msg, q }: { idx: number; msg: { role: string; content: unknown }; q?: string }) {
   const role = msg.role
   const content = msg.content
   const blocks = Array.isArray(content) ? content
@@ -169,13 +337,14 @@ function HistMsg({ idx, msg }: { idx: number; msg: { role: string; content: unkn
     if (bb.type === 'tool_result') return `tool_result(${String(bb.content ?? '').length})`
     return bb.type || '?'
   }).join(' · ')
+  const json = JSON.stringify(content, null, 2)
   return (
-    <details style={{ marginBottom: 4 }}>
+    <details style={{ marginBottom: 4 }} open={q ? true : undefined}>
       <summary style={{ fontSize: 11, fontFamily: 'monospace', cursor: 'pointer' }}>
         [{idx.toString().padStart(2, '0')}] <b>{role}</b> · {summary}
       </summary>
       <pre style={{ fontSize: 10, lineHeight: 1.3, background: 'var(--tree-active-bg)', padding: 6, borderRadius: 3, marginTop: 4, maxHeight: 300, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
-        {JSON.stringify(content, null, 2)}
+        {q ? highlight(json, q) : json}
       </pre>
     </details>
   )
