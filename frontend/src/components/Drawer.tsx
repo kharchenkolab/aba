@@ -10,7 +10,7 @@
  * Casual users get immediate-thread progress in the chat; this panel is the
  * deeper view, off the default path. Read-only.
  */
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
 import './Drawer.css'
 
@@ -292,34 +292,79 @@ function FilterableSection({ title, q, mode, content, items, count, emptyHint, m
   )
 }
 
-/** Filterable Message-history section. Item-grain: any block matches → show
- *  the whole message. The visible JSON dump keeps the same structure, with
- *  the in-message matches highlighted inside the pre. */
+/** Filterable Message-history section.
+ *
+ *  When q is empty → original per-message <details> drilldown (the JSON
+ *  is too verbose for an always-on flat view).
+ *
+ *  When q is non-empty → flat one-line-per-match view, same visual rhythm
+ *  as the System-prompt line-filter (numeric gutter, --bg-soft background,
+ *  yellow .ctxsearch__hit highlight). A short "[N] role" header marks the
+ *  start of each message's matched lines and a hairline divider separates
+ *  messages so text-wrapped lines from different messages don't blur
+ *  into each other (PK ask, 2026-06-05).
+ */
 function FilterableHistorySection({ title, q, history }: {
   title: string
   q: string
   history: { role: string; content: unknown }[]
 }) {
   const ql = q.toLowerCase()
-  const matches = history
-    .map((m, i) => ({ m, i, hit: !q || JSON.stringify(m.content).toLowerCase().includes(ql) }))
-    .filter(x => x.hit)
+  // Per-message line-grain scan, collected into groups so we can render
+  // a header + hairline between them. matchCount = TOTAL hit lines across
+  // the section (drives the header badge).
+  type LineHit = { lineNum: number; text: string }
+  const groups: { idx: number; role: string; lines: LineHit[] }[] = []
+  let totalHits = 0
+  if (q) {
+    history.forEach((m, i) => {
+      const dump = JSON.stringify(m.content, null, 2)
+      const ls = dump.split('\n')
+      const hits: LineHit[] = []
+      ls.forEach((line, n) => {
+        if (line.toLowerCase().includes(ql)) hits.push({ lineNum: n + 1, text: line })
+      })
+      if (hits.length) { groups.push({ idx: i, role: m.role, lines: hits }); totalHits += hits.length }
+    })
+  }
   const totalLabel = ` (${history.length})`
-  const matchBadge = q ? (matches.length > 0
-      ? <span className="ctxsearch__badge">{matches.length} msg{matches.length === 1 ? '' : 's'}</span>
+  const matchBadge = q ? (totalHits > 0
+      ? <span className="ctxsearch__badge">{totalHits} match{totalHits === 1 ? '' : 'es'}</span>
       : <span className="ctxsearch__badge ctxsearch__badge--none">no match</span>) : null
-  const openWhenFilter = q.length > 0 && matches.length > 0
+  const openWhenFilter = q.length > 0 && totalHits > 0
   return (
     <details open={openWhenFilter || undefined}>
       <summary className="ctxsearch__summary">
         <span className="ctxsearch__title">{title}{totalLabel}</span>
         {matchBadge}
       </summary>
-      <div style={{ padding: '4px 10px' }}>
-        {q && matches.length === 0
+      {q ? (
+        totalHits === 0
           ? <div className="ctxsearch__none">No matches in this section.</div>
-          : matches.map(x => <HistMsg key={x.i} idx={x.i} msg={x.m} q={q} />)}
-      </div>
+          : (
+            <div className="ctxsearch__lines" style={{ maxHeight: 500, overflowY: 'auto' }}>
+              {groups.map((g, gi) => (
+                <React.Fragment key={g.idx}>
+                  {gi > 0 && <div className="ctxsearch__msgsep" aria-hidden="true" />}
+                  <div className="ctxsearch__msghead">
+                    [{g.idx.toString().padStart(2, '0')}] <b>{g.role}</b>
+                    <span className="ctxsearch__msghead-meta">{g.lines.length} hit{g.lines.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {g.lines.map(l => (
+                    <div key={`${g.idx}-${l.lineNum}`} className="ctxsearch__line">
+                      <span className="ctxsearch__lineno">{l.lineNum}</span>
+                      <span className="ctxsearch__linetxt">{highlight(l.text, q)}</span>
+                    </div>
+                  ))}
+                </React.Fragment>
+              ))}
+            </div>
+          )
+      ) : (
+        <div style={{ padding: '4px 10px' }}>
+          {history.map((m, i) => <HistMsg key={i} idx={i} msg={m} />)}
+        </div>
+      )}
     </details>
   )
 }
