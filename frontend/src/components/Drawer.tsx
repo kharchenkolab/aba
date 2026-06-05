@@ -12,6 +12,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
+import SearchInput from './SearchInput'
 import './Drawer.css'
 
 type Tab = 'console' | 'jobs' | 'context'
@@ -125,24 +126,13 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
             <div className="drawer__kv"><span className="drawer__k">system size</span><span className="drawer__v">{ctx.system.length.toLocaleString()} chars</span></div>
             <div className="drawer__kv"><span className="drawer__k">history</span><span className="drawer__v">{ctx.history.length} messages</span></div>
           </Section>
-          <div className="ctxsearch">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                 strokeWidth="1.6" strokeLinecap="round" aria-hidden="true" className="ctxsearch__glyph">
-              <circle cx="7" cy="7" r="4.5" />
-              <path d="M10.5 10.5L13.5 13.5" />
-            </svg>
-            <input
-              className="ctxsearch__input"
-              type="text"
-              placeholder="Filter sections below…  (case-insensitive substring)"
+          <div className="ctxsearch-host">
+            <SearchInput
               value={q}
-              onChange={e => setQ(e.target.value)}
-              aria-label="Filter context sections"
-              spellCheck={false}
+              onChange={setQ}
+              ariaLabel="Filter context sections"
+              placeholder="Filter sections below…"
             />
-            {q && (
-              <button className="ctxsearch__clear" onClick={() => setQ('')} title="Clear" aria-label="Clear filter">×</button>
-            )}
           </div>
           <FilterableSection title="User message (this turn)"
                              q={q} mode="text" content={ctx.user_text || ''}
@@ -172,6 +162,25 @@ function ContextTab({ manifest: liveManifest, focusEntityId, threadId }: {
       )}
     </>
   )
+}
+
+/** When a matched line is very long (think a 4 KB JSON blob on one
+ *  physical line, or one of the system prompt's wide tables), show a
+ *  ~200-char window centered on the FIRST match — with leading /
+ *  trailing ellipses to mark the cut. Short lines fall through as-is.
+ *  PK ask 2026-06-05: "at most 200 chars around each match". */
+function excerpt(line: string, q: string, max = 200): string {
+  if (!q || line.length <= max) return line
+  const lo = line.toLowerCase()
+  const hit = lo.indexOf(q.toLowerCase())
+  if (hit < 0) return line.slice(0, max) + '…'
+  const before = Math.floor((max - q.length) / 2)
+  const start = Math.max(0, hit - Math.max(0, before))
+  const end = Math.min(line.length, start + max)
+  let s = line.slice(start, end)
+  if (start > 0) s = '…' + s
+  if (end < line.length) s = s + '…'
+  return s
 }
 
 /** Highlight every case-insensitive substring match of q in s. Empty q
@@ -221,7 +230,7 @@ function filterTextByLines(text: string, q: string): { rendered: React.ReactNode
         {kept.map(k => (
           <div key={k.lineNum} className="ctxsearch__line">
             <span className="ctxsearch__lineno">{k.lineNum}</span>
-            <span className="ctxsearch__linetxt">{highlight(k.text, q)}</span>
+            <span className="ctxsearch__linetxt">{highlight(excerpt(k.text, q), q)}</span>
           </div>
         ))}
       </>
@@ -353,7 +362,7 @@ function FilterableHistorySection({ title, q, history }: {
                   {g.lines.map(l => (
                     <div key={`${g.idx}-${l.lineNum}`} className="ctxsearch__line">
                       <span className="ctxsearch__lineno">{l.lineNum}</span>
-                      <span className="ctxsearch__linetxt">{highlight(l.text, q)}</span>
+                      <span className="ctxsearch__linetxt">{highlight(excerpt(l.text, q), q)}</span>
                     </div>
                   ))}
                 </React.Fragment>
