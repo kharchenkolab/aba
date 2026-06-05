@@ -222,20 +222,155 @@ function ConsoleTab({ log }: { log: LogEntry[] }) {
 }
 
 // ---------- Jobs tab (background jobs) ----------
+/** Full job record returned by GET /api/jobs/{id}. Server-shape (snake_case
+ *  ISO timestamps) — kept local to JobsTab since nothing else consumes it. */
+interface JobDetail {
+  id: string
+  kind: string
+  title: string
+  status: string
+  params: { code?: string; thread_id?: string | null; project_id?: string | null; run_id?: string | null; timeout_s?: number } | null
+  log_tail: string | null
+  error: string | null
+  created_at: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
 function JobsTab({ jobs }: { jobs: JobInfo[] }) {
+  // Single-open accordion: at most one job row is expanded at a time. Click
+  // the same row to collapse, a different one to switch. The detail panel
+  // sits inline directly below its row (no modal — keeps the (i) drawer's
+  // density and lets the user scan the list while reading details).
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Lazy detail cache. Polling /api/jobs (in useChat) keeps the row list
+  // fresh but doesn't carry params/log_tail/error — we fetch those once
+  // per job on first expansion and cache them here so repeated toggles
+  // don't re-hit the network.
+  const [details, setDetails] = useState<Record<string, JobDetail>>({})
+  const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({})
+
+  // Re-fetch the detail panel for a running job each poll tick so log_tail
+  // updates while the agent watches. Done in the same place that pulls it
+  // for the first expansion.
+  const fetchDetail = async (id: string, force = false) => {
+    if (!force && (details[id] || detailLoading[id])) return
+    setDetailLoading(prev => ({ ...prev, [id]: true }))
+    try {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`)
+      if (!r.ok) return
+      const d = await r.json() as JobDetail
+      setDetails(prev => ({ ...prev, [id]: d }))
+    } catch (_) { /* leave detailLoading set — user can re-toggle to retry */ }
+    finally { setDetailLoading(prev => ({ ...prev, [id]: false })) }
+  }
+
+  // While a job is expanded AND still running, refresh its detail every 4s
+  // so log_tail grows in view. Stops once the row closes or the job ends.
+  useEffect(() => {
+    if (!expandedId) return
+    const row = jobs.find(j => j.id === expandedId)
+    if (!row || (row.status !== 'queued' && row.status !== 'running')) return
+    const h = window.setInterval(() => { fetchDetail(expandedId, true) }, 4000)
+    return () => window.clearInterval(h)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId, jobs])
+
+  const toggle = (id: string) => {
+    setExpandedId(prev => {
+      const next = prev === id ? null : id
+      if (next) fetchDetail(next)
+      return next
+    })
+  }
+
   if (jobs.length === 0) {
     return <div className="drawer__empty">No background jobs. Long pipelines (run_python background) appear here.</div>
   }
   const sorted = [...jobs].sort((a, b) => b.t - a.t)
   return (
     <div className="jobs">
-      {sorted.map(j => (
-        <div key={j.id} className="jobs__row">
-          <span className={`jobs__status jobs__status--${j.status}`}>{j.status}</span>
-          <span className="jobs__title">{j.title || j.id}</span>
-          <span className="jobs__time">{fmtTime(j.t)}</span>
+      {sorted.map(j => {
+        const open = j.id === expandedId
+        const d = details[j.id]
+        return (
+          <div key={j.id} className={`jobs__row-wrap${open ? ' jobs__row-wrap--open' : ''}`}>
+            <button type="button" className="jobs__row" onClick={() => toggle(j.id)}
+                    aria-expanded={open} title={open ? 'Click to collapse' : 'Click to see code + output'}>
+              <span className={`jobs__caret${open ? ' jobs__caret--open' : ''}`} aria-hidden="true">›</span>
+              <span className={`jobs__status jobs__status--${j.status}`}>{j.status}</span>
+              <span className="jobs__title">{j.title || j.id}</span>
+              <span className="jobs__time">{fmtTime(j.t)}</span>
+            </button>
+            {open && <JobDetailPanel job={j} detail={d} loading={!!detailLoading[j.id]} />}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Inline detail panel rendered directly under an expanded jobs row. Mirrors
+ *  the chat's tool-line "script" + "output" affordances so a background
+ *  run feels like its synchronous run_python sibling — same content,
+ *  same toggles, different host. */
+function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean }) {
+  const [showCode, setShowCode] = useState(false)
+  // Output pane defaults to open IF there's something to show — surfaces
+  // log_tail / error without an extra click. Mirrors the failed-tool
+  // behavior in the chat (which auto-reveals the error pane).
+  const hasOutput = !!(detail?.log_tail || detail?.error)
+  const [showOut, setShowOut] = useState(true)
+
+  if (!detail && loading) {
+    return <div className="jobs__detail jobs__detail--loading">loading…</div>
+  }
+  if (!detail) {
+    return <div className="jobs__detail jobs__detail--loading">no detail available</div>
+  }
+
+  const code = detail.params?.code || ''
+  const out = detail.log_tail || ''
+  const err = detail.error || ''
+  const duration = durationFmt(detail.started_at, detail.finished_at)
+  return (
+    <div className="jobs__detail">
+      <div className="jobs__detail-meta">
+        <span>id <code className="jobs__mono">{detail.id}</code></span>
+        {detail.params?.thread_id && (
+          <span>thread <code className="jobs__mono">{detail.params.thread_id}</code></span>
+        )}
+        {duration && <span>duration {duration}</span>}
+        {detail.started_at && <span title={detail.started_at}>started {fmtTimeStr(detail.started_at)}</span>}
+        {detail.finished_at && <span title={detail.finished_at}>finished {fmtTimeStr(detail.finished_at)}</span>}
+      </div>
+      {err && (
+        <div className="jobs__error">
+          <div className="jobs__detail-label">error</div>
+          <pre className="jobs__pre jobs__pre--err">{err}</pre>
         </div>
-      ))}
+      )}
+      {code && (
+        <div className="jobs__section">
+          <button type="button" className="jobs__toggle" onClick={() => setShowCode(s => !s)}>
+            {showCode ? '▾ code' : '▸ code'}
+            <span className="jobs__toggle-meta">{code.length} chars</span>
+          </button>
+          {showCode && <pre className="jobs__pre jobs__pre--code">{code}</pre>}
+        </div>
+      )}
+      {hasOutput && (
+        <div className="jobs__section">
+          <button type="button" className="jobs__toggle" onClick={() => setShowOut(s => !s)}>
+            {showOut ? '▾ output' : '▸ output'}
+            <span className="jobs__toggle-meta">{(out || err).length} chars</span>
+          </button>
+          {showOut && out && <pre className="jobs__pre">{out}</pre>}
+        </div>
+      )}
+      {!code && !out && !err && (
+        <div className="jobs__detail-hint">(no captured input/output — this job may not have been a run_python)</div>
+      )}
     </div>
   )
 }
@@ -243,6 +378,22 @@ function JobsTab({ jobs }: { jobs: JobInfo[] }) {
 function fmtTime(t: number): string {
   const d = new Date(t)
   return d.toTimeString().slice(0, 8)
+}
+
+function fmtTimeStr(iso: string): string {
+  try { return new Date(iso).toTimeString().slice(0, 8) } catch { return iso }
+}
+
+/** "32s" / "2m 14s" — readable elapsed between start and finish. */
+function durationFmt(startIso: string | null, finishIso: string | null): string {
+  if (!startIso) return ''
+  const start = Date.parse(startIso); if (Number.isNaN(start)) return ''
+  const end = finishIso ? Date.parse(finishIso) : Date.now()
+  if (Number.isNaN(end)) return ''
+  const s = Math.max(0, Math.round((end - start) / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60), r = s % 60
+  return `${m}m ${r.toString().padStart(2, '0')}s`
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
