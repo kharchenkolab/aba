@@ -28,6 +28,14 @@ def create_entity(
     scenario_of: Optional[str] = None,
     metadata: Optional[dict] = None,
     entity_id: Optional[str] = None,
+    # Stage 2 (misc/exec_records_and_versioning.md): pointer to the
+    # exec_record that produced this entity, addressed as
+    # <exec_id>:<artifact_kind>:<artifact_idx>. Optional — set by
+    # paths that materialize entities from a tool-call harvest; legacy
+    # callers that don't know the exec leave them None.
+    exec_id: Optional[str] = None,
+    artifact_kind: Optional[str] = None,
+    artifact_idx: Optional[int] = None,
 ) -> str:
     # WU-2 (post-Phase-4.5): schema validation is now HARD-REJECT, not
     # warning-only. p10 confirmed every add_edge call site is declared
@@ -59,13 +67,15 @@ def create_entity(
             """INSERT INTO entities
                (id, type, title, status, artifact_path, producing_code,
                 producing_params, parent_entity_id, scenario_of, metadata,
+                exec_id, artifact_kind, artifact_idx,
                 created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 eid, entity_type, title, artifact_path, producing_code,
                 json.dumps(producing_params) if producing_params else None,
                 parent_entity_id, scenario_of,
                 json.dumps(metadata) if metadata else None,
+                exec_id, artifact_kind, artifact_idx,
                 now, now,
             ),
         )
@@ -80,11 +90,13 @@ def create_entity(
 
 
 def _row_to_entity(r) -> dict:
-    # display_path may be absent on rows from older schemas — tolerate.
-    try:
-        dp = r["display_path"]
-    except (KeyError, IndexError):
-        dp = None
+    # display_path / exec_id / artifact_* may be absent on rows from older
+    # schemas — tolerate during the migration window.
+    def _opt(name):
+        try:
+            return r[name]
+        except (KeyError, IndexError):
+            return None
     return {
         "id": r["id"],
         "type": r["type"],
@@ -99,7 +111,10 @@ def _row_to_entity(r) -> dict:
         "tags": json.loads(r["tags"]) if r["tags"] else [],
         "notes": r["notes"],
         "pinned": bool(r["pinned"]) if r["pinned"] is not None else False,
-        "display_path": dp,
+        "display_path": _opt("display_path"),
+        "exec_id": _opt("exec_id"),
+        "artifact_kind": _opt("artifact_kind"),
+        "artifact_idx": _opt("artifact_idx"),
         "deleted_at": r["deleted_at"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
@@ -190,7 +205,8 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
             # transition) or a buggy update (surface for the caller).
             raise ValueError("entity_types: " + "; ".join(msgs))
     allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path",
-               "display_path", "producing_code", "producing_params"}
+               "display_path", "producing_code", "producing_params",
+               "exec_id", "artifact_kind", "artifact_idx"}
     sets = []
     args = []
     for k, v in fields.items():

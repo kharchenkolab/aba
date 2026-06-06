@@ -141,6 +141,16 @@ def init_db():
             # F3 (files.md): derived display path from title + conventions.
             # Idempotent; recomputed by bio.graph.display.recompute_display_path.
             ("display_path", "ALTER TABLE entities ADD COLUMN display_path TEXT"),
+            # Stage 2 of misc/exec_records_and_versioning.md: artifact pointer
+            # into the exec record that produced this entity. Together with
+            # artifact_kind + artifact_idx these form <exec_id>:<kind>:<idx>,
+            # the canonical artifact id. For now, new figure/table entities
+            # populate these alongside producing_code (denormalized cache for
+            # legacy read paths); the column drop comes later once reads
+            # migrate to the exec_records-backed helper.
+            ("exec_id",       "ALTER TABLE entities ADD COLUMN exec_id TEXT"),
+            ("artifact_kind", "ALTER TABLE entities ADD COLUMN artifact_kind TEXT"),
+            ("artifact_idx",  "ALTER TABLE entities ADD COLUMN artifact_idx INTEGER"),
         ):
             if not _column_exists(c, "entities", col):
                 c.execute(ddl)
@@ -149,6 +159,7 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_parent ON entities(parent_entity_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(pinned)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_exec ON entities(exec_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_entity ON messages(entity_id)")
 
         c.execute("""

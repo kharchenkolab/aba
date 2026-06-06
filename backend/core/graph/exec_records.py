@@ -206,6 +206,30 @@ def list_by_thread(thread_id: str, *, run_id_filter: Optional[str] = None,
         return [_row_index(r) for r in c.execute(q, args).fetchall()]
 
 
+def lookup_code_for_entity(entity: dict | None) -> str:
+    """Return the producing-code string for an entity.
+
+    Stage 2 (misc/exec_records_and_versioning.md) routes "show code" via the
+    exec record: entity.exec_id → exec_records.get(eid).code. Legacy entities
+    that pre-date exec records (no exec_id) fall back to entity.producing_code.
+
+    Returns "" when neither source yields code. Never raises — UI/manifest
+    code paths shouldn't fail just because an exec sidecar got hand-deleted.
+    """
+    if not entity:
+        return ""
+    eid = entity.get("exec_id")
+    if eid:
+        try:
+            rec = get(eid)
+        except Exception:  # noqa: BLE001 — best-effort lookup
+            rec = None
+        if rec and rec.get("code"):
+            return rec["code"]
+        # Sidecar missing / unreadable → fall through to the legacy cache.
+    return entity.get("producing_code") or ""
+
+
 def _row_index(r) -> dict:
     return {
         "exec_id":      r["exec_id"],
