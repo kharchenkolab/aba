@@ -3,6 +3,7 @@ import type { Entity } from '../types'
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
+import SplitButton from './SplitButton'
 // Importing the bio side has the side-effect of registering all bio
 // focus-view components against the registry. The shell below dispatches
 // via `focus_view_for` — it never references entity-type-specific
@@ -24,8 +25,14 @@ interface Props {
   compact?: boolean
   /** Hand a request to the Guide (e.g. a Run's Re-run / Discuss → chat). */
   onAsk?: (text: string) => void
-  /** "Chat" gesture on a run output — bring the plot (with its image) into chat. */
-  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  /** "Chat" gesture on a run output / focus surface — brings the plot (with
+   *  its image) into chat. The optional `action` parameter (Stage 5 of
+   *  misc/exec_records_and_versioning.md) switches the composer prefill
+   *  between chat / make-a-revision / reproduce so the same callback
+   *  drives all three SplitButton dropdown options. */
+  onChatResult?: (label: string, thumb?: string,
+                  annotation?: { image: string; note: string },
+                  action?: 'chat' | 'revision' | 'reproduce') => void
   /** Run view → switch the left rail to the Files tab, deep-linking to a folder. */
   onBrowseFiles?: (path?: string) => void
   /** Per-request project pin for upload routing (dataset "Add files"). */
@@ -121,7 +128,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
             </svg>
           </button>
         )}
-        {renderActionButton(entity, setPromote, groupIntoResult)}
+        {renderActionButton(entity, setPromote, onChatResult, groupIntoResult)}
       </div>
       )}
       {historyOpen && entity.type === 'figure' && (
@@ -314,12 +321,55 @@ function renderCompareBody(scenario: Entity, baseline: Entity) {
 function renderActionButton(
   entity: Entity,
   setPromote: (m: PromoteMode | null) => void,
+  onChatResult?: (label: string, thumb?: string,
+                  annotation?: { image: string; note: string },
+                  action?: 'chat' | 'revision' | 'reproduce') => void,
   onGroup?: () => void,
 ) {
   // Figures/tables → group into a Result (deliberate), and draft a claim.
   if (entity.type === 'figure' || entity.type === 'table' || entity.type === 'result') {
+    const can_chat = onChatResult != null
+      && (entity.type === 'figure' || entity.type === 'table')
     return (
       <div className="focus__actions">
+        {can_chat && (
+          /* Stage 5: SplitButton default is "Chat about this figure"; the
+             dropdown surfaces "Make a revision" + "Reproduce", both of
+             which prefill the composer with a tailored instruction so
+             the agent uses the make_revision / reproduce_from_exec
+             tools (see misc/exec_records_and_versioning.md). */
+          <SplitButton
+            primary={{
+              label: `💬 Chat about this ${entity.type}`,
+              title: `Bring "${entity.title}" into chat`,
+              onClick: () => onChatResult!(entity.title,
+                                            entity.artifact_path ?? undefined),
+            }}
+            options={[
+              {
+                label: `Chat about this ${entity.type}`,
+                description: 'Bring it into the composer with the image attached',
+                emphasis: true,
+                onClick: () => onChatResult!(entity.title,
+                                              entity.artifact_path ?? undefined),
+              },
+              {
+                label: 'Make a revision',
+                description: 'Re-run the producing code with a change; pinned as a sibling',
+                onClick: () => onChatResult!(entity.title,
+                                              entity.artifact_path ?? undefined,
+                                              undefined, 'revision'),
+              },
+              {
+                label: 'Reproduce',
+                description: 'Re-run the exec; flag any env drift',
+                onClick: () => onChatResult!(entity.title,
+                                              entity.artifact_path ?? undefined,
+                                              undefined, 'reproduce'),
+              },
+            ]}
+          />
+        )}
         {(entity.type === 'figure' || entity.type === 'table') && onGroup && (
           <button
             className="focus__promote"
@@ -359,7 +409,9 @@ function renderRegistryView(
   onChange: () => void,
   compact?: boolean,
   onAsk?: (t: string) => void,
-  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void,
+  onChatResult?: (label: string, thumb?: string,
+                  annotation?: { image: string; note: string },
+                  action?: 'chat' | 'revision' | 'reproduce') => void,
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
 ) {
