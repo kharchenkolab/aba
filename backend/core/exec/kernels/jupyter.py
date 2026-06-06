@@ -145,11 +145,46 @@ def _r_setup_code(cwd: str) -> str:
     plotline = f"options(repr.plot.res={_res})\n"
     data_dir, _ = _project_data_artifacts()
     return (f"{libline}{repoline}{plotline}DATA_DIR <- {str(data_dir)!r}\n"
-            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n")
+            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n"
+            + _harvest_helpers_r())
+
+
+def _harvest_helpers_r() -> str:
+    """R `harvest_table()` helper, mirror of the Python one. Writes a
+    CSV to the current cwd so the post-cell harvester picks it up.
+
+    Auto-naming uses nanosecond Sys.time() + a random suffix to avoid
+    collisions when called several times in the same cell — `digest`
+    isn't guaranteed to be installed in every R image, so we stick
+    with base R primitives."""
+    return (
+        "harvest_table <- function(df, name='auto') {\n"
+        "  if (identical(name, 'auto')) {\n"
+        "    .t <- format(as.numeric(Sys.time()) * 1e6, scientific=FALSE, digits=20)\n"
+        "    .r <- paste(sample(c(0:9, letters[1:6]), 6, replace=TRUE), collapse='')\n"
+        "    name <- paste0('table_', substr(.t, nchar(.t)-5, nchar(.t)), '_', .r, '.csv')\n"
+        "  }\n"
+        "  if (!grepl('\\\\.(csv|tsv)$', name, ignore.case=TRUE)) {\n"
+        "    name <- paste0(name, '.csv')\n"
+        "  }\n"
+        "  path <- file.path(getwd(), name)\n"
+        "  tryCatch(\n"
+        "    write.csv(as.data.frame(df), path, row.names=FALSE),\n"
+        "    error = function(e) write.csv(df, path)\n"
+        "  )\n"
+        "  cat(sprintf('[harvest_table] wrote %s\\n', basename(path)))\n"
+        "  invisible(path)\n"
+        "}\n"
+    )
 
 
 def _setup_code(cwd: str) -> str:
-    """First cell: replicate the run_python environment in the kernel namespace."""
+    """First cell: replicate the run_python environment in the kernel namespace.
+
+    Also injects the Stage 6 harvest helpers (`harvest_table`) so recipes/
+    agents can explicitly tag a DataFrame for pinning without manually
+    composing a `df.to_csv(...)` line. See `_harvest_helpers_py` below.
+    """
     from core.config import BIOMNI_DIR
     biomni_line = f"_sys.path.insert(0, {str(BIOMNI_DIR)!r})\n" if BIOMNI_DIR else ""
     data_dir, _ = _project_data_artifacts()
@@ -161,6 +196,52 @@ def _setup_code(cwd: str) -> str:
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
+        + _harvest_helpers_py()
+    )
+
+
+def _harvest_helpers_py() -> str:
+    """Python `harvest_table()` helper, injected at kernel startup.
+
+    Stage 6 of misc/exec_records_and_versioning.md — give recipes/agents
+    a one-liner to mark a DataFrame for pinning. The function writes a
+    CSV to the current cwd; the standard run_python post-cell harvester
+    picks it up as a table artifact and registers it as a table entity.
+    """
+    return (
+        "def harvest_table(obj, name='auto'):\n"
+        "    \"\"\"Save a DataFrame (or anything with .to_csv()) to the current\n"
+        "    workdir as a CSV so it surfaces as a pinnable table artifact.\n"
+        "    Pass `name` to control the filename (default: auto-unique).\"\"\"\n"
+        "    import os as _os, time as _t, hashlib as _h\n"
+        "    from pathlib import Path as _P\n"
+        "    if name == 'auto':\n"
+        "        _seed = f'{_t.time_ns()}:{id(obj)}'.encode()\n"
+        "        name = 'table_' + _h.md5(_seed).hexdigest()[:8] + '.csv'\n"
+        "    if not name.lower().endswith(('.csv', '.tsv')):\n"
+        "        name = name + '.csv'\n"
+        "    _path = _P(_os.getcwd()) / name\n"
+        "    if hasattr(obj, 'to_csv'):\n"
+        "        # pandas / polars / etc. — let the library handle dialect + index\n"
+        "        try:\n"
+        "            obj.to_csv(_path, index=False)\n"
+        "        except TypeError:\n"
+        "            obj.to_csv(_path)\n"
+        "    else:\n"
+        "        import csv as _csv\n"
+        "        with open(_path, 'w', newline='') as _f:\n"
+        "            _w = _csv.writer(_f)\n"
+        "            if isinstance(obj, dict):\n"
+        "                _w.writerow(list(obj.keys()))\n"
+        "                _w.writerow(list(obj.values()))\n"
+        "            else:\n"
+        "                for _row in obj:\n"
+        "                    if isinstance(_row, (list, tuple)):\n"
+        "                        _w.writerow(_row)\n"
+        "                    else:\n"
+        "                        _w.writerow([_row])\n"
+        "    print(f'[harvest_table] wrote {_path.name}')\n"
+        "    return str(_path)\n"
     )
 
 
