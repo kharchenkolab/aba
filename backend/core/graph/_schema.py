@@ -366,3 +366,18 @@ def init_db():
                 (WORKSPACE_ID, "workspace", "Workspace", "active", now, now),
             )
         c.commit()
+
+    # Stage 2 cutover (misc/exec_records_and_versioning.md): backfill
+    # synthetic exec records for any entity that has producing_code but
+    # no exec_id. Idempotent + cheap when there's nothing to backfill.
+    # Wrapped in try/except so a bad row doesn't break init_db; the
+    # function itself swallows per-row errors and aggregates a count.
+    try:
+        from core.graph.exec_records import backfill_legacy_producing_code
+        backfill_legacy_producing_code()
+    except Exception:  # noqa: BLE001 — init_db must complete; backfill is best-effort
+        import logging as _lg
+        _lg.getLogger(__name__).warning(
+            "init_db: backfill_legacy_producing_code failed (continuing)",
+            exc_info=True,
+        )

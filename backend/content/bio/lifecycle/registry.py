@@ -146,11 +146,14 @@ def register_artifacts_from_tool_result(
             # by title — that conflated distinct plots (and silently retired
             # pinned ones). Version chains (wasRevisionOf) are a future, EXPLICIT
             # concern (lineage model), not inferred from a matching title.
+            # Post-cutover: code lives in the exec record (Stage 2 +
+            # misc/exec_records_and_versioning.md). The producing_code
+            # column is no longer written on new entities; reads route
+            # through lookup_code_for_entity, which prefers exec_id.
             eid = create_entity(
                 entity_type="figure",
                 title=title,
                 artifact_path=url,
-                producing_code=producing_code,
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name, **res_meta},
                 exec_id=exec_id_ptr,
@@ -180,7 +183,6 @@ def register_artifacts_from_tool_result(
                 entity_type="table",
                 title=title,
                 artifact_path=t.get("url"),
-                producing_code=producing_code,
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name, **res_meta},
                 exec_id=exec_id_ptr,
