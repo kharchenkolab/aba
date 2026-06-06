@@ -152,17 +152,22 @@ def create_scenario_variant(
         raise ValueError(f"baseline {baseline_id} not found")
     if baseline["type"] != "figure":
         raise ValueError("scenarios can only be derived from figures for now")
-    if not baseline.get("producing_code"):
-        raise ValueError("baseline has no producing_code; can't derive a scenario")
+    # Post-cutover: resolve baseline code via the exec record (Stage 2 of
+    # misc/exec_records_and_versioning.md). Legacy entities fall back to
+    # their producing_code column inside the helper.
+    from core.graph.exec_records import lookup_code_for_entity
+    baseline_code = lookup_code_for_entity(baseline)
+    if not baseline_code:
+        raise ValueError("baseline has no recoverable code; can't derive a scenario")
 
-    # Detect language from the baseline's producing_code (NOT from the agent's
-    # `code` arg, since the agent may have submitted code that doesn't match
-    # the baseline by accident). The agent's code SHOULD be in the baseline's
+    # Detect language from the baseline's code (NOT from the agent's `code`
+    # arg, since the agent may have submitted code that doesn't match the
+    # baseline by accident). The agent's code SHOULD be in the baseline's
     # language; if it isn't, run_<lang> will surface a kernel error.
-    language: Language = _detect_language(baseline["producing_code"])
+    language: Language = _detect_language(baseline_code)
 
     new_code = code or _rewrite_code_via_llm(
-        baseline["producing_code"], description, language=language,
+        baseline_code, description, language=language,
     )
 
     runner = "run_r" if language == "r" else "run_python"

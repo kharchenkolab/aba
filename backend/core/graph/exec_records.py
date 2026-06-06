@@ -230,6 +230,103 @@ def lookup_code_for_entity(entity: dict | None) -> str:
     return entity.get("producing_code") or ""
 
 
+def lookup_codes_for_entities(entities: list[dict]) -> dict[str, str]:
+    """Bulk equivalent of lookup_code_for_entity — for hot paths (manifest
+    assembler) that resolve code for many entities at once.
+
+    One DB query to fetch every distinct exec_id's record_path, then one
+    JSON read per distinct sidecar. Entities without exec_id resolve from
+    their own producing_code without any DB/disk hit (legacy fast-path).
+
+    Returns {entity_id: code}. Entities that have neither exec_id nor
+    producing_code map to "" so callers don't need to None-check.
+    """
+    out: dict[str, str] = {}
+    if not entities:
+        return out
+    # Partition: legacy (no exec_id) gets resolved from the entity dict;
+    # exec-backed entities are grouped by exec_id for a single bulk query.
+    exec_to_entities: dict[str, list[str]] = {}
+    for e in entities:
+        if not e:
+            continue
+        eid = e.get("id")
+        if not eid:
+            continue
+        ex = e.get("exec_id")
+        if ex:
+            exec_to_entities.setdefault(ex, []).append(eid)
+        else:
+            out[eid] = e.get("producing_code") or ""
+
+    if not exec_to_entities:
+        return out
+
+    exec_ids = list(exec_to_entities.keys())
+    placeholders = ",".join("?" * len(exec_ids))
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT exec_id, record_path FROM execution_records WHERE exec_id IN ({placeholders})",
+            exec_ids,
+        ).fetchall()
+    path_by_exec = {r["exec_id"]: r["record_path"] for r in rows}
+    code_by_exec: dict[str, str] = {}
+    for ex in exec_ids:
+        rp = path_by_exec.get(ex)
+        if not rp:
+            code_by_exec[ex] = ""
+            continue
+        try:
+            body = json.loads(Path(rp).read_text(encoding="utf-8"))
+            code_by_exec[ex] = body.get("code") or ""
+        except (OSError, json.JSONDecodeError) as e:  # noqa: F841
+            code_by_exec[ex] = ""
+
+    # Fan out, falling back to legacy producing_code when the exec record
+    # is missing or empty (mirrors the single-entity helper's behavior).
+    legacy_by_id = {e.get("id"): (e.get("producing_code") or "")
+                    for e in entities if e and e.get("id")}
+    for ex, ent_ids in exec_to_entities.items():
+        code = code_by_exec.get(ex, "")
+        for eid in ent_ids:
+            if code:
+                out[eid] = code
+            else:
+                out[eid] = legacy_by_id.get(eid, "")
+    return out
+
+
+def aggregated_code_for_run(run_id: str, *,
+                             separator: str = "\n\n# ---\n") -> str:
+    """Concatenate every exec record's code for this Run, ordered by
+    started_at, joined by `separator` (defaults to the `# ---` separator
+    runs.py:232 used historically).
+
+    Replaces the denormalized Run.producing_code aggregate that
+    append_run_code maintained. Reads each exec record's JSON sidecar
+    directly (cheaper than going through get() since we skip the rebuild
+    of the index dict).
+
+    Returns "" if the Run has no exec records (an empty Run, freshly
+    opened with no tool calls yet).
+    """
+    if not run_id:
+        return ""
+    parts: list[str] = []
+    for r in list_by_run(run_id):
+        rp = r.get("record_path")
+        if not rp:
+            continue
+        try:
+            body = json.loads(Path(rp).read_text(encoding="utf-8"))
+            code = body.get("code")
+            if code:
+                parts.append(code)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return separator.join(parts) if parts else ""
+
+
 def _row_index(r) -> dict:
     return {
         "exec_id":      r["exec_id"],

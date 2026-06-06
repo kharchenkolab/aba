@@ -131,7 +131,10 @@ def _run_readme(run: dict, children: list[dict]) -> str:
         lines.append("This run hasn't produced registered artifacts yet.")
         lines.append("")
 
-    if run.get("producing_code"):
+    # Post-cutover: Run has captured code iff at least one of its exec
+    # records carries code. aggregated_code_for_run returns "" if none do.
+    from core.graph.exec_records import aggregated_code_for_run as _agg_code
+    if _agg_code(run.get("id") or ""):
         lines.append("`producing_code.py` carries the code that produced these outputs.")
         lines.append("")
 
