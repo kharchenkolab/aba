@@ -263,7 +263,6 @@ export interface Entity {
   title: string
   status: string
   artifact_path: string | null
-  producing_code: string | null
   producing_params: Record<string, unknown> | null
   parent_entity_id: string | null
   scenario_of: string | null
@@ -271,6 +270,14 @@ export interface Entity {
   tags: string[]
   notes: string | null
   pinned: boolean
+  // Post Cutover 4 (misc/exec_records_and_versioning.md): pointer to
+  // the exec record that produced this entity. The legacy
+  // `producing_code` column is gone — code is reachable through the
+  // exec record (GET /api/entities/{id}/revisions for the chain,
+  // make_revision / reproduce for operations).
+  exec_id: string | null
+  artifact_kind: string | null
+  artifact_idx: number | null
   deleted_at: string | null
   created_at: string
   updated_at: string
