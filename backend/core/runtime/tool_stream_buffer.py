@@ -106,6 +106,47 @@ def record_chunk(run_id: str, tool_use_id: str, *,
         _maybe_gc(buf.last_chunk_at)
 
 
+def ensure(run_id: str, tool_use_id: str) -> None:
+    """Create an empty buffer for this (run_id, tool_use_id) if absent.
+
+    Called at tool dispatch start so EVERY tool — including non-streaming
+    ones like create_scenario, present_plan, write_memory — has a buffer
+    the /api/turns/.../tool_stream/... endpoint can return. Without this
+    those tools 404 on the poll and the frontend can't show "in-flight"
+    or "completed-with-error" state in the drawer.
+
+    Idempotent — no-op if a buffer already exists (which is the common
+    case for run_python/run_r where record_chunk created the buffer
+    before the dispatch wrapper called ensure)."""
+    if not run_id or not tool_use_id:
+        return
+    with _lock:
+        key = (run_id, tool_use_id)
+        if key not in _buffers:
+            _buffers[key] = _Buffer()
+
+
+def record_error(run_id: str, tool_use_id: str, error_text: str) -> None:
+    """Push an error message into the buffer's stderr so the UI's live-tail
+    drawer surfaces it. For tools that return {"error": "..."} without ever
+    emitting stderr (most non-streaming tools — create_scenario,
+    present_plan, etc.), this is the only path that gets the error into
+    the drawer view."""
+    if not run_id or not tool_use_id or not error_text:
+        return
+    cap_raw = TOOL_OUTPUT_CAP_CHARS * 2
+    with _lock:
+        key = (run_id, tool_use_id)
+        buf = _buffers.get(key)
+        if buf is None:
+            buf = _Buffer()
+            _buffers[key] = buf
+        sep = "\n" if buf.stderr else ""
+        buf.stderr = (buf.stderr + sep + error_text)[-cap_raw:]
+        buf.bytes_stderr = len(buf.stderr.encode("utf-8", errors="replace"))
+        buf.last_chunk_at = time.time()
+
+
 def mark_done(run_id: str, tool_use_id: str) -> None:
     """Flip status → done, set short retention TTL. Idempotent."""
     if not run_id or not tool_use_id:

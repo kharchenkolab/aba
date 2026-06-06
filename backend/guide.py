@@ -763,6 +763,17 @@ async def stream_response(
                 # P3 #6 telemetry — wrap dispatch with timing.
                 import datetime as _dt
                 _t_start = _dt.datetime.now(_dt.timezone.utc)
+                # Ensure a stream buffer exists BEFORE dispatch so the frontend's
+                # /api/turns/.../tool_stream/<tool_use_id> poll returns 200 with
+                # status:"running" instead of 404 — applies to every tool, not
+                # just streaming run_python/run_r. Without this, non-streaming
+                # tools like create_scenario / present_plan render as "stuck"
+                # in the drawer because the poll can't reach a buffer.
+                try:
+                    from core.runtime import tool_stream_buffer as _tsb_pre
+                    _tsb_pre.ensure(turn.run_id, block.id)
+                except Exception:  # noqa: BLE001 — buffer is best-effort
+                    pass
                 loop = asyncio.get_event_loop()
                 _fut = loop.run_in_executor(
                     None, execute_tool, tool_name, tool_input, tool_ctx
@@ -843,6 +854,17 @@ async def stream_response(
                 _telem_err = None
                 if _telem_status == "error" and isinstance(result_obj, dict):
                     _telem_err = str(result_obj.get("error") or result_obj.get("note") or "")[:300]
+                    # ALSO push the error into the stream buffer so the
+                    # live-tail drawer shows what went wrong — without this,
+                    # non-streaming tools (create_scenario, present_plan, etc.)
+                    # that error have no drawer-visible failure mode.
+                    try:
+                        from core.runtime import tool_stream_buffer as _tsb_err
+                        _tsb_err.record_error(
+                            turn.run_id, block.id, f"[tool error] {_telem_err}",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 try:
                     from core.runtime.tool_telemetry import record as _record_invocation
                     _record_invocation(
