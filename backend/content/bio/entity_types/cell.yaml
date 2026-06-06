@@ -1,0 +1,65 @@
+# Cell — a pinnable snapshot of a tool-output "cell" (the rendered
+# result of one run_python / run_r call: stdout/stderr text + the
+# figures/tables it produced, captured as a single unit).
+#
+# Use case: an agent prints a tabular summary or a stat block to stdout
+# and the user wants to keep THAT view (not the underlying CSV; not the
+# figure alone) as evidence. The cell entity wraps the exec record so
+# the rendered output is reproducible.
+#
+# Stage 6 of misc/exec_records_and_versioning.md.
+name: cell
+display: Output cell
+icon: terminal
+category: leaf
+
+schema:
+  required: [title]
+  # exec_id (+ artifact_kind=cell, artifact_idx=0) points at the exec
+  # whose stdout/stderr/produced the cell wraps. artifact_path is
+  # NULL — the cell's content lives in the exec record's JSON sidecar
+  # (read via exec_records.get(exec_id)).
+  optional: [artifact_path, producing_params,
+             parent_entity_id, scenario_of, metadata, tags, notes,
+             exec_id, artifact_kind, artifact_idx]
+  # metadata commonly carries: thread_id, origin ('internal'|'external'),
+  # caption (one-line summary), preview_text (first ~500 chars of stdout
+  # so the rail can show a teaser without fetching the exec record).
+
+status_model:
+  initial: active
+  states: [active, superseded, archived]
+  transitions:
+    active: [superseded, archived]
+    superseded: [archived]
+
+allowed_edges:
+  # Same provenance shape as figure/table — a cell wasGeneratedBy a run,
+  # may have been derived from a focused entity, can be pinned into a
+  # Result, can be a revision of another cell.
+  out: [wasGeneratedBy, produced_by, wasDerivedFrom,
+        wasRevisionOf, supports, commented_on]
+  in:  [supports, includes, wasDerivedFrom, wasRevisionOf]
+
+focus:
+  # The cell renders via lookup of its exec record; the agent's view
+  # surfaces title + exec_id so it can drill through to code / output.
+  agent_sees: [title, exec_id, parent_summary, tags, notes]
+
+ui:
+  panel: cell                # Frontend dispatch key (the cell viewer is
+                             # a follow-up; until then FocusCanvas falls
+                             # back to the generic placeholder).
+  list_fields: [title, status, parent_title]
+  thumbnail: null            # cells don't have an image-style thumbnail
+
+creation:
+  rail_plus: false
+  agent_tools: [pin_cell]
+  user_gestures_chat: [pin]           # Pin-this-cell button on tool-result chips
+  user_gestures_focus: []
+
+advisors:
+  on_create: []
+  on_pin: [skeptic]
+  on_status_change: {}
