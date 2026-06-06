@@ -24,6 +24,7 @@ from .tools.file_io import register_file_io_tools
 from .tools.plan_etc import register_plan_etc_tools
 from .tools.run_exec import register_run_exec_tools
 from .tools.revisions import register_revision_tools
+from .tools.cells import register_cell_tools
 
 
 def make_server() -> FastMCP:
@@ -59,5 +60,7 @@ def make_server() -> FastMCP:
     register_run_exec_tools(mcp)    # 6.H: run_python, run_r
     register_revision_tools(mcp)    # Stage 5 of misc/exec_records_and_versioning.md:
                                     #      make_revision, reproduce_from_exec
+    register_cell_tools(mcp)        # Stage 6 of misc/exec_records_and_versioning.md:
+                                    #      pin_cell
 
     return mcp
