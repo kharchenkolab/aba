@@ -16,14 +16,33 @@ Opened by the agent (open_run) as it begins executing an approved plan, or
 rotated by the next open_run. Closed by close_run (explicit, or on a topic
 pivot the agent recognizes). Closing an EMPTY Run discards it, so an abandoned
 or re-planned analysis doesn't litter the tree.
+
+Stage 4 (misc/exec_records_and_versioning.md): `close_idle_runs` adds the
+auto-close on inactivity, and `materialize_run_from_ambient` promotes the
+auto-created ambient analysis to a properly-titled Run when the user
+retroactively pins a casual-chat artifact.
 """
 from __future__ import annotations
+import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from core.graph._schema import _conn, WORKSPACE_ID
 from core.graph.entities import (
     create_entity, get_entity, update_entity, archive_entity, list_entities,
 )
+
+_log = logging.getLogger(__name__)
+
+# Stage 4: a Run with no entity-write activity for this long auto-closes.
+# The signal we use is `entities.updated_at` on the Run row, which bumps
+# every time a child artifact lands, the output manifest refreshes, or
+# code is appended — i.e., on real harvested work. A purely-reading user
+# (just scrolling the Run's outputs) gets no bumps, so their Run will
+# close cleanly after the timeout. The next tool call in the thread
+# auto-creates a new ambient analysis (via _ensure_analysis), so there's
+# no lost-state failure mode when the timeout fires.
+IDLE_TIMEOUT_S = 1800   # 30 minutes
 
 
 def active_run_id(thread_id: str) -> Optional[str]:
@@ -70,6 +89,15 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     request — no/blank title, or the same title as the open Run — returns the existing
     Run instead of rotating. The server's plan-boundary call (plan_entity_id set) always
     rotates, as a new approved plan should supersede the prior Run."""
+    # Stage 4: opportunistic sweep of OTHER threads' idle Runs. Cheap (only
+    # touches open-state rows) + no extra scheduler needed. Plan-Go is the
+    # canonical user-attention boundary, so sweeping here matches the
+    # design "new plan starts in same thread → old Run auto-closes" — and
+    # we extend it free to "and idle Runs in other threads close too".
+    try:
+        close_idle_runs()
+    except Exception as e:  # noqa: BLE001 — sweep failure must not block opening
+        _log.warning("open_run: opportunistic close_idle_runs failed: %s", e)
     cur = active_run_id(thread_id)
     if cur and not plan_entity_id:
         norm = (title or "").strip()
@@ -111,6 +139,98 @@ def close_run(thread_id: str) -> Optional[str]:
     md = dict((ent or {}).get("metadata") or {})
     md["run_state"] = "closed"
     update_entity(rid, metadata=md)
+    return rid
+
+
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def close_idle_runs(thread_id: Optional[str] = None, *,
+                     idle_seconds: int = IDLE_TIMEOUT_S) -> list[str]:
+    """Auto-close open Runs that haven't seen entity-write activity in
+    `idle_seconds`. Scoped to a single thread if `thread_id` is given, else
+    sweeps every open Run.
+
+    Activity = the Run's row `updated_at`, which `update_entity` bumps on
+    every write — child-artifact attachment, manifest refresh, code append.
+    A purely-reading user gets no bumps and their Run closes cleanly.
+
+    The closed Run keeps all its children + manifest + recorded code; only
+    `run_state` flips to "closed". The next tool call in the thread starts
+    a fresh ambient analysis, so there's no surprise-empty-Run failure mode.
+
+    Idempotent + cheap — only the open-run candidate set is iterated.
+    Called opportunistically by open_run() and by the home / chat poll
+    routes; no separate scheduler.
+
+    Returns the list of closed run ids."""
+    closed: list[str] = []
+    now = datetime.now(timezone.utc)
+    threshold = idle_seconds
+    for e in list_entities(type_filter="analysis", include_archived=False):
+        md = e.get("metadata") or {}
+        if md.get("run_state") != "open":
+            continue
+        if thread_id and md.get("thread_id") != thread_id:
+            continue
+        last = _parse_iso(e.get("updated_at"))
+        if last is None:
+            continue
+        if (now - last).total_seconds() < threshold:
+            continue
+        # Closed via the same path as explicit close (so empty Runs are
+        # discarded, populated Runs flip to "closed").
+        try:
+            rid = close_run(md.get("thread_id") or "")
+            if rid:
+                closed.append(rid)
+        except Exception as e2:  # noqa: BLE001 — sweeper is best-effort
+            _log.warning("close_idle_runs: failed to close %s: %s", e.get("id"), e2)
+    return closed
+
+
+def materialize_run_from_ambient(thread_id: str, title: str) -> Optional[str]:
+    """Promote the thread's ambient analysis (auto-created by registry.
+    _ensure_analysis when no plan-Go Run existed) into a properly-titled,
+    user-visible Run.
+
+    Used on the retroactive-pin path: a user pinning a figure from casual
+    chat triggers this so the figure's parent analysis stops being
+    "ambient" and becomes a navigable Run with the user-chosen title.
+
+    Returns the Run id (== the now-promoted ambient analysis id), or None
+    if there's no ambient analysis to promote. Idempotent — calling on an
+    already-promoted Run just updates the title.
+
+    Note this is logical-only — the underlying artifact_path doesn't move
+    (the ambient analysis already pointed at the thread's scratch dir).
+    Files stay where they were written; the Run navigation entry now
+    points at them with a meaningful name.
+    """
+    if not thread_id:
+        return None
+    rid = active_run_id(thread_id)
+    if not rid:
+        return None
+    ent = get_entity(rid)
+    if not ent:
+        return None
+    md = dict(ent.get("metadata") or {})
+    # Whether ambient or already-named, we update the title; the meaningful
+    # state change is removing the `ambient` flag.
+    was_ambient = bool(md.pop("ambient", False))
+    update_entity(rid, title=(title or "Analysis run").strip()[:120], metadata=md)
+    if was_ambient:
+        _log.info("materialize_run_from_ambient: promoted ambient %s for thread %s",
+                  rid, thread_id)
     return rid
 
 
