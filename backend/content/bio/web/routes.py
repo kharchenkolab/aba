@@ -1288,25 +1288,12 @@ def entities_provenance(entity_id: str):
 # --- Scenarios ---
 
 
-class ScenarioRequest(BaseModel):
-    description: str
-    code: str | None = None
-    title: str | None = None
-
-
-@router.post("/api/entities/{baseline_id}/create-scenario")
-async def create_scenario(baseline_id: str, req: ScenarioRequest):
-    import asyncio
-    from content.bio.lifecycle.scenarios import create_scenario_variant
-    try:
-        new_entity = await asyncio.get_event_loop().run_in_executor(
-            None,
-            create_scenario_variant,
-            baseline_id, req.description, req.code, req.title,
-        )
-    except (ValueError, RuntimeError) as e:
-        raise HTTPException(400, str(e))
-    return new_entity
+# NOTE (2026-06-06): the /api/entities/{baseline_id}/create-scenario route
+# was removed alongside the create_scenario MCP tool. The variant-figure
+# flow is now covered by `POST /api/entities/{id}/make_revision` (Stage 5
+# of misc/exec_records_and_versioning.md). Scenarios are a post-v1
+# concept; the lifecycle helper `create_scenario_variant` is preserved
+# but not exposed.
 
 
 # --- Result uploads (file-form endpoints) ---
