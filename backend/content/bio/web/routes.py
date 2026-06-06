@@ -618,6 +618,41 @@ def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
     }
 
 
+class PinCellRequest(BaseModel):
+    title: str | None = None
+    wrap_in_result: bool = True
+
+
+@router.post("/api/exec_records/{exec_id}/pin_cell")
+def pin_cell_endpoint(exec_id: str, req: PinCellRequest):
+    """Pin the output of `exec_id` as a `cell` entity (Stage 6 of
+    misc/exec_records_and_versioning.md).
+
+    The cell's content (stdout/stderr/produced) stays in the exec
+    record's JSON sidecar; the entity carries a small preview teaser
+    plus the exec_id pointer.
+
+    When `wrap_in_result=True` (default), the cell is also wrapped in
+    a Result via the standard pin_evidence path so it shows up in the
+    Results rail like any other pinned evidence.
+    """
+    from content.bio.lifecycle.cells import create_cell_from_exec, pin_cell_from_exec
+    try:
+        if req.wrap_in_result:
+            out = pin_cell_from_exec(exec_id, title=req.title)
+        else:
+            cell_id = create_cell_from_exec(exec_id, title=req.title)
+            out = {"cell_id": cell_id, "result_id": None, "member_id": None}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    cell = get_entity(out["cell_id"]) if out.get("cell_id") else None
+    return {
+        "cell": cell,
+        "result_id": out.get("result_id"),
+        "member_id": out.get("member_id"),
+    }
+
+
 @router.post("/api/entities/{entity_id}/reproduce")
 def reproduce_endpoint(entity_id: str):
     """Re-run the exec that produced `entity_id` and report the result.
