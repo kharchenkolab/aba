@@ -364,10 +364,12 @@ _BLOCKS: tuple[_Block, ...] = (
            gate=lambda c: _is_nonneg()),
     _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
     _Block("recipes",      frozenset({"primary"}), None,             _md("recipes.md")),
-    # scenarios + highlighting only render when there's actually a figure to act
-    # on (focus is a figure) or a fresh highlight — not on every turn.
-    _Block("scenarios",    frozenset({"primary"}), "create_scenario", _md("scenarios.md"),
-           gate=_has_focus_figure),
+    # The "scenarios" prompt block (gated on the legacy create_scenario tool)
+    # was removed 2026-06-06 — variant-figure flow is now the revisions
+    # cluster (Stage 5 of misc/exec_records_and_versioning.md). The
+    # `make_revision` tool's docstring carries the same guidance ("only when
+    # the user EXPLICITLY asks for a variant"), so no replacement block is
+    # needed. Highlighting still renders on focused-figure turns below.
     _Block("behavior",     None,                   None,             _behavior_block),
     _Block("highlighting", frozenset({"primary"}), None,             _md("highlighting.md"),
            gate=_highlight_relevant),

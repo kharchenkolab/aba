@@ -1,17 +1,21 @@
-"""Phase 6.G — plan / scenario / write-memory / runtime-control cluster.
+"""Phase 6.G — plan / write-memory / runtime-control cluster.
 
   - present_plan, ask_clarification: agent-side gestures that guide.py
     intercepts BEFORE the dispatcher runs (the bio impl is a stub
     returning a placeholder status). We register them on aba_core so
     the schema lives here too — post 6.I they're the only way the
     agent learns these tools exist.
-  - create_scenario: variant-figure registration
   - write_memory: persist a note across sessions
   - restart_kernel: clear the python/r kernel state in this thread
   - run_nextflow: launch an nf-core pipeline (long-running)
 
-Mix of pure (create_scenario, write_memory) and ctx-using
-(restart_kernel for sess lookup, run_nextflow for cancel_token).
+Scenarios (`create_scenario`) were removed from the catalog 2026-06-06:
+the variant-figure flow is now covered by `make_revision` in the
+revisions cluster (Stage 5 of misc/exec_records_and_versioning.md).
+The underlying lifecycle helper `create_scenario_variant` is still in
+the codebase as a private code path; bringing scenarios back as a
+distinct user concept is on the roadmap for after v1 (branches +
+"what-if" exploration UX).
 """
 from __future__ import annotations
 
@@ -40,17 +44,14 @@ class PlanStep(TypedDict, total=False):
 
 
 def register_plan_etc_tools(mcp: FastMCP) -> None:
-    """Register the 6 plan/scenario/write-memory/runtime tools on `mcp`."""
+    """Register the plan / write-memory / runtime tools on `mcp`.
 
-    @mcp.tool()
-    def create_scenario(baseline_id: str, description: str,
-                        code: str) -> dict:
-        """Register a scenario VARIANT of a baseline figure. The agent
-        runs `code` (a tweak of the baseline's producing_code) and the
-        result is recorded as a variant with `variantOf` provenance."""
-        from content.bio.tools import create_scenario as _impl
-        return _impl({"baseline_id": baseline_id, "description": description,
-                      "code": code})
+    Note: create_scenario was removed 2026-06-06 — variant-figure
+    creation goes through `make_revision` in the revisions cluster
+    (Stage 5 of misc/exec_records_and_versioning.md). Scenarios are
+    a post-v1 concept; their lifecycle helper is preserved but not
+    exposed to the agent.
+    """
 
     @mcp.tool()
     def present_plan(steps: list[PlanStep],
