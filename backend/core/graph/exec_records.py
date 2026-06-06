@@ -209,25 +209,26 @@ def list_by_thread(thread_id: str, *, run_id_filter: Optional[str] = None,
 def lookup_code_for_entity(entity: dict | None) -> str:
     """Return the producing-code string for an entity.
 
-    Stage 2 (misc/exec_records_and_versioning.md) routes "show code" via the
-    exec record: entity.exec_id → exec_records.get(eid).code. Legacy entities
-    that pre-date exec records (no exec_id) fall back to entity.producing_code.
+    Post Cutover 4 (misc/exec_records_and_versioning.md): the exec record
+    pointer (entity.exec_id) is the sole source. Legacy entities that had
+    a producing_code column were backfilled into synthetic exec records
+    by `backfill_legacy_producing_code` on init_db, so the column has
+    been dropped.
 
-    Returns "" when neither source yields code. Never raises — UI/manifest
-    code paths shouldn't fail just because an exec sidecar got hand-deleted.
+    Returns "" when the entity has no exec_id, the exec record is missing,
+    or its `code` field is empty. Never raises — UI/manifest code paths
+    shouldn't fail just because an exec sidecar got hand-deleted.
     """
     if not entity:
         return ""
     eid = entity.get("exec_id")
-    if eid:
-        try:
-            rec = get(eid)
-        except Exception:  # noqa: BLE001 — best-effort lookup
-            rec = None
-        if rec and rec.get("code"):
-            return rec["code"]
-        # Sidecar missing / unreadable → fall through to the legacy cache.
-    return entity.get("producing_code") or ""
+    if not eid:
+        return ""
+    try:
+        rec = get(eid)
+    except Exception:  # noqa: BLE001 — best-effort lookup
+        return ""
+    return (rec or {}).get("code") or ""
 
 
 def lookup_codes_for_entities(entities: list[dict]) -> dict[str, str]:
@@ -354,8 +355,13 @@ def backfill_legacy_producing_code(*, dry_run: bool = False) -> dict:
     from datetime import datetime, timezone
     log = logging.getLogger("exec_records.backfill")
 
-    # Skip cheap if no candidates — avoids a directory write + table scan.
+    # Post-Cutover-4 fresh DBs don't have the column at all (it was
+    # dropped on upgrade; never created on fresh). Detect that and skip
+    # — the function becomes a no-op once the migration is done.
     with _conn() as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(entities)").fetchall()}
+        if "producing_code" not in cols:
+            return {"backfilled": 0, "scanned": 0, "skipped_no_code": 0, "errors": 0}
         candidates = c.execute(
             "SELECT id, type, title, producing_code, created_at, metadata "
             "FROM entities WHERE producing_code IS NOT NULL "

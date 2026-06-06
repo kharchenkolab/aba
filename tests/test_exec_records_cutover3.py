@@ -43,6 +43,28 @@ def check(label, cond, detail=""):
         _failures.append(label)
 
 
+def _readd_producing_code_column() -> None:
+    """Tests in this file simulate an upgrade-in-progress scenario where
+    legacy entities still have producing_code. Cutover 4 drops the column
+    on init_db, so we re-add it here for the test's setup phase. The
+    backfill function checks for the column's existence before reading,
+    so this re-addition triggers the backfill path we want to test."""
+    with _conn() as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(entities)").fetchall()}
+        if "producing_code" not in cols:
+            c.execute("ALTER TABLE entities ADD COLUMN producing_code TEXT")
+            c.commit()
+
+
+def _set_legacy_producing_code(entity_id: str, code: str) -> None:
+    """Write producing_code via raw SQL since create_entity no longer
+    accepts the parameter (post Cutover 4)."""
+    with _conn() as c:
+        c.execute("UPDATE entities SET producing_code = ? WHERE id = ?",
+                  (code, entity_id))
+        c.commit()
+
+
 def test_registry_no_longer_writes_producing_code():
     print("\n[1] registry-created figures no longer carry producing_code")
     init_db()
@@ -77,17 +99,19 @@ def test_registry_no_longer_writes_producing_code():
 
 def test_backfill_synthesizes_records():
     print("\n[2] backfill_legacy_producing_code synthesizes exec records")
-    # Create a legacy-style entity (producing_code set, no exec_id)
+    # Simulate an upgrade-in-progress: re-add the dropped column, then
+    # write legacy rows via raw SQL (create_entity no longer accepts it).
+    _readd_producing_code_column()
     eid_py = entities.create_entity(
         entity_type="figure", title="Legacy py",
         artifact_path="/tmp/legacy_py.png",
-        producing_code="import scanpy as sc\nprint('legacy python')\n",
     )
+    _set_legacy_producing_code(eid_py, "import scanpy as sc\nprint('legacy python')\n")
     eid_r = entities.create_entity(
         entity_type="figure", title="Legacy r",
         artifact_path="/tmp/legacy_r.png",
-        producing_code="library(Seurat)\nobj <- CreateSeuratObject(counts=mat)\n",
     )
+    _set_legacy_producing_code(eid_r, "library(Seurat)\nobj <- CreateSeuratObject(counts=mat)\n")
     # Entity that already has exec_id — should NOT be touched
     cwd = Path(_tmp) / "skip"; cwd.mkdir(exist_ok=True)
     real_ex = exec_records.create(
@@ -97,9 +121,9 @@ def test_backfill_synthesizes_records():
     eid_skip = entities.create_entity(
         entity_type="figure", title="Already has exec",
         artifact_path="/tmp/skip.png",
-        producing_code="x = 1",  # duplicated cache, but has exec_id
         exec_id=real_ex, artifact_kind="figure", artifact_idx=0,
     )
+    _set_legacy_producing_code(eid_skip, "x = 1")  # duplicated cache, but has exec_id
 
     out = exec_records.backfill_legacy_producing_code()
     check("backfilled count > 0",
@@ -120,12 +144,12 @@ def test_backfill_synthesizes_records():
 
 def test_backfill_synthetic_record_shape():
     print("\n[3] synthetic exec records have right fields")
-    # Create another legacy entity, backfill, inspect
+    _readd_producing_code_column()
     eid = entities.create_entity(
         entity_type="figure", title="Inspect me",
         artifact_path="/tmp/i.png",
-        producing_code="library(Seurat)\nplot(1:10)\n",
     )
+    _set_legacy_producing_code(eid, "library(Seurat)\nplot(1:10)\n")
     exec_records.backfill_legacy_producing_code()
     rec = entities.get_entity(eid)
     ex_id = rec.get("exec_id")
@@ -164,11 +188,12 @@ def test_backfill_idempotent():
 
 def test_lookup_resolves_backfilled():
     print("\n[5] lookup_code_for_entity resolves backfilled entities")
+    _readd_producing_code_column()
     eid = entities.create_entity(
         entity_type="figure", title="Lookup",
         artifact_path="/tmp/l.png",
-        producing_code="print('resolve via backfill')\n",
     )
+    _set_legacy_producing_code(eid, "print('resolve via backfill')\n")
     exec_records.backfill_legacy_producing_code()
     rec = entities.get_entity(eid)
     # exec_id is now set
@@ -181,11 +206,12 @@ def test_lookup_resolves_backfilled():
 
 def test_backfill_dry_run():
     print("\n[6] dry_run=True scans without writing")
+    _readd_producing_code_column()
     eid = entities.create_entity(
         entity_type="figure", title="Dry",
         artifact_path="/tmp/dry.png",
-        producing_code="print('dry')\n",
     )
+    _set_legacy_producing_code(eid, "print('dry')\n")
     out = exec_records.backfill_legacy_producing_code(dry_run=True)
     check("dry_run backfilled count > 0", out["backfilled"] >= 1)
     rec = entities.get_entity(eid)

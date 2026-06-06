@@ -9,8 +9,12 @@ category: leaf
 
 schema:
   required: [title, artifact_path]
-  optional: [producing_code, producing_params, parent_entity_id,
-             scenario_of, metadata, tags, notes]
+  # Post Cutover 4: producing_code dropped; exec_id is the pointer
+  # (rarely set on datasets — only when the dataset was registered
+  # immediately after a tool call that produced it).
+  optional: [producing_params, parent_entity_id, scenario_of,
+             metadata, tags, notes,
+             exec_id, artifact_kind, artifact_idx]
   # metadata commonly carries: size_bytes, file_count, layout
   # ('directory' | absent for single-file), layout_hint, original_name,
   # source, description, organism.
