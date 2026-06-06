@@ -8,8 +8,10 @@ category: leaf
 
 schema:
   required: [title, artifact_path]
-  optional: [producing_code, producing_params, parent_entity_id,
-             scenario_of, metadata, tags, notes]
+  # Post Cutover 4: producing_code dropped; exec_id is the pointer.
+  optional: [producing_params, parent_entity_id, scenario_of,
+             metadata, tags, notes,
+             exec_id, artifact_kind, artifact_idx]
 
 status_model:
   initial: active
@@ -29,7 +31,9 @@ allowed_edges:
   in:  [supports, includes, wasDerivedFrom, wasRevisionOf]
 
 focus:
-  agent_sees: [title, artifact_path, producing_code, parent_summary,
+  # exec_id replaces producing_code (post Cutover 4); the manifest
+  # assembler resolves code through lookup_code_for_entity.
+  agent_sees: [title, artifact_path, exec_id, parent_summary,
                tags, notes]
 
 ui:

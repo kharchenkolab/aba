@@ -22,17 +22,17 @@ def create_entity(
     entity_type: str,
     title: str,
     artifact_path: Optional[str] = None,
-    producing_code: Optional[str] = None,
     producing_params: Optional[dict] = None,
     parent_entity_id: Optional[str] = None,
     scenario_of: Optional[str] = None,
     metadata: Optional[dict] = None,
     entity_id: Optional[str] = None,
-    # Stage 2 (misc/exec_records_and_versioning.md): pointer to the
-    # exec_record that produced this entity, addressed as
+    # Post Cutover 4 (misc/exec_records_and_versioning.md): pointer to
+    # the exec_record that produced this entity, addressed as
     # <exec_id>:<artifact_kind>:<artifact_idx>. Optional — set by
-    # paths that materialize entities from a tool-call harvest; legacy
-    # callers that don't know the exec leave them None.
+    # paths that materialize entities from a tool-call harvest; entities
+    # that don't come from an exec (containers like result/finding/etc)
+    # leave these None.
     exec_id: Optional[str] = None,
     artifact_kind: Optional[str] = None,
     artifact_idx: Optional[int] = None,
@@ -50,7 +50,6 @@ def create_entity(
         warnings = check_create_fields(entity_type, {
             "title": title,
             "artifact_path": artifact_path,
-            "producing_code": producing_code,
             "producing_params": producing_params,
             "parent_entity_id": parent_entity_id,
             "scenario_of": scenario_of,
@@ -65,13 +64,13 @@ def create_entity(
     with _conn() as c:
         c.execute(
             """INSERT INTO entities
-               (id, type, title, status, artifact_path, producing_code,
+               (id, type, title, status, artifact_path,
                 producing_params, parent_entity_id, scenario_of, metadata,
                 exec_id, artifact_kind, artifact_idx,
                 created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                eid, entity_type, title, artifact_path, producing_code,
+                eid, entity_type, title, artifact_path,
                 json.dumps(producing_params) if producing_params else None,
                 parent_entity_id, scenario_of,
                 json.dumps(metadata) if metadata else None,
@@ -103,7 +102,6 @@ def _row_to_entity(r) -> dict:
         "title": r["title"],
         "status": r["status"],
         "artifact_path": r["artifact_path"],
-        "producing_code": r["producing_code"],
         "producing_params": json.loads(r["producing_params"]) if r["producing_params"] else None,
         "parent_entity_id": r["parent_entity_id"],
         "scenario_of": r["scenario_of"],
@@ -205,7 +203,7 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
             # transition) or a buggy update (surface for the caller).
             raise ValueError("entity_types: " + "; ".join(msgs))
     allowed = {"title", "notes", "tags", "pinned", "status", "metadata", "artifact_path",
-               "display_path", "producing_code", "producing_params",
+               "display_path", "producing_params",
                "exec_id", "artifact_kind", "artifact_idx"}
     sets = []
     args = []

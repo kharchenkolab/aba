@@ -113,6 +113,11 @@ def init_db():
         if not _column_exists(c, "messages", "thread_id"):
             c.execute("ALTER TABLE messages ADD COLUMN thread_id TEXT")
 
+        # NOTE: producing_code is intentionally absent from this CREATE
+        # (Cutover 4 of misc/exec_records_and_versioning.md). On
+        # upgraded databases the column gets dropped further down via
+        # ALTER TABLE; on a fresh DB it never gets created in the first
+        # place. The column-add migrations below also no longer add it.
         c.execute("""
             CREATE TABLE IF NOT EXISTS entities (
                 id                TEXT PRIMARY KEY,
@@ -120,7 +125,6 @@ def init_db():
                 title             TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 artifact_path     TEXT,
-                producing_code    TEXT,
                 producing_params  TEXT,
                 parent_entity_id  TEXT,
                 scenario_of       TEXT,
@@ -372,6 +376,8 @@ def init_db():
     # no exec_id. Idempotent + cheap when there's nothing to backfill.
     # Wrapped in try/except so a bad row doesn't break init_db; the
     # function itself swallows per-row errors and aggregates a count.
+    # MUST run BEFORE the column drop below — the backfill reads the
+    # producing_code column directly via raw SQL.
     try:
         from core.graph.exec_records import backfill_legacy_producing_code
         backfill_legacy_producing_code()
@@ -381,3 +387,21 @@ def init_db():
             "init_db: backfill_legacy_producing_code failed (continuing)",
             exc_info=True,
         )
+
+    # Cutover 4: drop the legacy producing_code column from entities.
+    # Source of truth is now the exec record (exec_id pointer); the
+    # column was the denormalized cache for the read sites that have
+    # since migrated to lookup_code_for_entity. Requires SQLite >=
+    # 3.35.0 (March 2021); we're on 3.45+ in dev so this is safe.
+    # Idempotent: only drops if the column still exists.
+    with _conn() as c:
+        if _column_exists(c, "entities", "producing_code"):
+            try:
+                c.execute("ALTER TABLE entities DROP COLUMN producing_code")
+                c.commit()
+            except sqlite3.OperationalError as e:
+                import logging as _lg
+                _lg.getLogger(__name__).warning(
+                    "init_db: DROP COLUMN producing_code failed: %s "
+                    "(SQLite version too old?)", e,
+                )

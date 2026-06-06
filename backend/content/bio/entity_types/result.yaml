@@ -10,7 +10,10 @@ category: result
 
 schema:
   required: [title]
-  optional: [artifact_path, producing_code, producing_params,
+  # Post Cutover 4: producing_code dropped. Results don't have their own
+  # producing code — they wrap evidence (figures/tables) whose code is
+  # reachable via each evidence's exec_id.
+  optional: [artifact_path, producing_params,
              parent_entity_id, scenario_of, metadata, tags, notes]
   # metadata commonly carries: members (ordered list of {ref, kind}
   # pointing at figures/tables/notes/narrative entities), origin

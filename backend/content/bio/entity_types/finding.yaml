@@ -11,7 +11,9 @@ category: finding
 
 schema:
   required: [title]
-  optional: [artifact_path, producing_code, producing_params,
+  # Post Cutover 4: producing_code dropped (findings aggregate Results,
+  # which aggregate evidence — the code lives on the evidence's exec).
+  optional: [artifact_path, producing_params,
              parent_entity_id, metadata, tags, notes]
   # metadata carries: text (the interpretation), evidence (refs to
   # supporting figures/tables/results), thread_id, source.

@@ -75,12 +75,12 @@ def test_bulk_mixed():
         entity_type="figure", title="A3", artifact_path="/tmp/a3.png",
         exec_id=ex2, artifact_kind="figure", artifact_idx=0,
     )
-    # Legacy entity (producing_code only)
+    # No-exec entity (no code anywhere — post-cutover, the legacy
+    # producing_code fallback is gone; entities with no exec_id resolve
+    # to "")
     e4 = entities.create_entity(
-        entity_type="figure", title="A4 legacy", artifact_path="/tmp/a4.png",
-        producing_code="legacy4\n",
+        entity_type="figure", title="A4 no exec", artifact_path="/tmp/a4.png",
     )
-    # Empty entity (no code anywhere)
     e5 = entities.create_entity(
         entity_type="figure", title="A5 empty", artifact_path="/tmp/a5.png",
     )
@@ -91,30 +91,36 @@ def test_bulk_mixed():
     check("e2 (same exec as e1) also resolves to fig1_code",
           codes.get(e2) == "fig1_code\n")
     check("e3 resolves to fig3_code", codes.get(e3) == "fig3_code\n")
-    check("e4 (legacy) resolves to legacy4", codes.get(e4) == "legacy4\n")
-    check("e5 (empty) resolves to ''", codes.get(e5) == "")
+    check("e4 (no exec) resolves to ''", codes.get(e4) == "")
+    check("e5 (no exec) resolves to ''", codes.get(e5) == "")
     check("all 5 entities present in result",
           set(codes.keys()) == {e1, e2, e3, e4, e5})
 
 
 def test_bulk_dangling_exec_id():
-    print("\n[3] dangling exec_id → falls back to legacy producing_code")
+    print("\n[3] dangling exec_id → '' (post Cutover 4)")
     e = entities.create_entity(
         entity_type="figure", title="dangling", artifact_path="/tmp/d.png",
-        producing_code="fallback after dangling\n",
         exec_id="exec_does_not_exist", artifact_kind="figure", artifact_idx=0,
     )
     rec = entities.get_entity(e)
     codes = exec_records.lookup_codes_for_entities([rec])
-    check("resolves via legacy fallback when exec is dangling",
-          codes.get(e) == "fallback after dangling\n")
+    check("dangling exec_id → ''",
+          codes.get(e) == "")
 
 
 def test_bulk_skips_none_and_no_id():
     print("\n[4] tolerates None entries and missing ids without raising")
+    # Create an entity backed by an exec so the helper has a real lookup
+    # to do (post-cutover, code lives in the exec record).
+    cwd = Path(_tmp) / "skips"; cwd.mkdir(exist_ok=True)
+    ex = exec_records.create(
+        thread_id="thr_skips", run_id=None, tool_name="run_python",
+        status="ok", code="ok\n", started_at="2026-06-06T10:99:00Z", cwd=cwd,
+    )
     e1 = entities.create_entity(
         entity_type="figure", title="ok", artifact_path="/tmp/x.png",
-        producing_code="ok\n",
+        exec_id=ex, artifact_kind="figure", artifact_idx=0,
     )
     rec = entities.get_entity(e1)
     codes = exec_records.lookup_codes_for_entities([None, {}, rec, {"foo": "bar"}])

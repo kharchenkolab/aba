@@ -76,19 +76,25 @@ def test_create_entity_with_new_fields():
 
 
 def test_legacy_entity_unchanged():
-    print("\n[3] legacy entity without exec_id still works")
+    print("\n[3] entity without exec_id has no code reachable")
+    # Post Cutover 4: producing_code is gone. An entity with no exec_id
+    # is a degraded entity — lookup returns "". (Real legacy entities are
+    # auto-backfilled with synthetic exec records at init_db; only
+    # entities that never had code in the first place stay code-less.)
     eid = entities.create_entity(
-        entity_type="figure",
-        title="Legacy figure",
-        producing_code="print('old style')\n",
+        entity_type="figure", title="No-code figure",
+        artifact_path="/tmp/no-code.png",
     )
     rec = entities.get_entity(eid)
     check("entity created", rec is not None)
     if not rec:
         return
-    check("rec.producing_code matches", rec.get("producing_code") == "print('old style')\n")
     check("rec.exec_id is None", rec.get("exec_id") is None)
     check("rec.artifact_kind is None", rec.get("artifact_kind") is None)
+    check("no producing_code key in entity dict",
+          "producing_code" not in rec)
+    check("lookup_code_for_entity returns ''",
+          exec_records.lookup_code_for_entity(rec) == "")
 
 
 def test_lookup_code_for_entity_via_exec():
@@ -116,46 +122,37 @@ def test_lookup_code_for_entity_via_exec():
           f"got {looked!r}")
 
 
-def test_lookup_code_for_entity_legacy_fallback():
-    print("\n[5] lookup_code_for_entity falls back to producing_code")
+def test_lookup_code_for_entity_no_exec():
+    print("\n[5] lookup_code_for_entity returns '' when no exec_id (post Cutover 4)")
+    # Post-cutover: legacy fallback to producing_code is gone. An entity
+    # without exec_id resolves to "". (Backfilled entities will have
+    # exec_id set by the backfill on init_db.)
     eid = entities.create_entity(
-        entity_type="figure",
-        title="Legacy fallback",
-        producing_code="print('legacy fallback')\n",
-        # No exec_id → helper must use producing_code
+        entity_type="figure", title="No exec",
+        artifact_path="/tmp/none.png",
     )
     rec = entities.get_entity(eid)
     looked = exec_records.lookup_code_for_entity(rec)
-    check("helper returns legacy producing_code",
-          looked == "print('legacy fallback')\n",
-          f"got {looked!r}")
+    check("no exec_id → ''", looked == "", f"got {looked!r}")
 
 
-def test_lookup_code_for_entity_missing_exec():
-    print("\n[6] helper falls back to producing_code when exec_id points nowhere")
+def test_lookup_code_for_entity_dangling_exec():
+    print("\n[6] helper returns '' when exec_id points nowhere")
     eid = entities.create_entity(
-        entity_type="figure",
-        title="Broken pointer",
-        producing_code="fallback after broken pointer\n",
-        exec_id="exec_does_not_exist",   # dangling pointer
-        artifact_kind="figure",
-        artifact_idx=0,
+        entity_type="figure", title="Broken pointer",
+        artifact_path="/tmp/broken.png",
+        exec_id="exec_does_not_exist",
+        artifact_kind="figure", artifact_idx=0,
     )
     rec = entities.get_entity(eid)
     looked = exec_records.lookup_code_for_entity(rec)
-    check("falls back to producing_code on dangling exec_id",
-          looked == "fallback after broken pointer\n",
-          f"got {looked!r}")
+    check("dangling exec_id → ''", looked == "", f"got {looked!r}")
 
 
-def test_lookup_code_for_entity_no_code_anywhere():
-    print("\n[7] helper returns '' when no code anywhere")
-    eid = entities.create_entity(entity_type="figure", title="No code")
-    rec = entities.get_entity(eid)
-    looked = exec_records.lookup_code_for_entity(rec)
-    check("returns empty string", looked == "")
-    looked2 = exec_records.lookup_code_for_entity(None)
-    check("None entity → empty string", looked2 == "")
+def test_lookup_code_for_entity_none_entity():
+    print("\n[7] helper returns '' on None / empty inputs")
+    check("None → ''", exec_records.lookup_code_for_entity(None) == "")
+    check("empty dict → ''", exec_records.lookup_code_for_entity({}) == "")
 
 
 def test_integration_run_python_to_figure_entity():
@@ -210,9 +207,9 @@ def main() -> int:
     test_create_entity_with_new_fields()
     test_legacy_entity_unchanged()
     test_lookup_code_for_entity_via_exec()
-    test_lookup_code_for_entity_legacy_fallback()
-    test_lookup_code_for_entity_missing_exec()
-    test_lookup_code_for_entity_no_code_anywhere()
+    test_lookup_code_for_entity_no_exec()
+    test_lookup_code_for_entity_dangling_exec()
+    test_lookup_code_for_entity_none_entity()
     test_integration_run_python_to_figure_entity()
     print()
     if _failures:

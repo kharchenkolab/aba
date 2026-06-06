@@ -9,8 +9,12 @@ category: leaf
 # --- A. Storage + lifecycle (create-and-manage side) ---
 schema:
   required: [title, artifact_path]
-  optional: [producing_code, producing_params, parent_entity_id,
-             scenario_of, metadata, tags, notes]
+  # Post Cutover 4 of misc/exec_records_and_versioning.md: producing_code
+  # is no longer a column. exec_id (+ artifact_kind + artifact_idx) is
+  # the pointer at the exec record that owns the code.
+  optional: [producing_params, parent_entity_id, scenario_of,
+             metadata, tags, notes,
+             exec_id, artifact_kind, artifact_idx]
 
 status_model:
   initial: active
@@ -41,7 +45,10 @@ allowed_edges:
 focus:
   # The agent's view when this figure is focused — the producing code
   # context is what makes "regenerate with X different" possible.
-  agent_sees: [title, artifact_path, producing_code, producing_params,
+  # `exec_id` lets the agent's view resolve producing code via the exec
+  # record (post Cutover 4). The agent doesn't read producing_code as a
+  # column anymore — there isn't one.
+  agent_sees: [title, artifact_path, exec_id, producing_params,
                parent_summary, advisor_notes, tags, notes]
 
 ui:

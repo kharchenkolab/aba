@@ -252,10 +252,14 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
                 pass
     summary = (input_.get("summary") or "").strip()
+    # Post Cutover 4: `producing_code` is no longer a column on entities.
+    # If the caller supplied it (a holdover from the legacy schema), we
+    # silently drop it here; agents shouldn't notice. The dataset's code
+    # provenance, when meaningful, is reachable via the producing exec
+    # record (the agent passes `exec_id` for that, not free-form code).
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
-        producing_code=input_.get("producing_code"),
         metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
                   "by_reference": not adopted, "ref_path": abspath,
                   "summary": summary, "source": input_.get("source", ""),
