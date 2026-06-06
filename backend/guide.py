@@ -759,6 +759,10 @@ async def stream_response(
                     # Stop actually stops the work (not just the UI).
                     "cancel_token": cancel_token,
                     "progress_q": _progress_q,
+                    # Stage 1 exec records: the Anthropic tool_use id, so
+                    # run_python / run_r can stamp it into execution_records
+                    # for chat ↔ exec correlation.
+                    "tool_use_id": block.id,
                 }
                 # P3 #6 telemetry — wrap dispatch with timing.
                 import datetime as _dt

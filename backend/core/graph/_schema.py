@@ -296,6 +296,32 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at)")
 
+        # Exec records (misc/exec_records_and_versioning.md). One row per
+        # tool dispatch that produces an artifact or material side effect
+        # (currently run_python / run_r). Index only — the full record lives
+        # at record_path as a JSON sidecar colocated in the workdir's .exec/
+        # subdir. code_hash supports dedup / "same code as before" lookups
+        # without rehydrating the JSON. Separate from tool_invocations
+        # (which is bare telemetry — duration, status, no code, no produced).
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS execution_records (
+                exec_id        TEXT PRIMARY KEY,
+                thread_id      TEXT NOT NULL,
+                run_id         TEXT,
+                tool_use_id    TEXT,
+                tool_name      TEXT NOT NULL,
+                status         TEXT NOT NULL,
+                code_hash      TEXT,
+                record_path    TEXT NOT NULL,
+                started_at     TEXT NOT NULL,
+                completed_at   TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_exec_thread ON execution_records(thread_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_exec_run    ON execution_records(run_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_exec_hash   ON execution_records(code_hash)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_exec_tooluse ON execution_records(tool_use_id)")
+
         # P3 #6 — per-tool-invocation telemetry. One row per execute_tool
         # dispatch. Aggregated by /api/admin/tool_stats so we can see
         # what's actually used + failure rates as the catalog grows.

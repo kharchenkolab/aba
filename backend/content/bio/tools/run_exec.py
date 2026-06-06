@@ -9,10 +9,19 @@ working unchanged.
 
 All non-stdlib imports are kept lazy inside the functions — matches the
 pattern in the rest of bio/tools and keeps module-import cost low.
+
+Stage 1 exec records (misc/exec_records_and_versioning.md): on each
+successful kernel-path call, `_write_exec_record` writes one row to
+`execution_records` + a JSON sidecar at `<cwd>/.exec/<exec_id>.json`.
+Failure to write is logged but never blocks the tool result — provenance
+is best-effort, not a precondition for serving the user.
 """
 from __future__ import annotations
+import logging
 import uuid
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 
 def _run_scratch_cwd(project_id: str, thread_id: str):
@@ -271,6 +280,103 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         return ""
 
 
+def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
+                        sess, started_iso: str, started_ts: float,
+                        res, plots: list, tables: list, files: list) -> Optional[str]:
+    """Write one execution_records row + JSON sidecar after a successful
+    kernel-path tool dispatch. Returns the exec_id, or None on any failure
+    (logged, swallowed — provenance is best-effort).
+
+    `started_iso` is the ISO timestamp at dispatch start; `started_ts` is
+    the matching monotonic time used to compute wall_time_s. `res` is the
+    KernelResult from sess.execute. plots/tables/files come straight from
+    harvest_artifacts."""
+    try:
+        import time as _time
+        from datetime import datetime, timezone
+        from core.graph import exec_records as _er
+        from core.exec.fingerprint import (
+            code_hash, env_fingerprint, package_versions_for_session,
+        )
+        from core.exec.output_cap import snip_middle
+        from content.bio.lifecycle.runs import active_run_id
+
+        thread_id = str((ctx or {}).get("thread_id") or "default")
+        tool_use_id = (ctx or {}).get("tool_use_id")
+        # active_run_id needs the same thread_id used elsewhere; resolved
+        # via the entities table, so missing → None (scratch).
+        run_id_ent = None
+        try:
+            run_id_ent = active_run_id(thread_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Package versions + env fingerprint — cached on the session for
+        # 10 min so back-to-back calls don't re-probe.
+        pkg_full = package_versions_for_session(sess, lang)
+        lang_ver = pkg_full.pop("__lang_version__", "") if isinstance(pkg_full, dict) else ""
+        pkg = pkg_full if isinstance(pkg_full, dict) else {}
+        ef = env_fingerprint(lang_ver, pkg)
+
+        # Build produced[] in a uniform shape across kinds. The harvester
+        # returns three lists; we union them into one stream addressable
+        # as <exec_id>:<kind>:<idx>.
+        produced: list[dict] = []
+        for i, p in enumerate(plots or []):
+            produced.append({"kind": "figure", "idx": i,
+                             "url": p.get("url"),
+                             "name": p.get("original_name") or p.get("name")})
+        for i, t in enumerate(tables or []):
+            produced.append({"kind": "table", "idx": i,
+                             "url": t.get("url"), "name": t.get("name")})
+        for i, f in enumerate(files or []):
+            produced.append({"kind": "file", "idx": i,
+                             "url": f.get("url"), "name": f.get("name")})
+
+        completed_iso = datetime.now(timezone.utc).isoformat()
+        wall_s = max(0.0, _time.time() - started_ts)
+        # Status from KernelResult — Stage 1 only writes on the success
+        # path, so timed_out/cancelled won't get here; we still derive
+        # robustly so future expansion is trivial.
+        if getattr(res, "timed_out", False):
+            status = "timeout"
+        elif getattr(res, "cancelled", False):
+            status = "cancelled"
+        elif (getattr(res, "returncode", 0) or 0) != 0:
+            status = "error"
+        else:
+            status = "ok"
+
+        eid = _er.create(
+            thread_id=thread_id,
+            run_id=run_id_ent,
+            tool_use_id=tool_use_id,
+            tool_name=f"run_{lang}",
+            status=status,
+            code=code or "",
+            code_hash=code_hash(code or ""),
+            started_at=started_iso,
+            completed_at=completed_iso,
+            cwd=cwd,
+            payload={
+                "executor": f"kernel:{lang}",
+                "language": lang,
+                "language_version": lang_ver,
+                "package_versions": pkg,
+                "env_fingerprint": ef,
+                "produced": produced,
+                "stdout_tail": snip_middle(res.stdout or ""),
+                "stderr_tail": snip_middle(res.stderr or ""),
+                "exit_code": getattr(res, "returncode", 0),
+                "wall_time_s": wall_s,
+            },
+        )
+        return eid
+    except Exception as e:  # noqa: BLE001 — never block the user-visible result
+        _log.warning("exec_records: write failed for run_%s: %s", lang, e)
+        return None
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -321,12 +427,14 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # within this thread, so the agent reuses loaded data / fitted models.
     if KERNEL_ENABLED and not input_.get("fresh"):
         try:
+            from datetime import datetime as _dt, timezone as _tz
             from core.exec.kernels import get_pool
             from core.data.workspace import scratch_dir
             # cwd = the active Run's own output dir (so a pipeline's files land in
             # one browsable bundle), else the shared thread scratch dir.
             cwd = _run_scratch_cwd(str(project_id), str(thread_id))
             start_ts = _time.time()
+            started_iso = _dt.now(_tz.utc).isoformat()
             sess = get_pool().get_or_start(str(thread_id), "python",
                                            cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
             _ensure_kernel_cwd(sess, "python", cwd)
@@ -344,6 +452,17 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
                    "returncode": res.returncode, "plots": plots, "tables": tables,
                    "files": files, "execution_mode": "session"}
+            # Stage 1 exec record — written after harvest so produced[] is
+            # populated. Best-effort: failure here is logged, never blocks
+            # the user-visible result. exec_id surfaces in `out` so the
+            # caller / UI can reference it (Stage 2 entity creation uses it).
+            _eid = _write_exec_record(
+                lang="python", ctx=ctx, code=code, cwd=cwd, sess=sess,
+                started_iso=started_iso, started_ts=start_ts, res=res,
+                plots=plots, tables=tables, files=files,
+            )
+            if _eid:
+                out["exec_id"] = _eid
             if warns:
                 out["figure_warnings"] = warns
             # A: namespace preview (only on success — probing a half-broken
@@ -397,12 +516,14 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
     try:
+        from datetime import datetime as _dt, timezone as _tz
         from core.exec.kernels import get_pool
         from core.data.workspace import scratch_dir
         # cwd = the active Run's own output dir (shared with the Python kernel via
         # the same run-keyed dir), else the thread scratch dir.
         cwd = _run_scratch_cwd(str(project_id), str(thread_id))
         start_ts = _time.time()
+        started_iso = _dt.now(_tz.utc).isoformat()
         sess = get_pool().get_or_start(str(thread_id), "r",
                                        cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
         _ensure_kernel_cwd(sess, "r", cwd)
@@ -420,6 +541,15 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
            "returncode": res.returncode, "plots": plots, "tables": tables,
            "files": files, "execution_mode": "session"}
+    # Stage 1 exec record (parity with run_python). Best-effort; logged on
+    # failure, never blocks the tool result.
+    _eid = _write_exec_record(
+        lang="r", ctx=ctx, code=code, cwd=cwd, sess=sess,
+        started_iso=started_iso, started_ts=start_ts, res=res,
+        plots=plots, tables=tables, files=files,
+    )
+    if _eid:
+        out["exec_id"] = _eid
     if warns:
         out["figure_warnings"] = warns
     # A: namespace preview. B: one-shot prior-run files preamble on cwd switch.
