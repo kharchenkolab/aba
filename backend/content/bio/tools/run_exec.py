@@ -312,10 +312,16 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
             pass
 
         # Package versions + env fingerprint — cached on the session for
-        # 10 min so back-to-back calls don't re-probe.
-        pkg_full = package_versions_for_session(sess, lang)
-        lang_ver = pkg_full.pop("__lang_version__", "") if isinstance(pkg_full, dict) else ""
-        pkg = pkg_full if isinstance(pkg_full, dict) else {}
+        # 10 min so back-to-back calls don't re-probe. Copy the dict before
+        # popping the lang-version field so we don't mutate the cache (a
+        # mutated cache → empty lang_ver on subsequent calls → different
+        # fingerprint, which would break reproduction-drift detection).
+        pkg_cached = package_versions_for_session(sess, lang)
+        if isinstance(pkg_cached, dict):
+            pkg = {k: v for k, v in pkg_cached.items() if k != "__lang_version__"}
+            lang_ver = pkg_cached.get("__lang_version__", "")
+        else:
+            pkg, lang_ver = {}, ""
         ef = env_fingerprint(lang_ver, pkg)
 
         # Build produced[] in a uniform shape across kinds. The harvester

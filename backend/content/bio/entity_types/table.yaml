@@ -21,9 +21,12 @@ status_model:
 allowed_edges:
   # produced_by mirrors figure.out — promote_to_result links evidence
   # back to its parent Run (alias of wasGeneratedBy in PROV-O terms).
-  out: [wasGeneratedBy, produced_by, wasDerivedFrom, supports, commented_on]
+  # wasRevisionOf: a revised table points at the original it replaces
+  # (Stage 5 of misc/exec_records_and_versioning.md).
+  out: [wasGeneratedBy, produced_by, wasDerivedFrom, wasRevisionOf,
+        supports, commented_on]
   # Same membership/derivation pattern as figure — tables wrapped in Results.
-  in:  [supports, includes, wasDerivedFrom]
+  in:  [supports, includes, wasDerivedFrom, wasRevisionOf]
 
 focus:
   agent_sees: [title, artifact_path, producing_code, parent_summary,
