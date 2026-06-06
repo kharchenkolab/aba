@@ -35,6 +35,7 @@ import FileBrowser, { type TreeNode } from '../components/FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
 import UploadDrop from '../components/UploadDrop'
+import RevisionChevrons from './RevisionChevrons'
 
 
 // ---------- Registry API ----------
@@ -266,10 +267,15 @@ function formatBytes(n: number): string {
 // ---------- Per-entity-type view components ----------
 
 
-function FigureView({ entity }: FocusViewProps) {
-  return entity.artifact_path
-    ? <img className="focus__figure" src={entity.artifact_path} alt={entity.title} />
-    : <p className="focus__placeholder">No artifact attached.</p>
+function FigureView({ entity, onFocus }: FocusViewProps) {
+  if (!entity.artifact_path) {
+    return <p className="focus__placeholder">No artifact attached.</p>
+  }
+  return (
+    <RevisionChevrons entity_id={entity.id} onFocus={onFocus}>
+      <img className="focus__figure" src={entity.artifact_path} alt={entity.title} />
+    </RevisionChevrons>
+  )
 }
 
 
@@ -341,8 +347,12 @@ function NoteView({ entity }: FocusViewProps) {
 }
 
 
-function TableView({ entity }: FocusViewProps) {
-  return <PreviewTable entityId={entity.id} pageSize={25} />
+function TableView({ entity, onFocus }: FocusViewProps) {
+  return (
+    <RevisionChevrons entity_id={entity.id} onFocus={onFocus}>
+      <PreviewTable entityId={entity.id} pageSize={25} />
+    </RevisionChevrons>
+  )
 }
 
 

@@ -315,6 +315,65 @@
   align-self: flex-start;
 }
 
+/* Revision chevrons (Stage 5 of misc/exec_records_and_versioning.md) —
+   floating overlay on the figure/table when there are ≥2 revisions in
+   the wasRevisionOf chain. Chevrons stay invisible until hover so the
+   default view isn't cluttered for the common single-revision case. */
+.focus__figure-wrap {
+  position: relative;
+  display: inline-block;     /* hug the artifact so chevrons stick to its edges */
+  align-self: flex-start;
+}
+.rev-chevron {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;             /* hover-revealed; see :hover rule below */
+  transition: opacity 120ms ease;
+  z-index: 2;
+}
+.rev-chevron--prev { left: 6px; }
+.rev-chevron--next { right: 6px; }
+.focus__figure-wrap:hover .rev-chevron,
+.rev-chevron:focus-visible {
+  opacity: 1;
+}
+.rev-chevron:hover {
+  background: white;
+  border-color: var(--accent);
+}
+.rev-chevron__badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: white;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+  opacity: 0.7;
+  z-index: 1;
+}
+.focus__figure-wrap:hover .rev-chevron__badge {
+  opacity: 1;
+}
+
 .focus__dataset { display: flex; flex-direction: column; gap: 10px; }
 .focus__dataset-desc {
   width: 100%; box-sizing: border-box; resize: none; overflow: hidden; min-height: 36px;
