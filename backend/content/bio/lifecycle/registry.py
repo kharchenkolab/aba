@@ -127,6 +127,12 @@ def register_artifacts_from_tool_result(
             append_run_code(_rid, tool_input.get("code", "") if isinstance(tool_input, dict) else "")
 
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
+    # Stage 2: exec_id from run_python / run_r — points at the exec record
+    # that holds the canonical code + env. Entities created here carry
+    # both producing_code (legacy denormalized cache; many read sites still
+    # use it) and the exec_id pointer for the new single-source-of-truth
+    # path via core.graph.exec_records.get().
+    exec_id_ptr = result_obj.get("exec_id") if isinstance(result_obj, dict) else None
     if tool_name in ("run_python", "run_r", "run_nextflow") and plots:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
@@ -147,6 +153,9 @@ def register_artifacts_from_tool_result(
                 producing_code=producing_code,
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name, **res_meta},
+                exec_id=exec_id_ptr,
+                artifact_kind="figure" if exec_id_ptr else None,
+                artifact_idx=i if exec_id_ptr else None,
             )
             # PROV-O edges: figure wasGeneratedBy the analysis;
             # the analysis used the focused entity (if any).
@@ -164,7 +173,7 @@ def register_artifacts_from_tool_result(
     if tool_name in ("run_python", "run_r", "run_nextflow") and tables:
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
-        for t in tables:
+        for i, t in enumerate(tables):
             original_name = t.get("original_name") or "table.csv"
             title = _title_from_code(producing_code) or original_name
             eid = create_entity(
@@ -174,6 +183,9 @@ def register_artifacts_from_tool_result(
                 producing_code=producing_code,
                 parent_entity_id=analysis_id,
                 metadata={"original_name": original_name, **res_meta},
+                exec_id=exec_id_ptr,
+                artifact_kind="table" if exec_id_ptr else None,
+                artifact_idx=i if exec_id_ptr else None,
             )
             add_edge(eid, analysis_id, "wasGeneratedBy")
             focused = focused_entity_id or WORKSPACE_ID

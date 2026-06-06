@@ -180,6 +180,11 @@ def create_scenario_variant(
 
     plot = plots[0]
     derived_title = title or _title_from_code(new_code) or f"{baseline['title']} ({description})"
+    # Stage 2: scenarios carry the exec_id of the variant run too — they're
+    # full figure entities and deserve the same drill-down to producing code
+    # via the exec record. We take the first artifact (idx=0) since plots[0]
+    # is what we're materializing as the entity.
+    _exec_id_ptr = result.get("exec_id")
     eid = create_entity(
         entity_type="figure",
         title=derived_title[:120],
@@ -191,6 +196,9 @@ def create_scenario_variant(
             "scenario_description": description,
             "original_name": plot.get("original_name", "figure.png"),
         },
+        exec_id=_exec_id_ptr,
+        artifact_kind="figure" if _exec_id_ptr else None,
+        artifact_idx=0 if _exec_id_ptr else None,
     )
     add_edge(eid, baseline_id, "variantOf", {"description": description})
     return get_entity(eid)  # type: ignore[return-value]
