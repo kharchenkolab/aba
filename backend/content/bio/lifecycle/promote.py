@@ -485,7 +485,10 @@ def auto_interpret(result_id: str) -> Optional[str]:
             chunks.append(f"[{tag}{anchor}] {t}")
         chat_context = "\n\n".join(chunks)[:3000]
 
-    producing_code = (ev.get("producing_code") or "")[:6000]
+    # Post-cutover: resolve code via the exec record. Legacy entities
+    # fall back to their producing_code column inside the helper.
+    from core.graph.exec_records import lookup_code_for_entity
+    producing_code = lookup_code_for_entity(ev)[:6000]
     title_hint = (ev.get("title") or "").strip()
 
     # 1) LLM annotation path — title + caption together.

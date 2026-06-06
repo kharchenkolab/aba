@@ -89,8 +89,13 @@ def _generic_card(entity: dict) -> tuple[str, list[str]]:
     if e.get("artifact_path"):
         lines.append(f"Artifact on disk: {e['artifact_path']}")
         fields.append("artifact_path")
-    if e.get("producing_code"):
-        snippet = e["producing_code"].strip()
+    # Post-cutover: resolve producing code via the exec record (Stage 2 of
+    # misc/exec_records_and_versioning.md). Legacy entities (no exec_id)
+    # still fall back to their producing_code column inside the helper.
+    from core.graph.exec_records import lookup_code_for_entity
+    _code = lookup_code_for_entity(e)
+    if _code:
+        snippet = _code.strip()
         if len(snippet) > 600:
             snippet = snippet[:600] + "\n# ... (truncated)"
         lines.append("Producing code:")

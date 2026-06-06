@@ -1123,7 +1123,11 @@ def suggest_interpretation(entity_id: str):
             chunks.append(f"[{tag}{anchor}] {t}")
         chat_context = "\n\n".join(chunks)[:3000]
 
-    producing_code = (e.get("producing_code") or "")[:6000]
+    # Post-cutover: code resolved via the exec record (Stage 2 of
+    # misc/exec_records_and_versioning.md). Legacy entities fall back
+    # to their producing_code column inside the helper.
+    from core.graph.exec_records import lookup_code_for_entity
+    producing_code = lookup_code_for_entity(e)[:6000]
     title = (e.get("title") or "").strip()
 
     text = _llm_figure_caption(art, producing_code, chat_context, title)

@@ -40,8 +40,11 @@ def _build_skeptic_prompt(result: dict) -> str:
         fig = get_entity(evidence_id)
         if fig:
             bits.append(f"\nSupporting figure: {fig['title']}")
-            if fig.get("producing_code"):
-                code = fig["producing_code"]
+            # Post-cutover: resolve code via the exec record.
+            from core.graph.exec_records import lookup_code_for_entity
+            _fig_code = lookup_code_for_entity(fig)
+            if _fig_code:
+                code = _fig_code
                 if len(code) > 800:
                     code = code[:800] + "\n# ... (truncated)"
                 bits.append("Producing code:\n```python\n" + code + "\n```")
@@ -80,12 +83,23 @@ def methodologist_review(analysis_id: str, *,
     e = get_entity(analysis_id)
     if not e or e["type"] != "analysis":
         return None
+    # Post-cutover: code resolution goes through the exec records. For the
+    # analysis (= Run) itself, that's `aggregated_code_for_run`. For each
+    # child artifact, it's `lookup_code_for_entity`. The legacy
+    # `producing_code` column is no longer the source of truth.
+    from core.graph.exec_records import (
+        aggregated_code_for_run as _agg_code,
+        lookup_code_for_entity as _ent_code,
+    )
     code_snippets = []
     for edge in edges_to(analysis_id):
         child = get_entity(edge["source_id"])
-        if child and child.get("producing_code"):
-            code_snippets.append(child["producing_code"])
-    code = "\n\n".join(code_snippets)[:1500] or (e.get("producing_code") or "")
+        if not child:
+            continue
+        c = _ent_code(child)
+        if c:
+            code_snippets.append(c)
+    code = "\n\n".join(code_snippets)[:1500] or _agg_code(analysis_id)
     prompt = (
         f"Analysis: {e['title']}\n\nProducing code:\n```python\n{code}\n```\n\n"
         "Review the methodology. What's the most important thing to check?"

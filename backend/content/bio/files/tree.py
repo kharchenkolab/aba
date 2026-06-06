@@ -474,9 +474,13 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
             # Exclude the ambient catch-all analysis (it's a structural parent for
             # ad-hoc outputs, not a real Run — hidden from the UI per its `ambient`
             # flag; its files surface under working/ and its figures as orphans).
+            # Post-cutover: Run "has code?" comes from aggregated_code_for_run
+            # (concatenation of all exec records in the Run). The legacy
+            # producing_code column is no longer authoritative.
+            from core.graph.exec_records import aggregated_code_for_run as _agg_code
             runs = [r for r in in_thread(thread["id"], RUN_TYPES)
                     if not (r.get("metadata") or {}).get("ambient")
-                    and (run_children(r["id"]) or r.get("producing_code"))]
+                    and (run_children(r["id"]) or _agg_code(r["id"]))]
             if runs:
                 runs_folder = _folder("runs", path=f"{t_path}/runs")
                 for run, ri, r_seg in _add_numbered_children(runs_folder, runs):
@@ -490,8 +494,11 @@ def build_files_tree(*, include_archived: bool = False) -> dict:
                         entity=run,
                     ))
 
-                    # Producing code if present on the run entity.
-                    code = run.get("producing_code")
+                    # Producing code for the Run = the aggregated code across
+                    # every exec record this Run has dispatched. Single source
+                    # of truth (the exec records); the legacy run.producing_code
+                    # denormalization is gone.
+                    code = _agg_code(run["id"])
                     if code:
                         r_folder["children"].append({
                             "kind": "file",

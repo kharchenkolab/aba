@@ -127,15 +127,21 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
 
 def close_run(thread_id: str) -> Optional[str]:
     """Close the thread's open Run, if any. An EMPTY Run (no outputs, no
-    captured code) is discarded instead of kept, so abandoned/re-planned
-    analyses don't litter the tree. Returns the closed/discarded id, or None."""
+    captured exec records) is discarded instead of kept, so abandoned/
+    re-planned analyses don't litter the tree. Returns the closed/discarded
+    id, or None.
+
+    Post-cutover: "captured code" is sourced from the Run's exec records
+    (aggregated_code_for_run), not the legacy entity.producing_code.
+    """
     rid = active_run_id(thread_id)
     if not rid:
         return None
-    ent = get_entity(rid)
-    if not (ent or {}).get("producing_code") and not _has_children(rid):
+    from core.graph.exec_records import aggregated_code_for_run as _agg_code
+    if not _agg_code(rid) and not _has_children(rid):
         archive_entity(rid)
         return rid
+    ent = get_entity(rid)
     md = dict((ent or {}).get("metadata") or {})
     md["run_state"] = "closed"
     update_entity(rid, metadata=md)
@@ -341,16 +347,14 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
 
 
 def append_run_code(run_id: str, code: str) -> None:
-    """Accumulate a cell onto the Run's producing_code — so the Run is the
-    recompute/branch unit, not just a folder of figures."""
-    if not run_id or not code:
-        return
-    ent = get_entity(run_id)
-    if not ent:
-        return
-    block = code.strip()
-    prior = ent.get("producing_code") or ""
-    if not block or block in prior:
-        return
-    combined = (prior + "\n\n# ---\n" + block) if prior else block
-    update_entity(run_id, producing_code=combined[:20000])
+    """Deprecated no-op (post-cutover of misc/exec_records_and_versioning.md).
+
+    Historically this denormalized every cell's code onto the Run entity's
+    `producing_code` column. Now each cell writes an exec_records row +
+    JSON sidecar via the dispatcher; the Run's aggregated code is computed
+    on demand by `exec_records.aggregated_code_for_run(run_id)`.
+
+    Kept as a no-op (rather than removed) so callers in registry.py don't
+    need a coordinated migration. Safe to delete in a follow-up sweep.
+    """
+    return None
