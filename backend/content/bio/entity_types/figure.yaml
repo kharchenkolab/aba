@@ -27,12 +27,15 @@ allowed_edges:
   # commented_on (used as evidence/annotation target).
   # produced_by is the bio-flavoured alias for wasGeneratedBy used by
   # promote_to_result when an evidence figure links back to its parent Run.
+  # wasRevisionOf: a revised figure points at the original it replaces
+  # (Stage 5 of misc/exec_records_and_versioning.md).
   out: [wasGeneratedBy, produced_by, wasDerivedFrom, variantOf,
-        supports, commented_on]
+        wasRevisionOf, supports, commented_on]
   # in: Results wrap figures (includes, wasDerivedFrom, supports);
   # Findings/Claims support figures directly; variantOf is symmetric
   # (one figure points at another scenario figure).
-  in:  [supports, includes, wasDerivedFrom, variantOf]
+  # wasRevisionOf incoming: an older figure is pointed at by its newer revisions.
+  in:  [supports, includes, wasDerivedFrom, variantOf, wasRevisionOf]
 
 # --- B. Navigation + shared reference frame (navigate side) ---
 focus:
