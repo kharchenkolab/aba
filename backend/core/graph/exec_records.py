@@ -327,6 +327,131 @@ def aggregated_code_for_run(run_id: str, *,
     return separator.join(parts) if parts else ""
 
 
+def backfill_legacy_producing_code(*, dry_run: bool = False) -> dict:
+    """One-shot migration helper (idempotent): for every entity that has
+    `producing_code` set but no `exec_id`, write a synthetic exec record
+    so post-cutover code paths can drill through the new pointer.
+
+    The synthetic record is a degraded reconstruction — no env_fingerprint,
+    no package_versions, no produced[], no real started_at — but it's
+    enough to satisfy lookup_code_for_entity, aggregated_code_for_run,
+    and reproduce_from_exec. Synthetic records are flagged with
+    `source: "backfill"` in their JSON body so downstream UI can warn
+    users that env_drift comparisons are not meaningful for these.
+
+    Idempotent: subsequent calls re-query and find no candidates (exec_id
+    is already set on the previously-backfilled rows). Safe to call from
+    init_db on every startup.
+
+    Returns: {backfilled: N, scanned: M, skipped_no_code: K, errors: E}.
+
+    With dry_run=True, performs only the scan and returns the count of
+    would-be-backfilled entities without writing anything. Useful for
+    operators evaluating the upgrade impact.
+    """
+    import hashlib
+    import os
+    from datetime import datetime, timezone
+    log = logging.getLogger("exec_records.backfill")
+
+    # Skip cheap if no candidates — avoids a directory write + table scan.
+    with _conn() as c:
+        candidates = c.execute(
+            "SELECT id, type, title, producing_code, created_at, metadata "
+            "FROM entities WHERE producing_code IS NOT NULL "
+            "AND producing_code != '' AND exec_id IS NULL"
+        ).fetchall()
+    if not candidates:
+        return {"backfilled": 0, "scanned": 0, "skipped_no_code": 0, "errors": 0}
+
+    backfill_root_env = os.environ.get("ABA_RUNTIME_DIR") or "/workspace/aba-runtime"
+    backfill_dir = Path(backfill_root_env) / "exec-backfill"
+    if not dry_run:
+        backfill_dir.mkdir(parents=True, exist_ok=True)
+
+    backfilled = errors = skipped = 0
+    for r in candidates:
+        eid = r["id"]
+        code = r["producing_code"]
+        if not code or not code.strip():
+            skipped += 1
+            continue
+        if dry_run:
+            backfilled += 1
+            continue
+
+        try:
+            # Sniff language from the code itself, deferring to the
+            # scenarios._detect_language heuristic (R signals beat python
+            # signals; default to python on tie).
+            try:
+                from content.bio.lifecycle.scenarios import _detect_language
+                lang = _detect_language(code)
+            except Exception:  # noqa: BLE001 — never block backfill on the sniffer
+                lang = "python"
+            tool_name = "run_r" if lang == "r" else "run_python"
+
+            # Pull thread_id off entity metadata if present so the row is
+            # navigable per-thread, mirroring real exec records.
+            meta = {}
+            try:
+                if r["metadata"]:
+                    meta = json.loads(r["metadata"])
+            except Exception:  # noqa: BLE001
+                meta = {}
+            tid = meta.get("thread_id") or "backfill"
+
+            ex_id = f"exec_bf_{hashlib.sha256(eid.encode()).hexdigest()[:10]}"
+            ts = r["created_at"] or datetime.now(timezone.utc).isoformat()
+
+            ch = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+            rp = backfill_dir / f"{ex_id}.json"
+            body = {
+                "exec_id":      ex_id,
+                "thread_id":    tid,
+                "run_id":       None,
+                "tool_use_id":  None,
+                "tool_name":    tool_name,
+                "status":       "ok",
+                "code":         code,
+                "code_hash":    ch,
+                "started_at":   ts,
+                "completed_at": ts,
+                "executor":     f"backfill:{lang}",
+                "language":     lang,
+                "source":       "backfill",   # so the UI can flag degraded records
+                "produced":     [],
+                "stdout_tail":  "",
+                "stderr_tail":  "",
+            }
+            rp.write_text(json.dumps(body, indent=2, default=str), encoding="utf-8")
+
+            with _conn() as c:
+                c.execute(
+                    """INSERT OR IGNORE INTO execution_records
+                       (exec_id, thread_id, run_id, tool_use_id, tool_name,
+                        status, code_hash, record_path, started_at, completed_at)
+                       VALUES (?, ?, NULL, NULL, ?, 'ok', ?, ?, ?, ?)""",
+                    (ex_id, tid, tool_name, ch, str(rp), ts, ts),
+                )
+                c.execute("UPDATE entities SET exec_id = ? WHERE id = ? AND exec_id IS NULL",
+                          (ex_id, eid))
+                c.commit()
+            backfilled += 1
+        except Exception as e:  # noqa: BLE001 — log and keep going; a bad row shouldn't stop the batch
+            log.warning("backfill_legacy_producing_code: entity %s failed: %s", eid, e)
+            errors += 1
+
+    log.info(
+        "backfill_legacy_producing_code: %s entities backfilled (scanned %d, "
+        "skipped %d empty, %d errors)%s",
+        backfilled, len(candidates), skipped, errors,
+        " (dry-run)" if dry_run else "",
+    )
+    return {"backfilled": backfilled, "scanned": len(candidates),
+            "skipped_no_code": skipped, "errors": errors}
+
+
 def _row_index(r) -> dict:
     return {
         "exec_id":      r["exec_id"],

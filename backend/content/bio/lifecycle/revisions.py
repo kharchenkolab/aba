@@ -118,7 +118,6 @@ def make_revision(
         entity_type=kind,
         title=derived_title,
         artifact_path=art.get("url"),
-        producing_code=modified_code,
         parent_entity_id=parent.get("parent_entity_id"),
         metadata={
             "thread_id": tid or None,

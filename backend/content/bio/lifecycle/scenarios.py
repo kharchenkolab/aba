@@ -189,12 +189,13 @@ def create_scenario_variant(
     # full figure entities and deserve the same drill-down to producing code
     # via the exec record. We take the first artifact (idx=0) since plots[0]
     # is what we're materializing as the entity.
+    # Post-cutover: code lives in the exec record; no producing_code on
+    # new entities.
     _exec_id_ptr = result.get("exec_id")
     eid = create_entity(
         entity_type="figure",
         title=derived_title[:120],
         artifact_path=plot["url"],
-        producing_code=new_code,
         parent_entity_id=baseline["parent_entity_id"],
         scenario_of=baseline_id,
         metadata={
