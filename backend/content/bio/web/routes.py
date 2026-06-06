@@ -561,6 +561,85 @@ def unpin_entity(entity_id: str):
     return unpin_evidence(entity_id, thread_id=tid)
 
 
+# ── Revision navigation + operations (Stage 5 of
+# misc/exec_records_and_versioning.md) ───────────────────────────────────────
+
+@router.get("/api/entities/{entity_id}/revisions")
+def list_revisions(entity_id: str):
+    """Return the revision chain for a figure/table entity, newest first.
+
+    Follows wasRevisionOf edges in both directions from `entity_id` so
+    the same chain is returned regardless of which revision the caller
+    happens to be looking at. The 'position' field is the 0-based index
+    of `entity_id` within the chain (0 = newest).
+    """
+    from content.bio.graph.figure_history import figure_history
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    chain = figure_history(entity_id)
+    pos = next((i for i, e in enumerate(chain) if e["id"] == entity_id), 0)
+    return {
+        "chain": chain,
+        "position": pos,
+        "prev": chain[pos + 1]["id"] if pos + 1 < len(chain) else None,
+        "next": chain[pos - 1]["id"] if pos > 0 else None,
+    }
+
+
+class MakeRevisionRequest(BaseModel):
+    modified_code: str
+    title: str | None = None
+
+
+@router.post("/api/entities/{entity_id}/make_revision")
+def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
+    """Run `modified_code` and pin the new artifact as wasRevisionOf
+    `entity_id`. Both stay pinned siblings — the original is NOT
+    auto-superseded. Returns the new entity record (figure or table).
+    """
+    from content.bio.lifecycle.revisions import make_revision
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    try:
+        out = make_revision(
+            entity_id, req.modified_code,
+            title=req.title,
+            thread_id=(ent.get("metadata") or {}).get("thread_id"),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    new_ent = get_entity(out["new_entity_id"])
+    return {
+        "entity": new_ent,
+        "exec_id": out.get("exec_id"),
+        "wasRevisionOf": out.get("wasRevisionOf"),
+    }
+
+
+@router.post("/api/entities/{entity_id}/reproduce")
+def reproduce_endpoint(entity_id: str):
+    """Re-run the exec that produced `entity_id` and report the result.
+
+    Doesn't create any new entity — just runs and returns the reproduction
+    summary (new_exec_id, env_drift flag, fingerprints, warnings). The
+    caller may follow up with /make_revision to pin the reproduction as
+    a sibling if they want.
+    """
+    from content.bio.lifecycle.revisions import reproduce_from_exec
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, f"entity {entity_id} not found")
+    try:
+        return reproduce_from_exec(
+            entity_id,
+            thread_id=(ent.get("metadata") or {}).get("thread_id"),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 class PinMessageRequest(BaseModel):
     key: str                       # stable content hash from the client
     text: str = ""

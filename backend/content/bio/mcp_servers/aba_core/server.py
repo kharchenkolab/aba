@@ -23,6 +23,7 @@ from .tools.discovery import register_discovery_tools
 from .tools.file_io import register_file_io_tools
 from .tools.plan_etc import register_plan_etc_tools
 from .tools.run_exec import register_run_exec_tools
+from .tools.revisions import register_revision_tools
 
 
 def make_server() -> FastMCP:
@@ -56,5 +57,7 @@ def make_server() -> FastMCP:
     register_plan_etc_tools(mcp)    # 6.G: present_plan, ask_clarification, create_scenario,
                                     #      write_memory, restart_kernel, run_nextflow
     register_run_exec_tools(mcp)    # 6.H: run_python, run_r
+    register_revision_tools(mcp)    # Stage 5 of misc/exec_records_and_versioning.md:
+                                    #      make_revision, reproduce_from_exec
 
     return mcp
