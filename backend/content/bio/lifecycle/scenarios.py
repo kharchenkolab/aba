@@ -11,7 +11,8 @@ code), it rewrites the baseline's code (via Haiku) and runs it.
 """
 from __future__ import annotations
 import json
-from typing import Optional
+import re
+from typing import Literal, Optional
 
 from config import API_KEY, MODEL, FAKE_SESSION
 from core.graph.edges import add_edge
@@ -20,33 +21,103 @@ from content.bio.tools import execute_tool
 from content.bio.lifecycle.registry import _title_from_code
 
 
-_REWRITE_SYSTEM = (
-    "You are rewriting a small Python analysis script to produce a scenario "
-    "variant. The user will describe a change (e.g. 'use mt_fraction cutoff "
-    "0.10' or 'exclude sample S4'). Output ONLY the modified Python code — "
-    "no commentary, no markdown fences, no preamble. The code must continue "
-    "to save its figure with plt.savefig() so the harness captures it. Keep "
-    "all variable names and structure that aren't part of the change."
+Language = Literal["r", "python"]
+
+
+# Strong R signals (Python won't emit any of these in a script context).
+_R_SIGNALS = (
+    re.compile(r"^\s*library\s*\(", re.M),
+    re.compile(r"<-\s"),
+    re.compile(r"\bggsave\s*\("),
+    re.compile(r"\bggplot\s*\("),
+    re.compile(r"%>%"),
+    re.compile(r"\bSeurat\b|\bSignac\b"),
+)
+
+# Strong Python signals.
+_PY_SIGNALS = (
+    re.compile(r"^\s*import\s+\w", re.M),
+    re.compile(r"^\s*from\s+[\w.]+\s+import\s+", re.M),
+    re.compile(r"\bplt\.savefig\s*\("),
+    re.compile(r"\bsc\.(pl|tl|pp)\.\w+"),
+    re.compile(r"^\s*def\s+\w+\s*\(", re.M),
 )
 
 
-def _rewrite_code_via_llm(original_code: str, description: str) -> str:
-    """One-shot Haiku call to rewrite a script for a scenario variant."""
+def _detect_language(code: str) -> Language:
+    """Sniff the language of a producing_code snippet.
+
+    Strong R signals (library(), <-, ggsave/ggplot, Seurat) outweigh
+    Python signals. Defaults to python when ambiguous — that matches
+    the historical behavior + the fact that scanpy is the more common
+    scrna recipe language in the catalogue.
+    """
+    if not code:
+        return "python"
+    r_hits = sum(1 for p in _R_SIGNALS if p.search(code))
+    py_hits = sum(1 for p in _PY_SIGNALS if p.search(code))
+    # R `library(`, Python `import` are unambiguous single signals.
+    if r_hits > 0 and py_hits == 0:
+        return "r"
+    if py_hits > 0 and r_hits == 0:
+        return "python"
+    # Mixed (rare; can happen if R code is embedded in a Python reticulate
+    # block) — go by majority, tiebreak to python.
+    return "r" if r_hits > py_hits else "python"
+
+
+def _rewrite_system_prompt(language: Language) -> str:
+    if language == "r":
+        return (
+            "You are rewriting a small R analysis script to produce a scenario "
+            "variant. The user will describe a change (e.g. 'use mt_fraction "
+            "cutoff 0.10' or 'exclude sample S4'). Output ONLY the modified R "
+            "code — no commentary, no markdown fences, no preamble. The code "
+            "must continue to save its figure with ggsave() (or "
+            "png()/dev.off() for base-grid plots) so the harness captures it. "
+            "Keep all variable names and structure that aren't part of the "
+            "change."
+        )
+    return (
+        "You are rewriting a small Python analysis script to produce a "
+        "scenario variant. The user will describe a change (e.g. 'use "
+        "mt_fraction cutoff 0.10' or 'exclude sample S4'). Output ONLY the "
+        "modified Python code — no commentary, no markdown fences, no "
+        "preamble. The code must continue to save its figure with "
+        "plt.savefig() (or sc.pl.*(save=...)) so the harness captures it. "
+        "Keep all variable names and structure that aren't part of the "
+        "change."
+    )
+
+
+# Back-compat for any external import; deprecated — use _rewrite_system_prompt.
+_REWRITE_SYSTEM = _rewrite_system_prompt("python")
+
+
+def _rewrite_code_via_llm(original_code: str, description: str,
+                          language: Language = "python") -> str:
+    """One-shot Haiku call to rewrite a script for a scenario variant.
+
+    The system prompt + the fenced markdown hint passed to the model are
+    both keyed to `language` so the rewrite stays in the same language as
+    the baseline.
+    """
     if FAKE_SESSION:
         raise RuntimeError(
             "scenario rewrite needs the live LLM; pass `code` directly in fake mode",
         )
     import anthropic
     client = anthropic.Anthropic(api_key=API_KEY)
+    fence = "r" if language == "r" else "python"
     msg = client.messages.create(
         model=MODEL,
         max_tokens=2000,
-        system=_REWRITE_SYSTEM,
+        system=_rewrite_system_prompt(language),
         messages=[{
             "role": "user",
             "content": (
                 f"Modify this code for the following scenario: {description}\n\n"
-                f"```python\n{original_code}\n```"
+                f"```{fence}\n{original_code}\n```"
             ),
         }],
     )
@@ -84,17 +155,27 @@ def create_scenario_variant(
     if not baseline.get("producing_code"):
         raise ValueError("baseline has no producing_code; can't derive a scenario")
 
-    new_code = code or _rewrite_code_via_llm(baseline["producing_code"], description)
+    # Detect language from the baseline's producing_code (NOT from the agent's
+    # `code` arg, since the agent may have submitted code that doesn't match
+    # the baseline by accident). The agent's code SHOULD be in the baseline's
+    # language; if it isn't, run_<lang> will surface a kernel error.
+    language: Language = _detect_language(baseline["producing_code"])
 
-    result_json = execute_tool("run_python", {"code": new_code})
+    new_code = code or _rewrite_code_via_llm(
+        baseline["producing_code"], description, language=language,
+    )
+
+    runner = "run_r" if language == "r" else "run_python"
+    result_json = execute_tool(runner, {"code": new_code})
     result = json.loads(result_json)
     if result.get("error"):
-        raise ValueError(f"scenario run failed: {result['error']}")
+        raise ValueError(f"scenario run failed ({runner}): {result['error']}")
     plots = result.get("plots") or []
     if not plots:
         stderr = result.get("stderr", "")[:300]
         raise ValueError(
-            "scenario produced no figures" + (f"; stderr: {stderr}" if stderr else "")
+            f"scenario produced no figures (ran via {runner})"
+            + (f"; stderr: {stderr}" if stderr else "")
         )
 
     plot = plots[0]
