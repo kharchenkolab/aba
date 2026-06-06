@@ -576,7 +576,17 @@ export default function App() {
   // is already on screen as the peek, so we prefill *that* and leave the Run up.
   // We only reveal the chat when a full-canvas mode (overview/inventory) is
   // currently hiding it.
-  const chatAboutResult = async (label: string, thumb?: string, annotation?: { image: string; note: string }) => {
+  // Action variants for the figure SplitButton (Stage 5 of
+  // misc/exec_records_and_versioning.md). Default 'chat' preserves the
+  // pre-existing flow; 'revision' and 'reproduce' carry the agent to
+  // the make_revision / reproduce_from_exec tools via a tailored prefill.
+  type FigureAction = 'chat' | 'revision' | 'reproduce'
+  const chatAboutResult = async (
+    label: string,
+    thumb?: string,
+    annotation?: { image: string; note: string },
+    action: FigureAction = 'chat',
+  ) => {
     if (overview || inventory) { setFocusedId('workspace') }
     if (annotation) {
       // Already-composited image (e.g. a highlighted region) — attach as-is.
@@ -591,13 +601,25 @@ export default function App() {
             fr.onload = () => res(String(fr.result).split(',')[1] ?? '')
             fr.readAsDataURL(blob)
           })
-          if (b64) attachAnnotation({ image: b64, note: `The user is asking about the run output "${label}". The attached image is that plot — examine it.` })
+          if (b64) {
+            const note = action === 'revision'
+              ? `The user wants a revision of "${label}". The attached image is the current figure — examine it, then call make_revision with modified code.`
+              : action === 'reproduce'
+              ? `The user wants to reproduce "${label}". The attached image is the current figure — call reproduce_from_exec(entity_id) and report any drift.`
+              : `The user is asking about the run output "${label}". The attached image is that plot — examine it.`
+            attachAnnotation({ image: b64, note })
+          }
         }
       } catch { /* not fetchable (remote/CORS) — prefill only */ }
     }
-    setPrefill(annotation
-      ? `Look at "${label}" and highlighting. `
-      : `Let's look at "${label}". `)
+    const prefill = action === 'revision'
+      ? `Make a revision of "${label}" with the following change: `
+      : action === 'reproduce'
+      ? `Reproduce "${label}". Re-run the exec in the current environment and report any drift.`
+      : annotation
+        ? `Look at "${label}" and highlighting. `
+        : `Let's look at "${label}". `
+    setPrefill(prefill)
     setComposerFocus(n => n + 1)
   }
 

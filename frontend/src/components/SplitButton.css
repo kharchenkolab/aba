@@ -1,0 +1,105 @@
+/* SplitButton — primary action button + hover-revealed dropdown tab.
+   See SplitButton.tsx for the component contract. */
+
+.split-button {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  /* The chevron tab slides out on hover; we hide overflow on the wrapper
+     so the resting state doesn't show a gap to its left. */
+}
+
+.split-button__primary {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  border-radius: 6px;        /* default: full radius */
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.3;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.split-button__primary:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.split-button__chevron {
+  /* Slide-out left tab — hidden at rest (zero width, no border), revealed
+     on hover of the wrapper. Visible variant is a small square button. */
+  width: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-right: none;
+  background: var(--bg-soft);
+  color: var(--text-3);
+  border-radius: 6px 0 0 6px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+  opacity: 0;
+  transition: width 140ms ease, opacity 100ms ease, background 100ms ease;
+  flex: 0 0 auto;
+}
+.split-button:hover .split-button__chevron,
+.split-button--open .split-button__chevron,
+.split-button__chevron:focus-visible {
+  width: 22px;
+  padding: 5px 4px;
+  opacity: 1;
+  border-color: var(--border);
+}
+.split-button:hover .split-button__primary,
+.split-button--open .split-button__primary {
+  /* Match the chevron's open-state look — square off the left side so
+     the two read as a single connected control. */
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.split-button__chevron:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Portal'd menu */
+.split-button__menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.split-button__menu-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 7px 9px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.split-button__menu-item:hover {
+  background: var(--tree-active-bg);
+}
+.split-button__menu-item--emphasis .split-button__menu-label {
+  font-weight: 600;
+}
+.split-button__menu-label {
+  font-size: 13px;
+}
+.split-button__menu-desc {
+  font-size: 11.5px;
+  color: var(--text-3);
+}

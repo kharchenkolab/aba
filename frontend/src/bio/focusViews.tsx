@@ -53,7 +53,9 @@ export interface FocusViewProps {
   onChange: () => void
   compact?: boolean
   onAsk?: (text: string) => void
-  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  onChatResult?: (label: string, thumb?: string,
+                  annotation?: { image: string; note: string },
+                  action?: 'chat' | 'revision' | 'reproduce') => void
   onBrowseFiles?: (path?: string) => void
   projectId?: string
 }
@@ -178,7 +180,9 @@ function DatasetDescription({ entity, onChange }: { entity: Entity; onChange: ()
 function DatasetFiles({ entity, onFocus, onChatResult, onChange, projectId }: {
   entity: Entity
   onFocus: (id: string) => void
-  onChatResult?: (label: string, thumb?: string, annotation?: { image: string; note: string }) => void
+  onChatResult?: (label: string, thumb?: string,
+                  annotation?: { image: string; note: string },
+                  action?: 'chat' | 'revision' | 'reproduce') => void
   onChange: () => void
   projectId?: string
 }) {
