@@ -659,6 +659,29 @@ def list_run_artifacts(run_id: str):
     return {"artifacts": artifacts_for_run(run_id)}
 
 
+class PinArtifactRequest(BaseModel):
+    title: str | None = None
+    wrap_in_result: bool = True
+
+
+@router.post("/api/artifacts/{exec_id}/{kind}/{idx}/pin")
+def pin_artifact_endpoint(exec_id: str, kind: str, idx: int,
+                           req: PinArtifactRequest):
+    """Materialize an artifact as an entity and (by default) wrap it in
+    a Result. Idempotent: re-pinning the same artifact reuses the
+    existing entity. The response's `was_new` flag tells the frontend
+    whether anything was actually created."""
+    from content.bio.lifecycle.artifacts import pin_artifact
+    try:
+        out = pin_artifact(exec_id, kind, idx,
+                            title=req.title,
+                            wrap_in_result=req.wrap_in_result)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    entity = get_entity(out["entity_id"])
+    return {**out, "entity": entity}
+
+
 class PinCellRequest(BaseModel):
     title: str | None = None
     wrap_in_result: bool = True
