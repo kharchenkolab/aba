@@ -618,6 +618,47 @@ def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
     }
 
 
+# ── Artifact addressing (Option B / Phase 1 of
+# misc/exec_records_and_versioning.md) ──────────────────────────────────────
+
+@router.get("/api/exec_records/{exec_id}/artifacts")
+def list_exec_artifacts(exec_id: str):
+    """All artifacts an exec record produced.
+
+    Returns a list of {artifact_id, exec_id, kind, idx, url,
+    original_name, sha256, size}. Empty list if the exec is unknown
+    or produced nothing. Filter via ?kind=figure|table|cell|file.
+    """
+    from fastapi import Request  # noqa
+    from core.exec.artifacts import list_artifacts
+    out = list_artifacts(exec_id)
+    return {"artifacts": out}
+
+
+@router.get("/api/artifacts/{exec_id}/{kind}/{idx}")
+def resolve_artifact_endpoint(exec_id: str, kind: str, idx: int):
+    """Resolve a single artifact by its three-tuple address. 404 if the
+    exec record is gone, the index is out of range, or the kind at that
+    index doesn't match (mismatch is treated as not-found rather than
+    cross-kind redirection)."""
+    from core.exec.artifacts import resolve_artifact
+    a = resolve_artifact(exec_id, kind, idx)
+    if a is None:
+        raise HTTPException(
+            404, f"artifact {exec_id}:{kind}:{idx} not found"
+        )
+    return a
+
+
+@router.get("/api/runs/{run_id}/artifacts")
+def list_run_artifacts(run_id: str):
+    """All artifacts produced by every exec attributed to this Run.
+    Ordered by the exec's started_at — chat-history order is preserved.
+    """
+    from core.exec.artifacts import artifacts_for_run
+    return {"artifacts": artifacts_for_run(run_id)}
+
+
 class PinCellRequest(BaseModel):
     title: str | None = None
     wrap_in_result: bool = True
