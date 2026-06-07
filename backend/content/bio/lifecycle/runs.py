@@ -289,7 +289,13 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     (outputs / bulk) so the Run view lists what the pipeline produced — figures
     (with thumbnails), tables, and every other file (.rds/.h5ad/…) as a
     downloadable row. Called after each cell so the Run stays current. The full
-    nested directory is also browsable in the Files tree; this is the summary."""
+    nested directory is also browsable in the Files tree; this is the summary.
+
+    Option B / Phase 4 augments each output entry with an `artifact_id`
+    (<exec_id>:<kind>:<idx>) when the file matches an artifact recorded
+    in one of the Run's exec records. Frontends can use that id to pin
+    via /api/artifacts/.../pin without the legacy disk-scan-pin path.
+    """
     from pathlib import Path
     ent = get_entity(run_id)
     if not ent:
@@ -302,6 +308,22 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         return
     plot_urls_by_name = plot_urls_by_name or {}
     from urllib.parse import quote
+    # Build a lookup from "original_name basename" → artifact_id for this
+    # Run. Use the leaf name because the manifest's `label` is the rel
+    # path under the Run dir, while artifacts' `original_name` came from
+    # the harvester (which may or may not include subdir context). Match
+    # on basename as a safe lowest common denominator; collisions across
+    # subdirs prefer the most recently produced exec.
+    from core.exec.artifacts import artifacts_for_run
+    name_to_artifact: dict[str, str] = {}
+    try:
+        for a in artifacts_for_run(run_id):
+            leaf = (a.get("original_name") or "").rsplit("/", 1)[-1]
+            if leaf:
+                name_to_artifact[leaf] = a["artifact_id"]
+    except Exception as e:  # noqa: BLE001 — manifest refresh must not fail
+        _log.warning("refresh_output_manifest: artifact lookup failed: %s", e)
+
     outputs: list[dict] = []
     for f in sorted(base.rglob("*")):
         if not f.is_file() or f.name.startswith("."):
@@ -313,6 +335,7 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         rel = f.relative_to(base).as_posix()
         ext = f.suffix.lower().lstrip(".")
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
+        artifact_id = name_to_artifact.get(f.name)
         if ext in _FIG_EXT:
             # PDF: rasterize page 1 to a sibling .thumb.png + use that as the
             # thumb URL so the Plots grid can actually render it.
@@ -321,13 +344,22 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
                 from urllib.parse import quote as _q
                 thumb_rel = (f.relative_to(base).as_posix() + ".thumb.png")
                 thumb_url = f"/api/runs/{run_id}/file?rel={_q(thumb_rel)}"
-            outputs.append({"kind": "figure", "label": rel, "thumb": thumb_url,
-                            "href": url, "size": _human_size(sz)})
+            out: dict = {"kind": "figure", "label": rel, "thumb": thumb_url,
+                          "href": url, "size": _human_size(sz)}
+            if artifact_id:
+                out["artifact_id"] = artifact_id
+            outputs.append(out)
         elif ext in _TAB_EXT:
-            outputs.append({"kind": "table", "label": rel, "href": url, "size": _human_size(sz)})
+            out = {"kind": "table", "label": rel, "href": url, "size": _human_size(sz)}
+            if artifact_id:
+                out["artifact_id"] = artifact_id
+            outputs.append(out)
         else:
-            outputs.append({"kind": "file", "label": rel, "href": url + "&download=1",
-                            "size": _human_size(sz)})
+            out = {"kind": "file", "label": rel, "href": url + "&download=1",
+                    "size": _human_size(sz)}
+            if artifact_id:
+                out["artifact_id"] = artifact_id
+            outputs.append(out)
     bulk = None
     if len(outputs) > _MANIFEST_CAP:
         bulk = {"count": len(outputs), "note": f"{len(outputs)} files in the run folder"}

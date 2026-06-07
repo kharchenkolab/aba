@@ -131,7 +131,24 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
 
   const outputs = m.outputs ?? []
   const plotOutputs = outputs.filter(o => o.kind === 'figure' || o.kind === 'view')
+  // Option B / Phase 4: prefer the canonical artifact-pin path when the
+  // manifest entry carries an artifact_id. Falls back to the legacy
+  // /pin-output disk-scan path for older manifests that don't have it
+  // (pre-cutover Runs, or manifests refreshed before the artifact
+  // augmentation landed).
   const pinOutput = async (it: OutputItem) => {
+    if (it.artifact_id) {
+      const m = it.artifact_id.match(/^(.+):([^:]+):(\d+)$/)
+      if (m) {
+        const [, exec_id, kind, idxs] = m
+        await fetch(
+          `/api/artifacts/${encodeURIComponent(exec_id)}/${encodeURIComponent(kind)}/${idxs}/pin`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        ).catch(() => {})
+        onChange()
+        return
+      }
+    }
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/pin-output`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: it.kind, label: it.label, thumb: it.thumb, href: it.href, size: it.size }),
