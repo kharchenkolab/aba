@@ -18,6 +18,12 @@ export interface OutputItem {
   href?: string                // external link (browse / open)
   size?: string
   role?: 'primary' | 'diagnostic' | 'bulk'  // tier; absent ⇒ diagnostic
+  /** Option B / Phase 4: canonical artifact address from the exec
+   *  record that produced this file. When present, pinning routes to
+   *  /api/artifacts/{exec_id}/{kind}/{idx}/pin (materializes the entity
+   *  via the canonical path). When absent (legacy manifests), pinning
+   *  falls back to /api/runs/{run_id}/pin-output. */
+  artifact_id?: string
 }
 
 function PinChat({ item, onPin, onChat }: { item: OutputItem; onPin: (i: OutputItem) => void; onChat: (i: OutputItem) => void }) {
