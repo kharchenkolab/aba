@@ -29,6 +29,10 @@ interface Props {
   compact?: boolean
   entities?: Entity[]
   onPin?: (id: string, pinned: boolean) => void
+  /** Option B / Phase 3: callback fired after a successful artifact-pin
+   *  POST (inline chat figures whose entity hasn't been materialized
+   *  yet). The parent should refresh + reveal the right rail. */
+  onArtifactPinned?: () => void
   pinnedFigureIds?: Set<string>
   keptKeys?: Set<string>
   onKeepMessage?: (key: string, text: string, imageUrls: string[], pinned: boolean) => void
@@ -84,6 +88,7 @@ export default function ChatPane({
   compact,
   entities,
   onPin,
+  onArtifactPinned,
   pinnedFigureIds,
   keptKeys,
   onKeepMessage,
@@ -344,6 +349,7 @@ export default function ChatPane({
                 onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
                 entities={entities}
                 onPin={onPin}
+                onArtifactPinned={onArtifactPinned}
                 pinnedFigureIds={pinnedFigureIds}
                 keptKeys={keptKeys}
                 onKeepMessage={onKeepMessage}

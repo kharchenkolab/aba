@@ -459,7 +459,8 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
                       planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
                       isStreaming?: boolean, pinnedFigureIds?: Set<string>,
                       fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>,
-                      currentRunId?: string | null) {
+                      currentRunId?: string | null,
+                      onArtifactPinned?: () => void) {
   const out: React.ReactNode[] = []
   // Browsers refuse `file://` URLs from a web page, so any `file:///path` the
   // agent emits would render as a broken `<img>` or a dead `<a>`. Rewrite to
@@ -558,7 +559,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
               </div>
             ) : artifactId ? (
               <div className="msg-image__tools">
-                <ArtifactPin artifact_id={artifactId} />
+                <ArtifactPin artifact_id={artifactId} onPinned={onArtifactPinned} />
               </div>
             ) : null}
           </div>
@@ -836,6 +837,12 @@ interface Props {
   /** Entities (to resolve chat figures) + pin toggle for the capture gesture. */
   entities?: Entity[]
   onPin?: (id: string, pinned: boolean) => void
+  /** Called after a successful artifact pin (Option B / Phase 3) so the
+   *  parent can refresh the entity list and reveal the right rail. The
+   *  artifact pin doesn't go through `onPin` because that would
+   *  double-create a Result (artifact pin already wraps the new entity).
+   *  Distinct callback keeps the side effects exactly: refresh + reveal. */
+  onArtifactPinned?: () => void
   /** Figure IDs currently kept by an active Result — drives the chat pin
    *  state on re-entry (replaces the dropped `entity.pinned` flag). */
   pinnedFigureIds?: Set<string>
@@ -859,7 +866,7 @@ function msgKey(s: string): string {
   return 'm' + (h >>> 0).toString(36)
 }
 
-export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
+export default function Message({ message, isStreaming, collapseTools, onAnnotate, highlighting, anyDrawing, onDrawingChange, onHighlightDone, onRetry, entities, onPin, onArtifactPinned, pinnedFigureIds, keptKeys, onKeepMessage, planActive, onPlanGo, onPlanAdjust, fileMap, currentRunId }: Props) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
   const visibleBlocks = message.blocks
@@ -870,7 +877,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
   const hideSteps = canCollapse && !showSteps
 
-  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId)
+  const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId, isUser ? undefined : onArtifactPinned)
   if (rendered.length === 0 && !isStreaming) return null
 
   const msgText = message.blocks.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n').trim()

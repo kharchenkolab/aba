@@ -670,14 +670,30 @@ def pin_artifact_endpoint(exec_id: str, kind: str, idx: int,
     """Materialize an artifact as an entity and (by default) wrap it in
     a Result. Idempotent: re-pinning the same artifact reuses the
     existing entity. The response's `was_new` flag tells the frontend
-    whether anything was actually created."""
+    whether anything was actually created.
+
+    Fires the `auto_interpret` background job when wrap_in_result=True
+    (parity with /api/entities/{id}/pin) so the new Result gets an
+    AI-generated title + caption. Without this, the auto-legend/title
+    generation that users expect after pinning silently doesn't fire.
+    """
     from content.bio.lifecycle.artifacts import pin_artifact
+    from content.bio.lifecycle.promote import auto_interpret
     try:
         out = pin_artifact(exec_id, kind, idx,
                             title=req.title,
                             wrap_in_result=req.wrap_in_result)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Auto-interpret: same fire-and-forget thread shape as the legacy
+    # pin route. Only fires on NEW pins (was_new=True) AND when we
+    # actually wrapped in a Result (otherwise there's nothing to
+    # caption). Safe to call on the new pin only — re-pins return
+    # was_new=False and we leave the existing Result's caption alone.
+    if req.wrap_in_result and out.get("result_id") and out.get("was_new"):
+        import threading
+        threading.Thread(target=auto_interpret, args=(out["result_id"],),
+                         daemon=True).start()
     entity = get_entity(out["entity_id"])
     return {**out, "entity": entity}
 
