@@ -765,6 +765,14 @@ export default function App() {
       compact={compact}
       entities={entities}
       onPin={pinEntity}
+      onArtifactPinned={() => {
+        // Option B / Phase 3: same side effects as pinEntity (refresh +
+        // reveal the right rail) but no server call — the
+        // /api/artifacts/.../pin POST already happened inside ArtifactPin.
+        refresh()
+        userCollapsedRef.current = false
+        _setRightCollapsedRaw(false)
+      }}
       pinnedFigureIds={pinnedFigureIds}
       keptKeys={keptKeys}
       onKeepMessage={(key, text, image_urls) => keepMessage(key, text, image_urls)}
