@@ -115,6 +115,7 @@ def test_make_revision_end_to_end_via_handler():
     # Make a seed figure first
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
     code = (
         "import matplotlib\nmatplotlib.use('Agg')\n"
         "import matplotlib.pyplot as plt\n"
@@ -122,16 +123,18 @@ def test_make_revision_end_to_end_via_handler():
         "plt.savefig('mcp_seed.png'); plt.close('all')\n"
     )
     res = run_python({"code": code}, ctx={"thread_id": "thr_mcp", "tool_use_id": "tu_mcp"})
-    recs = register_artifacts_from_tool_result(
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id="thr_mcp",
     )
-    figs = [r for r in recs if r["type"] == "figure"]
-    check("seed figure created", len(figs) >= 1)
-    if not figs:
+    # Post Phase 5: explicitly materialize the figure artifact for the test
+    ex = res.get("exec_id")
+    check("seed exec_id present", isinstance(ex, str))
+    if not ex:
         return
-    parent_id = figs[0]["id"]
+    parent_id = pin_artifact(ex, "figure", 0, wrap_in_result=False,
+                              thread_id="thr_mcp")["entity_id"]
 
     # Get the registered tool's function and call it directly
     from mcp.server.fastmcp import FastMCP
@@ -196,6 +199,7 @@ def test_reproduce_handler():
     print("\n[5] reproduce_from_exec handler executes against a real figure")
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
     code = (
         "import matplotlib\nmatplotlib.use('Agg')\n"
         "import matplotlib.pyplot as plt\n"
@@ -203,16 +207,17 @@ def test_reproduce_handler():
         "plt.savefig('repro.png'); plt.close('all')\n"
     )
     res = run_python({"code": code}, ctx={"thread_id": "thr_mcp2", "tool_use_id": "tu_mcp2"})
-    recs = register_artifacts_from_tool_result(
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id="thr_mcp2",
     )
-    figs = [r for r in recs if r["type"] == "figure"]
-    if not figs:
-        check("seed figure created", False)
+    ex = res.get("exec_id")
+    if not ex:
+        check("seed exec_id present", False)
         return
-    parent_id = figs[0]["id"]
+    parent_id = pin_artifact(ex, "figure", 0, wrap_in_result=False,
+                              thread_id="thr_mcp2")["entity_id"]
 
     from mcp.server.fastmcp import FastMCP
     from content.bio.mcp_servers.aba_core.tools.revisions import register_revision_tools

@@ -68,17 +68,22 @@ def test_python_helper_pandas():
               any("de_results.csv" in n for n in names),
               f"got names: {names}")
 
-    # Register via the normal pipeline → should create a table entity
-    new_recs = register_artifacts_from_tool_result(
+    # Post Option-B-Phase-5: registry no longer mints entities on harvest;
+    # the table is reachable as an artifact via the exec record. Pin it
+    # explicitly to materialize the table entity.
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id="thr_harv_a",
     )
-    table_recs = [r for r in new_recs if r["type"] == "table"]
-    check("registry created a table entity",
-          len(table_recs) >= 1, f"new_recs types: {[r['type'] for r in new_recs]}")
-    if table_recs:
-        t = table_recs[0]
+    from content.bio.lifecycle.artifacts import pin_artifact
+    # `harvest_table(df, name='de_results')` writes de_results.csv, which
+    # appears in result.tables at idx 0 (the only table this cell produced).
+    pinned = pin_artifact(res["exec_id"], "table", 0,
+                          wrap_in_result=False, thread_id="thr_harv_a")
+    t = entities.get_entity(pinned["entity_id"])
+    check("pin_artifact materialized a table entity", t is not None)
+    if t:
         check("table entity has exec_id", bool(t.get("exec_id")))
         check("table.artifact_kind = table", t.get("artifact_kind") == "table")
 

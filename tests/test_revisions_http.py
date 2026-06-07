@@ -45,9 +45,14 @@ def _mount_app():
 
 def _make_seed_figure(thread_id: str = "thr_http"):
     """Create a real seed figure via the dispatch path so it has an exec
-    record + entity row + everything wired up."""
+    record + entity row + everything wired up.
+
+    Post Option-B-Phase-5: registry no longer mints entities on harvest;
+    we explicitly materialize via pin_artifact for the test fixture.
+    """
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
     code = (
         "import matplotlib\nmatplotlib.use('Agg')\n"
         "import matplotlib.pyplot as plt\n"
@@ -56,13 +61,17 @@ def _make_seed_figure(thread_id: str = "thr_http"):
     )
     res = run_python({"code": code}, ctx={"thread_id": thread_id,
                                           "tool_use_id": "tu_http_seed"})
-    recs = register_artifacts_from_tool_result(
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id=thread_id,
     )
-    figs = [r for r in recs if r["type"] == "figure"]
-    return figs[0]["id"] if figs else None
+    ex = res.get("exec_id")
+    if not ex:
+        return None
+    out = pin_artifact(ex, "figure", 0, wrap_in_result=False,
+                      thread_id=thread_id)
+    return out["entity_id"]
 
 
 def test_revisions_unknown_id_404():

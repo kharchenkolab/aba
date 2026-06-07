@@ -40,9 +40,16 @@ def check(label, cond, detail=""):
 def _make_seed_figure(thread_id: str = "thr_s5",
                        y0: float = 1.0) -> tuple[str, str]:
     """Create a real seed figure via run_python so it has a proper exec record.
-    Returns (figure_entity_id, exec_id)."""
+    Returns (figure_entity_id, exec_id).
+
+    Post Option-B-Phase-5: register_artifacts_from_tool_result no longer
+    mints figure entities on harvest. The helper now materializes the
+    first figure artifact via pin_artifact so the test gets a real
+    entity to revise / reproduce / chevron-navigate.
+    """
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
     code = (
         f"import matplotlib\nmatplotlib.use('Agg')\n"
         f"import matplotlib.pyplot as plt\n"
@@ -53,15 +60,17 @@ def _make_seed_figure(thread_id: str = "thr_s5",
                                           "tool_use_id": f"tu_seed_{y0}"})
     if res.get("returncode") != 0:
         raise RuntimeError(f"seed run failed: stderr={res.get('stderr')!r}")
-    recs = register_artifacts_from_tool_result(
+    # Still call register so the Run's analysis + manifest are set up
+    # like in production.
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id=thread_id,
     )
-    figs = [r for r in recs if r["type"] == "figure"]
-    if not figs:
-        raise RuntimeError("no figure entity created")
-    return figs[0]["id"], res["exec_id"]
+    ex = res["exec_id"]
+    out = pin_artifact(ex, "figure", 0, wrap_in_result=False,
+                      thread_id=thread_id)
+    return out["entity_id"], ex
 
 
 def test_make_revision_creates_linked_figure():

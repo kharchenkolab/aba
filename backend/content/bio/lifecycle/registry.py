@@ -11,6 +11,7 @@ This is the Phase-1 implementation:
   intentionally.)
 """
 from __future__ import annotations
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,8 @@ from typing import Optional
 from core.graph._schema import WORKSPACE_ID
 from core.graph.edges import add_edge
 from core.graph.entities import create_entity, get_entity, update_entity
+
+_log = logging.getLogger(__name__)
 
 
 def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
@@ -126,76 +129,48 @@ def register_artifacts_from_tool_result(
         if _rid:
             append_run_code(_rid, tool_input.get("code", "") if isinstance(tool_input, dict) else "")
 
+    # ──── Option B / Phase 5 cutover ────────────────────────────────────
+    # `register_artifacts_from_tool_result` USED to mint a figure entity
+    # per harvested PNG + a table entity per harvested CSV, even when the
+    # user never pinned anything. That created thousands of shadow
+    # entities cluttering the entity table.
+    #
+    # Post-cutover: artifacts live in the exec record's `produced[]` only.
+    # Entities are minted only when the user (or an explicit auto-pin
+    # path like plan-Go declared finals — Phase 6) pins them, via
+    # `content/bio/lifecycle/artifacts.pin_artifact`. The chat shows
+    # them inline via the ArtifactPin button (Phase 3); RunView /
+    # Files tree augment each output with `artifact_id` (Phase 4) so a
+    # pin click goes to /api/artifacts/.../pin.
+    #
+    # What this function still does: ensures the Run (analysis) entity
+    # exists, refreshes its output manifest below, and writes a
+    # `analysis --used--> focused_entity` edge when the cell was focused
+    # on an upstream entity (provenance the user expects to navigate).
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
-    # Stage 2: exec_id from run_python / run_r — points at the exec record
-    # that holds the canonical code + env. Entities created here carry
-    # both producing_code (legacy denormalized cache; many read sites still
-    # use it) and the exec_id pointer for the new single-source-of-truth
-    # path via core.graph.exec_records.get().
-    exec_id_ptr = result_obj.get("exec_id") if isinstance(result_obj, dict) else None
-    if tool_name in ("run_python", "run_r", "run_nextflow") and plots:
-        analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
-        producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
-        multi = len(plots) > 1
-        for i, p in enumerate(plots):
-            url = p.get("url")
-            original_name = p.get("original_name") or "figure.png"
-            title = _figure_title(producing_code, original_name, i, multi)
-
-            # Every plot is its own figure. We deliberately do NOT auto-supersede
-            # by title — that conflated distinct plots (and silently retired
-            # pinned ones). Version chains (wasRevisionOf) are a future, EXPLICIT
-            # concern (lineage model), not inferred from a matching title.
-            # Post-cutover: code lives in the exec record (Stage 2 +
-            # misc/exec_records_and_versioning.md). The producing_code
-            # column is no longer written on new entities; reads route
-            # through lookup_code_for_entity, which prefers exec_id.
-            eid = create_entity(
-                entity_type="figure",
-                title=title,
-                artifact_path=url,
-                parent_entity_id=analysis_id,
-                metadata={"original_name": original_name, **res_meta},
-                exec_id=exec_id_ptr,
-                artifact_kind="figure" if exec_id_ptr else None,
-                artifact_idx=i if exec_id_ptr else None,
-            )
-            # PROV-O edges: figure wasGeneratedBy the analysis;
-            # the analysis used the focused entity (if any).
-            add_edge(eid, analysis_id, "wasGeneratedBy")
-            focused = focused_entity_id or WORKSPACE_ID
-            if focused != WORKSPACE_ID:
-                add_edge(analysis_id, focused, "used")
-                add_edge(eid, focused, "wasDerivedFrom")
-            rec = get_entity(eid)
-            if rec:
-                new_records.append(rec)
-
-    # Output CSVs → table entities.
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
-    if tool_name in ("run_python", "run_r", "run_nextflow") and tables:
+    if tool_name in ("run_python", "run_r", "run_nextflow") and (plots or tables):
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
-        producing_code = tool_input.get("code", "") if isinstance(tool_input, dict) else ""
-        for i, t in enumerate(tables):
-            original_name = t.get("original_name") or "table.csv"
-            title = _title_from_code(producing_code) or original_name
-            eid = create_entity(
-                entity_type="table",
-                title=title,
-                artifact_path=t.get("url"),
-                parent_entity_id=analysis_id,
-                metadata={"original_name": original_name, **res_meta},
-                exec_id=exec_id_ptr,
-                artifact_kind="table" if exec_id_ptr else None,
-                artifact_idx=i if exec_id_ptr else None,
-            )
-            add_edge(eid, analysis_id, "wasGeneratedBy")
-            focused = focused_entity_id or WORKSPACE_ID
-            if focused != WORKSPACE_ID:
-                add_edge(eid, focused, "wasDerivedFrom")
-            rec = get_entity(eid)
-            if rec:
-                new_records.append(rec)
+        focused = focused_entity_id or WORKSPACE_ID
+        if focused != WORKSPACE_ID:
+            try:
+                add_edge(analysis_id, focused, "used")
+            except Exception as e:  # noqa: BLE001 — best-effort
+                _log.debug("analysis -> used edge failed: %s", e)
+        # Option B / Phase 5: backfill the exec record's run_id to point
+        # at the ambient analysis (or whatever Run _ensure_analysis
+        # resolved to). Without this, an exec written BEFORE the ambient
+        # analysis was created has run_id=NULL, and artifacts_for_run
+        # can't find its artifacts. The run-from-an-open-Run path
+        # already has the right run_id at exec-write time; this catches
+        # the ambient-lazy-create case.
+        exec_id_ptr = result_obj.get("exec_id") if isinstance(result_obj, dict) else None
+        if exec_id_ptr:
+            try:
+                from core.graph.exec_records import attach_to_run
+                attach_to_run(exec_id_ptr, analysis_id)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("exec_records.attach_to_run failed: %s", e)
 
     # F3: persist display_path for everything we just registered. Re-fetch
     # afterwards so the new value flows back to the caller (and the SSE
