@@ -133,6 +133,15 @@ def close_run(thread_id: str) -> Optional[str]:
 
     Post-cutover: "captured code" is sourced from the Run's exec records
     (aggregated_code_for_run), not the legacy entity.producing_code.
+
+    Option B / Phase 6: when the Run was opened via a plan-Go (its
+    metadata carries a plan_entity_id), inspect that plan's declared
+    expected_outputs and auto-pin matching artifacts so the Results
+    rail reflects the plan's stated deliverables. Intermediate
+    artifacts that don't appear in any step's expected_outputs stay
+    unpinned (the user can still pin them manually). This runs
+    BEFORE the state flip so the auto-pin gets `run_state=open`
+    semantics for entity-creation hooks, then we close.
     """
     rid = active_run_id(thread_id)
     if not rid:
@@ -143,9 +152,75 @@ def close_run(thread_id: str) -> Optional[str]:
         return rid
     ent = get_entity(rid)
     md = dict((ent or {}).get("metadata") or {})
+    # Auto-pin declared finals BEFORE flipping run_state to closed.
+    _auto_pin_declared_finals(rid, md)
     md["run_state"] = "closed"
     update_entity(rid, metadata=md)
     return rid
+
+
+def _auto_pin_declared_finals(run_id: str, run_metadata: dict) -> list[str]:
+    """Pin artifacts produced by this Run whose filename matches any
+    step's `expected_outputs` on the plan that opened the Run.
+
+    The plan_entity_id is recorded on the Run's metadata (set by
+    open_run when called with a plan_entity_id). If no plan is
+    referenced, no auto-pin happens — this is the post-v1 mechanism
+    for "the plan said it would produce X; surface X automatically."
+
+    Matching: exact basename only. `expected_outputs: ["umap.png"]`
+    matches any artifact with `original_name` ending in "umap.png"
+    (covers per-sample subdirs like "samples/A/umap.png"). Bare
+    descriptions like "DE results" don't match (no '.' extension),
+    skipped silently — the agent can pin those explicitly via the
+    `pin_artifact` MCP tool.
+
+    Returns the list of (newly) pinned entity ids."""
+    pinned: list[str] = []
+    plan_id = run_metadata.get("plan_entity_id")
+    if not plan_id:
+        return pinned
+    plan_ent = get_entity(plan_id)
+    if not plan_ent:
+        return pinned
+    plan_md = plan_ent.get("metadata") or {}
+    steps = plan_md.get("steps") or []
+    expected_names: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        outputs = step.get("expected_outputs") or []
+        if not isinstance(outputs, list):
+            continue
+        for o in outputs:
+            if not isinstance(o, str):
+                continue
+            # Only treat strings that look like filenames (have a "." in
+            # the last path segment) — bare descriptions don't match.
+            leaf = o.rsplit("/", 1)[-1]
+            if "." in leaf:
+                expected_names.add(leaf)
+    if not expected_names:
+        return pinned
+
+    from core.exec.artifacts import artifacts_for_run, parse_artifact_id
+    from content.bio.lifecycle.artifacts import pin_artifact
+    for a in artifacts_for_run(run_id):
+        leaf = (a.get("original_name") or "").rsplit("/", 1)[-1]
+        if not leaf or leaf not in expected_names:
+            continue
+        try:
+            exec_id, kind, idx = parse_artifact_id(a["artifact_id"])
+            out = pin_artifact(exec_id, kind, idx,
+                                wrap_in_result=True,
+                                thread_id=run_metadata.get("thread_id"))
+            if out.get("was_new"):
+                pinned.append(out["entity_id"])
+                _log.info("auto-pinned declared final %s → %s",
+                          leaf, out["entity_id"])
+        except Exception as e:  # noqa: BLE001
+            _log.warning("auto-pin failed for %s: %s", leaf, e)
+    return pinned
 
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
