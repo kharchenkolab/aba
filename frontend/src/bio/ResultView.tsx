@@ -9,6 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
 import { EntityGlyph, AgentGlyph } from '../components/icons'
+import RevisionChevrons from './RevisionChevrons'
 import './ResultView.css'
 
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
@@ -251,7 +252,15 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   return (
     <div className="rv-panel">
       <div className="rv-panel__cell">
-        {member.kind === 'figure' && url
+        {member.kind === 'figure' && url && cell
+          // Wrap the figure with RevisionChevrons so a Result member that has
+          // sibling revisions (wasRevisionOf chain) surfaces prev/next arrows
+          // here too — not just on the focused-figure view. Click navigates
+          // to the sibling figure's focus (leaves the Result page).
+          ? <RevisionChevrons entity_id={cell.id} onFocus={onFocus}>
+              <img className="rv-panel__img" src={url} alt={cell?.title} onClick={() => onZoom(url)} title="Click to enlarge" />
+            </RevisionChevrons>
+          : member.kind === 'figure' && url
           ? <img className="rv-panel__img" src={url} alt={cell?.title} onClick={() => onZoom(url)} title="Click to enlarge" />
           : member.kind === 'table'
           ? <button className="rv-panel__table" onClick={() => cell && onFocus(cell.id)}><EntityGlyph name="table" size={16} /> {cell?.title ?? 'table'}</button>
