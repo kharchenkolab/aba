@@ -156,11 +156,18 @@ def test_lookup_code_for_entity_none_entity():
 
 
 def test_integration_run_python_to_figure_entity():
-    """Full path: run_python writes exec record → registry creates figure entity
-    carrying the exec_id → helper resolves the code via the exec record."""
-    print("\n[8] integration: run_python → figure entity carries exec_id")
+    """Full path: run_python writes exec record → user pins via pin_artifact
+    → figure entity materializes carrying the exec_id → helper resolves
+    the code via the exec record.
+
+    Post Option-B-Phase-5: registry no longer mints figure entities on
+    harvest. Materialization is explicit (user pin or auto-pin), so this
+    integration test exercises pin_artifact as the entity-creation step.
+    """
+    print("\n[8] integration: run_python → pin_artifact → figure entity carries exec_id")
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
 
     code = (
         "import matplotlib\nmatplotlib.use('Agg')\n"
@@ -178,7 +185,8 @@ def test_integration_run_python_to_figure_entity():
           isinstance(res.get("plots"), list) and len(res["plots"]) >= 1)
     if not res.get("exec_id") or not res.get("plots"):
         return
-    # Now walk through registry → figure entity
+    # Registry still ensures the Run + manifest are set up. It no longer
+    # mints figure/table entities — assert that.
     new_recs = register_artifacts_from_tool_result(
         tool_name="run_python",
         tool_input={"code": code},
@@ -188,10 +196,16 @@ def test_integration_run_python_to_figure_entity():
         thread_id="thr_s2_int",
     )
     figure_recs = [r for r in new_recs if r["type"] == "figure"]
-    check("registry created at least one figure entity", len(figure_recs) >= 1)
-    if not figure_recs:
+    check("registry NO LONGER auto-mints figure entities",
+          len(figure_recs) == 0,
+          f"got {len(figure_recs)} unexpected entities")
+    # Explicit materialization via pin_artifact
+    pinned = pin_artifact(res["exec_id"], "figure", 0,
+                          wrap_in_result=False, thread_id="thr_s2_int")
+    fig = entities.get_entity(pinned["entity_id"])
+    check("pin_artifact created the figure entity", fig is not None)
+    if not fig:
         return
-    fig = figure_recs[0]
     check("figure.exec_id matches run result", fig.get("exec_id") == res["exec_id"])
     check("figure.artifact_kind = figure", fig.get("artifact_kind") == "figure")
     check("figure.artifact_idx = 0", fig.get("artifact_idx") == 0)

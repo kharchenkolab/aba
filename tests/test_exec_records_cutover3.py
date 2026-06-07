@@ -66,10 +66,11 @@ def _set_legacy_producing_code(entity_id: str, code: str) -> None:
 
 
 def test_registry_no_longer_writes_producing_code():
-    print("\n[1] registry-created figures no longer carry producing_code")
+    print("\n[1] post-cutover materialized figure carries exec_id, no producing_code")
     init_db()
     from content.bio.tools.run_exec import run_python
     from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from content.bio.lifecycle.artifacts import pin_artifact
 
     code = (
         "import matplotlib\nmatplotlib.use('Agg')\n"
@@ -78,22 +79,26 @@ def test_registry_no_longer_writes_producing_code():
     )
     res = run_python({"code": code}, ctx={"thread_id": "thr_c3a", "tool_use_id": "tu_c3a"})
     check("run_python ok", res.get("returncode") == 0)
-    recs = register_artifacts_from_tool_result(
+    # Registry no longer mints figure entities (Option B / Phase 5 cutover);
+    # the call still ensures the Run + manifest exist.
+    register_artifacts_from_tool_result(
         tool_name="run_python", tool_input={"code": code},
         result_obj=res, focused_entity_id=None,
         analysis_ctx={}, thread_id="thr_c3a",
     )
-    figs = [r for r in recs if r["type"] == "figure"]
-    check("figure created", len(figs) >= 1)
-    if figs:
-        f = figs[0]
+    # Materialize via pin_artifact (the post-cutover path)
+    out = pin_artifact(res["exec_id"], "figure", 0,
+                       wrap_in_result=False, thread_id="thr_c3a")
+    f = entities.get_entity(out["entity_id"])
+    check("figure entity materialized", f is not None)
+    if f:
         check("figure has exec_id set", bool(f.get("exec_id")))
-        check("figure has NO producing_code (post-cutover)",
-              f.get("producing_code") is None,
-              f"got {f.get('producing_code')!r}")
+        check("'producing_code' key absent from row dict",
+              "producing_code" not in f,
+              f"got keys: {sorted(f.keys())}")
         # The new helper still resolves code via the exec record
         looked = exec_records.lookup_code_for_entity(f)
-        check("lookup_code_for_entity still works for new entities",
+        check("lookup_code_for_entity returns the original code",
               looked == code)
 
 

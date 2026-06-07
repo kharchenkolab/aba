@@ -132,6 +132,43 @@ def create(
     return eid
 
 
+def attach_to_run(exec_id: str, run_id: str) -> bool:
+    """Backfill the `run_id` on an existing exec record (both the DB index
+    row and the JSON sidecar). Used when an ambient analysis materializes
+    AFTER its first child exec ran — that exec's record initially has
+    run_id=NULL (scratch), and we want artifacts_for_run(ambient_id) to
+    surface it once the ambient is created.
+
+    Returns True if the record was found and updated. Idempotent.
+    """
+    if not exec_id or not run_id:
+        return False
+    with _conn() as c:
+        r = c.execute(
+            "SELECT record_path, run_id FROM execution_records WHERE exec_id = ?",
+            (exec_id,),
+        ).fetchone()
+        if not r:
+            return False
+        if r["run_id"] == run_id:
+            return True  # already attached, no-op
+        c.execute("UPDATE execution_records SET run_id = ? WHERE exec_id = ?",
+                  (run_id, exec_id))
+        c.commit()
+    # Update the JSON sidecar too so `get(exec_id)` returns consistent data.
+    try:
+        rp = Path(r["record_path"])
+        body = json.loads(rp.read_text(encoding="utf-8"))
+        body["run_id"] = run_id
+        rp.write_text(json.dumps(body, indent=2, default=str), encoding="utf-8")
+    except (OSError, json.JSONDecodeError) as e:
+        _log.warning(
+            "attach_to_run: sidecar rewrite failed for %s at %s: %s",
+            exec_id, r["record_path"], e,
+        )
+    return True
+
+
 def get(exec_id: str) -> Optional[dict]:
     """Fetch the full exec record (DB index + JSON body merged).
 
