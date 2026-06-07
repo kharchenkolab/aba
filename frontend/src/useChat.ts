@@ -64,8 +64,17 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
         if (parsed && parsed.status === 'asked') continue         // ask_clarification ack — the mini-composer already shows it
         blocks.push({ type: 'tool_result', name: '(result)', result: parsed })
         if (parsed.plots && Array.isArray(parsed.plots)) {
-          for (const p of parsed.plots) {
-            blocks.push({ type: 'image', url: p.url, alt: p.original_name })
+          const _exec_id = (typeof parsed.exec_id === 'string') ? parsed.exec_id : undefined
+          for (let i = 0; i < parsed.plots.length; i++) {
+            const p = parsed.plots[i]
+            blocks.push({
+              type: 'image', url: p.url, alt: p.original_name,
+              // Stage 1 / Option B Phase 3: tag the inline image with its
+              // canonical artifact id so chat-level pin works without a
+              // pre-materialized entity. exec_id comes from run_python's
+              // post-harvest write of the execution_records row.
+              artifact_id: _exec_id ? `${_exec_id}:figure:${i}` : undefined,
+            })
           }
         }
       } catch {
@@ -576,9 +585,15 @@ export function useChat(
               const plots = (ev.result as Record<string, unknown>).plots as
                 | { url: string; original_name: string }[]
                 | undefined
+              const _exec_id_live = (ev.result as Record<string, unknown>).exec_id
+              const _exec_id = (typeof _exec_id_live === 'string') ? _exec_id_live : undefined
               if (plots) {
-                for (const p of plots) {
-                  streamingBlocks.push({ type: 'image', url: p.url, alt: p.original_name })
+                for (let i = 0; i < plots.length; i++) {
+                  const p = plots[i]
+                  streamingBlocks.push({
+                    type: 'image', url: p.url, alt: p.original_name,
+                    artifact_id: _exec_id ? `${_exec_id}:figure:${i}` : undefined,
+                  })
                 }
               }
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })

@@ -256,6 +256,53 @@ function FigurePin({ entity, isPinned, onPin }: {
   )
 }
 
+
+/** Pin-from-artifact button (Option B / Phase 3): pins an unpinned figure
+ *  in chat by materializing the entity via POST /api/artifacts/.../pin.
+ *  Surfaces when an `<img>` block carries an artifact_id but no Entity
+ *  has materialized yet (the post-cutover default for fresh harvests).
+ *  After a successful pin, optimistic UI flips to "pinned" until the
+ *  parent refresh delivers the now-materialized Entity (at which point
+ *  FigurePin takes over the rendering). */
+function ArtifactPin({ artifact_id, onPinned }: {
+  artifact_id: string
+  onPinned?: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState(false)
+  const handle = async () => {
+    if (busy || done) return
+    setBusy(true)
+    try {
+      // <exec_id>:<kind>:<idx> — parse defensively in case the producer
+      // emitted a malformed id (the backend route is the authoritative
+      // validator; we just need URL path components).
+      const m = artifact_id.match(/^(.+):([^:]+):(\d+)$/)
+      if (!m) { console.warn('ArtifactPin: bad artifact_id', artifact_id); return }
+      const [, exec_id, kind, idxs] = m
+      const r = await fetch(
+        `/api/artifacts/${encodeURIComponent(exec_id)}/${encodeURIComponent(kind)}/${idxs}/pin`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      )
+      if (!r.ok) { console.error('pin_artifact failed', await r.text()); return }
+      setDone(true)
+      onPinned?.()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <button
+      className={`msg__tool msg__tool--pin ${done ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
+      onClick={handle}
+      title={done ? 'Pinned' : busy ? 'Pinning…' : 'Pin this figure'}
+      disabled={busy}
+    >
+      <svg viewBox="0 0 24 24" fill={done ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
+    </button>
+  )
+}
+
 // Auto-fire countdown for the active plan card. The Go button has a 60s
 // default: if the biologist doesn't intervene, the plan runs on its own. A
 // clock-style ring beside Go shows the time draining away.
@@ -495,16 +542,25 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
       // Title from the registered figure/table entity, if any. (Highlight + pin
       // now live in the per-message toolbar and act on the whole cell.)
       const ent = entities?.find(e => e.artifact_path === b.url && (e.type === 'figure' || e.type === 'table'))
+      // Option B / Phase 3: when no entity exists yet (the post-cutover
+      // default for fresh harvests), pin via artifact_id materializes
+      // the entity on-click. Otherwise the legacy FigurePin path handles
+      // the toggle.
+      const artifactId = (b as { artifact_id?: string }).artifact_id
       out.push(
         <div key={i} className="msg-image">
           {ent && <div className="msg-image__head"><span className="msg-image__title">{ent.title}</span></div>}
           <div className="msg-image__frame">
             <ZoomableImg src={b.url} alt={b.alt ?? 'plot'} />
-            {ent && onPin && (
+            {ent && onPin ? (
               <div className="msg-image__tools">
                 <FigurePin entity={ent} isPinned={!!pinnedFigureIds?.has(ent.id)} onPin={onPin} />
               </div>
-            )}
+            ) : artifactId ? (
+              <div className="msg-image__tools">
+                <ArtifactPin artifact_id={artifactId} />
+              </div>
+            ) : null}
           </div>
         </div>,
       )
