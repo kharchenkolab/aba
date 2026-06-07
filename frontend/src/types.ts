@@ -1,7 +1,28 @@
 export type Role = 'user' | 'assistant'
 
 export interface TextBlock  { type: 'text';   text: string }
-export interface ImageBlock { type: 'image';  url: string; alt?: string }
+export interface ImageBlock {
+  type: 'image';  url: string; alt?: string
+  /** Canonical artifact id (<exec_id>:<kind>:<idx>) when this image came
+   *  from a tool result that recorded an exec_id (Stage 1+ paths do).
+   *  Used by the chat to offer pin-from-artifact (Option B / Phase 3 of
+   *  misc/exec_records_and_versioning.md) when the underlying figure
+   *  isn't yet materialized as an entity. */
+  artifact_id?: string
+}
+
+/** A figure/table reference without a backing entity row. Stage 6 +
+ *  Option B introduce this for "unpinned things you can still talk
+ *  about and pin if you want." Materialized on pin via
+ *  POST /api/artifacts/{exec_id}/{kind}/{idx}/pin. */
+export interface ArtifactRef {
+  artifact_id: string
+  exec_id: string
+  kind: 'figure' | 'table' | 'cell' | 'file' | string
+  idx: number
+  url?: string | null
+  original_name?: string
+}
 /** Transient status line (e.g. "Model is busy — retrying…"); not persisted. */
 export interface NoticeBlock { type: 'notice'; text: string }
 /** A failed turn — rendered with a retry affordance and expandable detail. */
