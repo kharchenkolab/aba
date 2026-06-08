@@ -243,11 +243,129 @@ def main() -> int:
     check("unknown field returns None",
           f.get("does_not_exist_field") is None and "error" not in r, str(r))
 
+    # ══════════════════════════════════════════════════════════════
+    # Phase 4: update_entity_fields
+    # ══════════════════════════════════════════════════════════════
+    print("update_entity_fields: top-level + metadata mixed")
+    r = call("update_entity_fields", entity_id=res_id,
+             fields={"title": "Monocyte expansion (revised)",
+                     "interpretation": "Revised by agent",
+                     "tags": ["covid", "pbmc"]})
+    check("update ok", r.get("status") == "ok", str(r))
+    check("updated lists keys we sent",
+          set(r.get("updated") or []) ==
+          {"title", "interpretation", "tags"}, str(r))
+    e = get_entity(res_id)
+    check("title persisted", e.get("title") == "Monocyte expansion (revised)")
+    check("tags persisted", e.get("tags") == ["covid", "pbmc"])
+    check("interpretation persisted in metadata",
+          (e.get("metadata") or {}).get("interpretation") == "Revised by agent")
+
+    print("update_entity_fields: claim caveats whole-list replace")
+    r = call("update_entity_fields", entity_id=claim_id,
+             fields={"caveats": ["replicate in larger cohort"]})
+    check("claim caveats update ok", r.get("status") == "ok", str(r))
+    e = get_entity(claim_id)
+    check("caveats replaced",
+          (e.get("metadata") or {}).get("caveats") == ["replicate in larger cohort"])
+
+    print("update_entity_fields: rejects disallowed field")
+    r = call("update_entity_fields", entity_id=fig_id,
+             fields={"artifact_path": "/tmp/different.png"})
+    check("artifact_path rejected for figure",
+          "error" in r and "not editable" in r["error"], str(r))
+    check("error names the type", "figure" in r.get("error", ""), str(r))
+    check("error lists allowed fields", "Allowed:" in r.get("error", ""), str(r))
+
+    print("update_entity_fields: type with no agent_can_update → error")
+    # A plan entity has no agent_can_update declared; should reject.
+    plan_id = create_entity(entity_type="plan", title="t",
+                            metadata={"thread_id": "default"})
+    r = call("update_entity_fields", entity_id=plan_id,
+             fields={"title": "different"})
+    check("plan reject mentions type",
+          "error" in r and "not editable" in r.get("error", "")
+          and "plan" in r.get("error", ""), str(r))
+    check("plan reject points at list_entity_operations",
+          "list_entity_operations" in r.get("error", ""), str(r))
+
+    print("update_entity_fields: unknown entity → error")
+    r = call("update_entity_fields", entity_id="ent_nope",
+             fields={"title": "x"})
+    check("unknown entity error",
+          "error" in r and "not found" in r["error"], str(r))
+
+    print("update_entity_fields: empty fields dict → error")
+    r = call("update_entity_fields", entity_id=res_id, fields={})
+    check("empty fields rejected",
+          "error" in r and "non-empty" in r["error"], str(r))
+
+    print("update_entity_fields: empty-string title → error")
+    r = call("update_entity_fields", entity_id=res_id, fields={"title": "   "})
+    check("blank title rejected",
+          "error" in r and "title cannot be empty" in r["error"], str(r))
+
+    print("update_entity_fields: None on metadata key removes it")
+    # First set description on dataset, then clear it.
+    call("update_entity_fields", entity_id=ds_id, fields={"description": "temp"})
+    r = call("update_entity_fields", entity_id=ds_id, fields={"description": None})
+    e = get_entity(ds_id)
+    check("description cleared from metadata",
+          "description" not in (e.get("metadata") or {}), str(e.get("metadata")))
+
+    print("update_entity_fields: read-after-write via read_entity")
+    r = call("read_entity", entity_id=res_id, fields=["title", "interpretation"])
+    f = r.get("fields", {})
+    check("read sees updated title",
+          f.get("title") == "Monocyte expansion (revised)", str(f))
+    check("read sees updated interpretation",
+          f.get("interpretation") == "Revised by agent", str(f))
+
+    # ══════════════════════════════════════════════════════════════
+    # Phase 5: list_entity_operations
+    # ══════════════════════════════════════════════════════════════
+    print("list_entity_operations: by type")
+    r = call("list_entity_operations", entity_type="result")
+    check("returns type", r.get("type") == "result", str(r))
+    check("readable matches agent_sees",
+          "members_summary" in (r.get("readable") or []), str(r.get("readable")))
+    check("writable matches agent_can_update",
+          set(r.get("writable") or []) ==
+          {"title", "notes", "tags", "interpretation"}, str(r.get("writable")))
+    check("workflow_tools present",
+          "promote_to_result" in (r.get("workflow_tools") or []), str(r))
+    check("user_gestures.chat present",
+          isinstance(r.get("user_gestures", {}).get("chat"), list), str(r))
+    check("status_states present",
+          "active" in (r.get("status_states") or []), str(r))
+
+    print("list_entity_operations: by entity_id (lookup type)")
+    r = call("list_entity_operations", entity_id=claim_id)
+    check("type resolved from entity_id",
+          r.get("type") == "claim", str(r))
+    check("claim writable includes caveats/alternatives",
+          set(r.get("writable") or []) >= {"caveats", "alternatives"}, str(r))
+
+    print("list_entity_operations: unknown type → error")
+    r = call("list_entity_operations", entity_type="nonexistent_type")
+    check("unknown type error", "error" in r, str(r))
+
+    print("list_entity_operations: no args → error")
+    r = call("list_entity_operations")
+    check("no-args error",
+          "error" in r and ("entity_type" in r["error"]
+                            or "entity_id" in r["error"]), str(r))
+
+    print("list_entity_operations: figure → workflow tools include run_python/run_r")
+    r = call("list_entity_operations", entity_type="figure")
+    check("figure agent_tools",
+          "run_python" in (r.get("workflow_tools") or []), str(r))
+
     print()
     if _failures:
         print(f"FAILED ({len(_failures)}): " + ", ".join(_failures))
         return 1
-    print("ALL READ_ENTITY CHECKS PASSED")
+    print("ALL ENTITY-OPS CHECKS PASSED")
     return 0
 
 

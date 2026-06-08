@@ -34,6 +34,7 @@ allowed_edges:
 focus:
   agent_sees: [title, text, evidence_summary, parent_summary,
                tags, notes]
+  agent_can_update: [title, notes, tags, text]
 
 ui:
   panel: finding

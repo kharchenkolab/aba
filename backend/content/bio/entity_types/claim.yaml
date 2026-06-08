@@ -49,6 +49,11 @@ allowed_edges:
 focus:
   agent_sees: [title, statement, confidence, evidence_summary,
                caveats, alternatives, status_log_tail, tags, notes]
+  # update_entity_fields write-set. statement edits update the title
+  # downstream (HTTP parity). Confidence transitions stay typed —
+  # they go through /api/claims/{id}/status with a robustness note
+  # at validated, which the generic primitive can't carry.
+  agent_can_update: [title, notes, tags, statement, caveats, alternatives]
 
 ui:
   panel: claim
