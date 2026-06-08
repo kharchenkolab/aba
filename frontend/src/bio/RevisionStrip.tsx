@@ -20,7 +20,8 @@
  * control strip below the image, not as an absolute-positioned overlay
  * that fights with click-to-zoom).
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Entity } from '../types'
 import SplitButton from '../components/SplitButton'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -125,6 +126,12 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
   // chevrons). Shows a horizontally-scrollable strip of all versions in
   // the chain so the user can jump anywhere directly.
   const [galleryOpen, setGalleryOpen] = useState(false)
+  // Ref on the strip row so the (portaled) gallery can compute its
+  // position relative to the column-wide .rv-panel ancestor. We don't
+  // anchor via CSS — the strip lives inside a flex layout where
+  // pure-CSS percentage widths against the wrong containing block
+  // could clamp the gallery to the narrow chevron group's width.
+  const stripRef = useRef<HTMLDivElement>(null)
 
   const e = rev.displayed
   if (!e) return null  // chain not loaded yet — don't flicker an empty bar
@@ -153,7 +160,7 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
   }
 
   return (
-    <div className="rev-strip">
+    <div className="rev-strip" ref={stripRef}>
       {showChevrons && (
         <div className="rev-strip__nav" role="group" aria-label="Revision navigation">
           <button
@@ -198,6 +205,7 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
               chain={rev.chain}
               displayedId={rev.displayedId}
               total={rev.total}
+              stripRef={stripRef}
               onPick={(id) => { rev.setDisplayedId(id); setGalleryOpen(false) }}
               onClose={() => setGalleryOpen(false)}
             />
@@ -281,17 +289,65 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
  *  mirrors chronological progression, which is what users expect when
  *  comparing "first attempt vs. latest" side-by-side.
  *
+ *  Portaled to <body> so its width is anchored to the column-wide
+ *  `.rv-panel` ancestor (computed via getBoundingClientRect) rather
+ *  than to whatever the nested flex containing-block resolves to.
  *  Closes on Escape or outside-click. Auto-scrolls the selected
- *  thumbnail into view on open. */
-function RevisionGallery({ chain, displayedId, total, onPick, onClose }: {
+ *  thumbnail into view on open. Recomputes on resize/scroll. */
+function RevisionGallery({ chain, displayedId, total, stripRef, onPick, onClose }: {
   chain: Entity[]
   displayedId: string
   total: number
+  stripRef: React.RefObject<HTMLDivElement | null>
   onPick: (id: string) => void
   onClose: () => void
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const selectedRef = useRef<HTMLButtonElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number; maxWidth: number } | null>(null)
+
+  // Compute the gallery's position from the column-wide .rv-panel
+  // ancestor. We walk up from the strip ref because that's the
+  // structural anchor passed in. If no .rv-panel ancestor exists
+  // (e.g. mounted outside ResultView), fall back to the strip's own
+  // bounding rect.
+  const recompute = () => {
+    const strip = stripRef.current
+    if (!strip) return
+    let panel: HTMLElement = strip
+    let walk: HTMLElement | null = strip
+    while (walk) {
+      if (walk.classList && walk.classList.contains('rv-panel')) {
+        panel = walk
+        break
+      }
+      walk = walk.parentElement
+    }
+    const panelRect = panel.getBoundingClientRect()
+    const stripRect = strip.getBoundingClientRect()
+    setPos({
+      left:     panelRect.left,                  // align with column-wide panel left
+      top:      stripRect.top - 6,               // 6px above the strip's top
+      maxWidth: Math.floor(panelRect.width * 0.95),
+    })
+  }
+
+  useLayoutEffect(() => {
+    recompute()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Recompute on viewport / layout changes so the popover stays anchored.
+  useEffect(() => {
+    const onChange = () => recompute()
+    window.addEventListener('resize', onChange)
+    window.addEventListener('scroll', onChange, true)   // capture scrolls in any ancestor
+    return () => {
+      window.removeEventListener('resize', onChange)
+      window.removeEventListener('scroll', onChange, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Close on outside click + Escape.
   useEffect(() => {
@@ -315,9 +371,22 @@ function RevisionGallery({ chain, displayedId, total, onPick, onClose }: {
 
   const display = [...chain].reverse()  // oldest → newest
 
-  return (
+  // Style: position fixed, anchored from the bottom-left UP (translate -100%
+  // so `top` becomes the BOTTOM edge of the popover). This puts the gallery
+  // directly above the strip without needing to know its height up front.
+  const style: React.CSSProperties = pos
+    ? {
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        transform: 'translateY(-100%)',
+        maxWidth: pos.maxWidth,
+      }
+    : { visibility: 'hidden' }   // hide until we measure to avoid flicker
+
+  const galleryEl = (
     <div ref={wrapRef} className="rev-strip__gallery" role="dialog"
-         aria-label="Revision gallery">
+         aria-label="Revision gallery" style={style}>
       {display.map((ent, i) => {
         // Label: revision number with the SAME convention the pill uses
         // (latest = highest number; chain[0] is latest = label `total`,
@@ -357,4 +426,5 @@ function RevisionGallery({ chain, displayedId, total, onPick, onClose }: {
       })}
     </div>
   )
+  return createPortal(galleryEl, document.body)
 }

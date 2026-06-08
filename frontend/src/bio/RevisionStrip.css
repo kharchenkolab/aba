@@ -118,17 +118,13 @@
 /* Confirm dialog moved to shared components/ConfirmDialog.css. */
 
 
-/* Mini-gallery — popover anchored to the FULL-WIDTH .rev-strip row
-   (not the narrow chevron group), so it can stretch to ~95% of the
-   panel/column width when the chain is long. Natural content width
-   for short chains keeps it visually proportional ("align left when
-   narrow"); long chains get horizontal scroll inside the cap. */
-.rev-strip { position: relative; }
-
+/* Mini-gallery — portaled to <body> with `position: fixed`; the JS in
+   RevisionStrip.tsx measures the column-wide `.rv-panel` ancestor and
+   sets `left` / `top` / `maxWidth` inline. CSS here only handles the
+   look: box, padding, scroll. Width policy is "natural content up to
+   95% of the panel" — content shorter than 95% sits left-aligned;
+   longer than 95% gets horizontal scroll inside the cap. */
 .rev-strip__gallery {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
   z-index: 60;
   display: flex;
   gap: 8px;
@@ -137,9 +133,6 @@
   border: 1px solid var(--border-strong, var(--border));
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-  /* Content sizes naturally up to 95% of the rev-strip row (= the panel
-     content area). Past that, horizontal scroll inside the popover. */
-  max-width: 95%;
   overflow-x: auto;
   overflow-y: hidden;
 }
