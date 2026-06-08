@@ -62,17 +62,18 @@
     return s.status;
   }
 
-  function renderEvents(events, { current, stepsEl, logEl, bar }) {
+  function renderEvents(events, { current, stepsEl, logEl, bar }, totalSteps) {
     if (stepsEl) stepsEl.innerHTML = '';
     const seen = new Map();
-    let lastLine = '', total = 0, doneN = 0;
+    let lastLine = '', started = 0, doneN = 0, activeTitle = '';
     for (const e of (events || [])) {
       const p = e.payload || {};
       if (e.event === 'step_start') {
-        total++;
+        started++;
+        activeTitle = p.title || p.step_id;
         if (stepsEl) {
           const li = document.createElement('li'); li.className = 'active';
-          li.textContent = p.title || p.step_id; stepsEl.appendChild(li);
+          li.textContent = activeTitle; stepsEl.appendChild(li);
           seen.set(p.step_id, li);
         }
       } else if (e.event === 'step_end') {
@@ -82,8 +83,16 @@
         lastLine = p.line;
       }
     }
-    if (current && lastLine) current.textContent = lastLine.slice(0, 100);
-    if (bar && total) bar.value = Math.round((doneN / total) * 100);
+    // done/total, not done/started — so the bar tracks real progress and the
+    // long env builds don't read as "nearly done".
+    const total = totalSteps || started || 1;
+    const running = started > doneN;
+    if (bar) bar.value = Math.round((doneN / total) * 100);
+    if (current) {
+      const head = running ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
+                           : (doneN >= total ? 'Finishing…' : '');
+      current.textContent = head + (lastLine ? '  ·  ' + lastLine.slice(0, 80) : '');
+    }
     if (logEl) {
       logEl.textContent = (events || []).map(e =>
         e.event === 'command_output' ? (e.payload.line || '')
@@ -230,7 +239,7 @@
     // Make sure it's running (e.g. after an error → retry), then poll to done.
     fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
     const timer = setInterval(async () => {
-      const st = await pollAuto(s => renderEvents(s.events, els));
+      const st = await pollAuto(s => renderEvents(s.events, els, s.total_steps));
       if (st === 'done') {
         clearInterval(timer);
         els.current.textContent = 'Starting ABA…';
