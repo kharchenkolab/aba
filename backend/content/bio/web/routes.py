@@ -597,6 +597,30 @@ class MakeRevisionRequest(BaseModel):
     supersede_newer: bool = False
 
 
+@router.post("/api/entities/{entity_id}/delete-revision")
+def delete_revision_endpoint(entity_id: str):
+    """Hard-delete a single figure/table revision, preserving chain
+    integrity (children re-parent to grandparent; Result members
+    re-anchor if their ref pointed at the deleted entity).
+
+    400 with a clear message if `entity_id` is the only active version
+    in its chain (the UI offers "Remove from Result" for that path).
+
+    See lifecycle/revisions.py:delete_revision for full semantics.
+    Returns the helper's dict verbatim (deleted, new_anchor,
+    re_parented_children, re_anchored_members, new_parent).
+    """
+    from content.bio.lifecycle.revisions import delete_revision
+    try:
+        out = delete_revision(entity_id)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
+    return out
+
+
 @router.post("/api/entities/{entity_id}/make_revision")
 def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
     """Run `modified_code` and pin the new artifact as wasRevisionOf

@@ -223,7 +223,7 @@ describe('ResultView.MemberPanel (redesigned)', () => {
     expect(args[4]).toBe(anchor.id)
   })
 
-  it('clicking × on a figure when other members exist → standard remove-confirm dialog', async () => {
+  it('⋯ menu → "Remove from Result" when other members exist → standard remove-confirm dialog', async () => {
     const figA = fig('fig_a', '2026-01-01T00:00:00', 'Figure A')
     const figB = fig('fig_b', '2026-01-02T00:00:00', 'Figure B')
     installFetchMock([figA])  // single-element chain (no revisions)
@@ -241,10 +241,11 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       const imgs = document.querySelectorAll('img.rv-panel__img')
       expect(imgs.length).toBe(2)
     })
-    // Click × on the first panel's × button
-    const xButtons = document.querySelectorAll('.rv-panel__ctl-x')
-    expect(xButtons.length).toBe(2)
-    fireEvent.click(xButtons[0])
+    // Open the first panel's ⋯ menu, then pick "Remove from Result".
+    const moreButtons = document.querySelectorAll('.rv-panel__more-btn')
+    expect(moreButtons.length).toBe(2)
+    fireEvent.click(moreButtons[0])
+    fireEvent.click(screen.getByText('Remove from Result'))
     // Standard confirm dialog appears
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent?.toLowerCase()).toContain('remove this figure from the result')
@@ -260,7 +261,7 @@ describe('ResultView.MemberPanel (redesigned)', () => {
     )
   })
 
-  it('clicking × on the ONLY meaningful member → BLOCKING info dialog directing to ⋯ menu', async () => {
+  it('⋯ menu → "Remove from Result" on the ONLY meaningful member → BLOCKING info dialog directing to rail ⋯ menu', async () => {
     const figOnly = fig('fig_only', '2026-01-01T00:00:00', 'Solo Figure')
     installFetchMock([figOnly])
     render(
@@ -275,8 +276,9 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       const img = document.querySelector('img.rv-panel__img') as HTMLImageElement | null
       expect(img?.src).toContain(figOnly.artifact_path!)
     })
-    const xBtn = document.querySelector('.rv-panel__ctl-x') as HTMLButtonElement
-    fireEvent.click(xBtn)
+    const moreBtn = document.querySelector('.rv-panel__more-btn') as HTMLButtonElement
+    fireEvent.click(moreBtn)
+    fireEvent.click(screen.getByText('Remove from Result'))
     const dialog = await screen.findByRole('dialog')
     // Info dialog (no Cancel button) — directs to ⋯ menu
     expect(dialog.textContent?.toLowerCase()).toContain('empty the result')
@@ -305,7 +307,9 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       const imgs = document.querySelectorAll('img.rv-panel__img')
       expect(imgs.length).toBe(2)
     })
-    fireEvent.click(document.querySelectorAll('.rv-panel__ctl-x')[0])
+    // Open the first panel's ⋯ menu, then "Remove from Result", then "Remove".
+    fireEvent.click(document.querySelectorAll('.rv-panel__more-btn')[0])
+    fireEvent.click(screen.getByText('Remove from Result'))
     await screen.findByRole('dialog')
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => {
@@ -315,6 +319,93 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       )
     })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('⋯ menu HIDES "Remove this version" on a single-entry chain', async () => {
+    const figOnly = fig('fig_only', '2026-01-01T00:00:00', 'Solo Figure')
+    installFetchMock([figOnly])
+    render(
+      <ResultView
+        result={makeResult(figOnly.id)}
+        entities={[figOnly]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+    await waitFor(() => {
+      const img = document.querySelector('img.rv-panel__img') as HTMLImageElement | null
+      expect(img?.src).toContain(figOnly.artifact_path!)
+    })
+    const moreBtn = document.querySelector('.rv-panel__more-btn') as HTMLButtonElement
+    fireEvent.click(moreBtn)
+    // Only "Remove from Result" is offered. "Remove this version" must
+    // not appear (chain has just one entry — version-delete would empty
+    // the chain).
+    expect(screen.queryByText('Remove this version')).toBeNull()
+    expect(screen.getByText('Remove from Result')).toBeTruthy()
+  })
+
+  it('⋯ menu SHOWS "Remove this version" on a 2-entry chain → confirm fires POST /delete-revision', async () => {
+    const anchor = fig('fig_anchor_dv', '2026-01-01T00:00:00', 'Anchor v1')
+    const rev2 = fig('fig_rev2_dv', '2026-02-01T00:00:00', 'Revision v2')
+    // The chain mock returns 2 entries: latest (rev2) first, anchor last.
+    installFetchMock([rev2, anchor])
+
+    // Track POSTs to /delete-revision
+    const deleteCalls: string[] = []
+    const baseFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string'
+          && url.includes('/delete-revision')
+          && init?.method === 'POST') {
+        deleteCalls.push(url)
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ deleted: rev2.id, new_anchor: anchor.id }),
+        } as unknown as Response)
+      }
+      return baseFetch(url, init)
+    }) as typeof globalThis.fetch
+
+    render(
+      <ResultView
+        result={makeResult(anchor.id)}
+        entities={[anchor, rev2]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+    // Wait for the chevrons (proves chain rendered with 2 entries)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Older revision')).toBeTruthy()
+    })
+    // Displayed defaults to the LATEST (rev2)
+    await waitFor(() => {
+      const img = document.querySelector('img.rv-panel__img') as HTMLImageElement | null
+      expect(img?.src).toContain(rev2.artifact_path!)
+    })
+    // Open ⋯ — both items present
+    fireEvent.click(document.querySelector('.rv-panel__more-btn')!)
+    expect(screen.getByText('Remove this version')).toBeTruthy()
+    expect(screen.getByText('Remove from Result')).toBeTruthy()
+    fireEvent.click(screen.getByText('Remove this version'))
+    // Destructive confirm dialog appears, naming the version
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent?.toLowerCase()).toContain('permanently')
+    expect(dialog.textContent).toMatch(/Revision v2/)
+    // Cancel doesn't fire
+    fireEvent.click(screen.getByText('Cancel'))
+    expect(deleteCalls).toHaveLength(0)
+
+    // Re-open menu, pick version-delete again, this time confirm
+    fireEvent.click(document.querySelector('.rv-panel__more-btn')!)
+    fireEvent.click(screen.getByText('Remove this version'))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByText('Remove this version'))
+    await waitFor(() => {
+      expect(deleteCalls).toHaveLength(1)
+      expect(deleteCalls[0]).toContain(`/api/entities/${rev2.id}/delete-revision`)
+    })
   })
 
   // The "live agent revises in background" bug: ResultView mounts with

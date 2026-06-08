@@ -122,3 +122,38 @@ def register_revision_tools(mcp: FastMCP) -> None:
             return _repro(entity_id, thread_id=ctx.get("thread_id"))
         except ValueError as e:
             return {"error": str(e)}
+
+    @mcp.tool()
+    def delete_revision(entity_id: str,
+                        aba_ctx_id: str | None = None) -> dict:
+        """Hard-delete a single figure/table revision while keeping the
+        chain intact. Children (newer revisions pointing at this one)
+        re-parent to this revision's parent; if the deleted entity was
+        the chain anchor that a Result member.ref points at, the member
+        is re-anchored to the next-oldest active descendant.
+
+        USE THIS when the user wants to throw away a specific version
+        of a figure/table (e.g. "delete this revision", "remove v3",
+        "roll back: I want to keep only v1 and v2"). The chain stays
+        navigable; the deleted entity is gone permanently.
+
+        DO NOT use this to remove a figure FROM a Result without
+        deleting the figure itself — that's `remove_result_member`
+        (HTTP) or the entity menu's "Remove from Result" gesture.
+
+        Refuses when `entity_id` is the only active version in its
+        chain (returns an error pointing at the right alternative).
+
+        Arguments:
+          entity_id — id of the figure/table revision to delete.
+
+        Returns: {deleted, new_anchor, new_parent,
+        re_parented_children: [...], re_anchored_members: [...]} on
+        success; {"error": "..."} on entity-not-found / wrong type /
+        single-version chain.
+        """
+        from content.bio.lifecycle.revisions import delete_revision as _del
+        try:
+            return _del(entity_id)
+        except ValueError as e:
+            return {"error": str(e)}

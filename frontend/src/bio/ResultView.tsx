@@ -122,6 +122,14 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     onChange()
   }
   const removeMember = (mid: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'DELETE')
+  // Hard-delete one revision in a figure/table chain. The backend re-parents
+  // children and re-anchors member.ref so the chain stays navigable. Refuses
+  // on the only active version (UI gates that via chain length).
+  const deleteRevision = async (entityId: string) => {
+    const r = await fetch(`/api/entities/${encodeURIComponent(entityId)}/delete-revision`, { method: 'POST' })
+    if (!r.ok) { console.error('delete-revision failed', r.status, await r.text()); return }
+    onChange()
+  }
   const saveCaption = (mid: string, caption: string, origin: 'user' = 'user') =>
     api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'PATCH', { caption, caption_origin: origin })
   const saveText = (mid: string, text: string) => api(`/api/results/${rid}/members/${encodeURIComponent(mid)}`, 'PATCH', { text })
@@ -167,6 +175,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
             onCaption={saveCaption} onText={saveText} onFocus={onFocus}
             onChatResult={onChatResult}
             onAsk={onAsk}
+            onDeleteRevision={deleteRevision}
             resultTitle={result.title}
             isLastNonAutoMember={_isLastNonAutoMember(members, m)}
             revisionsSignal={revisionsSignal} />
@@ -231,7 +240,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   )
 }
 
-function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, onMove, onCaption, onText, onFocus, onChatResult, onAsk, resultTitle, isLastNonAutoMember, revisionsSignal }: {
+function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, onMove, onCaption, onText, onFocus, onChatResult, onAsk, onDeleteRevision, resultTitle, isLastNonAutoMember, revisionsSignal }: {
   member: ResultMember
   idx: number
   count: number
@@ -248,6 +257,9 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
                   action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
                   entityId?: string) => void
   onAsk?: (t: string) => void
+  /** Hard-delete a single revision of a figure/table member's chain.
+   *  See ResultView.tsx:deleteRevision for the HTTP wiring. */
+  onDeleteRevision?: (entityId: string) => void
   resultTitle: string
   /** True if removing this member would leave the Result with no other
    *  user-meaningful members. The × triggers a different dialog in that
@@ -260,10 +272,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   revisionsSignal: number
 }) {
   // Removal confirmation modes:
-  //   'figure' = standard figure/table remove warning
-  //   'last'   = blocked because this is the only meaningful member
-  //   null     = no dialog showing
-  const [removeMode, setRemoveMode] = useState<'figure' | 'last' | null>(null)
+  //   'figure'  = standard figure/table remove-from-Result warning
+  //   'last'    = blocked because this is the only meaningful member
+  //   'version' = hard-delete THIS revision of the figure/table chain
+  //   null      = no dialog showing
+  const [removeMode, setRemoveMode] = useState<'figure' | 'last' | 'version' | null>(null)
+  // Track whether the per-panel ⋯ popover is open.
+  const [moreOpen, setMoreOpen] = useState(false)
   const [caption, setCaption] = useState(member.caption ?? '')
   const [text, setText] = useState(member.text ?? '')
   useEffect(() => { setCaption(member.caption ?? ''); setText(member.text ?? '') }, [member.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -325,17 +340,37 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
     setRemoveMode(isLastNonAutoMember ? 'last' : 'figure')
   }
 
+  // The ⋯ menu replaces the legacy ×. Two affordances:
+  //   - "Remove this version" — hard-deletes the currently-displayed
+  //     revision of a figure/table chain. Only shown when the chain has
+  //     more than one active entry (else the action would empty the chain
+  //     and require re-anchoring the member; the "Remove from Result"
+  //     path covers that case instead). Destructive: a confirm dialog
+  //     spells out that the version goes away permanently but the chain
+  //     stays navigable (children re-parent automatically).
+  //   - "Remove from Result" — same semantics as the old ×: unlinks the
+  //     member, the figure entity (and its whole chain) stays in the
+  //     project. The "last meaningful member" guard still applies.
+  const chainTotal = (member.kind === 'figure' && rev) ? rev.total : 0
+  const canDeleteVersion = chainTotal > 1 && Boolean(onDeleteRevision) && Boolean(displayedFigure)
   const controls = (
     <span className="rv-panel__ctl">
       {count > 1 && <button title="Move up" disabled={idx === 0} onClick={() => onMove(idx, -1)}>↑</button>}
       {count > 1 && <button title="Move down" disabled={idx === count - 1} onClick={() => onMove(idx, 1)}>↓</button>}
-      <button className="rv-panel__ctl-x"
-              title="Remove from result"
-              aria-label="Remove from result"
-              onClick={onRemoveClick}>×</button>
+      <PanelMoreMenu
+        open={moreOpen}
+        onToggle={() => setMoreOpen(v => !v)}
+        onClose={() => setMoreOpen(false)}
+        canDeleteVersion={canDeleteVersion}
+        onPickDeleteVersion={() => { setMoreOpen(false); setRemoveMode('version') }}
+        onPickRemoveFromResult={() => { setMoreOpen(false); onRemoveClick() }}
+      />
     </span>
   )
-  const removeDialogs = _removeDialogsFor(member, cell, removeMode, setRemoveMode, onRemove)
+  const removeDialogs = _removeDialogsFor(
+    member, cell, removeMode, setRemoveMode, onRemove,
+    displayedFigure, onDeleteRevision, chainTotal,
+  )
 
   // Image-reflow stabilizer (P2): when the displayed revision changes
   // and the new image has a different rendered height, the page jumps.
@@ -424,18 +459,54 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
 }
 
 
-/** Render the appropriate × confirm dialog given the current mode. */
+/** Render the appropriate ⋯ menu confirm dialog given the current mode. */
 function _removeDialogsFor(
   member: ResultMember,
   cell: Entity | undefined,
-  removeMode: 'figure' | 'last' | null,
-  setRemoveMode: (m: 'figure' | 'last' | null) => void,
+  removeMode: 'figure' | 'last' | 'version' | null,
+  setRemoveMode: (m: 'figure' | 'last' | 'version' | null) => void,
   onRemove: (mid: string) => void,
+  displayedFigure?: Entity,
+  onDeleteRevision?: (entityId: string) => void,
+  chainTotal?: number,
 ) {
   if (!removeMode) return null
   const label = member.kind === 'text'
     ? 'this note'
     : (cell?.title ?? `this ${member.kind}`)
+
+  if (removeMode === 'version' && displayedFigure && onDeleteRevision) {
+    const kind = member.kind === 'table' ? 'table' : 'figure'
+    const versionLabel = (displayedFigure.title || `this ${kind}`).trim()
+    const remaining = Math.max(0, (chainTotal ?? 1) - 1)
+    return (
+      <ConfirmDialog
+        title={`Permanently remove this version?`}
+        variant="destructive"
+        primaryLabel="Remove this version"
+        onPrimary={() => {
+          onDeleteRevision(displayedFigure.id)
+          setRemoveMode(null)
+        }}
+        onCancel={() => setRemoveMode(null)}
+        body={
+          <>
+            <p>
+              <strong>{versionLabel}</strong> will be deleted permanently.
+              The remaining {remaining} version{remaining === 1 ? '' : 's'} in
+              the chain stay{remaining === 1 ? 's' : ''} navigable — any newer
+              revisions re-link automatically to this version's parent.
+            </p>
+            <p>
+              To remove the whole {kind} (all versions) from this Result
+              without deleting anything, use <strong>Remove from Result</strong>
+              {' '}in the ⋯ menu instead.
+            </p>
+          </>
+        }
+      />
+    )
+  }
 
   if (removeMode === 'last') {
     // Blocked: the action equals deleting the Result. Direct to ⋯ menu.
@@ -485,5 +556,70 @@ function _removeDialogsFor(
         </>
       }
     />
+  )
+}
+
+
+/** Per-panel ⋯ button + popover. Replaces the legacy ×.
+ *
+ * The dropdown holds one or two actions:
+ *   - "Remove this version" (only when canDeleteVersion=true): hard-delete
+ *     just the currently-displayed revision of the chain. Surfaces a
+ *     destructive confirm dialog.
+ *   - "Remove from Result" (always): the original × semantics — unlink
+ *     the member, the figure entity stays in the project.
+ *
+ * The popover positions itself with absolute layout inside the panel
+ * controls strip (which already lives in rv-panel__cell, position
+ * relative). Closes on outside click + on Escape. */
+function PanelMoreMenu(props: {
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  canDeleteVersion: boolean
+  onPickDeleteVersion: () => void
+  onPickRemoveFromResult: () => void
+}) {
+  const wrapRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!props.open) return
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) props.onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') props.onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [props])
+  return (
+    <span ref={wrapRef} className="rv-panel__more-wrap">
+      <button
+        className="rv-panel__more-btn"
+        title="Panel actions"
+        aria-label="Panel actions"
+        aria-haspopup="menu"
+        aria-expanded={props.open}
+        onClick={e => { e.stopPropagation(); props.onToggle() }}
+      >⋯</button>
+      {props.open && (
+        <div className="rv-panel__more-pop" role="menu">
+          {props.canDeleteVersion && (
+            <button
+              role="menuitem"
+              className="rv-panel__more-item rv-panel__more-danger"
+              onClick={props.onPickDeleteVersion}
+            >Remove this version</button>
+          )}
+          <button
+            role="menuitem"
+            className="rv-panel__more-item"
+            onClick={props.onPickRemoveFromResult}
+          >Remove from Result</button>
+        </div>
+      )}
+    </span>
   )
 }
