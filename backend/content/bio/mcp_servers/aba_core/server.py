@@ -26,6 +26,7 @@ from .tools.run_exec import register_run_exec_tools
 from .tools.revisions import register_revision_tools
 from .tools.cells import register_cell_tools
 from .tools.entity_ops import register_entity_ops_tools
+from .tools.jobs import register_jobs_tools
 
 
 def make_server() -> FastMCP:
@@ -65,5 +66,9 @@ def make_server() -> FastMCP:
                                     #      pin_cell
     register_entity_ops_tools(mcp)  # Entity-mgmt refactor (2026-06-08):
                                     #      read_entity (generic YAML-driven reader)
+    register_jobs_tools(mcp)        # J-1/J-2 (2026-06-08): get_job_status,
+                                    #      cancel_job — let the agent answer
+                                    #      "is it still running?" without
+                                    #      deflecting to the UI Queues panel.
 
     return mcp
