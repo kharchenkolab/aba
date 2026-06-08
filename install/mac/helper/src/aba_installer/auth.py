@@ -275,12 +275,22 @@ def _exchange_code(code: str, state: str, verifier: str, redirect_uri: str) -> s
 def _oauth_result_page(ok: bool, msg: str) -> str:
     color = "#2c7a3f" if ok else "#c83434"
     head = "Signed in ✓" if ok else "Sign-in failed"
+    # On success, nudge the ABA Setup tab (our opener) to advance and close
+    # this one. Works when both tabs share an origin — see setup.command,
+    # which opens the UI on localhost to match the OAuth callback.
+    advance = """
+<script>
+  try { if (window.opener && !window.opener.closed) window.opener.location.reload(); } catch (e) {}
+  setTimeout(function () { try { window.close(); } catch (e) {} }, 1200);
+</script>""" if ok else ""
+    tail = ("Returning you to ABA Setup…" if ok
+            else "You can close this tab and return to ABA Setup.")
     return f"""<!doctype html><meta charset=utf-8>
 <title>ABA — {head}</title>
 <body style="font:15px -apple-system,system-ui,sans-serif;max-width:520px;margin:80px auto;text-align:center">
 <h2 style="color:{color}">{head}</h2>
 <p style="color:#555">{msg}</p>
-<p style="color:#888">You can close this tab and return to ABA Setup.</p>
+<p style="color:#888">{tail}</p>{advance}
 </body>"""
 
 
