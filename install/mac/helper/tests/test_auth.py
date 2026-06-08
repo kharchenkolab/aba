@@ -133,7 +133,7 @@ def test_oauth_callback_rejects_bad_state(client):
 def test_oauth_callback_exchanges_and_persists(client, tmp_aba_home, monkeypatch):
     from aba_installer import auth
     monkeypatch.setattr(auth, "_exchange_code",
-                        lambda code, verifier, redirect_uri: "sk-ant-oat01-fromflow")
+                        lambda code, state, verifier, redirect_uri: "sk-ant-oat01-fromflow")
     start = client.post("/api/auth/oauth/start").json()
     # Recover the state the helper generated (it's in the authorize URL)
     import urllib.parse as up
