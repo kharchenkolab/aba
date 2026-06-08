@@ -258,14 +258,12 @@ def _tail_log(env: dict[str, str]) -> None:
 
 
 def cmd_stop() -> int:
-    env = _isolated_env()
-    aba = _launcher_path()
-    if aba.exists():
-        p = subprocess.run([str(aba), "stop"], env=env, capture_output=True, text=True)
-        print(p.stdout.strip() or p.stderr.strip() or "stopped")
-    else:
-        subprocess.run(["pkill", "-f", "[u]vicorn main:app"], check=False)
-        print("stopped (pkill fallback)")
+    # Scope STRICTLY to the isolated backend (its --app-dir lives under ROOT).
+    # Never use the launcher's `aba stop` or a bare `pkill -f "uvicorn main:app"`
+    # here — those would also kill a real ~/.aba install on this machine.
+    pat = f"uvicorn main:app.*{ROOT}"
+    subprocess.run(["pkill", "-f", pat], check=False)
+    print(f"stopped (scoped to {ROOT})")
     return 0
 
 
