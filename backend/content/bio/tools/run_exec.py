@@ -489,19 +489,45 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                     out["stdout"] = preamble + "\n" + (out["stdout"] or "")
             return out
         except Exception as e:  # noqa: BLE001
-            # Never strand the agent on a kernel hiccup — fall back to stateless.
-            print(f"[run_python] kernel path failed, falling back to one-shot: {e}")
+            # Fix 1: don't strand on a TRANSIENT hiccup. A first-start failure
+            # leaves no session for get_or_start to "restart", so hard-reset and
+            # retry the kernel ONCE before degrading — a fresh start usually
+            # succeeds (e.g. a slow first kernel boot on a new install). Only
+            # after the retry do we drop to the stateless, cwd-fresh one-shot.
+            _ktries = int(input_.get("_kernel_tries", 0))
+            print(f"[run_python] kernel attempt {_ktries + 1} failed: {e}")
+            try:
+                from core.exec.kernels import get_pool
+                get_pool().restart(str(thread_id), "python")
+            except Exception:  # noqa: BLE001
+                pass
+            if _ktries < 1:
+                return run_python({**input_, "_kernel_tries": _ktries + 1}, ctx)
+            input_ = {**input_, "_kernel_fallback": True}
 
     # Stateless one-shot (fresh=true, kernel disabled, or kernel fallback).
     run_id = ((ctx or {}).get("run_id")
               or getattr(cancel_token, "run_id", None)
               or uuid.uuid4().hex)
     try:
-        return run_python_code(code, project_id=str(project_id), run_id=str(run_id),
-                               timeout_s=timeout_s, cancel_token=cancel_token,
-                               extra_syspath=[])
+        result = run_python_code(code, project_id=str(project_id), run_id=str(run_id),
+                                 timeout_s=timeout_s, cancel_token=cancel_token,
+                                 extra_syspath=[])
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
+    # Fix 2: if we degraded to stateless because the kernel was unavailable (NOT
+    # because the agent asked for fresh/background), say so LOUDLY. Otherwise the
+    # agent assumes a persistent kernel and its define-then-use / relative-path
+    # patterns silently break — state and cwd don't carry between stateless runs.
+    if input_.get("_kernel_fallback") and isinstance(result, dict):
+        result["kernel_warning"] = (
+            "⚠ Ran WITHOUT a persistent kernel (it was temporarily unavailable). "
+            "Variables, functions, and imports defined in earlier run_python calls are "
+            "NOT available here, and the working directory is a fresh per-run scratch dir. "
+            "Define everything you need in THIS call, and use ABSOLUTE paths for any files "
+            "you want to keep or pass to register_dataset."
+        )
+    return result
 
 
 def run_r(input_: dict, ctx: dict | None = None) -> dict:

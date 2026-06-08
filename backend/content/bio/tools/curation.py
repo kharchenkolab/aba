@@ -251,6 +251,19 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
                 adopted = True
             except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
                 pass
+        # Fix 3: a path that doesn't exist can't be registered (the dataset
+        # schema requires artifact_path). Return a clear, actionable error
+        # instead of letting create_entity raise the cryptic "required field
+        # 'artifact_path' is missing or empty" — the symptom when a relative
+        # path resolved against a now-gone per-run scratch dir.
+        if not exists:
+            return {"error": (
+                f"Nothing to register: no file or directory found at {path!r} "
+                f"(resolved to {abspath}). If you created/downloaded it in a run_python "
+                f"call, it may have landed in a per-run scratch dir that no longer exists "
+                f"— re-create it under DATA_DIR ({DATA_DIR}) or pass an ABSOLUTE path, then "
+                f"register that."
+            )}
     summary = (input_.get("summary") or "").strip()
     # Post Cutover 4: `producing_code` is no longer a column on entities.
     # If the caller supplied it (a holdover from the legacy schema), we
