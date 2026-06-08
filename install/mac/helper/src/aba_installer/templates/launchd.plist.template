@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kharchenkolab.aba.helper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@VENV_PYTHON@@</string>
+    <string>-m</string>
+    <string>aba_installer.service</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>@@HELPER_DIR@@</string>
+  <key>StandardOutPath</key>
+  <string>@@HELPER_DIR@@/helper.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@HELPER_DIR@@/helper.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ABA_HOME</key>
+    <string>@@ABA_HOME@@</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,79 @@
+# ABA install playbook — the deterministic sequence of steps to install
+# ABA on a fresh Mac. The control API executes these in order; the agent
+# (H8) reads the same file when surfaced for failure diagnosis.
+#
+# Variables substituted at run time: ABA_HOME, ARCH, ENV_DIR, REPO_DIR.
+
+defaults:
+  timeout_seconds: 300
+
+env_vars:
+  ABA_HOME: "$HOME/Library/Application Support/ABA"
+  ARCH: "$(uname -m)"
+  ENV_DIR: "$ABA_HOME/env"
+  REPO_DIR: "$ABA_HOME/repo"
+
+steps:
+  - id: preflight
+    title: Pre-flight system check
+    why: Confirm macOS version + arch + free disk before doing anything.
+    commands:
+      - "uname -m"
+      - "sw_vers -productVersion"
+      - "df -h $HOME | tail -1"
+      - "xcode-select -p 2>/dev/null || true"
+    timeout_seconds: 30
+
+  - id: install-micromamba
+    title: Install micromamba
+    why: Manages the isolated Python + R environment. ~20 MB binary, no admin needed.
+    commands:
+      - 'mkdir -p "$ABA_HOME/bin"'
+      - 'curl -fsSL "https://micro.mamba.pm/api/micromamba/osx-${ARCH}/latest" | tar -xj -C "$ABA_HOME" bin/micromamba'
+      - '"$ABA_HOME/bin/micromamba" --version'
+    timeout_seconds: 120
+
+  - id: create-env
+    title: Create the conda environment
+    why: |
+      Installs Python 3.12, R 4.4, Node 20, and the bio dependencies
+      (anndata, scanpy, scvi-tools, deseq2, edger, seurat, ...). Largest
+      step — ~9 minutes on a typical connection.
+    commands:
+      - 'curl -fsSLo "$ABA_HOME/environment.yml" "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"'
+      - '"$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"'
+    timeout_seconds: 1200
+
+  - id: clone-repos
+    title: Clone aba + aba-recipes
+    why: Source for the backend, the frontend, and the recipe library.
+    commands:
+      - 'mkdir -p "$REPO_DIR"'
+      - 'test -d "$REPO_DIR/aba" || git clone --depth 1 https://github.com/kharchenkolab/aba "$REPO_DIR/aba"'
+      - 'test -d "$REPO_DIR/aba-recipes" || git clone --depth 1 https://github.com/kharchenkolab/aba-recipes "$REPO_DIR/aba-recipes"'
+    timeout_seconds: 120
+
+  - id: build-frontend
+    title: Build the interface
+    why: One-shot frontend build. Production runtime serves static files directly — no Vite dev server.
+    commands:
+      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" install --frozen-lockfile'
+      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" build'
+    timeout_seconds: 600
+
+  - id: install-launcher
+    title: Install the aba launcher
+    why: |
+      Creates ~/bin/aba (no admin) by default. Use --global to install to
+      /usr/local/bin/aba instead (will prompt for sudo).
+    commands:
+      - 'mkdir -p "$HOME/bin"'
+      - 'install -m 0755 "$ABA_HOME/installer/aba" "$HOME/bin/aba"'
+    timeout_seconds: 10
+
+  - id: start-backend
+    title: Start ABA
+    why: First boot of the backend; serves the workspace at http://localhost:8000.
+    commands:
+      - '"$HOME/bin/aba" up'
+    timeout_seconds: 30
