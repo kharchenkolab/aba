@@ -91,9 +91,13 @@ def test_executor_runs_simple_command():
     assert r.ok
     assert r.commands[0].stdout.strip() == "hello-world"
     assert r.commands[0].exit_code == 0
-    # Event stream
+    # Event stream — output is streamed line-by-line as command_output between
+    # command_start and command_end.
     names = [n for n, _ in events]
-    assert names == ["step_start", "command_start", "command_end", "step_end"]
+    assert names == ["step_start", "command_start", "command_output",
+                     "command_end", "step_end"]
+    out_line = next(p["line"] for n, p in events if n == "command_output")
+    assert out_line == "hello-world"
 
 
 def test_executor_stops_on_command_failure():

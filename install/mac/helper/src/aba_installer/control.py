@@ -89,6 +89,74 @@ def _write_deployment_yaml() -> None:
     )
 
 
+# ─── prewarm: build the conda env in the background during auth ─────────────
+# The env build (install-micromamba + create-env) needs no credentials and is
+# the long pole (~2 GB). Kicking it off when the Welcome page loads overlaps it
+# with the user entering credentials, so the actual Install finishes fast.
+_PREWARM_STEPS = ("install-micromamba", "create-env")
+_prewarm_lock = threading.Lock()
+_prewarm: dict = {"thread": None, "events": [], "status": "idle"}  # idle|running|done|error
+
+
+def _prewarm_worker() -> None:
+    pb = load_playbook(_playbook_path("install"))
+
+    def on_event(ev: str, payload: dict) -> None:
+        with _prewarm_lock:
+            _prewarm["events"].append({"event": ev, "payload": payload})
+            if len(_prewarm["events"]) > 500:
+                del _prewarm["events"][:-500]
+
+    try:
+        prepare_install_artifacts()
+        results = Executor(pb, on_event=on_event).run_all(only=set(_PREWARM_STEPS))
+        ok = bool(results) and all(r.ok for r in results)
+        with _prewarm_lock:
+            _prewarm["status"] = "done" if ok else "error"
+    except Exception as e:  # noqa: BLE001
+        with _prewarm_lock:
+            _prewarm["status"] = "error"
+            _prewarm["events"].append({"event": "error", "payload": {"error": str(e)}})
+
+
+@router.post("/install/prewarm")
+def install_prewarm() -> dict:
+    """Start the background env build. Idempotent — a no-op if it's already
+    running or the env already exists."""
+    with _prewarm_lock:
+        t = _prewarm["thread"]
+        if t is not None and t.is_alive():
+            return {"started": False, "status": "running"}
+        if (env_dir() / "conda-meta").exists():
+            _prewarm["status"] = "done"
+            return {"started": False, "status": "done"}
+        _prewarm["events"] = []
+        _prewarm["status"] = "running"
+        th = threading.Thread(target=_prewarm_worker, daemon=True, name="aba-prewarm")
+        _prewarm["thread"] = th
+        th.start()
+    return {"started": True, "status": "running"}
+
+
+@router.get("/install/prewarm")
+def install_prewarm_status() -> dict:
+    with _prewarm_lock:
+        return {"status": _prewarm["status"], "events": list(_prewarm["events"][-200:])}
+
+
+def _await_prewarm(emit) -> None:
+    """If a prewarm is in flight, wait for it before the install runs its own
+    create-env (idempotent, but they must not run concurrently on the same
+    prefix). Surfaces the wait as a step so the UI isn't silent."""
+    with _prewarm_lock:
+        t = _prewarm["thread"]
+    if t is not None and t.is_alive():
+        emit("step_start", {"step_id": "prewarm-wait",
+                            "title": "Finishing background package download…"})
+        t.join()
+        emit("step_end", {"step_id": "prewarm-wait", "ok": True, "error": None})
+
+
 # ─── SSE helpers ───────────────────────────────────────────────────────────
 def _sse_format(event_name: str, payload: dict) -> bytes:
     """Encode one event as a Server-Sent-Events frame.
@@ -112,6 +180,9 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
     def on_event(ev_name: str, payload: dict) -> None:
         with _op_lock:
             _op_state.progress.append({"event": ev_name, "payload": payload})
+            # command_output can be thousands of lines — keep the replay buffer bounded.
+            if len(_op_state.progress) > 500:
+                del _op_state.progress[:-500]
         q.put(("event", ev_name, payload))
 
     def worker():
@@ -119,6 +190,10 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # Render Python-substituted artifacts (the launcher) before the
             # shell playbook reaches the step that installs them.
             prepare_install_artifacts()
+            # If the env is being prewarmed in the background, wait for it so
+            # create-env doesn't run twice on the same prefix.
+            if name == "install":
+                _await_prewarm(on_event)
             ex = Executor(pb, on_event=on_event)
             results = ex.run_all()
             ok = all(r.ok for r in results)

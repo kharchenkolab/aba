@@ -207,3 +207,18 @@ def test_uninstall_full_blast_removes_everything(client, tmp_aba_home):
     assert "config.env" in j["removed"]
     assert not (tmp_aba_home / "runtime").exists()
     assert not (tmp_aba_home / "config.env").exists()
+
+
+def test_prewarm_noop_when_env_already_built(client, tmp_aba_home):
+    # If conda-meta exists the env is already built — prewarm must NOT kick off
+    # a (multi-GB) download. This guards the prewarm/install idempotency.
+    (tmp_aba_home / "env" / "conda-meta").mkdir(parents=True)
+    r = client.post("/api/install/prewarm")
+    assert r.status_code == 200
+    assert r.json() == {"started": False, "status": "done"}
+
+
+def test_prewarm_status_endpoint(client):
+    r = client.get("/api/install/prewarm")
+    assert r.status_code == 200
+    assert "status" in r.json() and "events" in r.json()
