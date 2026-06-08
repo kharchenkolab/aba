@@ -328,10 +328,15 @@ function RevisionGallery({ chain, displayedId, total, stripRef, onPick, onClose 
     }
     const aRect = anchor.getBoundingClientRect()
     const stripRect = strip.getBoundingClientRect()
+    // Symmetric 2.5% inset on both sides: starts 2.5% in, max-width
+    // 95%, so a chain long enough to fill it ends 2.5% short of the
+    // column's right edge. Short chains size to natural content but
+    // stay left-aligned at the 2.5% offset.
+    const inset = Math.round(aRect.width * 0.025)
     setPos({
-      left:     aRect.left,                  // align with the column's left edge
-      top:      stripRect.top - 6,           // 6px above the strip's top
-      maxWidth: Math.floor(aRect.width * 0.95),
+      left:     aRect.left + inset,
+      top:      stripRect.top - 6,
+      maxWidth: aRect.width - 2 * inset,
     })
   }
 
