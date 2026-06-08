@@ -20,7 +20,7 @@
  * control strip below the image, not as an absolute-positioned overlay
  * that fights with click-to-zoom).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Entity } from '../types'
 import SplitButton from '../components/SplitButton'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -121,6 +121,10 @@ interface StripProps {
 
 export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions, downloadHref, downloadLabel, downloadName }: StripProps) {
   const [confirmSupersede, setConfirmSupersede] = useState(false)
+  // Gallery popover: opens when the user clicks the "rev N/N" pill (not the
+  // chevrons). Shows a horizontally-scrollable strip of all versions in
+  // the chain so the user can jump anywhere directly.
+  const [galleryOpen, setGalleryOpen] = useState(false)
 
   const e = rev.displayed
   if (!e) return null  // chain not loaded yet — don't flicker an empty bar
@@ -156,26 +160,42 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
             type="button"
             className="rev-strip__chev"
             disabled={!rev.canGoPrev}
-            onClick={rev.goPrev}
+            onClick={() => { setGalleryOpen(false); rev.goPrev() }}
             onKeyDown={onChevKey}
             title={rev.canGoPrev ? 'Older revision (← key)' : 'Already at oldest'}
             aria-label="Older revision"
           >‹</button>
-          <span className="rev-strip__pos" title={`Revision ${rev.total - rev.pos} of ${rev.total}`}>
+          <button
+            type="button"
+            className="rev-strip__pos"
+            title={`Revision ${rev.total - rev.pos} of ${rev.total} — click to browse all versions`}
+            onClick={() => setGalleryOpen(v => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={galleryOpen}
+          >
             rev <strong>{rev.total - rev.pos}</strong> / {rev.total}
             {rev.isLatest
               ? <span className="rev-strip__latest"> · latest</span>
               : <span className="rev-strip__not-latest"> · not latest</span>}
-          </span>
+          </button>
           <button
             type="button"
             className="rev-strip__chev"
             disabled={!rev.canGoNext}
-            onClick={rev.goNext}
+            onClick={() => { setGalleryOpen(false); rev.goNext() }}
             onKeyDown={onChevKey}
             title={rev.canGoNext ? 'Newer revision (→ key)' : 'Already at latest'}
             aria-label="Newer revision"
           >›</button>
+          {galleryOpen && (
+            <RevisionGallery
+              chain={rev.chain}
+              displayedId={rev.displayedId}
+              total={rev.total}
+              onPick={(id) => { rev.setDisplayedId(id); setGalleryOpen(false) }}
+              onClose={() => setGalleryOpen(false)}
+            />
+          )}
         </div>
       )}
       {downloadHref && (
@@ -240,6 +260,95 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
           }
         />
       )}
+    </div>
+  )
+}
+
+
+/** Horizontal scrollable mini-gallery of every version in the chain.
+ *  Triggered by clicking the "rev N/N" pill in the strip. Each thumbnail
+ *  is a click target that jumps the displayed revision via `onPick`.
+ *  Currently-displayed version is visually highlighted.
+ *
+ *  The chain comes in newest-first (chain[0] is latest); the gallery
+ *  reverses to show OLDEST first / newest last — reading left→right
+ *  mirrors chronological progression, which is what users expect when
+ *  comparing "first attempt vs. latest" side-by-side.
+ *
+ *  Closes on Escape or outside-click. Auto-scrolls the selected
+ *  thumbnail into view on open. */
+function RevisionGallery({ chain, displayedId, total, onPick, onClose }: {
+  chain: Entity[]
+  displayedId: string
+  total: number
+  onPick: (id: string) => void
+  onClose: () => void
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const selectedRef = useRef<HTMLButtonElement>(null)
+
+  // Close on outside click + Escape.
+  useEffect(() => {
+    const onDown = (ev: MouseEvent) => {
+      if (!wrapRef.current?.contains(ev.target as Node)) onClose()
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  // Scroll the currently-selected thumbnail into view on open. Without
+  // this, with 10+ revisions the user may not see where they "are".
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' })
+  }, [])
+
+  const display = [...chain].reverse()  // oldest → newest
+
+  return (
+    <div ref={wrapRef} className="rev-strip__gallery" role="dialog"
+         aria-label="Revision gallery">
+      {display.map((ent, i) => {
+        // Label: revision number with the SAME convention the pill uses
+        // (latest = highest number; chain[0] is latest = label `total`,
+        // oldest = label 1). After the reverse, display[0] is oldest →
+        // label 1, display[total-1] is latest → label `total`.
+        const revNum = i + 1
+        const isSelected = ent.id === displayedId
+        const isLatest   = i === display.length - 1
+        // Use derived preview if present (e.g. PDFs rasterize to a
+        // sibling .thumb.png) so non-raster canonicals render as the
+        // panel does; fall back to artifact_path for plain PNG/JPG.
+        const meta = (ent as { metadata?: { preview_path?: string } }).metadata
+        const url = meta?.preview_path ?? ent.artifact_path ?? undefined
+        return (
+          <button
+            type="button"
+            key={ent.id}
+            ref={isSelected ? selectedRef : undefined}
+            className={
+              "rev-strip__gallery-thumb"
+              + (isSelected ? " rev-strip__gallery-thumb--selected" : "")
+            }
+            onClick={() => onPick(ent.id)}
+            title={`${ent.title || ent.id} — rev ${revNum} of ${total}` + (isLatest ? " (latest)" : "")}
+          >
+            <div className="rev-strip__gallery-img-wrap">
+              {url
+                ? <img className="rev-strip__gallery-img" src={url} alt={ent.title ?? ''} />
+                : <div className="rev-strip__gallery-img-missing">no preview</div>}
+            </div>
+            <div className="rev-strip__gallery-label">
+              <span className="rev-strip__gallery-num">{revNum}</span>
+              {isLatest && <span className="rev-strip__gallery-latest"> · latest</span>}
+            </div>
+          </button>
+        )
+      })}
     </div>
   )
 }
