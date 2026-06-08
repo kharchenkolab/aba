@@ -125,6 +125,35 @@ def _count_artifacts_registered(job: dict, project_id: str | None) -> int:
         return 0
 
 
+def _list_job_output_files(job_id: str, project_id: str | None) -> tuple[str | None, list[str]]:
+    """Return (absolute_job_work_dir, [filenames]) for the files that the
+    background job left behind, excluding the housekeeping pair (script.R
+    / script.py and run.log). Used by the continuation message so the
+    agent doesn't have to guess where its outputs live.
+
+    Fix #6 (2026-06-08): root-cause of `Error in gzfile: cannot open the
+    connection` from the live session — the background job wrote
+    seurat_preprocessed.rds to <work>/job_<id>/, but the next R cell ran
+    in <work>/ana_<id>/. The agent called readRDS('seurat_preprocessed.rds')
+    with a bare relative path and got a wrong-cwd failure. Telling it the
+    full path in the continuation removes the guessing."""
+    if not project_id or not job_id:
+        return None, []
+    try:
+        from core.config import project_work_dir
+        wd = project_work_dir(project_id) / job_id
+        if not wd.exists():
+            return None, []
+        skip = {"script.R", "script.py", "run.log"}
+        files = sorted(
+            p.name for p in wd.iterdir()
+            if p.is_file() and p.name not in skip and not p.name.startswith(".")
+        )
+        return str(wd), files
+    except Exception:
+        return None, []
+
+
 def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     """The synthetic user message the Guide sees as fresh evidence. Starts
     with the literal `[continuation: …]` prefix so the frontend can render
@@ -133,6 +162,9 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     Three branches: failed (explicit error), done-with-artifacts (real
     success), and done-with-NO-artifacts (silent failure — agent should
     investigate the log, not trust the 'finished' claim).
+
+    All success branches end with a "Files written to <abs_path>:" listing
+    so the agent loads outputs by absolute path (Fix #6, 2026-06-08).
 
     Keep the success-with-artifacts case generic — the Guide already has
     the plan + the run's registered artifacts in its history; we just
@@ -152,6 +184,28 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
         )
 
     n_artifacts = _count_artifacts_registered(job, project_id)
+
+    # Fix #6 — surface the job's absolute work dir + the files it left
+    # behind. The background job ran in its own scratch (<work>/<job_id>/),
+    # NOT in the kernel's per-thread scratch — so `readRDS("foo.rds")` from
+    # the next kernel cell would fail with "cannot open the connection".
+    # Show full paths so the agent reads from where the files actually live.
+    abs_dir, files = _list_job_output_files(job_id, project_id)
+    files_blurb = ""
+    if abs_dir and files:
+        # Cap the listing — most pipelines write a handful of outputs; if
+        # someone dumps thousands of files we don't want to flood the model
+        # context. Show first 20 + a count for the rest.
+        head = files[:20]
+        more = len(files) - len(head)
+        lines = "\n".join(f"  - {abs_dir}/{n}" for n in head)
+        more_line = f"\n  …and {more} more" if more > 0 else ""
+        files_blurb = (
+            f"\n\nFiles written to `{abs_dir}/` (load with absolute paths "
+            f"in the next kernel cell — the kernel's cwd is the thread's "
+            f"analysis dir, NOT this job's dir):\n{lines}{more_line}"
+        )
+
     if n_artifacts == 0:
         # Job exited 0 but produced no registered artifacts. This is the
         # silent-failure shape (e.g. Rscript wrapper ate the script arg,
@@ -162,16 +216,20 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
         if tail:
             short_tail = tail[-400:] if len(tail) > 400 else tail
             tail_blurb = f"\n\nLog tail:\n```\n{short_tail}\n```"
+        # Files-written list is most valuable in this branch: the job
+        # produced real outputs (e.g. an .rds) that aren't registered
+        # entities — without the listing, the agent thinks "0 artifacts"
+        # means nothing happened and won't try to load them.
         return (
             f"[continuation: background job `{job_id}` ({title}) finished — "
             f"but no new artifacts were registered]\n\n"
-            f"The job's worker exited cleanly, but nothing was produced. "
-            f"Possibilities: the script no-op'd (silently swallowed args / "
-            f"wrong interpreter), wrote outputs to the wrong directory, "
-            f"or skipped the artifact-producing steps. Inspect the job "
-            f"directory's run.log to see what actually happened, then "
-            f"either re-run with the bug fixed or summarize the failure."
-            f"{tail_blurb}"
+            f"The job's worker exited cleanly, but no entities (figures / "
+            f"tables / cells) were minted. If the job wrote intermediate "
+            f"files (e.g. .rds, .h5ad, .parquet) that aren't auto-harvested, "
+            f"load them by ABSOLUTE PATH in the next step. Otherwise the "
+            f"script likely no-op'd (wrong interpreter, swallowed args, "
+            f"wrote to the wrong dir) — inspect run.log."
+            f"{files_blurb}{tail_blurb}"
         )
 
     return (
@@ -182,6 +240,7 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
         f"step of the plan you were following — read the prior plan in this "
         f"thread to remember what comes next. If the plan is done, summarize "
         f"results and stop."
+        f"{files_blurb}"
     )
 
 
