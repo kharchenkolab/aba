@@ -73,11 +73,22 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def run_r(code: str,
               timeout_s: int | None = None,
+              background: bool = False,
+              estimated_runtime_min: float | None = None,
+              title: str | None = None,
               aba_ctx_id: str | None = None) -> dict:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand
         files off (CSV/Parquet/RDS). For Bioconductor / DESeq2 /
         edgeR / limma / Seurat work.
+
+        Pass `background=True` (or `estimated_runtime_min` above the
+        router threshold, ~5 min) for long Seurat integrations / DESeq2
+        sweeps / etc. — those run as queued Rscript jobs that don't
+        block the thread, with artifacts harvested + the plan
+        continuation re-firing on completion. Do NOT shell out to
+        Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
+        background=True IS the supported path for long R work.
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
         focused figure/table (cairo_pdf of a current figure, ggsave with
@@ -93,4 +104,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_r as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:
-            return _impl({"code": code, "timeout_s": timeout_s}, ctx)
+            return _impl({"code": code, "timeout_s": timeout_s,
+                          "background": background,
+                          "estimated_runtime_min": estimated_runtime_min,
+                          "title": title}, ctx)
