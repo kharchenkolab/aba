@@ -20,6 +20,7 @@ import re
 import secrets
 import shlex
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -46,6 +47,9 @@ _OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 _OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 _OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
+# The token endpoint sits behind Cloudflare, which 403s (error 1010) the
+# default Python-urllib User-Agent. Any non-default UA gets through.
+_OAUTH_USER_AGENT = "aba-installer (kharchenkolab/aba)"
 
 # Single in-flight browser flow (one user, one helper). Guarded by a lock.
 _oauth_lock = threading.Lock()
@@ -241,22 +245,27 @@ def oauth_poll() -> dict:
                 "error": _oauth_flow.get("error")}
 
 
-def _exchange_code(code: str, verifier: str, redirect_uri: str) -> str:
+def _exchange_code(code: str, state: str, verifier: str, redirect_uri: str) -> str:
     """Exchange an authorization code for an access token. Returns the bearer.
-    Raises on any failure (caller records it on the flow)."""
+    Raises (with the endpoint's error body) on failure; caller records it."""
     body = json.dumps({
         "grant_type": "authorization_code",
         "code": code,
+        "state": state,            # required — without it the endpoint 400s
         "redirect_uri": redirect_uri,
         "client_id": _OAUTH_CLIENT_ID,
         "code_verifier": verifier,
     }).encode()
     req = urllib.request.Request(
-        _OAUTH_TOKEN_URL, data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode())
+        _OAUTH_TOKEN_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": _OAUTH_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"token endpoint HTTP {e.code}: {detail}")
     tok = data.get("access_token")
     if not tok:
         raise RuntimeError(f"token endpoint returned no access_token: {list(data)}")
@@ -289,7 +298,7 @@ def oauth_callback(code: str = "", state: str = "", error: str = "") -> HTMLResp
         _fail_flow("state mismatch or missing code")
         return HTMLResponse(_oauth_result_page(False, "Security check failed (state mismatch)."), status_code=400)
     try:
-        token = _exchange_code(code, flow["verifier"], flow["redirect_uri"])
+        token = _exchange_code(code, state, flow["verifier"], flow["redirect_uri"])
         _persist_oauth_token(token)
     except Exception as e:  # noqa: BLE001
         _fail_flow(f"token exchange failed: {e}")
