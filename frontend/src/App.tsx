@@ -703,9 +703,17 @@ export default function App() {
     // auto_interpret's caption write-back, goes through a different code path
     // and intentionally does NOT call this — see the right-rail effect above.)
     // User-initiated pin/unpin is intentional — clear the sticky and reveal.
-    if (pin) { userCollapsedRef.current = false; _setRightCollapsedRaw(false) }
-    // No deferred refresh — auto_interpret's caption-ready broadcast on
-    // /api/notifications drives the follow-up refresh on demand.
+    if (pin) {
+      userCollapsedRef.current = false; _setRightCollapsedRaw(false)
+      // The live path for the autogen title/caption is auto_interpret's
+      // caption-ready broadcast on /api/notifications → refresh(). But a
+      // single SSE event has no replay: if it's missed (EventSource mid-
+      // reconnect, a --reload worker restart, a slow-client queue drop) the
+      // UI sits on the placeholder until a manual reload. A few bounded
+      // refreshes cover that gap (auto_interpret typically lands in ~6s);
+      // refresh() is idempotent so overlapping with the broadcast is free.
+      ;[3000, 7000, 12000].forEach(ms => window.setTimeout(() => refresh(), ms))
+    }
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
   const keepMessage = (key: string, text: string, image_urls: string[]) => {

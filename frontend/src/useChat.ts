@@ -53,6 +53,30 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
                       result: { error: 'tool did not complete (interrupted)' } })
         continue
       }
+      // Multimodal tool results (e.g. view_artifact) carry an ARRAY of
+      // Anthropic content blocks ([{type:'text'},{type:'image'}]) rather than
+      // a JSON string. JSON.parse(array) coerces it to "[object Object],…"
+      // and throws, so the catch below used to render that literal string in
+      // chat. Handle the array shape explicitly: surface the text preamble as
+      // the result and render any image blocks inline (base64 → data URL).
+      if (Array.isArray(raw)) {
+        const arr = raw as Array<Record<string, unknown>>
+        const txt = arr
+          .filter(x => x && x.type === 'text' && typeof x.text === 'string')
+          .map(x => x.text as string).join('\n').trim()
+        blocks.push({ type: 'tool_result', name: '(result)',
+                      result: txt ? { stdout: txt } : {} })
+        for (const x of arr) {
+          if (!x || x.type !== 'image') continue
+          const src = x.source as { type?: string; media_type?: string; data?: string } | undefined
+          if (src && src.type === 'base64' && src.data) {
+            blocks.push({ type: 'image',
+                          url: `data:${src.media_type || 'image/png'};base64,${src.data}`,
+                          alt: 'viewed artifact' })
+          }
+        }
+        continue
+      }
       try {
         const parsed = JSON.parse(raw as string)
         if (parsed && parsed.status === 'interrupted') {
