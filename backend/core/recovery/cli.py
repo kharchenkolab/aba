@@ -80,6 +80,22 @@ def _cmd_all_under(args) -> int:
     return 0 if not failed else 1
 
 
+def _cmd_refresh_symlinks(args) -> int:
+    """Rebuild by-title symlinks from the live DB. Used after a clean recover
+    or when symlinks were manually removed / drifted."""
+    src = Path(args.path)
+    if not src.is_dir():
+        print(f"error: not a directory: {src}", file=sys.stderr)
+        return 2
+    from core.recovery.by_title import (
+        refresh_by_title_links, refresh_project_link_at_root,
+    )
+    counts = refresh_by_title_links(src)
+    refresh_project_link_at_root(src)
+    print(json.dumps(counts, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="aba-recover", description="Project recovery CLI.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -101,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     pa.add_argument("root", help="path to runtime/projects/")
     pa.add_argument("--dry-run", action="store_true")
     pa.set_defaults(fn=_cmd_all_under)
+
+    prs = sub.add_parser("refresh-symlinks",
+                         help="Rebuild by-title symlinks from the live DB")
+    prs.add_argument("path", help="path to projects/<pid>/")
+    prs.set_defaults(fn=_cmd_refresh_symlinks)
 
     args = p.parse_args(argv)
     return args.fn(args)
