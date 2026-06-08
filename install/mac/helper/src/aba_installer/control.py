@@ -153,8 +153,16 @@ def install_auto() -> dict:
 
 @router.get("/install/auto")
 def install_auto_status() -> dict:
+    # Total steps so the UI bar can show done/total (not done/started-so-far,
+    # which jumps near-full after the quick steps then sits during the builds).
+    try:
+        pb = load_playbook(_playbook_path("install"))
+        total = len([s for s in pb.steps if s.id not in _BG_SKIP])
+    except Exception:  # noqa: BLE001
+        total = 0
     with _bg_lock:
-        return {"status": _bg["status"], "events": list(_bg["events"][-300:])}
+        return {"status": _bg["status"], "total_steps": total,
+                "events": list(_bg["events"][-300:])}
 
 
 def _await_background(emit) -> None:
