@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Optional, Any
 
-from core.graph.edges import add_edge, remove_edge
+from core.graph.edges import add_edge, edges_to, remove_edge
 from core.graph.entities import create_entity, get_entity, update_entity
 
 # Placeholder used when interpretation is not provided at Pin time. The A3
