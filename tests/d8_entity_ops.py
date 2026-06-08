@@ -40,7 +40,7 @@ from core.skills.loader import get_skill  # noqa: E402
 from core.graph.entities import create_entity, get_entity  # noqa: E402
 
 CTX = {"thread_id": "default"}
-NEW = ["list_entities", "register_dataset", "pin_entity", "promote_to_result",
+NEW = ["list_entities", "register_dataset", "promote_to_result",
        "create_finding", "create_claim", "annotate_entity"]
 _failures: list[str] = []
 
@@ -63,7 +63,7 @@ def main() -> int:
     # strip_prefix_in_catalog=True). Check via is_inprocess_tool, which
     # interrogates aba_core directly.
     not_on_aba_core = {n for n in NEW if not is_inprocess_tool(n)}
-    check("all 7 entity tools registered on aba_core",
+    check("all entity tools registered on aba_core",
           not not_on_aba_core, str(not_on_aba_core))
     sk = get_skill("manage-entities")
     check("manage-entities core skill loaded", sk is not None)
@@ -85,10 +85,10 @@ def main() -> int:
     r = call("list_entities", type="dataset")
     check("lists the dataset", any(x["id"] == did for x in r.get("entities", [])), str(r)[:200])
 
-    print("pin_entity")
-    r = call("pin_entity", entity_id=did)
-    check("pinned ok + persisted", r.get("status") == "ok" and bool(get_entity(did).get("pinned")), str(r))
-    check("missing entity -> error", "error" in call("pin_entity", entity_id="nope_404"))
+    # pin_entity retired 2026-06-08 (entity-mgmt refactor Phase 1).
+    # The pin op is now promote_to_result (figure → new Result) /
+    # pin_evidence (backend); the legacy pinned boolean column has
+    # been dead since task #318 unified the pin semantic.
 
     print("promote_to_result")
     fig = create_entity(entity_type="figure", title="UMAP", metadata={"thread_id": "default"})

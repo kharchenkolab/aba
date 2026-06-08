@@ -13,7 +13,7 @@ from harness import _last_user_text
 FAIL_RE = re.compile(r"\b(error|failed|failure|403|404|not found|no such|empty|traceback|exception|denied|timed out|unable)\b", re.I)
 DESTR_RE = re.compile(r"\b(delete|remove|replace|overwrite|drop|discard|wipe|reset)\b", re.I)
 ANALYSIS_RE = re.compile(r"\b(run|process|cluster|differential|\bDE\b|qc|normaliz|analy|integrat|trajector|annotat|enrich|seurat|scanpy|deseq|umap|pca|marker)\b", re.I)
-CURATE_TOOLS = {"pin_entity", "create_finding", "create_claim", "promote_to_result", "register_dataset", "annotate_entity"}
+CURATE_TOOLS = {"create_finding", "create_claim", "promote_to_result", "register_dataset", "annotate_entity"}
 
 
 def _recent_blocks(msgs, k=8):
