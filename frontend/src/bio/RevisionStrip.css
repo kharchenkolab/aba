@@ -51,13 +51,28 @@
   opacity: 0.45;
 }
 
+/* The "rev N/N" label is a button — click to pop the gallery. Styled
+   to read as a clickable pill, not a plain text label: subtle hover
+   highlight, no border at rest so the chevron group stays the visual
+   primary, focus ring on keyboard nav. */
 .rev-strip__pos {
   font-size: 12px;
   color: var(--text-2);
-  padding: 0 4px;
+  padding: 2px 6px;
   min-width: 86px;
   text-align: center;
   user-select: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 100ms ease;
+}
+.rev-strip__pos:hover { background: var(--bg); }
+.rev-strip__pos:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .rev-strip__pos strong {
   color: var(--text);
@@ -101,3 +116,92 @@
 }
 
 /* Confirm dialog moved to shared components/ConfirmDialog.css. */
+
+
+/* Mini-gallery — popover anchored to the chevron group, opens above
+   the panel's caption row. Horizontal scroll so 10+ revisions stay
+   browsable without growing the layout vertically. */
+.rev-strip__nav { position: relative; }
+
+.rev-strip__gallery {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  z-index: 60;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  /* Keep the popover narrow enough that it doesn't escape the panel,
+     but wide enough to show ~4–5 thumbnails at once. The user can
+     horizontally scroll for more. */
+  max-width: min(640px, 90vw);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.rev-strip__gallery-thumb {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  width: 110px;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+.rev-strip__gallery-thumb:hover {
+  background: var(--bg-soft);
+  border-color: var(--border);
+}
+.rev-strip__gallery-thumb--selected {
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--bg-soft));
+}
+.rev-strip__gallery-thumb--selected:hover {
+  border-color: var(--accent);
+}
+
+.rev-strip__gallery-img-wrap {
+  width: 100%;
+  height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.rev-strip__gallery-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.rev-strip__gallery-img-missing {
+  font-size: 10px;
+  color: var(--text-4);
+  font-style: italic;
+}
+
+.rev-strip__gallery-label {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.rev-strip__gallery-num {
+  font-weight: 600;
+  color: var(--text);
+}
+.rev-strip__gallery-latest {
+  color: var(--text-3);
+}

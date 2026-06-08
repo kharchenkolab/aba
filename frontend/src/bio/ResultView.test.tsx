@@ -120,7 +120,7 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       expect(img?.src).toContain(rev3.artifact_path!)
     })
     // Verify the rev label says "rev 3 / 3"
-    expect(screen.getByTitle('Revision 3 of 3')).toBeTruthy()
+    expect(screen.getByTitle(/Revision 3 of 3/)).toBeTruthy()
   })
 
   it('clicking ‹ chevron swaps the displayed <img> in place (no nav)', async () => {
@@ -478,7 +478,7 @@ describe('ResultView.MemberPanel (redesigned)', () => {
       const img = document.querySelector('img.rv-panel__img') as HTMLImageElement | null
       expect(img?.src).toContain(newRev.artifact_path!)
     })
-    expect(screen.getByTitle('Revision 2 of 2').textContent).toContain('latest')
+    expect(screen.getByTitle(/Revision 2 of 2/).textContent).toContain('latest')
     // And we actually issued a second fetch (not stuck on cached response)
     expect(fetchCalls).toBeGreaterThan(initialFetches)
   })
