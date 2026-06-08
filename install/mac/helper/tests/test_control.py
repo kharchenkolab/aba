@@ -28,9 +28,19 @@ def test_status_fresh(client, tmp_aba_home):
     assert j["operation"] is None
 
 
-def test_status_installed_marker(client, tmp_aba_home):
-    (tmp_aba_home / "env").mkdir()
-    (tmp_aba_home / "repo" / "aba").mkdir(parents=True)
+def test_status_installed_requires_runnable_artifacts(client, tmp_aba_home):
+    # A half-built env (dir + repo present, as during prewarm) must NOT read as
+    # installed — the UI would jump to Control with nothing to run.
+    (tmp_aba_home / "env" / "bin").mkdir(parents=True)
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist").mkdir(parents=True)
+    j = client.get("/api/status").json()
+    assert j["installed"] is False, "env dir alone shouldn't count as installed"
+
+    # Now lay down the artifacts only a full install produces.
+    (tmp_aba_home / "env" / "bin" / "uvicorn").write_text("#!/bin/sh\n")
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist" / "index.html").write_text("<html>")
+    (tmp_aba_home / "bin").mkdir()
+    (tmp_aba_home / "bin" / "aba").write_text("#!/bin/sh\n")
     j = client.get("/api/status").json()
     assert j["installed"] is True
 
@@ -210,9 +220,10 @@ def test_uninstall_full_blast_removes_everything(client, tmp_aba_home):
 
 
 def test_prewarm_noop_when_env_already_built(client, tmp_aba_home):
-    # If conda-meta exists the env is already built — prewarm must NOT kick off
-    # a (multi-GB) download. This guards the prewarm/install idempotency.
-    (tmp_aba_home / "env" / "conda-meta").mkdir(parents=True)
+    # A *complete* env (env/bin/uvicorn present) means prewarm must NOT kick off
+    # a (multi-GB) rebuild. Guards the prewarm/install idempotency.
+    (tmp_aba_home / "env" / "bin").mkdir(parents=True)
+    (tmp_aba_home / "env" / "bin" / "uvicorn").write_text("#!/bin/sh\n")
     r = client.post("/api/install/prewarm")
     assert r.status_code == 200
     assert r.json() == {"started": False, "status": "done"}

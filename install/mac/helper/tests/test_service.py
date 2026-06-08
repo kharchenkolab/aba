@@ -28,8 +28,14 @@ def test_status_endpoint_initial(client):
     assert body["credentials"] is False
 
 
-def test_status_reports_installed_when_dirs_present(client, tmp_aba_home):
-    (tmp_aba_home / "env").mkdir()
-    (tmp_aba_home / "repo" / "aba").mkdir(parents=True)
+def test_status_reports_installed_when_runnable(client, tmp_aba_home):
+    # Requires the artifacts a full install produces (not just dirs that appear
+    # mid-prewarm): env/bin/uvicorn, built frontend, installed launcher.
+    (tmp_aba_home / "env" / "bin").mkdir(parents=True)
+    (tmp_aba_home / "env" / "bin" / "uvicorn").write_text("#!/bin/sh\n")
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist").mkdir(parents=True)
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist" / "index.html").write_text("<html>")
+    (tmp_aba_home / "bin").mkdir()
+    (tmp_aba_home / "bin" / "aba").write_text("#!/bin/sh\n")
     r = client.get("/api/status")
     assert r.json()["installed"] is True

@@ -127,7 +127,7 @@ def install_prewarm() -> dict:
         t = _prewarm["thread"]
         if t is not None and t.is_alive():
             return {"started": False, "status": "running"}
-        if (env_dir() / "conda-meta").exists():
+        if (env_dir() / "bin" / "uvicorn").exists():  # only a *complete* env counts
             _prewarm["status"] = "done"
             return {"started": False, "status": "done"}
         _prewarm["events"] = []
@@ -345,7 +345,17 @@ def stop_backend() -> dict:
 def status() -> dict:
     """Comprehensive status the Control page reads on load + periodically."""
     home = aba_home()
-    installed = env_dir().exists() and (repo_dir() / "aba").exists()
+    # "installed" must mean *runnable*, not just "files started appearing".
+    # The repo is cloned up front by setup.command and the env dir is created
+    # mid-build by the prewarm, so checking those flips true too early and the
+    # UI jumps to the Control page before there's anything to run. Require the
+    # artifacts only the full /api/install produces: a usable env (uvicorn),
+    # a built frontend, and the installed launcher.
+    installed = (
+        (env_dir() / "bin" / "uvicorn").exists()
+        and (repo_dir() / "aba" / "frontend" / "dist" / "index.html").exists()
+        and (home / "bin" / "aba").exists()
+    )
     pid = _backend_pid()
     with _op_lock:
         op = _op_state.name

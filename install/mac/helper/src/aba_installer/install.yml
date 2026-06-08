@@ -52,9 +52,12 @@ steps:
       # Prefer an explicit override, then the env.yml from the cloned repo
       # (the common case — setup.command already cloned it), then a URL fetch.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/mac/environment.yml" ]; then cp "$REPO_DIR/aba/install/mac/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml}"; fi'
-      # Idempotent: a prior prewarm may have already built the env (conda-meta
-      # is micromamba's marker for a populated prefix).
-      - 'if [ -d "$ENV_DIR/conda-meta" ]; then echo "environment already present — skipping create"; else "$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # Idempotent + self-healing. Marker is env/bin/uvicorn (pip-installed at
+      # the very end) so a half-built env from an interrupted prewarm is NOT
+      # mistaken for complete — we wipe and rebuild it (the package cache makes
+      # that fast). conda-meta would appear before the pip layer and skip a
+      # broken env, leaving "uvicorn: No such file or directory" at start.
+      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; "$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
 
   - id: clone-repos
