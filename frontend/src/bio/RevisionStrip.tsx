@@ -328,11 +328,11 @@ function RevisionGallery({ chain, displayedId, total, stripRef, onPick, onClose 
     }
     const aRect = anchor.getBoundingClientRect()
     const stripRect = strip.getBoundingClientRect()
-    // Symmetric 2.5% inset on both sides: starts 2.5% in, max-width
-    // 95%, so a chain long enough to fill it ends 2.5% short of the
+    // Symmetric 1.5% inset on both sides: starts 1.5% in, max-width
+    // 97%, so a chain long enough to fill it ends 1.5% short of the
     // column's right edge. Short chains size to natural content but
-    // stay left-aligned at the 2.5% offset.
-    const inset = Math.round(aRect.width * 0.025)
+    // stay left-aligned at the 1.5% offset.
+    const inset = Math.round(aRect.width * 0.015)
     setPos({
       left:     aRect.left + inset,
       top:      stripRect.top - 6,
