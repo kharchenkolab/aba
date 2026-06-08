@@ -72,6 +72,31 @@
   border-color: var(--section-border, var(--border));
 }
 
+/* ⋯ menu in the title bar: positioned relative wrapper + popover
+   anchored to the button's bottom-right. */
+.files__more-wrap { position: relative; display: inline-flex; }
+.files__more-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 7px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  display: flex; flex-direction: column;
+}
+.files__more-item {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; line-height: 1.3;
+  padding: 7px 10px; border-radius: 5px;
+  color: var(--text-1, var(--text));
+}
+.files__more-item:hover { background: var(--tree-active-bg); }
+
 /* ===== View toggle (Tree / List) ===== */
 .files__view-toggle {
   display: inline-flex;
