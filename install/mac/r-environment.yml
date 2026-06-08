@@ -1,0 +1,62 @@
+# ABA R tools environment — the conda env the BACKEND runs R in.
+#
+# Why a second env (not part of environment.yml): the backend keeps R fully
+# decoupled from the Python env. On the Linux deploy the backend is a pip venv
+# (which can't hold R), so R lives in a sibling micromamba "tools env" at
+# $ABA_RUNTIME_DIR/envs/tools — and core/exec/r.py + the R Jupyter kernel
+# resolve R from there (core.config: ENVS_DIR = RUNTIME_DIR/envs; TOOLS_ENV =
+# ENVS_DIR/tools). The Mac installer pre-builds that same tools env here so the
+# agent's R work uses it immediately instead of provisioning R at runtime (the
+# slow, Bioconductor-scale solve that otherwise happens on first use).
+#
+# This MUST be a superset of what the backend would install itself, so its
+# idempotent checks find nothing missing and never rebuild:
+#   core/exec/r.py  RUNTIME_SPECS + R_CORE_DEPS   (the runtime + foundational deps)
+#   jupyter.py      r-irkernel                    (the aba_r kernel)
+# The heavy frameworks below (Seurat / DESeq2 / edgeR / limma / SCE) are what
+# the recipe library leans on; pre-building them is the whole point.
+#
+# Pin r-base to match: a different minor R still LOADS cross-version, but pinning
+# keeps the pre-built stack reproducible. Channels: conda-forge + bioconda.
+
+name: aba-r-tools
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # ── runtime + toolchain (core/exec/r.py RUNTIME_SPECS) ─────────────────
+  - r-base=4.4.*
+  - r-remotes
+  - r-biocmanager
+  - compilers
+  - make
+  - pkg-config
+
+  # ── the R Jupyter kernel (jupyter.py registers aba_r from this) ────────
+  - r-irkernel
+
+  # ── foundational compiled deps + system libs (core/exec/r.py R_CORE_DEPS):
+  #    kept as conda binaries so on-demand installs find them on .libPaths()
+  #    instead of slow/fragile source compiles. ───────────────────────────
+  - r-matrix
+  - r-rcpp
+  - r-rcpparmadillo
+  - r-rcppeigen
+  - r-rcppprogress
+  - r-igraph
+  - r-irlba
+  - r-xml2
+  - libxml2
+  - r-ggrepel
+  - bioconductor-biomart
+  - r-kernsmooth
+  - r-dplyr
+
+  # ── heavy frameworks the recipe library uses — pre-built so the agent
+  #    doesn't re-provision them on first use. ────────────────────────────
+  - r-seurat
+  - bioconductor-singlecellexperiment
+  - bioconductor-deseq2
+  - bioconductor-edger
+  - bioconductor-limma

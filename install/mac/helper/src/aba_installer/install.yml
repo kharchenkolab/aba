@@ -69,6 +69,21 @@ steps:
       - 'if [ -d "$REPO_DIR/aba-recipes" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipes" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipes}" "$REPO_DIR/aba-recipes"; fi'
     timeout_seconds: 120
 
+  - id: create-r-tools-env
+    title: Build the R toolchain
+    why: |
+      Pre-builds R + IRkernel + Seurat/Bioconductor into the backend's tools
+      env ($ABA_RUNTIME_DIR/envs/tools) so the agent's R work uses it directly,
+      instead of the slow Bioconductor-scale solve the backend would otherwise
+      run on first R use. Kept separate from the Python env so the two stay
+      decoupled (see r-environment.yml). Non-fatal: if it fails, Python still
+      works and the backend falls back to provisioning R on demand. Marker is
+      Seurat (a late, heavy package) so a half-built env rebuilds rather than
+      being mistaken for complete.
+    commands:
+      - 'TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/mac/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi'
+    timeout_seconds: 1800
+
   - id: build-frontend
     title: Build the interface
     why: |

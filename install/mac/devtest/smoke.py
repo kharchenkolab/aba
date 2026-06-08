@@ -49,6 +49,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER_SRC = REPO_ROOT / "install" / "mac" / "helper" / "src"
 ENV_YML = REPO_ROOT / "install" / "mac" / "environment.yml"
+R_ENV_YML = REPO_ROOT / "install" / "mac" / "r-environment.yml"
 PLAYBOOK = HELPER_SRC / "aba_installer" / "install.yml"
 
 ROOT = Path(os.environ.get("ABA_SMOKE_ROOT", Path.home() / "aba" / ".smoke"))
@@ -68,6 +69,7 @@ def _isolated_env() -> dict[str, str]:
         ABA_HOME=str(ABA_HOME),
         MAMBA_ROOT_PREFIX=str(MAMBA_PKGS),
         ABA_ENV_YML_SRC=str(ENV_YML),
+        ABA_R_ENV_YML_SRC=str(R_ENV_YML),
         ABA_REPO_SRC=str(REPO_ROOT),
         # SSH clones must still work despite the redirected $HOME — the key
         # lives in the agent (SSH_AUTH_SOCK is inherited); we just need GitHub's
