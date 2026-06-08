@@ -229,6 +229,54 @@ def _agent_tools_for(entity_type: str) -> list[str]:
     return list((spec.creation or {}).get("agent_tools") or [])
 
 
+def _resolve_view_path(path: str):
+    """Resolve view_artifact's `path` arg to an EXISTING on-disk Path, or None.
+
+    Accepts (in order): an `/artifacts/<pid>/<name>` URL (the exact handle a
+    run/exec tool-result already hands back), an absolute path, or a path
+    relative to the active project. Relative paths resolve against the
+    project's work / artifacts / data areas — NOT the backend process cwd
+    (the old `Path(path).resolve()` did the latter, so a bare plot name 404'd
+    against `…/backend/`). A bare filename is matched anywhere under the
+    project work tree (newest mtime wins), so a plot a kernel just wrote into
+    its run subdir (`work/ana_*/foo.png`) is found without needing the run dir
+    or a pre-harvested entity id. Rejects `..` traversal."""
+    from pathlib import Path as _P
+    if not path:
+        return None
+    # /artifacts/... URL → disk, via the same mapper the entity branch uses.
+    if path.startswith("/artifacts/"):
+        try:
+            from main import _artifact_url_to_path
+            d = _artifact_url_to_path(path)
+        except Exception:  # noqa: BLE001
+            d = None
+        return d if (d and d.exists()) else None
+    p = _P(path).expanduser()
+    if ".." in p.parts:
+        return None
+    if p.is_absolute():
+        return p if p.exists() else None
+    from core.config import (current_project_id, project_work_dir,
+                             project_artifacts_dir, project_data_dir)
+    pid = current_project_id()
+    for base in (project_work_dir(pid), project_artifacts_dir(pid),
+                 project_data_dir(pid)):
+        cand = base / p
+        if cand.exists():
+            return cand
+    # Bare filename → search the project work tree (kernels write into a
+    # per-run subdir, so a simple join above won't catch it). Newest wins.
+    if p.name == str(p):
+        try:
+            hits = [m for m in project_work_dir(pid).rglob(p.name) if m.is_file()]
+            if hits:
+                return max(hits, key=lambda m: m.stat().st_mtime)
+        except OSError:
+            pass
+    return None
+
+
 _UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes"]
 
 # Top-level entity columns (vs metadata fields). The HTTP PATCH route
@@ -491,9 +539,16 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         Arguments (one of `entity_id` or `path` is required):
           entity_id — id of an entity with an artifact_path (figure,
             table, dataset, file, …). Looks up the artifact URL.
-          path      — explicit filesystem path (absolute or relative to
-            the project's artifacts/work area). Use for files that
-            aren't entities (intermediate outputs, downloads, …).
+          path      — an artifact handle for files that aren't entities
+            (intermediate outputs, downloads, a plot a run just wrote).
+            Accepts: an `/artifacts/<pid>/<name>` URL (exactly what a
+            run/exec tool-result hands back in its `plots`/`files`), an
+            absolute path, or a path relative to the active project. A
+            relative path resolves against the project's work / artifacts
+            / data areas — NOT the backend process cwd — and a bare
+            filename is matched anywhere under the project work tree
+            (newest wins), so a plot a kernel just saved into its run
+            subdir is found without needing its run dir or an entity id.
           page      — for multi-page PDFs: which page to rasterize
             (1-indexed; default 1). Ignored for non-PDF inputs.
 
@@ -539,7 +594,13 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
             if disk is None:
                 disk = _P(ap_url)
         else:
-            disk = _P(path).expanduser().resolve()
+            disk = _resolve_view_path(path)
+            if disk is None:
+                return {"error": f"artifact not found for path {path!r} "
+                                 f"(looked under the active project's "
+                                 f"work/artifacts/data area; pass an "
+                                 f"/artifacts/<pid>/<name> URL or an absolute "
+                                 f"path for files outside it)"}
 
         if not disk.exists():
             return {"error": f"artifact missing on disk: {disk}"}
