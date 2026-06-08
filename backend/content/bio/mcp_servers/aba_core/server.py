@@ -25,6 +25,7 @@ from .tools.plan_etc import register_plan_etc_tools
 from .tools.run_exec import register_run_exec_tools
 from .tools.revisions import register_revision_tools
 from .tools.cells import register_cell_tools
+from .tools.entity_ops import register_entity_ops_tools
 
 
 def make_server() -> FastMCP:
@@ -62,5 +63,7 @@ def make_server() -> FastMCP:
                                     #      make_revision, reproduce_from_exec
     register_cell_tools(mcp)        # Stage 6 of misc/exec_records_and_versioning.md:
                                     #      pin_cell
+    register_entity_ops_tools(mcp)  # Entity-mgmt refactor (2026-06-08):
+                                    #      read_entity (generic YAML-driven reader)
 
     return mcp
