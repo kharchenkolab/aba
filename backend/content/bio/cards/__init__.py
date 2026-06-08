@@ -5,6 +5,7 @@ Also registers the thread-context renderer and policy provider with
 core.manifest.assembler (Phase C.3 of misc/modularity_audit.md)."""
 from . import analysis  # noqa: F401
 from . import plan      # noqa: F401
+from . import result    # noqa: F401
 
 from core.manifest.assembler import (
     register_thread_context_renderer,

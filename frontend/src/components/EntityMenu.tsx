@@ -97,8 +97,15 @@ export default function EntityMenu({ entity, onChange }: Props) {
 
   async function hardDelete() {
     setDeleting(true); setDelError(null)
+    // For Results we cascade to members + their revision chains; the
+    // backend skips members that are also referenced from outside the
+    // cascade (shared with another Result, cited by a Claim) and detaches
+    // only the includes/supports/wasDerivedFrom edges from THIS Result.
+    const qs = entity.type === 'result'
+      ? '?hard=true&cascade=members'
+      : '?hard=true'
     try {
-      const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}?hard=true`,
+      const r = await fetch(`/api/entities/${encodeURIComponent(entity.id)}${qs}`,
         { method: 'DELETE' })
       if (r.ok) {
         setOpen(false); setEditing(null); onChange()
@@ -234,8 +241,15 @@ function DeleteConfirm({
   style?: React.CSSProperties
 }) {
   const isDataset = entity.type === 'dataset'
+  const isResult = entity.type === 'result'
   const fc = entity.metadata?.file_count as number | undefined
   const bytes = entity.metadata?.size_bytes as number | undefined
+  // Count Result members so the user sees what cascade-delete will sweep
+  // up before they confirm. Just the immediate members here — revision-
+  // chain expansion happens server-side and is summarized after delete
+  // via the response's `cascade_deleted` / `skipped` lists.
+  const members = (entity.metadata?.members as Array<{ kind?: string; ref?: string }> | undefined) ?? []
+  const memberCount = members.length
   return (
     <div className="entity-menu__pop entity-menu__edit" style={style}>
       <div className="entity-menu__label entity-menu__danger">Delete this {entity.type}?</div>
@@ -249,7 +263,19 @@ function DeleteConfirm({
                 The dataset folder and its contents will be permanently removed.</span>}
           </div>
         )}
-        {!isDataset && (
+        {isResult && (
+          <div className="entity-menu__delete-meta">
+            {memberCount === 0
+              ? <span>The Result and its synthesis text will be permanently removed.</span>
+              : <span>
+                  The Result will be removed along with its <strong>{memberCount}</strong>{' '}
+                  member{memberCount === 1 ? '' : 's'} (and their revision chains).
+                  Members that are <em>also</em> referenced by another Result or Claim are
+                  kept; the Result's edge to them is detached.
+                </span>}
+          </div>
+        )}
+        {!isDataset && !isResult && (
           <div className="entity-menu__delete-meta">This entity will be permanently removed (use Archive for a reversible alternative).</div>
         )}
         {error && (

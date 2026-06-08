@@ -9,6 +9,11 @@ export interface ImageBlock {
    *  misc/exec_records_and_versioning.md) when the underlying figure
    *  isn't yet materialized as an entity. */
   artifact_id?: string
+  /** Rasterized PNG preview for non-raster canonicals (PDF today).
+   *  When set, `<img src>` uses this so the browser can actually
+   *  display the thumbnail + lightbox; `url` stays the canonical
+   *  download. Absent for native rasters (PNG/JPG) — fall back to url. */
+  preview_url?: string
 }
 
 /** A figure/table reference without a backing entity row. Stage 6 +

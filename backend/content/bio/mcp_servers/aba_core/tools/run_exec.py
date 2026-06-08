@@ -48,7 +48,18 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         let the router decide based on estimated_runtime_min) for
         deferred long-runs.
 
-        Returns plots/tables/files harvested from the run's working dir."""
+        Returns plots/tables/files harvested from the run's working dir.
+
+        ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
+        focused figure/table (different format like PDF/SVG, different
+        layout/style, or a content tweak), prefer `make_revision`
+        instead — it pins the new rendering into the figure's revision
+        chain so the user sees it as a sibling on the focused Result.
+        Use `run_python` for analysis NOT tied to an existing focused
+        entity (loading data, fitting models, computing new tables,
+        exploratory plots that aren't a derivative of a current figure).
+        Producing a one-off PDF via this tool is correct only when no
+        focused figure is the parent of the request."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_python as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:
@@ -66,7 +77,19 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand
         files off (CSV/Parquet/RDS). For Bioconductor / DESeq2 /
-        edgeR / limma / Seurat work."""
+        edgeR / limma / Seurat work.
+
+        ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
+        focused figure/table (cairo_pdf of a current figure, ggsave with
+        new theme/layout, ComplexHeatmap re-render with different legend
+        placement, etc.), prefer `make_revision` — it pins the new
+        rendering into the figure's revision chain so the user sees it
+        as a sibling on the focused Result. Use `run_r` for analysis
+        NOT tied to an existing focused entity (loading/processing data,
+        fitting models, computing new tables, exploratory plots that
+        aren't a derivative of a current figure). Writing a one-off
+        PDF/SVG via this tool is correct only when no focused figure is
+        the parent of the request."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_r as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:

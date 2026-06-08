@@ -461,15 +461,65 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
     return updated
 
 
+def _result_cascade_set(result_id: str) -> set[str]:
+    """Containment set for `cascade=members` on a Result: every figure/
+    table/cell member referenced from metadata.members, plus each
+    member's full revision chain (active + superseded). The Result id
+    itself is NOT included — it's deleted separately at the end.
+
+    Why include superseded revisions: when the user deletes a Result,
+    they expect the whole history to go with it (the superseded
+    revisions are figure entities created via make_revision that
+    aren't referenced anywhere visible; leaving them as orphans
+    would just look like a memory leak)."""
+    from content.bio.graph.figure_history import figure_history
+    out: set[str] = set()
+    r = get_entity(result_id)
+    if not r:
+        return out
+    members = (r.get("metadata") or {}).get("members") or []
+    member_ids = [m.get("ref") for m in members if isinstance(m, dict) and m.get("ref")]
+    for mid in member_ids:
+        m = get_entity(mid)
+        if not m:
+            continue
+        out.add(mid)
+        # Expand revision chains for figure/table members. Cells don't
+        # currently form revision chains via wasRevisionOf, but
+        # figure_history is safe on any type — it'll just return [m].
+        if m.get("type") in ("figure", "table"):
+            try:
+                chain = figure_history(mid, include_superseded=True)
+                for e in chain:
+                    if e and e.get("id"):
+                        out.add(e["id"])
+            except Exception:  # noqa: BLE001 — chain walk is best-effort
+                pass
+    return out
+
+
 @app.delete("/api/entities/{entity_id}")
-def entities_delete(entity_id: str, hard: bool = False, _pid: str = Depends(require_project)):
+def entities_delete(entity_id: str, hard: bool = False,
+                    cascade: str | None = None,
+                    _pid: str = Depends(require_project)):
     """Soft-delete (default): mark status='archived'. Workspace cannot be deleted.
 
     With ?hard=true: hard-delete after refusing if other (non-archived) entities
     reference this one via entity_edges. For dataset entities whose artifact is
     a directory under the project's data dir, the directory is removed too.
-    Returns {"ok": true, "deleted": <entity>} on hard, the archived entity on
-    soft."""
+
+    With ?hard=true&cascade=members on a RESULT: includes/supports/
+    wasDerivedFrom edges from the Result to its figure/table/cell members
+    are treated as containment, not as live references. The cascade
+    expands to each member's full revision chain (active + superseded —
+    walked via figure_history). A member that is ALSO referenced from
+    outside the cascade set (e.g. included in another Result, cited by
+    a Claim) is preserved and its inbound edge from the Result is
+    silently removed; the response's `skipped[]` lists such members so
+    the UI can surface them.
+
+    Returns {"ok": true, "deleted": <entity>, "cascade_deleted": [...],
+    "skipped": [...]} on hard, the archived entity on soft."""
     if entity_id == WORKSPACE_ID:
         raise HTTPException(400, "workspace cannot be deleted")
     ent = get_entity(entity_id)
@@ -481,13 +531,26 @@ def entities_delete(entity_id: str, hard: bool = False, _pid: str = Depends(requ
             raise HTTPException(404, f"Entity {entity_id} not found")
         return updated
 
-    # Hard-delete: refuse if any non-archived entity points at us (inbound),
-    # or if we point at any non-archived entity (outbound). Edges to archived
-    # entities are fine — they're already gone from the user's view.
+    # cascade=members on a Result: figure out the containment set first
+    # so we can (a) ignore intra-cascade edges during the blocker check
+    # and (b) hard-delete those members at the end. Builds the set
+    # transitively: Result → members → each member's revision chain.
+    cascade_set: set[str] = set()
+    if cascade == "members" and ent.get("type") == "result":
+        cascade_set = _result_cascade_set(entity_id)
+
+    # Hard-delete: refuse if any non-archived, non-cascade-set entity
+    # points at us (inbound), or if we point at any non-archived,
+    # non-cascade-set entity (outbound). Edges to archived entities are
+    # fine — they're already gone from the user's view. Edges into the
+    # cascade set (members + revision chains) are fine — they'll be
+    # deleted by the cascade.
     blockers: list[dict] = []
     for e in edges_to(entity_id) + edges_from(entity_id):
         other_id = e["source_id"] if e["target_id"] == entity_id else e["target_id"]
         if other_id == entity_id:
+            continue
+        if other_id in cascade_set:
             continue
         other = get_entity(other_id)
         if other and other.get("status") != "archived":
@@ -516,9 +579,64 @@ def entities_delete(entity_id: str, hard: bool = False, _pid: str = Depends(requ
         except OSError:
             pass
 
+    # Cascade delete: walk the containment set, skip any member that has
+    # live references OUTSIDE the cascade scope (e.g. it's also a member
+    # of another Result, or cited by a Claim). For skipped members we
+    # detach the Result→member edges so the user-facing Result row
+    # cleanly disappears without orphaning the member's graph context.
+    cascade_deleted: list[dict] = []
+    skipped: list[dict] = []
+    if cascade_set:
+        # Topological-ish order: leaves of the revision chain first so
+        # wasRevisionOf edges resolve cleanly. Easiest proxy: delete in
+        # any order — delete_entity_hard tolerates missing references
+        # since edges are cascade-deleted by FK on the entity rows.
+        # Only INBOUND, dependency-forming edges count as outside
+        # references when deciding whether to preserve a cascade member.
+        # Provenance edges (wasGeneratedBy from analyses/runs) are
+        # bookkeeping — they don't make a Run "depend on" a figure in
+        # the user's sense. Without this filter, every harvested figure
+        # gets kept just because its parent Analysis exists.
+        _DEP_RELS = {"includes", "supports", "wasDerivedFrom", "wasRevisionOf"}
+        for member_id in list(cascade_set):
+            m = get_entity(member_id)
+            if not m:
+                continue
+            outside = []
+            for e in edges_to(member_id):
+                if e["rel_type"] not in _DEP_RELS:
+                    continue
+                src = e["source_id"]
+                if src in cascade_set or src == entity_id:
+                    continue
+                ent_other = get_entity(src)
+                if ent_other and ent_other.get("status") != "archived":
+                    outside.append({"id": src, "type": ent_other.get("type"),
+                                    "title": ent_other.get("title"),
+                                    "rel_type": e["rel_type"]})
+            if outside:
+                # Keep this member; just detach the Result→member edges
+                # so the visible Result delete is clean. wasRevisionOf
+                # edges stay (member still has its chain).
+                from core.graph.edges import remove_edge
+                for rel in ("includes", "supports", "wasDerivedFrom"):
+                    try: remove_edge(entity_id, member_id, rel)
+                    except Exception: pass  # noqa: BLE001
+                skipped.append({"id": member_id, "type": m.get("type"),
+                                "title": m.get("title"),
+                                "kept_because": outside[:5]})
+                continue
+            if delete_entity_hard(member_id):
+                cascade_deleted.append({"id": member_id, "type": m.get("type"),
+                                        "title": m.get("title")})
+
     if not delete_entity_hard(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    return {"ok": True, "deleted": ent}
+    out: dict = {"ok": True, "deleted": ent}
+    if cascade_set:
+        out["cascade_deleted"] = cascade_deleted
+        out["skipped"] = skipped
+    return out
 
 
 @app.post("/api/entities/{entity_id}/restore")

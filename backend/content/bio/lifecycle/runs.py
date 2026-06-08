@@ -318,36 +318,25 @@ def materialize_run_from_ambient(thread_id: str, title: str) -> Optional[str]:
 _FIG_EXT = {"png", "jpg", "jpeg", "svg", "webp", "gif", "pdf"}
 _TAB_EXT = {"csv", "tsv"}
 _MANIFEST_CAP = 24
-# PDF-thumbnail rasterization — for the Run-view Plots grid. The agent occasionally
-# saves figures as .pdf (recipe says PNG, but it drifts); without a thumb the grid
-# tile is unrenderable. pypdfium2 is pure-Python + no system deps. Cached as a
-# sibling .thumb.png; regenerated only if the PDF is newer than the cache.
+# PDF-preview rasterization moved to core.exec.previews — shared with
+# the entity lifecycle path (artifacts.py + revisions.py) so a pinned
+# PDF figure renders with the same rasterizer the Run-view grid uses.
+# The PREVIEW_SUFFIX constant keeps the cache filename in lockstep
+# everywhere; `_pdf_thumb_path` here is kept only for the rel-path
+# math in refresh_output_manifest below (the manifest builds its own
+# `/api/runs/.../file` URL rather than going through `/artifacts/`).
 def _pdf_thumb_path(pdf_path) -> object:
     from pathlib import Path as _P
-    return _P(pdf_path).with_suffix(_P(pdf_path).suffix + ".thumb.png")
+    from core.exec.previews import PREVIEW_SUFFIX
+    return _P(pdf_path).with_suffix(_P(pdf_path).suffix + PREVIEW_SUFFIX)
 
 
 def _ensure_pdf_thumb(pdf_path) -> bool:
-    """Render PDF page 1 to a sibling .thumb.png at ~600px wide. Idempotent
-    (mtime-checked). Never raises — returns False if anything went wrong."""
-    from pathlib import Path
-    try:
-        p = Path(pdf_path)
-        thumb = _pdf_thumb_path(p)
-        if thumb.exists() and thumb.stat().st_mtime >= p.stat().st_mtime:
-            return True
-        import pypdfium2 as pdfium
-        doc = pdfium.PdfDocument(str(p))
-        if len(doc) == 0:
-            return False
-        page = doc[0]
-        # ~600 px target — scale = 600/page_width_pt × 72dpi factor
-        scale = max(0.5, min(3.0, 600 / max(50, page.get_width())))
-        bitmap = page.render(scale=scale)
-        bitmap.to_pil().save(thumb, "PNG", optimize=True)
-        return True
-    except Exception:  # noqa: BLE001 — thumbnail is best-effort; fall back to badge
-        return False
+    """Thin shim → core.exec.previews. Kept so call sites read naturally
+    ('ensure thumb for this PDF') without leaking the previews module
+    name into runs.py's narrative."""
+    from core.exec.previews import ensure_pdf_thumb_for_disk
+    return ensure_pdf_thumb_for_disk(pdf_path)
 
 
 def _human_size(n: int) -> str:
@@ -412,12 +401,15 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
         artifact_id = name_to_artifact.get(f.name)
         if ext in _FIG_EXT:
-            # PDF: rasterize page 1 to a sibling .thumb.png + use that as the
-            # thumb URL so the Plots grid can actually render it.
+            # PDF: rasterize page 1 to a sibling preview PNG + use that
+            # as the thumb URL so the Plots grid can actually render it.
+            # The suffix matches PREVIEW_SUFFIX so the entity layer's
+            # ensure_preview and the manifest agree on the cache filename.
             thumb_url = plot_urls_by_name.get(f.name) or url
             if ext == "pdf" and _ensure_pdf_thumb(f):
                 from urllib.parse import quote as _q
-                thumb_rel = (f.relative_to(base).as_posix() + ".thumb.png")
+                from core.exec.previews import PREVIEW_SUFFIX as _PREV
+                thumb_rel = (f.relative_to(base).as_posix() + _PREV)
                 thumb_url = f"/api/runs/{run_id}/file?rel={_q(thumb_rel)}"
             out: dict = {"kind": "figure", "label": rel, "thumb": thumb_url,
                           "href": url, "size": _human_size(sz)}
