@@ -24,8 +24,10 @@ channels:
 
 dependencies:
   # ── language toolchains ────────────────────────────────────────────────
+  # R is NOT here — it lives in a separate conda "tools env" (see
+  # r-environment.yml), so Python and R stay decoupled (matching the Linux
+  # deploy): bumping R can't touch the Python env and vice-versa.
   - python=3.12.*
-  - r-base=4.4.*
   - nodejs=20.*
   - pip
 
@@ -50,19 +52,13 @@ dependencies:
   - leidenalg
   - python-igraph
 
-  # ── Jupyter kernels — the agent executes Python (ipykernel) and R (ir) ──
+  # ── Python Jupyter kernel (the agent runs Python here). R has its own
+  #    kernel in the tools env — see r-environment.yml. jupyter_client also
+  #    provides the `jupyter` CLI the R kernel registration shells out to. ──
   - jupyter_client
   - ipykernel
   - nbformat
   - nbconvert
-  - r-irkernel
-
-  # ── R / Bioconductor (the bulk of the recipe library leans on R) ───────
-  - bioconductor-singlecellexperiment
-  - bioconductor-deseq2
-  - bioconductor-edger
-  - bioconductor-limma
-  - r-seurat
 
   # ── document / report tooling ──────────────────────────────────────────
   - typst
