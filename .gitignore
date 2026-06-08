@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+install/mac/build/out/
 # Pre-2026-05-31 runtime lived under backend/. It now lives under
 # $ABA_RUNTIME_DIR (default /workspace/aba-runtime/) which is OUTSIDE the
 # source tree — so the cleanup below is a safety net for fresh clones that

@@ -37,8 +37,8 @@ def test_step_rejects_non_list_commands():
 
 
 def test_load_playbook_install_yml():
-    """The shipped playbook.yml must parse cleanly."""
-    pb_path = Path(__file__).resolve().parents[1] / "src/aba_installer/playbook.yml"
+    """The shipped install.yml must parse cleanly."""
+    pb_path = Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml"
     pb = load_playbook(pb_path)
     assert len(pb.steps) >= 5
     ids = [s.id for s in pb.steps]

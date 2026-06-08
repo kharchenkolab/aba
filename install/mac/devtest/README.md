@@ -1,7 +1,7 @@
 # Mac installer smoke test
 
 `smoke.py` runs the **real** install playbook
-(`../helper/src/aba_installer/playbook.yml`) end to end, but confined to a
+(`../helper/src/aba_installer/install.yml`) end to end, but confined to a
 throwaway root so it's repeatable on any Mac and removable in one command.
 It's how you validate `environment.yml` + the playbook on a real Mac without
 touching the machine's actual `~/.aba`, `~/bin`, or `~/Library`.

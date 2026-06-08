@@ -62,17 +62,20 @@ if [[ ! -x "$HELPER_DIR/venv/bin/python" ]]; then
   "$PY" -m venv "$HELPER_DIR/venv"
 fi
 "$HELPER_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$HELPER_DIR/venv/bin/pip" install --quiet "$HELPER_DIR/current"
+# The tarball wraps the package in aba-installer/, so install that subdir.
+"$HELPER_DIR/venv/bin/pip" install --quiet "$HELPER_DIR/current/aba-installer"
 
-# Install (or update) the LaunchAgent so the helper auto-starts on login.
-# We do this AFTER the venv is built so the first launch can find python.
-PLIST_SRC="$HELPER_DIR/current/com.kharchenkolab.aba.helper.plist"
-PLIST_DST="$HOME/Library/LaunchAgents/com.kharchenkolab.aba.helper.plist"
-if [[ -f "$PLIST_SRC" ]]; then
-  mkdir -p "$HOME/Library/LaunchAgents"
-  cp "$PLIST_SRC" "$PLIST_DST"
-  launchctl unload "$PLIST_DST" 2>/dev/null || true
-  launchctl load -w "$PLIST_DST"
+# Install the LaunchAgent so the helper auto-starts on login — and starts it
+# now (RunAtLoad). The plist ships as a template with @@…@@ path placeholders,
+# so we render + load it through the helper's own code rather than copying it
+# by hand. If that fails on this Mac, fall back to starting the helper
+# directly so the browser still has something to connect to.
+export ABA_HOME
+if ! "$HELPER_DIR/venv/bin/python" -c \
+     "from aba_installer.launchagent import install_launch_agent; install_launch_agent()"; then
+  echo "Warning: could not install the auto-start LaunchAgent; starting the helper directly for this session." >&2
+  nohup "$HELPER_DIR/venv/bin/python" -m aba_installer.service \
+    >> "$HELPER_DIR/helper.out.log" 2>&1 &
 fi
 
 # Wait for the helper to come up

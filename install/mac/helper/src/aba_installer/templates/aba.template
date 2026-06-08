@@ -36,7 +36,17 @@ case "${1:-up}" in
     echo "ABA up on http://127.0.0.1:$ABA_PORT (pid $!)"
     ;;
   stop)
-    pkill -f "[u]vicorn main:app" || true
+    pkill -f "[u]vicorn main:app" 2>/dev/null || true
+    # Wait for it to actually exit — pkill only signals. Without this, a
+    # follow-up `up` (or the Control panel's Restart) races the still-dying
+    # process, sees it "already running", and no-ops, leaving ABA down.
+    for _ in $(seq 1 20); do
+      pgrep -f "uvicorn.*main:app" > /dev/null 2>&1 || break
+      sleep 0.25
+    done
+    if pgrep -f "uvicorn.*main:app" > /dev/null 2>&1; then
+      pkill -9 -f "[u]vicorn main:app" 2>/dev/null || true
+    fi
     echo "ABA stopped."
     ;;
   status)

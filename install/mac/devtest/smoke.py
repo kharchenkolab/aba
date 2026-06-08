@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isolated, removable smoke test for the ABA macOS installer.
 
-Runs the REAL install playbook (helper/src/aba_installer/playbook.yml) and
+Runs the REAL install playbook (helper/src/aba_installer/install.yml) and
 the same launcher-rendering step the helper uses — end to end — but
 confined to a throwaway root so it is repeatable on any Mac and removable
 with one command.
@@ -49,7 +49,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER_SRC = REPO_ROOT / "install" / "mac" / "helper" / "src"
 ENV_YML = REPO_ROOT / "install" / "mac" / "environment.yml"
-PLAYBOOK = HELPER_SRC / "aba_installer" / "playbook.yml"
+PLAYBOOK = HELPER_SRC / "aba_installer" / "install.yml"
 
 ROOT = Path(os.environ.get("ABA_SMOKE_ROOT", Path.home() / "aba" / ".smoke"))
 FAKE_HOME = ROOT / "home"
@@ -148,6 +148,53 @@ def _launcher_path() -> Path:
     return FAKE_HOME / "bin" / "aba"
 
 
+HELPER_LABEL = "com.kharchenkolab.aba.helper"
+
+
+def _launchctl_cleanup() -> None:
+    """Make sure no test LaunchAgent lingers in the real user domain.
+
+    setup.command runs `launchctl load` against a plist under the (redirected)
+    $HOME, but launchctl registers it in the real per-user domain under
+    HELPER_LABEL. Unload + remove so a torn-down test never leaves launchd
+    pointing at a deleted venv.
+    """
+    plists = [
+        FAKE_HOME / "Library" / "LaunchAgents" / f"{HELPER_LABEL}.plist",
+        Path.home() / "Library" / "LaunchAgents" / f"{HELPER_LABEL}.plist",
+    ]
+    for pl in plists:
+        if pl.exists():
+            subprocess.run(["launchctl", "unload", str(pl)], check=False,
+                           capture_output=True)
+    uid = os.getuid()
+    subprocess.run(["launchctl", "remove", HELPER_LABEL], check=False,
+                   capture_output=True)
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{HELPER_LABEL}"],
+                   check=False, capture_output=True)
+    # Only remove the real-HOME plist if it points into our throwaway tree
+    # (never touch a genuine user install).
+    real = Path.home() / "Library" / "LaunchAgents" / f"{HELPER_LABEL}.plist"
+    if real.exists() and str(ROOT) in real.read_text():
+        real.unlink()
+
+
+def cmd_helper() -> int:
+    """Exec the real helper service under the isolated env (foreground).
+
+    Lets the bootstrap/control tests drive the actual FastAPI service +
+    control.py orchestration, not just the playbook Executor.
+    """
+    env = _isolated_env()
+    _setup_dirs(env)
+    if str(HELPER_SRC) not in sys.path:
+        sys.path.insert(0, str(HELPER_SRC))
+    os.environ.update({k: env[k] for k in env if k.startswith("ABA_")
+                       or k in ("HOME", "MAMBA_ROOT_PREFIX")})
+    os.execv(sys.executable, [sys.executable, "-m", "aba_installer.service"])
+    return 0  # unreachable
+
+
 def cmd_serve() -> int:
     env = _isolated_env()
     aba = _launcher_path()
@@ -231,6 +278,7 @@ def cmd_status() -> int:
 
 def cmd_down(purge: bool) -> int:
     cmd_stop()
+    _launchctl_cleanup()
     if purge:
         if ROOT.exists():
             shutil.rmtree(ROOT, ignore_errors=True)
@@ -248,7 +296,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="status",
-                    choices=["up", "run", "serve", "stop", "status", "down"])
+                    choices=["up", "run", "serve", "stop", "status", "down", "helper"])
     ap.add_argument("steps", nargs="*", help="step ids for `run`")
     ap.add_argument("--purge", action="store_true", help="`down`: also drop caches")
     ap.add_argument("--list", action="store_true", help="list playbook step ids")
@@ -268,6 +316,8 @@ def main() -> int:
             print("run: give one or more step ids (see --list)")
             return 2
         return _run_steps(args.steps)
+    if args.command == "helper":
+        return cmd_helper()
     if args.command == "serve":
         return cmd_serve()
     if args.command == "stop":

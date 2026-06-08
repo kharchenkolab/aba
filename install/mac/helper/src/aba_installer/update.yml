@@ -17,16 +17,14 @@ steps:
     title: Update aba
     why: Pull the latest backend + frontend code.
     commands:
-      - 'cd "$REPO_DIR/aba" && git fetch --depth 1'
-      - 'cd "$REPO_DIR/aba" && git reset --hard origin/main'
+      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
     timeout_seconds: 60
 
   - id: pull-recipes
     title: Update aba-recipes
     why: Pull the latest skill/recipe library so newly-published recipes appear.
     commands:
-      - 'cd "$REPO_DIR/aba-recipes" && git fetch --depth 1'
-      - 'cd "$REPO_DIR/aba-recipes" && git reset --hard origin/main'
+      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else cd "$REPO_DIR/aba-recipes" && git fetch --depth 1 && git reset --hard origin/main; fi'
     timeout_seconds: 60
 
   - id: refresh-env

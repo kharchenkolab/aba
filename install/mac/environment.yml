@@ -1,7 +1,7 @@
 # ABA conda environment — the single most-important file in the Mac install.
 #
 # Fetched at install time by the create-env playbook step and fed to
-# micromamba (see helper/src/aba_installer/playbook.yml). Everything ABA
+# micromamba (see helper/src/aba_installer/install.yml). Everything ABA
 # needs to run lives here: the Python + R + Node toolchains, the
 # single-cell bio stack the agent executes, the Jupyter kernels it runs
 # code in, and the backend's own runtime deps.

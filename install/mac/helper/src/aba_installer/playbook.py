@@ -5,7 +5,7 @@ sequence. The executor runs steps in order, capturing stdout/stderr and
 exit codes; results stream back to the API caller via an
 event-callback so the UI can render progress in real time.
 
-Step shape (see playbook.yml):
+Step shape (see install.yml):
   - id: <stable-string-id>
     title: <human title for the UI>
     why:   <one-paragraph rationale, shown on hover or in "show details">
