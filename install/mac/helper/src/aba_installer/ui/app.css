@@ -1,0 +1,72 @@
+/* ABA installer UI — light, system-fonts, no framework. */
+
+:root {
+  --bg: #fafbfc;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --accent: #4f3aa6;
+  --accent-hover: #3a2885;
+  --border: #e4e6ea;
+  --soft: #f4f5f8;
+  --green: #2c7a3f;
+  --red: #c83434;
+  --warn-bg: #fef3c7;
+  --warn-fg: #92400e;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+#app { max-width: 640px; margin: 60px auto; padding: 32px 40px;
+  background: white; border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.06);
+  border: 1px solid var(--border); }
+
+h1 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
+h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; }
+.lead { font-size: 14px; color: var(--muted); margin: 0 0 24px; }
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--red); font-size: 13px; min-height: 1.2em; margin: 6px 0; }
+.status { font-size: 15px; font-weight: 600; margin: 8px 0 4px; }
+
+.label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0; }
+.label input { display: block; width: 100%; margin-top: 4px;
+  padding: 8px 11px; font: inherit; color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px; background: white; }
+.label input:focus { outline: none; border-color: var(--accent); }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.row.muted button { color: var(--muted); }
+
+.btn { display: inline-block; padding: 8px 14px; font: inherit;
+  background: var(--soft); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; text-decoration: none; }
+.btn:hover { background: var(--border); }
+.btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.link { background: transparent; border-color: transparent; padding: 4px 8px; }
+.btn.link:hover { background: var(--soft); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+progress { width: 100%; height: 8px; appearance: none; border: none; }
+progress::-webkit-progress-bar { background: var(--soft); border-radius: 4px; }
+progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; }
+
+.steps { list-style: none; padding: 0; margin: 16px 0; }
+.steps li { padding: 6px 0; font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+.steps li::before { content: ""; display: inline-block; width: 16px; flex-shrink: 0; }
+.steps li.pending::before { content: "○"; color: var(--muted); }
+.steps li.active::before  { content: "▸"; color: var(--accent); font-weight: bold; }
+.steps li.ok::before      { content: "✓"; color: var(--green); }
+.steps li.fail::before    { content: "✗"; color: var(--red); }
+.steps li.active { font-weight: 600; }
+
+details { margin-top: 12px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+pre { background: var(--soft); padding: 12px; border-radius: 6px;
+  font-size: 12px; line-height: 1.45; overflow: auto; max-height: 280px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--soft); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+.page > p { margin: 12px 0; }

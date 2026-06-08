@@ -1,0 +1,23 @@
+[project]
+name = "aba-installer"
+version = "0.1.0"
+description = "Bootstrap helper for installing and controlling ABA on macOS."
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+aba-installer = "aba_installer.service:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aba_installer = ["ui/**/*", "playbook.md", "templates/**/*"]

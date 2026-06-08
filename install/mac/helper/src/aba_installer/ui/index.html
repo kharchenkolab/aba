@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ABA</title>
+  <link rel="stylesheet" href="/ui/app.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Per page section, hidden/shown by app.js based on current state -->
+  <template id="page-welcome">
+    <section class="page">
+      <h1>Welcome to ABA</h1>
+      <p class="lead">An AI-orchestrated workspace for biology.</p>
+      <p>Connect your account to begin:</p>
+      <div class="row">
+        <label class="label">Anthropic API key
+          <input type="password" id="apikey-input" placeholder="sk-ant-…" autocomplete="off" />
+        </label>
+      </div>
+      <p class="error" id="auth-error"></p>
+      <button class="btn primary" id="auth-submit">Continue</button>
+      <p class="muted">
+        We'll store this on your Mac at
+        <code>~/Library/Application Support/ABA/config.env</code> (mode 0600).
+      </p>
+    </section>
+  </template>
+
+  <template id="page-install">
+    <section class="page">
+      <h1>Install ABA</h1>
+      <p class="lead">ABA will install into <code id="aba-home"></code> (~3 GB, ~12 min).</p>
+      <button class="btn primary" id="install-go">Install ABA</button>
+      <div id="install-progress" hidden>
+        <progress id="install-bar" value="0" max="100"></progress>
+        <p id="install-current">Starting…</p>
+        <ol class="steps" id="install-steps"></ol>
+        <details>
+          <summary>Show details</summary>
+          <pre id="install-log"></pre>
+        </details>
+      </div>
+    </section>
+  </template>
+
+  <template id="page-control">
+    <section class="page">
+      <h1>ABA Control</h1>
+      <p class="status" id="run-status">●  …</p>
+      <p class="muted" id="run-meta"></p>
+      <p>
+        <a class="btn primary" id="open-aba" href="http://127.0.0.1:8000" target="_blank">
+          Open ABA →
+        </a>
+      </p>
+      <div class="row">
+        <button class="btn" id="ctl-start">▶ Start</button>
+        <button class="btn" id="ctl-stop">⏻ Stop</button>
+        <button class="btn" id="ctl-restart">↻ Restart</button>
+        <button class="btn" id="ctl-update">⤓ Check updates</button>
+      </div>
+      <div class="row muted">
+        <button class="btn link" id="ctl-logs">📄 Logs</button>
+        <button class="btn link" id="ctl-help">🛟 Help</button>
+        <button class="btn link" id="ctl-uninstall">Uninstall</button>
+      </div>
+      <pre id="logs-view" hidden></pre>
+      <!-- Update progress shares the same step renderer as install -->
+      <div id="update-progress" hidden>
+        <h3>Updating…</h3>
+        <progress id="update-bar" value="0" max="100"></progress>
+        <p id="update-current"></p>
+        <ol class="steps" id="update-steps"></ol>
+      </div>
+    </section>
+  </template>
+
+  <script src="/ui/app.js" defer></script>
+</body>
+</html>

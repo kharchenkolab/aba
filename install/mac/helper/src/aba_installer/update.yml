@@ -1,0 +1,55 @@
+# ABA update playbook — pulls fresh code + recipes, refreshes the conda env.
+# Run via /api/update or the UI's "⤓ Check for updates" button.
+# Idempotent: re-running with no upstream changes is a no-op.
+
+defaults:
+  timeout_seconds: 300
+
+env_vars:
+  ABA_HOME: "$HOME/Library/Application Support/ABA"
+  ARCH: "$(uname -m)"
+  ENV_DIR: "$ABA_HOME/env"
+  REPO_DIR: "$ABA_HOME/repo"
+
+steps:
+  - id: pull-aba
+    title: Update aba
+    why: Pull the latest backend + frontend code.
+    commands:
+      - 'cd "$REPO_DIR/aba" && git fetch --depth 1'
+      - 'cd "$REPO_DIR/aba" && git reset --hard origin/main'
+    timeout_seconds: 60
+
+  - id: pull-recipes
+    title: Update aba-recipes
+    why: Pull the latest skill/recipe library so newly-published recipes appear.
+    commands:
+      - 'cd "$REPO_DIR/aba-recipes" && git fetch --depth 1'
+      - 'cd "$REPO_DIR/aba-recipes" && git reset --hard origin/main'
+    timeout_seconds: 60
+
+  - id: refresh-env
+    title: Refresh the environment
+    why: |
+      Apply any new pinned dependencies from environment.yml. Usually a
+      no-op; only takes time when the upstream env actually changed.
+    commands:
+      - 'curl -fsSLo "$ABA_HOME/environment.yml" "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"'
+      - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
+    timeout_seconds: 900
+
+  - id: rebuild-frontend
+    title: Rebuild the interface
+    why: Picks up any frontend changes that landed since last build.
+    commands:
+      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" install --frozen-lockfile'
+      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" build'
+    timeout_seconds: 600
+
+  - id: bounce-backend
+    title: Restart ABA
+    why: Pick up the new code in the running backend. Skipped if backend isn't already running.
+    commands:
+      - '"$HOME/bin/aba" stop 2>/dev/null || true'
+      - '"$HOME/bin/aba" up'
+    timeout_seconds: 30
