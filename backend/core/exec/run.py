@@ -88,6 +88,89 @@ def run_python_code(
         "files": files,
         # Self-contained one-shot script — its producing_code reproduces it alone.
         "execution_mode": "stateless",
+        "cwd": str(scratch),
+    }
+    if warns:
+        out["figure_warnings"] = warns
+    return out
+
+
+def run_r_code(
+    code: str,
+    *,
+    project_id: str,
+    run_id: Optional[str] = None,
+    timeout_s: int = 600,
+    cancel_token=None,
+) -> dict:
+    """Background R execution — mirrors run_python_code's return shape so the
+    existing on_job_complete hook + artifact harvester work unchanged.
+
+    Writes a self-contained `script.R` to the project's scratch dir with a
+    preamble that:
+      - sets .libPaths() to put the project R lib first (so per-project
+        installs are visible);
+      - sets working dir to scratch (so plot files land here for harvest);
+      - exposes WORK_DIR / DATA_DIR / ARTIFACTS_DIR via Sys.getenv parity
+        with the IRkernel.
+
+    Then invokes Rscript via the same MaterializingExecutor that handles
+    Python, so timeouts / killpg cancellation / progress are unified.
+    """
+    timeout_s = max(5, min(int(timeout_s or 600), 1800))
+    run_id = run_id or uuid.uuid4().hex
+    scratch = scratch_dir(str(project_id), str(run_id))
+
+    from core.config import current_project_id, project_data_dir
+    from core.exec.r import _rscript, libpaths_expr
+    _data_dir = project_data_dir(current_project_id())
+
+    rscript = _rscript()
+    if not rscript.exists():
+        return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
+
+    # R preamble — kept short. The agent's own script.R follows verbatim.
+    preamble_lines = []
+    lib_expr = libpaths_expr(str(project_id))
+    if lib_expr:
+        preamble_lines.append(lib_expr)
+    preamble_lines.append(f'setwd({str(scratch)!r})')
+    preamble = "\n".join(preamble_lines)
+    (scratch / "script.R").write_text(preamble + "\n" + code)
+
+    ex = MaterializingExecutor()
+    env = ex.materialize(Provisioning())
+    env_vars = {
+        "WORK_DIR": str(scratch),
+        "DATA_DIR": str(_data_dir),
+        "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
+        "ABA_PYTHON": sys.executable,  # let R shell out to Python if needed
+    }
+    result = ex.exec(
+        env, [str(rscript), "--vanilla", str(scratch / "script.R")],
+        cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
+        env_vars=env_vars,
+    )
+
+    if result.timed_out:
+        return {"error": f"R execution timed out ({timeout_s}s limit)"}
+    if result.cancelled:
+        return {"status": "cancelled",
+                "note": f"Run was cancelled by the user "
+                        f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
+
+    plots, tables, files, warns = harvest_artifacts(scratch)
+    from core.exec.output_cap import snip_middle
+    out = {
+        "stdout": snip_middle(result.stdout or ""),
+        "stderr": snip_middle(result.stderr or ""),
+        "returncode": result.returncode,
+        "plots": plots,
+        "tables": tables,
+        "files": files,
+        # Self-contained one-shot script.R — its producing_code reproduces it alone.
+        "execution_mode": "stateless_r",
+        "cwd": str(scratch),
     }
     if warns:
         out["figure_warnings"] = warns

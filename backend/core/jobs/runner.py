@@ -163,6 +163,29 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def submit_r_job(code: str, title: str, focus_entity_id: str | None,
+                 timeout_s: int = 600, project_id: str | None = None,
+                 thread_id: str | None = None, run_id: str | None = None) -> dict:
+    """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
+    the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
+    against the project's tools-env R + project library, captures stdout/stderr,
+    and harvests artifacts. Used by run_r(background=True) — the proper path
+    for long Seurat/DESeq2/etc. work that would otherwise force the agent to
+    shell out via run_python(subprocess.run([\"Rscript\", ...]))."""
+    job_id = f"job_{uuid.uuid4().hex[:10]}"
+    job = create_job(
+        job_id=job_id,
+        kind="run_r",
+        title=title or "Background R analysis",
+        focus_entity_id=focus_entity_id,
+        params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
+                "thread_id": thread_id, "run_id": run_id},
+        project_id=project_id,
+    )
+    _QUEUE.put_nowait((job_id, project_id))
+    return job
+
+
 def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     """Cancel a queued or running job. Returns True if it was actionable. Fires
     the job's CancelToken so the shared exec core killpg's the whole process
@@ -204,18 +227,28 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     # the background job sees the project scratch workspace, the pylib overlay,
     # the conda tools env on PATH, and killpg cancellation. A per-job CancelToken
     # (keyed by job_id) lets cancel_job kill the whole process group.
-    from core.exec.run import run_python_code
+    # B2 (2026-06-08): branch on job["kind"] so R jobs route through run_r_code
+    # (script.R + Rscript) instead of the Python path.
+    from core.exec.run import run_python_code, run_r_code
     from core.runtime import cancellation
     biomni = str(Path(__file__).resolve().parents[2] / "biomni")
     token = cancellation.acquire(job_id)
+    kind = job.get("kind") or "run_python"
     try:
         loop = asyncio.get_event_loop()
-        result_obj = await loop.run_in_executor(
-            None,
-            lambda: run_python_code(code, project_id=str(effective_pid), run_id=job_id,
-                                    timeout_s=timeout_s, cancel_token=token,
-                                    extra_syspath=[biomni]),
-        )
+        if kind == "run_r":
+            result_obj = await loop.run_in_executor(
+                None,
+                lambda: run_r_code(code, project_id=str(effective_pid), run_id=job_id,
+                                   timeout_s=timeout_s, cancel_token=token),
+            )
+        else:
+            result_obj = await loop.run_in_executor(
+                None,
+                lambda: run_python_code(code, project_id=str(effective_pid), run_id=job_id,
+                                        timeout_s=timeout_s, cancel_token=token,
+                                        extra_syspath=[biomni]),
+            )
 
         if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
             update_job(job_id, project_id=project_id, status="cancelled", finished_at=_utcnow())
@@ -256,7 +289,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
         # attach to that Run instead of orphaning under a stray "Background
         # analysis" — analysis_id pins it directly; thread_id is the fallback.
         dispatch("on_job_complete", {
-            "tool_name": "run_python",
+            "tool_name": kind,
             "tool_input": {"code": code},
             "result_obj": result_obj,
             "focus_entity_id": focus_entity_id,

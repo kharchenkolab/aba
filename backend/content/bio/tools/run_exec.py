@@ -508,19 +508,47 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     """Execute R in the thread's persistent R (IRkernel) session — objects
     persist across calls, and the session shares the thread's working dir with
     run_python for file handoff (CSV/Parquet/RDS). For Bioconductor/DESeq2/
-    edgeR/limma/Seurat work."""
+    edgeR/limma/Seurat work.
+
+    background=True (or estimated_runtime_min above the router's threshold)
+    routes through the job queue: writes a standalone script.R, runs Rscript,
+    harvests artifacts, fires the continuation hook so the agent's plan
+    resumes when the job completes. Same machinery as run_python's
+    background mode (see B1-B6 design 2026-06-08)."""
     import time as _time
     from core.exec.run import harvest_artifacts
+    from core.exec import LocalRouter
     from core.config import KERNEL_ENABLED
     from core import projects
 
-    if not KERNEL_ENABLED:
-        return {"error": "R runs in a persistent kernel, which is currently disabled."}
     code = input_.get("code", "")
     timeout_s = max(5, min(int(input_.get("timeout_s") or 600), 1800))
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
+
+    # Background / long-runtime → job queue. Mirror run_python's routing.
+    override = "background" if input_.get("background") else None
+    est_min = float(input_.get("estimated_runtime_min") or 0)
+    choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
+    if choice.location == "background":
+        from core.jobs.runner import submit_r_job
+        from content.bio.lifecycle.runs import active_run_id
+        job = submit_r_job(code, title=input_.get("title") or "Background R analysis",
+                           focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                           timeout_s=timeout_s, project_id=str(project_id),
+                           thread_id=str(thread_id), run_id=active_run_id(str(thread_id)))
+        return {
+            "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
+            "status": "submitted",
+            "note": f"Submitted as background R job {job['id']} ({choice.rationale}). "
+                    f"Script will run via Rscript; figures register on completion.",
+        }
+
+    # Synchronous kernel path (default).
+    if not KERNEL_ENABLED:
+        return {"error": "R runs in a persistent kernel, which is currently disabled. "
+                         "Pass background=True to run as a queued Rscript job instead."}
     try:
         from datetime import datetime as _dt, timezone as _tz
         from core.exec.kernels import get_pool
