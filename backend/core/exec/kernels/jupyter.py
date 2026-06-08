@@ -95,10 +95,22 @@ def _ensure_r_kernelspec() -> str:
         run_micromamba([verb, "-y", "-p", str(tenv), "-c", "conda-forge", "r-irkernel"])
     # Register the spec under OUR name, in the user dir, pointing at THIS env's R +
     # IRkernel (installspec writes argv[0] = R.home()/bin/R of the running Rscript).
-    subprocess.run(
+    # IRkernel::installspec shells out to `jupyter kernelspec install`, and
+    # `jupyter` lives in the backend's own env, NOT the tools env — so put it on
+    # PATH or installspec exits 127 ("jupyter-client has to be installed"),
+    # writes nothing, and run_r later dies with "No such kernel named aba_r".
+    import os, sys
+    env = os.environ.copy()
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
+    proc = subprocess.run(
         [str(tenv / "bin" / "Rscript"), "-e",
          f'IRkernel::installspec(name="{_R_SPEC_NAME}", displayname="ABA R", user=TRUE)'],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=300, env=env)
+    # Verify it actually landed — don't mark ready on a silent failure.
+    if proc.returncode != 0 or not _r_spec_points_into(_R_SPEC_NAME, tenv):
+        raise RuntimeError(
+            "R kernel registration failed (IRkernel::installspec): "
+            + ((proc.stderr or proc.stdout or "").strip()[-500:] or "no kernelspec written"))
     _r_spec_ready = True
     return _R_SPEC_NAME
 
