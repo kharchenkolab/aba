@@ -45,7 +45,7 @@ def add_edge(source_id: str, target_id: str, rel_type: str,
     _edge_validate(source_id, target_id, rel_type)
     now = _utcnow()
     with _conn() as c:
-        c.execute(
+        cur = c.execute(
             "INSERT OR IGNORE INTO entity_edges "
             "(source_id, target_id, rel_type, metadata, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -53,15 +53,22 @@ def add_edge(source_id: str, target_id: str, rel_type: str,
              json.dumps(metadata) if metadata else None, now),
         )
         c.commit()
+        inserted = cur.rowcount > 0
+    # Only emit if a row actually landed (INSERT OR IGNORE may dedupe).
+    if inserted:
+        _emit_edge_op("add", source_id, target_id, rel_type, metadata)
 
 
 def remove_edge(source_id: str, target_id: str, rel_type: str) -> None:
     with _conn() as c:
-        c.execute(
+        cur = c.execute(
             "DELETE FROM entity_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
             (source_id, target_id, rel_type),
         )
         c.commit()
+        removed = cur.rowcount > 0
+    if removed:
+        _emit_edge_op("remove", source_id, target_id, rel_type, None)
 
 
 def edges_from(source_id: str) -> list[dict]:
@@ -100,3 +107,18 @@ def edges_to(target_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ─── Recovery archive emit ────────────────────────────────────────────────
+def _emit_edge_op(op: str, src: str, dst: str, rel: str, meta: Optional[dict]) -> None:
+    """Best-effort scribe enqueue: append the edge op to the FS recovery
+    archive's edges.jsonl. Failures swallowed — the DB write succeeded."""
+    try:
+        from core.recovery import get_scribe, EdgeOp        # noqa: PLC0415
+        from core.config import current_project_id          # noqa: PLC0415
+        get_scribe().enqueue(EdgeOp(
+            pid=current_project_id(),
+            op=op, src=src, dst=dst, rel=rel, meta=meta,
+        ))
+    except Exception:
+        _log.debug("scribe emit_edge_op failed (%s %s→%s %s)", op, src, dst, rel, exc_info=True)

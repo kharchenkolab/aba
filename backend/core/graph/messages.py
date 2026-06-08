@@ -27,7 +27,12 @@ def append_message(
             (entity_id, focus_entity_id, thread_id, role, json.dumps(content_blocks), ts),
         )
         c.commit()
-        return cur.lastrowid
+        mid = cur.lastrowid
+    _emit_message_appended({
+        "id": mid, "entity_id": entity_id, "focus_entity_id": focus_entity_id,
+        "thread_id": thread_id, "role": role, "content": content_blocks, "ts": ts,
+    })
+    return mid
 
 
 def get_messages(entity_id: str = WORKSPACE_ID, thread_id: Optional[str] = None) -> list[dict]:
@@ -65,6 +70,7 @@ def clear_messages(entity_id: str = WORKSPACE_ID):
     with _conn() as c:
         c.execute("DELETE FROM messages WHERE entity_id = ?", (entity_id,))
         c.commit()
+    _emit_messages_cleared(entity_id, thread_id=None)
 
 
 def get_all_messages():
@@ -75,3 +81,26 @@ def get_all_messages():
 def clear_history():
     """Legacy: clears workspace-scoped messages only."""
     clear_messages(WORKSPACE_ID)
+
+
+# ─── Recovery archive emit ────────────────────────────────────────────────
+def _emit_message_appended(row: dict) -> None:
+    try:
+        from core.recovery import get_scribe, MessageAppended  # noqa: PLC0415
+        from core.config import current_project_id             # noqa: PLC0415
+        get_scribe().enqueue(MessageAppended(pid=current_project_id(), row=row))
+    except Exception:
+        pass
+
+
+def _emit_messages_cleared(entity_id: str, thread_id: Optional[str]) -> None:
+    try:
+        from core.recovery import get_scribe, MessagesCleared  # noqa: PLC0415
+        from core.config import current_project_id             # noqa: PLC0415
+        get_scribe().enqueue(MessagesCleared(
+            pid=current_project_id(),
+            entity_id=entity_id,
+            thread_id=thread_id,
+        ))
+    except Exception:
+        pass
