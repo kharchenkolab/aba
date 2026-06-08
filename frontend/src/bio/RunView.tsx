@@ -5,7 +5,7 @@
  * focus (succinct cells: counts + links, not every artifact). Running/failed
  * runs foreground the log; queued runs foreground the queue.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Entity } from '../types'
 import { EntityGlyph } from '../components/icons'
 import ResultList, { type OutputItem } from '../components/ResultList'
@@ -130,7 +130,41 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const toggle = (p: 'command' | 'inputs' | 'log') => setPanel(c => c === p ? null : p)
 
   const outputs = m.outputs ?? []
-  const plotOutputs = outputs.filter(o => o.kind === 'figure' || o.kind === 'view')
+  // Hide superseded revisions from the Plots strip. When the agent
+  // revises a figure (make_revision), both the original and the new
+  // revision land in the run dir and the manifest lists both. We only
+  // want the chain HEAD for each figure — the latest active version.
+  // Map outputs to entities via artifact_id (= exec_id:kind:idx) and
+  // drop any whose entity has a known active descendant via
+  // metadata.revision_of. Outputs without artifact_id (legacy /
+  // unpinned files) are always kept — we can't tell if they're stale.
+  const supersededByDescendant = useMemo(() => {
+    const s = new Set<string>()
+    for (const e of entities) {
+      if (e.status !== 'active') continue
+      const ro = (e.metadata as { revision_of?: string } | undefined)?.revision_of
+      if (ro) s.add(ro)
+    }
+    return s
+  }, [entities])
+  const entityByArtifactId = useMemo(() => {
+    const m: Record<string, typeof entities[number]> = {}
+    for (const e of entities) {
+      if (e.exec_id && e.artifact_kind && e.artifact_idx != null) {
+        m[`${e.exec_id}:${e.artifact_kind}:${e.artifact_idx}`] = e
+      }
+    }
+    return m
+  }, [entities])
+  const isLatestOutput = (it: OutputItem): boolean => {
+    if (!it.artifact_id) return true                 // unpinned/legacy → keep
+    const ent = entityByArtifactId[it.artifact_id]
+    if (!ent) return true                            // no entity yet → keep
+    return !supersededByDescendant.has(ent.id)       // hide if it has a descendant
+  }
+  const plotOutputs = outputs
+    .filter(o => o.kind === 'figure' || o.kind === 'view')
+    .filter(isLatestOutput)
   // Option B / Phase 4: prefer the canonical artifact-pin path when the
   // manifest entry carries an artifact_id. Falls back to the legacy
   // /pin-output disk-scan path for older manifests that don't have it
