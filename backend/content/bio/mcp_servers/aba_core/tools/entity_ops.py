@@ -460,3 +460,209 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
             "status_states": spec.status_states(),
             "status_initial": spec.initial_status(),
         }
+
+    @mcp.tool()
+    def view_artifact(entity_id: str | None = None,
+                      path: str | None = None,
+                      page: int = 1,
+                      aba_ctx_id: str | None = None) -> dict:
+        """LOOK at an artifact — image, PDF, table, or short text doc —
+        so the agent can VERIFY what's actually in it rather than
+        reasoning open-loop from the source code that produced it.
+
+        For images and PDFs the result carries the rendered image
+        DIRECTLY into the next turn's context as a vision content block;
+        the model SEES the figure. For tables (CSV/TSV/Parquet) and short
+        text artifacts (Markdown, JSON, YAML, logs) the result carries a
+        text preview (shape + head for tables; first ~3 KB for text).
+
+        USE THIS:
+          - After produce-then-verify steps where the user asked for a
+            specific VISUAL change ("legend on right", "remove the grid",
+            "Figure 3: in bold", "no in-plot color key"). Don't claim the
+            change landed based on the code you wrote — verify by
+            looking.
+          - When you need to know what's actually in a file the user
+            referred to (e.g. "what's in the CSV the run produced?").
+          - When iterating on a composed figure / manuscript / report —
+            view_artifact each revision to catch wrong layout drift
+            BEFORE the user has to.
+
+        Arguments (one of `entity_id` or `path` is required):
+          entity_id — id of an entity with an artifact_path (figure,
+            table, dataset, file, …). Looks up the artifact URL.
+          path      — explicit filesystem path (absolute or relative to
+            the project's artifacts/work area). Use for files that
+            aren't entities (intermediate outputs, downloads, …).
+          page      — for multi-page PDFs: which page to rasterize
+            (1-indexed; default 1). Ignored for non-PDF inputs.
+
+        Returns by file kind:
+          - PNG/JPG/GIF/WebP: vision envelope (image block + preamble).
+          - PDF: rasterize requested page → vision envelope.
+          - CSV/TSV/Parquet: text preview (shape, dtypes, head 20 rows).
+          - Markdown/TXT/LOG/JSON/YAML/HTML: first ~3 KB as text.
+          - SVG / unknown / binary: {"error": "..."} with hint.
+
+        On error, returns {"error": "..."} (entity not found / artifact
+        missing on disk / unsupported format / rasterization failure).
+        """
+        import base64
+        from pathlib import Path as _P
+        from core.graph.entities import get_entity
+
+        # Resolve (entity_id | path) → disk path, with light metadata.
+        title = ""
+        ent_type: str | None = None
+        ent_meta: dict = {}
+        ap_url: str | None = None
+        if entity_id and path:
+            return {"error": "pass entity_id OR path, not both"}
+        if not entity_id and not path:
+            return {"error": "pass entity_id or path"}
+        if entity_id:
+            e = get_entity(entity_id)
+            if not e:
+                return {"error": f"entity {entity_id} not found"}
+            ent_type = e.get("type") or "entity"
+            title = (e.get("title") or "").strip()
+            ent_meta = e.get("metadata") or {}
+            ap_url = e.get("artifact_path") or ""
+            if not ap_url:
+                return {"error": f"entity {entity_id} has no artifact_path "
+                                 f"(type={ent_type})"}
+            try:
+                from main import _artifact_url_to_path
+                disk = _artifact_url_to_path(ap_url) if ap_url.startswith("/artifacts/") else None
+            except Exception:  # noqa: BLE001
+                disk = None
+            if disk is None:
+                disk = _P(ap_url)
+        else:
+            disk = _P(path).expanduser().resolve()
+
+        if not disk.exists():
+            return {"error": f"artifact missing on disk: {disk}"}
+        if disk.is_dir():
+            return {"error": f"path is a directory, not an artifact: {disk}"}
+
+        suffix = disk.suffix.lower()
+
+        # ── Image branch ────────────────────────────────────────────
+        if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+            media_type = {".png": "image/png", ".jpg": "image/jpeg",
+                          ".jpeg": "image/jpeg", ".gif": "image/gif",
+                          ".webp": "image/webp"}[suffix]
+            try:
+                img_bytes = disk.read_bytes()
+            except OSError as ex:
+                return {"error": f"failed to read image bytes: {ex}"}
+            return _vision_envelope(entity_id, ent_type, title, str(ap_url or disk),
+                                    ent_meta, disk.name, img_bytes, media_type)
+
+        # ── PDF branch ──────────────────────────────────────────────
+        if suffix == ".pdf":
+            try:
+                import pypdfium2 as pdfium  # type: ignore[import-not-found]
+            except ImportError:
+                return {"error": "pypdfium2 not installed; cannot render PDF"}
+            try:
+                doc = pdfium.PdfDocument(str(disk))
+                n_pages = len(doc)
+                if n_pages == 0:
+                    return {"error": f"PDF has 0 pages: {disk}"}
+                idx = max(1, min(int(page or 1), n_pages)) - 1
+                pg = doc[idx]
+                page_w_pt = max(50, pg.get_width())
+                scale = max(0.5, min(200 / 72, 1600 / page_w_pt))
+                bitmap = pg.render(scale=scale)
+                from io import BytesIO
+                buf = BytesIO()
+                bitmap.to_pil().save(buf, "PNG", optimize=True)
+                img_bytes = buf.getvalue()
+            except Exception as ex:  # noqa: BLE001
+                return {"error": f"PDF rasterize failed: {ex}"}
+            extra = (f" (page {idx + 1}/{n_pages})" if n_pages > 1 else "")
+            return _vision_envelope(entity_id, ent_type, title, str(ap_url or disk),
+                                    ent_meta, disk.name + extra, img_bytes,
+                                    "image/png")
+
+        # ── Tabular branch ──────────────────────────────────────────
+        if suffix in (".csv", ".tsv", ".parquet"):
+            try:
+                import pandas as pd
+                if suffix == ".csv":
+                    df = pd.read_csv(disk, nrows=200)
+                elif suffix == ".tsv":
+                    df = pd.read_csv(disk, sep="\t", nrows=200)
+                else:
+                    df = pd.read_parquet(disk).head(200)
+            except Exception as ex:  # noqa: BLE001
+                return {"error": f"failed to read tabular file: {ex}"}
+            with _pd_display():
+                head_str = df.head(20).to_string(max_colwidth=60)
+            return {"id": entity_id, "type": ent_type, "title": title,
+                    "artifact_path": str(ap_url or disk),
+                    "kind": "table",
+                    "shape": list(df.shape),
+                    "columns": [str(c) for c in df.columns][:50],
+                    "dtypes": {str(c): str(df[c].dtype) for c in df.columns[:50]},
+                    "head_20_rows_text": head_str}
+
+        # ── Short text branch ───────────────────────────────────────
+        if suffix in (".md", ".txt", ".log", ".json", ".yaml", ".yml", ".html", ".py", ".r"):
+            try:
+                raw = disk.read_bytes()
+            except OSError as ex:
+                return {"error": f"failed to read text bytes: {ex}"}
+            text = raw[:3072].decode("utf-8", errors="replace")
+            return {"id": entity_id, "type": ent_type, "title": title,
+                    "artifact_path": str(ap_url or disk),
+                    "kind": "text",
+                    "bytes": len(raw),
+                    "truncated": len(raw) > 3072,
+                    "text_head": text}
+
+        return {"error": f"don't know how to view {suffix or '<no-extension>'} — "
+                         f"supported: PNG/JPG/GIF/WebP, PDF, CSV/TSV/Parquet, "
+                         f"MD/TXT/LOG/JSON/YAML/HTML/PY/R"}
+
+
+def _vision_envelope(entity_id, ent_type, title, ap_str, ent_meta,
+                     display_name, img_bytes, media_type):
+    """Build the standard vision-bearing tool_result envelope."""
+    import base64
+    img_b64 = base64.b64encode(img_bytes).decode("ascii")
+    if entity_id:
+        preamble = (f"Artifact for entity {entity_id} (type={ent_type}, "
+                    f"title={title!r}). Image of {display_name} follows. "
+                    f"Compare to the user's last visual request and report "
+                    f"whether it matches.")
+    else:
+        preamble = (f"Artifact at {ap_str}. Image of {display_name} follows. "
+                    f"Inspect what's actually there.")
+    return {
+        "id": entity_id, "type": ent_type, "title": title,
+        "artifact_path": ap_str,
+        "metadata_summary": {k: ent_meta.get(k) for k in
+                             ("interpretation", "thread_id", "exec_id")
+                             if k in ent_meta},
+        "_vision_blocks": [
+            {"type": "text", "text": preamble},
+            {"type": "image",
+             "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
+        ],
+    }
+
+
+def _pd_display():
+    """Context manager: widen pandas display so head().to_string() is
+    actually readable (default truncates at ~80 chars)."""
+    import contextlib, pandas as pd
+    @contextlib.contextmanager
+    def _cm():
+        with pd.option_context("display.max_columns", 50,
+                               "display.width", 200,
+                               "display.max_colwidth", 60):
+            yield
+    return _cm()
