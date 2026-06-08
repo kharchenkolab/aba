@@ -40,28 +40,56 @@
   // ─── Welcome page ────────────────────────────────────────────────────
   function mountWelcome() {
     renderPage('welcome');
-    const input = document.getElementById('apikey-input');
     const submit = document.getElementById('auth-submit');
     const errEl = document.getElementById('auth-error');
+    const apikeyInput = document.getElementById('apikey-input');
+    const oauthInput = document.getElementById('oauth-input');
+    const tabApi = document.getElementById('tab-apikey');
+    const tabOauth = document.getElementById('tab-oauth');
+    const panelApi = document.getElementById('panel-apikey');
+    const panelOauth = document.getElementById('panel-oauth');
+    let mode = 'apikey';
+
+    function setMode(m) {
+      mode = m;
+      tabApi.classList.toggle('active', m === 'apikey');
+      tabOauth.classList.toggle('active', m === 'oauth');
+      panelApi.hidden = m !== 'apikey';
+      panelOauth.hidden = m !== 'oauth';
+      errEl.textContent = '';
+      (m === 'apikey' ? apikeyInput : oauthInput).focus();
+    }
+    tabApi.addEventListener('click', () => setMode('apikey'));
+    tabOauth.addEventListener('click', () => setMode('oauth'));
 
     submit.addEventListener('click', async () => {
       errEl.textContent = '';
-      const key = input.value.trim();
-      if (!key) { errEl.textContent = 'Paste a key first.'; return; }
       submit.disabled = true;
       try {
-        await fetchJSON('/api/auth/apikey', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ key })
-        });
+        if (mode === 'apikey') {
+          const key = apikeyInput.value.trim();
+          if (!key) throw new Error('Paste a key first.');
+          await fetchJSON('/api/auth/apikey', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key })
+          });
+        } else {
+          const token = oauthInput.value.trim();
+          if (!token) throw new Error('Paste a token first.');
+          await fetchJSON('/api/auth/oauth', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ token })
+          });
+        }
         boot();
       } catch (e) {
         errEl.textContent = (e.message || '').replace(/^\d+\s\S+:\s*/, '');
         submit.disabled = false;
       }
     });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); });
-    input.focus();
+    [apikeyInput, oauthInput].forEach(el =>
+      el.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); }));
+    setMode('apikey');
   }
 
   // ─── Install page ─────────────────────────────────────────────────────

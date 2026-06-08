@@ -37,6 +37,17 @@ h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .row.muted button { color: var(--muted); }
 
+/* Auth method tabs (Welcome) */
+.authtabs { display: flex; gap: 4px; margin: 16px 0 4px;
+  background: var(--soft); padding: 4px; border-radius: 9px; border: 1px solid var(--border); }
+.authtab { flex: 1; padding: 7px 10px; font: inherit; font-size: 13px;
+  background: transparent; color: var(--muted); border: none; border-radius: 6px; cursor: pointer; }
+.authtab:hover { color: var(--fg); }
+.authtab.active { background: white; color: var(--fg); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.authpanel { margin: 8px 0 4px; }
+.authpanel[hidden] { display: none; }
+
 .btn { display: inline-block; padding: 8px 14px; font: inherit;
   background: var(--soft); color: var(--fg); border: 1px solid var(--border);
   border-radius: 8px; cursor: pointer; text-decoration: none; }
