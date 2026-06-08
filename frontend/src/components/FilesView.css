@@ -73,8 +73,17 @@
 }
 
 /* ⋯ menu in the title bar: positioned relative wrapper + popover
-   anchored to the button's bottom-right. */
+   anchored to the button's bottom-right. The glyph is the Unicode
+   horizontal three-dot character (U+22EF MIDLINE HORIZONTAL ELLIPSIS),
+   sized up so it reads as a button-shaped affordance, not text. */
 .files__more-wrap { position: relative; display: inline-flex; }
+.files__more-btn {
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 1px;
+  /* nudge baseline so the glyph optically centers in the 22×22 box */
+  padding-bottom: 2px;
+}
 .files__more-pop {
   position: absolute;
   top: calc(100% + 4px);

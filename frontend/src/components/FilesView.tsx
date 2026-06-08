@@ -185,14 +185,14 @@ function FilesMoreMenu(props: {
   return (
     <span ref={wrapRef} className="files__more-wrap">
       <button
-        className="files__icon-btn"
+        className="files__icon-btn files__more-btn"
         title="More actions"
         aria-label="More actions"
         aria-haspopup="menu"
         aria-expanded={props.open}
         onMouseDown={e => e.stopPropagation()}
         onClick={e => { e.stopPropagation(); props.onToggle() }}
-      ><KebabGlyph /></button>
+      >⋯</button>
       {props.open && (
         <div className="files__more-pop" role="menu">
           <button
@@ -218,7 +218,4 @@ function FolderGlyph() {
 }
 function DownloadGlyph() {
   return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2.5v8" /><path d="M4.5 7L8 10.5 11.5 7" /><path d="M3 13.5h10" /></svg>
-}
-function KebabGlyph() {
-  return <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3.5" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="8" cy="12.5" r="1.2" /></svg>
 }
