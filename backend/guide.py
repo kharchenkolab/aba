@@ -1174,11 +1174,27 @@ async def stream_response(
                 yield sse({"type": "tool_result", "name": tool_name,
                            "result": result_obj, "tool_use_id": block.id})
 
-                tool_result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_str,
-                })
+                # Vision-bearing tool_results (view_figure, etc.): if the
+                # executor packed a list of content blocks under the
+                # `_vision_blocks` envelope key, pass them through to the
+                # API as the tool_result's content directly. The Messages
+                # API supports `content: [{type: "text"}, {type: "image"}, ...]`
+                # in tool_result blocks — that's how an agent can SEE the
+                # rendered figure on the next turn (rather than reasoning
+                # open-loop from its own source code).
+                if (isinstance(result_obj, dict)
+                        and isinstance(result_obj.get("_vision_blocks"), list)):
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_obj["_vision_blocks"],
+                    })
+                else:
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
 
             # Skip writing an empty user message — happens when the FIRST
             # tool_use this iteration triggered an approval halt and nothing
