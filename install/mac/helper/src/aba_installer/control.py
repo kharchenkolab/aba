@@ -67,7 +67,26 @@ def prepare_install_artifacts() -> Path:
     dest = installer_dir() / "aba"
     dest.write_text(launcher.render(launcher.default_context()))
     os.chmod(dest, 0o755)
+    _write_deployment_yaml()
     return dest
+
+
+def _write_deployment_yaml() -> None:
+    """Register the cloned recipe library as a content layer.
+
+    The backend reads $ABA_HOME/deployment.yaml (core/config_layers.py) to
+    find overlay content; without this file the cloned aba-recipes sits on
+    disk but never loads. A layer whose path is missing is skipped silently,
+    so writing this unconditionally is safe even before the clone lands.
+    """
+    recipes = repo_dir() / "aba-recipes"
+    (aba_home() / "deployment.yaml").write_text(
+        "# Auto-written by the ABA installer. Points the backend at the\n"
+        "# cloned recipe library (see core/config_layers.py).\n"
+        "layers:\n"
+        "  - name: aba-recipes\n"
+        f"    path: {recipes}\n"
+    )
 
 
 # ─── SSE helpers ───────────────────────────────────────────────────────────

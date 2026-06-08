@@ -9,8 +9,9 @@ env_vars:
   ABA_HOME: "$HOME/.aba"
   ENV_DIR: "$ABA_HOME/env"
   REPO_DIR: "$ABA_HOME/repo"
-  ABA_ENV_YML_URL: "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"
-  # ABA_ENV_YML_SRC — when set to a local path, used instead of the URL.
+  # Source overrides (ABA_ENV_YML_URL/SRC, ABA_REPO_SRC, ABA_RECIPES_SRC) come
+  # from the environment; URL defaults are inlined as ${VAR:-default} below so
+  # an exported override isn't clobbered by env_vars. See install.yml.
 
 steps:
   - id: pull-aba
@@ -33,7 +34,7 @@ steps:
       Apply any new pinned dependencies from environment.yml. Usually a
       no-op; only takes time when the upstream env actually changed.
     commands:
-      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "$ABA_ENV_YML_URL"; fi'
+      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml}"; fi'
       - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
 

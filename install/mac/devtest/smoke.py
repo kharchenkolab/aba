@@ -69,8 +69,20 @@ def _isolated_env() -> dict[str, str]:
         MAMBA_ROOT_PREFIX=str(MAMBA_PKGS),
         ABA_ENV_YML_SRC=str(ENV_YML),
         ABA_REPO_SRC=str(REPO_ROOT),
-        ABA_RECIPES_SRC=str(EMPTY_RECIPES),
+        # SSH clones must still work despite the redirected $HOME — the key
+        # lives in the agent (SSH_AUTH_SOCK is inherited); we just need GitHub's
+        # host key accepted without a known_hosts under the fake home.
+        GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new",
     )
+    # aba-recipes: clone the real repo when ABA_RECIPES_URL is exported
+    # (e.g. git@github.com:kharchenkolab/aba-recipes.git); otherwise stand in
+    # an empty dir so recipe content isn't a variable in mechanics testing.
+    recipes_url = os.environ.get("ABA_RECIPES_URL")
+    if recipes_url:
+        env["ABA_RECIPES_URL"] = recipes_url
+        env.pop("ABA_RECIPES_SRC", None)
+    else:
+        env["ABA_RECIPES_SRC"] = str(EMPTY_RECIPES)
     # Keep micromamba's own config/cache out of the real $HOME too.
     env.pop("CONDARC", None)
     return env
@@ -117,8 +129,9 @@ def _run_steps(only: list[str] | None) -> int:
     # render targets the isolated tree (control.prepare_install_artifacts
     # reads os.environ).
     os.environ.update({k: env[k] for k in
-                       ("HOME", "ABA_HOME", "MAMBA_ROOT_PREFIX",
-                        "ABA_ENV_YML_SRC", "ABA_REPO_SRC", "ABA_RECIPES_SRC")})
+                       ("HOME", "ABA_HOME", "MAMBA_ROOT_PREFIX", "ABA_ENV_YML_SRC",
+                        "ABA_REPO_SRC", "ABA_RECIPES_SRC", "ABA_RECIPES_URL")
+                       if k in env})
     control, playbook = _import_helper()
 
     # Render the launcher (gap fix #3) before install-launcher runs.
