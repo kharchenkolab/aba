@@ -190,19 +190,14 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     pushHistory(text)
     onSend(text)
     setDraft('')
-    // Defense: the useLayoutEffect on [value] SHOULD reset the height
-    // when value transitions to '', but during rapid streaming render
-    // cycles the textarea has been seen to retain its stretched height
-    // (PK 2026-06-07 — "the chat input gets stretched up even though
-    // there's nothing typed"). RAF schedules a forced reset AFTER
-    // React's batch commits, so any layout that landed in the wrong
-    // state corrects on the next frame.
+    // Defense: the useLayoutEffect on [value] SHOULD clear the inline
+    // height when value transitions to '', but during rapid streaming
+    // render cycles the textarea has been seen to retain its stretched
+    // height (PK 2026-06-07 + 2026-06-08). RAF schedules a forced
+    // reset AFTER React's batch commits.
     requestAnimationFrame(() => {
       const ta = textareaRef.current
-      if (ta && !ta.value) {
-        ta.style.height = 'auto'
-        ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
-      }
+      if (ta && !ta.value) ta.style.height = ''
     })
   }
 
@@ -213,13 +208,27 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   // Also re-runs on `streaming` change: the placeholder text differs
   // between idle and streaming modes, and the auto-grow's first
   // computation can land at the post-prefill stretched height if it
-  // happened before React's commit settled. PK 2026-06-07 reported
-  // the textarea occasionally getting stuck stretched with nothing
-  // typed — adding `streaming` to deps re-runs the recompute at the
-  // next mode transition so it self-heals.
+  // happened before React's commit settled.
+  //
+  // Empty-value branch: skip the scrollHeight measurement entirely and
+  // just CLEAR the inline height, letting CSS (`min-height: 22px` +
+  // `rows={1}`) govern the natural single-line size. The measurement
+  // path had an intermittent bug — in narrow-column layouts the
+  // useLayoutEffect would read a stale scrollHeight between commit and
+  // paint, leaving the textarea stuck at the previous MAX_GROW_PX
+  // height even though the value was empty. Symptom (PK 2026-06-08):
+  // empty textarea sitting at ~half column height; typing then
+  // recomputed correctly and the textarea visibly shrunk to fit. By
+  // not measuring at all when value is empty, the only state worth
+  // recomputing is the non-empty case where the value's content
+  // actually drives height.
   useLayoutEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
+    if (!value) {
+      ta.style.height = ''
+      return
+    }
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
     // After a programmatic value set (history recall), park the caret at the end.
@@ -231,10 +240,12 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   }, [value, streaming])
 
   // Recompute the cap on viewport resize (the max is vh-relative).
+  // Same empty-value short-circuit as the useLayoutEffect above.
   useEffect(() => {
     function onResize() {
       const ta = textareaRef.current
       if (!ta) return
+      if (!ta.value) { ta.style.height = ''; return }
       ta.style.height = 'auto'
       ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
     }
