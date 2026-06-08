@@ -23,9 +23,15 @@ fi
 
 mkdir -p "$ABA_HOME/logs"
 
+# Match ONLY this install's backend, by its unique --app-dir. A bare
+# "uvicorn main:app" match is machine-global: a stale uvicorn from a crashed or
+# deleted install would make `up` think we're already running and silently
+# no-op, leaving "connection refused". (pgrep/pkill exclude their own pid.)
+BACKEND_MATCH="uvicorn main:app --app-dir $ABA_REPO/aba/backend"
+
 case "${1:-up}" in
   up)
-    if pgrep -f "uvicorn.*main:app" > /dev/null 2>&1; then
+    if pgrep -f "$BACKEND_MATCH" > /dev/null 2>&1; then
       echo "ABA is already running on http://127.0.0.1:$ABA_PORT"
       exit 0
     fi
@@ -36,22 +42,22 @@ case "${1:-up}" in
     echo "ABA up on http://127.0.0.1:$ABA_PORT (pid $!)"
     ;;
   stop)
-    pkill -f "[u]vicorn main:app" 2>/dev/null || true
+    pkill -f "$BACKEND_MATCH" 2>/dev/null || true
     # Wait for it to actually exit — pkill only signals. Without this, a
     # follow-up `up` (or the Control panel's Restart) races the still-dying
     # process, sees it "already running", and no-ops, leaving ABA down.
     for _ in $(seq 1 20); do
-      pgrep -f "uvicorn.*main:app" > /dev/null 2>&1 || break
+      pgrep -f "$BACKEND_MATCH" > /dev/null 2>&1 || break
       sleep 0.25
     done
-    if pgrep -f "uvicorn.*main:app" > /dev/null 2>&1; then
-      pkill -9 -f "[u]vicorn main:app" 2>/dev/null || true
+    if pgrep -f "$BACKEND_MATCH" > /dev/null 2>&1; then
+      pkill -9 -f "$BACKEND_MATCH" 2>/dev/null || true
     fi
     echo "ABA stopped."
     ;;
   status)
-    if pgrep -f "uvicorn.*main:app" > /dev/null 2>&1; then
-      pid=$(pgrep -f "uvicorn.*main:app" | head -1)
+    if pgrep -f "$BACKEND_MATCH" > /dev/null 2>&1; then
+      pid=$(pgrep -f "$BACKEND_MATCH" | head -1)
       echo "Running (pid $pid) on http://127.0.0.1:$ABA_PORT"
     else
       echo "(not running)"
