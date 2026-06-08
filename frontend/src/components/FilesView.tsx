@@ -6,7 +6,7 @@
  * promote-to-dataset gesture. The same <FileBrowser> renders a Run's output
  * subtree in the Run view (wide variant).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './FilesView.css'
 import type { FileNode } from '../viewers/types'
 import FileBrowser, { type TreeNode } from './FileBrowser'
@@ -32,12 +32,36 @@ function countFiles(n: TreeNode | null): number {
   return c
 }
 
+/** Strip dot-prefixed children (`.exec/`, `.cache/`, etc.) from the tree.
+ *  These are bookkeeping folders the kernel + harvester write — useful
+ *  to the agent's introspection paths, noise to the user. Hidden by
+ *  default; toggled on via the ⋯ menu's "Show system folders". */
+function stripSystemFolders(node: TreeNode): TreeNode {
+  const kids = (node.children ?? [])
+    .filter(c => !c.name.startsWith('.'))
+    .map(stripSystemFolders)
+  return { ...node, children: kids }
+}
+
 export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, targetPath, targetNonce, projectId }: Props) {
   const [root, setRoot] = useState<TreeNode | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [bump, setBump] = useState(0)
+  // System-folder visibility (`.exec/`, `.cache/`, …). Off by default;
+  // persisted across mounts via sessionStorage so the toggle sticks
+  // through view changes without leaking across browser sessions.
+  const [showSystem, setShowSystem] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('filesview:show-system') === '1' }
+    catch { return false }
+  })
+  const setShowSystemPersisted = (v: boolean) => {
+    setShowSystem(v)
+    try { sessionStorage.setItem('filesview:show-system', v ? '1' : '0') }
+    catch { /* storage unavailable — degrade to in-memory */ }
+  }
+  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -81,7 +105,15 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, t
     }
   }
 
-  const fileCount = countFiles(root)
+  // Apply the system-folder filter once per (root, showSystem) change.
+  // The filtered tree is what the user sees + what the file-count badge
+  // reflects (badge always counts user-visible files).
+  const visibleRoot = useMemo(() => {
+    if (!root) return null
+    return showSystem ? root : stripSystemFolders(root)
+  }, [root, showSystem])
+
+  const fileCount = countFiles(visibleRoot)
   const titleSlot = (
     <span className="tree__tab-badge">
       <FolderGlyph />
@@ -92,13 +124,20 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, t
   const actionsSlot = (
     <>
       <a className="files__icon-btn" href="/api/files/download" title="Download the whole tree as .zip" download aria-label="Download all"><DownloadGlyph /></a>
-      <button className="files__icon-btn" onClick={materialize} title="Materialize on disk (symlinks → canonical artifacts)" aria-label="Materialize folder"><KebabGlyph /></button>
+      <FilesMoreMenu
+        open={menuOpen}
+        showSystem={showSystem}
+        onToggle={() => setMenuOpen(v => !v)}
+        onClose={() => setMenuOpen(false)}
+        onMaterialize={() => { setMenuOpen(false); materialize() }}
+        onToggleSystem={() => { setShowSystemPersisted(!showSystem); setMenuOpen(false) }}
+      />
     </>
   )
 
   return (
     <FileBrowser
-      root={root}
+      root={visibleRoot}
       focusedId={focusedId}
       onFocus={onFocus}
       onViewFile={onViewFile}
@@ -113,6 +152,64 @@ export default function FilesView({ focusedId, onFocus, onViewFile, reloadKey, t
       targetPath={targetPath}
       targetNonce={targetNonce}
     />
+  )
+}
+
+
+/** ⋯ menu for FilesView's title bar. Replaces what was a single
+ *  "materialize" icon button. Two items today; designed to absorb
+ *  future tree-level actions (compress / archive / etc.) without
+ *  growing the visible chrome. */
+function FilesMoreMenu(props: {
+  open: boolean
+  showSystem: boolean
+  onToggle: () => void
+  onClose: () => void
+  onMaterialize: () => void
+  onToggleSystem: () => void
+}) {
+  const wrapRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!props.open) return
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) props.onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') props.onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [props])
+  return (
+    <span ref={wrapRef} className="files__more-wrap">
+      <button
+        className="files__icon-btn"
+        title="More actions"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={props.open}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); props.onToggle() }}
+      ><KebabGlyph /></button>
+      {props.open && (
+        <div className="files__more-pop" role="menu">
+          <button
+            role="menuitem"
+            className="files__more-item"
+            onClick={props.onMaterialize}
+            title="Symlink the project's curated artifacts into a single on-disk folder for downloading"
+          >Materialize on disk</button>
+          <button
+            role="menuitem"
+            className="files__more-item"
+            onClick={props.onToggleSystem}
+            title="Show or hide bookkeeping folders like .exec/ that the kernel + harvester write"
+          >{props.showSystem ? 'Hide system folders' : 'Show system folders'}</button>
+        </div>
+      )}
+    </span>
   )
 }
 
