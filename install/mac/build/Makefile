@@ -15,6 +15,13 @@ SETUP_ZIP  := $(OUT_DIR)/ABA-Setup.zip
 
 VERSION    := $(shell grep -E '^version' $(HELPER_SRC)/pyproject.toml | head -1 | cut -d'"' -f2)
 
+# Source files the tarball is built from — listed as prerequisites so `make`
+# rebuilds when any of them change (without this, make sees the .tgz exists
+# and ships a stale artifact).
+HELPER_FILES := $(shell find $(HELPER_SRC) -type f \
+                  -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' \
+                  -not -path '*.egg-info/*')
+
 .PHONY: all helper setup clean
 
 all: helper setup
@@ -25,10 +32,13 @@ $(OUT_DIR):
 # ─── helper-latest.tgz ─────────────────────────────────────────────────────
 helper: $(HELPER_TGZ)
 
-$(HELPER_TGZ): $(OUT_DIR)
+$(HELPER_TGZ): $(HELPER_FILES) | $(OUT_DIR)
 	@echo "Packing helper $(VERSION) into $@"
 	@TMP=$$(mktemp -d) && \
-	cp -R $(HELPER_SRC) "$$TMP/aba-installer" && \
+	mkdir -p "$$TMP/aba-installer" && \
+	rsync -a --exclude '__pycache__' --exclude '.pytest_cache' \
+	         --exclude '*.egg-info' --exclude '.mypy_cache' \
+	         $(HELPER_SRC)/ "$$TMP/aba-installer/" && \
 	cp $(PLIST_SRC) "$$TMP/aba-installer/com.kharchenkolab.aba.helper.plist.template" && \
 	cd "$$TMP" && \
 	tar -czf $@ aba-installer && \
@@ -38,7 +48,7 @@ $(HELPER_TGZ): $(OUT_DIR)
 # ─── ABA-Setup.zip (the user-facing download) ──────────────────────────────
 setup: $(SETUP_ZIP)
 
-$(SETUP_ZIP): $(SETUP_SRC) $(OUT_DIR)
+$(SETUP_ZIP): $(SETUP_SRC) | $(OUT_DIR)
 	@echo "Packing setup.command into $@"
 	@TMP=$$(mktemp -d) && \
 	cp $(SETUP_SRC) "$$TMP/ABA Setup.command" && \

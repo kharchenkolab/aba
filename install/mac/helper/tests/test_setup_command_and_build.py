@@ -38,10 +38,14 @@ def test_setup_command_downloads_helper_from_github_releases_by_default():
     assert "helper-latest.tgz" in body
 
 
-def test_setup_command_loads_launchagent_when_plist_present():
+def test_setup_command_installs_launchagent_via_helper():
+    # The plist is a template needing path substitution, so setup.command
+    # renders + loads it through the helper's own install_launch_agent()
+    # rather than copying it by hand (which shipped unrendered @@…@@ markers).
     body = SETUP_CMD.read_text()
-    assert "launchctl load -w" in body
-    assert "LaunchAgents" in body
+    assert "install_launch_agent" in body
+    # Installs the package from the aba-installer/ subdir of the tarball.
+    assert "current/aba-installer" in body
 
 
 def test_setup_command_opens_browser_after_helper_ready():

@@ -144,7 +144,16 @@ def _start_op(name: str) -> queue.Queue:
         _op_state.name = name
         _op_state.started_at = time.time()
         _op_state.progress = []   # fresh replay buffer
-    return _run_playbook_in_background(name)
+    try:
+        return _run_playbook_in_background(name)
+    except Exception:
+        # The worker's finally-clause clears the lock, but if we never got
+        # that far (e.g. unknown playbook 400s), clear it here so a failed
+        # start doesn't wedge every future op behind a phantom 409.
+        with _op_lock:
+            _op_state.name = None
+            _op_state.started_at = None
+        raise
 
 
 @router.post("/install")
@@ -285,6 +294,16 @@ def uninstall(keep_runtime: bool = True) -> dict:
     except HTTPException:
         pass
 
+    # Unload + remove the auto-start LaunchAgent. Without this, deleting
+    # installer/ (below) leaves launchd pointing at a now-missing helper
+    # venv, which it then tries to start on every login.
+    launchagent_removed = False
+    try:
+        from aba_installer.launchagent import uninstall_launch_agent
+        launchagent_removed = uninstall_launch_agent()
+    except Exception:
+        pass
+
     # Remove the launcher
     for p in (Path.home() / "bin" / "aba", Path("/usr/local/bin/aba")):
         try:
@@ -310,4 +329,6 @@ def uninstall(keep_runtime: bool = True) -> dict:
                     target.unlink()
                 removed.append(sub)
 
+    if launchagent_removed:
+        removed.append("launchagent")
     return {"ok": True, "removed": removed, "kept_runtime": keep_runtime}

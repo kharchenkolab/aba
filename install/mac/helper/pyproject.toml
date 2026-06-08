@@ -20,4 +20,6 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aba_installer = ["ui/**/*", "playbook.md", "templates/**/*"]
+# *.yml ships the install/update playbooks — without them a non-editable
+# install (the real tarball install) has no playbooks and /api/install 500s.
+aba_installer = ["ui/**/*", "*.yml", "templates/**/*"]
