@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { prepareAssistantText } from '../markdown/prepareAssistantText'
 import type { DisplayMessage, Block, Entity } from '../types'
 import { AgentAvatar } from './icons'
 import './Message.css'
@@ -539,9 +540,13 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
           </div>,
         )
       } else {
+        // prepareAssistantText converts <reasoning>/<thinking> blocks (model
+        // scratchpad fallback when given conflicting context) into Markdown
+        // blockquotes so they render visibly instead of tripping the renderer.
+        const md = prepareAssistantText(b.text)
         out.push(
           <div key={i} className="msg-text">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{b.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{md}</ReactMarkdown>
           </div>,
         )
       }

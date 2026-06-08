@@ -93,14 +93,50 @@ async def _wait_then_fire(job: dict, project_id: str, thread_id: str) -> None:
           file=sys.stderr, flush=True)
 
 
-def _continuation_message_text(job: dict) -> str:
+def _count_artifacts_registered(job: dict, project_id: str | None) -> int:
+    """How many entity rows landed for this job since it started? Used by
+    the continuation message to decide whether the job actually produced
+    anything (Fix #1, 2026-06-08): exit-code 0 + zero artifacts means the
+    pipeline succeeded vacuously (e.g. silently-bad subprocess command),
+    and we MUST NOT tell the agent 'artifacts are now registered'."""
+    if not project_id:
+        return 0
+    started = job.get("started_at") or job.get("created_at")
+    if not started:
+        return 0
+    try:
+        import sqlite3
+        from core.config import project_db_path
+        db = project_db_path(project_id)
+        if not db.exists():
+            return 0
+        c = sqlite3.connect(db)
+        try:
+            n = c.execute(
+                "SELECT COUNT(*) FROM entities "
+                "WHERE created_at >= ? AND id != 'workspace' "
+                "AND type IN ('figure','table','cell','analysis')",
+                (started,),
+            ).fetchone()[0]
+        finally:
+            c.close()
+        return int(n)
+    except Exception:
+        return 0
+
+
+def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     """The synthetic user message the Guide sees as fresh evidence. Starts
     with the literal `[continuation: …]` prefix so the frontend can render
     it with a distinct badge instead of the user avatar.
 
-    Keep this generic — the Guide already has the plan + the run's
-    registered artifacts in its history; we just need to wake it up and
-    tell it to continue."""
+    Three branches: failed (explicit error), done-with-artifacts (real
+    success), and done-with-NO-artifacts (silent failure — agent should
+    investigate the log, not trust the 'finished' claim).
+
+    Keep the success-with-artifacts case generic — the Guide already has
+    the plan + the run's registered artifacts in its history; we just
+    need to wake it up and tell it to continue."""
     title = job.get("title") or "background job"
     job_id = job.get("id") or "?"
     status = job.get("status") or "done"
@@ -114,10 +150,35 @@ def _continuation_message_text(job: dict) -> str:
             f"decide whether to retry / fix / give up, and either continue "
             f"the plan or summarize what went wrong. Don't silently move on."
         )
+
+    n_artifacts = _count_artifacts_registered(job, project_id)
+    if n_artifacts == 0:
+        # Job exited 0 but produced no registered artifacts. This is the
+        # silent-failure shape (e.g. Rscript wrapper ate the script arg,
+        # subprocess no-op'd, kernel produced no plots). DO NOT claim
+        # artifacts are registered when none are.
+        tail = (job.get("log_tail") or "").strip()
+        tail_blurb = ""
+        if tail:
+            short_tail = tail[-400:] if len(tail) > 400 else tail
+            tail_blurb = f"\n\nLog tail:\n```\n{short_tail}\n```"
+        return (
+            f"[continuation: background job `{job_id}` ({title}) finished — "
+            f"but no new artifacts were registered]\n\n"
+            f"The job's worker exited cleanly, but nothing was produced. "
+            f"Possibilities: the script no-op'd (silently swallowed args / "
+            f"wrong interpreter), wrote outputs to the wrong directory, "
+            f"or skipped the artifact-producing steps. Inspect the job "
+            f"directory's run.log to see what actually happened, then "
+            f"either re-run with the bug fixed or summarize the failure."
+            f"{tail_blurb}"
+        )
+
     return (
-        f"[continuation: background job `{job_id}` ({title}) finished]\n\n"
-        f"The background job you submitted has completed. Any new artifacts "
-        f"are now registered to this thread's Run. Continue with the next "
+        f"[continuation: background job `{job_id}` ({title}) finished — "
+        f"{n_artifacts} new artifact{'s' if n_artifacts != 1 else ''} registered]\n\n"
+        f"The background job you submitted has completed. The new artifacts "
+        f"are registered to this thread's Run. Continue with the next "
         f"step of the plan you were following — read the prior plan in this "
         f"thread to remember what comes next. If the plan is done, summarize "
         f"results and stop."
@@ -138,7 +199,7 @@ async def _fire(job: dict, project_id: str, thread_id: str) -> None:
               f"{job.get('id')}: {e}", file=sys.stderr, flush=True)
         return
 
-    cont_text = _continuation_message_text(job)
+    cont_text = _continuation_message_text(job, project_id=project_id)
     focus_entity_id = job.get("focus_entity_id") or "workspace"
 
     from core.runtime import turn_executor
