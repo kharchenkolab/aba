@@ -267,14 +267,21 @@ def refresh_by_title_links(project_dir: Path) -> dict:
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
     try:
-        # Read entities
-        entities = c.execute("SELECT * FROM entities").fetchall()
+        # Read entities (tolerate uninitialized schema — some legacy project
+        # DBs exist as empty files without our tables yet)
+        try:
+            entities = c.execute("SELECT * FROM entities").fetchall()
+        except sqlite3.OperationalError:
+            return counts
         # Read superseded set (dst of any wasRevisionOf edge)
-        superseded = {
-            r["target_id"] for r in c.execute(
-                "SELECT target_id FROM entity_edges WHERE rel_type = 'wasRevisionOf'"
-            ).fetchall()
-        }
+        try:
+            superseded = {
+                r["target_id"] for r in c.execute(
+                    "SELECT target_id FROM entity_edges WHERE rel_type = 'wasRevisionOf'"
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            superseded = set()
     finally:
         c.close()
 
@@ -338,46 +345,71 @@ def refresh_by_title_links(project_dir: Path) -> dict:
 
 def refresh_project_link_at_root(project_dir: Path, registry_row: Optional[dict] = None) -> Optional[Path]:
     """Refresh the runtime-root `projects-by-title/<slug>` symlink + TITLE.txt
-    for one project. Reads title from registry_row if supplied, else from
-    project.json on disk.
+    for one project. Title source priority:
+      1. registry_row arg (if supplied)
+      2. project.json sidecar (if present)
+      3. workspace-level registry.json keyed by pid (legacy projects)
 
-    Returns the symlink path written, or None if nothing was written
-    (e.g. project.json missing AND no registry_row supplied).
+    Returns the symlink path written, or None if no title found anywhere.
     """
     import json as _json
     project_dir = Path(project_dir).resolve()
     pid = project_dir.name
     if registry_row is None:
+        # Try project.json (written by the scribe in newer projects)
         pj = project_dir / "project.json"
-        if not pj.exists():
-            return None
-        try:
-            data = _json.loads(pj.read_text())
-            registry_row = data.get("registry") or {}
-        except Exception:
-            return None
+        if pj.exists():
+            try:
+                data = _json.loads(pj.read_text())
+                registry_row = data.get("registry") or {}
+            except Exception:
+                registry_row = {}
+        # Fall back to the workspace registry (legacy projects without project.json)
+        if not (registry_row and registry_row.get("name")):
+            workspace_registry = project_dir.parent / "registry.json"
+            if workspace_registry.exists():
+                try:
+                    reg = _json.loads(workspace_registry.read_text())
+                    if isinstance(reg, list):
+                        row = next((r for r in reg if r.get("id") == pid), None)
+                        if row:
+                            registry_row = row
+                except Exception:
+                    pass
+    if not registry_row:
+        return None
     title = (registry_row.get("name") or registry_row.get("display_name") or "").strip()
     # TITLE.txt inside the project dir
     try:
         (project_dir / "TITLE.txt").write_text(title_file_contents(title))
     except Exception:
         pass
-    # projects-by-title symlink at runtime root
+    # projects-by-title symlink at runtime root.
+    # Three sub-cases to handle for idempotent re-runs:
+    #   A) Our pid has no link yet → pick a slug; collision-suffix if needed.
+    #   B) Our pid is already linked under the *desired* name → no-op.
+    #   C) Our pid is linked under a stale name (rename) → clear all stale
+    #      entries-pointing-at-us, then pick the new slug.
     runtime_root = project_dir.parent.parent  # …/projects/<pid> → …
     parent = runtime_root / "projects-by-title"
     spec = compute_project_link(pid, title)
     taken = existing_slugs_in(parent)
-    # Clear any prior link that pointed at THIS pid (idempotent re-runs after
-    # a rename — we don't have the cached previous name in this code path).
+    # Find every existing entry pointing at THIS pid.
+    ours = set()
     for name in list(taken):
         try:
             t = os.readlink(parent / name)
-            if t.endswith(f"projects/{pid}") or t == f"../projects/{pid}":
-                if name != spec.link_name:
-                    clear_symlink(parent / name)
-                    taken.discard(name)
         except OSError:
-            pass
+            continue
+        if t == spec.target or t.endswith(f"projects/{pid}"):
+            ours.add(name)
+            taken.discard(name)   # exclude from the "taken by others" set
+    # B) Already linked under the desired name → idempotent no-op
+    if spec.link_name in ours and len(ours) == 1:
+        return parent / spec.link_name
+    # C) Stale links — clear them
+    for name in ours:
+        clear_symlink(parent / name)
     actual = pick_slug(spec.link_name, taken=taken, fallback_id=spec.fallback_id, ext="")
     link_path = parent / actual
     atomic_symlink(spec.target, link_path)
