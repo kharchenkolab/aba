@@ -50,6 +50,12 @@ focus:
   # column anymore — there isn't one.
   agent_sees: [title, artifact_path, exec_id, producing_params,
                parent_summary, advisor_notes, tags, notes]
+  # Figures are the artifact: pixels and the code that made them. The
+  # generic update primitive can rename + tag, but artifact_path /
+  # exec_id / producing_params are produced state — to change a figure,
+  # use make_revision (creates a new figure, points wasRevisionOf at
+  # the original).
+  agent_can_update: [title, notes, tags]
 
 ui:
   panel: figure              # Frontend dispatch key for Phase 9 registry.

@@ -35,6 +35,9 @@ focus:
   # assembler resolves code through lookup_code_for_entity.
   agent_sees: [title, artifact_path, exec_id, parent_summary,
                tags, notes]
+  # Same shape as figure — the table IS its artifact; structural
+  # changes go through make_revision.
+  agent_can_update: [title, notes, tags]
 
 ui:
   panel: table

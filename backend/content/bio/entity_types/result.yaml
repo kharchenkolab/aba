@@ -38,6 +38,12 @@ allowed_edges:
 focus:
   agent_sees: [title, interpretation, members_summary, origin,
                parent_summary, tags, notes]
+  # Fields the generic update_entity_fields tool may write. Mirrors what
+  # the HTTP PATCH /api/entities/{id} surface allows for a Result
+  # (interpretation flips interpretation_origin → 'ai' downstream).
+  # Member-list ops stay on the typed surface (add_result_member /
+  # remove_result_member / make_revision) since they touch edges.
+  agent_can_update: [title, notes, tags, interpretation]
 
 ui:
   panel: result

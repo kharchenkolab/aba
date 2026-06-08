@@ -26,6 +26,7 @@ allowed_edges:
 
 focus:
   agent_sees: [title, text, parent_summary, tags, notes]
+  agent_can_update: [title, notes, tags, text]
 
 ui:
   panel: narrative
