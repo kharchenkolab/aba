@@ -68,6 +68,41 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_job_run_log(result_obj: dict, stdout: str, stderr: str,
+                       job_id: str, project_id: str) -> None:
+    """Persist combined stdout + stderr to <job_dir>/run.log so a later
+    agent turn can read what the job actually did. The job_dir is the
+    per-job scratch dir created by run_python_code (it lands a
+    `script.py` and any artifacts there). We write next to those.
+
+    Fix #2 (2026-06-08): without this, agents who needed to debug a
+    silently-failing background job had to re-submit the job with
+    explicit subprocess redirection — wasting a 10-minute round-trip."""
+    from pathlib import Path as _P
+    # run_python_code returns the working dir as `cwd` (or `workdir`).
+    cwd = result_obj.get("cwd") or result_obj.get("workdir")
+    # Fallback: per-project scratch convention used by the executor.
+    if not cwd:
+        try:
+            from core.config import project_work_dir
+            cwd = str(project_work_dir(project_id) / job_id)
+        except Exception:
+            return
+    if not cwd:
+        return
+    log_path = _P(cwd) / "run.log"
+    parts: list[str] = []
+    if stdout:
+        parts.append("=== STDOUT ===\n" + stdout.rstrip())
+    if stderr:
+        parts.append("=== STDERR ===\n" + stderr.rstrip())
+    rc = result_obj.get("returncode")
+    if rc is not None:
+        parts.append(f"=== EXIT {rc} ===")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("\n\n".join(parts) + "\n")
+
+
 async def _continue_after_failure(job_id: str, lookup_pid: str | None,
                                    effective_pid: str) -> None:
     """Fire the continuation hook for a job that just failed so the agent
@@ -196,7 +231,20 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
         stdout = result_obj.get("stdout", "")
         stderr = result_obj.get("stderr", "")
         log_tail = (stdout[-1500:] + ("\n" + stderr[-500:] if stderr else "")).strip()
+        # Fix #2 (2026-06-08): always persist stdout+stderr to <job_dir>/run.log
+        # so the agent can read what the job actually did without needing to
+        # re-run with explicit subprocess redirection. The job_dir is the
+        # work dir created by run_python_code; it returns it as `cwd` in
+        # result_obj. Best-effort; never blocks the runner.
+        try:
+            _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
+        except Exception:  # noqa: BLE001
+            pass
         if result_obj.get("returncode") != 0:
+            try:
+                _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
+            except Exception:  # noqa: BLE001
+                pass
             update_job(job_id, project_id=project_id, status="failed",
                        error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
                        log_tail=log_tail, finished_at=_utcnow())
