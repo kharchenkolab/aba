@@ -47,6 +47,10 @@ h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; }
   box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .authpanel { margin: 8px 0 4px; }
 .authpanel[hidden] { display: none; }
+.oauth-fallback { margin-top: 14px; }
+.oauth-fallback summary { font-size: 12px; }
+#oauth-status { margin: 10px 0 0; }
+#oauth-status[hidden] { display: none; }
 
 .btn { display: inline-block; padding: 8px 14px; font: inherit;
   background: var(--soft); color: var(--fg); border: 1px solid var(--border);

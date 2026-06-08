@@ -42,9 +42,10 @@ def build_app() -> FastAPI:
         return {"ok": True, "version": __version__}
 
     from aba_installer.control import router as control_router
-    from aba_installer.auth import router as auth_router
+    from aba_installer.auth import router as auth_router, callback_router as oauth_callback_router
     app.include_router(control_router)
     app.include_router(auth_router)
+    app.include_router(oauth_callback_router)  # /callback for Sign in with Claude.ai
 
     # Static UI bundle. Serves /ui/<file> and / (returns index.html).
     ui_dir = Path(__file__).resolve().parent / "ui"

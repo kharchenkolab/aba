@@ -111,6 +111,41 @@ def test_oauth_and_apikey_are_mutually_exclusive(client, tmp_aba_home):
     assert "ABA_LLM_CREDENTIAL" not in text
 
 
+def test_oauth_start_returns_authorize_url(client):
+    r = client.post("/api/auth/oauth/start")
+    assert r.status_code == 200
+    url = r.json()["authorize_url"]
+    assert url.startswith("https://claude.ai/oauth/authorize?")
+    for p in ("client_id=", "code_challenge=", "code_challenge_method=S256",
+              "redirect_uri=", "state="):
+        assert p in url
+    # Poll now reports the flow in progress
+    assert client.get("/api/auth/oauth/poll").json()["status"] == "pending"
+
+
+def test_oauth_callback_rejects_bad_state(client):
+    client.post("/api/auth/oauth/start")
+    r = client.get("/callback", params={"code": "x", "state": "wrong-state"})
+    assert r.status_code == 400
+    assert client.get("/api/auth/oauth/poll").json()["status"] == "error"
+
+
+def test_oauth_callback_exchanges_and_persists(client, tmp_aba_home, monkeypatch):
+    from aba_installer import auth
+    monkeypatch.setattr(auth, "_exchange_code",
+                        lambda code, verifier, redirect_uri: "sk-ant-oat01-fromflow")
+    start = client.post("/api/auth/oauth/start").json()
+    # Recover the state the helper generated (it's in the authorize URL)
+    import urllib.parse as up
+    state = up.parse_qs(up.urlparse(start["authorize_url"]).query)["state"][0]
+    r = client.get("/callback", params={"code": "authcode", "state": state})
+    assert r.status_code == 200
+    assert client.get("/api/auth/oauth/poll").json()["status"] == "done"
+    text = (tmp_aba_home / "config.env").read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in text and "sk-ant-oat01-fromflow" in text
+    assert "ABA_LLM_CREDENTIAL=oauth_cc" in text
+
+
 def test_clear_credentials_removes_key_lines(client, tmp_aba_home):
     client.post("/api/auth/apikey", json={"key": VALID_KEY})
     r = client.post("/api/auth/clear")

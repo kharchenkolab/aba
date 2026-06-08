@@ -56,39 +56,80 @@
       tabOauth.classList.toggle('active', m === 'oauth');
       panelApi.hidden = m !== 'apikey';
       panelOauth.hidden = m !== 'oauth';
+      // The bottom Continue button is the API-key action; OAuth uses its own
+      // "Sign in" button (or the paste fallback's button).
+      submit.hidden = m !== 'apikey';
       errEl.textContent = '';
-      (m === 'apikey' ? apikeyInput : oauthInput).focus();
+      if (m === 'apikey') apikeyInput.focus();
     }
     tabApi.addEventListener('click', () => setMode('apikey'));
     tabOauth.addEventListener('click', () => setMode('oauth'));
 
-    submit.addEventListener('click', async () => {
+    // Sign in with Claude.ai — browser OAuth. Opens claude.ai, then polls
+    // until the helper's /callback completes the handshake.
+    const signin = document.getElementById('oauth-signin');
+    const oauthStatus = document.getElementById('oauth-status');
+    let polling = null;
+    signin.addEventListener('click', async () => {
       errEl.textContent = '';
-      submit.disabled = true;
+      signin.disabled = true;
+      oauthStatus.hidden = false;
+      oauthStatus.textContent = 'Opening claude.ai… complete sign-in there, then come back.';
       try {
-        if (mode === 'apikey') {
-          const key = apikeyInput.value.trim();
-          if (!key) throw new Error('Paste a key first.');
-          await fetchJSON('/api/auth/apikey', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ key })
-          });
-        } else {
-          const token = oauthInput.value.trim();
-          if (!token) throw new Error('Paste a token first.');
-          await fetchJSON('/api/auth/oauth', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ token })
-          });
-        }
+        const { authorize_url } = await fetchJSON('/api/auth/oauth/start', { method: 'POST' });
+        window.open(authorize_url, '_blank');
+        if (polling) clearInterval(polling);
+        polling = setInterval(async () => {
+          let s;
+          try { s = await fetchJSON('/api/auth/oauth/poll'); } catch (_) { return; }
+          if (s.status === 'done') {
+            clearInterval(polling);
+            oauthStatus.textContent = 'Signed in ✓';
+            boot();
+          } else if (s.status === 'error') {
+            clearInterval(polling);
+            signin.disabled = false;
+            oauthStatus.hidden = true;
+            errEl.textContent = s.error || 'Sign-in failed. Try again, or paste a token.';
+          }
+        }, 1500);
+      } catch (e) {
+        signin.disabled = false;
+        oauthStatus.hidden = true;
+        errEl.textContent = (e.message || '').replace(/^\d+\s\S+:\s*/, '');
+      }
+    });
+
+    async function submitCreds(url, payload, btn) {
+      errEl.textContent = '';
+      btn.disabled = true;
+      try {
+        await fetchJSON(url, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
         boot();
       } catch (e) {
         errEl.textContent = (e.message || '').replace(/^\d+\s\S+:\s*/, '');
-        submit.disabled = false;
+        btn.disabled = false;
       }
+    }
+
+    submit.addEventListener('click', () => {
+      const key = apikeyInput.value.trim();
+      if (!key) { errEl.textContent = 'Paste a key first.'; return; }
+      submitCreds('/api/auth/apikey', { key }, submit);
     });
-    [apikeyInput, oauthInput].forEach(el =>
-      el.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); }));
+    apikeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); });
+
+    const pasteBtn = document.getElementById('oauth-paste-submit');
+    pasteBtn.addEventListener('click', () => {
+      const token = oauthInput.value.trim();
+      if (!token) { errEl.textContent = 'Paste a token first.'; return; }
+      submitCreds('/api/auth/oauth', { token }, pasteBtn);
+    });
+    oauthInput.addEventListener('keydown', e => { if (e.key === 'Enter') pasteBtn.click(); });
+
     setMode('apikey');
   }
 
