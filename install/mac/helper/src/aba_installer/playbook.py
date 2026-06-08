@@ -14,8 +14,10 @@ Step shape (see install.yml):
 """
 from __future__ import annotations
 import os
+import queue
 import shlex
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -105,6 +107,7 @@ EventCallback = Callable[[str, dict], None]
 Events:
   step_start  {step_id, title}
   command_start  {step_id, command}
+  command_output {step_id, line}   — one line of live stdout/stderr
   command_end    {step_id, command, exit_code, duration_s, ok}
   step_end       {step_id, ok, error}
 """
@@ -132,7 +135,12 @@ class Executor:
         result = StepResult(step_id=step.id, started_at=started, finished_at=started)
         for cmd in step.commands:
             self._on_event("command_start", {"step_id": step.id, "command": cmd})
-            cmd_result = self._run_one(cmd, env=env, timeout=step.timeout_seconds)
+
+            def _emit_line(line: str, _sid=step.id) -> None:
+                self._on_event("command_output", {"step_id": _sid, "line": line})
+
+            cmd_result = self._run_one(cmd, env=env, timeout=step.timeout_seconds,
+                                       on_line=_emit_line)
             result.commands.append(cmd_result)
             self._on_event("command_end", {
                 "step_id": step.id, "command": cmd,
@@ -174,23 +182,54 @@ class Executor:
             env[k] = os.path.expandvars(raw)
         return env
 
-    def _run_one(self, cmd: str, *, env: dict[str, str], timeout: int) -> CommandResult:
+    def _run_one(self, cmd: str, *, env: dict[str, str], timeout: int,
+                 on_line: Optional[Callable[[str], None]] = None) -> CommandResult:
+        """Run one shell command, streaming output line-by-line to on_line as
+        it arrives (so the UI shows live progress on long steps like the conda
+        env build) while still accumulating the full output. Enforces the
+        timeout even if the process blocks producing no output."""
         t0 = time.monotonic()
-        try:
-            proc = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                env=env, cwd=self._cwd, timeout=timeout,
-            )
-            return CommandResult(
-                command=cmd, exit_code=proc.returncode,
-                stdout=proc.stdout, stderr=proc.stderr,
-                duration_s=time.monotonic() - t0,
-            )
-        except subprocess.TimeoutExpired as e:
-            return CommandResult(
-                command=cmd, exit_code=-1,
-                stdout=(e.stdout or b"").decode("utf-8", errors="replace") if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or ""),
-                stderr=(e.stderr or b"").decode("utf-8", errors="replace") if isinstance(e.stderr, (bytes, bytearray)) else (e.stderr or ""),
-                duration_s=time.monotonic() - t0,
-                timed_out=True,
-            )
+        proc = subprocess.Popen(
+            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, env=env, cwd=self._cwd,
+        )
+        # Read in a thread so a deadline can be enforced even when readline
+        # blocks (a hung command with no output).
+        q: "queue.Queue[Optional[str]]" = queue.Queue()
+
+        def _reader() -> None:
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    q.put(line)
+            finally:
+                q.put(None)  # sentinel: stream closed
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        lines: list[str] = []
+        timed_out = False
+        deadline = t0 + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                item = q.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            lines.append(item)
+            if on_line:
+                on_line(item.rstrip("\n"))
+
+        if timed_out:
+            proc.kill()
+        exit_code = proc.wait()
+        return CommandResult(
+            command=cmd, exit_code=(-1 if timed_out else exit_code),
+            stdout="".join(lines), stderr="",
+            duration_s=time.monotonic() - t0, timed_out=timed_out,
+        )

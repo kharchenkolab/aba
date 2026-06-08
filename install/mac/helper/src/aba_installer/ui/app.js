@@ -31,6 +31,11 @@
         Try restarting via <code>aba up</code>.</p>`;
       return;
     }
+    // Race the heavy, credential-free env download against the user entering
+    // credentials: kick it off the moment the UI loads (idempotent server-side).
+    if (!status.installed) {
+      fetch('/api/install/prewarm', { method: 'POST' }).catch(() => {});
+    }
     const authState = await fetchJSON('/api/auth/status');
     if (!authState.credentials) return mountWelcome();
     if (!status.installed) return mountInstall(status);
@@ -134,15 +139,47 @@
   }
 
   // ─── Install page ─────────────────────────────────────────────────────
+  function lastOutputLine(events) {
+    for (let i = (events || []).length - 1; i >= 0; i--) {
+      const e = events[i];
+      if (e.event === 'command_output' && e.payload && e.payload.line) return e.payload.line;
+    }
+    return '';
+  }
+
   function mountInstall(status) {
     renderPage('install');
     document.getElementById('aba-home').textContent = status.aba_home;
     const go = document.getElementById('install-go');
     const progress = document.getElementById('install-progress');
     const log = document.getElementById('install-log');
+    const note = document.getElementById('prewarm-note');
+
+    // Reflect the background env download (started in boot) so the user sees
+    // it's already underway — and that Install will be quick once it's done.
+    let prewarmTimer = setInterval(async () => {
+      let s;
+      try { s = await fetchJSON('/api/install/prewarm'); } catch (_) { return; }
+      note.hidden = false;
+      if (s.status === 'running') {
+        const last = lastOutputLine(s.events);
+        note.textContent = '⏳ Downloading scientific packages in the background…'
+          + (last ? '  ' + last.slice(0, 80) : '');
+      } else if (s.status === 'done') {
+        note.textContent = '✓ Scientific packages ready — Install will be quick.';
+        clearInterval(prewarmTimer);
+      } else if (s.status === 'error') {
+        note.textContent = 'Background prep hit a snag — Install will retry it.';
+        clearInterval(prewarmTimer);
+      } else {
+        note.hidden = true;
+      }
+    }, 1500);
 
     go.addEventListener('click', () => {
       go.disabled = true;
+      clearInterval(prewarmTimer);
+      note.hidden = true;
       progress.hidden = false;
       streamPlaybook('/api/install', {
         bar: document.getElementById('install-bar'),
@@ -183,12 +220,8 @@
         onComplete: () => boot(),
       });
     });
-    document.getElementById('ctl-logs').addEventListener('click', async () => {
-      const view = document.getElementById('logs-view');
-      const out = await fetchJSON('/api/logs?tail=200');
-      view.hidden = false;
-      view.textContent = (out.lines || []).join('\n');
-    });
+    const diag = document.getElementById('diag');
+    diag.addEventListener('toggle', () => { if (diag.open) loadDiag(); });
     document.getElementById('ctl-help').addEventListener('click', () => {
       // H8 (deferred) — for now, route the user to the GitHub issue tracker.
       window.open('https://github.com/kharchenkolab/aba/issues', '_blank');
@@ -201,17 +234,38 @@
     });
 
     // Light poll for status changes so the UI reflects external `aba stop` etc.
-    if (!window._abaPollTimer) {
-      window._abaPollTimer = setInterval(async () => {
-        try { const s = await fetchJSON('/api/status'); refreshControl(s); } catch(e){}
-      }, 5000);
-    }
+    if (window._abaPollTimer) clearInterval(window._abaPollTimer);
+    window._abaPollTimer = setInterval(async () => {
+      try {
+        const s = await fetchJSON('/api/status');
+        refreshControl(s);
+        const d = document.getElementById('diag');
+        if (d && d.open) loadDiag();
+      } catch(e){}
+    }, 5000);
+  }
+
+  async function loadDiag() {
+    try {
+      const s = await fetchJSON('/api/status');
+      const meta = document.getElementById('diag-meta');
+      if (meta) meta.textContent = s.backend_running
+        ? `Running · pid ${s.backend_pid} · http://localhost:8000 · ${s.aba_home}`
+        : `Stopped · ${s.aba_home}`;
+      const out = await fetchJSON('/api/logs?tail=200');
+      const view = document.getElementById('logs-view');
+      if (view) { view.textContent = (out.lines || []).join('\n'); view.scrollTop = view.scrollHeight; }
+    } catch (e) {}
   }
 
   function refreshControl(s) {
     const status = document.getElementById('run-status');
     const meta = document.getElementById('run-meta');
-    if (s.backend_running) {
+    const start = document.getElementById('ctl-start');
+    const stop = document.getElementById('ctl-stop');
+    const restart = document.getElementById('ctl-restart');
+    const running = !!s.backend_running;
+    if (running) {
       status.textContent = '●  Running';
       status.style.color = 'var(--green)';
       meta.textContent = `pid ${s.backend_pid} · ${s.aba_home}`;
@@ -220,6 +274,10 @@
       status.style.color = 'var(--muted)';
       meta.textContent = s.aba_home;
     }
+    // Start only when stopped; Stop/Restart only when running.
+    if (start) start.disabled = running;
+    if (stop) stop.disabled = !running;
+    if (restart) restart.disabled = !running;
   }
 
   // ─── playbook event stream (used by both Install + Update) ─────────────
@@ -250,9 +308,16 @@
           }
           let payload = {};
           try { payload = JSON.parse(data); } catch(_) {}
-          if (logEl) logEl.textContent += `[${ev}] ${data}\n`;
+          if (logEl) {
+            logEl.textContent += (ev === 'command_output' ? (payload.line || '') : `[${ev}] ${data}`) + '\n';
+            if (logEl.textContent.length > 24000) logEl.textContent = logEl.textContent.slice(-24000);
+          }
 
-          if (ev === 'step_start') {
+          if (ev === 'command_output') {
+            // Live line from the running command — shows long steps (the conda
+            // env build) are alive, not hung.
+            if (payload.line) current.textContent = payload.line.slice(0, 100);
+          } else if (ev === 'step_start') {
             stepsCount++;
             const li = document.createElement('li');
             li.className = 'active';

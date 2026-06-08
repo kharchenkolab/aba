@@ -55,6 +55,7 @@
     <section class="page">
       <h1>Install ABA</h1>
       <p class="lead">ABA will install into <code id="aba-home"></code> (~3 GB, ~12 min).</p>
+      <p class="muted" id="prewarm-note" hidden></p>
       <button class="btn primary" id="install-go">Install ABA</button>
       <div id="install-progress" hidden>
         <progress id="install-bar" value="0" max="100"></progress>
@@ -85,11 +86,14 @@
         <button class="btn" id="ctl-update">⤓ Check updates</button>
       </div>
       <div class="row muted">
-        <button class="btn link" id="ctl-logs">📄 Logs</button>
         <button class="btn link" id="ctl-help">🛟 Help</button>
         <button class="btn link" id="ctl-uninstall">Uninstall</button>
       </div>
-      <pre id="logs-view" hidden></pre>
+      <details id="diag">
+        <summary>Show details</summary>
+        <p class="muted" id="diag-meta"></p>
+        <pre id="logs-view"></pre>
+      </details>
       <!-- Update progress shares the same step renderer as install -->
       <div id="update-progress" hidden>
         <h3>Updating…</h3>

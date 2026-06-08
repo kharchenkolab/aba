@@ -38,7 +38,7 @@ steps:
     why: Manages the isolated Python + R environment. ~20 MB binary, no admin needed.
     commands:
       - 'mkdir -p "$ABA_HOME/bin"'
-      - 'curl -fsSL "https://micro.mamba.pm/api/micromamba/osx-$(uname -m)/latest" | tar -xj -C "$ABA_HOME" bin/micromamba'
+      - 'if [ -x "$ABA_HOME/bin/micromamba" ]; then echo "micromamba already installed"; else curl -fsSL "https://micro.mamba.pm/api/micromamba/osx-$(uname -m)/latest" | tar -xj -C "$ABA_HOME" bin/micromamba; fi'
       - '"$ABA_HOME/bin/micromamba" --version'
     timeout_seconds: 120
 
@@ -52,7 +52,9 @@ steps:
       # Prefer an explicit override, then the env.yml from the cloned repo
       # (the common case — setup.command already cloned it), then a URL fetch.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/mac/environment.yml" ]; then cp "$REPO_DIR/aba/install/mac/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml}"; fi'
-      - '"$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"'
+      # Idempotent: a prior prewarm may have already built the env (conda-meta
+      # is micromamba's marker for a populated prefix).
+      - 'if [ -d "$ENV_DIR/conda-meta" ]; then echo "environment already present — skipping create"; else "$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
 
   - id: clone-repos
