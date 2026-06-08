@@ -306,29 +306,32 @@ function RevisionGallery({ chain, displayedId, total, stripRef, onPick, onClose 
   const selectedRef = useRef<HTMLButtonElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; maxWidth: number } | null>(null)
 
-  // Compute the gallery's position from the column-wide .rv-panel
-  // ancestor. We walk up from the strip ref because that's the
-  // structural anchor passed in. If no .rv-panel ancestor exists
-  // (e.g. mounted outside ResultView), fall back to the strip's own
-  // bounding rect.
+  // Compute the gallery's position from the COLUMN-wide ancestor.
+  // The strip lives inside `.rv-panel`, but `.rv-panel` is offset by
+  // `.focus`'s 18px horizontal padding — anchoring there starts the
+  // popover at the figure's left, not the column's left. Walk up
+  // through .rv-panel to the .focus root (the FocusCanvas, full column
+  // width). Fall back to .surface-panel (column itself) or .rv-panel
+  // (figure container) or the strip in degenerate cases.
   const recompute = () => {
     const strip = stripRef.current
     if (!strip) return
-    let panel: HTMLElement = strip
+    let anchor: HTMLElement = strip
     let walk: HTMLElement | null = strip
     while (walk) {
-      if (walk.classList && walk.classList.contains('rv-panel')) {
-        panel = walk
+      const cls = walk.classList
+      if (cls && (cls.contains('focus') || cls.contains('surface-panel'))) {
+        anchor = walk
         break
       }
       walk = walk.parentElement
     }
-    const panelRect = panel.getBoundingClientRect()
+    const aRect = anchor.getBoundingClientRect()
     const stripRect = strip.getBoundingClientRect()
     setPos({
-      left:     panelRect.left,                  // align with column-wide panel left
-      top:      stripRect.top - 6,               // 6px above the strip's top
-      maxWidth: Math.floor(panelRect.width * 0.95),
+      left:     aRect.left,                  // align with the column's left edge
+      top:      stripRect.top - 6,           // 6px above the strip's top
+      maxWidth: Math.floor(aRect.width * 0.95),
     })
   }
 
