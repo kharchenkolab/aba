@@ -106,7 +106,10 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-URL="http://127.0.0.1:$PORT/"
+# Use localhost (not 127.0.0.1) so the UI tab shares an origin with the OAuth
+# callback (http://localhost:PORT/callback) — lets the callback advance the
+# Setup tab after Sign in with Claude.ai.
+URL="http://localhost:$PORT/"
 echo
 echo "ABA Setup is running."
 echo "Opening $URL in your browser…"
