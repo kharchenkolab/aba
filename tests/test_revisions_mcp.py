@@ -36,7 +36,7 @@ def check(label, cond, detail=""):
 
 
 def test_register_revision_tools():
-    print("\n[1] register_revision_tools adds 2 tools to the FastMCP server")
+    print("\n[1] register_revision_tools adds 3 tools to the FastMCP server")
     init_db()
     from mcp.server.fastmcp import FastMCP
     from content.bio.mcp_servers.aba_core.tools.revisions import register_revision_tools
@@ -53,7 +53,9 @@ def test_register_revision_tools():
     check("make_revision registered", "make_revision" in names,
           f"got {names}")
     check("reproduce_from_exec registered", "reproduce_from_exec" in names)
-    check("exactly 2 tools", len(names) == 2)
+    check("delete_revision registered", "delete_revision" in names,
+          f"got {names}")
+    check("exactly 3 tools", len(names) == 3, f"got {names}")
 
 
 def test_make_server_includes_revision_tools():

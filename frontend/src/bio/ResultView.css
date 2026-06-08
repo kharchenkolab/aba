@@ -92,9 +92,28 @@
 .rv-panel__ctl button { width: 28px; height: 26px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px; font-size: 14px; line-height: 1; }
 .rv-panel__ctl button:hover:not(:disabled) { background: var(--tree-active-bg); color: var(--accent); }
 .rv-panel__ctl button:disabled { opacity: 0.3; cursor: default; }
-/* × button: larger glyph, red on hover so removal reads as destructive. */
-.rv-panel__ctl-x { font-size: 20px !important; font-weight: 400; color: var(--text-2) !important; }
-.rv-panel__ctl-x:hover:not(:disabled) { background: rgba(192, 57, 44, 0.12) !important; color: var(--danger, #c0392c) !important; }
+/* ⋯ menu replaces the legacy × — top-right of each panel. The button is
+   the same shape as the move arrows; the popover opens beneath it. */
+.rv-panel__more-wrap { position: relative; display: inline-flex; }
+.rv-panel__more-btn { width: 28px; height: 26px; border: none; background: none; color: var(--text-2); cursor: pointer; border-radius: 5px; font-size: 18px !important; line-height: 1; padding: 0; letter-spacing: 1px; }
+.rv-panel__more-btn:hover { background: var(--tree-active-bg); color: var(--accent); }
+.rv-panel__more-pop {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: 8px; box-shadow: var(--shadow-md, 0 6px 18px rgba(0,0,0,0.12));
+  min-width: 200px; padding: 4px; z-index: 50;
+  display: flex; flex-direction: column;
+}
+.rv-panel__more-item {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; line-height: 1.3;
+  padding: 8px 12px; border-radius: 5px;
+  color: var(--text-1);
+}
+.rv-panel__more-item:hover { background: var(--tree-active-bg); }
+.rv-panel__more-danger { color: #b91c1c; }
+.rv-panel__more-danger:hover { background: #fef2f2; }
 
 /* Add affordances */
 .rv__add { display: flex; flex-direction: column; gap: 8px; }

@@ -23,8 +23,10 @@ import logging
 from typing import Literal, Optional
 
 from core.graph._schema import _conn
-from core.graph.edges import add_edge
-from core.graph.entities import create_entity, get_entity
+from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
+from core.graph.entities import (
+    create_entity, get_entity, update_entity, delete_entity_hard,
+)
 from core.graph import exec_records
 from content.bio.lifecycle.scenarios import _detect_language
 
@@ -232,6 +234,198 @@ def make_revision(
         "superseded": superseded_ids,
         "wasRevisionOf": entity_id,
         "produced": result.get("plots") if kind == "figure" else result.get("tables"),
+    }
+
+
+def _active_children(entity_id: str) -> list[str]:
+    """Active (non-superseded) children pointing AT `entity_id` via
+    wasRevisionOf. Returned in DB insertion order — the natural
+    chronological order for re-parenting decisions."""
+    out: list[str] = []
+    for e in edges_to(entity_id):
+        if e.get("rel_type") != "wasRevisionOf":
+            continue
+        sid = e.get("source_id")
+        child = get_entity(sid)
+        if child and child.get("status") != "superseded":
+            out.append(sid)
+    return out
+
+
+def _wasrevof_parent(entity_id: str) -> Optional[str]:
+    """The entity this revision points at via wasRevisionOf, or None
+    if this is the chain anchor."""
+    for e in edges_from(entity_id):
+        if e.get("rel_type") == "wasRevisionOf":
+            return e.get("target_id")
+    return None
+
+
+def _result_members_referencing(entity_id: str) -> list[tuple[str, str]]:
+    """Find all (result_id, member_id) pairs whose member.ref ==
+    entity_id. Searches via the includes edge to short-list candidate
+    Results, then walks each Result's metadata.members for the exact
+    match (members can carry the same ref multiple times in pathological
+    cases; we return one entry per occurrence)."""
+    candidates: set[str] = set()
+    for e in edges_to(entity_id):
+        if e.get("rel_type") == "includes":
+            src = e.get("source_id")
+            if src:
+                candidates.add(src)
+    out: list[tuple[str, str]] = []
+    for rid in candidates:
+        r = get_entity(rid)
+        if not r or r.get("type") != "result":
+            continue
+        for m in (r.get("metadata") or {}).get("members") or []:
+            if m.get("ref") == entity_id:
+                out.append((rid, m.get("id") or ""))
+    return out
+
+
+def delete_revision(entity_id: str) -> dict:
+    """Hard-delete a figure/table revision while preserving chain
+    integrity.
+
+    Three things happen, in order:
+
+    1. Re-parent: every ACTIVE wasRevisionOf child of `entity_id` is
+       re-linked to `entity_id`'s wasRevisionOf parent (if any). For a
+       chain v1 ← v2 ← v3, deleting v2 leaves v1 ← v3 (v3's parent
+       edge is rewritten). Deleting the chain head v3 has no children
+       to re-parent. Deleting the chain anchor v1 (no parent) leaves
+       v2 as the new anchor with no wasRevisionOf edge.
+
+    2. Re-anchor Result members: if a Result has a member whose
+       `ref == entity_id`, the ref is updated to the new chain anchor.
+       The new anchor is the wasRevisionOf parent if one exists; else
+       the first active child (the next-oldest in the chain); else
+       None (the member is left pointing at the deleted id and will be
+       silently dropped on the next cleanup pass — but in practice the
+       caller blocks this case by refusing to delete the only active
+       version). The `includes` edge from Result → entity is removed
+       by the hard-delete edge-cascade; a fresh edge to the new anchor
+       is added.
+
+    3. Hard-delete `entity_id` and all its incident edges (artifacts on
+       disk are NOT cleaned — figures live in run output dirs we don't
+       own; the exec record stays, since older revisions may still
+       reference it through their own provenance).
+
+    Refuses (raises ValueError) when `entity_id` is the only active
+    entry in its chain. The UI offers "Remove from Result" for that
+    case (unlinks the member; keeps the figure).
+
+    Returns: {
+        "deleted": entity_id,
+        "re_parented_children": [...],     # child ids whose edges moved
+        "new_parent": parent_id | None,    # where those children now point
+        "re_anchored_members": [{"result_id", "member_id", "new_ref"}],
+        "new_anchor": entity_id | None,
+    }
+    """
+    ent = get_entity(entity_id)
+    if not ent:
+        raise ValueError(f"entity {entity_id} not found")
+    if ent.get("type") not in ("figure", "table"):
+        raise ValueError(
+            f"delete_revision only operates on figure/table entities, "
+            f"got {ent.get('type')}"
+        )
+
+    # Chain-size guard: refuse on the only active version.
+    from content.bio.graph.figure_history import figure_history
+    chain = figure_history(entity_id)
+    if len([c for c in chain if c.get("id")]) <= 1:
+        raise ValueError(
+            "cannot delete the only active version in the chain — "
+            "use 'Remove from Result' to unlink the member, or delete "
+            "the Result itself"
+        )
+
+    parent_id = _wasrevof_parent(entity_id)
+    children = _active_children(entity_id)
+
+    # 1) Re-parent children to grandparent (or detach if no grandparent).
+    re_parented: list[str] = []
+    for cid in children:
+        try:
+            remove_edge(cid, entity_id, "wasRevisionOf")
+        except Exception as e:  # noqa: BLE001
+            _log.warning("re-parent: remove edge %s→%s failed: %s",
+                         cid, entity_id, e)
+        if parent_id:
+            try:
+                add_edge(cid, parent_id, "wasRevisionOf",
+                         {"created_by": "delete_revision",
+                          "via_deleted": entity_id})
+            except Exception as e:  # noqa: BLE001
+                _log.warning("re-parent: add edge %s→%s failed: %s",
+                             cid, parent_id, e)
+        re_parented.append(cid)
+
+    # 2) Re-anchor any Result members whose ref points at entity_id.
+    # The new anchor is the parent (if we deleted a non-anchor mid- or
+    # head-revision) — but when we deleted the anchor itself, parent_id
+    # is None and the natural new anchor is the first child.
+    new_anchor = parent_id if parent_id else (children[0] if children else None)
+    re_anchored: list[dict] = []
+    for rid, mid in _result_members_referencing(entity_id):
+        if not new_anchor:
+            continue
+        r = get_entity(rid)
+        if not r:
+            continue
+        meta = dict(r.get("metadata") or {})
+        members = list(meta.get("members") or [])
+        changed = False
+        for m in members:
+            if m.get("ref") == entity_id:
+                m["ref"] = new_anchor
+                changed = True
+        if changed:
+            meta["members"] = members
+            update_entity(rid, metadata=meta)
+            # Add the includes edge to the new anchor (idempotent — the
+            # old includes edge is removed by delete_entity_hard below).
+            try:
+                add_edge(rid, new_anchor, "includes",
+                         {"created_by": "delete_revision"})
+            except Exception as e:  # noqa: BLE001
+                _log.warning("re-anchor: add includes %s→%s failed: %s",
+                             rid, new_anchor, e)
+            re_anchored.append({"result_id": rid, "member_id": mid,
+                                "new_ref": new_anchor})
+
+    # 3) Hard-delete the entity (cleans remaining incident edges via
+    # FK cascade inside delete_entity_hard).
+    delete_entity_hard(entity_id)
+
+    # Broadcast so the focused Result re-fetches and the chevrons
+    # rebuild against the new chain.
+    try:
+        from core.runtime.notifications import broadcast
+        for rid, _ in _result_members_referencing(new_anchor) if new_anchor else []:
+            broadcast({"type": "entity_updated",
+                       "entity_id": rid,
+                       "reason": "revision_deleted",
+                       "deleted_revision": entity_id})
+        broadcast({"type": "entity_updated",
+                   "entity_id": new_anchor or entity_id,
+                   "reason": "revision_deleted",
+                   "deleted_revision": entity_id,
+                   "re_parented_children": re_parented,
+                   "re_anchored_members": re_anchored})
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "deleted": entity_id,
+        "re_parented_children": re_parented,
+        "new_parent": parent_id,
+        "re_anchored_members": re_anchored,
+        "new_anchor": new_anchor,
     }
 
 
