@@ -169,6 +169,12 @@ export default function RevisionStrip({ rev, onAction, hideChevrons, hideActions
             type="button"
             className="rev-strip__pos"
             title={`Revision ${rev.total - rev.pos} of ${rev.total} — click to browse all versions`}
+            // stopPropagation on mousedown: the gallery's outside-click
+            // handler fires on document mousedown, so without this an
+            // open-pill-click would CLOSE (outside-click) and then OPEN
+            // (React onClick) on the same gesture — the gallery stays
+            // stuck open instead of toggling closed.
+            onMouseDown={e => e.stopPropagation()}
             onClick={() => setGalleryOpen(v => !v)}
             aria-haspopup="dialog"
             aria-expanded={galleryOpen}

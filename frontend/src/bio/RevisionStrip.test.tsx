@@ -227,6 +227,24 @@ describe('RevisionStrip', () => {
     expect(screen.queryByRole('dialog', { name: /Revision gallery/i })).toBeNull()
   })
 
+  it('gallery: clicking the rev N/N pill while OPEN toggles it closed', async () => {
+    mockChain([
+      ent('fig_b', '2026-02-01T00:00:00'),
+      ent('fig_a', '2026-01-01T00:00:00'),
+    ])
+    render(<Harness anchorId="fig_a" onActionSpy={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('displayed-id').textContent).toBe('fig_b'))
+
+    const pill = screen.getByTitle(/Revision 2 of 2/)
+    // First click opens
+    fireEvent.mouseDown(pill); fireEvent.click(pill)
+    expect(screen.getByRole('dialog', { name: /Revision gallery/i })).toBeTruthy()
+    // Second click closes — the mousedown handler must NOT trigger the
+    // outside-click reopen race (pill stops mousedown propagation).
+    fireEvent.mouseDown(pill); fireEvent.click(pill)
+    expect(screen.queryByRole('dialog', { name: /Revision gallery/i })).toBeNull()
+  })
+
   it('gallery: Escape closes; outside-click closes', async () => {
     mockChain([
       ent('fig_b', '2026-02-01T00:00:00'),
