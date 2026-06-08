@@ -22,6 +22,10 @@
   }
 
   async function boot() {
+    // Stop any per-page pollers before re-rendering.
+    for (const k of ['_abaStripTimer', '_abaSetupTimer']) {
+      if (window[k]) { clearInterval(window[k]); window[k] = null; }
+    }
     let status;
     try {
       status = await fetchJSON('/api/status');
@@ -31,15 +35,61 @@
         Try restarting via <code>aba up</code>.</p>`;
       return;
     }
-    // Race the heavy, credential-free env download against the user entering
-    // credentials: kick it off the moment the UI loads (idempotent server-side).
+    // The install needs no credentials, so run it automatically in the
+    // background the moment the UI loads — in parallel with the user signing
+    // in. Idempotent server-side.
     if (!status.installed) {
-      fetch('/api/install/prewarm', { method: 'POST' }).catch(() => {});
+      fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
     }
     const authState = await fetchJSON('/api/auth/status');
-    if (!authState.credentials) return mountWelcome();
-    if (!status.installed) return mountInstall(status);
+    if (!authState.credentials) return mountWelcome();        // sign in (install runs behind it)
+    if (!status.installed) return mountSetup();               // authed; install still finishing
+    if (!status.backend_running) {                            // installed → start the backend once
+      if (!window._abaAutoStarted) {
+        window._abaAutoStarted = true;
+        try { await fetchJSON('/api/start', { method: 'POST' }); } catch (e) {}
+        return boot();
+      }
+    }
     return mountControl(status);
+  }
+
+  // ─── background-install progress (polled, shown on Welcome + Setup) ────
+  async function pollAuto(onUpdate) {
+    let s;
+    try { s = await fetchJSON('/api/install/auto'); } catch (_) { return 'pending'; }
+    onUpdate(s);
+    return s.status;
+  }
+
+  function renderEvents(events, { current, stepsEl, logEl, bar }) {
+    if (stepsEl) stepsEl.innerHTML = '';
+    const seen = new Map();
+    let lastLine = '', total = 0, doneN = 0;
+    for (const e of (events || [])) {
+      const p = e.payload || {};
+      if (e.event === 'step_start') {
+        total++;
+        if (stepsEl) {
+          const li = document.createElement('li'); li.className = 'active';
+          li.textContent = p.title || p.step_id; stepsEl.appendChild(li);
+          seen.set(p.step_id, li);
+        }
+      } else if (e.event === 'step_end') {
+        doneN++;
+        const li = seen.get(p.step_id); if (li) li.className = p.ok ? 'ok' : 'fail';
+      } else if (e.event === 'command_output' && p.line) {
+        lastLine = p.line;
+      }
+    }
+    if (current && lastLine) current.textContent = lastLine.slice(0, 100);
+    if (bar && total) bar.value = Math.round((doneN / total) * 100);
+    if (logEl) {
+      logEl.textContent = (events || []).map(e =>
+        e.event === 'command_output' ? (e.payload.line || '')
+          : `[${e.event}] ${JSON.stringify(e.payload)}`).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
   }
 
   // ─── Welcome page ────────────────────────────────────────────────────
@@ -135,10 +185,27 @@
     });
     oauthInput.addEventListener('keydown', e => { if (e.key === 'Enter') pasteBtn.click(); });
 
+    // Show the background install progress right here, so signing in doesn't
+    // feel like nothing's happening.
+    const strip = document.getElementById('setup-strip');
+    const stripTimer = setInterval(() => pollAuto(s => {
+      strip.hidden = false;
+      if (s.status === 'running') {
+        const last = lastOutputLine(s.events);
+        strip.textContent = '⏳ Setting up ABA in the background…' + (last ? '  ' + last.slice(0, 70) : '');
+      } else if (s.status === 'done') {
+        strip.textContent = '✓ Setup ready — just finish signing in.';
+        clearInterval(stripTimer);
+      } else if (s.status === 'error') {
+        strip.textContent = 'Setup hit a snag (details after you sign in).';
+        clearInterval(stripTimer);
+      } else { strip.hidden = true; }
+    }), 2000);
+    window._abaStripTimer = stripTimer;  // cleared when we navigate away via boot()
+
     setMode('apikey');
   }
 
-  // ─── Install page ─────────────────────────────────────────────────────
   function lastOutputLine(events) {
     for (let i = (events || []).length - 1; i >= 0; i--) {
       const e = events[i];
@@ -147,48 +214,35 @@
     return '';
   }
 
-  function mountInstall(status) {
-    renderPage('install');
-    document.getElementById('aba-home').textContent = status.aba_home;
-    const go = document.getElementById('install-go');
-    const progress = document.getElementById('install-progress');
-    const log = document.getElementById('install-log');
-    const note = document.getElementById('prewarm-note');
-
-    // Reflect the background env download (started in boot) so the user sees
-    // it's already underway — and that Install will be quick once it's done.
-    let prewarmTimer = setInterval(async () => {
-      let s;
-      try { s = await fetchJSON('/api/install/prewarm'); } catch (_) { return; }
-      note.hidden = false;
-      if (s.status === 'running') {
-        const last = lastOutputLine(s.events);
-        note.textContent = '⏳ Downloading scientific packages in the background…'
-          + (last ? '  ' + last.slice(0, 80) : '');
-      } else if (s.status === 'done') {
-        note.textContent = '✓ Scientific packages ready — Install will be quick.';
-        clearInterval(prewarmTimer);
-      } else if (s.status === 'error') {
-        note.textContent = 'Background prep hit a snag — Install will retry it.';
-        clearInterval(prewarmTimer);
-      } else {
-        note.hidden = true;
+  // ─── Setup page (authed; the background install is finishing) ──────────
+  function mountSetup() {
+    renderPage('setup');
+    fetchJSON('/api/status').then(s => {
+      const el = document.getElementById('aba-home'); if (el) el.textContent = s.aba_home;
+    }).catch(() => {});
+    const els = {
+      bar: document.getElementById('setup-bar'),
+      current: document.getElementById('setup-current'),
+      stepsEl: document.getElementById('setup-steps'),
+      logEl: document.getElementById('setup-log'),
+    };
+    const errEl = document.getElementById('setup-error');
+    // Make sure it's running (e.g. after an error → retry), then poll to done.
+    fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
+    const timer = setInterval(async () => {
+      const st = await pollAuto(s => renderEvents(s.events, els));
+      if (st === 'done') {
+        clearInterval(timer);
+        els.current.textContent = 'Starting ABA…';
+        boot();  // installed → boot auto-starts the backend → Control
+      } else if (st === 'error') {
+        clearInterval(timer);
+        errEl.textContent = 'Setup failed — see details. Retrying…';
+        fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
+        setTimeout(mountSetup, 4000);
       }
     }, 1500);
-
-    go.addEventListener('click', () => {
-      go.disabled = true;
-      clearInterval(prewarmTimer);
-      note.hidden = true;
-      progress.hidden = false;
-      streamPlaybook('/api/install', {
-        bar: document.getElementById('install-bar'),
-        current: document.getElementById('install-current'),
-        stepsEl: document.getElementById('install-steps'),
-        logEl: log,
-        onComplete: () => boot(),
-      });
-    });
+    window._abaSetupTimer = timer;
   }
 
   // ─── Control page ─────────────────────────────────────────────────────

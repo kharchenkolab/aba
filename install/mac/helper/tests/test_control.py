@@ -219,17 +219,21 @@ def test_uninstall_full_blast_removes_everything(client, tmp_aba_home):
     assert not (tmp_aba_home / "config.env").exists()
 
 
-def test_prewarm_noop_when_env_already_built(client, tmp_aba_home):
-    # A *complete* env (env/bin/uvicorn present) means prewarm must NOT kick off
-    # a (multi-GB) rebuild. Guards the prewarm/install idempotency.
+def test_auto_install_noop_when_already_installed(client, tmp_aba_home):
+    # A complete install (uvicorn + built frontend + launcher) means the
+    # background install must NOT kick off a (multi-GB) rebuild.
     (tmp_aba_home / "env" / "bin").mkdir(parents=True)
     (tmp_aba_home / "env" / "bin" / "uvicorn").write_text("#!/bin/sh\n")
-    r = client.post("/api/install/prewarm")
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist").mkdir(parents=True)
+    (tmp_aba_home / "repo" / "aba" / "frontend" / "dist" / "index.html").write_text("<html>")
+    (tmp_aba_home / "bin").mkdir()
+    (tmp_aba_home / "bin" / "aba").write_text("#!/bin/sh\n")
+    r = client.post("/api/install/auto")
     assert r.status_code == 200
     assert r.json() == {"started": False, "status": "done"}
 
 
-def test_prewarm_status_endpoint(client):
-    r = client.get("/api/install/prewarm")
+def test_auto_install_status_endpoint(client):
+    r = client.get("/api/install/auto")
     assert r.status_code == 200
     assert "status" in r.json() and "events" in r.json()

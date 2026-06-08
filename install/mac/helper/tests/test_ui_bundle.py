@@ -47,10 +47,10 @@ def test_index_references_static_files(client):
 
 
 def test_index_has_three_pages():
-    """Welcome, Install, Control — the three UI states."""
+    """Welcome, Setup, Control — the three UI states."""
     body = (UI_DIR / "index.html").read_text()
     assert 'id="page-welcome"' in body
-    assert 'id="page-install"' in body
+    assert 'id="page-setup"' in body
     assert 'id="page-control"' in body
 
 
