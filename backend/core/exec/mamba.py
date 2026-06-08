@@ -8,6 +8,7 @@ primary for everything Python.
 """
 from __future__ import annotations
 import os
+import platform
 import subprocess
 import tarfile
 import tempfile
@@ -19,15 +20,45 @@ from core.config import ENVS_DIR
 
 MAMBA_BIN = ENVS_DIR / "bin" / "micromamba"
 MAMBA_ROOT = ENVS_DIR / "mamba_root"
-# linux-64 static build; the VM platform. (Detect arch later if we ever run
-# elsewhere — out of scope for the single-VM prototype.)
-_MAMBA_URL = "https://micro.mamba.pm/api/micromamba/linux-64/latest"
+
+
+def _mamba_platform() -> str:
+    """micro.mamba.pm platform slug for the host. Critically NOT hardcoded:
+    on a Mac install a linux-64 binary downloads fine but fails to exec
+    ('Exec format error'), breaking all R/CLI provisioning."""
+    sysname, machine = platform.system(), platform.machine().lower()
+    if sysname == "Darwin":
+        return "osx-arm64" if machine in ("arm64", "aarch64") else "osx-64"
+    if machine in ("arm64", "aarch64"):
+        return "linux-aarch64"
+    return "linux-64"
+
+
+_MAMBA_URL = f"https://micro.mamba.pm/api/micromamba/{_mamba_platform()}/latest"
+
+
+def _runs(path: Path) -> bool:
+    """True if this micromamba binary actually executes here. Guards against a
+    wrong-arch binary left in a cache/wiped dir (X_OK alone passes for those)."""
+    try:
+        return subprocess.run([str(path), "--version"], capture_output=True,
+                              timeout=15).returncode == 0
+    except Exception:  # noqa: BLE001  (OSError: Exec format error, etc.)
+        return False
 
 
 def ensure_micromamba() -> str:
     """Return the path to a usable micromamba binary, downloading it on first
     use. Idempotent."""
-    if MAMBA_BIN.exists() and os.access(MAMBA_BIN, os.X_OK):
+    # Prefer the binary the installer already placed under $ABA_HOME/bin — it's
+    # the right arch for this machine and isn't wiped with ENVS_DIR.
+    aba_home = os.environ.get("ABA_HOME")
+    if aba_home:
+        cand = Path(aba_home) / "bin" / "micromamba"
+        if cand.exists() and _runs(cand):
+            return str(cand)
+    # Validate (not just exists+X_OK) so a stale wrong-arch binary re-downloads.
+    if MAMBA_BIN.exists() and _runs(MAMBA_BIN):
         return str(MAMBA_BIN)
     MAMBA_BIN.parent.mkdir(parents=True, exist_ok=True)
     try:
