@@ -5,6 +5,7 @@
 node_modules/
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
 .env
 # Pre-2026-05-31 runtime lived under backend/. It now lives under

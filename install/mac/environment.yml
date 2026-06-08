@@ -1,0 +1,84 @@
+# ABA conda environment — the single most-important file in the Mac install.
+#
+# Fetched at install time by the create-env playbook step and fed to
+# micromamba (see helper/src/aba_installer/playbook.yml). Everything ABA
+# needs to run lives here: the Python + R + Node toolchains, the
+# single-cell bio stack the agent executes, the Jupyter kernels it runs
+# code in, and the backend's own runtime deps.
+#
+# Channels, in priority order:
+#   conda-forge — the C-library base + most scientific Python + R-base
+#   bioconda    — Bioconductor packages (the binary source for Bioc on Mac;
+#                 PPM has CRAN binaries but no Bioc — see mac-install.md §8.2)
+#
+# Pin policy: pin the language toolchains (python/r/node) to a minor series
+# so updates stay predictable; leave the bio stack with floors (>=) so the
+# solver can pick a mutually-compatible set per arch. Once validated on a
+# fresh arm64 + x86_64 Mac, capture the resolved versions as a locked
+# snapshot. Refresh monthly (mac-install.md §4).
+
+name: aba
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # ── language toolchains ────────────────────────────────────────────────
+  - python=3.12.*
+  - r-base=4.4.*
+  - nodejs=20.*
+  - pip
+
+  # ── native libraries + build helpers (binary; nothing compiles at install)
+  - hdf5
+  - pkg-config
+  - cmake
+
+  # ── scientific Python core ─────────────────────────────────────────────
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib-base
+  - scikit-learn
+  - h5py
+  - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
+
+  # ── single-cell bio stack (the agent imports these in Python kernels) ──
+  - anndata>=0.10
+  - scanpy>=1.10
+  - scvi-tools>=1.1
+  - leidenalg
+  - python-igraph
+
+  # ── Jupyter kernels — the agent executes Python (ipykernel) and R (ir) ──
+  - jupyter_client
+  - ipykernel
+  - nbformat
+  - nbconvert
+  - r-irkernel
+
+  # ── R / Bioconductor (the bulk of the recipe library leans on R) ───────
+  - bioconductor-singlecellexperiment
+  - bioconductor-deseq2
+  - bioconductor-edger
+  - bioconductor-limma
+  - r-seurat
+
+  # ── document / report tooling ──────────────────────────────────────────
+  - typst
+
+  # ── frontend package manager (the build step calls $ENV_DIR/bin/pnpm) ──
+  - pnpm
+
+  # ── backend runtime — pure-python / arm64 wheels, kept in a pip section
+  #    so they don't constrain the heavier conda solve above. ────────────
+  - pip:
+      - fastapi
+      - uvicorn[standard]
+      - python-multipart   # FastAPI UploadFile/File/Form on the upload routes
+      - anthropic
+      - mcp
+      - pydantic
+      - python-dotenv
+      - pypdfium2
+      - pillow

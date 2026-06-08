@@ -2,7 +2,7 @@
 
 Every test gets a fresh tempdir as ABA_HOME so config files, logs, and
 the port-state file don't leak between tests or pollute the user's
-real ~/Library/Application Support/ABA/ directory.
+real ~/.aba/ directory.
 """
 from __future__ import annotations
 import os

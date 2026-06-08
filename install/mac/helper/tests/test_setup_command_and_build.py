@@ -25,9 +25,11 @@ def test_setup_command_exists_and_has_shebang():
     assert body.startswith("#!/usr/bin/env bash"), "setup.command must be a bash script"
 
 
-def test_setup_command_targets_aba_home_under_application_support():
+def test_setup_command_targets_aba_home_space_free():
+    # The install root must be space-free — the conda r-base wrapper breaks
+    # on a space in its prefix path. See paths.aba_home().
     body = SETUP_CMD.read_text()
-    assert 'ABA_HOME="$HOME/Library/Application Support/ABA"' in body
+    assert 'ABA_HOME="$HOME/.aba"' in body
 
 
 def test_setup_command_downloads_helper_from_github_releases_by_default():

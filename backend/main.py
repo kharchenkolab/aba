@@ -2292,3 +2292,34 @@ def file_ai_summary(req: AiSummaryRequest):
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+# ── Serve the built frontend (production single-server mode) ─────────────────
+# In development the React app is served by Vite on :5173, which proxies
+# /api and /artifacts here (see frontend/vite.config.ts). An installed
+# deploy has no Vite — uvicorn is the only server, so it must serve the
+# compiled SPA from frontend/dist. Guarded on the build existing, so this
+# is a no-op in dev and only engages once `npm run build` has produced a
+# dist/. Registered last, so it never shadows the /api or /artifacts routes
+# above (Starlette matches routes in registration order).
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if (_FRONTEND_DIST / "index.html").is_file():
+    _assets_dir = _FRONTEND_DIST / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        """Serve a real file from dist/ if it exists, else the SPA shell.
+
+        The shell fallback is what makes client-side routing work: a deep
+        link like /p/X/runs/e/Y has no file on disk, so we return
+        index.html and let react-router resolve the path in the browser.
+        """
+        # A miss on an API/artifact path must 404, not fall through to HTML.
+        if full_path.startswith(("api/", "artifacts/")):
+            raise HTTPException(404, "not found")
+        candidate = _FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))

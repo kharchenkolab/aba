@@ -7,7 +7,7 @@
 # Everything else happens in the browser UI.
 #
 # What this script touches:
-#   ~/Library/Application Support/ABA/installer/   (helper service + state)
+#   ~/.aba/installer/                              (helper service + state)
 #   ~/Library/LaunchAgents/com.kharchenkolab.aba.helper.plist  (auto-start on login)
 #
 # Anything heavier (Python env, R, the repo) is downloaded by the helper
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 HELPER_URL="${HELPER_URL:-https://github.com/kharchenkolab/aba/releases/latest/download/helper-latest.tgz}"
-ABA_HOME="$HOME/Library/Application Support/ABA"
+ABA_HOME="$HOME/.aba"
 HELPER_DIR="$ABA_HOME/installer"
 
 cat <<EOF

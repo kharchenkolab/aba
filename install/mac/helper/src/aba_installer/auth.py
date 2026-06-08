@@ -1,7 +1,7 @@
 """Credential management.
 
 For v1: API-key only. The user pastes an Anthropic API key in the UI; we
-persist it to ~/Library/Application Support/ABA/config.env at mode 0600.
+persist it to ~/.aba/config.env at mode 0600.
 The ABA launcher (~/bin/aba) sources this file at startup so the
 backend has ANTHROPIC_API_KEY in env.
 
