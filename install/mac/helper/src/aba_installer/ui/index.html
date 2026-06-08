@@ -48,24 +48,24 @@
         We'll store this on your Mac at
         <code>~/.aba/config.env</code> (mode 0600).
       </p>
+      <!-- The install runs in the background while you sign in; this shows it. -->
+      <p class="muted setup-strip" id="setup-strip" hidden></p>
     </section>
   </template>
 
-  <template id="page-install">
+  <template id="page-setup">
     <section class="page">
-      <h1>Install ABA</h1>
-      <p class="lead">ABA will install into <code id="aba-home"></code> (~3 GB, ~12 min).</p>
-      <p class="muted" id="prewarm-note" hidden></p>
-      <button class="btn primary" id="install-go">Install ABA</button>
-      <div id="install-progress" hidden>
-        <progress id="install-bar" value="0" max="100"></progress>
-        <p id="install-current">Starting…</p>
-        <ol class="steps" id="install-steps"></ol>
-        <details>
-          <summary>Show details</summary>
-          <pre id="install-log"></pre>
-        </details>
-      </div>
+      <h1>Setting up ABA…</h1>
+      <p class="lead">Installing into <code id="aba-home"></code>. This runs by
+        itself — nothing to click. ABA opens automatically when it's ready.</p>
+      <progress id="setup-bar" value="0" max="100"></progress>
+      <p id="setup-current">Starting…</p>
+      <ol class="steps" id="setup-steps"></ol>
+      <p class="error" id="setup-error"></p>
+      <details>
+        <summary>Show details</summary>
+        <pre id="setup-log"></pre>
+      </details>
     </section>
   </template>
 

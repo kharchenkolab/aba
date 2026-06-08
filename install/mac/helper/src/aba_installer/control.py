@@ -89,72 +89,83 @@ def _write_deployment_yaml() -> None:
     )
 
 
-# ─── prewarm: build the conda env in the background during auth ─────────────
-# The env build (install-micromamba + create-env) needs no credentials and is
-# the long pole (~2 GB). Kicking it off when the Welcome page loads overlaps it
-# with the user entering credentials, so the actual Install finishes fast.
-_PREWARM_STEPS = ("install-micromamba", "create-env")
-_prewarm_lock = threading.Lock()
-_prewarm: dict = {"thread": None, "events": [], "status": "idle"}  # idle|running|done|error
+# ─── background install: everything that doesn't need credentials ───────────
+# The whole install EXCEPT the final backend start needs no API key, so it runs
+# automatically the moment the UI loads — in parallel with the user signing in.
+# That's why there's no "Install ABA" button: by the time auth finishes, the
+# install is done (or nearly), and the backend just starts. Only start-backend
+# is credential-gated (it boots uvicorn with the key from config.env).
+_BG_SKIP = {"start-backend"}
+_bg_lock = threading.Lock()
+_bg: dict = {"thread": None, "events": [], "status": "idle"}  # idle|running|done|error
 
 
-def _prewarm_worker() -> None:
+def _is_installed() -> bool:
+    """A *runnable* install: a usable env (uvicorn), a built frontend, and the
+    launcher. Not just 'dirs exist' — those appear mid-build."""
+    return (
+        (env_dir() / "bin" / "uvicorn").exists()
+        and (repo_dir() / "aba" / "frontend" / "dist" / "index.html").exists()
+        and (aba_home() / "bin" / "aba").exists()
+    )
+
+
+def _bg_worker() -> None:
     pb = load_playbook(_playbook_path("install"))
+    steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
 
     def on_event(ev: str, payload: dict) -> None:
-        with _prewarm_lock:
-            _prewarm["events"].append({"event": ev, "payload": payload})
-            if len(_prewarm["events"]) > 500:
-                del _prewarm["events"][:-500]
+        with _bg_lock:
+            _bg["events"].append({"event": ev, "payload": payload})
+            if len(_bg["events"]) > 1000:
+                del _bg["events"][:-1000]
 
     try:
         prepare_install_artifacts()
-        results = Executor(pb, on_event=on_event).run_all(only=set(_PREWARM_STEPS))
+        results = Executor(pb, on_event=on_event).run_all(only=set(steps))
         ok = bool(results) and all(r.ok for r in results)
-        with _prewarm_lock:
-            _prewarm["status"] = "done" if ok else "error"
+        with _bg_lock:
+            _bg["status"] = "done" if ok else "error"
     except Exception as e:  # noqa: BLE001
-        with _prewarm_lock:
-            _prewarm["status"] = "error"
-            _prewarm["events"].append({"event": "error", "payload": {"error": str(e)}})
+        with _bg_lock:
+            _bg["status"] = "error"
+            _bg["events"].append({"event": "error", "payload": {"error": str(e)}})
 
 
-@router.post("/install/prewarm")
-def install_prewarm() -> dict:
-    """Start the background env build. Idempotent — a no-op if it's already
-    running or the env already exists."""
-    with _prewarm_lock:
-        t = _prewarm["thread"]
+@router.post("/install/auto")
+def install_auto() -> dict:
+    """Start (or continue) the background install. Idempotent — a no-op if it's
+    already running or the install is already complete."""
+    with _bg_lock:
+        t = _bg["thread"]
         if t is not None and t.is_alive():
             return {"started": False, "status": "running"}
-        if (env_dir() / "bin" / "uvicorn").exists():  # only a *complete* env counts
-            _prewarm["status"] = "done"
+        if _is_installed():
+            _bg["status"] = "done"
             return {"started": False, "status": "done"}
-        _prewarm["events"] = []
-        _prewarm["status"] = "running"
-        th = threading.Thread(target=_prewarm_worker, daemon=True, name="aba-prewarm")
-        _prewarm["thread"] = th
+        _bg["events"] = []
+        _bg["status"] = "running"
+        th = threading.Thread(target=_bg_worker, daemon=True, name="aba-bg-install")
+        _bg["thread"] = th
         th.start()
     return {"started": True, "status": "running"}
 
 
-@router.get("/install/prewarm")
-def install_prewarm_status() -> dict:
-    with _prewarm_lock:
-        return {"status": _prewarm["status"], "events": list(_prewarm["events"][-200:])}
+@router.get("/install/auto")
+def install_auto_status() -> dict:
+    with _bg_lock:
+        return {"status": _bg["status"], "events": list(_bg["events"][-300:])}
 
 
-def _await_prewarm(emit) -> None:
-    """If a prewarm is in flight, wait for it before the install runs its own
-    create-env (idempotent, but they must not run concurrently on the same
-    prefix). Surfaces the wait as a step so the UI isn't silent."""
-    with _prewarm_lock:
-        t = _prewarm["thread"]
+def _await_background(emit) -> None:
+    """If the background install is in flight, wait for it before an explicit
+    /api/install runs the same steps. Surfaces the wait so the UI isn't silent."""
+    with _bg_lock:
+        t = _bg["thread"]
     if t is not None and t.is_alive():
-        emit("step_start", {"step_id": "prewarm-wait",
-                            "title": "Finishing background package download…"})
+        emit("step_start", {"step_id": "bg-wait", "title": "Finishing background setup…"})
         t.join()
-        emit("step_end", {"step_id": "prewarm-wait", "ok": True, "error": None})
+        emit("step_end", {"step_id": "bg-wait", "ok": True, "error": None})
 
 
 # ─── SSE helpers ───────────────────────────────────────────────────────────
@@ -190,10 +201,10 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # Render Python-substituted artifacts (the launcher) before the
             # shell playbook reaches the step that installs them.
             prepare_install_artifacts()
-            # If the env is being prewarmed in the background, wait for it so
-            # create-env doesn't run twice on the same prefix.
+            # If the background install is in flight, wait for it so steps
+            # don't run twice on the same prefix.
             if name == "install":
-                _await_prewarm(on_event)
+                _await_background(on_event)
             ex = Executor(pb, on_event=on_event)
             results = ex.run_all()
             ok = all(r.ok for r in results)
@@ -345,17 +356,7 @@ def stop_backend() -> dict:
 def status() -> dict:
     """Comprehensive status the Control page reads on load + periodically."""
     home = aba_home()
-    # "installed" must mean *runnable*, not just "files started appearing".
-    # The repo is cloned up front by setup.command and the env dir is created
-    # mid-build by the prewarm, so checking those flips true too early and the
-    # UI jumps to the Control page before there's anything to run. Require the
-    # artifacts only the full /api/install produces: a usable env (uvicorn),
-    # a built frontend, and the installed launcher.
-    installed = (
-        (env_dir() / "bin" / "uvicorn").exists()
-        and (repo_dir() / "aba" / "frontend" / "dist" / "index.html").exists()
-        and (home / "bin" / "aba").exists()
-    )
+    installed = _is_installed()
     pid = _backend_pid()
     with _op_lock:
         op = _op_state.name

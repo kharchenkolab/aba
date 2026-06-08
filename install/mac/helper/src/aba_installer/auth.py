@@ -170,9 +170,10 @@ def set_apikey(payload: ApiKeyIn) -> dict:
     entries.pop("ABA_LLM_CREDENTIAL", None)
     entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
     entries.setdefault("ABA_HOME", str(aba_home()))
-    # Default to Sonnet — Haiku (the backend default) is underpowered for real
-    # bioinformatics, and subscription/key users can afford it. User-overridable.
-    entries.setdefault("ABA_MODEL", "claude-sonnet-4-6")
+    # Default to Opus — Haiku (the backend default) is underpowered for real
+    # bioinformatics, and subscription/key users can afford the strongest model.
+    # User-overridable via ABA_MODEL.
+    entries.setdefault("ABA_MODEL", "claude-opus-4-7")
     _write_config_env(entries)
     return {"ok": True, "persisted": True}
 
@@ -191,9 +192,10 @@ def _persist_oauth_token(token: str) -> None:
     entries.pop("ANTHROPIC_API_KEY", None)
     entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
     entries.setdefault("ABA_HOME", str(aba_home()))
-    # Default to Sonnet — Haiku (the backend default) is underpowered for real
-    # bioinformatics, and subscription/key users can afford it. User-overridable.
-    entries.setdefault("ABA_MODEL", "claude-sonnet-4-6")
+    # Default to Opus — Haiku (the backend default) is underpowered for real
+    # bioinformatics, and subscription/key users can afford the strongest model.
+    # User-overridable via ABA_MODEL.
+    entries.setdefault("ABA_MODEL", "claude-opus-4-7")
     _write_config_env(entries)
 
 
