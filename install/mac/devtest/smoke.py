@@ -7,9 +7,9 @@ confined to a throwaway root so it is repeatable on any Mac and removable
 with one command.
 
 Everything the install touches is rooted under $ABA_SMOKE_ROOT (default
-~/aba/.smoke) by redirecting $HOME: the conda env, the cloned repo,
-~/bin/aba, ~/Library/... — all of it lands inside the throwaway tree, so
-teardown is a single `rm -rf` and nothing on the real machine is mutated.
+~/aba/.smoke) by redirecting $HOME: the conda env, the cloned repo, the
+launcher (~/.aba/bin/aba), ~/Library/... — all of it lands inside the
+throwaway tree, so teardown is a single `rm -rf`.
 
 Source of truth is the *working tree*, not GitHub: ABA_ENV_YML_SRC and
 ABA_REPO_SRC point the playbook at this checkout, so un-pushed changes are
@@ -158,7 +158,7 @@ def _run_steps(only: list[str] | None) -> int:
 
 
 def _launcher_path() -> Path:
-    return FAKE_HOME / "bin" / "aba"
+    return ABA_HOME / "bin" / "aba"
 
 
 HELPER_LABEL = "com.kharchenkolab.aba.helper"

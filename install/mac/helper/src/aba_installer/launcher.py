@@ -63,7 +63,8 @@ def render(ctx: LauncherContext, *, template_text: Optional[str] = None) -> str:
 
 # ─── install destinations ──────────────────────────────────────────────────
 def user_install_path() -> Path:
-    return Path.home() / "bin" / "aba"
+    # Under $ABA_HOME so the install is self-contained (no ~/bin pollution).
+    return aba_home() / "bin" / "aba"
 
 
 def global_install_path() -> Path:
@@ -71,7 +72,7 @@ def global_install_path() -> Path:
 
 
 def install_to_user_bin(ctx: Optional[LauncherContext] = None) -> Path:
-    """Write the launcher to ~/bin/aba. Creates ~/bin if needed. No admin."""
+    """Write the launcher to $ABA_HOME/bin/aba (mode 0755). No admin."""
     ctx = ctx or default_context()
     dest = user_install_path()
     dest.parent.mkdir(parents=True, exist_ok=True)

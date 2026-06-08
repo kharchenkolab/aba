@@ -10,7 +10,7 @@ touching the machine's actual `~/.aba`, `~/bin`, or `~/Library`.
 
 Everything the install writes is keyed off `$HOME`, so the harness redirects
 `$HOME` to `<root>/home` (default root `~/aba/.smoke`). The conda env, the
-cloned repo, `~/bin/aba` — all of it lands inside the throwaway tree.
+cloned repo, the launcher (`~/.aba/bin/aba`) — all inside the throwaway tree.
 
 It also points the playbook at the **working tree** instead of GitHub via the
 `ABA_ENV_YML_SRC` / `ABA_REPO_SRC` escape hatches, so un-pushed changes are

@@ -87,16 +87,18 @@ steps:
   - id: install-launcher
     title: Install the aba launcher
     why: |
-      Creates ~/bin/aba (no admin) by default. Use --global to install to
-      /usr/local/bin/aba instead (will prompt for sudo).
+      Places the `aba` control script at $ABA_HOME/bin/aba — kept under the ABA
+      home so the whole install stays self-contained (uninstall = one rm -rf,
+      nothing in ~/bin or /usr/local/bin). The Control panel runs it by full
+      path; for a terminal `aba` command, add $ABA_HOME/bin to PATH.
     commands:
-      - 'mkdir -p "$HOME/bin"'
-      - 'install -m 0755 "$ABA_HOME/installer/aba" "$HOME/bin/aba"'
+      - 'mkdir -p "$ABA_HOME/bin"'
+      - 'install -m 0755 "$ABA_HOME/installer/aba" "$ABA_HOME/bin/aba"'
     timeout_seconds: 10
 
   - id: start-backend
     title: Start ABA
     why: First boot of the backend; serves the workspace at http://localhost:8000.
     commands:
-      - '"$HOME/bin/aba" up'
+      - '"$ABA_HOME/bin/aba" up'
     timeout_seconds: 30

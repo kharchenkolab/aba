@@ -50,6 +50,6 @@ steps:
     title: Restart ABA
     why: Pick up the new code in the running backend. Skipped if backend isn't already running.
     commands:
-      - '"$HOME/bin/aba" stop 2>/dev/null || true'
-      - '"$HOME/bin/aba" up'
+      - '"$ABA_HOME/bin/aba" stop 2>/dev/null || true'
+      - '"$ABA_HOME/bin/aba" up'
     timeout_seconds: 30
