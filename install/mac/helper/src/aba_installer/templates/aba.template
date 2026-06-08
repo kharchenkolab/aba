@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ABA launcher — installed by the ABA installer at ~/bin/aba (default) or
-# /usr/local/bin/aba (with admin opt-in). Sources config.env so the
+# ABA launcher — installed by the ABA installer at $ABA_HOME/bin/aba (under
+# the ABA home so the install stays self-contained). Sources config.env so the
 # backend boots with the API key + paths the installer captured.
 #
 # Auto-generated. Do not edit by hand — re-run the installer to update.
@@ -75,6 +75,8 @@ case "${1:-up}" in
   uninstall)
     "$0" stop
     rm -rf "$ABA_HOME"
+    # Launcher lives under $ABA_HOME (removed above); also clear any legacy
+    # ~/bin or --global copies from older installs.
     rm -f "$HOME/bin/aba" /usr/local/bin/aba 2>/dev/null || true
     echo "Uninstalled. Runtime files preserved at $ABA_HOME (if any remain)."
     ;;

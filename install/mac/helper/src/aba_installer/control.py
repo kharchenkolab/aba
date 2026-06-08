@@ -61,7 +61,7 @@ def prepare_install_artifacts() -> Path:
     The launcher needs ABA_HOME/env/repo/port baked in by Python
     substitution (see launcher.py), which the pure-shell playbook can't do
     — its install-launcher step just copies this rendered file to
-    ~/bin/aba. Called before the playbook runs. Idempotent.
+    $ABA_HOME/bin/aba. Called before the playbook runs. Idempotent.
     """
     from aba_installer import launcher
     dest = installer_dir() / "aba"
@@ -279,14 +279,15 @@ def current_operation() -> dict:
 
 # ─── start / stop / status / logs ──────────────────────────────────────────
 def _aba_launcher() -> Optional[Path]:
-    """Find the 'aba' launcher. Prefers ~/bin/aba (default install location);
-    falls back to /usr/local/bin/aba (admin install)."""
-    home_bin = Path.home() / "bin" / "aba"
-    if home_bin.exists():
-        return home_bin
-    sysbin = Path("/usr/local/bin/aba")
-    if sysbin.exists():
-        return sysbin
+    """Find the 'aba' launcher. Prefers $ABA_HOME/bin/aba (the self-contained
+    default), then the rendered installer copy, then legacy ~/bin /
+    /usr/local/bin locations from older installs."""
+    for p in (aba_home() / "bin" / "aba",
+              installer_dir() / "aba",
+              Path.home() / "bin" / "aba",
+              Path("/usr/local/bin/aba")):
+        if p.exists() and p.is_file():
+            return p
     return None
 
 
@@ -398,7 +399,8 @@ def uninstall(keep_runtime: bool = True) -> dict:
     except Exception:
         pass
 
-    # Remove the launcher
+    # Clear any legacy launcher copies from older installs (the current one
+    # lives under $ABA_HOME/bin and is removed with the "bin" subdir below).
     for p in (Path.home() / "bin" / "aba", Path("/usr/local/bin/aba")):
         try:
             if p.exists() and p.is_file():
@@ -406,9 +408,10 @@ def uninstall(keep_runtime: bool = True) -> dict:
         except PermissionError:
             pass  # /usr/local/bin needs sudo — silently skip, user can clean up
 
-    # Remove env + repo; keep runtime + config unless keep_runtime=False
+    # Remove env + repo + the launcher/micromamba bin; keep runtime + config
+    # unless keep_runtime=False.
     removed = []
-    for sub in ("env", "repo", "installer", "logs"):
+    for sub in ("env", "repo", "installer", "logs", "bin"):
         target = home / sub
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)

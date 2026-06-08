@@ -1,7 +1,7 @@
 """Credential management.
 
 Two ways to authenticate, both persisted to ~/.aba/config.env (mode 0600),
-which the ABA launcher (~/bin/aba) sources at startup:
+which the ABA launcher ($ABA_HOME/bin/aba) sources at startup:
 
   • Anthropic API key  → ANTHROPIC_API_KEY (billed to the user's org).
   • Claude.ai subscription → a Claude Code OAuth token (from
@@ -130,7 +130,7 @@ def _parse_config_env(text: str) -> dict[str, str]:
 def _emit_config_env(entries: dict[str, str]) -> str:
     """Render entries back to a bash-sourceable config.env. Keys are
     written in deterministic order so re-emission is stable."""
-    lines = ["# ABA config — sourced by ~/bin/aba at startup.",
+    lines = ["# ABA config — sourced by $ABA_HOME/bin/aba at startup.",
              "# Auto-managed; safe to read, edit-by-hand at your own risk.",
              ""]
     for k in sorted(entries):

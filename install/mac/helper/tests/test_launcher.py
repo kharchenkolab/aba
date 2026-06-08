@@ -53,14 +53,10 @@ def test_render_uses_custom_template_text():
     assert out == "HOME=/x PORT=12345"
 
 
-def test_install_to_user_bin_writes_executable(tmp_aba_home, monkeypatch):
-    fake_home = tmp_aba_home / "homedir"
-    fake_home.mkdir()
-    monkeypatch.setenv("HOME", str(fake_home))
-    monkeypatch.setattr(Path, "home", lambda: fake_home)
-
+def test_install_to_user_bin_writes_executable(tmp_aba_home):
     dest = install_to_user_bin()
-    assert dest == fake_home / "bin" / "aba"
+    # Launcher lives under $ABA_HOME (self-contained), not ~/bin.
+    assert dest == tmp_aba_home / "bin" / "aba"
     assert dest.exists()
     mode = stat.S_IMODE(os.stat(dest).st_mode)
     assert mode == 0o755, f"expected 0755, got {oct(mode)}"
