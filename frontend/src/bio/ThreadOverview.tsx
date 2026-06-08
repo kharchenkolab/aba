@@ -1,6 +1,6 @@
 /**
  * Thread overview — the thread-scoped analog of the Project overview (P8/P9).
- * Four columns: Pinned → Runs → Claims → Open Questions. Status-grouped,
+ * Four columns: Results → Runs → Claims → Open Questions. Status-grouped,
  * filterable, click an entity to open it. Columns add intentionally (inline
  * input for claims/questions; a two-path dialog for pinned results); open
  * questions are click-to-edit with a "Discuss" action that asks the Guide.
@@ -212,7 +212,7 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
           {question ? <span className="overview__q">{question}</span>
                     : <span className="overview__q is-empty">No question framed yet</span>}
           <div className="overview__counts">
-            <span><b>{pinned.length}</b> Pinned</span>
+            <span><b>{pinned.length}</b> Results</span>
             <span><b>{runs.length}</b> Runs</span>
             <span><b>{claims.length}</b> Claims</span>
             <span><b>{oqs.length}</b> Open Qs</span>
@@ -234,7 +234,7 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
         </div>
       </div>
       <div className="overview__cols overview__cols--4">
-        <OverviewColumn title="Pinned" total={pinned.length} groups={pinnedGroups}
+        <OverviewColumn title="Results" total={pinned.length} groups={pinnedGroups}
                         onAdd={() => setPinnedDialog(true)} addTitle="Add a result"
                         emptyHint="Pin figures from the chat to build evidence." />
         <OverviewColumn title="Runs" total={runs.length} groups={runGroups} emptyHint="No analyses recorded." />
