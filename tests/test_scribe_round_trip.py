@@ -75,10 +75,12 @@ def _make_loaded_project(name: str) -> tuple[str, Path]:
     update_entity(eids[0], title="A-0 updated")
     update_entity(fids[2], metadata={"k": "v"})
 
-    # 8 edges (analysis → finding via 'supports')
-    for ai in range(4):
-        for fi in range(2):
-            add_edge(eids[ai], fids[(ai + fi) % 5], "supports")
+    # 8 edges (finding → finding via 'supports' — declared in finding.yaml's
+    # allowed_edges and tolerant of whether the entity-type registry has been
+    # loaded by a sibling test in this process).
+    for src_i in range(4):
+        for off in range(2):
+            add_edge(fids[src_i], fids[(src_i + 1 + off) % 5], "supports")
 
     # 6 messages across two threads
     for i in range(3):
@@ -187,7 +189,11 @@ def test_cli_recover_subcommand():
         capture_output=True, text=True, check=False,
     )
     assert r.returncode == 0, f"CLI exit={r.returncode}\nstderr:\n{r.stderr}\nstdout:\n{r.stdout}"
-    out = json.loads(r.stdout)
+    # Importing content.bio at process-start emits some boot lines to stdout.
+    # The report is the trailing JSON object — parse from the last `{` line.
+    lines = r.stdout.splitlines()
+    json_start = next(i for i, ln in enumerate(lines) if ln.startswith("{"))
+    out = json.loads("\n".join(lines[json_start:]))
     assert out["pid"] == pid
     assert out["entities"] >= 10
     assert (pdir / "project.db").exists()

@@ -142,7 +142,9 @@ class Scribe:
     sidecars + jsonl logs. Construct one per process (the module-level
     singleton in get_scribe()) or many for tests."""
 
-    def __init__(self, *, tick_interval: float = 1.0, max_queue_size: int = 10_000):
+    def __init__(self, *, tick_interval: float = 1.0, max_queue_size: int = 10_000,
+                 compact_threshold_bytes: int = 16 * 1024 * 1024,
+                 compact_check_every_ticks: int = 100):
         self._q: queue.Queue = queue.Queue(maxsize=max_queue_size)
         self._tick_interval = tick_interval
         self._stop = threading.Event()
@@ -151,8 +153,13 @@ class Scribe:
         # Per-project monotonic edge seq counter; loaded lazily.
         self._seqs: dict[str, int] = {}
         self._seqs_lock = threading.Lock()
-        # Tick counter (P4 will key compaction off this).
+        # Tick counter — P4 keys compaction off this.
         self._tick_count = 0
+        # P4 — compaction parameters.
+        self._compact_threshold = int(compact_threshold_bytes)
+        self._compact_every = int(compact_check_every_ticks)
+        # Track all pids we've written to so compaction has somewhere to look.
+        self._touched_pids: set[str] = set()
 
     # ─── lifecycle ──────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -200,6 +207,11 @@ class Scribe:
             try:
                 self._tick_count += 1
                 self._drain()
+                # P4 — every Nth tick (~ once per 100 s of activity), check
+                # edge log size and compact if over threshold. Synchronously
+                # in-band; rare (only fires when log actually grew).
+                if self._tick_count % self._compact_every == 0:
+                    self._maybe_compact_edges()
             except Exception:
                 _log.exception("scribe tick failed")
 
@@ -287,6 +299,76 @@ class Scribe:
         with log.open("a") as f:
             for d in lines:
                 f.write(json.dumps(d, default=str) + "\n")
+        self._touched_pids.add(pid)
+
+    # ─── P4 — compaction ────────────────────────────────────────────────────
+    def _maybe_compact_edges(self) -> None:
+        """For every pid we've written to in this process, stat edges.jsonl;
+        if over threshold, perform an in-band compaction. Synchronous in
+        the tick — the operation is rare (only fires when the log has
+        genuinely grown) and bounded by current edge-set size (~200 ms for
+        100k edges)."""
+        for pid in list(self._touched_pids):
+            try:
+                proot = _project_root(pid)
+                log = proot / "edges.jsonl"
+                if not log.exists():
+                    continue
+                if log.stat().st_size < self._compact_threshold:
+                    continue
+                self._compact_edges_for(pid, proot)
+            except Exception:
+                _log.exception("scribe: compaction failed (pid=%s)", pid)
+
+    def _compact_edges_for(self, pid: str, proot: Path) -> None:
+        """Query the live DB for current edges, write a snapshot, rotate the
+        tail. Snapshot lines re-use the regular `add` shape — recovery
+        replays them like any other entry."""
+        # Find the project DB
+        try:
+            from core.config import project_db_path  # noqa: PLC0415
+            db_file = project_db_path(pid)
+        except Exception:
+            return
+        if not db_file.exists():
+            return
+        import sqlite3 as _sql  # noqa: PLC0415
+        # Read current edge state
+        c = _sql.connect(db_file)
+        c.row_factory = _sql.Row
+        try:
+            rows = c.execute(
+                "SELECT source_id, target_id, rel_type, metadata, created_at "
+                "FROM entity_edges ORDER BY id"
+            ).fetchall()
+        finally:
+            c.close()
+        # Determine snapshot seq (== current persisted seq)
+        with self._seqs_lock:
+            seq = self._seqs.get(pid, self._load_seq(pid))
+        # Write snapshot
+        snap = proot / f"edges-snapshot-{seq}.jsonl"
+        snap_tmp = snap.with_suffix(snap.suffix + ".tmp")
+        with snap_tmp.open("w") as f:
+            for r in rows:
+                meta = r["metadata"]
+                try:
+                    meta = json.loads(meta) if meta else None
+                except Exception:
+                    pass
+                f.write(json.dumps({
+                    "_v": 1, "op": "add",
+                    "src": r["source_id"], "dst": r["target_id"], "rel": r["rel_type"],
+                    "meta": meta, "seq": seq, "ts": r["created_at"] or _utcnow_iso(),
+                }, default=str) + "\n")
+        snap_tmp.replace(snap)
+        # Rotate tail (archive the old log; start a fresh empty one)
+        log = proot / "edges.jsonl"
+        archived = proot / f"edges.jsonl.{seq}.archived"
+        try:
+            log.replace(archived)
+        except FileNotFoundError:
+            pass
 
     def _append_messages(self, pid: str, thread_id: Optional[str], lines: list[dict]) -> None:
         proot = _project_root(pid)
@@ -311,6 +393,11 @@ class Scribe:
             "aba_commit": commit,
             "aba_version": version,
             "pid": pid,
+            # Stamp the absolute project dir so cross-host import (recovery.md
+            # § 14 / I1) can compute the path-prefix substitution without
+            # having to guess. Same-host imports compare this to the target
+            # project_root and skip normalization if equal.
+            "source_project_dir": str(proot),
             **payload,
         }
         pf.write_text(json.dumps(out, default=str))
