@@ -57,6 +57,12 @@ export interface ToolStartBlock {
   liveElapsedS?: number
   /** ms timestamp of the most recent chunk — drives "last activity Xs ago". */
   lastChunkAt?: number
+  /** Fix #5 (2026-06-08) — tool returned {deferred:true,job_id} so the turn
+   *  halted in AWAITING_TOOL_RESULT. Render a queued badge with the job id
+   *  instead of a spinning chip; the eventual tool_result (delivered via the
+   *  job-complete webhook) will clear `deferred` and switch to ✓/✗. */
+  deferred?: boolean
+  deferredJobId?: string
 }
 export interface ToolResultBlock {
   type: 'tool_result'
@@ -152,6 +158,18 @@ export interface ClarificationPendingEvent {
   type: 'clarification_pending'
   question: string
   tool_use_id: string
+  run_id: string
+}
+
+/** Fix #5 — a tool returned {deferred:true, job_id}, halting the turn in
+ *  AWAITING_TOOL_RESULT. Frontend clears the tool_start's spinner and shows
+ *  a queued badge with the job id. The webhook later posts the real
+ *  tool_result, which the UI handles via the normal tool_result branch. */
+export interface DeferredToolPendingEvent {
+  type: 'deferred_tool_pending'
+  tool_name: string
+  tool_use_id: string
+  deferred_id: string
   run_id: string
 }
 
@@ -252,6 +270,7 @@ export type SSEEvent =
   | ClarificationPendingEvent
   | ApprovalPendingEvent
   | CancelledEvent
+  | DeferredToolPendingEvent
 
 // ---------- Entities ----------
 

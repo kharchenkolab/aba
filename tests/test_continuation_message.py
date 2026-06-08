@@ -124,6 +124,91 @@ def test_done_handles_missing_project_id_gracefully():
     assert "no new artifacts were registered" in msg
 
 
+# ─── Fix #6 — surface job work dir + file list ──────────────────────────────
+def _create_job_work_dir_with_files(pid: str, job_id: str,
+                                    filenames: list[str]) -> str:
+    """Create <work>/<job_id>/ with the given files. Returns its abs path."""
+    from core.config import project_work_dir
+    wd = project_work_dir(pid) / job_id
+    wd.mkdir(parents=True, exist_ok=True)
+    for n in filenames:
+        (wd / n).write_text("stub")
+    return str(wd)
+
+
+def test_files_blurb_lists_job_outputs_with_absolute_paths():
+    """The real bug: a background job left seurat_preprocessed.rds in
+    <work>/job_<id>/, but the next R cell readRDS()'d the bare filename
+    in <work>/ana_<id>/ and got 'gzfile: cannot open the connection'.
+    The continuation message must give the agent the full path."""
+    pid = "prj_files_paths"
+    _setup_project_with_entities(pid, 0, "2026-06-08T18:14:18+00:00")
+    job_id = "job_307f8db583"
+    wd = _create_job_work_dir_with_files(pid, job_id,
+        ["seurat_preprocessed.rds", "run.log", "script.R"])
+    msg = _continuation_message_text({
+        "id": job_id, "title": "Seurat preproc", "status": "done",
+        "started_at": "2026-06-08T18:14:18+00:00",
+    }, project_id=pid)
+    # Must surface the absolute job work dir, not just a bare filename.
+    assert wd in msg, f"expected {wd!r} in message; got: {msg}"
+    assert "seurat_preprocessed.rds" in msg
+    # Don't list housekeeping files — they're not pipeline outputs. We
+    # check inside the file listing specifically (the prose may legitimately
+    # mention "inspect run.log" as guidance — that's not a leak).
+    assert f"- {wd}/run.log" not in msg
+    assert f"- {wd}/script.R" not in msg
+    # Warn about cwd mismatch explicitly.
+    assert "absolute paths" in msg.lower()
+
+
+def test_files_blurb_caps_long_listings():
+    pid = "prj_files_cap"
+    _setup_project_with_entities(pid, 0, "2026-06-08T18:14:18+00:00")
+    job_id = "job_many"
+    names = [f"out_{i:03d}.csv" for i in range(50)]
+    _create_job_work_dir_with_files(pid, job_id, names)
+    msg = _continuation_message_text({
+        "id": job_id, "title": "many outputs", "status": "done",
+        "started_at": "2026-06-08T18:14:18+00:00",
+    }, project_id=pid)
+    # First 20 should be listed by name
+    assert "out_000.csv" in msg
+    assert "out_019.csv" in msg
+    # The 21st should NOT be (we capped at 20)
+    assert "out_020.csv" not in msg
+    # ...and the remainder should be summarized
+    assert "30 more" in msg
+
+
+def test_files_blurb_omitted_when_no_files():
+    """No work dir present → no files_blurb (don't fabricate paths)."""
+    pid = "prj_files_none"
+    _setup_project_with_entities(pid, 0, "2026-06-08T18:14:18+00:00")
+    msg = _continuation_message_text({
+        "id": "job_nodir", "title": "no work dir", "status": "done",
+        "started_at": "2026-06-08T18:14:18+00:00",
+    }, project_id=pid)
+    assert "Files written to" not in msg
+
+
+def test_files_blurb_present_in_success_branch_too():
+    """Even when N artifacts were registered, listing the raw files in the
+    job dir is useful — a Seurat run may register some figures AND leave
+    a giant .rds the agent should know how to find."""
+    pid = "prj_files_success"
+    _setup_project_with_entities(pid, 2, "2026-06-08T18:14:18+00:00")
+    job_id = "job_mixed"
+    _create_job_work_dir_with_files(pid, job_id, ["model.rds", "matrix.h5"])
+    msg = _continuation_message_text({
+        "id": job_id, "title": "mixed outputs", "status": "done",
+        "started_at": "2026-06-08T18:14:18+00:00",
+    }, project_id=pid)
+    assert "2 new artifacts registered" in msg
+    assert "model.rds" in msg
+    assert "matrix.h5" in msg
+
+
 # ─── runner ─────────────────────────────────────────────────────────────────
 TESTS = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 

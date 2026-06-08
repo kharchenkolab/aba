@@ -322,7 +322,11 @@
 .tool-line__icon { font-weight: 700; width: 12px; text-align: center; }
 .tool-line__label { font-style: italic; }
 .tool-line--done .tool-line__label,
-.tool-line--err .tool-line__label { font-style: normal; }
+.tool-line--err .tool-line__label,
+.tool-line--queued .tool-line__label { font-style: normal; }
+/* Fix #5 — a background-routed tool returned {deferred:true}. Distinct from
+   --run (spinning) and --done (✓): the work is real, queued elsewhere. */
+.tool-line--queued { color: var(--text-3); }
 /* Specific recipe/capability/etc. the tool acted on. Dimmer + monospace so
    the verb still leads but the named thing is clearly identifiable. */
 .tool-line__detail {

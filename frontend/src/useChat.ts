@@ -176,6 +176,7 @@ function logFor(ev: SSEEvent): LogEntry | null {
     case 'entity_registered': return { t, type: ev.type, label: `${ev.entity.type}: ${ev.entity.title}`, level: 2 }
     case 'clarification_pending': return { t, type: ev.type, label: ev.question, level: 2 }
     case 'approval_pending': return { t, type: ev.type, label: `approve ${ev.tool_name}`, level: 2 }
+    case 'deferred_tool_pending': return { t, type: ev.type, label: `${ev.tool_name} → queued (${ev.deferred_id})`, level: 2 }
     case 'manifest': return { t, type: ev.type, label: `turn ${ev.manifest.turn_index}`, level: 3 }
     default: return { t, type: (ev as { type: string }).type, label: '', level: 3 }
   }
@@ -639,6 +640,19 @@ export function useChat(
                 concerns: ev.concerns,
               })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+            } else if (ev.type === 'deferred_tool_pending') {
+              // Fix #5 — tool returned {deferred:true,job_id}. Clear the
+              // spinner on its tool_start chip (turn is halted in
+              // AWAITING_TOOL_RESULT; webhook posts the real tool_result
+              // later when the job finishes). Without this the chip spins
+              // for the whole job duration, defeating background-mode UX.
+              const target = streamingBlocks.findLast(b => b.type === 'tool_start'
+                && (b as { tool_use_id?: string }).tool_use_id === ev.tool_use_id)
+              if (target && target.type === 'tool_start') {
+                ;(target as { type: 'tool_start'; deferred?: boolean; deferredJobId?: string }).deferred = true
+                ;(target as { type: 'tool_start'; deferredJobId?: string }).deferredJobId = ev.deferred_id
+                setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
+              }
             } else if (ev.type === 'clarification_pending') {
               // B1 — Guide paused the turn on ask_clarification. Show the
               // question with an inline mini-composer; user's reply goes to
