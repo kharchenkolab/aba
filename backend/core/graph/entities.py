@@ -85,6 +85,18 @@ def create_entity(
     if entity_type not in ("workspace", "analysis", *HIDDEN_TYPES):  # noqa: seam
         kind = "scenario_created" if scenario_of else "entity_created"
         log_event(kind, entity_id=eid, title=title, detail={"type": entity_type})
+    _emit_upsert(eid, {
+        "id": eid, "type": entity_type, "title": title, "status": "active",
+        "artifact_path": artifact_path,
+        "producing_params": producing_params,
+        "parent_entity_id": parent_entity_id,
+        "scenario_of": scenario_of,
+        "metadata": metadata,
+        "exec_id": exec_id,
+        "artifact_kind": artifact_kind,
+        "artifact_idx": artifact_idx,
+        "created_at": now, "updated_at": now,
+    })
     return eid
 
 
@@ -227,7 +239,10 @@ def update_entity(entity_id: str, **fields) -> Optional[dict]:
         c.commit()
         if cur.rowcount == 0:
             return None
-    return get_entity(entity_id)
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
 
 
 def archive_entity(entity_id: str) -> Optional[dict]:
@@ -258,7 +273,10 @@ def archive_entity(entity_id: str) -> Optional[dict]:
         c.commit()
         if cur.rowcount == 0:
             return None
-    return get_entity(entity_id)
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
 
 
 def delete_entity_hard(entity_id: str) -> bool:
@@ -272,7 +290,10 @@ def delete_entity_hard(entity_id: str) -> bool:
                   (entity_id, entity_id))
         cur = c.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
         c.commit()
-        return cur.rowcount > 0
+        ok = cur.rowcount > 0
+    if ok:
+        _emit_delete(entity_id)
+    return ok
 
 
 def restore_entity(entity_id: str) -> Optional[dict]:
@@ -285,4 +306,31 @@ def restore_entity(entity_id: str) -> Optional[dict]:
         c.commit()
         if cur.rowcount == 0:
             return None
-    return get_entity(entity_id)
+    row = get_entity(entity_id)
+    if row:
+        _emit_upsert(entity_id, row)
+    return row
+
+
+# ─── Recovery archive emit ────────────────────────────────────────────────
+# Best-effort mirror of each entity mutation to the FS recovery archive
+# (misc/recovery.md). Failures here are swallowed: the DB write succeeded,
+# so the project is fine; we'll re-mirror on the next mutation. The drift
+# detector (P5) catches any sustained gap.
+
+def _emit_upsert(eid: str, row: dict) -> None:
+    try:
+        from core.recovery import get_scribe, EntityUpserted  # noqa: PLC0415
+        from core.config import current_project_id            # noqa: PLC0415
+        get_scribe().enqueue(EntityUpserted(pid=current_project_id(), entity_id=eid, row=row))
+    except Exception:
+        _log.debug("scribe emit_upsert failed (eid=%s)", eid, exc_info=True)
+
+
+def _emit_delete(eid: str) -> None:
+    try:
+        from core.recovery import get_scribe, EntityHardDeleted  # noqa: PLC0415
+        from core.config import current_project_id               # noqa: PLC0415
+        get_scribe().enqueue(EntityHardDeleted(pid=current_project_id(), entity_id=eid))
+    except Exception:
+        _log.debug("scribe emit_delete failed (eid=%s)", eid, exc_info=True)

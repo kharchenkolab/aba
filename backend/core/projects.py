@@ -188,6 +188,7 @@ def create_project(name: str) -> dict:
     _save(reg)
     set_current(pid)
     update_entity("workspace", title=entry["name"])  # in-project title = project name
+    _emit_project_meta(pid)
     return {**entry, "current": True, "counts": {}}
 
 
@@ -199,6 +200,7 @@ def rename_project(pid: str, name: str) -> None:
         if p["id"] == pid:
             p["name"] = (name or p["name"]).strip()[:80]
     _save(reg)
+    _emit_project_meta(pid)
 
 
 def delete_project(pid: str) -> None:
@@ -214,3 +216,27 @@ def delete_project(pid: str) -> None:
             set_current(reg[-1]["id"])
         else:
             _park_scratch()       # true empty state — no phantom project
+
+
+# ─── Recovery archive emit ────────────────────────────────────────────────
+def _emit_project_meta(pid: str) -> None:
+    """Best-effort: enqueue a ProjectMetaChanged event so the FS recovery
+    archive (misc/recovery.md) mirrors registry + workspace-entity state.
+    Failures swallowed — DB is authoritative."""
+    try:
+        from core.recovery import get_scribe, ProjectMetaChanged  # noqa: PLC0415
+        row = next((p for p in _load() if p["id"] == pid), None)
+        if not row:
+            return
+        ws = None
+        try:
+            from core.graph.entities import get_entity   # noqa: PLC0415
+            ws = get_entity("workspace")
+        except Exception:
+            pass
+        get_scribe().enqueue(ProjectMetaChanged(pid=pid, payload={
+            "registry": row,
+            "project_entity": ws,
+        }))
+    except Exception:
+        pass
