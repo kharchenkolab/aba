@@ -278,6 +278,9 @@
     if (start) start.disabled = running;
     if (stop) stop.disabled = !running;
     if (restart) restart.disabled = !running;
+    // "Open ABA" is a link, not a <button> — grey it out when stopped.
+    const open = document.getElementById('open-aba');
+    if (open) open.classList.toggle('disabled', !running);
   }
 
   // ─── playbook event stream (used by both Install + Update) ─────────────
