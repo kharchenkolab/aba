@@ -303,12 +303,13 @@ def _aba_launcher() -> Optional[Path]:
 
 
 def _backend_pid() -> Optional[int]:
-    """Heuristic: find a uvicorn main:app process owned by this user. Robust
-    enough for the helper's purposes — it doesn't share a port with anything
-    else by design."""
+    """Find THIS install's backend by its unique --app-dir. Scoped (not a bare
+    'uvicorn main:app') so a stale process from a crashed/old install doesn't
+    read as running — which would make /api/start no-op into a dead port."""
+    app_dir = str(repo_dir() / "aba" / "backend")
     try:
         proc = subprocess.run(
-            ["pgrep", "-f", "uvicorn.*main:app"],
+            ["pgrep", "-f", f"uvicorn main:app --app-dir {app_dir}"],
             capture_output=True, text=True, check=False, timeout=5,
         )
         out = (proc.stdout or "").strip()
