@@ -14,12 +14,28 @@
     <section class="page">
       <h1>Welcome to ABA</h1>
       <p class="lead">An AI-orchestrated workspace for biology.</p>
-      <p>Connect your account to begin:</p>
-      <div class="row">
+      <p>Connect your Anthropic account to begin:</p>
+
+      <div class="authtabs">
+        <button class="authtab active" id="tab-apikey" type="button">API key</button>
+        <button class="authtab" id="tab-oauth" type="button">Claude.ai subscription</button>
+      </div>
+
+      <div class="authpanel" id="panel-apikey">
         <label class="label">Anthropic API key
           <input type="password" id="apikey-input" placeholder="sk-ant-…" autocomplete="off" />
         </label>
+        <p class="muted">A paid Anthropic API key — billed to your organization.</p>
       </div>
+
+      <div class="authpanel" id="panel-oauth" hidden>
+        <p class="muted">Use your Claude Pro / Max subscription. In a Terminal, run
+          <code>claude setup-token</code> and paste the token it prints:</p>
+        <label class="label">Claude Code OAuth token
+          <input type="password" id="oauth-input" placeholder="sk-ant-oat…" autocomplete="off" />
+        </label>
+      </div>
+
       <p class="error" id="auth-error"></p>
       <button class="btn primary" id="auth-submit">Continue</button>
       <p class="muted">

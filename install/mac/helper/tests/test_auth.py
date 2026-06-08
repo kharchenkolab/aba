@@ -14,6 +14,7 @@ def client():
 
 VALID_KEY = "sk-ant-api03-" + "a" * 40
 ALT_KEY   = "sk-ant-api03-" + "b" * 40
+VALID_OAUTH = "sk-ant-oat01-" + "c" * 40
 
 
 def test_initial_status_no_credentials(client):
@@ -73,6 +74,41 @@ def test_set_apikey_persist_false_doesnt_write(client, tmp_aba_home):
     r = client.post("/api/auth/apikey", json={"key": VALID_KEY, "persist": False})
     assert r.json() == {"ok": True, "persisted": False}
     assert not (tmp_aba_home / "config.env").exists()
+
+
+def test_set_oauth_persists_subscription_creds(client, tmp_aba_home):
+    r = client.post("/api/auth/oauth", json={"token": VALID_OAUTH})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "persisted": True}
+    cfg = tmp_aba_home / "config.env"
+    assert cfg.exists()
+    assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+    text = cfg.read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in text and VALID_OAUTH in text
+    assert "ABA_LLM_CREDENTIAL=oauth_cc" in text
+    assert "ANTHROPIC_AUTH_FLOW=oauth" in text
+    # Status reflects the oauth flow
+    s = client.get("/api/auth/status").json()
+    assert s["credentials"] is True and s["flow"] == "oauth"
+
+
+def test_set_oauth_rejects_api_key_in_oauth_field(client):
+    # An API key (sk-ant-api…) is not an OAuth token — clear error.
+    r = client.post("/api/auth/oauth", json={"token": VALID_KEY})
+    assert r.status_code == 400
+
+
+def test_oauth_and_apikey_are_mutually_exclusive(client, tmp_aba_home):
+    # Setting oauth after a key drops the key, and vice-versa.
+    client.post("/api/auth/apikey", json={"key": VALID_KEY})
+    client.post("/api/auth/oauth", json={"token": VALID_OAUTH})
+    text = (tmp_aba_home / "config.env").read_text()
+    assert VALID_KEY not in text and "ANTHROPIC_API_KEY" not in text
+    assert VALID_OAUTH in text
+    client.post("/api/auth/apikey", json={"key": VALID_KEY})
+    text = (tmp_aba_home / "config.env").read_text()
+    assert VALID_OAUTH not in text and "CLAUDE_CODE_OAUTH_TOKEN" not in text
+    assert "ABA_LLM_CREDENTIAL" not in text
 
 
 def test_clear_credentials_removes_key_lines(client, tmp_aba_home):

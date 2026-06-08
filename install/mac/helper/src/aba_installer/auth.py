@@ -1,12 +1,15 @@
 """Credential management.
 
-For v1: API-key only. The user pastes an Anthropic API key in the UI; we
-persist it to ~/.aba/config.env at mode 0600.
-The ABA launcher (~/bin/aba) sources this file at startup so the
-backend has ANTHROPIC_API_KEY in env.
+Two ways to authenticate, both persisted to ~/.aba/config.env (mode 0600),
+which the ABA launcher (~/bin/aba) sources at startup:
 
-OAuth via claude.ai is deferred to H8 (requires hosted callback or the
-copy-paste device-flow shape).
+  • Anthropic API key  → ANTHROPIC_API_KEY (billed to the user's org).
+  • Claude.ai subscription → a Claude Code OAuth token (from
+    `claude setup-token`) in CLAUDE_CODE_OAUTH_TOKEN, plus
+    ABA_LLM_CREDENTIAL=oauth_cc so the backend uses the subscription bearer
+    for non-Haiku models. The backend reads CLAUDE_CODE_OAUTH_TOKEN first
+    and only falls back to ~/.claude if it's unset — so providing it here
+    keeps the backend off ~/.claude entirely (see core/llm.py:_oauth_bearer).
 """
 from __future__ import annotations
 import os
@@ -30,7 +33,16 @@ class ApiKeyIn(BaseModel):
     persist: bool = True
 
 
+class OAuthTokenIn(BaseModel):
+    token: str
+    persist: bool = True
+
+
+# An OAuth token (sk-ant-oat…) and an API key (sk-ant-api…) share the sk-ant-
+# prefix, so match the oauth marker specifically to give a clear error when a
+# user pastes the wrong one into the wrong field.
 _ANTHROPIC_KEY_PATTERN = re.compile(r"^sk-ant-[a-zA-Z0-9_\-]{16,}$")
+_OAUTH_TOKEN_PATTERN = re.compile(r"^sk-ant-oat[a-zA-Z0-9_\-]{16,}$")
 
 
 def _validate_api_key(key: str) -> None:
@@ -43,6 +55,16 @@ def _validate_api_key(key: str) -> None:
     if not _ANTHROPIC_KEY_PATTERN.match(stripped):
         raise HTTPException(status_code=400,
                             detail="key doesn't look like an Anthropic API key (sk-ant-…)")
+
+
+def _validate_oauth_token(token: str) -> None:
+    if not token or not isinstance(token, str):
+        raise HTTPException(status_code=400, detail="token must be a non-empty string")
+    if not _OAUTH_TOKEN_PATTERN.match(token.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="that doesn't look like a Claude Code OAuth token (sk-ant-oat…). "
+                   "Run `claude setup-token` in a terminal and paste what it prints.")
 
 
 # ─── persistence ───────────────────────────────────────────────────────────
@@ -105,6 +127,32 @@ def set_apikey(payload: ApiKeyIn) -> dict:
     entries = _read_config_env()
     entries["ANTHROPIC_API_KEY"] = payload.key.strip()
     entries["ANTHROPIC_AUTH_FLOW"] = "api_key"
+    # Switching from a prior OAuth setup → drop the subscription creds so the
+    # backend doesn't see a stale mode.
+    entries.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    entries.pop("ABA_LLM_CREDENTIAL", None)
+    entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
+    entries.setdefault("ABA_HOME", str(aba_home()))
+    _write_config_env(entries)
+    return {"ok": True, "persisted": True}
+
+
+@router.post("/oauth")
+def set_oauth(payload: OAuthTokenIn) -> dict:
+    """Persist a Claude Code OAuth token (Claude.ai Pro/Max subscription).
+
+    Writes CLAUDE_CODE_OAUTH_TOKEN + ABA_LLM_CREDENTIAL=oauth_cc so the
+    backend bills the user's subscription and can use non-Haiku models.
+    """
+    _validate_oauth_token(payload.token)
+    if not payload.persist:
+        return {"ok": True, "persisted": False}
+    entries = _read_config_env()
+    entries["CLAUDE_CODE_OAUTH_TOKEN"] = payload.token.strip()
+    entries["ABA_LLM_CREDENTIAL"] = "oauth_cc"
+    entries["ANTHROPIC_AUTH_FLOW"] = "oauth"
+    # Switching from a prior API-key setup → drop the key.
+    entries.pop("ANTHROPIC_API_KEY", None)
     entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
     entries.setdefault("ABA_HOME", str(aba_home()))
     _write_config_env(entries)
@@ -116,7 +164,9 @@ def auth_status() -> dict:
     """Whether credentials exist, and which flow. NEVER echoes the key itself."""
     entries = _read_config_env()
     flow = entries.get("ANTHROPIC_AUTH_FLOW")
-    has_key = bool(entries.get("ANTHROPIC_API_KEY") or entries.get("ANTHROPIC_AUTH_TOKEN"))
+    has_key = bool(entries.get("ANTHROPIC_API_KEY")
+                   or entries.get("ANTHROPIC_AUTH_TOKEN")
+                   or entries.get("CLAUDE_CODE_OAUTH_TOKEN"))
     return {
         "credentials": has_key,
         "flow": flow,
@@ -130,7 +180,8 @@ def clear_credentials() -> dict:
     """Remove the API key / token from config.env. Other entries preserved."""
     entries = _read_config_env()
     removed = []
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_FLOW"):
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_FLOW",
+              "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL"):
         if entries.pop(k, None) is not None:
             removed.append(k)
     if entries:
