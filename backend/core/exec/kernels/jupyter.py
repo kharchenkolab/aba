@@ -283,6 +283,14 @@ def _kernel_env(lang: str, cwd: str) -> dict:
     env["DATA_DIR"] = str(data_dir)
     env["ARTIFACTS_DIR"] = str(artifacts_dir)
     env["WORK_DIR"] = str(cwd)
+    # ABA_PYTHON: the python interpreter that has ABA's deps installed
+    # (numpy / scipy / typst / ...). The R kernel runs on a separate conda
+    # tools env whose `python3` doesn't see these, so code in run_r that
+    # wants to shell out for a Python-only library (e.g. typst.compile)
+    # needs an explicit pointer. compose-figure-typst's R template reads
+    # this. Set unconditionally so the contract is the same in both
+    # kernels.
+    env["ABA_PYTHON"] = sys.executable
     nthreads = str(_kernel_threads())
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
                 "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
