@@ -439,7 +439,6 @@ def test_6D_thirteen_curation_tools_registered():
     from content.bio.mcp_servers.aba_core import make_server
     out = g["register"]("aba_core", make_server)
     expected = {
-        "aba_core:pin_entity",
         "aba_core:promote_to_result",
         "aba_core:create_finding",
         "aba_core:create_claim",

@@ -134,7 +134,6 @@ from .curation import (    # noqa: F401, E402
     _compound_ext,
     add_to_dataset_tool,
     remove_from_dataset_tool,
-    pin_entity_tool,
     promote_to_result_tool,
     create_finding_tool,
     create_claim_tool,

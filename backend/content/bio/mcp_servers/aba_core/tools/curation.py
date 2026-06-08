@@ -1,6 +1,6 @@
-"""Phase 6.D — curation cluster (13 tools).
+"""Phase 6.D — curation cluster.
 
-The agent's highest-volume gestures: pin/promote evidence, draft
+The agent's highest-volume gestures: promote evidence, draft
 findings/claims, attach annotations, archive, register/grow datasets,
 open/close runs, manage reference data.
 
@@ -10,6 +10,12 @@ declared here mirror TOOL_SCHEMAS (same param names, same required vs
 optional). When 6.I prunes TOOL_SCHEMAS and flips expose_in_catalog=True,
 THESE annotations become the source of truth — adding a new curation
 tool will be one @mcp.tool() block here, no edit anywhere else.
+
+NOTE: `pin_entity` was retired 2026-06-08 (entity-mgmt refactor Phase 1).
+It toggled a legacy `pinned` boolean column that no UI surface has read
+since task #318 unified "pin" semantics around promote_to_result /
+pin_evidence. The actual pin op the agent should use is
+`promote_to_result` (figure → new Result) — pin_evidence in the backend.
 """
 from __future__ import annotations
 
@@ -17,19 +23,9 @@ from mcp.server.fastmcp import FastMCP
 
 
 def register_curation_tools(mcp: FastMCP) -> None:
-    """Register the 13 curation tools on `mcp`. All take ctx for
+    """Register the curation tools on `mcp`. All take ctx for
     thread_id resolution (most write a new entity; the thread it
     belongs to comes from ctx)."""
-
-    @mcp.tool()
-    def pin_entity(entity_id: str, pinned: bool = True,
-                   aba_ctx_id: str | None = None) -> dict:
-        """Pin a figure/table as a Result for the current thread (or
-        unpin it). The kept evidence shows up in Results."""
-        from core.runtime.tool_ctx import peek_ctx
-        from content.bio.tools import pin_entity_tool
-        return pin_entity_tool({"entity_id": entity_id, "pinned": pinned},
-                               peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def promote_to_result(figure_id: str, interpretation: str,

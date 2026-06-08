@@ -446,16 +446,11 @@ def remove_from_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             "dataset_dir": dest_dir, "note": note}
 
 
-def pin_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
-    eid = input_.get("entity_id")
-    if not eid:
-        return {"error": "entity_id is required"}
-    from core.graph.entities import get_entity, update_entity
-    if not get_entity(eid):
-        return {"error": f"entity {eid} not found"}
-    pinned = bool(input_.get("pinned", True))
-    update_entity(eid, pinned=pinned)
-    return {"status": "ok", "entity_id": eid, "pinned": pinned}
+# pin_entity_tool removed 2026-06-08 (entity-mgmt refactor Phase 1).
+# It toggled a legacy `pinned` boolean column that no UI surface has
+# read since task #318 unified "pin" semantics around
+# promote_to_result / pin_evidence. The actual pin op is
+# promote_to_result_tool below (figure → new Result).
 
 
 def promote_to_result_tool(input_: dict, ctx: dict | None = None) -> dict:
