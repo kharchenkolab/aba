@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Literal, Optional
 
+from core.graph._schema import _conn
 from core.graph.edges import add_edge
 from core.graph.entities import create_entity, get_entity
 from core.graph import exec_records
@@ -51,6 +52,37 @@ def _resolve_language(parent_entity: dict) -> Language:
     return _detect_language(code) if code else "python"
 
 
+def _newer_than(entity_id: str) -> list[str]:
+    """Walk the wasRevisionOf graph FORWARD from `entity_id` and collect
+    every entity that is "newer than" it (i.e., any descendant via
+    `--wasRevisionOf-->`-incoming edges). Returns active entity ids in
+    BFS order. Used to find what to mark `superseded` when a user
+    revises from a non-latest revision."""
+    out: list[str] = []
+    seen = {entity_id}
+    frontier = [entity_id]
+    while frontier:
+        nxt: list[str] = []
+        for cur in frontier:
+            with _conn() as c:
+                rows = c.execute(
+                    "SELECT eb.source_id FROM entity_edges eb "
+                    "JOIN entities e ON e.id = eb.source_id "
+                    "WHERE eb.target_id=? AND eb.rel_type='wasRevisionOf' "
+                    "AND e.status='active'",
+                    (cur,),
+                ).fetchall()
+            for r in rows:
+                sid = r["source_id"]
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                nxt.append(sid)
+                out.append(sid)
+        frontier = nxt
+    return out
+
+
 def make_revision(
     entity_id: str,
     modified_code: str,
@@ -58,19 +90,31 @@ def make_revision(
     language: Optional[Language] = None,
     title: Optional[str] = None,
     thread_id: Optional[str] = None,
+    supersede_newer: bool = False,
 ) -> dict:
     """Run `modified_code` and pin the new artifact as a wasRevisionOf the
     given parent figure/table entity. Both stay pinned siblings.
+
+    By default (supersede_newer=False): if the parent already has a
+    newer revision, the call REFUSES with ValueError. This protects
+    the linear-chain invariant for callers that don't know whether
+    they're revising the latest. Pass `supersede_newer=True` to
+    explicitly accept that any currently-newer revisions will be
+    marked status='superseded' to make the new revision the latest.
+    The UI surfaces this via a confirmation dialog before passing the
+    flag through.
 
     Returns: {
         "new_entity_id": str,
         "exec_id": str,                # exec record of the revision's run
         "wasRevisionOf": entity_id,    # parent
+        "superseded": [...],           # ids marked superseded (if any)
         "produced": [...],             # artifacts from the run
     }
 
-    Raises ValueError if the parent doesn't exist, has the wrong type, or
-    the modified code produced no artifacts.
+    Raises ValueError if the parent doesn't exist, has the wrong type,
+    the modified code produced no artifacts, OR the parent has newer
+    active revisions and `supersede_newer` is False.
     """
     parent = get_entity(entity_id)
     if not parent:
@@ -81,6 +125,17 @@ def make_revision(
         )
     if not modified_code or not modified_code.strip():
         raise ValueError("modified_code is empty")
+
+    # Linear-chain guard: refuse if there are newer revisions and the
+    # caller hasn't opted in to superseding them. Returns the list so
+    # the frontend can surface them in the confirmation dialog.
+    newer = _newer_than(entity_id)
+    if newer and not supersede_newer:
+        raise ValueError(
+            "cannot revise from a non-latest revision without "
+            "supersede_newer=True (would create a branch; "
+            f"newer entries: {newer})"
+        )
 
     lang: Language = language or _resolve_language(parent)
     from content.bio.tools.run_exec import run_python, run_r
@@ -113,17 +168,24 @@ def make_revision(
     # revisions would land more entities via the normal registry path; for
     # the make_revision UX, idx=0 is the user's intent.
     art = artifacts[0]
+    art_url = art.get("url")
+    # Mirror materialize_entity_from_artifact: non-raster canonicals
+    # (PDF today) get a derived PNG preview so the browser can render
+    # the panel thumbnail faithfully from the actual artifact.
+    from core.exec.previews import ensure_preview
+    preview_url = ensure_preview(art_url) if art_url else None
     derived_title = (title or parent.get("title") or "Revision").strip()[:120]
     new_eid = create_entity(
         entity_type=kind,
         title=derived_title,
-        artifact_path=art.get("url"),
+        artifact_path=art_url,
         parent_entity_id=parent.get("parent_entity_id"),
         metadata={
             "thread_id": tid or None,
             "origin": "internal",
             "revision_of": entity_id,
             "original_name": art.get("original_name") or art.get("name"),
+            **({"preview_path": preview_url} if preview_url else {}),
         },
         exec_id=new_exec_id,
         artifact_kind=kind,
@@ -134,9 +196,40 @@ def make_revision(
     add_edge(new_eid, entity_id, "wasRevisionOf",
              {"created_by": "make_revision"})
 
+    # Supersede any previously-newer revisions so the chain stays
+    # linear when displayed. The status_model on figure.yaml /
+    # table.yaml already declares `superseded` as a legal transition
+    # from `active`. update_entity validates via core.lifecycle.
+    superseded_ids: list[str] = []
+    if newer:
+        from core.graph.entities import update_entity as _upd_ent
+        for old_id in newer:
+            try:
+                _upd_ent(old_id, status="superseded")
+                superseded_ids.append(old_id)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("supersede failed for %s: %s", old_id, e)
+
+    # Broadcast entity_updated so the frontend's SSE listener triggers a
+    # refresh — without this, the user has to reload the page to see the
+    # new chevrons appear on the focused Result. Best-effort: a failed
+    # broadcast must not roll back the revision.
+    try:
+        from core.runtime.notifications import broadcast
+        broadcast({
+            "type": "entity_updated",
+            "entity_id": new_eid,
+            "reason": "revision_created",
+            "wasRevisionOf": entity_id,
+            "superseded": superseded_ids,
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
     return {
         "new_entity_id": new_eid,
         "exec_id": new_exec_id,
+        "superseded": superseded_ids,
         "wasRevisionOf": entity_id,
         "produced": result.get("plots") if kind == "figure" else result.get("tables"),
     }

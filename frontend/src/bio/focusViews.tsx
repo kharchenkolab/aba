@@ -35,7 +35,10 @@ import FileBrowser, { type TreeNode } from '../components/FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
 import UploadDrop from '../components/UploadDrop'
-import RevisionChevrons from './RevisionChevrons'
+// RevisionChevrons (floating overlay) is deprecated 2026-06-07. The
+// new RevisionStrip lives in ResultView's MemberPanel (below the figure,
+// not over it). Direct figure/table focus surfaces lean on the
+// FocusCanvas header's history clock + SplitButton — no in-body chevrons.
 
 
 // ---------- Registry API ----------
@@ -55,7 +58,8 @@ export interface FocusViewProps {
   onAsk?: (text: string) => void
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
-                  action?: 'chat' | 'revision' | 'reproduce') => void
+                  action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
+                  entityId?: string) => void
   onBrowseFiles?: (path?: string) => void
   projectId?: string
 }
@@ -182,7 +186,8 @@ function DatasetFiles({ entity, onFocus, onChatResult, onChange, projectId }: {
   onFocus: (id: string) => void
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
-                  action?: 'chat' | 'revision' | 'reproduce') => void
+                  action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
+                  entityId?: string) => void
   onChange: () => void
   projectId?: string
 }) {
@@ -271,15 +276,11 @@ function formatBytes(n: number): string {
 // ---------- Per-entity-type view components ----------
 
 
-function FigureView({ entity, onFocus }: FocusViewProps) {
+function FigureView({ entity }: FocusViewProps) {
   if (!entity.artifact_path) {
     return <p className="focus__placeholder">No artifact attached.</p>
   }
-  return (
-    <RevisionChevrons entity_id={entity.id} onFocus={onFocus}>
-      <img className="focus__figure" src={entity.artifact_path} alt={entity.title} />
-    </RevisionChevrons>
-  )
+  return <img className="focus__figure" src={entity.artifact_path} alt={entity.title} />
 }
 
 
@@ -351,12 +352,8 @@ function NoteView({ entity }: FocusViewProps) {
 }
 
 
-function TableView({ entity, onFocus }: FocusViewProps) {
-  return (
-    <RevisionChevrons entity_id={entity.id} onFocus={onFocus}>
-      <PreviewTable entityId={entity.id} pageSize={25} />
-    </RevisionChevrons>
-  )
+function TableView({ entity }: FocusViewProps) {
+  return <PreviewTable entityId={entity.id} pageSize={25} />
 }
 
 

@@ -122,15 +122,24 @@ def materialize_entity_from_artifact(
         parent_entity_id = rec.get("run_id") or None
 
     entity_type = _KIND_TO_TYPE[kind]
+    artifact_url = artifact.get("url")
+    # Browser-displayable preview for non-raster canonicals (PDF today).
+    # PNGs return None and we never write a preview_path — the frontend
+    # falls back to artifact_path. Best-effort: a failed rasterize
+    # leaves preview_path null, the panel shows a broken thumb but the
+    # download still works.
+    from core.exec.previews import ensure_preview
+    preview_url = ensure_preview(artifact_url) if artifact_url else None
     eid = create_entity(
         entity_type=entity_type,
         title=derived_title,
-        artifact_path=artifact.get("url"),
+        artifact_path=artifact_url,
         parent_entity_id=parent_entity_id,
         metadata={
             "thread_id": tid,
             "origin": "internal",
             "original_name": artifact.get("original_name"),
+            **({"preview_path": preview_url} if preview_url else {}),
         },
         exec_id=exec_id,
         artifact_kind=kind,

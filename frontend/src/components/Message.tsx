@@ -479,11 +479,29 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
     img: (props: { src?: string; alt?: string }) => (
       <img src={fixFileUrl(props.src)} alt={props.alt ?? ''} />
     ),
-    a: (props: { href?: string; children?: React.ReactNode; title?: string }) => (
-      <a href={fixFileUrl(props.href)} title={props.title}
-         target={(props.href || '').startsWith('/artifacts/') ? '_blank' : undefined}
-         rel="noreferrer">{props.children}</a>
-    ),
+    a: (props: { href?: string; children?: React.ReactNode; title?: string }) => {
+      const href = fixFileUrl(props.href)
+      const isArtifact = (props.href || '').startsWith('/artifacts/')
+      // For artifact links, derive a human-readable download filename
+      // from the visible link text. Without this the browser falls back
+      // to the URL's basename, which is the content-hash for /artifacts/
+      // paths ("183906e6...pdf") and reads as a broken/garbage filename
+      // when the user hits Save. The visible text is the agent's own
+      // label (e.g. "Open umap_leiden.pdf") — strip a leading "Open "
+      // verb so the saved file is just `umap_leiden.pdf`.
+      let downloadName: string | undefined
+      if (isArtifact) {
+        const txt = (typeof props.children === 'string' ? props.children : '').trim()
+        const m = /([\w.\-+]+\.(?:pdf|svg|csv|tsv|html?|rds|h5ad|h5|parquet|xlsx|json|md|txt|png|jpe?g|webp|gif))$/i.exec(txt)
+        if (m) downloadName = m[1]
+      }
+      return (
+        <a href={href} title={props.title}
+           target={isArtifact ? '_blank' : undefined}
+           download={downloadName}
+           rel="noreferrer">{props.children}</a>
+      )
+    },
     // Override inline `code` so basenames the agent quotes resolve to a link
     // (only when the basename actually corresponds to a file written this
     // thread). Bare code (variable names, identifiers) renders unchanged.
@@ -548,11 +566,17 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
       // the entity on-click. Otherwise the legacy FigurePin path handles
       // the toggle.
       const artifactId = (b as { artifact_id?: string }).artifact_id
+      // Display source: preview rasterization (for PDF/non-raster
+      // canonicals) takes precedence over the canonical so <img> renders
+      // something the browser actually displays. Canonical stays the
+      // download target for any future "open original" affordance.
+      const previewUrl = (b as { preview_url?: string }).preview_url
+      const displaySrc = previewUrl ?? b.url
       out.push(
         <div key={i} className="msg-image">
           {ent && <div className="msg-image__head"><span className="msg-image__title">{ent.title}</span></div>}
           <div className="msg-image__frame">
-            <ZoomableImg src={b.url} alt={b.alt ?? 'plot'} />
+            <ZoomableImg src={displaySrc} alt={b.alt ?? 'plot'} />
             {ent && onPin ? (
               <div className="msg-image__tools">
                 <FigurePin entity={ent} isPinned={!!pinnedFigureIds?.has(ent.id)} onPin={onPin} />

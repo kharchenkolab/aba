@@ -74,6 +74,10 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
               // pre-materialized entity. exec_id comes from run_python's
               // post-harvest write of the execution_records row.
               artifact_id: _exec_id ? `${_exec_id}:figure:${i}` : undefined,
+              // PDF (and any future non-raster figure format) — backend
+              // annotates with the rasterized .preview.png so chat can
+              // <img src> something a browser actually renders.
+              preview_url: p.preview_url,
             })
           }
         }
@@ -583,7 +587,7 @@ export function useChat(
             } else if (ev.type === 'tool_result') {
               streamingBlocks.push({ type: 'tool_result', name: ev.name, result: ev.result, tool_use_id: ev.tool_use_id })
               const plots = (ev.result as Record<string, unknown>).plots as
-                | { url: string; original_name: string }[]
+                | { url: string; original_name: string; preview_url?: string }[]
                 | undefined
               const _exec_id_live = (ev.result as Record<string, unknown>).exec_id
               const _exec_id = (typeof _exec_id_live === 'string') ? _exec_id_live : undefined
@@ -593,6 +597,7 @@ export function useChat(
                   streamingBlocks.push({
                     type: 'image', url: p.url, alt: p.original_name,
                     artifact_id: _exec_id ? `${_exec_id}:figure:${i}` : undefined,
+                    preview_url: p.preview_url,
                   })
                 }
               }

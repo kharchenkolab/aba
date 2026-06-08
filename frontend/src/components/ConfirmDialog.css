@@ -1,0 +1,92 @@
+/* ConfirmDialog — small modal for destructive/blocking confirmations.
+   See ConfirmDialog.tsx for contract. */
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.confirm-dialog {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 22px;
+  max-width: 480px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+}
+
+.confirm-dialog__title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.confirm-dialog__body {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.confirm-dialog__body p {
+  margin: 0 0 8px;
+}
+.confirm-dialog__body p:last-child {
+  margin-bottom: 0;
+}
+.confirm-dialog__body strong {
+  color: var(--text);
+}
+.confirm-dialog__body code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.confirm-dialog__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm-dialog__btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.confirm-dialog__btn:hover {
+  background: var(--bg);
+}
+
+.confirm-dialog__btn--destructive {
+  background: var(--danger, #c0392c) !important;
+  border-color: var(--danger, #c0392c) !important;
+  color: white !important;
+}
+.confirm-dialog__btn--warning {
+  background: var(--warn, #c0782c) !important;
+  border-color: var(--warn, #c0782c) !important;
+  color: white !important;
+}
+.confirm-dialog__btn--info {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: white !important;
+}
+.confirm-dialog__btn--destructive:hover,
+.confirm-dialog__btn--warning:hover,
+.confirm-dialog__btn--info:hover {
+  filter: brightness(1.08);
+}

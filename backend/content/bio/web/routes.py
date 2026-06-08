@@ -590,6 +590,11 @@ def list_revisions(entity_id: str):
 class MakeRevisionRequest(BaseModel):
     modified_code: str
     title: str | None = None
+    # When True, allows revising from a non-latest revision; any newer
+    # entries in the chain get marked status='superseded' so the
+    # displayed chain stays linear. The frontend gates this behind a
+    # confirmation dialog. Default False = refuse non-latest revisions.
+    supersede_newer: bool = False
 
 
 @router.post("/api/entities/{entity_id}/make_revision")
@@ -597,6 +602,11 @@ def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
     """Run `modified_code` and pin the new artifact as wasRevisionOf
     `entity_id`. Both stay pinned siblings — the original is NOT
     auto-superseded. Returns the new entity record (figure or table).
+
+    If `entity_id` has newer revisions and `supersede_newer` is False
+    (the default), responds 400 with a `newer` list so the UI can
+    surface a confirmation dialog. Re-send with `supersede_newer=True`
+    to accept.
     """
     from content.bio.lifecycle.revisions import make_revision
     ent = get_entity(entity_id)
@@ -607,6 +617,7 @@ def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
             entity_id, req.modified_code,
             title=req.title,
             thread_id=(ent.get("metadata") or {}).get("thread_id"),
+            supersede_newer=req.supersede_newer,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -615,6 +626,7 @@ def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
         "entity": new_ent,
         "exec_id": out.get("exec_id"),
         "wasRevisionOf": out.get("wasRevisionOf"),
+        "superseded": out.get("superseded", []),
     }
 
 

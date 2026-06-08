@@ -198,7 +198,15 @@ def render_focus_preamble(manifest: Manifest) -> tuple[str, list[str]]:
     text = manifest.focus.text + "\n"
     text += (
         "When the user asks questions, answer in the context of this entity. "
-        "Do not require the user to re-identify which entity they mean."
+        "Do not require the user to re-identify which entity they mean. "
+        # Deixis rule — added 2026-06-07 after the focus regression in
+        # thr_806a2ced where the agent asked the user to pick between
+        # the focused entity and a prior conversation-history figure.
+        "Deictic references in the user's message ('this figure', 'this "
+        "plot', 'this result', 'this table', 'this run') ALWAYS resolve "
+        "to the entity above — even when the conversation history just "
+        "discussed a different entity. Do NOT ask the user to choose "
+        "between the focused entity and a previously-discussed one."
     )
     text += "\n\n"
     if manifest.policy_text:

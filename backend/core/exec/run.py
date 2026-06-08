@@ -129,7 +129,11 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
             continue
         if f.name.startswith("."):
             continue
-        if f.name.endswith(".thumb.png"):
+        # Skip rasterized-preview sidecars (PDFs and any future
+        # non-raster figure formats). Both the legacy .thumb.png name
+        # (pre-2026-06-07) and the current .preview.png name are
+        # filtered so a re-harvest doesn't surface caches as content.
+        if f.name.endswith(".thumb.png") or f.name.endswith(".preview.png"):
             continue
         if f.suffix.lower() not in suff:
             continue
@@ -210,6 +214,13 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0
     # 3) Other useful files — PDFs, HTML, RDS, h5ad, etc. Cap each at
     # MAX_HARVEST_BYTES; oversize ones go to warnings so the agent can
     # mention them but they're not auto-copied to /artifacts.
+    #
+    # PDF special-case: a single-page PDF written by recipe/agent code
+    # (typical for figure exports via cairo_pdf, ggsave, matplotlib's
+    # PdfPages with one page) is conceptually a FIGURE — it deserves
+    # to land in `plots` so it ends up on a Result, gets a preview
+    # rasterization, and joins the revisions chain. Multi-page PDFs
+    # are reports/manuscripts and stay in `files` where downloads live.
     for f in _iter_kept(scratch, _FILE_EXTS, since_ts):
         try:
             st = f.stat()
@@ -222,9 +233,40 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0
                 f"won't be linkable from chat."
             )
             continue
-        _copy_and_record(f, files, f.suffix.lower())
+        suf = f.suffix.lower()
+        if suf == ".pdf" and _pdf_page_count(f) == 1:
+            _copy_and_record(f, plots, suf)
+            # Annotate with a rasterized preview URL so chat-inline
+            # rendering can <img src=...> something the browser can
+            # actually display. The canonical url stays the PDF — that
+            # remains what downloads / pin / "open original" operate on.
+            # Without this annotation, the chat shows a broken-image
+            # icon for PDF plots (regression 2026-06-07 after the
+            # Phase 2 PDF-as-figure promotion).
+            from core.exec.previews import ensure_preview
+            try:
+                pv = ensure_preview(plots[-1]["url"])
+                if pv:
+                    plots[-1]["preview_url"] = pv
+            except Exception:  # noqa: BLE001 — preview is best-effort
+                pass
+            continue
+        _copy_and_record(f, files, suf)
 
     return plots, tables, files, warnings
+
+
+def _pdf_page_count(pdf_path: Path) -> int:
+    """Return the number of pages in `pdf_path`. Returns 0 if pypdfium2
+    isn't available or the file isn't parseable as a PDF. Treats a
+    parse failure as "not 1 page" so the file falls through to the
+    files bucket (the harvester's safe default)."""
+    try:
+        import pypdfium2 as pdfium  # type: ignore[import-not-found]
+        doc = pdfium.PdfDocument(str(pdf_path))
+        return len(doc)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _png_is_blank(path: Path) -> bool:

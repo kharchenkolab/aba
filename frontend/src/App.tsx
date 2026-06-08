@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUrlState } from './useUrlState'
+import { useResetOnChange } from './hooks/useResetOnChange'
 import './App.css'
 import Rail from './components/Rail'
 import ProjectTree from './components/ProjectTree'
@@ -278,6 +279,10 @@ export default function App() {
     setPosture((focusedId !== 'workspace' || viewedFile) ? 'entity' : 'chat')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedId, viewedFile])
+
+  // Clear any in-flight annotation (image + framing note) when focus
+  // changes — see hooks/useResetOnChange for full rationale.
+  useResetOnChange(focusedId, () => setAnnotation(null))
 
   // Root URL ("/") = the project selector. We deliberately do NOT auto-
   // redirect into the server-side current project; that would flash the
@@ -580,14 +585,24 @@ export default function App() {
   // misc/exec_records_and_versioning.md). Default 'chat' preserves the
   // pre-existing flow; 'revision' and 'reproduce' carry the agent to
   // the make_revision / reproduce_from_exec tools via a tailored prefill.
-  type FigureAction = 'chat' | 'revision' | 'reproduce'
+  // 'revision-supersede' is the user-confirmed branch when revising from
+  // a NON-LATEST revision in the chain; it tells the agent to pass
+  // supersede_newer=True to make_revision (which marks the displaced
+  // newer revisions as status='superseded' so the visible chain stays
+  // linear). The confirmation dialog lives in RevisionStrip.
+  type FigureAction = 'chat' | 'revision' | 'revision-supersede' | 'reproduce'
   const chatAboutResult = async (
     label: string,
     thumb?: string,
     annotation?: { image: string; note: string },
     action: FigureAction = 'chat',
+    entityId?: string,
   ) => {
     if (overview || inventory) { setFocusedId('workspace') }
+    // Build a precise entity-id clause when we have one. Including it
+    // explicitly removes the agent's guesswork (the focused entity is
+    // often the Result, not the figure the user clicked on).
+    const idClause = entityId ? ` (entity_id="${entityId}")` : ''
     if (annotation) {
       // Already-composited image (e.g. a highlighted region) — attach as-is.
       attachAnnotation(annotation)
@@ -602,20 +617,24 @@ export default function App() {
             fr.readAsDataURL(blob)
           })
           if (b64) {
-            const note = action === 'revision'
-              ? `The user wants a revision of "${label}". The attached image is the current figure — examine it, then call make_revision with modified code.`
+            const note = action === 'revision-supersede'
+              ? `The user has explicitly CONFIRMED revising from a non-latest revision of "${label}"${idClause}. Any newer revisions will be displaced. Call make_revision(entity_id, modified_code, supersede_newer=True). The attached image is the revision the user is revising FROM.`
+              : action === 'revision'
+              ? `The user wants a revision of "${label}"${idClause}. The attached image is the current figure — examine it, then call make_revision(entity_id, modified_code) with modified code.`
               : action === 'reproduce'
-              ? `The user wants to reproduce "${label}". The attached image is the current figure — call reproduce_from_exec(entity_id) and report any drift.`
-              : `The user is asking about the run output "${label}". The attached image is that plot — examine it.`
+              ? `The user wants to reproduce "${label}"${idClause}. The attached image is the current figure — call reproduce_from_exec(entity_id) and report any drift.`
+              : `The user is asking about the run output "${label}"${idClause}. The attached image is that plot — examine it.`
             attachAnnotation({ image: b64, note })
           }
         }
       } catch { /* not fetchable (remote/CORS) — prefill only */ }
     }
-    const prefill = action === 'revision'
-      ? `Make a revision of "${label}" with the following change: `
+    const prefill = action === 'revision-supersede'
+      ? `Make a revision of "${label}"${idClause} (superseding any newer revisions — confirmed). Change: `
+      : action === 'revision'
+      ? `Make a revision of "${label}"${idClause} with the following change: `
       : action === 'reproduce'
-      ? `Reproduce "${label}". Re-run the exec in the current environment and report any drift.`
+      ? `Reproduce "${label}"${idClause}. Re-run the exec in the current environment and report any drift.`
       : annotation
         ? `Look at "${label}" and highlighting. `
         : `Let's look at "${label}". `

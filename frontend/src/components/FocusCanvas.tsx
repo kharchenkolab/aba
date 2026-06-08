@@ -32,7 +32,8 @@ interface Props {
    *  drives all three SplitButton dropdown options. */
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
-                  action?: 'chat' | 'revision' | 'reproduce') => void
+                  action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
+                  entityId?: string) => void
   /** Run view → switch the left rail to the Files tab, deep-linking to a folder. */
   onBrowseFiles?: (path?: string) => void
   /** Per-request project pin for upload routing (dataset "Add files"). */
@@ -323,7 +324,8 @@ function renderActionButton(
   setPromote: (m: PromoteMode | null) => void,
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
-                  action?: 'chat' | 'revision' | 'reproduce') => void,
+                  action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
+                  entityId?: string) => void,
   onGroup?: () => void,
 ) {
   // Figures/tables → group into a Result (deliberate), and draft a claim.
@@ -343,7 +345,8 @@ function renderActionButton(
               label: `💬 Chat about this ${entity.type}`,
               title: `Bring "${entity.title}" into chat`,
               onClick: () => onChatResult!(entity.title,
-                                            entity.artifact_path ?? undefined),
+                                            entity.artifact_path ?? undefined,
+                                            undefined, 'chat', entity.id),
             }}
             options={[
               {
@@ -351,21 +354,22 @@ function renderActionButton(
                 description: 'Bring it into the composer with the image attached',
                 emphasis: true,
                 onClick: () => onChatResult!(entity.title,
-                                              entity.artifact_path ?? undefined),
+                                              entity.artifact_path ?? undefined,
+                                              undefined, 'chat', entity.id),
               },
               {
                 label: 'Make a revision',
                 description: 'Re-run the producing code with a change; pinned as a sibling',
                 onClick: () => onChatResult!(entity.title,
                                               entity.artifact_path ?? undefined,
-                                              undefined, 'revision'),
+                                              undefined, 'revision', entity.id),
               },
               {
                 label: 'Reproduce',
                 description: 'Re-run the exec; flag any env drift',
                 onClick: () => onChatResult!(entity.title,
                                               entity.artifact_path ?? undefined,
-                                              undefined, 'reproduce'),
+                                              undefined, 'reproduce', entity.id),
               },
             ]}
           />
@@ -411,7 +415,8 @@ function renderRegistryView(
   onAsk?: (t: string) => void,
   onChatResult?: (label: string, thumb?: string,
                   annotation?: { image: string; note: string },
-                  action?: 'chat' | 'revision' | 'reproduce') => void,
+                  action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
+                  entityId?: string) => void,
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
 ) {

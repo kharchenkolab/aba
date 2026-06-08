@@ -22,7 +22,22 @@
 
 .rv-panel { display: flex; flex-direction: column; gap: 5px; }
 .rv-panel__cell { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; display: flex; }
-.rv-panel__img { max-width: 100%; display: block; margin: 0 auto; cursor: pointer; }
+/* Cap the figure to keep the whole panel — image + legend + chevrons
+   + caption — in the viewport without scrolling. The 240px reserves
+   room for: Result title (~50), panel padding/gap (~30), RevisionStrip
+   (~40), caption (~50), Composer + margins (~70). Aspect ratio is
+   preserved (object-fit: contain), so a tall figure scales down
+   proportionally; the lightbox click-to-zoom remains for full
+   resolution reading of small legends/labels.
+   PK 2026-06-07 — "the figure pushes the legend below the fold". */
+.rv-panel__img {
+  max-width: 100%;
+  max-height: calc(100vh - 240px);
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+  cursor: pointer;
+}
 .rv-panel__table { display: inline-flex; align-items: center; gap: 8px; padding: 14px; border: none; background: none; color: var(--text-2); font-size: 13.5px; cursor: pointer; }
 .rv-panel__table:hover { color: var(--accent); }
 .rv-panel__missing { padding: 14px; color: var(--text-4); font-size: 13px; }
@@ -70,12 +85,16 @@
 .rv-panel__note:focus { outline: none; }
 .rv-panel__note::placeholder { color: var(--text-4); }
 
-/* Per-panel controls — quiet, top-right, revealed on hover */
-.rv-panel__ctl { position: absolute; top: 6px; right: 6px; display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.1s; background: rgba(255,255,255,0.92); border-radius: 7px; padding: 1px; }
+/* Per-panel controls — top-right; faint at rest, full on hover so they
+   stay discoverable even when the mouse isn't over the panel. */
+.rv-panel__ctl { position: absolute; top: 6px; right: 6px; display: inline-flex; gap: 2px; opacity: 0.2; transition: opacity 0.12s; background: rgba(255,255,255,0.92); border-radius: 7px; padding: 1px; }
 .rv-panel:hover .rv-panel__ctl, .rv-panel--text:hover .rv-panel__ctl { opacity: 1; }
-.rv-panel__ctl button { width: 24px; height: 22px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px; font-size: 13px; }
+.rv-panel__ctl button { width: 28px; height: 26px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px; font-size: 14px; line-height: 1; }
 .rv-panel__ctl button:hover:not(:disabled) { background: var(--tree-active-bg); color: var(--accent); }
 .rv-panel__ctl button:disabled { opacity: 0.3; cursor: default; }
+/* × button: larger glyph, red on hover so removal reads as destructive. */
+.rv-panel__ctl-x { font-size: 20px !important; font-weight: 400; color: var(--text-2) !important; }
+.rv-panel__ctl-x:hover:not(:disabled) { background: rgba(192, 57, 44, 0.12) !important; color: var(--danger, #c0392c) !important; }
 
 /* Add affordances */
 .rv__add { display: flex; flex-direction: column; gap: 8px; }

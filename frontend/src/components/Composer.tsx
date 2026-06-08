@@ -190,11 +190,33 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     pushHistory(text)
     onSend(text)
     setDraft('')
+    // Defense: the useLayoutEffect on [value] SHOULD reset the height
+    // when value transitions to '', but during rapid streaming render
+    // cycles the textarea has been seen to retain its stretched height
+    // (PK 2026-06-07 — "the chat input gets stretched up even though
+    // there's nothing typed"). RAF schedules a forced reset AFTER
+    // React's batch commits, so any layout that landed in the wrong
+    // state corrects on the next frame.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta && !ta.value) {
+        ta.style.height = 'auto'
+        ta.style.height = Math.min(ta.scrollHeight, MAX_GROW_PX()) + 'px'
+      }
+    })
   }
 
   // Auto-grow on every value change — covers typing, paste, prefill,
   // programmatic clear, and resize-triggered recompute. Runs before
   // paint so the user never sees the textarea snap.
+  //
+  // Also re-runs on `streaming` change: the placeholder text differs
+  // between idle and streaming modes, and the auto-grow's first
+  // computation can land at the post-prefill stretched height if it
+  // happened before React's commit settled. PK 2026-06-07 reported
+  // the textarea occasionally getting stuck stretched with nothing
+  // typed — adding `streaming` to deps re-runs the recompute at the
+  // next mode transition so it self-heals.
   useLayoutEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
@@ -206,7 +228,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
       const n = ta.value.length
       ta.setSelectionRange(n, n)
     }
-  }, [value])
+  }, [value, streaming])
 
   // Recompute the cap on viewport resize (the max is vh-relative).
   useEffect(() => {

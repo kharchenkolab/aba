@@ -98,6 +98,158 @@ def _derive_thread_title(text: str) -> str:
     return (t[:1].upper() + t[1:]) if t else "Investigation"
 
 
+def _previous_user_focus(history: list[dict]) -> str | None:
+    """focus_entity_id of the most-recent user message OTHER than the
+    current one (history[-1]). Returns None when no prior user message
+    exists in this thread (we're on the first turn — nothing to compare
+    against). Caller must have already appended the current user
+    message to history before calling.
+    """
+    if len(history) < 2:
+        return None
+    for m in reversed(history[:-1]):
+        if m.get("role") == "user":
+            return m.get("focus_entity_id")
+    return None
+
+
+def _build_focus_change_marker(prev_focus_id: str | None,
+                               current_focus_id: str | None) -> str | None:
+    """Synthesize the one-line '[Focus changed: …]' marker prepended
+    to the current user message's content when focus has changed
+    since the prior user message.
+
+    Returns None when:
+      - no prior user message in the thread (first turn)
+      - focus is unchanged (treating None / WORKSPACE_ID as equal)
+
+    The marker tells the model EXACTLY what changed, with both old +
+    new entity names and ids, so it re-anchors reasoning on the new
+    context. Defeats the recency-bias failure mode where the agent's
+    'active entity' pointer (accumulated across many tool calls)
+    refuses to follow a navigation event hidden in the focus preamble.
+
+    For a Result-typed focus, names the member figure/table id(s)
+    explicitly — the agent needs the right entity_id for make_revision
+    on the new focus's contents, not the prior chain's last entry.
+
+    Mirrors trailer + annotation_note: in-memory only, not persisted.
+    """
+    # First user message in the thread — nothing to compare against, no
+    # transition to announce. (Even if the user is "going from workspace
+    # to entity" on their opening message, they didn't navigate FROM
+    # workspace — they started there. Cleaner not to invent a transition.)
+    if prev_focus_id is None:
+        return None
+    prev = prev_focus_id or WORKSPACE_ID
+    cur = current_focus_id or WORKSPACE_ID
+    if prev == cur:
+        return None
+
+    def _describe_brief(eid: str) -> str:
+        """Title + id only. Used for the OLD focus to keep the marker
+        signal focused on the NEW focus's members."""
+        if eid == WORKSPACE_ID:
+            return "the workspace (no specific entity focused)"
+        e = get_entity(eid)
+        if not e:
+            return f"entity {eid} (no longer exists)"
+        return f"{e.get('type','entity')} {(e.get('title') or '').strip()!r} (id {e['id']})"
+
+    def _describe_full(eid: str) -> str:
+        """Title + id + member listing (for Result types). Used for the
+        NEW focus so the agent sees exactly which entity_ids to use for
+        tool calls on the current context."""
+        if eid == WORKSPACE_ID:
+            return "the workspace (no specific entity focused)"
+        e = get_entity(eid)
+        if not e:
+            return f"entity {eid} (no longer exists)"
+        base = f"{e.get('type','entity')} {(e.get('title') or '').strip()!r} (id {e['id']})"
+        if e.get("type") == "result":
+            members = (e.get("metadata") or {}).get("members") or []
+            member_bits: list[str] = []
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                kind = m.get("kind") or "?"
+                ref = m.get("ref")
+                if not ref:
+                    continue
+                cell = get_entity(ref)
+                if not cell:
+                    continue
+                displayed_id = cell["id"]
+                try:
+                    from content.bio.graph.figure_history import figure_history
+                    chain = figure_history(ref)
+                    if chain:
+                        displayed_id = chain[0]["id"]
+                except Exception:  # noqa: BLE001
+                    pass
+                t = (cell.get("title") or "").strip()
+                member_bits.append(f"{kind} {t!r} (id {displayed_id})")
+            if member_bits:
+                base += " holding " + "; ".join(member_bits)
+        return base
+
+    return (f"[Focus changed: previously the user was viewing {_describe_brief(prev)}. "
+            f"They've now navigated to {_describe_full(cur)}. Treat subsequent "
+            f"references in their next message as referring to the NEW focus, "
+            f"not the previously-discussed entity. For tool calls (entity_id "
+            f"arg to make_revision/reproduce), use ids from the new focus.]")
+
+
+def _build_focus_trailer(focus_entity_id: str) -> str | None:
+    """One-line, very compact 'currently focused on X' reminder appended
+    AFTER the user's text in the in-memory history (not persisted).
+    Recency-bias counterweight to the focus preamble at the top of the
+    system prompt — see the call site in stream_response for the
+    failure mode it addresses.
+
+    For a Result, names the figure/table members + their ids so the
+    agent has the exact entity_id to pass to make_revision (the live
+    failure was passing a stale conversation-history id instead).
+
+    Returns None when the focused entity can't be loaded (caller skips
+    the trailer; nothing to lose vs. today's behavior).
+    """
+    e = get_entity(focus_entity_id)
+    if not e:
+        return None
+    bits = [f"focused on {e.get('type','entity')} {(e.get('title') or '').strip()!r} (id {e['id']})"]
+    if e.get("type") == "result":
+        members = (e.get("metadata") or {}).get("members") or []
+        member_bits = []
+        for m in members:
+            if not isinstance(m, dict): continue
+            kind = m.get("kind") or "?"
+            ref = m.get("ref")
+            if not ref:
+                continue
+            cell = get_entity(ref)
+            if not cell: continue
+            # If the figure/table has a revision chain, the panel shows
+            # chain[0] (latest), not the anchor — so cite the displayed id.
+            displayed_id = cell["id"]
+            try:
+                from content.bio.graph.figure_history import figure_history
+                chain = figure_history(ref)
+                if chain:
+                    displayed_id = chain[0]["id"]
+            except Exception:  # noqa: BLE001
+                pass
+            t = (cell.get("title") or "").strip()
+            member_bits.append(f"{kind} {t!r} (id {displayed_id})")
+        if member_bits:
+            bits.append("holding " + "; ".join(member_bits))
+    msg = ", ".join(bits)
+    return (f"[Reminder: {msg}. For 'this figure'/'this result'/'this table' "
+            f"and for tool calls (entity_id arg to make_revision/reproduce), "
+            f"use these ids — even if the conversation history just discussed "
+            f"a different entity.]")
+
+
 async def stream_response(
     user_text: str,
     *,
@@ -175,18 +327,31 @@ async def stream_response(
     # executor's _drain owns the sink lifecycle.
 
     if not retry:
-        # Note-FIRST ordering: when the user attached a highlight, lead
-        # with the meta-note so the model's attention is framed by the
-        # highlight before it reads the question. Without this ordering
-        # the model treats the highlight as an afterthought and answers
-        # about the broader plot.
-        user_blocks: list[dict] = []
-        if annotation_note:
-            user_blocks.append({"type": "text", "text": annotation_note})
-        user_blocks.append({"type": "text", "text": user_text})
+        # PERSIST ONLY the user's actual text. The annotation note (a
+        # system-generated framing hint authored by the frontend, e.g.
+        # 'The user is asking about run output "X" (entity_id="fig_Y") -
+        # the attached image is that plot') is intentionally NOT
+        # appended here -- it's injected ephemerally below, mirroring
+        # annotation_image's lifecycle. Persisting it would leak the
+        # SplitButton's implementation detail into the conversation as
+        # a user statement and bias all subsequent turns toward
+        # whatever figure the user happened to click last (focus
+        # regression found 2026-06-07 in thread thr_806a2ced).
+        user_blocks: list[dict] = [{"type": "text", "text": user_text}]
         append_message("user", user_blocks, entity_id=WORKSPACE_ID,
                        focus_entity_id=focus_entity_id, thread_id=store_tid)
     history = get_messages(WORKSPACE_ID, thread_id=store_tid)
+
+    # Inject the framing note ephemerally so it leads the user turn in
+    # the LLM call but does NOT enter persisted history. Same lifecycle
+    # as annotation_image (see the image-injection block below for the
+    # mirroring rationale); together they yield in-memory block order
+    # [note, image, user_text] without poisoning future turns.
+    if annotation_note and not FAKE_SESSION and history and not retry:
+        history = list(history)
+        last = dict(history[-1])
+        last["content"] = [{"type": "text", "text": annotation_note}, *list(last["content"])]
+        history[-1] = last
 
     # Seed a freshly created thread's title + question from its opening message
     # (heuristic; LLM-quality suggestion is Phase D). Both stay user-editable.
@@ -203,6 +368,53 @@ async def stream_response(
                 fields["metadata"] = meta
             if fields:
                 update_entity(store_tid, **fields)
+
+    # Focus-CHANGE marker — prepended to the current user message's
+    # content when focus has changed since the prior user message. Fix
+    # B for the focus-handling regression (2026-06-07/08 thr_b80bc612):
+    # the agent kept chaining tool calls on the previously-focused
+    # entity's id (UMAP), ignoring that focus had switched to a new
+    # Result (heatmap). The deixis rule + trailer help but they don't
+    # NAME the transition; this marker does, with both old and new
+    # entity ids + members, exactly at the boundary. Fires at most
+    # once per effective change — re-rendering the same prompt yields
+    # the same marker (the comparison is between two stored fields,
+    # not a transient event). Skipped on image turns (image is
+    # dominant context; markers/trailers stand down).
+    if (focus_entity_id and history and not retry
+            and not annotation_image):
+        prev_focus = _previous_user_focus(history)
+        marker = _build_focus_change_marker(prev_focus, focus_entity_id)
+        if marker:
+            history = list(history)
+            last = dict(history[-1])
+            last["content"] = [{"type": "text", "text": marker},
+                               *list(last["content"])]
+            history[-1] = last
+
+    # Focus-trailer reminder — appended AFTER the user's question for
+    # the same recency-bias reason the image trailer below exists.
+    # Combats the "agent keeps treating focus as the entity discussed
+    # earlier in the conversation, not the entity currently focused"
+    # failure mode found 2026-06-07 in thr_b80bc612 (the agent passed
+    # entity_id=<UMAP-from-prior-turn> to make_revision while focus was
+    # the heatmap Result). The focus preamble at the top of the system
+    # prompt already carries this information, but a heavily-biased
+    # conversation history can outweigh it; restating at the tail
+    # gives the directive a fighting chance against recency.
+    #
+    # Skipped when an annotation_image is attached — that case already
+    # gets its own trailer below; stacking trailers is noisy. Skipped
+    # when focus is workspace (no specific entity to anchor on).
+    if (focus_entity_id and focus_entity_id != WORKSPACE_ID
+            and not annotation_image and history):
+        trailer = _build_focus_trailer(focus_entity_id)
+        if trailer:
+            history = list(history)
+            last = dict(history[-1])
+            last["content"] = [*list(last["content"]),
+                               {"type": "text", "text": trailer}]
+            history[-1] = last
 
     # Vision: inject the annotated figure into the last user turn for THIS
     # call only (not persisted). Skipped in fake mode (no vision).
