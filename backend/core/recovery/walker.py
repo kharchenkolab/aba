@@ -472,6 +472,17 @@ def recover_project(
             build_report(source_dir, pid=pid, db_path=Path(tdb))
         except Exception as e:
             report.warnings.append(f"compatibility report failed: {e}")
+        # R4 — refresh by-title symlinks from the just-imported entities.
+        # The by-title dirs aren't part of the recovery archive (pure
+        # derivation), so they need rebuild on import.
+        try:
+            from core.recovery.by_title import (   # noqa: PLC0415
+                refresh_by_title_links, refresh_project_link_at_root,
+            )
+            refresh_by_title_links(source_dir)
+            refresh_project_link_at_root(source_dir)
+        except Exception as e:
+            report.warnings.append(f"by-title refresh failed: {e}")
 
     return report
 

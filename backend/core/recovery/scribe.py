@@ -160,6 +160,11 @@ class Scribe:
         self._compact_every = int(compact_check_every_ticks)
         # Track all pids we've written to so compaction has somewhere to look.
         self._touched_pids: set[str] = set()
+        # R3 — by-title link cache, last-emitted LinkSpec per (pid, eid).
+        # Lets us short-circuit unchanged-title rewrites + know what to
+        # unlink when a title changes. Process-local; survives only this
+        # scribe's lifetime — R4 handles cold-start / cross-restart refresh.
+        self._link_cache: dict[tuple[str, str], object] = {}
 
     # ─── lifecycle ──────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -265,6 +270,17 @@ class Scribe:
                 self._append_edges(pid, lines)
             except Exception:
                 _log.exception("scribe: edge append failed (pid=%s)", pid)
+            # R3 — supersession: when X --wasRevisionOf--> Y is added, Y is
+            # the OLD version; clear its by-title link so the by-title dir
+            # only shows chain heads. (Same convention as RunView's Plots
+            # strip.) Edge `dst` is the predecessor.
+            for line in lines:
+                if line.get("op") == "add" and line.get("rel") == "wasRevisionOf":
+                    try:
+                        self._clear_entity_link(pid, line["dst"])
+                    except Exception:
+                        _log.debug("supersession by-title clear failed",
+                                   exc_info=True)
         for (pid, tid), lines in message_batches.items():
             try:
                 self._append_messages(pid, tid, lines)
@@ -288,9 +304,16 @@ class Scribe:
         sidecar = entities_dir / f"{entity_id}.json"
         if row is None:
             sidecar.unlink(missing_ok=True)
+            self._clear_entity_link(pid, entity_id)
             return
         payload = {"_v": 1, "_ts": _utcnow_iso(), **_normalize_row(row)}
         sidecar.write_text(json.dumps(payload, default=str))
+        # R3 — by-title link side effect. Errors logged; don't disrupt sidecar.
+        try:
+            self._refresh_entity_link(pid, entity_id, payload)
+        except Exception:
+            _log.exception("scribe: by-title link refresh failed (pid=%s, eid=%s)",
+                           pid, entity_id)
 
     def _append_edges(self, pid: str, lines: list[dict]) -> None:
         proot = _project_root(pid)
@@ -401,6 +424,98 @@ class Scribe:
             **payload,
         }
         pf.write_text(json.dumps(out, default=str))
+        # R3 — by-title side effects: TITLE.txt sidecar + projects-by-title link.
+        try:
+            self._refresh_project_link(pid, payload)
+        except Exception:
+            _log.exception("scribe: project by-title refresh failed (pid=%s)", pid)
+
+    # ─── R3 — by-title symlink side effects ────────────────────────────────
+    def _refresh_entity_link(self, pid: str, entity_id: str, row: dict) -> None:
+        """Compute the entity's by-title link spec, compare against cache,
+        and refresh on disk if changed."""
+        from core.recovery.by_title import (   # noqa: PLC0415
+            compute_entity_link, pick_slug, atomic_symlink, clear_symlink,
+            existing_slugs_in,
+        )
+        spec = compute_entity_link(row)
+        prev = self._link_cache.get((pid, entity_id))
+        if spec == prev:
+            return  # title-affecting fields unchanged → no-op
+        proot = _project_root(pid)
+        # Clear the previous link if any
+        if prev is not None:
+            try:
+                clear_symlink(proot / prev.category / prev.link_name)
+            except Exception:
+                _log.debug("clear previous by-title link failed", exc_info=True)
+        # Write the new one if applicable
+        if spec is not None:
+            parent = proot / spec.category
+            taken = existing_slugs_in(parent)
+            # Don't collide with someone else's slug. The new entity always
+            # gets the suffixed slot when the base is already taken; existing
+            # entities keep their slot.
+            ext = Path(spec.link_name).suffix
+            actual = pick_slug(
+                Path(spec.link_name).stem,
+                taken=taken - ({prev.link_name} if prev else set()),
+                fallback_id=spec.fallback_id,
+                ext=ext,
+            )
+            link_name = actual + ext
+            atomic_symlink(spec.target, parent / link_name)
+            spec.link_name = link_name   # remember the actually-used name
+        self._link_cache[(pid, entity_id)] = spec
+
+    def _clear_entity_link(self, pid: str, entity_id: str) -> None:
+        """Used on EntityHardDeleted: remove any cached link."""
+        from core.recovery.by_title import clear_symlink  # noqa: PLC0415
+        prev = self._link_cache.pop((pid, entity_id), None)
+        if prev is None:
+            return
+        try:
+            clear_symlink(_project_root(pid) / prev.category / prev.link_name)
+        except Exception:
+            _log.debug("clear entity by-title link failed", exc_info=True)
+
+    def _refresh_project_link(self, pid: str, payload: dict) -> None:
+        """Write TITLE.txt inside the project's canonical dir + maintain a
+        projects-by-title/<slug> symlink at the runtime root."""
+        from core.recovery.by_title import (   # noqa: PLC0415
+            compute_project_link, pick_slug, atomic_symlink, clear_symlink,
+            existing_slugs_in, title_file_contents,
+        )
+        proot = _project_root(pid)
+        # 1. TITLE.txt sidecar — always rewritten; cheap.
+        registry = payload.get("registry") or {}
+        title = registry.get("name") or registry.get("display_name") or ""
+        try:
+            (proot / "TITLE.txt").write_text(title_file_contents(title))
+        except Exception:
+            _log.debug("TITLE.txt write failed", exc_info=True)
+
+        # 2. projects-by-title/<slug> at the runtime root
+        runtime_root = proot.parent.parent  # …/projects/<pid> → …
+        parent = runtime_root / "projects-by-title"
+        spec = compute_project_link(pid, title)
+        prev = self._link_cache.get(("__project__", pid))
+        if spec == prev:
+            return
+        if prev is not None:
+            try:
+                clear_symlink(parent / prev.link_name)
+            except Exception:
+                _log.debug("clear previous project link failed", exc_info=True)
+        if spec is not None:
+            taken = existing_slugs_in(parent)
+            base = spec.link_name
+            actual = pick_slug(base,
+                               taken=taken - ({prev.link_name} if prev else set()),
+                               fallback_id=spec.fallback_id)
+            atomic_symlink(spec.target, parent / actual)
+            spec.link_name = actual
+        self._link_cache[("__project__", pid)] = spec
 
     # ─── seq counter persistence ────────────────────────────────────────────
     def _next_seq(self, pid: str) -> int:
