@@ -12,19 +12,52 @@ which the ABA launcher (~/bin/aba) sources at startup:
     keeps the backend off ~/.claude entirely (see core/llm.py:_oauth_bearer).
 """
 from __future__ import annotations
+import base64
+import hashlib
+import json
 import os
 import re
+import secrets
 import shlex
+import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from aba_installer.paths import aba_home, config_env, runtime_dir
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+# The OAuth callback lands at the app root (/callback) to match the redirect
+# path Anthropic's OAuth client expects; service.py mounts this router.
+callback_router = APIRouter(tags=["auth"])
+
+
+# ─── Claude.ai OAuth (Sign in with Claude.ai) ───────────────────────────────
+# These mirror the OAuth client the Claude Code CLI uses for subscription
+# login. They are not an officially published third-party API, so if the
+# "Sign in" flow ever stops working, re-check these against the current CLI.
+_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
+_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+_OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
+
+# Single in-flight browser flow (one user, one helper). Guarded by a lock.
+_oauth_lock = threading.Lock()
+_oauth_flow: dict = {}   # {state, verifier, redirect_uri, status, error}
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Return (verifier, challenge) for PKCE S256."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
 
 
 # ─── shape ─────────────────────────────────────────────────────────────────
@@ -137,18 +170,14 @@ def set_apikey(payload: ApiKeyIn) -> dict:
     return {"ok": True, "persisted": True}
 
 
-@router.post("/oauth")
-def set_oauth(payload: OAuthTokenIn) -> dict:
-    """Persist a Claude Code OAuth token (Claude.ai Pro/Max subscription).
+def _persist_oauth_token(token: str) -> None:
+    """Write a subscription OAuth bearer to config.env in oauth_cc mode.
 
-    Writes CLAUDE_CODE_OAUTH_TOKEN + ABA_LLM_CREDENTIAL=oauth_cc so the
-    backend bills the user's subscription and can use non-Haiku models.
+    The backend reads CLAUDE_CODE_OAUTH_TOKEN first (core/llm.py), so this
+    keeps it off ~/.claude entirely.
     """
-    _validate_oauth_token(payload.token)
-    if not payload.persist:
-        return {"ok": True, "persisted": False}
     entries = _read_config_env()
-    entries["CLAUDE_CODE_OAUTH_TOKEN"] = payload.token.strip()
+    entries["CLAUDE_CODE_OAUTH_TOKEN"] = token.strip()
     entries["ABA_LLM_CREDENTIAL"] = "oauth_cc"
     entries["ANTHROPIC_AUTH_FLOW"] = "oauth"
     # Switching from a prior API-key setup → drop the key.
@@ -156,7 +185,125 @@ def set_oauth(payload: OAuthTokenIn) -> dict:
     entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
     entries.setdefault("ABA_HOME", str(aba_home()))
     _write_config_env(entries)
+
+
+@router.post("/oauth")
+def set_oauth(payload: OAuthTokenIn) -> dict:
+    """Persist a pasted Claude Code OAuth token (the manual fallback to the
+    browser 'Sign in with Claude.ai' flow). Writes CLAUDE_CODE_OAUTH_TOKEN +
+    ABA_LLM_CREDENTIAL=oauth_cc."""
+    _validate_oauth_token(payload.token)
+    if not payload.persist:
+        return {"ok": True, "persisted": False}
+    _persist_oauth_token(payload.token)
     return {"ok": True, "persisted": True}
+
+
+# ─── browser OAuth: Sign in with Claude.ai ──────────────────────────────────
+@router.post("/oauth/start")
+def oauth_start(request: Request) -> dict:
+    """Begin the browser OAuth flow. Returns the claude.ai authorize URL the
+    UI should open; the user logs in there and claude.ai redirects back to
+    /callback on this helper."""
+    verifier, challenge = _pkce_pair()
+    state = secrets.token_urlsafe(24)
+    # Redirect back to THIS helper. claude.ai's client accepts localhost
+    # callbacks on any port (that's how the CLI logs in locally).
+    base = request.base_url  # e.g. http://127.0.0.1:8765/
+    port = base.port or 8765
+    redirect_uri = f"http://localhost:{port}/callback"
+    params = {
+        "code": "true",
+        "client_id": _OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": _OAUTH_SCOPES,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+    }
+    authorize_url = _OAUTH_AUTHORIZE_URL + "?" + urllib.parse.urlencode(params)
+    with _oauth_lock:
+        _oauth_flow.clear()
+        _oauth_flow.update(state=state, verifier=verifier,
+                           redirect_uri=redirect_uri, status="pending", error=None)
+    return {"authorize_url": authorize_url}
+
+
+@router.get("/oauth/poll")
+def oauth_poll() -> dict:
+    """The UI polls this after opening the browser. status ∈
+    {none, pending, done, error}."""
+    with _oauth_lock:
+        if not _oauth_flow:
+            return {"status": "none"}
+        return {"status": _oauth_flow.get("status", "none"),
+                "error": _oauth_flow.get("error")}
+
+
+def _exchange_code(code: str, verifier: str, redirect_uri: str) -> str:
+    """Exchange an authorization code for an access token. Returns the bearer.
+    Raises on any failure (caller records it on the flow)."""
+    body = json.dumps({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": _OAUTH_CLIENT_ID,
+        "code_verifier": verifier,
+    }).encode()
+    req = urllib.request.Request(
+        _OAUTH_TOKEN_URL, data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode())
+    tok = data.get("access_token")
+    if not tok:
+        raise RuntimeError(f"token endpoint returned no access_token: {list(data)}")
+    return tok
+
+
+def _oauth_result_page(ok: bool, msg: str) -> str:
+    color = "#2c7a3f" if ok else "#c83434"
+    head = "Signed in ✓" if ok else "Sign-in failed"
+    return f"""<!doctype html><meta charset=utf-8>
+<title>ABA — {head}</title>
+<body style="font:15px -apple-system,system-ui,sans-serif;max-width:520px;margin:80px auto;text-align:center">
+<h2 style="color:{color}">{head}</h2>
+<p style="color:#555">{msg}</p>
+<p style="color:#888">You can close this tab and return to ABA Setup.</p>
+</body>"""
+
+
+@callback_router.get("/callback", response_class=HTMLResponse)
+def oauth_callback(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+    """claude.ai redirects here with ?code&state after the user authorizes."""
+    with _oauth_lock:
+        flow = dict(_oauth_flow)
+    if error:
+        _fail_flow(f"claude.ai returned: {error}")
+        return HTMLResponse(_oauth_result_page(False, f"claude.ai returned: {error}"), status_code=400)
+    if not flow or flow.get("status") != "pending":
+        return HTMLResponse(_oauth_result_page(False, "No sign-in was in progress."), status_code=400)
+    if not code or state != flow.get("state"):
+        _fail_flow("state mismatch or missing code")
+        return HTMLResponse(_oauth_result_page(False, "Security check failed (state mismatch)."), status_code=400)
+    try:
+        token = _exchange_code(code, flow["verifier"], flow["redirect_uri"])
+        _persist_oauth_token(token)
+    except Exception as e:  # noqa: BLE001
+        _fail_flow(f"token exchange failed: {e}")
+        return HTMLResponse(_oauth_result_page(False, "Could not complete sign-in. Try again, or paste a token instead."), status_code=500)
+    with _oauth_lock:
+        _oauth_flow["status"] = "done"
+    return HTMLResponse(_oauth_result_page(True, "Your Claude.ai subscription is connected."))
+
+
+def _fail_flow(msg: str) -> None:
+    with _oauth_lock:
+        if _oauth_flow:
+            _oauth_flow["status"] = "error"
+            _oauth_flow["error"] = msg
 
 
 @router.get("/status")

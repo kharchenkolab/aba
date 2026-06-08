@@ -29,11 +29,17 @@
       </div>
 
       <div class="authpanel" id="panel-oauth" hidden>
-        <p class="muted">Use your Claude Pro / Max subscription. In a Terminal, run
-          <code>claude setup-token</code> and paste the token it prints:</p>
-        <label class="label">Claude Code OAuth token
-          <input type="password" id="oauth-input" placeholder="sk-ant-oat…" autocomplete="off" />
-        </label>
+        <p class="muted">Use your Claude Pro / Max subscription — no API key needed.</p>
+        <button class="btn primary" id="oauth-signin">Sign in with Claude.ai</button>
+        <p class="muted" id="oauth-status" hidden></p>
+        <details class="oauth-fallback">
+          <summary>Having trouble? Paste a token instead</summary>
+          <p class="muted">Run <code>claude setup-token</code> in a Terminal and paste what it prints:</p>
+          <label class="label">Claude Code OAuth token
+            <input type="password" id="oauth-input" placeholder="sk-ant-oat…" autocomplete="off" />
+          </label>
+          <button class="btn" id="oauth-paste-submit">Use this token</button>
+        </details>
       </div>
 
       <p class="error" id="auth-error"></p>
