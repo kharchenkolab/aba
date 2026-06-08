@@ -1,49 +1,22 @@
-# Build the two release artifacts:
-#   helper-latest.tgz — the helper service tarball
-#   ABA-Setup.zip     — the zipped .command file users download
+# Build the single release artifact:
+#   ABA-Setup.zip — the zipped .command file users download.
 #
-# Both are uploaded to GitHub Releases by the CI workflow.
+# That's the whole rollout: the .command clones the repo and installs the
+# helper from it (see ../setup.command), so there is no separate helper
+# bundle to ship. Uploaded to GitHub Releases (or just linked from the README).
 
 ROOT       := $(shell git rev-parse --show-toplevel)
-HELPER_SRC := $(ROOT)/install/mac/helper
 SETUP_SRC  := $(ROOT)/install/mac/setup.command
-PLIST_SRC  := $(HELPER_SRC)/src/aba_installer/templates/launchd.plist.template
 
 OUT_DIR    := $(ROOT)/install/mac/build/out
-HELPER_TGZ := $(OUT_DIR)/helper-latest.tgz
 SETUP_ZIP  := $(OUT_DIR)/ABA-Setup.zip
 
-VERSION    := $(shell grep -E '^version' $(HELPER_SRC)/pyproject.toml | head -1 | cut -d'"' -f2)
+.PHONY: all setup clean
 
-# Source files the tarball is built from — listed as prerequisites so `make`
-# rebuilds when any of them change (without this, make sees the .tgz exists
-# and ships a stale artifact).
-HELPER_FILES := $(shell find $(HELPER_SRC) -type f \
-                  -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' \
-                  -not -path '*.egg-info/*')
-
-.PHONY: all helper setup clean
-
-all: helper setup
+all: setup
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
-
-# ─── helper-latest.tgz ─────────────────────────────────────────────────────
-helper: $(HELPER_TGZ)
-
-$(HELPER_TGZ): $(HELPER_FILES) | $(OUT_DIR)
-	@echo "Packing helper $(VERSION) into $@"
-	@TMP=$$(mktemp -d) && \
-	mkdir -p "$$TMP/aba-installer" && \
-	rsync -a --exclude '__pycache__' --exclude '.pytest_cache' \
-	         --exclude '*.egg-info' --exclude '.mypy_cache' \
-	         $(HELPER_SRC)/ "$$TMP/aba-installer/" && \
-	cp $(PLIST_SRC) "$$TMP/aba-installer/com.kharchenkolab.aba.helper.plist.template" && \
-	cd "$$TMP" && \
-	tar -czf $@ aba-installer && \
-	rm -rf "$$TMP"
-	@echo "  → $@ ($$(du -h $@ | cut -f1))"
 
 # ─── ABA-Setup.zip (the user-facing download) ──────────────────────────────
 setup: $(SETUP_ZIP)

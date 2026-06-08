@@ -13,15 +13,14 @@ env_vars:
   ABA_HOME: "$HOME/.aba"
   ENV_DIR: "$ABA_HOME/env"
   REPO_DIR: "$ABA_HOME/repo"
-  # Where the install pulls the conda env spec + repos from. The defaults
-  # point at the public GitHub raw/clone URLs. Override the *_SRC vars with
-  # a local path to install from a working tree or an offline mirror — this
-  # is also how the isolated smoke harness tests un-pushed changes.
-  ABA_ENV_YML_URL: "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"
-  ABA_REPO_URL: "https://github.com/kharchenkolab/aba"
-  ABA_RECIPES_URL: "https://github.com/kharchenkolab/aba-recipes"
-  # ABA_ENV_YML_SRC / ABA_REPO_SRC / ABA_RECIPES_SRC — unset by default;
-  # when set to a local path, used instead of the URL above.
+  # Sources can be overridden from the environment (the defaults are inlined
+  # into the commands as ${VAR:-default}, NOT set here — env_vars would
+  # clobber an exported override):
+  #   ABA_ENV_YML_URL / ABA_REPO_URL / ABA_RECIPES_URL — fetch/clone from a
+  #     different URL (e.g. git@github.com:… for SSH while the repos are private).
+  #   ABA_ENV_YML_SRC / ABA_REPO_SRC / ABA_RECIPES_SRC — install from a local
+  #     path (working tree / offline mirror) instead of fetching. Used by the
+  #     smoke harness to test un-pushed changes.
 
 steps:
   - id: preflight
@@ -50,7 +49,9 @@ steps:
       (anndata, scanpy, scvi-tools, deseq2, edger, seurat, ...). Largest
       step — ~9 minutes on a typical connection.
     commands:
-      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "$ABA_ENV_YML_URL"; fi'
+      # Prefer an explicit override, then the env.yml from the cloned repo
+      # (the common case — setup.command already cloned it), then a URL fetch.
+      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/mac/environment.yml" ]; then cp "$REPO_DIR/aba/install/mac/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml}"; fi'
       - '"$ABA_HOME/bin/micromamba" create -y -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"'
     timeout_seconds: 1200
 
@@ -59,8 +60,8 @@ steps:
     why: Source for the backend, the frontend, and the recipe library.
     commands:
       - 'mkdir -p "$REPO_DIR"'
-      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "$ABA_REPO_URL" "$REPO_DIR/aba"; fi'
-      - 'if [ -d "$REPO_DIR/aba-recipes" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipes" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else git clone --depth 1 "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipes"; fi'
+      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
+      - 'if [ -d "$REPO_DIR/aba-recipes" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipes" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipes}" "$REPO_DIR/aba-recipes"; fi'
     timeout_seconds: 120
 
   - id: build-frontend

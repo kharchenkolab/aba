@@ -1,75 +1,90 @@
 #!/usr/bin/env bash
 # ABA Setup — bootstrap installer for macOS.
 #
-# This file is distributed as ABA-Setup.zip on github.com/kharchenkolab/aba/releases.
-# When the user double-clicks it: Terminal opens, this script downloads the
-# helper service, starts it on localhost, opens the browser, and exits.
-# Everything else happens in the browser UI.
+# Distributed as ABA-Setup.zip (this single file). Double-clicking it:
+#   1. clones the ABA repo + recipe library,
+#   2. installs the lightweight helper service from the repo,
+#   3. starts the helper on localhost and opens the browser.
+# Everything heavier (the conda env, the frontend build) happens in the
+# browser UI after you click "Install ABA".
 #
-# What this script touches:
-#   ~/.aba/installer/                              (helper service + state)
-#   ~/Library/LaunchAgents/com.kharchenkolab.aba.helper.plist  (auto-start on login)
+# Why clone here instead of downloading a helper bundle: the clones run in
+# YOUR shell, so your SSH agent / git credentials work — which means you can
+# install while the repos are still private. The helper itself then only
+# talks to public conda channels, never GitHub. When the repos go public,
+# the defaults below just work with no overrides.
 #
-# Anything heavier (Python env, R, the repo) is downloaded by the helper
-# only after the user clicks "Install ABA" in the browser UI.
+# Override the sources (e.g. SSH while private, or a fork):
+#   ABA_REPO_URL=git@github.com:kharchenkolab/aba.git \
+#   ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipes.git \
+#       "./ABA Setup.command"
+#
+# What this touches:
+#   ~/.aba/repo/{aba,aba-recipes}   (source)
+#   ~/.aba/installer/               (helper venv + state)
+#   ~/Library/LaunchAgents/com.kharchenkolab.aba.helper.plist  (auto-start)
 
 set -euo pipefail
 
-HELPER_URL="${HELPER_URL:-https://github.com/kharchenkolab/aba/releases/latest/download/helper-latest.tgz}"
 ABA_HOME="$HOME/.aba"
+REPO_DIR="$ABA_HOME/repo"
 HELPER_DIR="$ABA_HOME/installer"
+ABA_REPO_URL="${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}"
+ABA_RECIPES_URL="${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipes}"
 
 cat <<EOF
 ABA Setup
 ─────────
-Installing the lightweight ABA helper into:
-    $HELPER_DIR
-
-This file is ~5 MB and runs on localhost. Nothing else is touched until you
-click "Install ABA" in the browser.
+Setting up ABA under:
+    $ABA_HOME
 
 EOF
 
-# Pre-flight checks
+# Pre-flight
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Error: ABA Setup runs on macOS. Detected: $(uname -s)" >&2
   exit 1
 fi
-
-mkdir -p "$HELPER_DIR"
-
-# Download (or refresh) the helper tarball
-echo "Downloading ABA helper from $HELPER_URL …"
-curl -fsSL "$HELPER_URL" -o "$HELPER_DIR/helper.tgz"
-echo "Extracting …"
-# Extract into a versioned subdir so we never overwrite a running helper
-STAMP="$(date +%s)"
-EXTRACT_DIR="$HELPER_DIR/helper-$STAMP"
-mkdir -p "$EXTRACT_DIR"
-tar -xzf "$HELPER_DIR/helper.tgz" -C "$EXTRACT_DIR"
-ln -sfn "$EXTRACT_DIR" "$HELPER_DIR/current"
-
-# Make sure system python3 has the helper's deps. Use a private venv under
-# HELPER_DIR so we never touch the user's system Python.
+if ! command -v git >/dev/null 2>&1; then
+  echo "Error: git not found. Install the Xcode Command Line Tools first:" >&2
+  echo "    xcode-select --install" >&2
+  exit 1
+fi
 PY="$(command -v python3 || true)"
 if [[ -z "$PY" ]]; then
-  echo "Error: macOS 12.3+ ships with python3; could not find it on this system." >&2
+  echo "Error: macOS 12.3+ ships python3; could not find it on this system." >&2
   exit 1
 fi
 
+mkdir -p "$REPO_DIR" "$HELPER_DIR"
+
+# Clone (or refresh) the repo + recipe library — in this shell, so SSH keys /
+# git credentials work while the repos are private.
+clone_or_pull() {  # $1=url  $2=dest
+  if [[ -d "$2/.git" ]]; then
+    echo "Updating $(basename "$2") …"
+    git -C "$2" pull --ff-only || true
+  else
+    echo "Cloning $(basename "$2") …"
+    git clone --depth 1 "$1" "$2"
+  fi
+}
+clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"
+clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipes"
+
+# Install the helper from the cloned repo into a private venv (never touches
+# the user's system Python).
 if [[ ! -x "$HELPER_DIR/venv/bin/python" ]]; then
   echo "Creating helper venv …"
   "$PY" -m venv "$HELPER_DIR/venv"
 fi
 "$HELPER_DIR/venv/bin/pip" install --quiet --upgrade pip
-# The tarball wraps the package in aba-installer/, so install that subdir.
-"$HELPER_DIR/venv/bin/pip" install --quiet "$HELPER_DIR/current/aba-installer"
+"$HELPER_DIR/venv/bin/pip" install --quiet "$REPO_DIR/aba/install/mac/helper"
 
-# Install the LaunchAgent so the helper auto-starts on login — and starts it
-# now (RunAtLoad). The plist ships as a template with @@…@@ path placeholders,
-# so we render + load it through the helper's own code rather than copying it
-# by hand. If that fails on this Mac, fall back to starting the helper
-# directly so the browser still has something to connect to.
+# Render + load the LaunchAgent so the helper auto-starts on login — and
+# starts it now (RunAtLoad). The plist is a template needing path
+# substitution, so we render it through the helper's own code. If that fails
+# on this Mac, fall back to starting the helper directly.
 export ABA_HOME
 if ! "$HELPER_DIR/venv/bin/python" -c \
      "from aba_installer.launchagent import install_launch_agent; install_launch_agent()"; then
@@ -78,7 +93,7 @@ if ! "$HELPER_DIR/venv/bin/python" -c \
     >> "$HELPER_DIR/helper.out.log" 2>&1 &
 fi
 
-# Wait for the helper to come up
+# Wait for the helper to come up, then open the browser.
 echo "Starting helper …"
 PORT=8765
 for _ in $(seq 1 60); do
@@ -97,8 +112,8 @@ echo "ABA Setup is running."
 echo "Opening $URL in your browser…"
 open "$URL" || true
 
-# Best-effort: close this Terminal window so the user isn't left staring at a
-# blank prompt. Quietly ignored if the user's Terminal is not the default.
+# Best-effort: close this Terminal window so the user isn't left at a blank
+# prompt. Quietly ignored if the user's Terminal isn't the default.
 osascript <<APPLESCRIPT 2>/dev/null || true
 tell application "Terminal"
   set windowList to (every window whose name contains "ABA Setup" or name contains "setup.command")
