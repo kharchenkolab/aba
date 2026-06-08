@@ -85,6 +85,17 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const [modal, setModal] = useState<Modal>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // Per-project recovery-report cache (I5). Populated lazily for any project
+  // whose dir contains recovery_report.json — i.e. projects that came in via
+  // aba-recover and may have missing deps the admin should know about.
+  type RecoveryReport = {
+    pid: string
+    missing: { entity_types: string[]; recipes: string[]; capabilities: string[]; tools: string[] }
+    source: { aba_commit: string | null; aba_version: string | null }
+    host: { aba_commit: string | null; aba_version: string | null }
+  }
+  const [recoveryReports, setRecoveryReports] = useState<Record<string, RecoveryReport | null>>({})
+  const [verifyResult, setVerifyResult] = useState<{ pid: string; rep: any } | null>(null)
 
   const load = useCallback(async () => {
     // Initial-load: just fetch projects. Summary is fetched per-selection
@@ -96,6 +107,42 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     onProjectsChanged?.()
   }, [onProjectsChanged])
   useEffect(() => { load() }, [load])
+
+  // I5 — fan out one recovery-report fetch per project. 200 OK with `null`
+  // body means "no recovery report" (project wasn't imported, or no missing
+  // deps); only banners + the verify modal care about non-null payloads.
+  useEffect(() => {
+    if (!projects || projects.length === 0) return
+    let cancelled = false
+    Promise.all(projects.map(p =>
+      fetch(`/api/projects/${encodeURIComponent(p.id)}/recovery-report`)
+        .then(r => r.ok ? r.json() : null)
+        .then(j => [p.id, j] as [string, any])
+        .catch(() => [p.id, null] as [string, any])
+    )).then(pairs => {
+      if (cancelled) return
+      const next: Record<string, any> = {}
+      for (const [pid, j] of pairs) next[pid] = j
+      setRecoveryReports(next)
+    })
+    return () => { cancelled = true }
+  }, [projects])
+  function hasMissingDeps(pid: string): boolean {
+    const rep = recoveryReports[pid]
+    if (!rep || !rep.missing) return false
+    const m = rep.missing
+    return (m.entity_types?.length || 0) + (m.recipes?.length || 0)
+         + (m.capabilities?.length || 0) + (m.tools?.length || 0) > 0
+  }
+  async function verifyRecovery(pid: string) {
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(pid)}/verify-recovery?depth=full`,
+                            { method: 'POST' })
+      const j = await r.json()
+      setVerifyResult({ pid, rep: j })
+    } finally { setBusy(false) }
+  }
 
   // Right-rail click: pure UI selection — just preview this project in the
   // central column. No backend call; the server's current-project state
@@ -189,11 +236,34 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
         {menuFor === key && (
           <div className="home__menu" onClick={e => e.stopPropagation()}>
             <button onClick={() => { setMenuFor(null); setModal({ kind: 'rename', pid: p.id, name: p.name }) }}>Rename</button>
+            <button onClick={() => { setMenuFor(null); verifyRecovery(p.id) }}
+                    title="Compare the FS recovery archive against the live DB. Reports any drift.">
+              Verify recovery archive
+            </button>
             <button className="home__menu-danger"
                     onClick={() => { setMenuFor(null); setModal({ kind: 'delete', pid: p.id, name: p.name }) }}>Delete project</button>
           </div>
         )}
       </>
+    )
+  }
+
+  // Tiny chip rendered next to a project name when its recovery-report flags
+  // missing host-side dependencies. Click → modal with the full report.
+  const recoveryChip = (p: Project) => {
+    if (!hasMissingDeps(p.id)) return null
+    const rep = recoveryReports[p.id]!
+    const total =
+      (rep.missing.recipes?.length || 0) +
+      (rep.missing.capabilities?.length || 0) +
+      (rep.missing.entity_types?.length || 0) +
+      (rep.missing.tools?.length || 0)
+    return (
+      <span className="home__recovery-chip"
+            title={`Imported with ${total} missing host-side dependencies — click for details`}
+            onClick={e => { e.stopPropagation(); setVerifyResult({ pid: p.id, rep: { compat: rep } }) }}>
+        ⚠ {total} missing
+      </span>
     )
   }
 
@@ -349,6 +419,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                         >
                           <div className="home__side-item-head">
                             <span className="home__side-item-name">{p.name}</span>
+                            {recoveryChip(p)}
                             {menu(p, 'side')}
                           </div>
                           <div className="home__side-item-meta">
@@ -387,6 +458,73 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                       onClick={() => confirmDelete(modal.pid)}>Delete project</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {verifyResult && (
+        <div className="modal-backdrop" onClick={() => setVerifyResult(null)}>
+          <div className="modal modal--wide" onClick={e => e.stopPropagation()}>
+            <h2 className="modal__title">Recovery archive — {verifyResult.pid}</h2>
+            <RecoveryReportBody rep={verifyResult.rep} />
+            <div className="modal__actions">
+              <button className="home__btn" onClick={() => setVerifyResult(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RecoveryReportBody({ rep }: { rep: any }) {
+  // Two shapes: full drift report (from /verify-recovery) OR compat report
+  // (from /recovery-report, wrapped as {compat: ...} by recoveryChip).
+  const compat = rep?.compat
+  const drift = !rep?.compat ? rep : null
+  return (
+    <div className="modal__body">
+      {drift && (
+        <div className="home__recovery-section">
+          <div><b>Skew score:</b> {(drift.skew_score * 100).toFixed(1)}%</div>
+          <div><b>Counts (live / FS):</b>{' '}
+            {Object.entries(drift.counts?.live || {}).map(([t, n]: any) => (
+              <span key={t}>{t}: {n} / {drift.counts?.fs?.[t] ?? '?'}{' '}</span>
+            ))}
+          </div>
+          {drift.sample_size > 0 && (
+            <div><b>Sample:</b> {drift.sample_mismatches}/{drift.sample_size} mismatched</div>
+          )}
+          {drift.field_mismatches?.length ? (
+            <details>
+              <summary>{drift.field_mismatches.length} field mismatch{drift.field_mismatches.length > 1 ? 'es' : ''}</summary>
+              <ul>{drift.field_mismatches.slice(0, 20).map((m: any, i: number) => (
+                <li key={i}><code>{m.table}/{m.id}.{m.field}</code>: live=<code>{String(m.live)}</code> fs=<code>{String(m.fs)}</code></li>
+              ))}</ul>
+            </details>
+          ) : null}
+        </div>
+      )}
+      {compat && (
+        <div className="home__recovery-section">
+          <div className="home__muted">
+            Source: {compat.source?.aba_commit ?? 'unknown'} ({compat.source?.aba_version ?? 'unknown'}) →
+            Host: {compat.host?.aba_commit ?? 'unknown'} ({compat.host?.aba_version ?? 'unknown'})
+          </div>
+          {(['recipes','capabilities','entity_types','tools'] as const).map(cat => {
+            const list = compat.missing?.[cat] ?? []
+            if (list.length === 0) return null
+            return (
+              <div key={cat} className="home__recovery-row">
+                <b>Missing {cat.replace('_', ' ')} ({list.length}):</b>{' '}
+                <code>{list.join(', ')}</code>
+              </div>
+            )
+          })}
+          {compat.artifacts?.missing > 0 && (
+            <div className="home__recovery-row">
+              <b>Artifacts missing:</b> {compat.artifacts.missing} of {compat.artifacts.present + compat.artifacts.missing}
+            </div>
+          )}
         </div>
       )}
     </div>

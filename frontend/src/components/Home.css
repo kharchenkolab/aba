@@ -458,3 +458,24 @@
 .modal__input:focus { outline: none; border-color: var(--accent); }
 .modal__hint { margin: 8px 0 0; font-size: 12px; color: var(--text-4); }
 .modal__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* ---- Recovery banner (I5) ---- */
+.home__recovery-chip {
+  display: inline-block; margin: 0 6px;
+  padding: 2px 7px; font-size: 11px; font-weight: 600; line-height: 1.4;
+  background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
+  border-radius: 6px; cursor: pointer; user-select: none;
+}
+.home__recovery-chip:hover { background: #fde68a; }
+.modal--wide { width: 560px; max-width: calc(100vw - 40px); }
+.home__recovery-section {
+  margin: 0 0 14px; padding: 12px 14px; background: var(--page); border-radius: 8px;
+  border: 1px solid var(--border); font-size: 13px;
+}
+.home__recovery-section > div { margin: 4px 0; }
+.home__recovery-row code {
+  background: var(--tree-active-bg); padding: 1px 6px; border-radius: 4px;
+  font-size: 12px; word-break: break-word;
+}
+.home__recovery-section details { margin-top: 6px; }
+.home__recovery-section details > summary { cursor: pointer; color: var(--text-3); }

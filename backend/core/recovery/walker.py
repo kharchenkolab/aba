@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -35,6 +37,7 @@ class RecoverReport:
     message_clears: int = 0
     execs: int = 0
     artifacts_seen: int = 0
+    renamed_from_pid: Optional[str] = None  # I2 — collision auto-rename
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -51,6 +54,7 @@ class RecoverReport:
             "message_clears": self.message_clears,
             "execs": self.execs,
             "artifacts_seen": self.artifacts_seen,
+            "renamed_from_pid": self.renamed_from_pid,
             "warnings": list(self.warnings),
         }
 
@@ -85,10 +89,44 @@ def _read_json_safe(p: Path) -> Optional[dict]:
         return None
 
 
+# ─── project-ID collision handling (I2) ─────────────────────────────────────
+def _existing_pids() -> set[str]:
+    """Pids already registered in the workspace's project registry."""
+    try:
+        from core import projects as _projects   # noqa: PLC0415
+        return {p["id"] for p in _projects._load()}
+    except Exception:
+        return set()
+
+
+def _gen_fresh_pid() -> str:
+    return "prj_" + uuid.uuid4().hex[:8]
+
+
+# ─── path normalization (I1) ────────────────────────────────────────────────
+def _normalize_path(s: Optional[str], src_proot: Optional[str], tgt_proot: Optional[str]) -> Optional[str]:
+    """Rewrite an absolute path whose prefix matches the source project dir
+    so it instead points under the target project dir. Returns the input
+    unchanged when nothing matches — keeps non-path strings (UUIDs, IDs,
+    free text) safe."""
+    if not isinstance(s, str) or not src_proot or not tgt_proot:
+        return s
+    if src_proot == tgt_proot:
+        return s
+    if s.startswith(src_proot):
+        return tgt_proot + s[len(src_proot):]
+    return s
+
+
 # ─── entity / edge / message / exec writers (direct SQL, no scribe) ─────────
-def _insert_entity(c: sqlite3.Connection, payload: dict, *, replace: bool = False) -> None:
+def _insert_entity(c: sqlite3.Connection, payload: dict,
+                   src_proot: Optional[str] = None,
+                   tgt_proot: Optional[str] = None) -> None:
     """Insert one entity row from a sidecar payload. INSERT OR REPLACE since
-    recovery is idempotent (drift detector + repeated runs)."""
+    recovery is idempotent (drift detector + repeated runs).
+
+    If src_proot/tgt_proot differ, rewrites artifact_path (and string values
+    inside producing_params/metadata that match the source-project prefix)."""
     metadata = payload.get("metadata")
     if isinstance(metadata, (dict, list)):
         metadata = json.dumps(metadata)
@@ -98,6 +136,7 @@ def _insert_entity(c: sqlite3.Connection, payload: dict, *, replace: bool = Fals
     tags = payload.get("tags")
     if isinstance(tags, (list, dict)):
         tags = json.dumps(tags)
+    artifact_path = _normalize_path(payload.get("artifact_path"), src_proot, tgt_proot)
     sql = (
         "INSERT OR REPLACE INTO entities "
         "(id, type, title, status, artifact_path, producing_params, "
@@ -111,7 +150,7 @@ def _insert_entity(c: sqlite3.Connection, payload: dict, *, replace: bool = Fals
         payload.get("type"),
         payload.get("title") or "(unrecovered)",
         payload.get("status") or "active",
-        payload.get("artifact_path"),
+        artifact_path,
         producing_params,
         payload.get("parent_entity_id"),
         payload.get("scenario_of"),
@@ -129,8 +168,14 @@ def _insert_entity(c: sqlite3.Connection, payload: dict, *, replace: bool = Fals
     ))
 
 
-def _insert_exec(c: sqlite3.Connection, payload: dict, sidecar_path: Path) -> None:
-    """Insert one execution_records row from a sidecar payload."""
+def _insert_exec(c: sqlite3.Connection, payload: dict, sidecar_path: Path,
+                 src_proot: Optional[str] = None,
+                 tgt_proot: Optional[str] = None) -> None:
+    """Insert one execution_records row from a sidecar payload.
+
+    The exec sidecar's record_path is normalized to the target project's path
+    (so the live DB doesn't hold dead pointers after a cross-host import)."""
+    record_path = _normalize_path(str(sidecar_path), src_proot, tgt_proot)
     c.execute(
         "INSERT OR REPLACE INTO execution_records "
         "(exec_id, thread_id, run_id, tool_use_id, tool_name, status, "
@@ -144,7 +189,7 @@ def _insert_exec(c: sqlite3.Connection, payload: dict, sidecar_path: Path) -> No
             payload.get("tool_name") or "unknown",
             payload.get("status") or "ok",
             payload.get("code_hash"),
-            str(sidecar_path),     # record_path: where this exec record lives on disk
+            record_path,
             payload.get("started_at") or "",
             payload.get("completed_at"),
         ),
@@ -213,8 +258,60 @@ def recover_project(
     source_dir = Path(source_dir).resolve()
     project_json_path = source_dir / "project.json"
     project_meta = _read_json_safe(project_json_path) or {}
-    pid = target_pid or project_meta.get("pid") or source_dir.name
+    candidate_pid = target_pid or project_meta.get("pid") or source_dir.name
+    pid = candidate_pid
     report = RecoverReport(pid=pid, source_dir=str(source_dir), target_db="")
+
+    # I2 — project-ID collision. If the candidate pid already exists in the
+    # target host's registry AND the source dir isn't this project's own
+    # current home, generate a fresh one. Skipping the "own home" case is
+    # essential — recovering a project from its own runtime/projects/<pid>/
+    # is the standard same-host disaster recovery, NOT a collision. Skip
+    # entirely in dry-run so the drift detector doesn't perturb live state.
+    if not dry_run and target_pid is None:
+        existing = _existing_pids()
+        # Compute the current project's home for this pid; if our source dir
+        # already lives there, this is self-recovery.
+        try:
+            from core.config import project_root as _proot   # noqa: PLC0415
+            own_home = str(_proot(candidate_pid).resolve())
+        except Exception:
+            own_home = None
+        is_own_home = own_home is not None and str(source_dir) == own_home
+        if candidate_pid in existing and not is_own_home:
+            new_pid = _gen_fresh_pid()
+            while new_pid in existing:
+                new_pid = _gen_fresh_pid()
+            report.renamed_from_pid = candidate_pid
+            report.warnings.append(
+                f"PID collision: {candidate_pid} already in registry; renamed to {new_pid}"
+            )
+            pid = new_pid
+            report.pid = new_pid
+            # Rewrite project.json pid + registry.id on disk so future loads
+            # see the new identity (next backfill would do this anyway, but
+            # be eager — saves one mismatched-state round trip).
+            project_meta["pid"] = new_pid
+            reg = project_meta.get("registry") or {}
+            if isinstance(reg, dict):
+                reg["id"] = new_pid
+                project_meta["registry"] = reg
+            try:
+                project_json_path.write_text(json.dumps(project_meta))
+            except Exception as e:
+                report.warnings.append(f"could not rewrite project.json: {e}")
+            # If the source dir name doesn't match the new pid, move it. The
+            # parent dir is the runtime/projects/ root; we want a sibling
+            # under the same parent named after new_pid.
+            if source_dir.name != new_pid:
+                new_dir = source_dir.parent / new_pid
+                if not new_dir.exists():
+                    try:
+                        shutil.move(str(source_dir), str(new_dir))
+                        source_dir = new_dir
+                        project_json_path = source_dir / "project.json"
+                    except Exception as e:
+                        report.warnings.append(f"directory rename {source_dir}→{new_dir} failed: {e}")
 
     if dry_run:
         tdb = Path(tempfile.mkstemp(prefix="aba_recover_dry_", suffix=".db")[1])
@@ -230,10 +327,32 @@ def recover_project(
         tdb.unlink()
 
     # Init schema. Defer import — the recovery module shouldn't pull the
-    # whole core import graph just by existing.
-    from core.graph._schema import init_db, set_db_path  # noqa: PLC0415
-    set_db_path(tdb)
-    init_db()
+    # whole core import graph just by existing. We must temporarily repoint
+    # the global DB pointer to call init_db() on tdb, but the original is
+    # restored immediately so dry-runs from a live process (drift detector)
+    # don't pollute the caller's connection (P5 found this regression).
+    from core.graph import _schema as _sm        # noqa: PLC0415
+    prev_db_path = _sm.DB_PATH
+    try:
+        _sm.set_db_path(tdb)
+        _sm.init_db()
+    finally:
+        _sm.set_db_path(prev_db_path)
+
+    # Resolve source/target project dirs for I1 path normalization. The source
+    # dir is what we're reading from; the target dir is where the rebuilt
+    # project should live (project_root(pid) in the current runtime). When
+    # the two match (same-host recovery), normalization is a no-op.
+    src_proot = project_meta.get("source_project_dir") or str(source_dir)
+    try:
+        from core.config import project_root  # noqa: PLC0415
+        tgt_proot = str(project_root(pid))
+    except Exception:
+        tgt_proot = str(source_dir)
+    if src_proot != tgt_proot:
+        report.warnings.append(
+            f"cross-host import: rewriting absolute paths {src_proot} → {tgt_proot}"
+        )
 
     c = sqlite3.connect(tdb)
     c.row_factory = sqlite3.Row
@@ -249,7 +368,7 @@ def recover_project(
                     report.warnings.append(f"unparseable entity sidecar: {f.name}")
                     continue
                 try:
-                    _insert_entity(c, payload)
+                    _insert_entity(c, payload, src_proot=src_proot, tgt_proot=tgt_proot)
                     report.entities += 1
                 except sqlite3.DatabaseError as e:
                     report.warnings.append(f"entity insert failed {f.name}: {e}")
@@ -261,7 +380,7 @@ def recover_project(
                 report.warnings.append(f"unparseable exec sidecar: {f.name}")
                 continue
             try:
-                _insert_exec(c, payload, f)
+                _insert_exec(c, payload, f, src_proot=src_proot, tgt_proot=tgt_proot)
                 report.execs += 1
             except sqlite3.DatabaseError as e:
                 report.warnings.append(f"exec insert failed {f.name}: {e}")
@@ -334,13 +453,47 @@ def recover_project(
     if not dry_run and project_meta.get("registry"):
         try:
             from core import projects as _projects  # noqa: PLC0415
+            # If we renamed via collision, the registry entry's id must match
+            # the new pid (project.json was already rewritten earlier).
+            reg_row = dict(project_meta["registry"])
+            reg_row["id"] = pid
             _projects._save([
                 p for p in _projects._load() if p["id"] != pid
-            ] + [project_meta["registry"]])
+            ] + [reg_row])
         except Exception as e:
             report.warnings.append(f"registry update failed: {e}")
 
+    # I3 — compatibility report: write recovery_report.json into the project
+    # dir. Skipped for dry_run (the drift detector calls build_report directly
+    # against its temp DB if it wants the data).
+    if not dry_run:
+        try:
+            from core.recovery.report import build_report  # noqa: PLC0415
+            build_report(source_dir, pid=pid, db_path=Path(tdb))
+        except Exception as e:
+            report.warnings.append(f"compatibility report failed: {e}")
+
     return report
+
+
+# ─── archived-tail GC (P4) ──────────────────────────────────────────────────
+def gc_archived_edges(project_dir: Path, *, keep: int = 1) -> dict:
+    """Delete `edges.jsonl.<seq>.archived` files older than the newest
+    `keep` snapshots. Recovery only needs newest snapshot + live tail; older
+    archives are dead weight. Returns {deleted, kept} counts."""
+    project_dir = Path(project_dir).resolve()
+    archived = sorted(project_dir.glob("edges.jsonl.*.archived"))
+    if len(archived) <= keep:
+        return {"deleted": 0, "kept": len(archived)}
+    to_delete = archived[:-keep] if keep > 0 else archived
+    deleted = 0
+    for f in to_delete:
+        try:
+            f.unlink()
+            deleted += 1
+        except Exception:
+            pass
+    return {"deleted": deleted, "kept": len(archived) - deleted}
 
 
 # ─── backfill (DB → FS) ─────────────────────────────────────────────────────

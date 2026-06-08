@@ -335,6 +335,33 @@ def projects_delete(pid: str):
     return {"current": projects.current()}
 
 
+@app.get("/api/projects/{pid}/recovery-report")
+def projects_recovery_report(pid: str):
+    """The most recent recovery_report.json for this project, or null if
+    the project hasn't been imported via aba-recover (i.e. it was created
+    here and has no compatibility issues to surface)."""
+    from core.config import project_root
+    from pathlib import Path
+    rp = project_root(pid) / "recovery_report.json"
+    if not rp.exists():
+        return None
+    try:
+        import json as _json
+        return _json.loads(rp.read_text())
+    except Exception:
+        return None
+
+
+@app.post("/api/projects/{pid}/verify-recovery")
+def projects_verify_recovery(pid: str, depth: str = "full"):
+    """On-demand drift check from the project ⋯ menu's
+    'Verify recovery archive' button (recovery.md § 10.0)."""
+    from core.recovery.drift import compute_drift
+    from core.config import project_root
+    rep = compute_drift(project_root(pid), depth=depth)
+    return rep.to_dict()
+
+
 # ---------- Entities ----------
 
 @app.get("/api/entity-types")
