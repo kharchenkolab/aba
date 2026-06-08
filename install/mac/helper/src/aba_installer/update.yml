@@ -6,10 +6,11 @@ defaults:
   timeout_seconds: 300
 
 env_vars:
-  ABA_HOME: "$HOME/Library/Application Support/ABA"
-  ARCH: "$(uname -m)"
+  ABA_HOME: "$HOME/.aba"
   ENV_DIR: "$ABA_HOME/env"
   REPO_DIR: "$ABA_HOME/repo"
+  ABA_ENV_YML_URL: "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"
+  # ABA_ENV_YML_SRC — when set to a local path, used instead of the URL.
 
 steps:
   - id: pull-aba
@@ -34,7 +35,7 @@ steps:
       Apply any new pinned dependencies from environment.yml. Usually a
       no-op; only takes time when the upstream env actually changed.
     commands:
-      - 'curl -fsSLo "$ABA_HOME/environment.yml" "https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml"'
+      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "$ABA_ENV_YML_URL"; fi'
       - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
 
@@ -42,8 +43,8 @@ steps:
     title: Rebuild the interface
     why: Picks up any frontend changes that landed since last build.
     commands:
-      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" install --frozen-lockfile'
-      - 'cd "$REPO_DIR/aba/frontend" && "$ENV_DIR/bin/pnpm" build'
+      - 'cd "$REPO_DIR/aba/frontend" && PATH="$ENV_DIR/bin:$PATH" "$ENV_DIR/bin/npm" ci'
+      - 'cd "$REPO_DIR/aba/frontend" && PATH="$ENV_DIR/bin:$PATH" ./node_modules/.bin/vite build'
     timeout_seconds: 600
 
   - id: bounce-backend

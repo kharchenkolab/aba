@@ -54,6 +54,22 @@ def _playbook_path(name: str) -> Path:
     return here / f"{name}.yml"
 
 
+# ─── install artifacts the shell playbook can't render itself ───────────────
+def prepare_install_artifacts() -> Path:
+    """Render the `aba` launcher into $ABA_HOME/installer/aba.
+
+    The launcher needs ABA_HOME/env/repo/port baked in by Python
+    substitution (see launcher.py), which the pure-shell playbook can't do
+    — its install-launcher step just copies this rendered file to
+    ~/bin/aba. Called before the playbook runs. Idempotent.
+    """
+    from aba_installer import launcher
+    dest = installer_dir() / "aba"
+    dest.write_text(launcher.render(launcher.default_context()))
+    os.chmod(dest, 0o755)
+    return dest
+
+
 # ─── SSE helpers ───────────────────────────────────────────────────────────
 def _sse_format(event_name: str, payload: dict) -> bytes:
     """Encode one event as a Server-Sent-Events frame.
@@ -81,6 +97,9 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
 
     def worker():
         try:
+            # Render Python-substituted artifacts (the launcher) before the
+            # shell playbook reaches the step that installs them.
+            prepare_install_artifacts()
             ex = Executor(pb, on_event=on_event)
             results = ex.run_all()
             ok = all(r.ok for r in results)

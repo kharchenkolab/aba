@@ -1,7 +1,13 @@
 """Where things live on disk.
 
-All paths under ABA_HOME (default: ~/Library/Application Support/ABA/).
-Override via ABA_HOME env for tests.
+All paths under ABA_HOME (default: ~/.aba/). Override via ABA_HOME env for
+tests.
+
+Why ~/.aba and not the Apple-conventional ~/Library/Application Support/ABA:
+the conda r-base launcher script hardcodes its env path *unquoted*, so a
+space anywhere in the prefix (as in "Application Support") breaks every R
+invocation. R is core to the recipe library, so the install root must be
+space-free.
 """
 from __future__ import annotations
 import os
@@ -13,7 +19,7 @@ def aba_home() -> Path:
     p = os.environ.get("ABA_HOME")
     if p:
         return Path(p)
-    return Path.home() / "Library" / "Application Support" / "ABA"
+    return Path.home() / ".aba"
 
 
 def installer_dir() -> Path:
