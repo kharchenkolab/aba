@@ -1,14 +1,18 @@
 /**
  * Highlight gesture on the focused Result.
  *
- * Mirrors the Threads/Message highlight UX in ResultView:
- *   1. A single Highlight toggle button lives next to the title.
- *   2. Clicking it activates highlight mode (button gets --on class).
- *   3. While active, hovering a MemberPanel reveals the yellow surface
- *      overlay (.rv-panel__hl) with the "draw to highlight" hint.
- *   4. Mousedown on the surface + mousemove + mouseup triggers
- *      captureHighlight, which calls onAnnotate with {image, note}
- *      and exits highlight mode.
+ * The Highlight TOGGLE lives in App.tsx's canvas-actions row (alongside
+ * the Threads ✏️ button). ResultView only consumes the lifted
+ * `highlighting` prop. So these tests drive `highlighting` directly via
+ * props, no in-view button.
+ *
+ * Contract verified here:
+ *   1. With highlighting=true, hovering a MemberPanel reveals the yellow
+ *      surface overlay (.rv-panel__hl) with the "draw to highlight" hint.
+ *   2. Drawing a stroke triggers captureHighlight, which calls
+ *      onAnnotate with {image, note} and calls onHighlightingChange(false)
+ *      (auto-exit).
+ *   3. With highlighting=false, no surface appears even on hover.
  *
  * We mock html2canvas to avoid running the rasterizer in happy-dom.
  */
@@ -89,59 +93,55 @@ function makeResult(ref: string): Entity {
 
 
 describe('ResultView — Highlight tool', () => {
-  it('hides the toggle when onAnnotate is not provided', () => {
+  it('renders no in-view toggle button (lives in App.tsx canvas-actions)', () => {
     const f = fig('fig_a')
     const result = makeResult('fig_a')
-    render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}} />)
+    render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
+                       onAnnotate={() => {}} />)
+    // The toggle is OWNED by App.tsx now, not ResultView. ResultView
+    // should not render its own hl-toggle button.
     expect(document.querySelector('.hl-toggle')).toBeNull()
   })
 
-  it('shows the toggle next to the title when onAnnotate is wired', () => {
+  it('with highlighting=false, hover does NOT show surface', () => {
     const f = fig('fig_a')
     const result = makeResult('fig_a')
     render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
-                       onAnnotate={() => {}} />)
-    const head = document.querySelector('.rv__head')
-    expect(head).not.toBeNull()
-    expect(head?.querySelector('.hl-toggle')).not.toBeNull()
-    expect(head?.querySelector('.rv__title')).not.toBeNull()
-  })
-
-  it('toggling adds .hl-toggle--on and reveals the surface on hover', () => {
-    const f = fig('fig_a')
-    const result = makeResult('fig_a')
-    render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
-                       onAnnotate={() => {}} />)
-    const btn = document.querySelector('.hl-toggle') as HTMLButtonElement
-    expect(btn.classList.contains('hl-toggle--on')).toBe(false)
-    // Before toggle: no surface even on hover
+                       onAnnotate={() => {}} highlighting={false} />)
     const panel = document.querySelector('.rv-panel') as HTMLElement
     fireEvent.mouseEnter(panel)
     expect(panel.querySelector('.rv-panel__hl')).toBeNull()
-    // Toggle on
-    fireEvent.click(btn)
-    expect(btn.classList.contains('hl-toggle--on')).toBe(true)
-    // Re-trigger hover (the prior mouseEnter was while inactive)
-    fireEvent.mouseLeave(panel)
+  })
+
+  it('with highlighting=true, hovering a MemberPanel shows the yellow surface', () => {
+    const f = fig('fig_a')
+    const result = makeResult('fig_a')
+    render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
+                       onAnnotate={() => {}} highlighting={true} />)
+    const panel = document.querySelector('.rv-panel') as HTMLElement
     fireEvent.mouseEnter(panel)
     expect(panel.querySelector('.rv-panel__hl')).not.toBeNull()
     expect(panel.querySelector('.rv-panel__hl-hint')?.textContent).toContain('draw to highlight')
   })
 
-  it('drawing a stroke calls onAnnotate({image, note}) and exits highlight mode', async () => {
+  it('drawing a stroke calls onAnnotate({image, note}) and onHighlightingChange(false)', async () => {
     const f = fig('fig_a', 'UMAP clusters')
     const result = makeResult('fig_a')
     const onAnnotate = vi.fn()
+    const onHighlightingChange = vi.fn()
     render(<ResultView result={result} entities={[f]} onChange={() => {}} onFocus={() => {}}
-                       onAnnotate={onAnnotate} />)
-    const btn = document.querySelector('.hl-toggle') as HTMLButtonElement
-    fireEvent.click(btn)
+                       onAnnotate={onAnnotate}
+                       highlighting={true}
+                       onHighlightingChange={onHighlightingChange} />)
     const panel = document.querySelector('.rv-panel') as HTMLElement
-    // Stub the panel's bounding rect so normXY gets sensible values.
-    panel.getBoundingClientRect = () => ({
+    // Stub the panel's bounding rect AND the body's so normXY works.
+    const stubRect = () => ({
       x: 0, y: 0, top: 0, left: 0, bottom: 200, right: 300,
       width: 300, height: 200, toJSON: () => ({}),
-    }) as DOMRect
+    } as DOMRect)
+    panel.getBoundingClientRect = stubRect
+    const body = panel.querySelector('.rv-panel__body') as HTMLElement
+    if (body) body.getBoundingClientRect = stubRect
     fireEvent.mouseEnter(panel)
     const surface = panel.querySelector('.rv-panel__hl') as HTMLElement
     expect(surface).not.toBeNull()
@@ -155,9 +155,9 @@ describe('ResultView — Highlight tool', () => {
     expect(arg.image.length).toBeGreaterThan(0)
     expect(typeof arg.note).toBe('string')
     expect(arg.note).toMatch(/User highlight \(this turn\)/)
-    // Auto-exit: toggle returns to off
+    // Auto-exit: parent's onHighlightingChange(false) called
     await waitFor(() => {
-      expect(btn.classList.contains('hl-toggle--on')).toBe(false)
+      expect(onHighlightingChange).toHaveBeenCalledWith(false)
     })
   })
 
@@ -165,17 +165,17 @@ describe('ResultView — Highlight tool', () => {
     const f = fig('fig_a')
     const resA = makeResult('fig_a')
     const resB = { ...makeResult('fig_a'), id: 'res_h2', title: 'Different result' } as Entity
+    const onHighlightingChange = vi.fn()
     const { rerender } = render(
       <ResultView result={resA} entities={[f]} onChange={() => {}} onFocus={() => {}}
-                  onAnnotate={() => {}} />,
+                  onAnnotate={() => {}} highlighting={true}
+                  onHighlightingChange={onHighlightingChange} />,
     )
-    const btn = document.querySelector('.hl-toggle') as HTMLButtonElement
-    fireEvent.click(btn)
-    expect(btn.classList.contains('hl-toggle--on')).toBe(true)
-    // Re-render with a different result entity (different id)
+    // Re-render with a different result entity (different id) — the
+    // result-id effect should fire onHighlightingChange(false).
     rerender(<ResultView result={resB} entities={[f]} onChange={() => {}} onFocus={() => {}}
-                         onAnnotate={() => {}} />)
-    const btn2 = document.querySelector('.hl-toggle') as HTMLButtonElement
-    expect(btn2.classList.contains('hl-toggle--on')).toBe(false)
+                         onAnnotate={() => {}} highlighting={true}
+                         onHighlightingChange={onHighlightingChange} />)
+    expect(onHighlightingChange).toHaveBeenCalledWith(false)
   })
 })

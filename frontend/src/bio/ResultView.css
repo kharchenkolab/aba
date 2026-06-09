@@ -1,20 +1,13 @@
 .rv { display: flex; flex-direction: column; gap: 12px; }
 
-.rv__head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.rv__head .rv__title,
-.rv__head .rv__title-input { flex: 1; min-width: 0; }
 .rv__title { font-size: 19px; font-weight: 700; color: var(--text); margin: 0; cursor: text; line-height: 1.3; }
 .rv__title:hover { color: var(--accent); }
 .rv__title-input {
   font-size: 19px; font-weight: 700; color: var(--text); width: 100%; box-sizing: border-box;
   border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--page);
 }
-/* The .hl-toggle button used inside .rv__head reuses ChatPane.css's
-   .hl-toggle / .hl-toggle--on styles — already global. */
+/* The Highlight toggle for Result view lives in App.tsx's canvas-actions
+   row (same spot as the Threads ✏️ button), not here. */
 
 /* Per-MemberPanel highlight surface — same shape as Message's .msg__hl
    (thin yellow inset, faint fill, cursor crosshair); the SVG overlays
@@ -49,7 +42,12 @@
 .rv__members { display: flex; flex-direction: column; gap: 14px; }
 .rv__empty { color: var(--text-4); font-size: 13px; padding: 12px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
 
-.rv-panel { display: flex; flex-direction: column; gap: 5px; }
+/* The figure panel's inner content (cell + revision strip + caption)
+   stacks via flex. The OUTER .rv-panel is the positioning anchor for the
+   highlight surface (which lives as a sibling of __body, NOT inside it,
+   so html2canvas doesn't capture the yellow overlay). The __body must
+   have a real box for getBoundingClientRect() — no display:contents. */
+.rv-panel__body { display: flex; flex-direction: column; gap: 5px; }
 .rv-panel__cell { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; display: flex; }
 /* Cap the figure to keep the whole panel — image + legend + chevrons
    + caption — in the viewport without scrolling. The 240px reserves

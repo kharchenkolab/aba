@@ -38,13 +38,17 @@ interface Props {
   onBrowseFiles?: (path?: string) => void
   /** Per-request project pin for upload routing (dataset "Add files"). */
   projectId?: string
+  /** Highlight-mode toggle, lifted from App.tsx so the canvas-actions row's
+   *  ✏️ button drives both ChatPane AND result-focused MemberPanels. */
+  highlighting?: boolean
+  onHighlightingChange?: (on: boolean) => void
 }
 
 type PromoteMode =
   | { kind: 'figure-to-claim' }
   | { kind: 'scenario' }
 
-export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles, projectId }: Props) {
+export default function FocusCanvas({ entity, entities, onChange, onFocus, onSelectThread, onAnnotate, annotClear, compact, onAsk, onChatResult, onBrowseFiles, projectId, highlighting, onHighlightingChange }: Props) {
   const [promote, setPromote] = useState<PromoteMode | null>(null)
   const [compareOn, setCompareOn] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -151,7 +155,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear, highlighting, onHighlightingChange)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -421,6 +425,8 @@ function renderRegistryView(
   projectId?: string,
   onAnnotate?: (a: { image: string; note: string }) => void,
   annotClear?: number,
+  highlighting?: boolean,
+  onHighlightingChange?: (on: boolean) => void,
 ) {
   const View = focus_view_for(e.type)
   if (!View) {
@@ -438,6 +444,8 @@ function renderRegistryView(
     projectId={projectId}
     onAnnotate={onAnnotate}
     annotClear={annotClear}
+    highlighting={highlighting}
+    onHighlightingChange={onHighlightingChange}
   />
 }
 
