@@ -151,7 +151,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
           ? renderCompareBody(entity, baseline)
           : entity.type === 'figure' && onAnnotate
           ? <AnnotatedFigure entity={entity} onAttach={onAnnotate} clearSignal={annotClear} />
-          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId)}
+          : renderRegistryView(entity, entities, onFocus, onChange, compact, onAsk, onChatResult, onBrowseFiles, projectId, onAnnotate, annotClear)}
       </div>
       <div className="focus__meta">
         <span title={entity.id}>id {entity.id}</span>
@@ -419,6 +419,8 @@ function renderRegistryView(
                   entityId?: string) => void,
   onBrowseFiles?: (path?: string) => void,
   projectId?: string,
+  onAnnotate?: (a: { image: string; note: string }) => void,
+  annotClear?: number,
 ) {
   const View = focus_view_for(e.type)
   if (!View) {
@@ -434,6 +436,8 @@ function renderRegistryView(
     onChatResult={onChatResult}
     onBrowseFiles={onBrowseFiles}
     projectId={projectId}
+    onAnnotate={onAnnotate}
+    annotClear={annotClear}
   />
 }
 
