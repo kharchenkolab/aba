@@ -58,8 +58,8 @@
       <h1>Setting up ABA…</h1>
       <p class="lead">Installing into <code id="aba-home"></code>. This runs by
         itself — nothing to click. ABA opens automatically when it's ready.</p>
-      <progress id="setup-bar" value="0" max="100"></progress>
-      <p id="setup-current">Starting…</p>
+      <p id="setup-current" class="phase">Starting…</p>
+      <p id="setup-line" class="muted line"></p>
       <ol class="steps" id="setup-steps"></ol>
       <p class="error" id="setup-error"></p>
       <details>
@@ -97,8 +97,8 @@
       <!-- Update progress shares the same step renderer as install -->
       <div id="update-progress" hidden>
         <h3>Updating…</h3>
-        <progress id="update-bar" value="0" max="100"></progress>
-        <p id="update-current"></p>
+        <p id="update-current" class="phase"></p>
+        <p id="update-line" class="muted line"></p>
         <ol class="steps" id="update-steps"></ol>
       </div>
     </section>

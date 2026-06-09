@@ -133,24 +133,11 @@ class Executor:
         self._on_event("step_start", {"step_id": step.id, "title": step.title})
         env = self._materialize_env()
         result = StepResult(step_id=step.id, started_at=started, finished_at=started)
-        # Sub-progress for long `micromamba create` steps so the bar advances
-        # WITHIN a step instead of sitting frozen for minutes. Generic: only
-        # conda output drives it (CondaProgress reports 0 for everything else).
-        # State persists across the step's commands; emit on each whole-percent
-        # advance to keep the event stream small.
-        from .conda_progress import CondaProgress
-        _prog = CondaProgress()
-        _pct = {"v": 0}   # only emit step_progress once real (>=1%) progress starts
         for cmd in step.commands:
             self._on_event("command_start", {"step_id": step.id, "command": cmd})
 
             def _emit_line(line: str, _sid=step.id) -> None:
                 self._on_event("command_output", {"step_id": _sid, "line": line})
-                _f = _prog.feed(line)
-                _p = int(_f * 100)
-                if _p > _pct["v"]:
-                    _pct["v"] = _p
-                    self._on_event("step_progress", {"step_id": _sid, "frac": round(_f, 4)})
 
             cmd_result = self._run_one(cmd, env=env, timeout=step.timeout_seconds,
                                        on_line=_emit_line)
