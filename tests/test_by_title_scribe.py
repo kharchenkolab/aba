@@ -244,6 +244,131 @@ def test_result_entity_no_symlink():
         assert not any(p.is_symlink() for p in parent.iterdir())
 
 
+# ─── S-1: thread upsert → threads-by-title symlink ──────────────────────
+def test_thread_upsert_creates_threads_by_title_symlink():
+    s = _fresh_scribe()
+    pid = "prj_t1"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="thr_704fb4aa", row={
+        "id": "thr_704fb4aa", "type": "thread",
+        "title": "show the sample table for GSE192391",
+        "status": "active",
+    }))
+    s.flush()
+    link = _PROOT() / pid / "threads-by-title" / "show-the-sample-table-for-GSE192391.jsonl"
+    assert link.is_symlink(), "expected threads-by-title symlink to land"
+    assert os.readlink(link) == "../threads/thr_704fb4aa.jsonl"
+
+
+def test_thread_title_change_renames_symlink():
+    """User renames a thread → old symlink cleared, new one written."""
+    s = _fresh_scribe()
+    pid = "prj_t2"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="thr_x", row={
+        "id": "thr_x", "type": "thread", "title": "first title",
+        "status": "active",
+    }))
+    s.flush()
+    parent = _PROOT() / pid / "threads-by-title"
+    assert (parent / "first-title.jsonl").is_symlink()
+    s.enqueue(EntityUpserted(pid=pid, entity_id="thr_x", row={
+        "id": "thr_x", "type": "thread", "title": "renamed",
+        "status": "active",
+    }))
+    s.flush()
+    assert (parent / "renamed.jsonl").is_symlink()
+    assert not (parent / "first-title.jsonl").exists()
+
+
+def test_thread_archived_clears_link():
+    s = _fresh_scribe()
+    pid = "prj_t3"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="thr_y", row={
+        "id": "thr_y", "type": "thread", "title": "drop me",
+        "status": "active",
+    }))
+    s.flush()
+    parent = _PROOT() / pid / "threads-by-title"
+    assert (parent / "drop-me.jsonl").is_symlink()
+    s.enqueue(EntityUpserted(pid=pid, entity_id="thr_y", row={
+        "id": "thr_y", "type": "thread", "title": "drop me",
+        "status": "archived",
+    }))
+    s.flush()
+    assert not (parent / "drop-me.jsonl").exists()
+
+
+# ─── S-3: analysis (Run) upsert → runs-by-title symlink ────────────────
+def test_analysis_upsert_creates_runs_by_title_symlink():
+    s = _fresh_scribe()
+    pid = "prj_r1"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="ana_7abe103d", row={
+        "id": "ana_7abe103d", "type": "analysis",
+        "title": "pagoda2 on GSM5746259 (patient 145, day 0)",
+        "status": "active",
+    }))
+    s.flush()
+    link = (_PROOT() / pid / "runs-by-title"
+            / "pagoda2-on-GSM5746259-patient-145-day-0")
+    assert link.is_symlink()
+    assert os.readlink(link) == "../work/ana_7abe103d"
+
+
+def test_analysis_title_collision_suffixes():
+    """Two analysis entities with identical titles get collision-suffixed
+    by the existing pick_slug logic (last 6 of their id)."""
+    s = _fresh_scribe()
+    pid = "prj_r2"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="ana_aaaaaaaaaa", row={
+        "id": "ana_aaaaaaaaaa", "type": "analysis", "title": "Run X",
+        "status": "active",
+    }))
+    s.enqueue(EntityUpserted(pid=pid, entity_id="ana_bbbbbbbbbb", row={
+        "id": "ana_bbbbbbbbbb", "type": "analysis", "title": "Run X",
+        "status": "active",
+    }))
+    s.flush()
+    parent = _PROOT() / pid / "runs-by-title"
+    names = {p.name for p in parent.iterdir() if p.is_symlink()}
+    assert "Run-X" in names
+    suffixed = [n for n in names if n != "Run-X" and n.startswith("Run-X_")]
+    assert len(suffixed) == 1, f"expected one suffixed link, got {names}"
+
+
+# ─── S-2: dataset upsert → datasets-by-title symlink ───────────────────
+def test_dataset_upsert_creates_datasets_by_title_symlink():
+    s = _fresh_scribe()
+    pid = "prj_ds1"
+    abs_path = str(_PROOT() / pid / "work" / "thread-thr_xxx" / "geo_data" / "GSE192391_first2")
+    s.enqueue(EntityUpserted(pid=pid, entity_id="dat_2ce1545a", row={
+        "id": "dat_2ce1545a", "type": "dataset",
+        "title": "GSE192391 — count matrices",
+        "status": "active",
+        "artifact_path": abs_path,
+    }))
+    s.flush()
+    parent = _PROOT() / pid / "datasets-by-title"
+    link = parent / "GSE192391-count-matrices"
+    assert link.is_symlink(), f"expected dataset symlink; contents={list(parent.iterdir()) if parent.exists() else 'no dir'}"
+    assert os.readlink(link) == "../work/thread-thr_xxx/geo_data/GSE192391_first2"
+
+
+def test_dataset_refstore_path_no_symlink():
+    """A dataset whose artifact_path is in /refs/ (cross-project) gets
+    NO symlink — we don't link across project boundaries in v1."""
+    s = _fresh_scribe()
+    pid = "prj_ds2"
+    s.enqueue(EntityUpserted(pid=pid, entity_id="dat_ref", row={
+        "id": "dat_ref", "type": "dataset", "title": "Shared",
+        "status": "active",
+        "artifact_path": str(_RUNTIME() / "refs" / "GSE192391"),
+    }))
+    s.flush()
+    parent = _PROOT() / pid / "datasets-by-title"
+    # Either parent doesn't exist or it has no symlinks.
+    if parent.exists():
+        assert not any(p.is_symlink() for p in parent.iterdir())
+
+
 # ─── runner ─────────────────────────────────────────────────────────────
 TESTS = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 
