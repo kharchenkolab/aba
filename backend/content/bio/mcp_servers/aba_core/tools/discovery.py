@@ -94,7 +94,37 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                            import_name: str | None = None,
                            tags: list[str] | None = None) -> dict:
         """Propose a NEW capability for the catalog (when nothing on
-        list_capabilities matches). User reviews before adoption."""
+        list_capabilities matches). User reviews before adoption.
+
+        Examples by archetype — copy the matching shape:
+
+          PyPI library (default):
+            propose_capability(name='GEOparse', archetype='library',
+                               package='GEOparse', import_name='GEOparse')
+
+          CRAN R package:
+            propose_capability(name='Seurat', archetype='r_package',
+                               source='cran', package='Seurat', library='Seurat')
+
+          Bioconductor:
+            propose_capability(name='DESeq2', archetype='r_package',
+                               source='bioconductor', package='DESeq2',
+                               library='DESeq2')
+
+          GitHub R package — `package` is 'owner/repo'; `ref` is the
+          branch / tag / commit (default 'main' if omitted):
+            propose_capability(name='pagoda2-devel', archetype='r_package',
+                               source='github',
+                               package='kharchenkolab/pagoda2',
+                               ref='devel', library='pagoda2')
+
+          Conda CLI tool:
+            propose_capability(name='samtools', archetype='cli',
+                               channel='bioconda', version='1.21')
+
+        If `ensure_capability(name)` returned `status:'candidates'`,
+        each suggestion's fields are already shaped for this tool —
+        copy them directly."""
         from content.bio.tools import propose_capability_tool
         return propose_capability_tool({
             "name": name, "archetype": archetype, "channel": channel,

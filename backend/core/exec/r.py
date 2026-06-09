@@ -415,7 +415,13 @@ def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[
         return f"unknown R source {source!r} (cran|bioconductor|github)"
     if source == "github":
         if not _GH_RE.match(package or ""):
-            return "github package must be 'owner/repo'"
+            return (
+                "github source requires the 'package' field to be "
+                "'owner/repo' (the GitHub coordinate, e.g. "
+                "'kharchenkolab/pagoda2'); use 'ref' for the branch / "
+                "tag / commit (default 'main'). "
+                f"Got package={package!r}."
+            )
     elif not _CRAN_RE.match(package or ""):
         return "package name has invalid characters"
     if ref and not _REF_RE.match(ref):
