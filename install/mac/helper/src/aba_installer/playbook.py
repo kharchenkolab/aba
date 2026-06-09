@@ -121,11 +121,18 @@ class Executor:
     def __init__(self, playbook: Playbook, *,
                  on_event: Optional[EventCallback] = None,
                  base_env: Optional[dict[str, str]] = None,
-                 cwd: Optional[Path] = None):
+                 cwd: Optional[Path] = None,
+                 on_step_failed=None,
+                 max_repair_attempts: int = 1):
         self.playbook = playbook
         self._on_event = on_event or (lambda name, payload: None)
         self._base_env = base_env if base_env is not None else dict(os.environ)
         self._cwd = str(cwd) if cwd is not None else None
+        # on_step_failed(step, result, attempt) -> bool: attempt an out-of-band
+        # repair (Tier-0 agent), return True to retry the step. None = no repair
+        # (exactly the legacy behaviour). max_repair_attempts caps the retries.
+        self._on_step_failed = on_step_failed
+        self._max_repair_attempts = max_repair_attempts
 
     # ─── public API ────────────────────────────────────────────────────────
     def run_step(self, step: Step) -> StepResult:
@@ -168,6 +175,15 @@ class Executor:
             if only_set is not None and step.id not in only_set:
                 continue
             r = self.run_step(step)
+            # Tier-0 repair: on failure, let the agent fix the system, then retry
+            # the step (bounded). The re-run's exit code is the real verdict.
+            attempt = 0
+            while (not r.ok and self._on_step_failed is not None
+                   and attempt < self._max_repair_attempts):
+                attempt += 1
+                if not self._on_step_failed(step, r, attempt):
+                    break
+                r = self.run_step(step)
             results.append(r)
             if not r.ok:
                 break

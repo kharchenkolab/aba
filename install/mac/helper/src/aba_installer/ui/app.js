@@ -81,6 +81,8 @@
         const li = seen.get(p.step_id); if (li) li.className = p.ok ? 'ok' : 'fail';
       } else if (e.event === 'command_output' && p.line) {
         lastLine = p.line;
+      } else if (e.event === 'repair' && p.message) {
+        lastLine = '🔧 ' + p.message;   // Tier-0 agent repairing a failed step
       }
     }
     // No bar — env builds give no honest percentage. Show the current PHASE
@@ -380,6 +382,8 @@
             // Live line from the running command — beneath the phase title, so
             // long steps (the conda/pip build) read as alive, not hung.
             if (payload.line && line) line.textContent = payload.line.slice(0, 140);
+          } else if (ev === 'repair') {
+            if (payload.message && line) line.textContent = '🔧 ' + payload.message.slice(0, 140);
           } else if (ev === 'step_start') {
             const li = document.createElement('li');
             li.className = 'active';
