@@ -25,16 +25,25 @@ from mcp.server.fastmcp import FastMCP
 
 
 class PlanStep(TypedDict, total=False):
-    """One step of a present_plan list.
-
-    NOTE: this typed shape exists so FastMCP emits per-item properties in the
-    generated JSON schema (`steps.items.properties = {title, ...}`). Without it,
-    the schema is just `array of anything` and the model has to *infer* field
-    names from prose — Opus 4.7 was caught using `step` instead of `title`
-    (commit history: this contract was carried by the manual TOOL_SCHEMAS
-    pre-WU-1 commit 862d55b; restored here at the MCP layer post-WU-1)."""
-    # title is the user-facing label — required in the *intended* contract.
-    # `total=False` keeps the field schema-described-but-optional so a plain
+    """One step of a plan. `title` is the user-facing one-line label and is
+    required — do NOT name this field `step` or `name`. Optional: `description`
+    (one sentence of detail), `expected_outputs` (filenames the step will
+    produce), `skill` (name of a recipe the step follows), `parameters`
+    (resolved choices as a dict)."""
+    # Implementation note (NOT part of the schema description shown to the
+    # model — placed BELOW the docstring so FastMCP doesn't pick it up):
+    # this typed shape exists so FastMCP emits per-item properties in the
+    # generated JSON schema. Without it, the schema is `array of anything`
+    # and earlier Opus iterations were caught using `step` instead of `title`
+    # (pre-WU-1 the contract was carried by manual TOOL_SCHEMAS at commit
+    # 862d55b; restored at the MCP layer post-WU-1). Leaving meta-language
+    # like "infer field names from prose" or model-incident lore in the
+    # docstring itself destabilized the model at the assumptions→steps
+    # boundary (prj_2578185f thr_577d666a, 2026-06-09) — both
+    # present_plan calls slipped from JSON to XML mid-emission. Keep this
+    # block as a normal Python comment so the schema stays clean.
+    #
+    # `total=False`: every field schema-described-but-optional so a plain
     # string is still tolerated by the tool dispatcher (the bio impl coerces).
     title: str
     description: str
