@@ -52,10 +52,22 @@ source "$ROOT/.env"
 set +a
 
 cd "$ROOT/backend"
+# Why bare dir names (not 'envs/*'): uvicorn's reload filter
+# (watchfilesreload.py:23-34) only routes a value into `exclude_dirs`
+# when Path(value).is_dir(). 'envs/*' is a literal wildcard string —
+# not a real path — so it lands in the pattern list, and Path.match
+# uses last-N-components semantics: 'envs/foo.py' matches but
+# 'envs/pylib/natsort/x.py' does NOT (its trailing 2 components are
+# 'natsort/x.py'). Result: pip-install events deep under envs/pylib/
+# slip through and trigger worker reload mid-session, killing the
+# live LLM stream (diagnosed 2026-06-09 in prj_0ea773b4). Passing the
+# bare directory name routes through the is_dir() branch, and the
+# matcher then uses `exclude_dir in path.parents` — True for any
+# descendant of envs/, vendor/, data/, work/.
 setsid -f "$ROOT/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port "$PORT" --reload \
-  --reload-exclude 'vendor/*' --reload-exclude 'envs/*' \
-  --reload-exclude 'data/*' --reload-exclude 'work/*' \
+  --reload-exclude vendor --reload-exclude envs \
+  --reload-exclude data --reload-exclude work \
   >"$LOG" 2>&1 < /dev/null
 
 # --- 3. Wait for health ----------------------------------------------

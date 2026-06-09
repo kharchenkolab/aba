@@ -732,6 +732,28 @@ export function useChat(
             }
           }
         }
+        // Stream closed without a terminal SSE event (`done`/`cancel`/
+        // `error`) — those branches all `return`, so reaching here means
+        // the server dropped the connection mid-stream (uvicorn worker
+        // reload, network blip, idle timeout). Don't strand the UI on
+        // "thinking…"; release the streaming flag, surface a brief
+        // notice, and try to pick the live turn back up via TurnSink
+        // (the agent loop survives client disconnect — and now also
+        // worker reload, since turns are persisted to disk per C-2).
+        if (live()) {
+          const rid = currentRunIdRef.current
+          setStreamMsg(null)
+          setStreaming(false)
+          if (rid) {
+            streamingBlocks.push({ type: 'notice', text: 'Connection dropped — reattaching…' })
+            setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
+            const since = lastSeqRef.current
+            setTimeout(() => {
+              if (!live()) return
+              runStreamRef.current?.({ reattachRunId: rid, since })
+            }, 250)
+          }
+        }
       } catch (e) {
         // Aborted by a thread/project switch, or superseded — drop it silently
         // so nothing leaks into the new thread.
