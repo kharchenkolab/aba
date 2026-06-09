@@ -129,6 +129,23 @@ def _repair_hook(on_event):
     return make_repair_hook(cwd=os.environ.get("ABA_HOME"), on_event=on_event, ensure=True)
 
 
+def _run_preflight_if_enabled(pb, on_event) -> None:
+    """When agent repair is enabled, run a proactive pre-flight BEFORE the
+    playbook: probe the system + pre-fix known blockers. Best-effort; never
+    blocks the install (errors are surfaced, not raised)."""
+    if not _agent_repair_enabled():
+        return
+    try:
+        from .agent_repair import ensure_claude, run_preflight
+        claude = ensure_claude(on_event=on_event)
+        if not claude:
+            return
+        plan = "; ".join(f"{s.id}: {s.title}" for s in pb.steps)
+        run_preflight(plan, cwd=os.environ.get("ABA_HOME"), claude=claude, on_event=on_event)
+    except Exception as e:  # noqa: BLE001
+        on_event("repair", {"phase": "error", "message": f"pre-flight error: {e}"})
+
+
 def _bg_worker() -> None:
     pb = load_playbook(_playbook_path("install"))
     steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
@@ -141,6 +158,7 @@ def _bg_worker() -> None:
 
     try:
         prepare_install_artifacts()
+        _run_preflight_if_enabled(pb, on_event)
         results = Executor(pb, on_event=on_event,
                            on_step_failed=_repair_hook(on_event)).run_all(only=set(steps))
         ok = bool(results) and all(r.ok for r in results)
@@ -233,6 +251,7 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # don't run twice on the same prefix.
             if name == "install":
                 _await_background(on_event)
+            _run_preflight_if_enabled(pb, on_event)
             ex = Executor(pb, on_event=on_event, on_step_failed=_repair_hook(on_event))
             results = ex.run_all()
             ok = all(r.ok for r in results)

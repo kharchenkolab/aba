@@ -134,17 +134,85 @@ def build_repair_prompt(step_id: str, title: str, command: str,
 def build_claude_argv(claude: str, *, prompt: str,
                       recipe_path: Path = RECIPE_PATH,
                       allowed_tools: Optional[list[str]] = None,
-                      add_dir: Optional[str] = None) -> list[str]:
+                      add_dir: Optional[str] = None,
+                      stream: bool = False) -> list[str]:
+    # stream-json (+ --verbose) surfaces each assistant message / tool_use as it
+    # happens so we can show the agent's actions live in the "Show details" log;
+    # plain json returns only the final summary.
+    output = (["--output-format", "stream-json", "--verbose"] if stream
+              else ["--output-format", "json"])
     argv = [
         claude, "-p", prompt,
         "--append-system-prompt-file", str(recipe_path),
         "--permission-mode", "dontAsk",
         "--allowedTools", ",".join(allowed_tools or DEFAULT_ALLOWED_TOOLS),
-        "--output-format", "json",
-    ]
+    ] + output
     if add_dir:
         argv += ["--add-dir", add_dir]
     return argv
+
+
+# ─── stream-json parsing (#2) ───────────────────────────────────────────────
+def _summarize_stream_event(evt: dict) -> Optional[str]:
+    """Turn one `--output-format stream-json` event into a short human line for
+    the details log, or None to ignore it. Surfaces what the agent SAYS and
+    DOES (text + each tool_use); skips verbose tool results and bookkeeping."""
+    t = evt.get("type")
+    if t != "assistant":
+        return None
+    blocks = (evt.get("message") or {}).get("content") or []
+    out = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "text":
+            txt = (b.get("text") or "").strip()
+            if txt:
+                out.append(txt)
+        elif b.get("type") == "tool_use":
+            name = b.get("name", "?")
+            inp = b.get("input") or {}
+            detail = inp.get("command") or inp.get("file_path") or \
+                ", ".join(f"{k}={v}" for k, v in list(inp.items())[:2])
+            out.append(f"🔧 {name}: {str(detail)[:120]}")
+    return "  ·  ".join(out) if out else None
+
+
+def _consume_stream(lines, emit) -> dict:
+    """Parse an NDJSON line stream, emitting per-event repair messages; return
+    the final {returncode, result, is_error} from the terminal `result` event."""
+    final: dict = {"returncode": 0}
+    for raw in lines:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        try:
+            evt = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            continue
+        if evt.get("type") == "result":
+            final["result"] = evt.get("result") or ""
+            final["is_error"] = bool(evt.get("is_error"))
+            continue
+        msg = _summarize_stream_event(evt)
+        if msg:
+            emit("repair", {"phase": "step", "message": msg})
+    return final
+
+
+def _streaming_runner(argv: list[str], *, cwd: Optional[str], env: dict,
+                      on_event: Callable) -> dict:
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    final = _consume_stream(proc.stdout, on_event)
+    try:
+        proc.wait(timeout=600)
+    except Exception:  # noqa: BLE001
+        proc.kill()
+    final.setdefault("returncode", proc.returncode if proc.returncode is not None else 1)
+    if proc.returncode and not final.get("result"):
+        final["result"] = (proc.stderr.read() if proc.stderr else "")[-400:]
+    return final
 
 
 def _default_runner(argv: list[str], *, cwd: Optional[str], env: dict) -> dict:
@@ -165,43 +233,76 @@ def _default_runner(argv: list[str], *, cwd: Optional[str], env: dict) -> dict:
 
 
 # ─── orchestration ──────────────────────────────────────────────────────────
-def run_repair(step_id: str, title: str, command: str, error: str, *,
-               cwd: Optional[str] = None,
-               claude: Optional[str] = None,
-               runner: Optional[Callable] = None,
-               recipe_path: Path = RECIPE_PATH,
-               allowed_tools: Optional[list[str]] = None,
-               on_event: Optional[Callable[[str, dict], None]] = None
-               ) -> RepairOutcome:
-    """Drive one repair round. `runner` is injectable for tests."""
+def _run_agent(prompt: str, *, cwd, claude, runner, on_event, stream,
+               allowed_tools, start_msg: str, skip_msg: str) -> RepairOutcome:
+    """Shared core: run `claude -p` (streaming or not), emit events, return the
+    outcome. `runner` injectable for tests; streaming used only for real runs."""
     emit = on_event or (lambda name, payload: None)
     claude = claude or claude_path()
     if not claude:
-        emit("repair", {"step_id": step_id, "phase": "skip",
-                        "message": "Claude Code (claude) not available — cannot auto-repair."})
+        emit("repair", {"phase": "skip", "message": skip_msg})
         return RepairOutcome(attempted=False, ok=False, reason="claude not available")
-
-    probe = probe_system()
-    prompt = build_repair_prompt(step_id, title, command, error, probe)
-    argv = build_claude_argv(claude, prompt=prompt, recipe_path=recipe_path,
-                             allowed_tools=allowed_tools, add_dir=cwd)
-    emit("repair", {"step_id": step_id, "phase": "start",
-                    "message": f"Asking Claude Code to diagnose “{title}”…"})
-
+    argv = build_claude_argv(claude, prompt=prompt, allowed_tools=allowed_tools,
+                             add_dir=cwd, stream=stream)
+    emit("repair", {"phase": "start", "message": start_msg})
     env = dict(os.environ)
-    env.setdefault("DISABLE_AUTOUPDATER", "1")   # don't let claude self-update mid-install
-    run = runner or _default_runner
+    env.setdefault("DISABLE_AUTOUPDATER", "1")   # don't self-update mid-install
+    if runner is None and stream:
+        def run(a, *, cwd, env):
+            return _streaming_runner(a, cwd=cwd, env=env, on_event=emit)
+    else:
+        run = runner or _default_runner
     try:
         parsed = run(argv, cwd=cwd, env=env)
     except Exception as e:  # noqa: BLE001
-        emit("repair", {"step_id": step_id, "phase": "error", "message": str(e)})
+        emit("repair", {"phase": "error", "message": str(e)})
         return RepairOutcome(attempted=True, ok=False, reason=f"runner failed: {e}")
-
     ok = (parsed.get("returncode", 0) == 0) and not parsed.get("is_error")
     diagnosis = (parsed.get("result") or "").strip()
-    emit("repair", {"step_id": step_id, "phase": "done", "ok": ok,
-                    "message": diagnosis[:400] or ("repaired" if ok else "could not repair")})
+    emit("repair", {"phase": "done", "ok": ok,
+                    "message": diagnosis[:400] or ("done" if ok else "could not complete")})
     return RepairOutcome(attempted=True, ok=ok, diagnosis=diagnosis, raw=parsed)
+
+
+def run_repair(step_id: str, title: str, command: str, error: str, *,
+               cwd: Optional[str] = None, claude: Optional[str] = None,
+               runner: Optional[Callable] = None,
+               allowed_tools: Optional[list[str]] = None,
+               on_event: Optional[Callable[[str, dict], None]] = None,
+               stream: bool = True) -> RepairOutcome:
+    """Drive one repair round for a failed step. `runner` injectable for tests."""
+    prompt = build_repair_prompt(step_id, title, command, error, probe_system())
+    return _run_agent(prompt, cwd=cwd, claude=claude, runner=runner,
+                      on_event=on_event, stream=stream, allowed_tools=allowed_tools,
+                      start_msg=f"Asking Claude Code to diagnose “{title}”…",
+                      skip_msg="Claude Code not available — cannot auto-repair.")
+
+
+# ─── adaptive pre-flight (#3) ───────────────────────────────────────────────
+def build_preflight_prompt(plan_summary: str, probe: dict) -> str:
+    return (
+        f"PRE-FLIGHT check before an ABA install runs on this Mac. The install "
+        f"will perform these steps:\n{plan_summary}\n\n"
+        f"System probe:\n{json.dumps(probe, indent=2)}\n\n"
+        f"Detect conditions that would make those steps fail (Gatekeeper "
+        f"quarantine on downloaded binaries, missing tools, proxy/network, low "
+        f"disk) and PROACTIVELY fix only what you safely can within the user's "
+        f"space. Do NOT run the install itself. Briefly report what you found "
+        f"and any fixes applied."
+    )
+
+
+def run_preflight(plan_summary: str, *, cwd: Optional[str] = None,
+                  claude: Optional[str] = None, runner: Optional[Callable] = None,
+                  allowed_tools: Optional[list[str]] = None,
+                  on_event: Optional[Callable[[str, dict], None]] = None,
+                  stream: bool = True) -> RepairOutcome:
+    """Proactive pre-flight: probe + pre-fix known blockers before the install."""
+    prompt = build_preflight_prompt(plan_summary, probe_system())
+    return _run_agent(prompt, cwd=cwd, claude=claude, runner=runner,
+                      on_event=on_event, stream=stream, allowed_tools=allowed_tools,
+                      start_msg="Pre-flight: checking this Mac for install blockers…",
+                      skip_msg="Claude Code not available — skipping pre-flight.")
 
 
 def make_repair_hook(*, cwd: Optional[str] = None,

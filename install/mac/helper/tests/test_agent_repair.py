@@ -79,6 +79,58 @@ def test_build_claude_argv_has_scoped_flags():
     assert "--output-format" in argv
 
 
+def test_build_claude_argv_stream_mode():
+    argv = ar.build_claude_argv("claude", prompt="p", stream=True)
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in argv
+
+
+# ─── stream-json parsing (#2) ───────────────────────────────────────────────
+def test_summarize_stream_event_surfaces_text_and_tools():
+    tool_evt = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Bash",
+         "input": {"command": "xattr -d com.apple.quarantine /x/micromamba"}}]}}
+    s = ar._summarize_stream_event(tool_evt)
+    assert "🔧 Bash" in s and "xattr -d" in s
+    text_evt = {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Cleared the quarantine flag."}]}}
+    assert "Cleared the quarantine" in ar._summarize_stream_event(text_evt)
+    assert ar._summarize_stream_event({"type": "result", "result": "done"}) is None
+    assert ar._summarize_stream_event({"type": "system", "subtype": "init"}) is None
+
+
+def test_consume_stream_emits_actions_and_returns_final():
+    lines = [
+        '{"type":"system","subtype":"init"}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"xattr -d com.apple.quarantine /x/mm"}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Removed quarantine."}]}}',
+        '{"type":"result","subtype":"success","result":"Fixed.","is_error":false}',
+    ]
+    events = []
+    final = ar._consume_stream(lines, lambda n, p: events.append(p["message"]))
+    assert final["result"] == "Fixed." and final["is_error"] is False
+    assert any("xattr -d" in m for m in events)
+    assert any("Removed quarantine" in m for m in events)
+    assert all("tool_result" not in m for m in events)   # verbose results not surfaced
+
+
+# ─── pre-flight (#3) ─────────────────────────────────────────────────────────
+def test_run_preflight_invokes_claude(monkeypatch):
+    monkeypatch.setattr(ar, "claude_path", lambda: "claude")
+    seen = {}
+    def runner(argv, *, cwd, env):
+        seen["argv"] = argv
+        return {"returncode": 0, "result": "No blockers found; quarantine clear."}
+    events = []
+    out = ar.run_preflight("install-micromamba: Install micromamba; create-env: Create env",
+                           cwd="/x/aba", runner=runner,
+                           on_event=lambda n, p: events.append((n, p)))
+    assert out.attempted and out.ok
+    assert "PRE-FLIGHT" in seen["argv"][2]            # the preflight prompt
+    assert any(p.get("phase") == "start" for _, p in events)
+
+
 # ─── run_repair ─────────────────────────────────────────────────────────────
 def test_run_repair_skips_when_no_claude(monkeypatch):
     monkeypatch.setattr(ar, "claude_path", lambda: None)
@@ -176,3 +228,20 @@ def test_executor_unchanged_when_no_hook():
     pb = Playbook(steps=[_step("false")])
     results = Executor(pb).run_all()             # no repair hook → legacy behaviour
     assert not results[-1].ok
+
+
+# ─── control wiring: pre-flight is flag-gated ───────────────────────────────
+def test_control_preflight_runs_only_when_flag_enabled(monkeypatch):
+    from aba_installer import control
+    monkeypatch.setattr(ar, "ensure_claude", lambda **k: "claude")
+    calls = []
+    monkeypatch.setattr(ar, "run_preflight", lambda *a, **k: calls.append(1))
+    pb = Playbook(steps=[_step("true")])
+
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+    control._run_preflight_if_enabled(pb, lambda n, p: None)
+    assert calls == [], "pre-flight must not run when the flag is off"
+
+    monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR", "1")
+    control._run_preflight_if_enabled(pb, lambda n, p: None)
+    assert calls == [1], "pre-flight must run when the flag is on"
