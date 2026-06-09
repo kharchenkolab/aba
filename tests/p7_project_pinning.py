@@ -36,22 +36,25 @@ import main as _main  # noqa: E402
 client = TestClient(_main.app)
 
 
-def test_middleware_pins_query_param():
-    """?project_id=X pins X for the request."""
+def test_query_param_pin_is_per_request_no_global_leak():
+    """#17: ?project_id=X binds X for the request's duration via a contextvar —
+    it must NOT mutate the process-global (that shared global is what raced
+    concurrent requests / corrupted streaming turns). After the request, the
+    global is unchanged."""
     _projects.set_current("alpha")
-    r = client.get("/api/entities/workspace?project_id=alpha")
-    assert r.status_code in (200, 404), r.text
-    assert _projects.current() == "alpha", "middleware must pin"
-    # Switch via the same dep
     r = client.get("/api/entities/workspace?project_id=beta")
-    assert _projects.current() == "beta", "middleware must re-pin per request"
+    assert r.status_code in (200, 404), r.text          # accepted (not 412)
+    assert _projects.current() == "alpha", \
+        f"pin leaked to the process-global: current()={_projects.current()!r}"
 
 
-def test_middleware_pins_header():
-    """X-Project-Id: X also pins X for the request."""
+def test_header_pin_is_per_request_no_global_leak():
+    """X-Project-Id: X also pins per-request without leaking to the global."""
     _projects.set_current("alpha")
     r = client.get("/api/entities/workspace", headers={"X-Project-Id": "gamma"})
-    assert _projects.current() == "gamma", "header form must pin"
+    assert r.status_code in (200, 404), r.text
+    assert _projects.current() == "alpha", \
+        f"header pin leaked to the process-global: current()={_projects.current()!r}"
 
 
 def test_depends_412_on_missing_when_no_global():
@@ -85,8 +88,8 @@ def test_depends_passes_when_global_set():
 
 def main() -> int:
     tests = [
-        test_middleware_pins_query_param,
-        test_middleware_pins_header,
+        test_query_param_pin_is_per_request_no_global_leak,
+        test_header_pin_is_per_request_no_global_leak,
         test_depends_412_on_missing_when_no_global,
         test_depends_passes_when_pid_supplied,
         test_depends_passes_when_global_set,
