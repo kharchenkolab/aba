@@ -23,7 +23,7 @@ _CANCEL_GRACE_S = float(os.environ.get("ABA_KERNEL_CANCEL_GRACE_S", "3"))
 
 from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.exec.base import ExecResult
-from core.exec.materialize import pylib_dir, tools_env
+from core.exec.materialize import pylib_paths, tools_env
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _SPEC_NAME = "aba_py"
@@ -200,10 +200,11 @@ def _setup_code(cwd: str) -> str:
     from core.config import BIOMNI_DIR
     biomni_line = f"_sys.path.insert(0, {str(BIOMNI_DIR)!r})\n" if BIOMNI_DIR else ""
     data_dir, _ = _project_data_artifacts()
+    pylib_appends = "".join(f"_sys.path.append({str(p)!r})\n" for p in pylib_paths())
     return (
         "import sys as _sys, os as _os\n"
         f"{biomni_line}"
-        f"_sys.path.append({str(pylib_dir())!r})\n"
+        f"{pylib_appends}"
         f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(data_dir)!r}\n"

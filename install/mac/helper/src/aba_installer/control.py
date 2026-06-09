@@ -97,7 +97,11 @@ def _write_deployment_yaml() -> None:
 # is credential-gated (it boots uvicorn with the key from config.env).
 _BG_SKIP = {"start-backend"}
 _bg_lock = threading.Lock()
-_bg: dict = {"thread": None, "events": [], "status": "idle"}  # idle|running|done|error
+# step_status: {step_id -> "active"|"ok"|"fail"} — survives the event-buffer
+# eviction so the UI's checklist doesn't lose its checkmarks when create-env's
+# command_output flood pushes the early step_start/step_end frames off the buffer.
+_bg: dict = {"thread": None, "events": [], "status": "idle",  # idle|running|done|error
+             "step_status": {}}
 
 
 def _is_installed() -> bool:
@@ -110,6 +114,42 @@ def _is_installed() -> bool:
     )
 
 
+def _agent_repair_enabled() -> bool:
+    return os.environ.get("ABA_INSTALL_AGENT_REPAIR", "").lower() in ("1", "true", "yes", "on")
+
+
+def _repair_hook(on_event):
+    """Tier-0 agent-repair hook for the Executor, or None. Active only when
+    ABA_INSTALL_AGENT_REPAIR is set AND a `claude` binary is available; on a step
+    failure it asks Claude Code to fix the system, then the step is retried."""
+    if not _agent_repair_enabled():
+        return None
+    try:
+        from .agent_repair import make_repair_hook
+    except Exception:  # noqa: BLE001
+        return None
+    # ensure=True: the `claude` CLI is bootstrapped on the FIRST step failure
+    # (not on the happy path), then used to repair + retry.
+    return make_repair_hook(cwd=os.environ.get("ABA_HOME"), on_event=on_event, ensure=True)
+
+
+def _run_preflight_if_enabled(pb, on_event) -> None:
+    """When agent repair is enabled, run a proactive pre-flight BEFORE the
+    playbook: probe the system + pre-fix known blockers. Best-effort; never
+    blocks the install (errors are surfaced, not raised)."""
+    if not _agent_repair_enabled():
+        return
+    try:
+        from .agent_repair import ensure_claude, run_preflight
+        claude = ensure_claude(on_event=on_event)
+        if not claude:
+            return
+        plan = "; ".join(f"{s.id}: {s.title}" for s in pb.steps)
+        run_preflight(plan, cwd=os.environ.get("ABA_HOME"), claude=claude, on_event=on_event)
+    except Exception as e:  # noqa: BLE001
+        on_event("repair", {"phase": "error", "message": f"pre-flight error: {e}"})
+
+
 def _bg_worker() -> None:
     pb = load_playbook(_playbook_path("install"))
     steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
@@ -119,10 +159,27 @@ def _bg_worker() -> None:
             _bg["events"].append({"event": ev, "payload": payload})
             if len(_bg["events"]) > 1000:
                 del _bg["events"][:-1000]
+            # Step status survives eviction (the UI's checklist depends on it).
+            sid = payload.get("step_id") if isinstance(payload, dict) else None
+            if sid:
+                if ev == "step_start":
+                    _bg["step_status"][sid] = "active"
+                elif ev == "step_end":
+                    _bg["step_status"][sid] = "ok" if payload.get("ok") else "fail"
 
     try:
         prepare_install_artifacts()
-        results = Executor(pb, on_event=on_event).run_all(only=set(steps))
+        # Tell the UI the FULL planned list up front so it can render a fixed
+        # checklist (○ → ✓) instead of revealing steps one at a time. Sent as the
+        # first event so the UI's event-replay sees it; /api/install/auto also
+        # exposes the same list as a top-level field for late subscribers.
+        on_event("step_planned", {
+            "steps": [{"id": s.id, "title": s.title}
+                      for s in pb.steps if s.id not in _BG_SKIP]
+        })
+        _run_preflight_if_enabled(pb, on_event)
+        results = Executor(pb, on_event=on_event,
+                           on_step_failed=_repair_hook(on_event)).run_all(only=set(steps))
         ok = bool(results) and all(r.ok for r in results)
         with _bg_lock:
             _bg["status"] = "done" if ok else "error"
@@ -144,6 +201,7 @@ def install_auto() -> dict:
             _bg["status"] = "done"
             return {"started": False, "status": "done"}
         _bg["events"] = []
+        _bg["step_status"] = {}
         _bg["status"] = "running"
         th = threading.Thread(target=_bg_worker, daemon=True, name="aba-bg-install")
         _bg["thread"] = th
@@ -153,15 +211,23 @@ def install_auto() -> dict:
 
 @router.get("/install/auto")
 def install_auto_status() -> dict:
-    # Total steps so the UI bar can show done/total (not done/started-so-far,
-    # which jumps near-full after the quick steps then sits during the builds).
+    # Total + planned steps so the UI can render a fixed checklist up-front
+    # (one row per top-level category, marked ✓ as each finishes) instead of
+    # revealing them one-by-one. Computed fresh per call — robust to the event
+    # buffer evicting the step_planned frame on long installs.
     try:
         pb = load_playbook(_playbook_path("install"))
-        total = len([s for s in pb.steps if s.id not in _BG_SKIP])
+        active = [s for s in pb.steps if s.id not in _BG_SKIP]
+        steps = [{"id": s.id, "title": s.title} for s in active]
     except Exception:  # noqa: BLE001
-        total = 0
+        steps = []
     with _bg_lock:
-        return {"status": _bg["status"], "total_steps": total,
+        return {"status": _bg["status"], "total_steps": len(steps),
+                "steps": steps,
+                # Authoritative per-step state — UI uses this to draw the
+                # checklist instead of inferring from events, so checkmarks
+                # don't blink off when create-env evicts old step events.
+                "step_status": dict(_bg["step_status"]),
                 "events": list(_bg["events"][-300:])}
 
 
@@ -213,7 +279,13 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # don't run twice on the same prefix.
             if name == "install":
                 _await_background(on_event)
-            ex = Executor(pb, on_event=on_event)
+            # Tell the UI the planned checklist up front (same shape the auto
+            # path emits — see _bg_worker).
+            on_event("step_planned", {
+                "steps": [{"id": s.id, "title": s.title} for s in pb.steps]
+            })
+            _run_preflight_if_enabled(pb, on_event)
+            ex = Executor(pb, on_event=on_event, on_step_failed=_repair_hook(on_event))
             results = ex.run_all()
             ok = all(r.ok for r in results)
             error = next((r.error for r in results if r.error), None)

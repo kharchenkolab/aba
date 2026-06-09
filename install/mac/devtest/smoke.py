@@ -101,6 +101,30 @@ def _setup_dirs(env: dict[str, str]) -> None:
     if not target.exists() and SEED_MICROMAMBA.exists():
         shutil.copy2(SEED_MICROMAMBA, target)
         target.chmod(0o755)
+    _seed_aba_credential()
+
+
+def _seed_aba_credential() -> None:
+    """Optionally seed $ABA_HOME/config.env so agent-repair can authenticate.
+
+    Real installs get this via the helper UI's sign-in (auth.py writes config.env).
+    For smoke (which never opens the UI), point ABA_SMOKE_CREDENTIAL_SRC at a
+    file containing the relevant export lines and we'll copy it in — same shape
+    auth.py would have produced. Skipped silently when unset, which is also a
+    valid test (issue #2 should make the run fail fast instead of looping)."""
+    src = os.environ.get("ABA_SMOKE_CREDENTIAL_SRC")
+    if not src:
+        return
+    p = Path(src).expanduser()
+    if not p.is_file():
+        print(f"WARNING: ABA_SMOKE_CREDENTIAL_SRC={src} not found; skipping",
+              flush=True)
+        return
+    dst = ABA_HOME / "config.env"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(p, dst)
+    os.chmod(dst, 0o600)
+    print(f"seeded ABA credential → {dst}", flush=True)
 
 
 def _import_helper():
@@ -112,16 +136,30 @@ def _import_helper():
 
 def _on_event(name: str, payload: dict) -> None:
     if name == "step_start":
-        print(f"\n\033[1m▸ {payload['title']}\033[0m  ({payload['step_id']})")
+        print(f"\n\033[1m▸ {payload['title']}\033[0m  ({payload['step_id']})", flush=True)
     elif name == "command_start":
         cmd = payload["command"]
-        print(f"    $ {cmd[:140]}{'…' if len(cmd) > 140 else ''}")
+        print(f"    $ {cmd[:140]}{'…' if len(cmd) > 140 else ''}", flush=True)
     elif name == "command_end":
         mark = "✓" if payload["ok"] else "✗"
-        print(f"    {mark} exit={payload['exit_code']} ({payload['duration_s']:.1f}s)")
+        print(f"    {mark} exit={payload['exit_code']} ({payload['duration_s']:.1f}s)", flush=True)
     elif name == "step_end":
         if not payload["ok"]:
-            print(f"  \033[31mstep failed: {payload['error']}\033[0m")
+            print(f"  \033[31mstep failed: {payload['error']}\033[0m", flush=True)
+    elif name == "repair":
+        phase = payload.get("phase", "?")
+        msg = payload.get("message", "")
+        color = {
+            "bootstrap": "\033[36m", "start": "\033[36m",
+            "step": "\033[2m",
+            "done": "\033[32m" if payload.get("ok") else "\033[33m",
+            "skip": "\033[33m", "error": "\033[31m",
+        }.get(phase, "")
+        print(f"    \033[35m[repair:{phase}]\033[0m {color}{msg}\033[0m", flush=True)
+
+
+def _agent_repair_on() -> bool:
+    return os.environ.get("ABA_INSTALL_AGENT_REPAIR", "").lower() in ("1", "true", "yes", "on")
 
 
 def _run_steps(only: list[str] | None) -> int:
@@ -138,10 +176,29 @@ def _run_steps(only: list[str] | None) -> int:
 
     # Render the launcher (gap fix #3) before install-launcher runs.
     launcher = control.prepare_install_artifacts()
-    print(f"rendered launcher → {launcher}")
+    print(f"rendered launcher → {launcher}", flush=True)
 
     pb = playbook.load_playbook(PLAYBOOK)
-    ex = playbook.Executor(pb, on_event=_on_event, base_env=env)
+
+    # Tier-0 agent-driven pre-flight + per-step repair — matches the helper
+    # service's /api/install/auto path so smoke exercises the same code as a
+    # real install. Off unless ABA_INSTALL_AGENT_REPAIR=1.
+    repair_hook = None
+    if _agent_repair_on():
+        from aba_installer import agent_repair
+        # Bootstrap claude up front (matches control._run_preflight_if_enabled)
+        # so pre-flight has a CLI to use — otherwise it'd silently skip.
+        claude = agent_repair.ensure_claude(on_event=_on_event)
+        if claude:
+            plan = "; ".join(f"{s.id}: {s.title}" for s in pb.steps)
+            agent_repair.run_preflight(plan, cwd=env.get("ABA_HOME"),
+                                       claude=claude, on_event=_on_event)
+        repair_hook = agent_repair.make_repair_hook(
+            cwd=env.get("ABA_HOME"), on_event=_on_event, ensure=True,
+        )
+
+    ex = playbook.Executor(pb, on_event=_on_event, base_env=env,
+                           on_step_failed=repair_hook)
     results = ex.run_all(only=set(only) if only else None)
 
     failed = [r for r in results if not r.ok]

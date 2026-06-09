@@ -18,7 +18,7 @@ from typing import Optional, Sequence
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.data.workspace import scratch_dir
-from core.exec import MaterializingExecutor, Provisioning, pylib_dir
+from core.exec import MaterializingExecutor, Provisioning, pylib_paths
 
 
 def run_python_code(
@@ -46,7 +46,8 @@ def run_python_code(
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
     for p in (extra_syspath or []):
         lines.append(f"_sys.path.insert(0, {str(p)!r})")
-    lines.append(f"_sys.path.append({str(pylib_dir())!r})")
+    for _p in pylib_paths():
+        lines.append(f"_sys.path.append({str(_p)!r})")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
 
     ex = MaterializingExecutor()
