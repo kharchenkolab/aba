@@ -110,6 +110,25 @@ def _is_installed() -> bool:
     )
 
 
+def _agent_repair_enabled() -> bool:
+    return os.environ.get("ABA_INSTALL_AGENT_REPAIR", "").lower() in ("1", "true", "yes", "on")
+
+
+def _repair_hook(on_event):
+    """Tier-0 agent-repair hook for the Executor, or None. Active only when
+    ABA_INSTALL_AGENT_REPAIR is set AND a `claude` binary is available; on a step
+    failure it asks Claude Code to fix the system, then the step is retried."""
+    if not _agent_repair_enabled():
+        return None
+    try:
+        from .agent_repair import make_repair_hook
+    except Exception:  # noqa: BLE001
+        return None
+    # ensure=True: the `claude` CLI is bootstrapped on the FIRST step failure
+    # (not on the happy path), then used to repair + retry.
+    return make_repair_hook(cwd=os.environ.get("ABA_HOME"), on_event=on_event, ensure=True)
+
+
 def _bg_worker() -> None:
     pb = load_playbook(_playbook_path("install"))
     steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
@@ -122,7 +141,8 @@ def _bg_worker() -> None:
 
     try:
         prepare_install_artifacts()
-        results = Executor(pb, on_event=on_event).run_all(only=set(steps))
+        results = Executor(pb, on_event=on_event,
+                           on_step_failed=_repair_hook(on_event)).run_all(only=set(steps))
         ok = bool(results) and all(r.ok for r in results)
         with _bg_lock:
             _bg["status"] = "done" if ok else "error"
@@ -213,7 +233,7 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # don't run twice on the same prefix.
             if name == "install":
                 _await_background(on_event)
-            ex = Executor(pb, on_event=on_event)
+            ex = Executor(pb, on_event=on_event, on_step_failed=_repair_hook(on_event))
             results = ex.run_all()
             ok = all(r.ok for r in results)
             error = next((r.error for r in results if r.error), None)
