@@ -560,15 +560,10 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   if (member.kind === 'text') {
     return (
       <>
-        <div className="rv-panel rv-panel--text" {...hoverHandlers}>
-          {/* contentRef sits on the INNER body — surface must be a sibling,
-              never a descendant, or html2canvas captures the yellow overlay
-              into the rasterized image (right-half-yellow bug, 2026-06-09). */}
-          <div className="rv-panel__body" ref={contentRef}>
-            <textarea className="rv-panel__note" value={text} placeholder="Write a note…" autoFocus={autoFocus}
-                      onChange={e => setText(e.target.value)} onBlur={() => onText(member.id, text)} />
-            {controls}
-          </div>
+        <div className="rv-panel rv-panel--text" ref={contentRef} {...hoverHandlers}>
+          <textarea className="rv-panel__note" value={text} placeholder="Write a note…" autoFocus={autoFocus}
+                    onChange={e => setText(e.target.value)} onBlur={() => onText(member.id, text)} />
+          {controls}
           {renderHlSurface()}
         </div>
         {removeDialogs}
@@ -594,12 +589,7 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const cellStyle = (member.kind === 'figure' && minCellHeight != null)
     ? { minHeight: minCellHeight } : undefined
   return (
-    <div className="rv-panel" {...hoverHandlers}>
-      {/* contentRef on INNER body so the highlight surface (rendered as
-          a sibling below) isn't captured by html2canvas. Without this
-          split, the yellow inset + the live SVG polyline get rasterized
-          into the captured image (the "right half yellow" distortion). */}
-      <div className="rv-panel__body" ref={contentRef}>
+    <div className="rv-panel" ref={contentRef} {...hoverHandlers}>
       <div className="rv-panel__cell" ref={cellRef} style={cellStyle}>
         {member.kind === 'figure' && url
           ? <img className="rv-panel__img" src={url} alt={displayedFigure?.title ?? cell?.title}
@@ -636,7 +626,6 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </span>
         )}
       </div>
-      </div>{/* /.rv-panel__body */}
       {renderHlSurface()}
       {removeDialogs}
     </div>

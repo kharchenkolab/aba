@@ -13,7 +13,7 @@
    (thin yellow inset, faint fill, cursor crosshair); the SVG overlays
    the live stroke. Anchored on .rv-panel / .rv-panel--text via
    position:relative. */
-.rv-panel { position: relative; }
+.rv-panel { display: flex; flex-direction: column; gap: 5px; position: relative; }
 .rv-panel__hl {
   position: absolute; inset: 0; z-index: 5;
   cursor: crosshair;
@@ -42,12 +42,6 @@
 .rv__members { display: flex; flex-direction: column; gap: 14px; }
 .rv__empty { color: var(--text-4); font-size: 13px; padding: 12px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
 
-/* The figure panel's inner content (cell + revision strip + caption)
-   stacks via flex. The OUTER .rv-panel is the positioning anchor for the
-   highlight surface (which lives as a sibling of __body, NOT inside it,
-   so html2canvas doesn't capture the yellow overlay). The __body must
-   have a real box for getBoundingClientRect() — no display:contents. */
-.rv-panel__body { display: flex; flex-direction: column; gap: 5px; }
 .rv-panel__cell { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; display: flex; }
 /* Cap the figure to keep the whole panel — image + legend + chevrons
    + caption — in the viewport without scrolling. The 240px reserves

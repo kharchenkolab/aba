@@ -184,6 +184,16 @@ export async function captureHighlight(opts: CaptureOpts):
     const full = await h2c(cellEl, {
       backgroundColor: '#ffffff', scale: 1, logging: false, useCORS: true,
       onclone: (_doc, root) => {
+        // (1) Hide highlight overlays in the clone so the yellow inset border
+        //     + live SVG stroke don't bleed into the rasterized image — the
+        //     "right half all yellow" distortion when the surface lives as
+        //     a descendant of the captured cell. Cheap: a few selectors,
+        //     no live-DOM change. Replaces the prior DOM-restructure fix.
+        root.querySelectorAll('.rv-panel__hl, .msg__hl').forEach(n => {
+          (n as HTMLElement).style.display = 'none'
+        })
+        // (2) Swap textareas/inputs for plain divs in the clone — see comment
+        //     above for the single-line-rendering rationale.
         const liveAreas = Array.from(cellEl.querySelectorAll('textarea, input[type="text"]')) as
           (HTMLTextAreaElement | HTMLInputElement)[]
         const cloneAreas = Array.from(root.querySelectorAll('textarea, input[type="text"]')) as

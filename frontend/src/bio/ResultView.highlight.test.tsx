@@ -134,14 +134,12 @@ describe('ResultView — Highlight tool', () => {
                        highlighting={true}
                        onHighlightingChange={onHighlightingChange} />)
     const panel = document.querySelector('.rv-panel') as HTMLElement
-    // Stub the panel's bounding rect AND the body's so normXY works.
+    // Stub the panel's bounding rect so normXY works.
     const stubRect = () => ({
       x: 0, y: 0, top: 0, left: 0, bottom: 200, right: 300,
       width: 300, height: 200, toJSON: () => ({}),
     } as DOMRect)
     panel.getBoundingClientRect = stubRect
-    const body = panel.querySelector('.rv-panel__body') as HTMLElement
-    if (body) body.getBoundingClientRect = stubRect
     fireEvent.mouseEnter(panel)
     const surface = panel.querySelector('.rv-panel__hl') as HTMLElement
     expect(surface).not.toBeNull()
