@@ -36,6 +36,46 @@ interface RevisionsResponse {
 }
 
 
+/** Walk forward from `anchorId` in the entities array following
+ *  `metadata.revision_of` edges and return the active LEAF (the head of
+ *  the chain). When no descendant exists, the anchor IS the head.
+ *
+ *  This lets callers render the latest revision on first paint without
+ *  waiting for the /revisions endpoint — the entities array is already
+ *  loaded by the parent. The backend's /revisions response is still
+ *  authoritative for chevron navigation (full chain incl. superseded),
+ *  but for the INITIAL render the client-side head matches it.
+ *
+ *  Branching: if multiple actives point at the same parent, pick the
+ *  newest by created_at (mirrors backend tiebreak). Superseded entries
+ *  are skipped — they're not on the live branch.
+ *
+ *  Cycle-safe: bounded walk via a `seen` set; bails out and returns the
+ *  last good node if it loops. Pure / no React, easy to unit-test. */
+export function findRevisionHead<E extends Entity>(anchorId: string, entities: E[]): E | undefined {
+  const anchor = entities.find(e => e.id === anchorId)
+  if (!anchor) return undefined
+  const successors = new Map<string, E[]>()
+  for (const e of entities) {
+    const parent = (e.metadata as { revision_of?: string } | undefined)?.revision_of
+    if (parent && e.status === 'active') {
+      const arr = successors.get(parent) ?? []
+      arr.push(e); successors.set(parent, arr)
+    }
+  }
+  const seen = new Set<string>()
+  let cur: E = anchor
+  while (true) {
+    if (seen.has(cur.id)) return cur
+    seen.add(cur.id)
+    const kids = successors.get(cur.id)
+    if (!kids || kids.length === 0) return cur
+    kids.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+    cur = kids[0]
+  }
+}
+
+
 /** Fetch the revision chain for `anchorId`. Returns null while loading
  *  or on error — callers should hide chevrons when null.
  *
@@ -67,20 +107,44 @@ export function useFigureHistory(anchorId: string, refreshKey: number = 0): Revi
  *  Defaults the displayed entity to the LATEST revision (chain[0]).
  *  Re-snaps to latest if the chain head changes (e.g. a new revision
  *  was added by the agent in the background — caller is expected to
- *  bump `refreshKey` when entities mutate, see useFigureHistory). */
-export function useFigureRevisions(anchorId: string, refreshKey: number = 0) {
+ *  bump `refreshKey` when entities mutate, see useFigureHistory).
+ *
+ *  When `entities` is provided, the initial displayedId is the
+ *  CLIENT-SIDE head computed via `findRevisionHead` — so the first
+ *  paint shows the latest revision without waiting for the /revisions
+ *  fetch. Without this, the panel briefly renders the anchor (v0) and
+ *  then swaps to the latest a network-RTT later (the "v0 flash"). */
+export function useFigureRevisions(anchorId: string, refreshKey: number = 0, entities?: Entity[]) {
   const hist = useFigureHistory(anchorId, refreshKey)
   const chain = hist?.chain ?? []
-  const [displayedId, setDisplayedId] = useState<string>(anchorId)
+  // Initial displayed = client-side head (entities walk). useState's
+  // initializer runs once on mount; we deliberately do NOT recompute on
+  // entities change (the fetch result drives later updates via headId).
+  const [displayedId, setDisplayedId] = useState<string>(() => {
+    if (entities && entities.length) {
+      const head = findRevisionHead(anchorId, entities)
+      if (head) return head.id
+    }
+    return anchorId
+  })
   const headId = chain[0]?.id
   useEffect(() => {
     if (headId) setDisplayedId(headId)
   }, [headId, chain.length])
 
-  const pos = chain.findIndex(e => e.id === displayedId)
+  // Synthetic chain for first-paint navigation (so the SplitButton + the
+  // entity returned as `displayed` reflect the client-side head before
+  // the fetch lands). Once `hist` arrives, the real chain takes over.
+  const effChain: Entity[] = chain.length > 0
+    ? chain
+    : (() => {
+        const head = entities ? findRevisionHead(anchorId, entities) : undefined
+        return head ? [head] : []
+      })()
+  const pos = effChain.findIndex(e => e.id === displayedId)
   const safePos = pos < 0 ? 0 : pos
-  const total = chain.length
-  const displayed = pos >= 0 ? chain[pos] : null
+  const total = effChain.length
+  const displayed = pos >= 0 ? effChain[pos] : null
   const isLatest = safePos === 0
   return {
     hist, chain, displayedId, displayed,
@@ -88,8 +152,8 @@ export function useFigureRevisions(anchorId: string, refreshKey: number = 0) {
     setDisplayedId,
     canGoPrev: safePos < total - 1, // older direction
     canGoNext: safePos > 0,         // newer direction
-    goPrev: () => { if (safePos < total - 1) setDisplayedId(chain[safePos + 1].id) },
-    goNext: () => { if (safePos > 0) setDisplayedId(chain[safePos - 1].id) },
+    goPrev: () => { if (safePos < total - 1) setDisplayedId(effChain[safePos + 1].id) },
+    goNext: () => { if (safePos > 0) setDisplayedId(effChain[safePos - 1].id) },
   }
 }
 
