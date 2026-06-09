@@ -25,6 +25,8 @@ open_stream() in fake mode pops the next turn.
 from __future__ import annotations
 import json
 import os
+import time
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -179,24 +181,118 @@ def _wants_cc_marker() -> bool:
     return _credential_mode() == "oauth_cc"
 
 
-def _oauth_bearer():
-    """Claude Code subscription OAuth bearer, or None. $CLAUDE_CODE_OAUTH_TOKEN else the
-    stored CLI credential. Re-read per call so a refreshed token is picked up.
+# OAuth token refresh (tier 2). The browser sign-in flow now persists a small
+# store ($ABA_HOME/oauth.json: access_token + refresh_token + expires_at) so the
+# backend can mint a new access token when the old one expires — instead of
+# 401ing until a restart/re-auth. Public OAuth client params (not secrets;
+# mirror the installer's auth.py).
+_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+_OAUTH_REFRESH_SKEW = 120          # refresh this many seconds before expiry
+_oauth_lock = threading.Lock()     # one refresh at a time (refresh tokens are single-use)
 
-    Treats the token as missing once `expiresAt` is past — sending an expired bearer
-    just yields a confusing 401. With a stale token we'd rather return None so the
-    caller (oauth_cc mode) can refuse with a clear, actionable error."""
-    import time
+
+def _oauth_store_path():
+    home = os.environ.get("ABA_HOME")
+    return os.path.join(home, "oauth.json") if home else None
+
+
+def _load_oauth_store():
+    p = _oauth_store_path()
+    if not p or not os.path.exists(p):
+        return None
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _save_oauth_store(d: dict) -> None:
+    p = _oauth_store_path()
+    if not p:
+        return
+    try:
+        tmp = p + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)        # atomic
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _refresh_oauth(store: dict):
+    """Exchange the refresh_token for a fresh access token; persist the rotated
+    pair and return the new access token. Returns None on failure (→ the caller
+    surfaces a clean re-auth error rather than shipping a doomed bearer)."""
+    import urllib.request, urllib.error  # noqa: PLC0415
+    body = json.dumps({
+        "grant_type": "refresh_token",
+        "refresh_token": store["refresh_token"],
+        "client_id": _OAUTH_CLIENT_ID,
+    }).encode()
+    req = urllib.request.Request(
+        _OAUTH_TOKEN_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "aba-backend (kharchenkolab/aba)"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:  # noqa: BLE001
+        print(f"[llm] OAuth token refresh failed: {e}", flush=True)
+        return None
+    at = data.get("access_token")
+    if not at:
+        return None
+    _save_oauth_store({
+        "access_token": at,
+        # Refresh tokens rotate (single-use); keep the new one, fall back to the
+        # old only if the response omitted it.
+        "refresh_token": data.get("refresh_token") or store.get("refresh_token"),
+        "expires_at": time.time() + (data.get("expires_in") or 3600),
+    })
+    print("[llm] OAuth access token refreshed", flush=True)
+    return at
+
+
+def _oauth_bearer():
+    """Claude Code subscription OAuth bearer, or None. Re-read per call so a
+    refreshed token is picked up immediately.
+
+    Priority: (1) ABA's own refreshable store ($ABA_HOME/oauth.json) from the
+    browser flow — auto-refreshed near expiry; (2) $CLAUDE_CODE_OAUTH_TOKEN env
+    (pasted/setup-token path — long-lived, not refreshable); (3) the Claude Code
+    CLI store (~/.claude/.credentials.json), which the CLI itself refreshes.
+    An expired token with no way to refresh returns None so oauth_cc mode can
+    refuse with a clear, actionable error instead of a confusing 401."""
+    # (1) ABA's refreshable store.
+    store = _load_oauth_store()
+    if store and store.get("access_token"):
+        exp = store.get("expires_at")
+        if not exp or time.time() < exp - _OAUTH_REFRESH_SKEW:
+            return store["access_token"]                       # still valid
+        if store.get("refresh_token"):
+            with _oauth_lock:
+                s = _load_oauth_store() or {}                  # re-check: another turn may have refreshed
+                e = s.get("expires_at")
+                if s.get("refresh_token") and e and time.time() >= e - _OAUTH_REFRESH_SKEW:
+                    return _refresh_oauth(s)                    # new token, or None on failure
+                return s.get("access_token")                   # already refreshed by another turn
+        return None                                            # expired, no refresh token → re-auth
+
+    # (2) Static env var (back-compat / pasted token).
     tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if tok:
         return tok.strip()
+
+    # (3) Claude Code CLI store (CLI keeps it refreshed).
     cred = os.path.expanduser("~/.claude/.credentials.json")
     if os.path.exists(cred):
         try:
             oa = json.load(open(cred)).get("claudeAiOauth") or {}
             exp = oa.get("expiresAt")
-            # expiresAt is ms-since-epoch; treat expired (5s grace for clock skew)
-            # as missing so we don't ship a doomed request.
+            # expiresAt is ms-since-epoch; treat expired (5s grace) as missing.
             if isinstance(exp, (int, float)) and exp <= int(time.time() * 1000) + 5_000:
                 return None
             return (oa.get("accessToken") or "").strip() or None

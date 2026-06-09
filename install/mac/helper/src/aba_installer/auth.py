@@ -199,6 +199,32 @@ def _persist_oauth_token(token: str) -> None:
     _write_config_env(entries)
 
 
+def _persist_oauth_store(data: dict) -> None:
+    """Write the refreshable OAuth store ($ABA_HOME/oauth.json, mode 0600) from
+    the token-exchange response, so the backend can mint a new access token when
+    this one expires (core/llm.py) instead of 401ing until a re-auth. Only the
+    browser flow yields a refresh_token; the pasted/setup-token path has none,
+    so it skips this and stays on the long-lived env-var credential."""
+    import time
+    rt = data.get("refresh_token")
+    if not rt:
+        return
+    store = {
+        "access_token": (data.get("access_token") or "").strip(),
+        "refresh_token": rt,
+        "expires_at": time.time() + (data.get("expires_in") or 3600),
+    }
+    p = aba_home() / "oauth.json"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.parent / "oauth.json.tmp"
+        tmp.write_text(json.dumps(store))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)        # atomic
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/oauth")
 def set_oauth(payload: OAuthTokenIn) -> dict:
     """Persist a pasted Claude Code OAuth token (the manual fallback to the
@@ -253,9 +279,11 @@ def oauth_poll() -> dict:
                 "error": _oauth_flow.get("error")}
 
 
-def _exchange_code(code: str, state: str, verifier: str, redirect_uri: str) -> str:
-    """Exchange an authorization code for an access token. Returns the bearer.
-    Raises (with the endpoint's error body) on failure; caller records it."""
+def _exchange_code(code: str, state: str, verifier: str, redirect_uri: str) -> dict:
+    """Exchange an authorization code for tokens. Returns the full token dict
+    ({access_token, refresh_token, expires_in}) so the caller can persist the
+    refresh_token for later auto-refresh. Raises (with the endpoint's error
+    body) on failure; caller records it."""
     body = json.dumps({
         "grant_type": "authorization_code",
         "code": code,
@@ -277,7 +305,7 @@ def _exchange_code(code: str, state: str, verifier: str, redirect_uri: str) -> s
     tok = data.get("access_token")
     if not tok:
         raise RuntimeError(f"token endpoint returned no access_token: {list(data)}")
-    return tok
+    return data
 
 
 def _oauth_result_page(ok: bool, msg: str) -> str:
@@ -316,8 +344,9 @@ def oauth_callback(code: str = "", state: str = "", error: str = "") -> HTMLResp
         _fail_flow("state mismatch or missing code")
         return HTMLResponse(_oauth_result_page(False, "Security check failed (state mismatch)."), status_code=400)
     try:
-        token = _exchange_code(code, state, flow["verifier"], flow["redirect_uri"])
-        _persist_oauth_token(token)
+        data = _exchange_code(code, state, flow["verifier"], flow["redirect_uri"])
+        _persist_oauth_token(data["access_token"])   # config.env (back-compat)
+        _persist_oauth_store(data)                   # refreshable store (#oauth-refresh)
     except Exception as e:  # noqa: BLE001
         _fail_flow(f"token exchange failed: {e}")
         return HTMLResponse(_oauth_result_page(False, "Could not complete sign-in. Try again, or paste a token instead."), status_code=500)
