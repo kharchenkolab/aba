@@ -1,10 +1,39 @@
 .rv { display: flex; flex-direction: column; gap: 12px; }
 
+.rv__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rv__head .rv__title,
+.rv__head .rv__title-input { flex: 1; min-width: 0; }
 .rv__title { font-size: 19px; font-weight: 700; color: var(--text); margin: 0; cursor: text; line-height: 1.3; }
 .rv__title:hover { color: var(--accent); }
 .rv__title-input {
   font-size: 19px; font-weight: 700; color: var(--text); width: 100%; box-sizing: border-box;
   border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--page);
+}
+/* The .hl-toggle button used inside .rv__head reuses ChatPane.css's
+   .hl-toggle / .hl-toggle--on styles — already global. */
+
+/* Per-MemberPanel highlight surface — same shape as Message's .msg__hl
+   (thin yellow inset, faint fill, cursor crosshair); the SVG overlays
+   the live stroke. Anchored on .rv-panel / .rv-panel--text via
+   position:relative. */
+.rv-panel { position: relative; }
+.rv-panel__hl {
+  position: absolute; inset: 0; z-index: 5;
+  cursor: crosshair;
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px #fde047 inset;
+  background: rgba(253, 224, 71, 0.04);
+}
+.rv-panel__hl-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.rv-panel__hl-hint {
+  position: absolute; top: 4px; right: 6px;
+  font-size: 10px; font-family: var(--mono); color: #854d0e;
+  background: var(--surface); border: 1px solid #fde047;
+  padding: 1px 6px; border-radius: 9999px; pointer-events: none;
 }
 
 /* Reading — grows with content, quiet until focused */

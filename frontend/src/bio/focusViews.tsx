@@ -60,6 +60,13 @@ export interface FocusViewProps {
                   annotation?: { image: string; note: string },
                   action?: 'chat' | 'revision' | 'revision-supersede' | 'reproduce',
                   entityId?: string) => void
+  /** Per-view annotation attach (highlight tool): some views (Result)
+   *  carry a freehand-highlight surface inside the body. Captured strokes
+   *  arrive here and propagate to the composer via App.tsx's
+   *  attachAnnotation. Mirrors FocusCanvas's `onAnnotate` for figures. */
+  onAnnotate?: (a: { image: string; note: string }) => void
+  /** Bumped to clear any drawn marks (focus change, attach commit). */
+  annotClear?: number
   onBrowseFiles?: (path?: string) => void
   projectId?: string
 }
@@ -525,9 +532,10 @@ function RunViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResu
                   onAsk={onAsk} onChatResult={onChatResult} onBrowseFiles={onBrowseFiles} />
 }
 
-function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult }: FocusViewProps) {
+function ResultViewAdapter({ entity, entities, onFocus, onChange, onAsk, onChatResult, onAnnotate, annotClear }: FocusViewProps) {
   return <ResultView result={entity} entities={entities} onFocus={onFocus} onChange={onChange}
-                     onAsk={onAsk} onChatResult={onChatResult} />
+                     onAsk={onAsk} onChatResult={onChatResult}
+                     onAnnotate={onAnnotate} annotClear={annotClear} />
 }
 
 function ClaimViewAdapter({ entity, entities, onFocus, onChange, compact }: FocusViewProps) {
