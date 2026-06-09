@@ -17,9 +17,12 @@ import os
 import platform
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+from aba_installer.paths import aba_home, config_env
 
 RECIPE_PATH = Path(__file__).with_name("repair_recipe.md")
 
@@ -70,6 +73,143 @@ def probe_system() -> dict:
         "has_xcode_clt": _has_xcode_clt(),
         "aba_home": os.environ.get("ABA_HOME", ""),
     }
+
+
+# ─── ABA credential pass-through ────────────────────────────────────────────
+# Reuse ABA's existing credential (the one captured by the helper UI's sign-in)
+# so `claude -p` authenticates without depending on ~/.claude. Both env var names
+# below — CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY — are read natively by
+# Claude Code, so the merged env just works; no translation needed.
+#
+# Parsing + refresh logic mirrors auth.py:_parse_config_env and
+# backend/core/llm.py:_refresh_oauth respectively. Duplicated here to keep this
+# module dep-light (no fastapi pull-in) and self-contained for the offline cases
+# the playbook runs through.
+
+_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"   # mirror auth.py
+_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+_OAUTH_USER_AGENT = "aba-installer-repair (kharchenkolab/aba)"
+_OAUTH_REFRESH_SKEW = 60   # refresh when within this many seconds of expiry
+
+
+def _parse_config_env(text: str) -> dict[str, str]:
+    """Parse `export K=V` lines from $ABA_HOME/config.env. Tolerant of quotes
+    and comments. Mirrors auth.py:_parse_config_env."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        body = line[len("export "):] if line.startswith("export ") else line
+        if "=" not in body:
+            continue
+        k, v = body.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        out[k] = v
+    return out
+
+
+def _read_config_env() -> dict[str, str]:
+    cfg = config_env()
+    if not cfg.exists():
+        return {}
+    try:
+        return _parse_config_env(cfg.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _oauth_store_path() -> Path:
+    return aba_home() / "oauth.json"
+
+
+def _load_oauth_store() -> Optional[dict]:
+    p = _oauth_store_path()
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _save_oauth_store(store: dict) -> None:
+    p = _oauth_store_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.parent / "oauth.json.tmp"
+        tmp.write_text(json.dumps(store))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)        # atomic — won't corrupt a concurrent reader
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _refresh_oauth_token(store: dict) -> Optional[str]:
+    """Exchange a refresh_token for a fresh access token; persist the rotated
+    pair and return the new access token. Mirrors backend/core/llm.py
+    _refresh_oauth; returns None on failure."""
+    import urllib.request   # local — avoids cost on the happy path
+    import urllib.error     # noqa: F401  (imported for the except clause)
+    body = json.dumps({
+        "grant_type": "refresh_token",
+        "refresh_token": store["refresh_token"],
+        "client_id": _OAUTH_CLIENT_ID,
+    }).encode()
+    req = urllib.request.Request(
+        _OAUTH_TOKEN_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": _OAUTH_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:  # noqa: BLE001
+        return None
+    at = data.get("access_token")
+    if not at:
+        return None
+    _save_oauth_store({
+        "access_token": at,
+        # Refresh tokens rotate (single-use); keep the new one, fall back to the
+        # old only if the response omitted it.
+        "refresh_token": data.get("refresh_token") or store.get("refresh_token"),
+        "expires_at": time.time() + (data.get("expires_in") or 3600),
+    })
+    return at
+
+
+def _aba_credential_env() -> dict[str, str]:
+    """Env vars carrying ABA's existing credential to `claude -p`.
+
+    Priority: (1) refreshable OAuth store ($ABA_HOME/oauth.json) from the browser
+    flow — auto-refreshed near expiry; (2) CLAUDE_CODE_OAUTH_TOKEN from
+    config.env (pasted/setup-token path — long-lived); (3) ANTHROPIC_API_KEY
+    from config.env. Returns {} when ABA is not yet signed in (the bg install
+    starts before sign-in, so this is a legitimate state, not an error)."""
+    # (1) Refreshable OAuth store.
+    store = _load_oauth_store()
+    if store and store.get("access_token"):
+        exp = store.get("expires_at")
+        if not exp or time.time() < exp - _OAUTH_REFRESH_SKEW:
+            return {"CLAUDE_CODE_OAUTH_TOKEN": store["access_token"]}
+        if store.get("refresh_token"):
+            new_tok = _refresh_oauth_token(store)
+            if new_tok:
+                return {"CLAUDE_CODE_OAUTH_TOKEN": new_tok}
+        # Expired with no usable refresh path → fall through to config.env.
+
+    # (2) + (3) Static credentials from config.env.
+    cfg = _read_config_env()
+    tok = (cfg.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
+    if tok:
+        return {"CLAUDE_CODE_OAUTH_TOKEN": tok}
+    key = (cfg.get("ANTHROPIC_API_KEY") or "").strip()
+    if key:
+        return {"ANTHROPIC_API_KEY": key}
+    return {}
 
 
 # ─── claude binary discovery ────────────────────────────────────────────────
@@ -247,6 +387,10 @@ def _run_agent(prompt: str, *, cwd, claude, runner, on_event, stream,
     emit("repair", {"phase": "start", "message": start_msg})
     env = dict(os.environ)
     env.setdefault("DISABLE_AUTOUPDATER", "1")   # don't self-update mid-install
+    # Reuse ABA's existing credential so `claude -p` authenticates without
+    # depending on ~/.claude. {} when ABA isn't signed in yet — claude will
+    # then surface its own "Not logged in" error; issue #2 handles that branch.
+    env.update(_aba_credential_env())
     if runner is None and stream:
         def run(a, *, cwd, env):
             return _streaming_runner(a, cwd=cwd, env=env, on_event=emit)
