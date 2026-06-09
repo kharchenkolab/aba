@@ -615,6 +615,26 @@ async def stream_response(
             except Exception:  # noqa: BLE001
                 pass
 
+            # #13 — never send a request whose last message is an assistant
+            # turn. The Anthropic API treats that as a prefill ("continue this
+            # assistant turn"), which the OAuth/Claude-Code model rejects with
+            # a 400 ("the conversation must end with a user message"). It also
+            # means there is nothing for the model to answer — the loop only
+            # reaches here after a user/tool_result, so a trailing assistant
+            # turn is upstream history corruption (the 2026-06 cross-project
+            # race, #15). Halt cleanly instead of crashing: the existing
+            # assistant message IS the reply. Loud log so any NEW source of
+            # this state stays visible after #15.
+            if llm_history and llm_history[-1].get("role") != "user":
+                print(f"[guide] WARN halting run={turn.run_id}: history ends "
+                      f"with role={llm_history[-1].get('role')!r} — nothing to "
+                      f"answer (see #13/#15)", flush=True)
+                turn.transition(TurnState.DONE); checkpoint(turn)
+                yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                           "cache_read": usage_cr, "cache_write": usage_cw})
+                yield sse({"type": "done"})
+                return
+
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. We only retry
             # while no text has been emitted this turn — otherwise a retry
