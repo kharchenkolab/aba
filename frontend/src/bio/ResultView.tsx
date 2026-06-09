@@ -66,7 +66,8 @@ function _canonicalKindLabel(url: string | null | undefined): string {
 const IMG = /\.(png|jpe?g|svg|webp|gif)$/i
 
 export default function ResultView({ result, entities, onChange, onFocus, onAsk, onChatResult,
-                                     onAnnotate, annotClear }: {
+                                     onAnnotate, annotClear, highlighting: highlightingProp,
+                                     onHighlightingChange }: {
   result: Entity
   entities: Entity[]
   onChange: () => void
@@ -83,6 +84,11 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   /** Bumped on focus change / annotation clear; signals MemberPanels to
    *  drop any in-progress stroke. */
   annotClear?: number
+  /** Highlight mode (lifted from App.tsx so the canvas-actions ✏️ button
+   *  drives this view's MemberPanels). Provided when ResultView is hosted
+   *  inside FocusCanvas; falls back to local state for standalone tests. */
+  highlighting?: boolean
+  onHighlightingChange?: (on: boolean) => void
 }) {
   const members = (result.metadata?.members as ResultMember[]) ?? []
   const interpretation = (result.metadata?.interpretation as string) ?? ''
@@ -96,16 +102,18 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const [picker, setPicker] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [focusMember, setFocusMember] = useState<string | null>(null)
-  // Freehand-highlight mode (mirrors ChatPane's hl-toggle). When on, each
-  // MemberPanel shows a thin-yellow hover surface; drawing on any panel
-  // rasterizes + composites + sends to the composer. anyDrawing is the
-  // global "someone's currently dragging" flag so OTHER panels hide their
-  // surface during the drag (avoids accidental smears across panels).
-  const [highlighting, setHighlighting] = useState(false)
+  // Freehand-highlight mode. When the prop is wired (i.e. mounted inside
+  // FocusCanvas), use the external state — the canvas-actions row's ✏️
+  // button is the single toggle. When undefined (standalone tests), fall
+  // back to local state. anyDrawing is the global "someone's currently
+  // dragging" flag so OTHER panels hide their surface during the drag.
+  const [hlLocal, setHlLocal] = useState(false)
+  const highlighting = highlightingProp ?? hlLocal
+  const setHighlighting = (on: boolean) => (onHighlightingChange ?? setHlLocal)(on)
   const [anyDrawing, setAnyDrawing] = useState(false)
   // Exit highlight mode when the focused entity changes or the parent
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
-  useEffect(() => { setHighlighting(false) }, [result.id, annotClear])
+  useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setReading(interpretation); setTitle(result.title) }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -211,30 +219,17 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 
   return (
     <div className="rv">
-      <div className="rv__head">
-        {titleEdit ? (
-          <input className="rv__title-input" autoFocus value={title}
-                 onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
-                 onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
-        ) : (
-          <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
-        )}
-        {/* Single Highlight toggle — same placement + iconography as
-            ChatPane's hl-toggle. Hidden when no onAnnotate plumb (older
-            mount sites that haven't wired it yet). */}
-        {onAnnotate && (
-          <button
-            type="button"
-            className={`hl-toggle ${highlighting ? 'hl-toggle--on' : ''}`}
-            onClick={() => setHighlighting(h => !h)}
-            title={highlighting
-              ? 'Cancel highlight'
-              : 'Highlight a region of any panel (figure, caption, or note) to ask Guide about it'}
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="#fde047" stroke="#a16207" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
-          </button>
-        )}
-      </div>
+      {/* Title row. The Highlight toggle now lives in App.tsx's
+          canvas-actions row (consistent with the Threads view), so it's
+          NOT rendered here — each MemberPanel is driven by the lifted
+          `highlighting` prop. */}
+      {titleEdit ? (
+        <input className="rv__title-input" autoFocus value={title}
+               onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
+               onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
+      ) : (
+        <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
+      )}
 
       <div className="rv__members">
         {members.map((m, i) => (
@@ -565,10 +560,15 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   if (member.kind === 'text') {
     return (
       <>
-        <div className="rv-panel rv-panel--text" ref={contentRef} {...hoverHandlers}>
-          <textarea className="rv-panel__note" value={text} placeholder="Write a note…" autoFocus={autoFocus}
-                    onChange={e => setText(e.target.value)} onBlur={() => onText(member.id, text)} />
-          {controls}
+        <div className="rv-panel rv-panel--text" {...hoverHandlers}>
+          {/* contentRef sits on the INNER body — surface must be a sibling,
+              never a descendant, or html2canvas captures the yellow overlay
+              into the rasterized image (right-half-yellow bug, 2026-06-09). */}
+          <div className="rv-panel__body" ref={contentRef}>
+            <textarea className="rv-panel__note" value={text} placeholder="Write a note…" autoFocus={autoFocus}
+                      onChange={e => setText(e.target.value)} onBlur={() => onText(member.id, text)} />
+            {controls}
+          </div>
           {renderHlSurface()}
         </div>
         {removeDialogs}
@@ -594,7 +594,12 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const cellStyle = (member.kind === 'figure' && minCellHeight != null)
     ? { minHeight: minCellHeight } : undefined
   return (
-    <div className="rv-panel" ref={contentRef} {...hoverHandlers}>
+    <div className="rv-panel" {...hoverHandlers}>
+      {/* contentRef on INNER body so the highlight surface (rendered as
+          a sibling below) isn't captured by html2canvas. Without this
+          split, the yellow inset + the live SVG polyline get rasterized
+          into the captured image (the "right half yellow" distortion). */}
+      <div className="rv-panel__body" ref={contentRef}>
       <div className="rv-panel__cell" ref={cellRef} style={cellStyle}>
         {member.kind === 'figure' && url
           ? <img className="rv-panel__img" src={url} alt={displayedFigure?.title ?? cell?.title}
@@ -631,6 +636,7 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </span>
         )}
       </div>
+      </div>{/* /.rv-panel__body */}
       {renderHlSurface()}
       {removeDialogs}
     </div>

@@ -842,6 +842,8 @@ export default function App() {
           onChatResult={chatAboutResult}
           onBrowseFiles={(path?: string) => { openProjectSection('files'); setFilesTarget(t => ({ path: path ?? '', n: t.n + 1 })) }}
           projectId={url.pid ?? undefined}
+          highlighting={highlighting}
+          onHighlightingChange={setHighlighting}
         />
       )}
     </div>
@@ -938,11 +940,15 @@ export default function App() {
             </>)}
           </div>
           <div className="canvas-actions">
-            {!overview && posture === 'chat' && !inventory && (
+            {!overview && !inventory && (posture === 'chat' || focused?.type === 'result') && (
               <button
                 className={`canvas-hl ${highlighting ? 'is-on' : ''}`}
                 onClick={() => setHighlighting(v => !v)}
-                title={highlighting ? 'Cancel highlight' : 'Highlight a region of any message to ask Guide about it'}
+                title={highlighting
+                  ? 'Cancel highlight'
+                  : (focused?.type === 'result'
+                     ? 'Highlight a region of any panel (figure, caption, or note) to ask Guide about it'
+                     : 'Highlight a region of any message to ask Guide about it')}
               >
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="#fde047" stroke="#a16207" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
                 Highlight
