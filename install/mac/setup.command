@@ -19,6 +19,13 @@
 #   ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipes.git \
 #       "./ABA Setup.command"
 #
+# Override the branch (default: whatever each remote's HEAD points to). Useful
+# for testing a feature branch end-to-end before merging to main:
+#   ABA_REPO_BRANCH=your-feature-branch "./ABA Setup.command"
+# Only affects the initial clone — on subsequent runs this script `git pull`s
+# whatever branch the local checkout is on, so to switch branches after the
+# fact, remove $REPO_DIR/aba and re-run.
+#
 # What this touches:
 #   ~/.aba/repo/{aba,aba-recipes}   (source)
 #   ~/.aba/installer/               (helper venv + state)
@@ -60,17 +67,21 @@ mkdir -p "$REPO_DIR" "$HELPER_DIR"
 
 # Clone (or refresh) the repo + recipe library — in this shell, so SSH keys /
 # git credentials work while the repos are private.
-clone_or_pull() {  # $1=url  $2=dest
+clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
   if [[ -d "$2/.git" ]]; then
     echo "Updating $(basename "$2") …"
     git -C "$2" pull --ff-only || true
   else
     echo "Cloning $(basename "$2") …"
-    git clone --depth 1 "$1" "$2"
+    if [[ -n "${3:-}" ]]; then
+      git clone -b "$3" --depth 1 "$1" "$2"
+    else
+      git clone --depth 1 "$1" "$2"
+    fi
   fi
 }
-clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"
-clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipes"
+clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"          "${ABA_REPO_BRANCH:-}"
+clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipes"  "${ABA_RECIPES_BRANCH:-}"
 
 # Install the helper from the cloned repo into a private venv (never touches
 # the user's system Python).

@@ -112,11 +112,20 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
     """Bring a scratch path into DATA_DIR so a registered dataset persists past
     scratch GC. Hardlinks (instant, non-blocking) when same-filesystem; across
     filesystems, copies in a BACKGROUND thread (via a .part temp + atomic rename)
-    so the turn never blocks. Returns (dest_path, materializing)."""
+    so the turn never blocks. Returns (dest_path, materializing).
+
+    Targets the **active project's** data dir (``projects/<pid>/data/``), same
+    as ``_bundle_paths_into_data_dir`` — NOT the module-level workspace
+    ``config.DATA_DIR``, which the agent doesn't see via its kernel
+    ``os.environ["DATA_DIR"]``. Pre-fix this misaligned: a scratch file would
+    get hardlinked into the workspace dir, agent's ``os.listdir(DATA_DIR)``
+    returned empty, and the agent reported "no dataset registered" — same
+    bug-shape as the 2026-05-31 bundle fix."""
     import os, shutil, threading
-    from config import DATA_DIR
+    from core.config import current_project_id, project_data_dir
+    target_data = project_data_dir(current_project_id())
     src = os.path.abspath(src)
-    dest = os.path.join(str(DATA_DIR), os.path.basename(src.rstrip("/")) or "dataset")
+    dest = os.path.join(str(target_data), os.path.basename(src.rstrip("/")) or "dataset")
     if not os.path.exists(os.path.dirname(dest)):
         os.makedirs(os.path.dirname(dest), exist_ok=True)
     base, i = dest, 2
@@ -147,13 +156,25 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
 
 def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     """Resolve a bare/relative path against the scratch tier first (where the
-    agent's relative downloads land), then DATA_DIR, then process cwd. Returns
-    the first existing match, or the most likely candidate if nothing exists."""
+    agent's relative downloads land), then the **per-project** data dir (what
+    the kernel preamble sets ``os.environ["DATA_DIR"]`` to — the dir the agent
+    sees), then the module-level workspace DATA_DIR (back-compat for the
+    no-project case), then process cwd. Returns the first existing match, or
+    the most likely candidate if nothing exists.
+
+    The per-project candidate is the load-bearing one: the module-level
+    ``config.DATA_DIR`` constant binds at import to the workspace dir
+    (``projects/_workspace/data``) and never tracks which project is active,
+    so it diverges from the agent's view in any real install. Pre-2026-06-09
+    this caused the agent's natural "save to DATA_DIR/foo then register 'foo'"
+    pattern to fail with "Nothing to register"."""
     import os
     from config import DATA_DIR
+    from core.config import current_project_id, project_data_dir
     if os.path.isabs(path):
         return os.path.normpath(path)        # also collapses `./` segments
     cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
+    cands.append(os.path.normpath(os.path.join(str(project_data_dir(current_project_id())), path)))
     cands.append(os.path.normpath(os.path.join(str(DATA_DIR), path)))
     cands.append(os.path.normpath(os.path.abspath(path)))
     return next((c for c in cands if os.path.exists(c)), cands[0])
@@ -201,7 +222,17 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from config import DATA_DIR
-    from core.config import WORK_DIR
+    from core.config import (WORK_DIR, current_project_id, project_data_dir,
+                             project_work_dir)
+    # Per-project equivalents of DATA_DIR / WORK_DIR — what the agent actually
+    # sees via os.environ. The module-level constants are workspace-level
+    # (resolved once at import) and miss in any real install. Used for the
+    # adopt-check (so a file in the per-project work tier is recognized as
+    # scratch and adopted into per-project data) AND for the error message
+    # (so the agent is sent to the same DATA_DIR it sees).
+    _pid = current_project_id()
+    _PROJECT_DATA = str(project_data_dir(_pid))
+    _PROJECT_WORK = str(project_work_dir(_pid))
     title = input_.get("title")
     if not title:
         return {"error": "title is required"}
@@ -245,7 +276,17 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         # removing the move-then-re-register dance. Non-blocking (instant hardlink,
         # or a background copy across filesystems).
         adopted = materializing = False
-        if exists and _within(abspath, str(WORK_DIR)) and not _within(abspath, str(DATA_DIR)):
+        # "Is this file in scratch?" / "is it already in DATA_DIR?" must check
+        # the PER-PROJECT trees the agent actually writes to, plus the module
+        # ones for back-compat. Without per-project membership, a scratch file
+        # at projects/<pid>/work/... wouldn't be recognized as scratch and the
+        # adopt step would silently skip — file gets registered by-reference
+        # against a path that'll be GC'd in 48h.
+        in_work = (_within(abspath, str(WORK_DIR)) or
+                   _within(abspath, _PROJECT_WORK))
+        in_data = (_within(abspath, str(DATA_DIR)) or
+                   _within(abspath, _PROJECT_DATA))
+        if exists and in_work and not in_data:
             try:
                 abspath, materializing = _adopt_into_data_dir(abspath)
                 adopted = True
@@ -261,7 +302,7 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
                 f"Nothing to register: no file or directory found at {path!r} "
                 f"(resolved to {abspath}). If you created/downloaded it in a run_python "
                 f"call, it may have landed in a per-run scratch dir that no longer exists "
-                f"— re-create it under DATA_DIR ({DATA_DIR}) or pass an ABSOLUTE path, then "
+                f"— re-create it under DATA_DIR ({_PROJECT_DATA}) or pass an ABSOLUTE path, then "
                 f"register that."
             )}
     summary = (input_.get("summary") or "").strip()
@@ -296,9 +337,14 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     layout_hint = _dataset_layout_hint(abspath) if exists else ""
     if layout_hint:
         # Persist the hint on the entity so the cwd-shift preamble can surface it later.
+        # MERGE with the existing metadata — update_entity REPLACES the metadata
+        # column outright, so reading-then-merging is required to keep the
+        # bookkeeping fields (by_reference / ref_path / origin / summary)
+        # that create_entity just wrote.
         try:
-            md = (input_.get("metadata") or {}) if isinstance(input_, dict) else {}
-            update_entity(eid, metadata={**md, "layout_hint": layout_hint})
+            from core.graph.entities import get_entity as _get_entity_for_md
+            cur = ((_get_entity_for_md(eid) or {}).get("metadata") or {})
+            update_entity(eid, metadata={**cur, "layout_hint": layout_hint})
         except Exception:  # noqa: BLE001
             pass
     return {"status": "ok", "dataset_id": eid, "title": title,

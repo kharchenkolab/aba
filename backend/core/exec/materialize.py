@@ -1,22 +1,31 @@
 """MaterializingExecutor — builds capability environments on demand (P1).
 
 Standardizes on **pip** (capdat_impl.md, per PK): Python library capabilities
-materialize into a single shared pip ``--target`` overlay under ENVS_DIR/pylib,
+materialize into a single shared pip ``--prefix`` overlay under ENVS_DIR/pylib,
 which is wholly wipeable (``rm -rf`` → repopulates on next request) and kept OUT
 of the system ``.venv`` so the backend env stays pristine.
 
-The overlay is consumed by *appending* it to ``sys.path`` (run_python preamble),
-not prepending via PYTHONPATH — so the ``.venv``'s scientific stack
-(scanpy/numpy/pandas) always wins and the overlay only supplies packages that
-are genuinely missing. That sidesteps version-shadowing while still composing.
+The overlay is consumed by *appending* its site-packages dirs to ``sys.path``
+(run_python preamble), not prepending via PYTHONPATH — so the ``.venv``'s
+scientific stack (scanpy/numpy/pandas) always wins and the overlay only supplies
+packages that are genuinely missing. That sidesteps version-shadowing while
+still composing.
+
+Why ``--prefix`` not ``--target``: ``--target`` ignores already-installed
+packages on sys.path and re-downloads every transitive dep into the overlay
+(scanpy → 100+ MB of duplicated numpy/pandas). ``--prefix`` respects the
+running interpreter's site-packages, so a request for GEOparse installs *just*
+GEOparse — numpy/pandas resolve to the .venv copy and aren't downloaded again.
 
 Non-Python CLI tools (salmon/STAR/fastqc — not on PyPI) need conda; that path
 is deferred (capdat_impl.md task 186) and raises NotImplementedError here.
 """
 from __future__ import annotations
 import re
+import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -24,16 +33,48 @@ from core.config import ENVS_DIR
 from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
 
-PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --target overlay for libraries
+PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --prefix overlay for libraries
 TOOLS_ENV = ENVS_DIR / "tools"          # one shared conda env for CLI tools
 
 
 def pylib_dir() -> Path:
+    """Prefix root for the overlay. Use for housekeeping (mkdir / rm -rf).
+    For import-from paths, use ``pylib_paths()`` — under --prefix those live
+    one or two levels deeper (lib/pythonX.Y/site-packages)."""
     return PYLIB_DIR
+
+
+def pylib_paths() -> list[Path]:
+    """Site-packages dirs the runtime should append to sys.path so the overlay's
+    packages are importable. Two entries (purelib + platlib) on systems where
+    they differ (some Linuxes split lib / lib64); usually one on macOS/Windows.
+    Computed from sysconfig against the running interpreter — matches the layout
+    `pip install --prefix=PYLIB_DIR` actually writes."""
+    purelib = sysconfig.get_path(
+        "purelib", vars={"base": str(PYLIB_DIR), "platbase": str(PYLIB_DIR)})
+    platlib = sysconfig.get_path(
+        "platlib", vars={"base": str(PYLIB_DIR), "platbase": str(PYLIB_DIR)})
+    return list({Path(purelib), Path(platlib)})   # dedupe; usually equal
 
 
 def tools_env() -> Path:
     return TOOLS_ENV
+
+
+def _has_legacy_target_layout() -> bool:
+    """Detect a pylib dir written by the old ``pip install --target`` codepath.
+
+    --target writes top-level package dirs (numpy/, pandas/, …); --prefix writes
+    a single ``lib/`` subdir. If the overlay has site-packages-style siblings
+    but no ``lib/``, it's the old layout — wipe so --prefix can repopulate
+    cleanly (avoids mixing two layouts that index into different sys.path entries).
+    """
+    if not PYLIB_DIR.exists():
+        return False
+    if (PYLIB_DIR / "lib").exists():
+        return False
+    # Heuristic: any *.dist-info at the top level → old --target layout.
+    return any(p.suffix == ".dist-info" for p in PYLIB_DIR.iterdir())
 
 
 class MaterializingExecutor:
@@ -99,13 +140,23 @@ class MaterializingExecutor:
     def _pip_install(self, packages: Sequence[str], *, cancel_token=None) -> None:
         """pip install the packages into the shared overlay. Idempotent enough:
         pip is fast on already-satisfied targets. Uses the .venv's pip but
-        installs INTO the overlay dir, leaving the .venv untouched."""
+        installs INTO the overlay dir, leaving the .venv untouched.
+
+        Uses ``--prefix`` (not ``--target``) so pip checks the running
+        interpreter's sys.path and SKIPS any dep already in the .venv —
+        avoiding the duplicate-numpy/pandas problem with --target."""
+        # One-time migration: the old --target layout dumps packages at the
+        # top of PYLIB_DIR; --prefix puts them under lib/. Mixing the two
+        # means imports randomly hit whichever the runtime added first. Wipe
+        # the old layout on the first --prefix install to start clean.
+        if _has_legacy_target_layout():
+            shutil.rmtree(PYLIB_DIR, ignore_errors=True)
         PYLIB_DIR.mkdir(parents=True, exist_ok=True)
         from core.runtime import progress
         from core.exec.proc import run_cancellable
         progress.emit(f"pip: installing {', '.join(packages)} into the overlay…", phase="pip")
         cmd = [sys.executable, "-m", "pip", "install",
-               "--target", str(PYLIB_DIR), *packages]
+               "--prefix", str(PYLIB_DIR), *packages]
         proc = run_cancellable(cmd, timeout_s=900, cancel_token=cancel_token)
         if proc.returncode != 0:
             raise RuntimeError(

@@ -22,6 +22,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_d17_")
+# ABA_RUNTIME_DIR drives PROJECTS_DIR (and thus per-project data/work dirs).
+# Pin it to _tmp so the per-project tree (projects/single/{data,work}) lines
+# up with the workspace tree we configure below — pre-2026-06-09 this was
+# always true on the CI host (`/workspace/aba-runtime/` writable) so d17
+# didn't set it; on a dev Mac it isn't, and the per-project paths the fix
+# now uses for adopt/resolve would land outside _tmp without this.
+os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_DB_PATH"] = str(Path(_tmp) / "d17.db")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
@@ -52,7 +59,15 @@ def check(label, cond, detail=""):
 
 
 def _within_data(p: str) -> bool:
-    return os.path.abspath(p).startswith(os.path.abspath(str(DATA_DIR)) + os.sep)
+    """Within EITHER the workspace DATA_DIR or the per-project one. Post
+    2026-06-09 the adopt code targets the per-project dir (what the agent
+    sees via os.environ['DATA_DIR']) instead of the module-level workspace
+    constant — see content/bio/tools/curation.py:_adopt_into_data_dir."""
+    from core.config import current_project_id, project_data_dir
+    pj = os.path.abspath(str(project_data_dir(current_project_id())))
+    ws = os.path.abspath(str(DATA_DIR))
+    ap = os.path.abspath(p)
+    return ap.startswith(pj + os.sep) or ap.startswith(ws + os.sep)
 
 
 TID = create_entity(entity_type="thread", title="t", metadata={"thread_id": None})
@@ -96,10 +111,19 @@ check("uses DATA_DIR path directly", os.path.abspath(res3.get("artifact_path") o
 check("not re-adopted (by_reference stays True)",
       (get_entity(res3["dataset_id"]).get("metadata") or {}).get("by_reference") is True, str(res3))
 
-print("\nmissing path → by-reference with a warning (unchanged)")
+print("\nmissing path → hard error pointing at the per-project DATA_DIR")
+# Behaviour-change captured here: the legacy by-reference-with-WARNING fallback
+# was replaced by a "Nothing to register" hard-error branch (see Fix 3 in
+# content/bio/tools/curation.py — registering a dataset with null artifact_path
+# was a footgun, every later read tripped on it). Post 2026-06-09 the error
+# message ALSO carries the per-project DATA_DIR (what the agent sees) rather
+# than the module-level workspace one — so the agent's "save under DATA_DIR
+# and retry" follow-up actually lands in the same dir the resolver checks.
 res4 = register_dataset_tool({"path": "nope_missing", "title": "x"}, ctx)
-check("null artifact_path + warning", res4.get("artifact_path") is None and "WARNING" in (res4.get("note") or ""),
-      str(res4))
+from core.config import current_project_id, project_data_dir
+_pp = str(project_data_dir(current_project_id()))
+check("hard error returned", "error" in res4 and "Nothing to register" in res4["error"], str(res4))
+check("error points at per-project DATA_DIR", _pp in (res4.get("error") or ""), str(res4))
 
 print()
 if _failures:
