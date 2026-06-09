@@ -131,6 +131,20 @@ def _coerce_string_list(x: Any) -> list[str]:
         s = x.strip()
         if not s:
             return []
+        # Whole-string leak case (prj_2578185f thr_577d666a, 2026-06-09):
+        # the model emitted assumptions as a JSON-array literal followed by
+        # `</assumptions><parameter name="steps">[...]`. The literal '[' at
+        # the start is the tell — extract just the JSON prefix as the real
+        # list. Without this the string would line-split into garbage or
+        # single-element-list verbatim, and the UI would render the leak.
+        if s.startswith("[") and ("</assumptions>" in s.lower() or "<parameter" in s.lower()):
+            # Find where the leaked markup begins; parse just what comes before.
+            tag_positions = [s.lower().find(t) for t in ("</assumptions>", "<parameter")
+                             if s.lower().find(t) >= 0]
+            cut = min(tag_positions) if tag_positions else len(s)
+            arr = _loads_loose(s[:cut])
+            if isinstance(arr, list):
+                return [str(a).strip() for a in arr if str(a).strip()]
         # XML-ish <item>...</item> wrapping
         tagged = _ITEM_TAG_RE.findall(s)
         if tagged:
@@ -231,9 +245,15 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
     # Recovery: some models cram the steps as a JSON array into a *text* field
     # (e.g. function-call XML leaking into `assumptions`), leaving `steps` empty.
     # If we have no steps, scan the raw string values for an embedded step array.
+    # Looks-like-a-step heuristic: a string mentioning `title` plus any other
+    # PlanStep field (description/expected_outputs/skill/parameters) — the
+    # latter two were added 2026-06-09 to catch lean step shapes the model
+    # sometimes emits (title+skill+parameters with no description prose).
+    _STEP_FIELDS = ("description", "expected_outputs", "skill", "parameters")
     if not norm_steps:
         for v in raw.values():
-            if not (isinstance(v, str) and ("title" in v and ("description" in v or "expected_outputs" in v))):
+            if not (isinstance(v, str) and "title" in v
+                    and any(f in v for f in _STEP_FIELDS)):
                 continue
             m = _re.search(r"\[\s*\{.*\}\s*\]", v, _re.S)
             if not m:
@@ -244,10 +264,16 @@ def normalize_plan(raw: dict[str, Any]) -> Plan:
                     if isinstance(s, dict):
                         title = (s.get("title") or s.get("description") or "").strip()[:120]
                         if title:
+                            # PRESERVE skill + parameters too — plan_first.md
+                            # tells the agent to bind a recipe to each step via
+                            # `skill`, and the recipe-uptake tracker only sees
+                            # bindings that survive validation.
                             norm_steps.append(PlanStep(
                                 n=i, title=title,
                                 description=(s.get("description") or "").strip(),
-                                expected_outputs=_coerce_string_list(s.get("expected_outputs"))))
+                                expected_outputs=_coerce_string_list(s.get("expected_outputs")),
+                                skill=(s.get("skill") or "").strip() or None,
+                                parameters=dict(s.get("parameters") or {})))
                 if norm_steps:
                     break
 
