@@ -14,6 +14,8 @@ import json
 import os
 import sqlite3
 import uuid
+import contextlib
+import contextvars
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +32,20 @@ SCRATCH = PROJECTS_DIR / "_scratch.db"   # parked here when no project is active
 SINGLE = bool(os.environ.get("ABA_DB_PATH") or os.environ.get("ABA_DB_PATH_OVERRIDE"))
 
 _state = {"current": None}
+
+# Per-CONTEXT active project, isolated from the process-global _state above.
+# Set by bind() for background turn tasks (which asyncio copies the context
+# into) so a concurrent request's set_current() can't change what project a
+# running turn sees. current() prefers this when set. See bind() and the
+# 2026-06 cross-project corruption incident write-up.
+_active_pid: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "aba_active_pid", default=None
+)
+
+# Projects already reaped in THIS process (first-open memo — see set_current/#14).
+_reaped_pids: set[str] = set()
+# Projects whose DB has been initialized+reaped in THIS process (ensure_opened).
+_opened_pids: set[str] = set()
 
 
 def _now() -> str:
@@ -113,15 +129,22 @@ def set_current(pid: str) -> None:
     # actual project activity (chat, entities, runs), not by mere "I clicked
     # this to look at it." last_touched is now derived from the DB file's
     # mtime in list_projects(), so it reflects real work automatically.
-    # A1: reap stale Turn rows + repair any orphaned tool_use in the
-    # newly-opened project's message log. Idempotent; safe to run on
-    # every project switch. Stays in platform — Turn reaping is a
-    # platform concern (durable-turns infrastructure).
-    try:
-        from core.runtime.checkpoint import reap_stale_turns
-        reap_stale_turns()
-    except Exception:  # noqa: BLE001
-        pass
+    # A1/#14: reap stale Turn rows + repair orphaned tool_use ONCE per project
+    # per process — the FIRST time this process addresses the project's DB.
+    # Staleness means "the owning process is gone": true only for turns left by
+    # a *previous* process, which are fully present the moment we first open the
+    # DB. Re-reaping on every later switch (the middleware toggles projects on
+    # nearly every request) is redundant AND races live turns — a switch back to
+    # a project mid-turn would fail its own running turn and synthesize a bogus
+    # 'interrupted' result. Memoizing to first-open removes both problems; the
+    # liveness guard inside reap_stale_turns is the belt to this suspenders.
+    if pid not in _reaped_pids:
+        _reaped_pids.add(pid)
+        try:
+            from core.runtime.checkpoint import reap_stale_turns
+            reap_stale_turns()
+        except Exception:  # noqa: BLE001
+            pass
     # Content-side project-open hooks (display-path backfill, etc.) run
     # via the hook dispatcher. Errors are swallowed by dispatch() — one
     # bad hook must not block a project switch.
@@ -135,7 +158,59 @@ def set_current(pid: str) -> None:
 def current() -> str | None:
     if SINGLE:
         return "single"
+    pid = _active_pid.get()
+    if pid is not None:
+        return pid
     return _state["current"]
+
+
+def ensure_opened(pid: str) -> None:
+    """Idempotent per-process project open WITHOUT mutating the global DB.
+
+    Call INSIDE `with bind(pid):` (the per-request ASGI middleware does) so
+    init_db()/reap operate on the context-bound DB. First time only: create
+    the project's tables and reap its previous-process stale turns (#14's
+    first-open memo). Subsequent calls are a set-membership check — this is the
+    request hot path, so it must stay cheap. No-op in SINGLE mode."""
+    if SINGLE or not pid or pid in _opened_pids:
+        return
+    _opened_pids.add(pid)
+    init_db()
+    if pid not in _reaped_pids:
+        _reaped_pids.add(pid)
+        try:
+            from core.runtime.checkpoint import reap_stale_turns
+            reap_stale_turns()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@contextlib.contextmanager
+def bind(pid: str | None):
+    """Bind `pid` as the active project for the CURRENT execution context
+    (asyncio task / thread) ONLY — isolated from the process-global
+    set_current(). Both projects.current() and the DB connection (_conn via
+    bind_active_db) resolve to `pid` inside the block.
+
+    Background turn tasks (turn_executor._drain) wrap their whole run in this
+    so a concurrent request that repoints the process-global DB — e.g. the
+    frontend polling another open project's active-turn endpoint — can't swap
+    the database out from under a running turn. That race silently corrupted
+    turn history in 2026-06 (a turn read another project's messages mid-loop,
+    lost the user's instruction, and produced a generic reply).
+
+    No-op in SINGLE/test-harness mode (the harness owns DB_PATH) or when `pid`
+    is falsy (no project to bind — leave the global fallback in place)."""
+    if SINGLE or not pid:
+        yield pid
+        return
+    tok_pid = _active_pid.set(pid)
+    tok_db = _schema_mod.bind_active_db(_db_file(pid))
+    try:
+        yield pid
+    finally:
+        _schema_mod.reset_active_db(tok_db)
+        _active_pid.reset(tok_pid)
 
 
 def _touch(pid: str) -> None:

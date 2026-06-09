@@ -32,15 +32,25 @@ def new_run_id() -> str:
     return gen_run_id()
 
 
-async def _drain(gen: AsyncGenerator[dict, None], sink: "_ts.TurnSink") -> None:
+async def _drain(gen: AsyncGenerator[dict, None], sink: "_ts.TurnSink",
+                 pid: Optional[str] = None) -> None:
     """Background body: consume `gen`'s yielded dicts and push them onto
     `sink`. Closes the sink in a finally block so subscribers see the
-    `None` sentinel even on early exit / exception."""
+    `None` sentinel even on early exit / exception.
+
+    `pid` is the project this turn belongs to, captured by start_turn while
+    the originating request's pin was still in effect. We re-bind it HERE,
+    inside the task, via projects.bind() so every _conn() the agent loop
+    makes resolves to this project's DB — even though the task outlives the
+    request and concurrent requests for other projects keep repointing the
+    process-global DB (the 2026-06 cross-project corruption race)."""
+    from core import projects as _projects
     try:
-        async for obj in gen:
-            if not isinstance(obj, dict):
-                continue    # defensive — emit() should only yield dicts
-            sink.push(obj)
+        with _projects.bind(pid):
+            async for obj in gen:
+                if not isinstance(obj, dict):
+                    continue    # defensive — emit() should only yield dicts
+                sink.push(obj)
     except asyncio.CancelledError:
         # The task itself was cancelled (rare — we don't cancel from the
         # request path anymore; only an explicit Stop fires the cancel
@@ -92,8 +102,14 @@ def start_turn(
             pass
         return existing
 
+    # Capture the project NOW, synchronously, while the originating request's
+    # per-request pin is still the active global. The detached task below will
+    # re-bind it to its own context so concurrent requests can't swap it.
+    from core import projects as _projects
+    pid = _projects.current()
+
     sink = _ts.create(run_id, thread_id, started_at)
-    task = asyncio.create_task(_drain(body_gen, sink), name=f"turn:{run_id}")
+    task = asyncio.create_task(_drain(body_gen, sink, pid), name=f"turn:{run_id}")
     # Attach the task so we can find / inspect / (rarely) cancel it.
     # Sink stays alive after the task completes — see core/runtime/turn_sink.py.
     sink._task = task  # type: ignore[attr-defined]
