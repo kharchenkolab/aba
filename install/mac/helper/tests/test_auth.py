@@ -131,9 +131,14 @@ def test_oauth_callback_rejects_bad_state(client):
 
 
 def test_oauth_callback_exchanges_and_persists(client, tmp_aba_home, monkeypatch):
+    import json, time
     from aba_installer import auth
     monkeypatch.setattr(auth, "_exchange_code",
-                        lambda code, state, verifier, redirect_uri: "sk-ant-oat01-fromflow")
+                        lambda code, state, verifier, redirect_uri: {
+                            "access_token": "sk-ant-oat01-fromflow",
+                            "refresh_token": "rt-xyz",
+                            "expires_in": 3600,
+                        })
     start = client.post("/api/auth/oauth/start").json()
     # Recover the state the helper generated (it's in the authorize URL)
     import urllib.parse as up
@@ -144,6 +149,11 @@ def test_oauth_callback_exchanges_and_persists(client, tmp_aba_home, monkeypatch
     text = (tmp_aba_home / "config.env").read_text()
     assert "CLAUDE_CODE_OAUTH_TOKEN" in text and "sk-ant-oat01-fromflow" in text
     assert "ABA_LLM_CREDENTIAL=oauth_cc" in text
+    # #oauth-refresh: the refreshable store is written with the rotated creds.
+    store = json.loads((tmp_aba_home / "oauth.json").read_text())
+    assert store["access_token"] == "sk-ant-oat01-fromflow"
+    assert store["refresh_token"] == "rt-xyz"
+    assert store["expires_at"] > time.time() + 3000
 
 
 def test_clear_credentials_removes_key_lines(client, tmp_aba_home):
