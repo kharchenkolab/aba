@@ -283,6 +283,168 @@ def _overlay_has_import(import_name: str) -> bool:
         return False
 
 
+# ─── E-1 (2026-06-09): capability discovery cleanup ───────────────────────
+# When `ensure_capability(name)` misses the catalog, parallel-search PyPI /
+# CRAN / Bioconductor / Bioconda for an EXACT-name match (case-insensitive,
+# PEP-503-normalized for PyPI) and return suggestions shaped for direct
+# copy into propose_capability. Collapses the prior 4-5 round-trip
+# discovery dance (ensure → not_found → list → search → propose → ensure)
+# into a single round-trip on misses.
+#
+# Strict matching: only candidates whose canonical name matches `name`
+# (case-insensitive) are returned. Fuzzy hits aren't surfaced — they'd be
+# noise without a way to pick safely. The `language` param is the E-3
+# plumbing already in place; today it's always None (search all sources).
+
+def _pypi_exact(name: str) -> dict | None:
+    """Strict exact-name lookup on PyPI. Returns a propose_capability-
+    shaped candidate or None. Defers to search_pypi (which handles
+    PEP-503 variants); we then verify the canonical name matches."""
+    from .simple import search_pypi as _sp, _pep503
+    try:
+        res = _sp({"name": name})
+    except Exception:
+        return None
+    if not res.get("found"):
+        return None
+    found = (res.get("name") or "").strip()
+    # PyPI normalizes separators; accept PEP-503 equality as the strict
+    # match (so "scikit-learn" vs "scikit_learn" both count).
+    if _pep503(found) != _pep503(name):
+        return None
+    return {
+        "source": "pypi",
+        "archetype": "library",
+        "package": found,
+        "version": res.get("version"),
+        "summary": res.get("summary"),
+    }
+
+
+def _cran_exact(name: str, timeout_s: float = 4.0) -> dict | None:
+    """Strict exact-name lookup on CRAN via the crandb endpoint
+    (https://crandb.r-pkg.org/<pkg> — JSON metadata, 404 if absent).
+    URL is name-keyed so a 200 IS the exact-match proof."""
+    import urllib.error
+    import urllib.request
+    from urllib.parse import quote
+    try:
+        req = urllib.request.Request(
+            f"https://crandb.r-pkg.org/{quote(name)}",
+            headers={"User-Agent": "ABA capability discovery"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    pkg = (data.get("Package") or name).strip()
+    if pkg.lower() != name.lower():
+        return None
+    return {
+        "source": "cran",
+        "archetype": "r_package",
+        "package": pkg,
+        "library": pkg,
+        "version": data.get("Version"),
+        "summary": (data.get("Title") or "").strip() or None,
+    }
+
+
+def _bioc_exact(name: str, timeout_s: float = 4.0) -> dict | None:
+    """Strict exact-name lookup on Bioconductor (release branch). HEAD
+    the package's release/bioc HTML — 200 iff the package exists with
+    that exact name."""
+    import urllib.error
+    import urllib.request
+    from urllib.parse import quote
+    try:
+        req = urllib.request.Request(
+            f"https://bioconductor.org/packages/release/bioc/html/{quote(name)}.html",
+            method="HEAD",
+            headers={"User-Agent": "ABA capability discovery"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return None
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    return {
+        "source": "bioconductor",
+        "archetype": "r_package",
+        "package": name,
+        "library": name,
+        "summary": "Bioconductor release package",
+    }
+
+
+def _bioconda_exact(name: str) -> dict | None:
+    """Strict exact-name lookup on bioconda. Defers to search_bioconda
+    (already name-keyed via anaconda.org); we verify the returned name
+    matches strictly before counting it as a candidate."""
+    try:
+        res = search_bioconda({"query": name})
+    except Exception:  # noqa: BLE001
+        return None
+    if not res.get("found"):
+        return None
+    found = (res.get("name") or "").strip()
+    if found.lower() != name.lower():
+        return None
+    return {
+        "source": "bioconda",
+        "archetype": "cli",
+        "channel": "bioconda",
+        "package": found,
+        "version": res.get("latest_version"),
+        "summary": res.get("summary"),
+    }
+
+
+# Order suggestions: prefer R sources for R-shaped names (the agent's
+# common case for Bioconductor/CRAN). PyPI sits in the middle; bioconda
+# (CLI) last. Within strict-name matching, this just controls UI order.
+_SUGGESTION_ORDER = {"cran": 0, "bioconductor": 1, "pypi": 2, "bioconda": 3}
+
+
+def _search_external_for_name(name: str,
+                              language: str | None = None,
+                              total_timeout_s: float = 4.0) -> list[dict]:
+    """Parallel strict-exact search of external registries. Returns a
+    list of zero or more propose_capability-shaped candidates.
+
+    `language` filters which sources to query (None = all). The arg is
+    kept for E-3 wiring; today `ensure_capability` doesn't pass it."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeoutError
+    sources: dict[str, callable] = {}
+    if language in (None, "python"):
+        sources["pypi"] = lambda: _pypi_exact(name)
+    if language in (None, "r"):
+        sources["cran"] = lambda: _cran_exact(name)
+        sources["bioconductor"] = lambda: _bioc_exact(name)
+    if language in (None, "cli"):
+        sources["bioconda"] = lambda: _bioconda_exact(name)
+    if not sources:
+        return []
+
+    candidates: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(sources)) as ex:
+        futs = {ex.submit(fn): key for key, fn in sources.items()}
+        deadline = total_timeout_s
+        for fut in list(futs):
+            try:
+                c = fut.result(timeout=deadline)
+            except (FTimeoutError, TimeoutError):
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+            if c is not None:
+                candidates.append(c)
+    candidates.sort(key=lambda c: _SUGGESTION_ORDER.get(c.get("source", ""), 9))
+    return candidates
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -295,8 +457,31 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
     if not cap:
-        return {"status": "not_found",
-                "note": f"No capability '{name}' in the catalog. Use list_capabilities to search."}
+        # E-1: parallel-search external registries for an exact-name match
+        # instead of pointing at list_capabilities (which would also be
+        # empty for an uncatalogued name). Returns suggestions shaped for
+        # direct copy into propose_capability.
+        suggestions = _search_external_for_name(name)
+        if suggestions:
+            return {
+                "status": "candidates",
+                "name": name,
+                "suggestions": suggestions,
+                "note": (
+                    "Not in the catalog yet, but matched on external "
+                    "registries. Pick one and call propose_capability "
+                    "with the matching fields (source/archetype/package "
+                    "etc. on each suggestion are already shaped for it), "
+                    "then re-call ensure_capability."),
+            }
+        return {
+            "status": "not_found", "name": name,
+            "note": (
+                f"No capability '{name}' in the catalog, and no exact "
+                f"match found on PyPI / CRAN / Bioconductor / bioconda. "
+                f"If you know the install source, call propose_capability "
+                f"directly (e.g. source='github', package='owner/repo')."),
+        }
     # Honor the lifecycle: an unapproved (proposed) capability isn't runnable
     # until approved (the 'ask' multi-user gate).
     if cap.get("status") not in (None, "published"):
