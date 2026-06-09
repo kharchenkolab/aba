@@ -238,8 +238,8 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     first top-level module name, or None if undetectable."""
     import os, re, glob
     try:
-        from core.exec.materialize import pylib_dir
-        d = str(pylib_dir())
+        from core.exec.materialize import pylib_paths
+        dirs = [str(p) for p in pylib_paths()]
     except Exception:  # noqa: BLE001
         return None
     _norm = lambda s: re.sub(r"[-_.]+", "-", s).lower()
@@ -248,22 +248,23 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
         if not base:
             continue
         target = _norm(base)
-        for di in sorted(glob.glob(os.path.join(d, "*.dist-info"))):
-            stem = os.path.basename(di)[: -len(".dist-info")]   # "<name>-<version>"
-            if _norm(stem.rsplit("-", 1)[0]) != target:
-                continue
-            tl = os.path.join(di, "top_level.txt")
-            if os.path.exists(tl):
-                for line in open(tl):
-                    m = line.strip()
-                    if m and not m.startswith("_"):
-                        return m
-            rec = os.path.join(di, "RECORD")
-            if os.path.exists(rec):
-                for line in open(rec):
-                    top = line.split(",", 1)[0].split("/")[0]
-                    if top and "." not in top and not top.endswith(".dist-info") and not top.startswith("_"):
-                        return top
+        for d in dirs:
+            for di in sorted(glob.glob(os.path.join(d, "*.dist-info"))):
+                stem = os.path.basename(di)[: -len(".dist-info")]   # "<name>-<version>"
+                if _norm(stem.rsplit("-", 1)[0]) != target:
+                    continue
+                tl = os.path.join(di, "top_level.txt")
+                if os.path.exists(tl):
+                    for line in open(tl):
+                        m = line.strip()
+                        if m and not m.startswith("_"):
+                            return m
+                rec = os.path.join(di, "RECORD")
+                if os.path.exists(rec):
+                    for line in open(rec):
+                        top = line.split(",", 1)[0].split("/")[0]
+                        if top and "." not in top and not top.endswith(".dist-info") and not top.startswith("_"):
+                            return top
     return None
 
 
@@ -274,11 +275,12 @@ def _overlay_has_import(import_name: str) -> bool:
     if not import_name:
         return False
     try:
-        from core.exec.materialize import pylib_dir
+        from core.exec.materialize import pylib_paths
         from importlib.machinery import PathFinder
         import importlib
         importlib.invalidate_caches()   # overlay dir may have appeared post-startup
-        return PathFinder.find_spec(import_name, [str(pylib_dir())]) is not None
+        search = [str(p) for p in pylib_paths()]
+        return PathFinder.find_spec(import_name, search) is not None
     except Exception:  # noqa: BLE001
         return False
 
