@@ -97,7 +97,11 @@ def _write_deployment_yaml() -> None:
 # is credential-gated (it boots uvicorn with the key from config.env).
 _BG_SKIP = {"start-backend"}
 _bg_lock = threading.Lock()
-_bg: dict = {"thread": None, "events": [], "status": "idle"}  # idle|running|done|error
+# step_status: {step_id -> "active"|"ok"|"fail"} — survives the event-buffer
+# eviction so the UI's checklist doesn't lose its checkmarks when create-env's
+# command_output flood pushes the early step_start/step_end frames off the buffer.
+_bg: dict = {"thread": None, "events": [], "status": "idle",  # idle|running|done|error
+             "step_status": {}}
 
 
 def _is_installed() -> bool:
@@ -155,6 +159,13 @@ def _bg_worker() -> None:
             _bg["events"].append({"event": ev, "payload": payload})
             if len(_bg["events"]) > 1000:
                 del _bg["events"][:-1000]
+            # Step status survives eviction (the UI's checklist depends on it).
+            sid = payload.get("step_id") if isinstance(payload, dict) else None
+            if sid:
+                if ev == "step_start":
+                    _bg["step_status"][sid] = "active"
+                elif ev == "step_end":
+                    _bg["step_status"][sid] = "ok" if payload.get("ok") else "fail"
 
     try:
         prepare_install_artifacts()
@@ -190,6 +201,7 @@ def install_auto() -> dict:
             _bg["status"] = "done"
             return {"started": False, "status": "done"}
         _bg["events"] = []
+        _bg["step_status"] = {}
         _bg["status"] = "running"
         th = threading.Thread(target=_bg_worker, daemon=True, name="aba-bg-install")
         _bg["thread"] = th
@@ -212,6 +224,10 @@ def install_auto_status() -> dict:
     with _bg_lock:
         return {"status": _bg["status"], "total_steps": len(steps),
                 "steps": steps,
+                # Authoritative per-step state — UI uses this to draw the
+                # checklist instead of inferring from events, so checkmarks
+                # don't blink off when create-env evicts old step events.
+                "step_status": dict(_bg["step_status"]),
                 "events": list(_bg["events"][-300:])}
 
 

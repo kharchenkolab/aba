@@ -79,7 +79,7 @@
     return liById;
   }
 
-  function renderEvents(events, { current, line, stepsEl, logEl }, totalSteps, plannedSteps) {
+  function renderEvents(events, { current, line, stepsEl, logEl }, totalSteps, plannedSteps, stepStatus) {
     // Prefer the planned list passed in; fall back to scraping step_planned out
     // of the event stream (for SSE callers that don't receive a separate list).
     let planned = plannedSteps;
@@ -92,27 +92,37 @@
     }
     const liById = populateChecklist(stepsEl, planned);
 
-    let lastLine = '', started = 0, doneN = 0, activeTitle = '';
-    for (const e of (events || [])) {
-      const p = e.payload || {};
-      if (e.event === 'step_start') {
-        started++;
-        activeTitle = p.title || p.step_id;
-        const li = liById.get(p.step_id);
-        if (li) li.className = 'active';
-      } else if (e.event === 'step_end') {
-        doneN++;
-        const li = liById.get(p.step_id);
-        if (li) li.className = p.ok ? 'ok' : 'fail';
-      } else if (e.event === 'command_output' && p.line) {
-        lastLine = p.line;
-      } else if (e.event === 'repair' && p.message) {
-        lastLine = '🔧 ' + p.message;   // Tier-0 agent repairing a failed step
+    // Authoritative step state comes from the server's step_status map (which
+    // survives event-buffer eviction). Fall back to scanning events for SSE
+    // callers that haven't been wired to expose it.
+    const status = Object.assign({}, stepStatus || {});
+    if (!stepStatus) {
+      for (const e of (events || [])) {
+        const p = e.payload || {};
+        if (e.event === 'step_start' && p.step_id) status[p.step_id] = 'active';
+        else if (e.event === 'step_end' && p.step_id) status[p.step_id] = p.ok ? 'ok' : 'fail';
       }
     }
-    // Active phase title below the list — env builds give no honest percent.
-    const total = totalSteps || (planned || []).length || started || 1;
-    const running = started > doneN;
+    // Apply status to checklist <li>s. Anything without a status stays pending.
+    let doneN = 0, activeTitle = '', activeStepId = null;
+    for (const s of (planned || [])) {
+      const st = status[s.id];
+      const li = liById.get(s.id);
+      if (st && li) li.className = st;
+      if (st === 'ok' || st === 'fail') doneN++;
+      if (st === 'active') { activeStepId = s.id; activeTitle = s.title || s.id; }
+    }
+
+    // Live command line — pull the most recent command_output / repair message.
+    let lastLine = '';
+    for (const e of (events || [])) {
+      const p = e.payload || {};
+      if (e.event === 'command_output' && p.line) lastLine = p.line;
+      else if (e.event === 'repair' && p.message) lastLine = '🔧 ' + p.message;
+    }
+
+    const total = totalSteps || (planned || []).length || 1;
+    const running = !!activeStepId;
     if (current) current.textContent = running
       ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
       : (doneN >= total ? 'Finishing…' : '');
@@ -263,7 +273,7 @@
     // Make sure it's running (e.g. after an error → retry), then poll to done.
     fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
     const timer = setInterval(async () => {
-      const st = await pollAuto(s => renderEvents(s.events, els, s.total_steps, s.steps));
+      const st = await pollAuto(s => renderEvents(s.events, els, s.total_steps, s.steps, s.step_status));
       if (st === 'done') {
         clearInterval(timer);
         els.current.textContent = 'Starting ABA…';
