@@ -494,7 +494,7 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   // the LATEST revision (chain[0]); the user can step back via the strip's
   // chevrons. Anchored on the originally-pinned member.ref so the chain
   // stays stable as the agent adds more revisions in the background.
-  const rev = useFigureRevisions(member.kind === 'figure' && cell ? cell.id : '', revisionsSignal)
+  const rev = useFigureRevisions(member.kind === 'figure' && cell ? cell.id : '', revisionsSignal, entities)
   const displayedFigure: Entity | undefined =
     member.kind === 'figure' ? (rev.displayed ?? cell) : undefined
 
