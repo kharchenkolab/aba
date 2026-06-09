@@ -117,9 +117,13 @@ def test_every_tool_importable_from_facade():
         "list_data_files", "inspect_upload",
         "write_file_tool", "edit_file_tool", "read_file_tool",
         # curation
+        # pin_entity_tool retired 2026-06-08 (entity-mgmt refactor Phase 1) —
+        # see content/bio/tools/curation.py:508 and d8_entity_ops.py:88. Pin
+        # semantics now live in promote_to_result_tool (agent gesture) and
+        # pin_evidence (backend route, not agent-callable).
         "register_reference_tool", "find_reference_tool",
         "register_dataset_tool", "add_to_dataset_tool", "remove_from_dataset_tool",
-        "pin_entity_tool", "promote_to_result_tool",
+        "promote_to_result_tool",
         "create_finding_tool", "create_claim_tool",
         "open_run_tool", "close_run_tool",
         "annotate_entity_tool", "_archive_entity_tool",
@@ -141,7 +145,8 @@ def test_no_NameError_on_minimal_call():
         ("register_dataset_tool", {"title": "t", "path": "/tmp"}, ctx),
         ("add_to_dataset_tool",    {"dataset_id": "x", "paths": []}, ctx),
         ("remove_from_dataset_tool", {"dataset_id": "x", "paths": []}, ctx),
-        ("pin_entity_tool",        {"entity_id": "no_such"}, ctx),
+        # pin_entity_tool retired 2026-06-08 — see the comment near
+        # expected_tool_names above.
         ("promote_to_result_tool", {"figure_id": "no_such", "interpretation": "x"}, ctx),
         ("create_finding_tool",    {"result_ids": ["no_such"], "text": "x"}, ctx),
         ("create_claim_tool",      {"statement": "x"}, ctx),
