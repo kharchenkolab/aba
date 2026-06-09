@@ -62,17 +62,15 @@
     return s.status;
   }
 
-  function renderEvents(events, { current, stepsEl, logEl, bar }, totalSteps) {
+  function renderEvents(events, { current, line, stepsEl, logEl }, totalSteps) {
     if (stepsEl) stepsEl.innerHTML = '';
     const seen = new Map();
     let lastLine = '', started = 0, doneN = 0, activeTitle = '';
-    let activeStep = null, activeFrac = 0;   // sub-progress of the in-flight step
     for (const e of (events || [])) {
       const p = e.payload || {};
       if (e.event === 'step_start') {
         started++;
         activeTitle = p.title || p.step_id;
-        activeStep = p.step_id; activeFrac = 0;
         if (stepsEl) {
           const li = document.createElement('li'); li.className = 'active';
           li.textContent = activeTitle; stepsEl.appendChild(li);
@@ -80,26 +78,19 @@
         }
       } else if (e.event === 'step_end') {
         doneN++;
-        if (p.step_id === activeStep) activeFrac = 0;
         const li = seen.get(p.step_id); if (li) li.className = p.ok ? 'ok' : 'fail';
-      } else if (e.event === 'step_progress') {
-        // Within-step fraction for the long conda builds (#progress-bars).
-        if (p.step_id === activeStep) activeFrac = p.frac || 0;
       } else if (e.event === 'command_output' && p.line) {
         lastLine = p.line;
       }
     }
-    // done/total, plus the in-flight step's fraction so the bar keeps moving
-    // through the multi-minute env builds instead of sitting frozen.
+    // No bar — env builds give no honest percentage. Show the current PHASE
+    // title (with its ordinal) and the live command line below it.
     const total = totalSteps || started || 1;
     const running = started > doneN;
-    const eff = Math.min(doneN + (running ? activeFrac : 0), total);
-    if (bar) bar.value = Math.round((eff / total) * 100);
-    if (current) {
-      const head = running ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
-                           : (doneN >= total ? 'Finishing…' : '');
-      current.textContent = head + (lastLine ? '  ·  ' + lastLine.slice(0, 80) : '');
-    }
+    if (current) current.textContent = running
+      ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
+      : (doneN >= total ? 'Finishing…' : '');
+    if (line) line.textContent = lastLine ? lastLine.slice(0, 140) : '';
     if (logEl) {
       logEl.textContent = (events || []).map(e =>
         e.event === 'command_output' ? (e.payload.line || '')
@@ -237,8 +228,8 @@
       const el = document.getElementById('aba-home'); if (el) el.textContent = s.aba_home;
     }).catch(() => {});
     const els = {
-      bar: document.getElementById('setup-bar'),
       current: document.getElementById('setup-current'),
+      line: document.getElementById('setup-line'),
       stepsEl: document.getElementById('setup-steps'),
       logEl: document.getElementById('setup-log'),
     };
@@ -284,8 +275,8 @@
       const wrap = document.getElementById('update-progress');
       wrap.hidden = false;
       streamPlaybook('/api/update', {
-        bar: document.getElementById('update-bar'),
         current: document.getElementById('update-current'),
+        line: document.getElementById('update-line'),
         stepsEl: document.getElementById('update-steps'),
         onComplete: () => boot(),
       });
@@ -354,7 +345,7 @@
   }
 
   // ─── playbook event stream (used by both Install + Update) ─────────────
-  function streamPlaybook(url, { bar, current, stepsEl, logEl, onComplete }) {
+  function streamPlaybook(url, { current, line, stepsEl, logEl, onComplete }) {
     // EventSource doesn't support POST; use fetch + ReadableStream
     fetch(url, { method: 'POST' }).then(async (r) => {
       if (!r.ok) {
@@ -365,8 +356,6 @@
       const decoder = new TextDecoder();
       let buf = '';
       const stepsSeen = new Map(); // id → <li>
-      let stepsCount = 0;
-      let activeStep = null, activeFrac = 0;   // in-flight step sub-progress
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -388,36 +377,27 @@
           }
 
           if (ev === 'command_output') {
-            // Live line from the running command — shows long steps (the conda
-            // env build) are alive, not hung.
-            if (payload.line) current.textContent = payload.line.slice(0, 100);
+            // Live line from the running command — beneath the phase title, so
+            // long steps (the conda/pip build) read as alive, not hung.
+            if (payload.line && line) line.textContent = payload.line.slice(0, 140);
           } else if (ev === 'step_start') {
-            stepsCount++;
-            activeStep = payload.step_id; activeFrac = 0;
             const li = document.createElement('li');
             li.className = 'active';
             li.textContent = payload.title || payload.step_id;
             stepsEl.appendChild(li);
             stepsSeen.set(payload.step_id, li);
-            current.textContent = payload.title || payload.step_id;
-          } else if (ev === 'step_progress') {
-            if (payload.step_id === activeStep) activeFrac = payload.frac || 0;
+            current.textContent = payload.title || payload.step_id;   // phase title
+            if (line) line.textContent = '';
           } else if (ev === 'step_end') {
-            if (payload.step_id === activeStep) activeFrac = 0;
             const li = stepsSeen.get(payload.step_id);
             if (li) li.className = payload.ok ? 'ok' : 'fail';
           } else if (ev === 'complete') {
-            bar.value = bar.max;
             current.textContent = payload.ok ? 'Done.' : ('Failed: ' + (payload.error || ''));
+            if (line) line.textContent = '';
             if (payload.ok && onComplete) onComplete();
           } else if (ev === 'error') {
             current.textContent = 'Error: ' + (payload.error || '');
           }
-          // Steps finished + the in-flight step's fraction, so the bar moves
-          // through the multi-minute conda builds instead of sitting frozen.
-          const done = Array.from(stepsEl.children).filter(c => c.className === 'ok' || c.className === 'fail').length;
-          const running = done < stepsCount;
-          if (stepsCount) bar.value = Math.round(((done + (running ? activeFrac : 0)) / stepsCount) * 100);
         }
       }
     });
