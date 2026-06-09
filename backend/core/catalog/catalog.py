@@ -34,8 +34,8 @@ def register_seed_provider(fn) -> None:
 def _ensure_seeded() -> None:
     if not _seed_providers:
         return
-    from core.graph._schema import DB_PATH
-    key = str(DB_PATH)
+    from core.graph._schema import active_db_path
+    key = str(active_db_path())   # context-bound path inside a turn, else global
     if key in _seeded_dbs:
         return
     # Mark first to avoid recursion (providers call resolve/register, which

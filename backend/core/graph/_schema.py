@@ -9,6 +9,7 @@ import sqlite3
 import json
 import os
 import uuid
+import contextvars
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -42,16 +43,50 @@ _GLOBAL_DISABLED = {t.strip() for t in os.environ.get("ABA_DISABLED_TOOLS", "").
 
 
 def set_db_path(path) -> None:
-    """Repoint the connection at a new SQLite DB. The multi-project layer
-    (core.projects) uses this to swap the active project's database
-    in-place. _conn() does a runtime lookup of the module-global DB_PATH
-    so the next call sees the new path."""
+    """Repoint the PROCESS-GLOBAL connection at a new SQLite DB. The
+    multi-project layer (core.projects) uses this to swap the active
+    project's database in-place for request-scoped handlers. _conn() does a
+    runtime lookup so the next call sees the new path.
+
+    DANGER: this global is shared by the whole process. A background turn
+    task (turn_executor) that outlives its request must NOT rely on it — a
+    concurrent request for another project will repoint it mid-turn and the
+    turn ends up reading the wrong database (the 2026-06 cross-project
+    corruption incident). Such tasks bind a per-context path instead, via
+    projects.bind() → bind_active_db() below, which _conn() prefers."""
     global DB_PATH
     DB_PATH = Path(path)
 
 
+# Per-CONTEXT (asyncio-task / thread) DB override. When set, it wins over the
+# process-global DB_PATH. contextvars are copied into child tasks by
+# asyncio.create_task, so a turn task that binds this keeps reading its own
+# project's DB no matter what concurrent requests do to the global. Default
+# None → fall back to the global (unchanged behaviour for request handlers).
+_active_db_path: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "aba_active_db_path", default=None
+)
+
+
+def active_db_path() -> Path:
+    """The DB path the next _conn() will use: the context-bound override if
+    one is set for this task/thread, else the process-global DB_PATH."""
+    return _active_db_path.get() or DB_PATH
+
+
+def bind_active_db(path) -> "contextvars.Token":
+    """Bind `path` as the active DB for the CURRENT context only. Returns a
+    token to pass to reset_active_db(). Prefer projects.bind() over calling
+    this directly."""
+    return _active_db_path.set(Path(path))
+
+
+def reset_active_db(token: "contextvars.Token") -> None:
+    _active_db_path.reset(token)
+
+
 def _conn():
-    c = sqlite3.connect(DB_PATH)
+    c = sqlite3.connect(active_db_path())
     c.row_factory = sqlite3.Row
     return c
 

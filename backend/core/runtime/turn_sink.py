@@ -221,6 +221,25 @@ def get(run_id: str) -> Optional[TurnSink]:
     return _REGISTRY.get(run_id)
 
 
+def live_run_ids() -> set[str]:
+    """run_ids whose background turn task is still running in THIS process.
+    Used by the Turn reaper (checkpoint.reap_stale_turns) so it never fails a
+    turn that is alive right now — only ones whose owning process is gone
+    (#14). A sink lingers post-close for replay; liveness is keyed strictly on
+    the asyncio task, not sink presence."""
+    return {rid for rid, s in _REGISTRY.items()
+            if getattr(s, "_task", None) is not None and not s._task.done()}
+
+
+def live_thread_ids() -> set[str]:
+    """thread_ids that own a live turn task in this process — the message-log
+    repair must skip these so it can't synthesize an 'interrupted' fill for a
+    tool that is still legitimately running."""
+    return {s.thread_id for s in _REGISTRY.values()
+            if s.thread_id is not None
+            and getattr(s, "_task", None) is not None and not s._task.done()}
+
+
 def close(run_id: str) -> None:
     """Mark the sink closed (sentinel to subscribers). Keep it in the
     registry so a late reconnect can still replay the in-memory tail.

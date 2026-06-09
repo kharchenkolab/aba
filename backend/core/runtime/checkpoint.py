@@ -75,14 +75,32 @@ def reap_stale_turns() -> int:
     stale_states = ("generating", "executing_tools", "summarizing")
     reason = json.dumps({"type": "ProcessRestart",
                          "message": "process restarted before the turn completed"})
+    # #14 — a turn whose background task is still running in THIS process is
+    # NOT stale; it's alive. Never fail it. (Staleness means "owning process is
+    # gone" — true for every in-flight turn at startup, false for a live one.)
+    # Without this, a project switch that reaches reap while a turn is mid-tool
+    # would mark it FAILED and synthesize a bogus 'interrupted' result.
+    try:
+        from core.runtime import turn_sink as _ts
+        live = _ts.live_run_ids()
+    except Exception:  # noqa: BLE001
+        live = set()
     placeholders = ", ".join("?" for _ in stale_states)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with _conn() as c:
-        cur = c.execute(
-            f"UPDATE runs SET state='failed', error_blob=?, updated_at=? "
-            f"WHERE state IN ({placeholders})",
-            (reason, now, *stale_states),
-        )
+        if live:
+            live_ph = ", ".join("?" for _ in live)
+            cur = c.execute(
+                f"UPDATE runs SET state='failed', error_blob=?, updated_at=? "
+                f"WHERE state IN ({placeholders}) AND run_id NOT IN ({live_ph})",
+                (reason, now, *stale_states, *live),
+            )
+        else:
+            cur = c.execute(
+                f"UPDATE runs SET state='failed', error_blob=?, updated_at=? "
+                f"WHERE state IN ({placeholders})",
+                (reason, now, *stale_states),
+            )
         c.commit()
         n = cur.rowcount or 0
     # Sweep up any duplicate orphan-fill rows that accumulated under
@@ -199,8 +217,17 @@ def repair_orphaned_tool_use_in_messages() -> int:
     # must NOT patch those — the resume endpoint will write the real
     # tool_result when the user decides. Skip threads whose latest Turn
     # row is AWAITING_USER with pending_user_signal='approval'.
-    # Phase 2 will add the same rule for AWAITING_TOOL_RESULT.
     held_thread_ids = _threads_with_pending_approval()
+    # #14 (the deferred "Phase 2") — also skip threads with a turn whose task
+    # is RUNNING right now in this process. Its trailing assistant tool_use is
+    # the tool still in flight, NOT an orphan; synthesizing an 'interrupted'
+    # fill here is the cross-project corruption (the real result lands moments
+    # later, leaving two results for one tool_use).
+    try:
+        from core.runtime import turn_sink as _ts
+        held_thread_ids = held_thread_ids | _ts.live_thread_ids()
+    except Exception:  # noqa: BLE001
+        pass
 
     inserted = 0
     for (entity_id, thread_id), msgs in by_thread.items():
