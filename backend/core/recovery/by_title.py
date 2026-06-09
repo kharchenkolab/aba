@@ -174,6 +174,34 @@ class LinkSpec:
 _ARTIFACT_ENTITY_TYPES = ("figure", "table", "cell")
 
 
+def _strip_to_project_relative(absolute_path: str) -> Optional[str]:
+    """Given an absolute path that lives under SOME `projects/<pid>/` dir
+    inside the ABA runtime tree, return the sub-path AFTER the project id.
+
+    Used by dataset linking — dataset.artifact_path is recorded as an
+    absolute path (e.g. `/workspace/aba-runtime/projects/prj_55b67456/
+    work/thread-thr_xxx/geo_data/GSE.../`), but the by-title symlink at
+    `projects/<pid>/datasets-by-title/<slug>` needs a project-relative
+    target so the link stays valid when the runtime root moves.
+
+    Returns None if the path is not under a project dir at all
+    (e.g. `/workspace/aba-runtime/refs/<accession>/…` — cross-project
+    refstore, intentionally unsupported in v1: we don't link across
+    project boundaries)."""
+    if not absolute_path:
+        return None
+    marker = "/projects/"
+    idx = absolute_path.find(marker)
+    if idx < 0:
+        return None
+    tail = absolute_path[idx + len(marker):]
+    # tail = "<pid>/sub/path"; we want everything after the first slash
+    parts = tail.split("/", 1)
+    if len(parts) < 2 or not parts[1]:
+        return None
+    return parts[1].rstrip("/")
+
+
 def _basename(path_str: str) -> str:
     """Last segment of an artifact path. Tolerates either `/abs/path/x.png`
     or relative shapes — we only need the file leaf to build the symlink
@@ -188,17 +216,24 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     (results, claims, narratives, plans, workspace, etc.) or that are
     archived / deleted.
 
-    For v1 we support artifact-typed entities only (figure/table/cell).
-    Runs / threads / datasets land in R3 expansion once their work-dir
-    convention is plumbed through here.
+    Supported types (each lands in its own `<type>s-by-title/` dir):
+      - figure / table / cell  → `artifacts-by-title/<slug>.<ext>`
+        (target: ../artifacts/<hash>.<ext>)
+      - thread                 → `threads-by-title/<slug>.jsonl`
+        (target: ../threads/<thread_id>.jsonl)
+      - analysis (Run)         → `runs-by-title/<slug>`
+        (target: ../work/<run_id>; run_id == entity.id, dir-typed link)
+      - dataset                → `datasets-by-title/<slug>`
+        (target derived from artifact_path; None if cross-project /refs/)
     """
     if not row:
         return None
     status = (row.get("status") or "active").lower()
-    if status not in ("active",):
+    if status != "active":
         return None   # archived / deleted entities don't get a link
     etype = (row.get("type") or "").lower()
     title = row.get("title") or ""
+    eid = row.get("id") or ""
 
     if etype in _ARTIFACT_ENTITY_TYPES:
         artifact_path = row.get("artifact_path")
@@ -212,7 +247,49 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
             category="artifacts-by-title",
             link_name=link_name,
             target=target,
-            fallback_id=row.get("id") or "",
+            fallback_id=eid,
+        )
+
+    # S-1 — thread: derived title (first user message via
+    # _derive_thread_title), file target sibling to threads/.
+    if etype == "thread":
+        if not eid:
+            return None
+        return LinkSpec(
+            category="threads-by-title",
+            link_name=f"{slugify(title or 'untitled-thread')}.jsonl",
+            target=f"../threads/{eid}.jsonl",
+            fallback_id=eid,
+        )
+
+    # S-3 — analysis (Run): work_dir at projects/<pid>/work/<run_id>/.
+    # `run_id` == entity.id by convention (see scratch_dir in
+    # core.data.workspace). Symlink to a directory.
+    if etype == "analysis":
+        if not eid:
+            return None
+        return LinkSpec(
+            category="runs-by-title",
+            link_name=slugify(title or "untitled-run"),
+            target=f"../work/{eid}",
+            fallback_id=eid,
+        )
+
+    # S-2 — dataset: artifact_path is absolute, somewhere under this
+    # project's tree (work/, data/, …) or, occasionally, an external
+    # /refs/ accession we don't link in v1.
+    if etype == "dataset":
+        artifact_path = row.get("artifact_path")
+        if not artifact_path:
+            return None
+        sub = _strip_to_project_relative(str(artifact_path))
+        if sub is None:
+            return None    # cross-project refstore — out of scope
+        return LinkSpec(
+            category="datasets-by-title",
+            link_name=slugify(title or "untitled-dataset"),
+            target=f"../{sub}",
+            fallback_id=eid,
         )
 
     return None
@@ -331,8 +408,10 @@ def refresh_by_title_links(project_dir: Path) -> dict:
             counts["created"] += 1
         counts["categories"].append(category)
 
-    # Also remove links from categories no entity wants any more
-    for category in ("artifacts-by-title",):
+    # Also remove links from categories no entity wants any more — covers the
+    # "had-then-archived-all" case for each managed category.
+    for category in ("artifacts-by-title", "threads-by-title",
+                     "runs-by-title", "datasets-by-title"):
         if category in desired:
             continue
         parent = project_dir / category

@@ -141,6 +141,80 @@ def test_refresh_repairs_manually_deleted_symlinks():
     assert counts["created"] == 1
 
 
+# ─── S-1/S-2/S-3 — refresh covers new entity types ─────────────────────
+def test_refresh_creates_threads_by_title():
+    """A thread entity in the DB → refresh creates threads-by-title/<slug>.jsonl."""
+    pid, pdir = _populated_project("RefreshThreads")
+    t = create_entity(entity_type="thread", title="My investigation")
+    refresh_by_title_links(pdir)
+    parent = pdir / "threads-by-title"
+    names = {p.name for p in parent.iterdir() if p.is_symlink()}
+    assert "My-investigation.jsonl" in names
+    link = parent / "My-investigation.jsonl"
+    assert os.readlink(link) == f"../threads/{t}.jsonl"
+
+
+def test_refresh_creates_runs_by_title():
+    """An analysis (Run) entity → refresh creates runs-by-title/<slug>."""
+    pid, pdir = _populated_project("RefreshRuns")
+    a = create_entity(entity_type="analysis", title="pagoda2 day 0")
+    refresh_by_title_links(pdir)
+    parent = pdir / "runs-by-title"
+    names = {p.name for p in parent.iterdir() if p.is_symlink()}
+    assert "pagoda2-day-0" in names
+    link = parent / "pagoda2-day-0"
+    assert os.readlink(link) == f"../work/{a}"
+
+
+def test_refresh_creates_datasets_by_title_for_in_project_path():
+    """A dataset with artifact_path inside this project's tree → symlink with
+    a project-relative target."""
+    pid, pdir = _populated_project("RefreshDS")
+    abs_path = str(pdir / "work" / "thread-thr_x" / "geo_data" / "Counts")
+    d = create_entity(entity_type="dataset", title="GSE192391 counts",
+                      artifact_path=abs_path)
+    refresh_by_title_links(pdir)
+    parent = pdir / "datasets-by-title"
+    link = parent / "GSE192391-counts"
+    assert link.is_symlink(), \
+        f"expected link; contents={list(parent.iterdir()) if parent.exists() else 'no dir'}"
+    assert os.readlink(link) == "../work/thread-thr_x/geo_data/Counts"
+
+
+def test_refresh_skips_dataset_with_refstore_path():
+    """A dataset whose artifact_path is in the cross-project refstore
+    (/refs/...) gets NO symlink."""
+    pid, pdir = _populated_project("RefreshDSref")
+    abs_path = str(RUNTIME / "refs" / "GSE-shared")
+    create_entity(entity_type="dataset", title="Shared",
+                  artifact_path=abs_path)
+    refresh_by_title_links(pdir)
+    parent = pdir / "datasets-by-title"
+    # Dir may not exist (no qualifying datasets) — either is fine
+    if parent.exists():
+        assert not any(p.is_symlink() for p in parent.iterdir())
+
+
+def test_refresh_idempotent_with_mixed_entity_types():
+    """One project with figures + threads + runs + datasets → refresh
+    twice; second run is all unchanged."""
+    pid, pdir = _populated_project("RefreshMixed")
+    create_entity(entity_type="figure", title="UMAP",
+                  artifact_path=str(pdir / "artifacts" / "u.png"))
+    create_entity(entity_type="thread", title="my investigation")
+    create_entity(entity_type="analysis", title="run alpha")
+    create_entity(entity_type="dataset", title="counts",
+                  artifact_path=str(pdir / "data" / "dat_x"))
+    refresh_by_title_links(pdir)
+    counts = refresh_by_title_links(pdir)
+    assert counts["created"] == 0, f"second run should be idempotent: {counts}"
+    # Each category should have exactly one link
+    for cat in ("artifacts-by-title", "threads-by-title",
+                "runs-by-title", "datasets-by-title"):
+        links = [p for p in (pdir / cat).iterdir() if p.is_symlink()]
+        assert len(links) == 1, f"{cat}: expected 1 link, got {[l.name for l in links]}"
+
+
 # ─── project-level link ─────────────────────────────────────────────────
 def test_refresh_project_link_writes_title_txt_and_symlink():
     pid, pdir = _populated_project("Refresh-G project")
