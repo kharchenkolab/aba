@@ -21,7 +21,7 @@
 #
 # Override the branch (default: whatever each remote's HEAD points to). Useful
 # for testing a feature branch end-to-end before merging to main:
-#   ABA_REPO_BRANCH=mac-cl-installer "./ABA Setup.command"
+#   ABA_REPO_BRANCH=your-feature-branch "./ABA Setup.command"
 # Only affects the initial clone — on subsequent runs this script `git pull`s
 # whatever branch the local checkout is on, so to switch branches after the
 # fact, remove $REPO_DIR/aba and re-run.
