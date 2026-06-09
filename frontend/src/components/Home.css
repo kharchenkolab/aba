@@ -432,6 +432,11 @@
   background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.12); padding: 4px; display: flex; flex-direction: column;
 }
+/* Last item in the side list: open the menu UPWARD so it isn't clipped by the
+   side-list's overflow:hidden (load-bearing for the panel's rounded corners). */
+.home__side-item:last-child .home__menu {
+  top: auto; bottom: 100%; margin-bottom: 4px;
+}
 .home__menu button {
   text-align: left; padding: 7px 10px; border: none; background: none; border-radius: 6px;
   font-size: 13px; color: var(--text-2); cursor: pointer;
