@@ -465,12 +465,27 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   // Auto-resize the caption textarea to its content. The figure caption is
   // a free-form paragraph (per the new prompt), not a one-liner — without
   // auto-resize the bottom of a multi-sentence caption gets cut off.
+  // Includes a ResizeObserver: the panel width changes after mount (image
+  // load triggers .focus's vertical scrollbar → panel shrinks by ~15px),
+  // text re-wraps to more lines, height must follow. PK 2026-06-09 — live
+  // inspect confirmed styleHeight=62px but scrollHeight=100px after layout
+  // settled, i.e. text was clipped by ~3 lines.
   const capRef = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
     const el = capRef.current
     if (!el) return
-    el.style.height = 'auto'
-    el.style.height = el.scrollHeight + 'px'
+    let lastWidth = 0
+    const resize = () => {
+      const w = el.clientWidth
+      if (w === lastWidth) return    // ignore self-triggered height changes
+      lastWidth = w
+      el.style.height = 'auto'
+      el.style.height = el.scrollHeight + 'px'
+    }
+    resize()
+    const ro = new ResizeObserver(resize)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [caption])
 
   const captionOrigin = (member as { caption_origin?: 'ai' | 'user' }).caption_origin ?? 'user'
