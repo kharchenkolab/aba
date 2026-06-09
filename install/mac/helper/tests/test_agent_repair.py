@@ -12,6 +12,17 @@ from aba_installer import agent_repair as ar
 from aba_installer.playbook import Executor, Playbook, Step
 
 
+@pytest.fixture
+def seeded_credential(tmp_path):
+    """Seed a CLAUDE_CODE_OAUTH_TOKEN in $ABA_HOME/config.env so _run_agent's
+    no-credential gate (commit 2) lets the runner be invoked. Tests that
+    specifically exercise the no-credential or auth-failure path skip this."""
+    (tmp_path / "config.env").write_text(
+        "export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-fixture\n"
+    )
+    yield
+
+
 # ─── probe + discovery ──────────────────────────────────────────────────────
 def test_probe_system_has_core_keys():
     p = ar.probe_system()
@@ -116,7 +127,7 @@ def test_consume_stream_emits_actions_and_returns_final():
 
 
 # ─── pre-flight (#3) ─────────────────────────────────────────────────────────
-def test_run_preflight_invokes_claude(monkeypatch):
+def test_run_preflight_invokes_claude(monkeypatch, seeded_credential):
     monkeypatch.setattr(ar, "claude_path", lambda: "claude")
     seen = {}
     def runner(argv, *, cwd, env):
@@ -179,6 +190,61 @@ def test_aba_credential_env_empty_when_unconfigured():
     assert ar._aba_credential_env() == {}
 
 
+# ─── fail-fast on no usable session (#2) ────────────────────────────────────
+def test_run_repair_skips_when_no_aba_credential(monkeypatch):
+    """Issue #2: no config.env / oauth.json → don't even invoke claude. Return
+    attempted=False so the executor halts cleanly instead of retrying a doomed
+    repair (which used to loop on 'Not logged in')."""
+    monkeypatch.setattr(ar, "claude_path", lambda: "claude")
+    called = []
+    out = ar.run_repair("s", "t", "cmd", "err",
+                        runner=lambda *a, **k: called.append(1) or {})
+    assert out.attempted is False
+    assert "no aba credential" in out.reason
+    assert called == [], "runner must not run when no credential is configured"
+
+
+def test_run_repair_skips_on_auth_failure_signature(monkeypatch, seeded_credential):
+    """Claude ran but came back 'Not logged in' (stale/rejected token). Treat as
+    no-attempt — the credential isn't going to fix itself between retries."""
+    monkeypatch.setattr(ar, "claude_path", lambda: "claude")
+    def runner(argv, *, cwd, env):
+        return {"returncode": 1, "result": "Not logged in · Please run /login"}
+    events = []
+    out = ar.run_repair("s", "t", "cmd", "err", runner=runner,
+                        on_event=lambda n, p: events.append((n, p)))
+    assert out.attempted is False
+    assert "claude auth failed" in out.reason
+    assert any(p.get("phase") == "skip" for _, p in events)
+
+
+def test_run_repair_skips_on_invalid_api_key_signature(monkeypatch, seeded_credential):
+    """The other side of the auth-failure coin: API mode with a bad key."""
+    monkeypatch.setattr(ar, "claude_path", lambda: "claude")
+    out = ar.run_repair("s", "t", "cmd", "err",
+                        runner=lambda *a, **k: {"returncode": 1,
+                                                "result": "Invalid API key · Unauthorized"})
+    assert out.attempted is False
+
+
+def test_repair_hook_short_circuits_when_no_credential(tmp_path, monkeypatch):
+    """make_repair_hook must not even bootstrap claude when there's no credential
+    — no point downloading a binary we can't authenticate."""
+    installs = []
+    monkeypatch.setattr(ar, "_default_installer",
+                        lambda: installs.append(1))
+    monkeypatch.setattr(ar, "claude_path", lambda: None)
+    events = []
+    hook = ar.make_repair_hook(cwd=str(tmp_path), runner=lambda *a, **k: {"returncode": 0},
+                               on_event=lambda n, p: events.append((n, p)),
+                               ensure=True)
+    pb = Playbook(steps=[_step("false")])
+    results = Executor(pb, on_step_failed=hook, max_repair_attempts=2).run_all()
+    assert not results[-1].ok, "step still fails — no repair happened"
+    assert installs == [], "must not bootstrap claude when no credential"
+    assert any(p.get("phase") == "skip" for _, p in events)
+
+
 # ─── run_repair ─────────────────────────────────────────────────────────────
 def test_run_repair_skips_when_no_claude(monkeypatch):
     monkeypatch.setattr(ar, "claude_path", lambda: None)
@@ -190,7 +256,7 @@ def test_run_repair_skips_when_no_claude(monkeypatch):
     assert called == [], "runner must not run without claude"
 
 
-def test_run_repair_invokes_claude_and_reports_ok(monkeypatch):
+def test_run_repair_invokes_claude_and_reports_ok(monkeypatch, seeded_credential):
     monkeypatch.setattr(ar, "claude_path", lambda: "claude")
     seen = {}
     def runner(argv, *, cwd, env):
@@ -207,7 +273,7 @@ def test_run_repair_invokes_claude_and_reports_ok(monkeypatch):
     assert any(p.get("phase") == "done" for _, p in events)
 
 
-def test_run_repair_marks_failure_on_error(monkeypatch):
+def test_run_repair_marks_failure_on_error(monkeypatch, seeded_credential):
     monkeypatch.setattr(ar, "claude_path", lambda: "claude")
     out = ar.run_repair("s", "t", "cmd", "err",
                         runner=lambda *a, **k: {"returncode": 1, "is_error": True, "result": "nope"})
@@ -219,7 +285,7 @@ def _step(cmd: str) -> Step:
     return Step(id="probe-step", title="Probe", why="t", commands=[cmd], timeout_seconds=30)
 
 
-def test_executor_retries_after_repair_fixes_the_system(tmp_path, monkeypatch):
+def test_executor_retries_after_repair_fixes_the_system(tmp_path, monkeypatch, seeded_credential):
     """The step fails until the repair 'fixes the system' (creates a marker the
     command checks for), then the retry passes — proving the whole chain."""
     monkeypatch.setattr(ar, "claude_path", lambda: "claude")
@@ -240,7 +306,7 @@ def test_executor_retries_after_repair_fixes_the_system(tmp_path, monkeypatch):
     assert any(n == "repair" for n, _ in events)
 
 
-def test_executor_gives_up_after_max_attempts(monkeypatch):
+def test_executor_gives_up_after_max_attempts(monkeypatch, seeded_credential):
     monkeypatch.setattr(ar, "claude_path", lambda: "claude")
     calls = {"n": 0}
     def runner(argv, *, cwd, env):
@@ -253,7 +319,7 @@ def test_executor_gives_up_after_max_attempts(monkeypatch):
     assert calls["n"] == 2, f"repair should run exactly max_repair_attempts times, got {calls['n']}"
 
 
-def test_repair_hook_ensure_bootstraps_claude_on_first_failure(tmp_path, monkeypatch):
+def test_repair_hook_ensure_bootstraps_claude_on_first_failure(tmp_path, monkeypatch, seeded_credential):
     """The control.py path: ensure=True installs `claude` on the first failure
     (not before), then repairs + retries."""
     state = {"installed": False}
