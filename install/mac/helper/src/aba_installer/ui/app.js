@@ -62,32 +62,56 @@
     return s.status;
   }
 
-  function renderEvents(events, { current, line, stepsEl, logEl }, totalSteps) {
-    if (stepsEl) stepsEl.innerHTML = '';
-    const seen = new Map();
+  // Build (or rebuild) the fixed checklist from the server's planned step list.
+  // Idempotent — safe to call every poll. Returns step_id → <li> for later updates.
+  function populateChecklist(stepsEl, plannedSteps) {
+    const liById = new Map();
+    if (!stepsEl) return liById;
+    stepsEl.innerHTML = '';
+    for (const s of (plannedSteps || [])) {
+      const li = document.createElement('li');
+      li.className = 'pending';
+      li.textContent = s.title || s.id;
+      li.dataset.stepId = s.id;
+      stepsEl.appendChild(li);
+      liById.set(s.id, li);
+    }
+    return liById;
+  }
+
+  function renderEvents(events, { current, line, stepsEl, logEl }, totalSteps, plannedSteps) {
+    // Prefer the planned list passed in; fall back to scraping step_planned out
+    // of the event stream (for SSE callers that don't receive a separate list).
+    let planned = plannedSteps;
+    if (!planned || !planned.length) {
+      for (const e of (events || [])) {
+        if (e.event === 'step_planned' && e.payload && e.payload.steps) {
+          planned = e.payload.steps; break;
+        }
+      }
+    }
+    const liById = populateChecklist(stepsEl, planned);
+
     let lastLine = '', started = 0, doneN = 0, activeTitle = '';
     for (const e of (events || [])) {
       const p = e.payload || {};
       if (e.event === 'step_start') {
         started++;
         activeTitle = p.title || p.step_id;
-        if (stepsEl) {
-          const li = document.createElement('li'); li.className = 'active';
-          li.textContent = activeTitle; stepsEl.appendChild(li);
-          seen.set(p.step_id, li);
-        }
+        const li = liById.get(p.step_id);
+        if (li) li.className = 'active';
       } else if (e.event === 'step_end') {
         doneN++;
-        const li = seen.get(p.step_id); if (li) li.className = p.ok ? 'ok' : 'fail';
+        const li = liById.get(p.step_id);
+        if (li) li.className = p.ok ? 'ok' : 'fail';
       } else if (e.event === 'command_output' && p.line) {
         lastLine = p.line;
       } else if (e.event === 'repair' && p.message) {
         lastLine = '🔧 ' + p.message;   // Tier-0 agent repairing a failed step
       }
     }
-    // No bar — env builds give no honest percentage. Show the current PHASE
-    // title (with its ordinal) and the live command line below it.
-    const total = totalSteps || started || 1;
+    // Active phase title below the list — env builds give no honest percent.
+    const total = totalSteps || (planned || []).length || started || 1;
     const running = started > doneN;
     if (current) current.textContent = running
       ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
@@ -239,7 +263,7 @@
     // Make sure it's running (e.g. after an error → retry), then poll to done.
     fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
     const timer = setInterval(async () => {
-      const st = await pollAuto(s => renderEvents(s.events, els, s.total_steps));
+      const st = await pollAuto(s => renderEvents(s.events, els, s.total_steps, s.steps));
       if (st === 'done') {
         clearInterval(timer);
         els.current.textContent = 'Starting ABA…';
@@ -357,7 +381,9 @@
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      const stepsSeen = new Map(); // id → <li>
+      // step_id → <li>, seeded by step_planned and extended on step_start (for
+      // back-compat with servers that don't emit step_planned).
+      let stepsSeen = new Map();
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -378,18 +404,27 @@
             if (logEl.textContent.length > 24000) logEl.textContent = logEl.textContent.slice(-24000);
           }
 
-          if (ev === 'command_output') {
+          if (ev === 'step_planned') {
+            // Pre-render the full planned checklist so the user can see what's
+            // coming, not just what's already happened.
+            stepsSeen = populateChecklist(stepsEl, payload.steps);
+          } else if (ev === 'command_output') {
             // Live line from the running command — beneath the phase title, so
             // long steps (the conda/pip build) read as alive, not hung.
             if (payload.line && line) line.textContent = payload.line.slice(0, 140);
           } else if (ev === 'repair') {
             if (payload.message && line) line.textContent = '🔧 ' + payload.message.slice(0, 140);
           } else if (ev === 'step_start') {
-            const li = document.createElement('li');
+            // Honor the pre-populated <li> if step_planned arrived; otherwise
+            // append a fresh one (old-server fallback).
+            let li = stepsSeen.get(payload.step_id);
+            if (!li) {
+              li = document.createElement('li');
+              li.textContent = payload.title || payload.step_id;
+              stepsEl.appendChild(li);
+              stepsSeen.set(payload.step_id, li);
+            }
             li.className = 'active';
-            li.textContent = payload.title || payload.step_id;
-            stepsEl.appendChild(li);
-            stepsSeen.set(payload.step_id, li);
             current.textContent = payload.title || payload.step_id;   // phase title
             if (line) line.textContent = '';
           } else if (ev === 'step_end') {
