@@ -181,6 +181,11 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   }
   const visible = entities.filter(filterFn)
   const byId = new Map(entities.map(e => [e.id, e]))
+  // Most-recent first — the backend default sort is created_at ASC, but the
+  // rail caps at SECTION_CAP (8) so without flipping here, the user only
+  // ever sees the OLDEST items at the top of every list (PK 2026-06-09).
+  const byRecent = (a: Entity, b: Entity) =>
+    (b.created_at || '').localeCompare(a.created_at || '')
   // Named threads only; the default thread is represented by the "Main thread"
   // chip (selects the 'default' alias), not a duplicate named row. Respects
   // showArchived so the "show archived" footer checkbox actually surfaces
@@ -188,6 +193,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   // appearing but doing nothing because this list pre-excluded archived).
   const threads = entities.filter(e => e.type === 'thread' && !e.metadata?.is_default
                                        && (showArchived || e.status !== 'archived'))
+                          .sort(byRecent)
   const hasArchived = entities.some(e => e.status === 'archived' && !e.metadata?.is_default)
   const projectTitle = workspace?.title ?? 'Workspace'
 
@@ -509,6 +515,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
           // "HIDDEN from the Runs UI"; this is that filter.
           const items = visible.filter(e =>
             section.types.includes(e.type) && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
+            .sort(byRecent)
           const sectionFilter = sectionFilters[activeSection]
           const filteredItems = items.filter(e => entityMatchesFilter(e, activeSection, sectionFilter))
           const showKey = `${activeSection}:${sectionFilter}`
