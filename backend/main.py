@@ -58,23 +58,54 @@ async def _value_error_to_422(_request, exc: ValueError):
     )
 
 
-# Project-context pinning middleware (Phase B of misc/modularity_audit.md):
-# every request that carries `?project_id=<pid>` or `X-Project-Id: <pid>` is
-# atomically pinned per-request to that project, so two tabs on different
-# projects can't race on the process-global. Endpoints that need stricter
-# 412-on-missing enforcement use Depends(require_project) on top.
-# Body-sourced project_id (chat: req.project_id in the JSON body) still
-# uses the function-form _require_project_context — middleware can't safely
-# read the request body without consuming it.
-@app.middleware("http")
-async def _pin_project_per_request(request, call_next):
-    pid = (request.query_params.get("project_id")
-           or request.headers.get("X-Project-Id"))
+# Project-context pinning middleware (#17, supersedes the Phase-B
+# BaseHTTPMiddleware version). Every request carrying `?project_id=<pid>` or
+# `X-Project-Id: <pid>` is pinned to that project for the request's duration by
+# BINDING A CONTEXTVAR (projects.bind) — not by mutating the process-global
+# DB_PATH. This isolates concurrent requests for different projects from each
+# other (the old version's set_current() mutated a shared global, so two tabs —
+# or the frontend polling two open projects — raced; that same global is what
+# corrupted streaming turns in #15).
+#
+# It MUST be a pure-ASGI middleware, not @app.middleware("http")
+# (BaseHTTPMiddleware): the latter runs the endpoint in a separate anyio task,
+# so a contextvar set in it does NOT propagate to the handler. A pure-ASGI
+# middleware runs the app in the SAME context, and Starlette's threadpool for
+# sync `def` handlers copies that context — so both async and sync handlers see
+# the binding. `_conn()` already prefers the bound path (#15).
+#
+# Body-sourced project_id (chat: req.project_id in the JSON body) is NOT
+# visible in the ASGI scope, so chat still pins via _require_project_context in
+# its handler; its background turn then re-binds the captured project (#15).
+def _pid_from_scope(scope) -> str | None:
+    from urllib.parse import parse_qs
+    qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+    pid = (qs.get("project_id") or [None])[0]
     if pid:
+        return pid
+    for k, v in scope.get("headers") or []:
+        if k == b"x-project-id":
+            return v.decode("latin-1") or None
+    return None
+
+
+class _ProjectPinMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
         from core import projects as _projects
-        if _projects.current() != pid:
-            _projects.set_current(pid)
-    return await call_next(request)
+        pid = _pid_from_scope(scope)
+        if not pid or _projects.SINGLE:
+            return await self.app(scope, receive, send)
+        with _projects.bind(pid):
+            _projects.ensure_opened(pid)
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(_ProjectPinMiddleware)
 
 import threading
 
@@ -787,45 +818,59 @@ class ChatRequest(BaseModel):
     retry: bool = False
 
 
-def _require_project_context(project_id: str | None) -> None:
+def _require_project_context(project_id: str | None) -> str:
     """Pin the project per-request (A+B fix, 2026-06-02). Used by handlers that
     take project_id in the REQUEST BODY (chat) — middleware can't safely parse
     the body. For query/header sources, prefer Depends(require_project) from
     core.web.deps (Phase B of misc/modularity_audit.md). Both share the
-    `_pin_or_412` primitive."""
+    `_pin_or_412` primitive.
+
+    Returns the RESOLVED pid (body value, or the global fallback when the body
+    omits it) so callers can bind it to their context — see chat()/#18."""
     from core.web.deps import _pin_or_412
-    _pin_or_412(project_id)
+    return _pin_or_412(project_id)
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    _require_project_context(req.project_id)
-    if not get_entity(req.focus_entity_id):
-        raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
+    # #18 — chat's project_id rides in the BODY, invisible to the ASGI pin
+    # middleware (#17), so we bind it explicitly here. Binding the RESOLVED pid
+    # to the contextvar for the whole setup makes get_entity() and the
+    # start_turn() project capture immune to a concurrent request mutating the
+    # process-global — even if an `await` is later introduced into this block
+    # (today it's synchronous, so this is defense-in-depth). The spawned turn
+    # task inherits the bound context and re-binds the same pid in _drain (#15).
+    from core import projects as _projects
+    pid = _require_project_context(req.project_id)
+    with _projects.bind(pid):
+        if not get_entity(req.focus_entity_id):
+            raise HTTPException(404, f"Entity {req.focus_entity_id} not found")
 
-    # C-1: spawn the agent loop as a background task that owns its own
-    # lifetime; the HTTP response is just a subscriber on the resulting
-    # TurnSink. Client disconnect unsubscribes; the task keeps running.
-    # Reattach via GET /api/turns/{run_id}/stream?since=<lastSeq>.
-    from core.runtime import turn_executor, turn_sink as _ts
-    from datetime import datetime, timezone
-    run_id = turn_executor.new_run_id()
-    started_at = datetime.now(timezone.utc).isoformat()
-    body_gen = stream_response(
-        req.text,
-        focus_entity_id=req.focus_entity_id,
-        thread_id=req.thread_id,
-        annotation_image=req.annotation_image,
-        annotation_note=req.annotation_note,
-        retry=req.retry,
-        run_id=run_id,
-    )
-    sink = turn_executor.start_turn(
-        run_id=run_id,
-        thread_id=req.thread_id,
-        started_at=started_at,
-        body_gen=body_gen,
-    )
+        # C-1: spawn the agent loop as a background task that owns its own
+        # lifetime; the HTTP response is just a subscriber on the resulting
+        # TurnSink. Client disconnect unsubscribes; the task keeps running.
+        # Reattach via GET /api/turns/{run_id}/stream?since=<lastSeq>.
+        from core.runtime import turn_executor, turn_sink as _ts
+        from datetime import datetime, timezone
+        run_id = turn_executor.new_run_id()
+        started_at = datetime.now(timezone.utc).isoformat()
+        body_gen = stream_response(
+            req.text,
+            focus_entity_id=req.focus_entity_id,
+            thread_id=req.thread_id,
+            annotation_image=req.annotation_image,
+            annotation_note=req.annotation_note,
+            retry=req.retry,
+            run_id=run_id,
+        )
+        sink = turn_executor.start_turn(
+            run_id=run_id,
+            thread_id=req.thread_id,
+            started_at=started_at,
+            body_gen=body_gen,
+        )
+    # The SSE generator reads only the in-memory sink + turn_events JSONL (never
+    # the project DB), so it runs correctly outside the bound context.
     return StreamingResponse(
         _ts.stream_from_sink(sink, since=0),
         media_type="text/event-stream",
