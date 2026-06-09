@@ -118,5 +118,12 @@ steps:
     title: Start ABA
     why: First boot of the backend; serves the workspace at http://localhost:8000.
     commands:
+      # RESTART, not just `up`: a (re)install just wrote fresh credentials to
+      # config.env, but `up` no-ops when a backend is already running — so a
+      # stale process from a prior session would keep serving its OLD (often
+      # expired) OAuth token and every request 401s. stop+up forces the new
+      # process to load the freshly-captured credential. `stop` is a no-op when
+      # nothing is running.
+      - '"$ABA_HOME/bin/aba" stop || true'
       - '"$ABA_HOME/bin/aba" up'
-    timeout_seconds: 30
+    timeout_seconds: 60
