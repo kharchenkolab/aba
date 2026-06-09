@@ -131,6 +131,54 @@ def test_run_preflight_invokes_claude(monkeypatch):
     assert any(p.get("phase") == "start" for _, p in events)
 
 
+# ─── ABA credential pass-through (#1) ───────────────────────────────────────
+def test_run_repair_passes_aba_credential_into_runner_env(tmp_path, monkeypatch):
+    """config.env's CLAUDE_CODE_OAUTH_TOKEN must reach claude -p's env so the
+    repair agent authenticates via ABA's existing credential (not ~/.claude)."""
+    # ABA_HOME is tmp_path via the autouse fixture; write a minimal config.env
+    # in the shape auth.py emits.
+    (tmp_path / "config.env").write_text(
+        "export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-12345\n"
+    )
+    monkeypatch.setattr(ar, "claude_path", lambda: "claude")
+    seen = {}
+    def runner(argv, *, cwd, env):
+        seen["env"] = env
+        return {"returncode": 0, "result": "ok"}
+    out = ar.run_repair("s", "t", "cmd", "err", runner=runner)
+    assert out.attempted and out.ok
+    assert seen["env"].get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat-test-12345"
+    assert seen["env"].get("DISABLE_AUTOUPDATER") == "1"
+
+
+def test_aba_credential_env_prefers_oauth_store_over_config(tmp_path, monkeypatch):
+    """The refreshable OAuth store ($ABA_HOME/oauth.json) outranks config.env —
+    matches backend/core/llm.py:_oauth_bearer priority."""
+    (tmp_path / "config.env").write_text(
+        "export CLAUDE_CODE_OAUTH_TOKEN=from-config\n"
+    )
+    import time as _t
+    (tmp_path / "oauth.json").write_text(
+        '{"access_token": "from-store", "refresh_token": "rt",'
+        f' "expires_at": {_t.time() + 3600}}}'
+    )
+    creds = ar._aba_credential_env()
+    assert creds == {"CLAUDE_CODE_OAUTH_TOKEN": "from-store"}
+
+
+def test_aba_credential_env_falls_back_to_api_key(tmp_path):
+    (tmp_path / "config.env").write_text(
+        "export ANTHROPIC_API_KEY=sk-ant-api03-abc\n"
+    )
+    creds = ar._aba_credential_env()
+    assert creds == {"ANTHROPIC_API_KEY": "sk-ant-api03-abc"}
+
+
+def test_aba_credential_env_empty_when_unconfigured():
+    # autouse fixture gives us a fresh ABA_HOME with no config.env / oauth.json
+    assert ar._aba_credential_env() == {}
+
+
 # ─── run_repair ─────────────────────────────────────────────────────────────
 def test_run_repair_skips_when_no_claude(monkeypatch):
     monkeypatch.setattr(ar, "claude_path", lambda: None)
