@@ -173,8 +173,53 @@ export async function captureHighlight(opts: CaptureOpts):
   let b64: string
   try {
     const h2c = (await import('html2canvas')).default
-    const full = await h2c(cellEl,
-                           { backgroundColor: '#ffffff', scale: 1, logging: false, useCORS: true })
+    // html2canvas v1.4.x renders <textarea>/<input> values as a SINGLE
+    // unwrapped line clipped to the control's bbox (see its
+    // `renderTextWithLetterSpacing(new TextBounds(container.value, …))`),
+    // so a multi-line caption rasterizes as a sliver of the first few
+    // characters at vertical center — "the minimized image looks odd"
+    // when the user highlighted caption text (PK 2026-06-09). Swapping the
+    // textarea for a div in the CLONED doc lets html2canvas use the normal
+    // text layout (wraps + multi-line). The live DOM is untouched.
+    const full = await h2c(cellEl, {
+      backgroundColor: '#ffffff', scale: 1, logging: false, useCORS: true,
+      onclone: (_doc, root) => {
+        const liveAreas = Array.from(cellEl.querySelectorAll('textarea, input[type="text"]')) as
+          (HTMLTextAreaElement | HTMLInputElement)[]
+        const cloneAreas = Array.from(root.querySelectorAll('textarea, input[type="text"]')) as
+          (HTMLTextAreaElement | HTMLInputElement)[]
+        cloneAreas.forEach((cloneEl, i) => {
+          const liveEl = liveAreas[i]
+          if (!liveEl) return
+          const cs = window.getComputedStyle(liveEl)
+          const div = root.ownerDocument!.createElement('div')
+          div.textContent = cloneEl.value || ''
+          // Match the live element's visual frame closely enough that the
+          // rasterized content lines up with the caption's on-screen bbox.
+          // Keep position/size from the live computed style; preserve newlines
+          // via white-space: pre-wrap so multi-line captions stay multi-line.
+          const w = liveEl.getBoundingClientRect().width
+          const h = liveEl.getBoundingClientRect().height
+          div.style.cssText = (
+            `box-sizing: ${cs.boxSizing};` +
+            `width: ${w}px;` +
+            `min-height: ${h}px;` +
+            `padding: ${cs.padding};` +
+            `border: ${cs.border};` +
+            `border-radius: ${cs.borderRadius};` +
+            `background: ${cs.backgroundColor};` +
+            `font: ${cs.font};` +
+            `line-height: ${cs.lineHeight};` +
+            `color: ${cs.color};` +
+            `white-space: pre-wrap;` +
+            `word-wrap: break-word;` +
+            `overflow: hidden;` +
+            `text-align: ${cs.textAlign};`
+          )
+          cloneEl.parentNode?.replaceChild(div, cloneEl)
+        })
+      },
+    })
     const cropC = document.createElement('canvas')
     cropC.width = Math.max(1, Math.round(cropW))
     cropC.height = Math.max(1, Math.round(cropH))
