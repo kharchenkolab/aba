@@ -6,6 +6,28 @@
   font-size: 19px; font-weight: 700; color: var(--text); width: 100%; box-sizing: border-box;
   border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--page);
 }
+/* The Highlight toggle for Result view lives in App.tsx's canvas-actions
+   row (same spot as the Threads ✏️ button), not here. */
+
+/* Per-MemberPanel highlight surface — same shape as Message's .msg__hl
+   (thin yellow inset, faint fill, cursor crosshair); the SVG overlays
+   the live stroke. Anchored on .rv-panel / .rv-panel--text via
+   position:relative. */
+.rv-panel { display: flex; flex-direction: column; gap: 5px; position: relative; }
+.rv-panel__hl {
+  position: absolute; inset: 0; z-index: 5;
+  cursor: crosshair;
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px #fde047 inset;
+  background: rgba(253, 224, 71, 0.04);
+}
+.rv-panel__hl-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.rv-panel__hl-hint {
+  position: absolute; top: 4px; right: 6px;
+  font-size: 10px; font-family: var(--mono); color: #854d0e;
+  background: var(--surface); border: 1px solid #fde047;
+  padding: 1px 6px; border-radius: 9999px; pointer-events: none;
+}
 
 /* Reading — grows with content, quiet until focused */
 .rv__reading {
@@ -20,7 +42,6 @@
 .rv__members { display: flex; flex-direction: column; gap: 14px; }
 .rv__empty { color: var(--text-4); font-size: 13px; padding: 12px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
 
-.rv-panel { display: flex; flex-direction: column; gap: 5px; }
 .rv-panel__cell { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; display: flex; }
 /* Cap the figure to keep the whole panel — image + legend + chevrons
    + caption — in the viewport without scrolling. The 240px reserves

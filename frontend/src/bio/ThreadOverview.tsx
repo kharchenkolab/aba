@@ -66,10 +66,14 @@ export default function ThreadOverview({ entities, thread, threadId, onGoTo, onS
   // the wrapper entity created when the user pins a figure/table. The
   // dropped `entity.pinned` flag is no longer the source of truth (it was
   // never populated, so the old filter returned empty).
-  const pinned = entities.filter(e => e.type === 'result' && inThread(e) && e.status !== 'archived')
-  const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived')
+  // Most-recent-first ordering (backend default is created_at ASC) — match
+  // ProjectOverview so the active work surfaces at the top of each list.
+  const byRecent = (a: Entity, b: Entity) =>
+    (b.created_at || '').localeCompare(a.created_at || '')
+  const pinned = entities.filter(e => e.type === 'result' && inThread(e) && e.status !== 'archived').sort(byRecent)
+  const claims = entities.filter(e => e.type === 'claim' && inThread(e) && e.status !== 'archived').sort(byRecent)
   const runs = entities.filter(e => e.type === 'analysis' && inThread(e) && e.status !== 'archived'
-    && !(e.metadata as { ambient?: boolean } | undefined)?.ambient)
+    && !(e.metadata as { ambient?: boolean } | undefined)?.ambient).sort(byRecent)
   const oqs: OpenQ[] = ((thread.metadata?.open_questions as OpenQ[]) ?? [])
 
   const citedIds = new Set<string>()
