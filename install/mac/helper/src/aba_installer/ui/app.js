@@ -66,11 +66,13 @@
     if (stepsEl) stepsEl.innerHTML = '';
     const seen = new Map();
     let lastLine = '', started = 0, doneN = 0, activeTitle = '';
+    let activeStep = null, activeFrac = 0;   // sub-progress of the in-flight step
     for (const e of (events || [])) {
       const p = e.payload || {};
       if (e.event === 'step_start') {
         started++;
         activeTitle = p.title || p.step_id;
+        activeStep = p.step_id; activeFrac = 0;
         if (stepsEl) {
           const li = document.createElement('li'); li.className = 'active';
           li.textContent = activeTitle; stepsEl.appendChild(li);
@@ -78,16 +80,21 @@
         }
       } else if (e.event === 'step_end') {
         doneN++;
+        if (p.step_id === activeStep) activeFrac = 0;
         const li = seen.get(p.step_id); if (li) li.className = p.ok ? 'ok' : 'fail';
+      } else if (e.event === 'step_progress') {
+        // Within-step fraction for the long conda builds (#progress-bars).
+        if (p.step_id === activeStep) activeFrac = p.frac || 0;
       } else if (e.event === 'command_output' && p.line) {
         lastLine = p.line;
       }
     }
-    // done/total, not done/started — so the bar tracks real progress and the
-    // long env builds don't read as "nearly done".
+    // done/total, plus the in-flight step's fraction so the bar keeps moving
+    // through the multi-minute env builds instead of sitting frozen.
     const total = totalSteps || started || 1;
     const running = started > doneN;
-    if (bar) bar.value = Math.round((doneN / total) * 100);
+    const eff = Math.min(doneN + (running ? activeFrac : 0), total);
+    if (bar) bar.value = Math.round((eff / total) * 100);
     if (current) {
       const head = running ? `Step ${Math.min(doneN + 1, total)} of ${total}: ${activeTitle}`
                            : (doneN >= total ? 'Finishing…' : '');
@@ -359,6 +366,7 @@
       let buf = '';
       const stepsSeen = new Map(); // id → <li>
       let stepsCount = 0;
+      let activeStep = null, activeFrac = 0;   // in-flight step sub-progress
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -385,13 +393,17 @@
             if (payload.line) current.textContent = payload.line.slice(0, 100);
           } else if (ev === 'step_start') {
             stepsCount++;
+            activeStep = payload.step_id; activeFrac = 0;
             const li = document.createElement('li');
             li.className = 'active';
             li.textContent = payload.title || payload.step_id;
             stepsEl.appendChild(li);
             stepsSeen.set(payload.step_id, li);
             current.textContent = payload.title || payload.step_id;
+          } else if (ev === 'step_progress') {
+            if (payload.step_id === activeStep) activeFrac = payload.frac || 0;
           } else if (ev === 'step_end') {
+            if (payload.step_id === activeStep) activeFrac = 0;
             const li = stepsSeen.get(payload.step_id);
             if (li) li.className = payload.ok ? 'ok' : 'fail';
           } else if (ev === 'complete') {
@@ -401,9 +413,11 @@
           } else if (ev === 'error') {
             current.textContent = 'Error: ' + (payload.error || '');
           }
-          // Coarse progress: percentage of steps finished so far
+          // Steps finished + the in-flight step's fraction, so the bar moves
+          // through the multi-minute conda builds instead of sitting frozen.
           const done = Array.from(stepsEl.children).filter(c => c.className === 'ok' || c.className === 'fail').length;
-          if (stepsCount) bar.value = Math.round((done / stepsCount) * 100);
+          const running = done < stepsCount;
+          if (stepsCount) bar.value = Math.round(((done + (running ? activeFrac : 0)) / stepsCount) * 100);
         }
       }
     });
