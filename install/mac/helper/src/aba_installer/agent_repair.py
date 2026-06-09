@@ -50,6 +50,38 @@ class RepairOutcome:
     raw: dict = field(default_factory=dict)
 
 
+# Substrings that signal claude couldn't authenticate (no session, expired token,
+# wrong API key). Substring match is intentionally permissive — better to over-skip
+# than to retry endlessly on a doomed credential. Anchored to the messages we see
+# from Claude Code 2.1.x; revisit if a structured error code becomes available in
+# --output-format json.
+_AUTH_FAIL_SIGNATURES = (
+    "not logged in",
+    "please run /login",
+    "invalid api key",
+    "authentication_error",
+    "unauthorized",
+    "401",
+)
+
+
+def _looks_like_auth_failure(text: str) -> bool:
+    if not text:
+        return False
+    lower = text.lower()
+    return any(s in lower for s in _AUTH_FAIL_SIGNATURES)
+
+
+_NO_CREDENTIAL_MSG = (
+    "ABA isn't signed in yet — agent-repair is unavailable until sign-in "
+    "completes. This step's failure needs a manual fix."
+)
+_AUTH_FAILED_MSG = (
+    "Claude Code reported an auth failure — re-sign-in to ABA and re-run "
+    "the install."
+)
+
+
 # ─── system probe ───────────────────────────────────────────────────────────
 def _has_xcode_clt() -> bool:
     try:
@@ -382,15 +414,18 @@ def _run_agent(prompt: str, *, cwd, claude, runner, on_event, stream,
     if not claude:
         emit("repair", {"phase": "skip", "message": skip_msg})
         return RepairOutcome(attempted=False, ok=False, reason="claude not available")
+    # No ABA credential → invoking claude is doomed (it'd return "Not logged in").
+    # Skip with attempted=False so the executor halts cleanly instead of retrying.
+    creds = _aba_credential_env()
+    if not creds:
+        emit("repair", {"phase": "skip", "message": _NO_CREDENTIAL_MSG})
+        return RepairOutcome(attempted=False, ok=False, reason="no aba credential")
     argv = build_claude_argv(claude, prompt=prompt, allowed_tools=allowed_tools,
                              add_dir=cwd, stream=stream)
     emit("repair", {"phase": "start", "message": start_msg})
     env = dict(os.environ)
     env.setdefault("DISABLE_AUTOUPDATER", "1")   # don't self-update mid-install
-    # Reuse ABA's existing credential so `claude -p` authenticates without
-    # depending on ~/.claude. {} when ABA isn't signed in yet — claude will
-    # then surface its own "Not logged in" error; issue #2 handles that branch.
-    env.update(_aba_credential_env())
+    env.update(creds)
     if runner is None and stream:
         def run(a, *, cwd, env):
             return _streaming_runner(a, cwd=cwd, env=env, on_event=emit)
@@ -401,8 +436,16 @@ def _run_agent(prompt: str, *, cwd, claude, runner, on_event, stream,
     except Exception as e:  # noqa: BLE001
         emit("repair", {"phase": "error", "message": str(e)})
         return RepairOutcome(attempted=True, ok=False, reason=f"runner failed: {e}")
-    ok = (parsed.get("returncode", 0) == 0) and not parsed.get("is_error")
     diagnosis = (parsed.get("result") or "").strip()
+    # Stale or rejected credential — claude ran but couldn't talk to the API.
+    # Treat as no-attempt so the executor doesn't retry; the credential isn't
+    # going to fix itself between attempts.
+    if _looks_like_auth_failure(diagnosis):
+        emit("repair", {"phase": "skip", "message": _AUTH_FAILED_MSG})
+        return RepairOutcome(attempted=False, ok=False,
+                             reason="claude auth failed", diagnosis=diagnosis,
+                             raw=parsed)
+    ok = (parsed.get("returncode", 0) == 0) and not parsed.get("is_error")
     emit("repair", {"phase": "done", "ok": ok,
                     "message": diagnosis[:400] or ("done" if ok else "could not complete")})
     return RepairOutcome(attempted=True, ok=ok, diagnosis=diagnosis, raw=parsed)
@@ -462,9 +505,15 @@ def make_repair_hook(*, cwd: Optional[str] = None,
     `ensure=True` bootstraps the `claude` binary (ensure_claude) on the FIRST
     failure — so the happy path never pays for it, only a real failure does."""
     state = {"resolved": not ensure, "claude": None}
+    emit = on_event or (lambda name, payload: None)
 
     def hook(step, result, attempt: int) -> bool:
         if not enabled:
+            return False
+        # Don't even bootstrap claude if we'd have no credential to feed it —
+        # the install would just download a binary we can't use.
+        if not _aba_credential_env():
+            emit("repair", {"phase": "skip", "message": _NO_CREDENTIAL_MSG})
             return False
         if not state["resolved"]:
             state["resolved"] = True
