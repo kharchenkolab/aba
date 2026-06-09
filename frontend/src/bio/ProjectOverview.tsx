@@ -47,9 +47,14 @@ export default function ProjectOverview({ entities, onGoTo, onSelectThread, onCh
     onChange()
   }
 
-  const datasets = entities.filter(e => e.type === 'dataset')
-  const threads = entities.filter(e => e.type === 'thread')
-  const claims = entities.filter(e => e.type === 'claim')
+  // Sort most-recent-first. Backend default is ORDER BY created_at ASC
+  // (oldest first); flip in each list view so the active items the user
+  // is touching now surface at the top.
+  const byRecent = (a: Entity, b: Entity) =>
+    (b.created_at || '').localeCompare(a.created_at || '')
+  const datasets = entities.filter(e => e.type === 'dataset').sort(byRecent)
+  const threads  = entities.filter(e => e.type === 'thread').sort(byRecent)
+  const claims   = entities.filter(e => e.type === 'claim').sort(byRecent)
 
   // Default to the working set (Active); 'attention' is an explicit chip.
   const [filter, setFilter] = useState<Filter>('active')
