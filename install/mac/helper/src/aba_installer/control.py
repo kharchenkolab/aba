@@ -158,6 +158,14 @@ def _bg_worker() -> None:
 
     try:
         prepare_install_artifacts()
+        # Tell the UI the FULL planned list up front so it can render a fixed
+        # checklist (○ → ✓) instead of revealing steps one at a time. Sent as the
+        # first event so the UI's event-replay sees it; /api/install/auto also
+        # exposes the same list as a top-level field for late subscribers.
+        on_event("step_planned", {
+            "steps": [{"id": s.id, "title": s.title}
+                      for s in pb.steps if s.id not in _BG_SKIP]
+        })
         _run_preflight_if_enabled(pb, on_event)
         results = Executor(pb, on_event=on_event,
                            on_step_failed=_repair_hook(on_event)).run_all(only=set(steps))
@@ -191,15 +199,19 @@ def install_auto() -> dict:
 
 @router.get("/install/auto")
 def install_auto_status() -> dict:
-    # Total steps so the UI bar can show done/total (not done/started-so-far,
-    # which jumps near-full after the quick steps then sits during the builds).
+    # Total + planned steps so the UI can render a fixed checklist up-front
+    # (one row per top-level category, marked ✓ as each finishes) instead of
+    # revealing them one-by-one. Computed fresh per call — robust to the event
+    # buffer evicting the step_planned frame on long installs.
     try:
         pb = load_playbook(_playbook_path("install"))
-        total = len([s for s in pb.steps if s.id not in _BG_SKIP])
+        active = [s for s in pb.steps if s.id not in _BG_SKIP]
+        steps = [{"id": s.id, "title": s.title} for s in active]
     except Exception:  # noqa: BLE001
-        total = 0
+        steps = []
     with _bg_lock:
-        return {"status": _bg["status"], "total_steps": total,
+        return {"status": _bg["status"], "total_steps": len(steps),
+                "steps": steps,
                 "events": list(_bg["events"][-300:])}
 
 
@@ -251,6 +263,11 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # don't run twice on the same prefix.
             if name == "install":
                 _await_background(on_event)
+            # Tell the UI the planned checklist up front (same shape the auto
+            # path emits — see _bg_worker).
+            on_event("step_planned", {
+                "steps": [{"id": s.id, "title": s.title} for s in pb.steps]
+            })
             _run_preflight_if_enabled(pb, on_event)
             ex = Executor(pb, on_event=on_event, on_step_failed=_repair_hook(on_event))
             results = ex.run_all()
