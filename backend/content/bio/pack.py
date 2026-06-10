@@ -98,6 +98,12 @@ class BioPack:
         import content.bio.advisors               # noqa: F401  handlers + specs
         import content.bio.lifecycle.adaptive    # noqa: F401  on_stop: maybe_reflect
         import content.bio.proposals.scheduler   # noqa: F401  on_stop: evaluate_thread
+        # W1-A.2 phase 4': bio reactions for events that guide.py used to
+        # call inline via lazy imports (close_run, open_run, _feedlog,
+        # set_plan_lifecycle, active_run_id, figure_history). Each is
+        # now an `on_*` event fired by guide.py; this module registers
+        # the bio side.
+        import content.bio.lifecycle.guide_hooks  # noqa: F401
         self._hooks_registered = True
 
     # ─── Bio-specific helpers exposed for orchestrator convenience ──
