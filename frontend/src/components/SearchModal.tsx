@@ -4,10 +4,10 @@
  * snippets. Pick an entity to focus it.
  */
 import { useEffect, useRef, useState } from 'react'
-// Search placeholder text dispatches through the bio search-facet
-// registry. The shell never lists "figures, findings, datasets"; bio
-// decides what it can usefully be searched for.
-import { search_placeholder } from '../bio/searchFacets'
+// Search placeholder text dispatches through the search-facet
+// registry. The shell never lists "figures, findings, datasets";
+// the active content pack decides what's usefully searchable.
+import { search_placeholder } from '../lib/searchFacets'
 import './SearchModal.css'
 
 interface EntityHit { id: string; type: string; title: string; status: string; created_at: string }
