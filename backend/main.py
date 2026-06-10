@@ -698,7 +698,7 @@ def entities_delete(entity_id: str, hard: bool = False,
 
 
 @app.post("/api/entities/{entity_id}/restore")
-def entities_restore(entity_id: str):
+def entities_restore(entity_id: str, _pid: str = Depends(require_project)):
     updated = restore_entity(entity_id)
     if not updated:
         raise HTTPException(404, f"Entity {entity_id} not found")
@@ -738,7 +738,7 @@ def entities_messages(entity_id: str, thread_id: str | None = None):
 
 
 @app.delete("/api/entities/{entity_id}/messages")
-def entities_clear_messages(entity_id: str):
+def entities_clear_messages(entity_id: str, _pid: str = Depends(require_project)):
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
     clear_messages(entity_id)
@@ -1004,7 +1004,7 @@ def threads_create(req: ThreadRequest):
 
 
 @app.patch("/api/threads/{tid}")
-def threads_patch(tid: str, req: ThreadPatch):
+def threads_patch(tid: str, req: ThreadPatch, _pid: str = Depends(require_project)):
     ent = get_entity(tid)
     if not ent or ent["type"] != "thread":
         raise HTTPException(404, f"Thread {tid} not found")
@@ -1049,7 +1049,7 @@ def _save_oqs(tid: str, ent: dict, oqs: list):
 
 
 @app.post("/api/threads/{tid}/open-questions")
-def oq_add(tid: str, req: OpenQRequest):
+def oq_add(tid: str, req: OpenQRequest, _pid: str = Depends(require_project)):
     from core.graph._schema import gen_entity_id
     ent = _thread_or_404(tid)
     oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
@@ -1062,7 +1062,7 @@ def oq_add(tid: str, req: OpenQRequest):
 
 
 @app.patch("/api/threads/{tid}/open-questions/{oqid}")
-def oq_patch(tid: str, oqid: str, req: OpenQPatch):
+def oq_patch(tid: str, oqid: str, req: OpenQPatch, _pid: str = Depends(require_project)):
     ent = _thread_or_404(tid)
     oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
     found = None
@@ -1082,7 +1082,7 @@ def oq_patch(tid: str, oqid: str, req: OpenQPatch):
 
 
 @app.delete("/api/threads/{tid}/open-questions/{oqid}")
-def oq_delete(tid: str, oqid: str):
+def oq_delete(tid: str, oqid: str, _pid: str = Depends(require_project)):
     ent = _thread_or_404(tid)
     oqs = [o for o in ((ent.get("metadata") or {}).get("open_questions") or [])
            if o.get("id") != oqid]
@@ -1091,7 +1091,7 @@ def oq_delete(tid: str, oqid: str):
 
 
 @app.post("/api/threads/{tid}/open-questions/{oqid}/promote")
-def oq_promote(tid: str, oqid: str):
+def oq_promote(tid: str, oqid: str, _pid: str = Depends(require_project)):
     """Promote an open question into its own thread (title + question seeded
     from the OQ); mark the source OQ promoted and link it."""
     from core.graph.threads import create_thread
@@ -1319,7 +1319,7 @@ def jobs_get(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def jobs_cancel(job_id: str):
+def jobs_cancel(job_id: str, _pid: str = Depends(require_project)):
     ok = cancel_job(job_id)
     if not ok:
         raise HTTPException(400, "job not found or not cancellable")

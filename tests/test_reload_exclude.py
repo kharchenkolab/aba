@@ -23,6 +23,11 @@ from pathlib import Path
 
 import pytest
 
+# Platform-tier: this test exercises uvicorn's reload filter, which is
+# domain-neutral (no bio content imports). Wave 2 §5.1 marks platform
+# tests so a CI run `pytest -m platform` exercises just this tier.
+pytestmark = pytest.mark.platform
+
 
 def _make_filter(exclude_args, cwd=None):
     """Stand up uvicorn's FileFilter with the given --reload-exclude values.
