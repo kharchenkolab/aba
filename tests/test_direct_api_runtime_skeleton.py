@@ -50,22 +50,16 @@ def test_protocol_conformance():
     assert callable(DirectAPIRuntime.run_turn)
 
 
-def test_skeleton_raises_not_implemented():
-    """Until phase 2 lands, calling run_turn must fail loudly so no
-    caller accidentally wires this in before it works."""
-    import asyncio
-    rt = DirectAPIRuntime()
-    req = RuntimeRequest(
-        history=[], tools=[], system=SystemSpec(stable="", dynamic=""),
-        model="claude-haiku-4-5", max_tokens=128, ctx={},
-    )
-
-    async def _consume():
-        async for _ev in rt.run_turn(req, lambda *_a: None, frozenset()):
-            pass
-
-    with pytest.raises(NotImplementedError, match="phase 1"):
-        asyncio.run(_consume())
+def test_run_turn_is_async_generator():
+    """W1-A.2 phase 4.1: run_turn is a real async generator now, not the
+    NotImplementedError skeleton. Behavioral testing is done via
+    tests/e2e/quick_smoke.py (live agent loop through the runtime); this
+    test just sanity-checks the entry point's shape so a structural
+    regression — e.g. accidentally turning it back into a normal coro —
+    fails fast in pytest before the next live smoke."""
+    import inspect
+    assert inspect.isasyncgenfunction(DirectAPIRuntime.run_turn), \
+        "DirectAPIRuntime.run_turn must be an async generator"
 
 
 def test_module_has_no_bio_imports():
