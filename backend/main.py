@@ -18,6 +18,16 @@ from core.graph.entities import list_entities, get_entity, create_entity, update
 from core.web.deps import require_project
 from core.graph.messages import get_messages, clear_messages
 from guide import stream_response
+# Wave 2 A.3: register the bio content pack BEFORE any request handler
+# can fire. guide.py reads `active_pack()` at the top of stream_response,
+# so the pack must be live by the time the first chat request lands.
+# register_hooks() triggers the per-handler imports that used to live
+# at the top of guide.py as noqa: F401.
+from content.bio import BIO_PACK as _BIO_PACK
+from core.runtime.content_pack import set_active_pack as _set_active_pack
+_set_active_pack(_BIO_PACK)
+_BIO_PACK.register_hooks()
+
 from content.bio.lifecycle.promote import (
     promote_figure_to_result,
     promote_results_to_finding,

@@ -23,3 +23,10 @@ from . import prompts        # noqa: F401  — registers named prompts (e.g. thr
 from core.hooks.dispatcher import register as _register_hook
 from .graph.display import _on_project_open as _display_on_project_open
 _register_hook("on_project_open", _display_on_project_open, priority=10)
+
+# Wave 2 A.3: ContentPack singleton. Re-exported here so callers can do
+# `from content.bio import BIO_PACK`. The pack object's constructor is
+# side-effect-free; its register_hooks() (called by main.py startup)
+# triggers the per-hook module imports that guide.py used to do via
+# noqa: F401 at the top of the file.
+from .pack import BIO_PACK  # noqa: E402, F401

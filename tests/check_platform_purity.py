@@ -47,6 +47,19 @@ PLATFORM_TESTS = [
     "tests/d19_run_python_env_parity.py",
 ]
 
+# Wave 2 A.4: source-file invariants. These platform-shaped backend
+# files MUST NOT have TOP-LEVEL `import content.*` statements — they
+# reach into the content layer via `core.runtime.content_pack.active_pack()`
+# at call time, not via module-level imports.
+#
+# (Lazy/conditional bio imports inside function bodies are tracked by
+# tests/test_runtime_runs_without_bio.py with a separate count gate.)
+PLATFORM_SOURCES = [
+    "backend/guide.py",                       # A.3 lifted bio via ContentPack
+    "backend/core/runtime/llm_runtime.py",    # A.1 protocol — pure platform
+    "backend/core/runtime/content_pack.py",   # A.1 protocol — pure platform
+]
+
 
 def imports_in(py_path: Path) -> list[tuple[int, str]]:
     """Return (lineno, top-level-module) for every import in py_path,
@@ -70,6 +83,26 @@ def imports_in(py_path: Path) -> list[tuple[int, str]]:
     return out
 
 
+def top_level_imports_in(py_path: Path) -> list[tuple[int, str]]:
+    """Like imports_in but only TOP-LEVEL statements (module body).
+    Used for PLATFORM_SOURCES — lazy/conditional imports inside
+    function bodies are tracked elsewhere."""
+    import ast
+    try:
+        tree = ast.parse(py_path.read_text())
+    except (SyntaxError, OSError) as exc:
+        print(f"WARN: could not parse {py_path}: {exc}", file=sys.stderr)
+        return []
+    out: list[tuple[int, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            out.append((node.lineno, node.module))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                out.append((node.lineno, alias.name))
+    return out
+
+
 def main() -> int:
     rc = 0
     violations: list[tuple[Path, int, str]] = []
@@ -82,6 +115,18 @@ def main() -> int:
             if mod == "content" or mod.startswith("content."):
                 violations.append((py, lineno, mod))
 
+    # Wave 2 A.4: also check that platform-shaped backend sources have
+    # no TOP-LEVEL content imports. Lazy ones are tracked separately.
+    src_violations: list[tuple[Path, int, str]] = []
+    for rel in PLATFORM_SOURCES:
+        py = ROOT / rel
+        if not py.exists():
+            print(f"WARN: platform-tier source missing: {rel}", file=sys.stderr)
+            continue
+        for lineno, mod in top_level_imports_in(py):
+            if mod == "content" or mod.startswith("content."):
+                src_violations.append((py, lineno, mod))
+
     if violations:
         rc = 1
         print(f"FAIL: {len(violations)} content imports in platform-tier "
@@ -89,9 +134,20 @@ def main() -> int:
         for py, lineno, mod in violations:
             print(f"  {py.relative_to(ROOT)}:{lineno}  imports {mod}",
                   file=sys.stderr)
-    else:
+
+    if src_violations:
+        rc = 1
+        print(f"FAIL: {len(src_violations)} TOP-LEVEL content imports in "
+              f"platform-tier backend source files (Wave 2 A.4 invariant):",
+              file=sys.stderr)
+        for py, lineno, mod in src_violations:
+            print(f"  {py.relative_to(ROOT)}:{lineno}  imports {mod}",
+                  file=sys.stderr)
+
+    if not violations and not src_violations:
         print(f"OK platform-purity: {len(PLATFORM_TESTS)} tier-platform "
-              "tests, no content imports.")
+              f"tests + {len(PLATFORM_SOURCES)} tier-platform sources, "
+              "no top-level content imports.")
     return rc
 
 

@@ -3,28 +3,26 @@ import asyncio
 from typing import AsyncGenerator
 
 from config import FAKE_SESSION
-from content.bio.prompts.build import build_system, build_recipes_reminder
 from core.graph._schema import WORKSPACE_ID
 from core.graph.audit import log_context_assembly, session_assembly_summary, add_context_suggestion
 from core.graph.entities import get_entity, update_entity
 from core.graph.messages import append_message, get_messages
 from core.graph.threads import get_or_create_default_thread
-from content.bio.tools import TOOL_SCHEMAS, execute_tool
 from core.llm import make_open_stream
 from core.manifest.assembler import build_manifest, render_focus_preamble
-import content.bio.cards  # noqa: F401  — registers per-type card builders
 from core.hooks.dispatcher import dispatch
 from core.runtime.turn import Turn, TurnState, gen_run_id
 from core.runtime.checkpoint import checkpoint
-from content.bio.lifecycle.adaptive import new_session_id
-# Bio modules registering hook handlers at import — keep these imports even
-# though their names aren't used directly: the side effect is registration.
-import content.bio.lifecycle.registry  # noqa: F401  — on_post_tool: register artifacts
-import content.bio.advisors  # noqa: F401  — registers handlers + specs
-import content.bio.lifecycle.adaptive  # noqa: F401  — on_stop: maybe_reflect
-import content.bio.proposals.scheduler  # noqa: F401 — on_stop: evaluate_thread
+from core.runtime.content_pack import active_pack
 from core.jobs.runner import submit_python_job
 from core.summarize.rolling import effective_history
+# Wave 2 A.3: bio content (prompts, tools, cards, hooks, session-id
+# factory) is reached via core.runtime.content_pack.active_pack() —
+# NOT direct imports. The pack is registered by main.py startup.
+# Previously the noqa: F401 imports of bio.lifecycle.registry / .advisors
+# / .lifecycle.adaptive / .proposals.scheduler were here to trigger
+# hook registration as a side-effect; now BIO_PACK.register_hooks()
+# does that explicitly.
 
 open_stream = make_open_stream()
 
@@ -286,7 +284,14 @@ async def stream_response(
         _live_log_event(turn.run_id, obj, _dtbuf)
         return obj
 
-    session_id = new_session_id()
+    # Wave 2 A.3: the content pack is the single seam to bio. Cache the
+    # accessors per-turn — calling pack methods is cheap but the dict
+    # lookup beats re-fetching.
+    pack = active_pack()
+    _prompts = pack.prompts()
+    _tools_all = pack.tools()
+    _exec_tool = pack.execute_tool()
+    session_id = pack.new_session_id()
     turn_index = 0
     # A2: Guide is now spec-driven. The YAML at bio/advisors/guide.yaml
     # declares the model + role + halt/streaming flags. Full loop-body
@@ -464,7 +469,7 @@ async def stream_response(
     from core.graph.tool_settings import get_disabled_tools
     from core.runtime.agent import filter_tools_by_allowlist
     disabled = get_disabled_tools()
-    active_tools = [t for t in TOOL_SCHEMAS if t["name"] not in disabled]
+    active_tools = [t for t in _tools_all if t["name"] not in disabled]
     # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
     # Empty when no MCP server is configured/connected.
     try:
@@ -505,7 +510,7 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
-    stable_sys, dynamic_sys = build_system(
+    stable_sys, dynamic_sys = _prompts["system"](
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
     # CC-convergence Phase 4 (cache split): system is sent as TWO blocks at the
     # transport layer — the stable prefix (cache_control: ephemeral) plus the
@@ -1012,7 +1017,7 @@ async def stream_response(
                     pass
                 loop = asyncio.get_event_loop()
                 _fut = loop.run_in_executor(
-                    None, execute_tool, tool_name, tool_input, tool_ctx
+                    None, _exec_tool, tool_name, tool_input, tool_ctx
                 )
 
                 def _drain_progress():
