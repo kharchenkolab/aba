@@ -32,7 +32,10 @@ from core.runtime.llm_runtime import (
     RuntimeRequest,
     TextDelta,
     ToolExecutor,
+    ToolResult,
     ToolUseStart,
+    TurnDone,
+    TurnHalt,
 )
 
 _open_stream = make_open_stream()
@@ -56,6 +59,18 @@ class _RetryNotice:
     max_retries: int
     backoff_s: int
     error: str
+
+
+@dataclass(frozen=True)
+class _ToolProgress:
+    """Phase 4 private — surfaces progress events the tool's synchronous
+    body pushes onto ctx['progress_q'] while it runs. The runtime drains
+    the queue around its `await fut` and yields one of these per tick;
+    guide.py translates them to the existing tool_progress / tool_chunk
+    SSE shapes. Stays private until/unless AgentSDKRuntime needs to
+    speak the same vocabulary."""
+    tool_use_id: str
+    payload: dict
 
 
 @dataclass(frozen=True)
@@ -198,18 +213,160 @@ class DirectAPIRuntime:
         tool_executor: ToolExecutor,
         halt_on_tools: frozenset[str] = frozenset(),
     ) -> AsyncIterator[RuntimeEvent]:
-        """Skeleton: raises NotImplementedError. Phases 2-4 fill this in
-        incrementally. The signature matches LLMRuntime.run_turn exactly
-        so structural-protocol checks pass today."""
-        raise NotImplementedError(
-            "DirectAPIRuntime.run_turn is a skeleton (W1-A.2 phase 1). "
-            "Phase 2 moves the inner streaming retry loop here; phase 3 "
-            "the final-msg consumption; phase 4 the tool-dispatch loop. "
-            "Until then, guide.py owns the loop body directly."
-        )
-        # Unreachable, but keeps the type checker happy that this is an
-        # async generator.
-        yield  # type: ignore[unreachable]
+        """Run one model-driven phase. Owns:
+          1. model stream + transient-error retries (open_and_consume_stream)
+          2. text-delta + tool_use_start emission
+          3. tool dispatch via the caller's `tool_executor` async callable
+          4. halt detection (model issued a tool in `halt_on_tools` →
+             TurnHalt before dispatch; tool returned {deferred: True}
+             envelope → TurnHalt after dispatch)
+          5. progress passthrough (queue-drain while awaiting the executor)
+
+        Yields:
+          - TextDelta, ToolUseStart, ToolResult              public
+          - TurnDone (natural end), TurnHalt (halt-on-tool /
+            deferred / cancelled)                            public
+          - _RetryNotice (transient retry notice),
+            _ToolProgress (tool's progress_q events)         private,
+            phase 5 may promote
+
+        Cancellation: the cancel token on req is checked at each event
+        boundary. Mid-stream cancel ends the model phase early and yields
+        TurnHalt(reason='cancelled') without further tool dispatch.
+
+        The caller provides a `tool_executor(name, input, ctx) ->
+        Awaitable[dict]`. The executor owns approval gating, background-
+        job branching, vision-blocks envelope, and any content-specific
+        side effects. ctx will have 'progress_q' (a queue.Queue) and
+        'tool_use_id' added by the runtime; the executor's sync body
+        pushes onto progress_q while it runs.
+        """
+        # ── phase 1 — model stream ─────────────────────────────────────
+        # open_and_consume_stream is the existing helper from phases 2+3.
+        # We forward its events; the _StreamCompleted sentinel terminates
+        # this section with the assistant_blocks + stop_reason + usage.
+        final_msg = None
+        assistant_blocks: list[dict] = []
+        stop_reason: str | None = None
+        usage_delta: dict = {}
+        async for ev in open_and_consume_stream(
+            history=req.history,
+            tools=req.tools,
+            system=req.system.stable,
+            dynamic_system=req.system.dynamic,
+            model=req.model,
+            cancel_token=req.cancel,
+        ):
+            # Forward public events to caller; capture private sentinel.
+            if isinstance(ev, (TextDelta, ToolUseStart)):
+                yield ev
+            elif isinstance(ev, _RetryNotice):
+                yield ev   # private, caller translates to SSE notice
+            elif isinstance(ev, _StreamCompleted):
+                final_msg = ev.final_msg
+                assistant_blocks = ev.assistant_blocks
+                stop_reason = ev.stop_reason
+                usage_delta = ev.usage_delta
+                # Forward to caller: guide.py uses ev.assistant_blocks for
+                # append_message("assistant", ...) + ev.tool_calls_this_turn
+                # for the context-assembly audit. Phase 5 cleanup may
+                # promote these fields into TurnDone's public shape.
+                yield ev
+
+        # Cancellation: open_and_consume_stream returns final_msg=None on
+        # mid-stream cancel. The Protocol's cancellation event is
+        # TurnHalt(reason='cancelled'); guide.py already emits its own
+        # cancelled SSE on the outer loop's pre-iteration check, but the
+        # runtime is content-neutral and signals via the event.
+        if final_msg is None and req.cancel is not None and getattr(req.cancel, "cancelled", False):
+            yield TurnHalt(reason='cancelled', detail={})
+            return
+
+        # No tool_use → natural end-of-turn. TurnDone carries stop_reason
+        # + usage so guide.py can record telemetry without inspecting
+        # any model-side object.
+        if stop_reason != "tool_use":
+            yield TurnDone(stop_reason=stop_reason or "end_turn", usage=usage_delta)
+            return
+
+        # ── phase 2 — tool dispatch ────────────────────────────────────
+        # We walk the tool_use blocks from assistant_blocks (already
+        # validated by phase 3 of W1-A.2). For each:
+        #   - if name ∈ halt_on_tools: yield TurnHalt(pending_tool)
+        #     BEFORE dispatch. Caller decides what to do.
+        #   - else: invoke tool_executor, yielding _ToolProgress while
+        #     it runs. On completion, inspect result for {deferred:true}
+        #     envelope → TurnHalt(deferred). Otherwise yield ToolResult.
+        import queue as _queue
+        loop = asyncio.get_event_loop()
+        for block in assistant_blocks:
+            if block.get("type") != "tool_use":
+                continue
+            tool_name = block["name"]
+            tool_input = block["input"]
+            tool_use_id = block["id"]
+
+            if tool_name in halt_on_tools:
+                # The model wanted to invoke an intercepted tool — caller
+                # handles it (present_plan / ask_clarification today; future
+                # halt-on-tool sets are similar). No dispatch.
+                yield TurnHalt(reason='pending_tool', detail={
+                    "tool_use_id": tool_use_id,
+                    "tool_name": tool_name,
+                    "input": tool_input,
+                })
+                return
+
+            # Progress queue: the sync executor body pushes ticks/chunks
+            # onto it; we drain while awaiting the future and surface
+            # each one as a _ToolProgress event. The pattern matches the
+            # pre-refactor inline loop in guide.py (lines 998-1061).
+            progress_q: _queue.Queue = _queue.Queue()
+            exec_ctx = {**req.ctx,
+                        "progress_q": progress_q,
+                        "tool_use_id": tool_use_id}
+            # The executor is async; for sync bio dispatch the closure
+            # in guide.py wraps run_in_executor itself. Either way we
+            # await one task and yield progress events around it.
+            exec_task = loop.create_task(tool_executor(tool_name, tool_input, exec_ctx))
+            while not exec_task.done():
+                drained = []
+                try:
+                    while True:
+                        drained.append(progress_q.get_nowait())
+                except _queue.Empty:
+                    pass
+                for prog in drained:
+                    yield _ToolProgress(tool_use_id=tool_use_id, payload=prog)
+                    await asyncio.sleep(0)
+                if not drained:
+                    await asyncio.sleep(0.2)
+            # Tail flush — anything pushed between the last drain + task
+            # completion must reach the caller before the result event.
+            try:
+                while True:
+                    yield _ToolProgress(tool_use_id=tool_use_id,
+                                        payload=progress_q.get_nowait())
+                    await asyncio.sleep(0)
+            except _queue.Empty:
+                pass
+            result_obj = await exec_task
+
+            # Deferred-tool envelope: tool went to a background job, the
+            # webhook will write the real result later. Halt the phase.
+            if isinstance(result_obj, dict) and result_obj.get("deferred"):
+                yield TurnHalt(reason='deferred', detail={
+                    "tool_use_id": tool_use_id,
+                    "tool_name": tool_name,
+                    "deferred_id": result_obj.get("deferred_id"),
+                    "timeout_s": result_obj.get("timeout_s"),
+                })
+                return
+
+            yield ToolResult(tool_use_id=tool_use_id, tool_name=tool_name,
+                             result=result_obj)
+
+        yield TurnDone(stop_reason=stop_reason, usage=usage_delta)
 
 
 def _conforms_to_protocol() -> bool:
