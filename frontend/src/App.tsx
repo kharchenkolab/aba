@@ -18,6 +18,11 @@ import PinnedShelf from './bio/PinnedShelf'
 import Drawer from './components/Drawer'
 import ThreadOverview from './bio/ThreadOverview'
 import ProjectOverview from './bio/ProjectOverview'
+// Side-effect import — registers all bio focus views / rail icons / menu
+// traits / search facets / home tiles against the platform's registries.
+// Must run BEFORE any shell component asks its registry (rail_icon_for,
+// entity_menu_traits, ...) to see anything but the empty defaults.
+import './bio'
 import { useProposals, ProposalCard, UndoToast } from './components/Proposals'
 import { useChat } from './useChat'
 import { useEntities } from './useEntities'
