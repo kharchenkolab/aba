@@ -32,10 +32,30 @@ os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
 sys.path.insert(0, str(ROOT / "backend"))
 
-# Imports must come AFTER env so core.config picks up the temp dirs.
+# Module-level constant override — env-var-only isolation fails when
+# conftest.py imports core.runtime.content_pack at COLLECTION time,
+# which transitively loads core.config before this file's `os.environ`
+# assignments above are seen. By then PROJECTS_DIR is already resolved
+# to /workspace/aba-runtime/projects. We monkey-patch the resolved
+# constants on the modules so our writes land in the temp dir even
+# under that collection order. Verified by running this test pre-fix
+# and observing the live registry get clobbered.
+import core.config as _cc  # noqa: E402
 from core import projects  # noqa: E402
-from core.config import PROJECTS_DIR  # noqa: E402
 
+_TEST_PROJECTS = Path(_tmp) / "projects"
+_TEST_PROJECTS.mkdir(parents=True, exist_ok=True)
+_cc.PROJECTS_DIR = _TEST_PROJECTS
+projects.PROJECTS_DIR = _TEST_PROJECTS
+projects.REGISTRY = _TEST_PROJECTS / "registry.json"
+projects.SCRATCH = _TEST_PROJECTS / "_scratch.db"
+# A sibling test (test_direct_api_runtime_skeleton.py) sets ABA_DB_PATH
+# at import time which flips projects.SINGLE = True process-wide, making
+# delete_project early-return. Force it off so our race test exercises
+# the real registry-write path.
+projects.SINGLE = False
+
+PROJECTS_DIR = _TEST_PROJECTS
 REG_FILE = PROJECTS_DIR / "registry.json"
 
 
