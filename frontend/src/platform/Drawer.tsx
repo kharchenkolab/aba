@@ -12,7 +12,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
-import SearchInput from './SearchInput'
+import SearchInput from '../components/SearchInput'
 import './Drawer.css'
 
 type Tab = 'console' | 'jobs' | 'context'

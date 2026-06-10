@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { prepareAssistantText } from '../markdown/prepareAssistantText'
 import type { DisplayMessage, Block, Entity } from '../types'
-import { AgentAvatar } from './icons'
-import { HILITE, captureHighlight, type Pt } from './highlightTools'
+import { AgentAvatar } from '../components/icons'
+import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
 import './Message.css'
 
 interface Annotation { image: string; note: string }

@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import './tokens.css'
 import App from './App.tsx'
 import PreviewWindow from './components/PreviewWindow'
-import ErrorBoundary from './components/ErrorBoundary'
+import ErrorBoundary from './platform/ErrorBoundary'
 
 // Detached-preview mode: when opened with a #preview=… hash (a separate browser
 // window popped from the run-output preview), render just the preview surface —

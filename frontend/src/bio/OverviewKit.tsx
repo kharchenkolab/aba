@@ -8,8 +8,8 @@
  * the primary gesture stays a single click on the row to navigate to the entity.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { EntityGlyph } from './icons'
-import '../bio/ProjectOverview.css'
+import { EntityGlyph } from '../components/icons'
+import './ProjectOverview.css'
 import './EntityMenu.css'
 
 export const TOP_N = 6

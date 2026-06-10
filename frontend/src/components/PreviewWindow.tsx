@@ -7,7 +7,7 @@
  * (no about:blank).
  */
 import { useEffect, useMemo, useState } from 'react'
-import HighlightableImage from './HighlightableImage'
+import HighlightableImage from '../bio/HighlightableImage'
 import './PreviewWindow.css'
 
 interface Payload {

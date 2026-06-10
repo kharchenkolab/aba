@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import Settings from './Settings'
-// Rail icons dispatch through the bio registry — the shell hands a name
-// and gets back whatever bio registered. Falls back to a small circle
-// when nothing is registered, so an unmounted bio side doesn't crash
-// the rail (just leaves the slots empty-looking).
-import { rail_icon_for } from '../bio/railIcons'
+import Settings from '../components/Settings'
+// Rail icons dispatch through the lib registry — bio registers its
+// glyph set at startup; the shell reads via lib/ to satisfy the
+// platform-purity lint (no `../bio/*` imports).
+import { rail_icon_for } from '../lib/railIcons'
 import './Rail.css'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'

@@ -1,27 +1,37 @@
 /**
- * Bio aggregator — single entry point the platform shell imports to
- * trigger all bio-side registrations (focus views, rail icons, menu
- * traits, search facets, home tiles).
+ * Bio aggregator — single entry point the app imports to ensure all
+ * bio-side registrations have fired against the lib/ registry hubs.
  *
- * App.tsx does `import './bio'` once on startup; each sub-module's
- * top-level `register_*` calls fire as a side effect of being imported.
- * The shell then asks each registry by name — no further coupling.
+ * App.tsx does `import './bio'` once on startup. The side-effect chain:
+ *   1. importing this module loads each lib/ registry file
+ *   2. each lib/ file runs its top-level `register_*` calls
+ *   3. afterwards `rail_icon_for(...)`, `entity_menu_traits(...)`,
+ *      `home_tiles()`, etc. return the bio defaults.
  *
- * Adding a new bio surface = a new sub-module here + an import line
- * below. The platform never sees the new file.
+ * The platform/ shell reads registries directly from lib/ — never
+ * from this file or from bio/ — so the platform-imports lint test
+ * (src/platform/__platform_imports.test.ts) stays green.
+ *
+ * Re-exports below let bio components (focusViews, FocusCanvas
+ * adapter) and App.tsx itself read registry APIs via `from './bio'`
+ * — saving them from listing every lib/ path.
  */
-import './focusViews'
-import './railIcons'
-import './menuActions'
-import './searchFacets'
-import './homeTiles'
-import './typeLabels'
-import './entityClasses'
-import './sectionCounts'
-import './projectSignals'
 
-// Re-export the public registry APIs so platform components can import
-// from `src/bio` directly (rather than from each sub-module).
+// Side-effect imports — each lib/ module's top-level `register_*`
+// calls populate its registry. focusViews stays in bio/ because the
+// FocusViewProps shape is part of the bio contract.
+import './focusViews'
+import '../lib/railIcons'
+import '../lib/menuActions'
+import '../lib/searchFacets'
+import '../lib/homeTiles'
+import '../lib/typeLabels'
+import '../lib/entityClasses'
+import '../lib/sectionCounts'
+import '../lib/projectSignals'
+import './messageRendererDefault'
+
+// Re-exports — the public registry API surface, gathered in one place.
 export {
   register_focus_view,
   focus_view_for,
@@ -35,20 +45,20 @@ export {
   registered_rail_icons,
   type RailIconName,
   type RailIconProps,
-} from './railIcons'
+} from '../lib/railIcons'
 
 export {
   register_menu_traits,
   entity_menu_traits,
   is_pinnable,
   type EntityMenuTraits,
-} from './menuActions'
+} from '../lib/menuActions'
 
 export {
   register_search_facet,
   search_facets,
   search_placeholder,
-} from './searchFacets'
+} from '../lib/searchFacets'
 
 export {
   register_home_tile,
@@ -57,26 +67,26 @@ export {
   register_card_order,
   card_order,
   type HomeTile,
-} from './homeTiles'
+} from '../lib/homeTiles'
 
 export {
   register_type_label,
   type_label_for,
   type_label_or_fallback,
-} from './typeLabels'
+} from '../lib/typeLabels'
 
 export {
   register_entity_class,
   type_in_class,
   types_in_class,
-} from './entityClasses'
+} from '../lib/entityClasses'
 
 export {
   register_section_count,
   section_count,
   section_counts,
   type SectionName,
-} from './sectionCounts'
+} from '../lib/sectionCounts'
 
 export {
   dataset_count,
@@ -88,4 +98,9 @@ export {
   default_pin_kind,
   uses_claim_focus_route,
   supports_focused_highlighting,
-} from './projectSignals'
+} from '../lib/projectSignals'
+
+export {
+  register_message_renderer,
+  message_renderer,
+} from '../lib/messageRenderer'

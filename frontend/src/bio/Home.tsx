@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react'
 // Home stat tiles dispatch through the bio home-tile registry — the
 // shell asks for the tile list, bio decides the labels + count rules
 // (which entity types roll up into "results", "runs", etc.).
-import { home_tiles, card_order } from '../bio/homeTiles'
+import { home_tiles, card_order } from '../lib/homeTiles'
 import './Home.css'
 
 interface Project {
