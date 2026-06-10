@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo } from './types'
+// W2-#4 phase 2: the SSE reader loop lives in a small reusable helper.
+// Pulls ~50 LOC out of runStream and makes the terminal-event / premature-
+// close / cancellation behavior unit-testable in isolation.
+import { readSSEStream } from './lib/sseReader'
 
 type RawMsg = { role: string; content: unknown[]; ts?: string }
 
@@ -472,28 +476,32 @@ export function useChat(
         // works before the first event arrives.
         if (opts.reattachRunId) currentRunIdRef.current = opts.reattachRunId
         if (!res.body) throw new Error('No response body')
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buf = ''
 
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          if (!live()) { await reader.cancel().catch(() => {}); return }   // thread switched — drop the rest
-          buf += decoder.decode(value, { stream: true })
-          const lines = buf.split('\n')
-          buf = lines.pop() ?? ''
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            const raw = line.slice(6).trim()
-            if (!raw) continue
-            let ev: SSEEvent
-            try {
-              ev = JSON.parse(raw)
-            } catch {
-              continue
-            }
+        // W2-#4 phase 2 — the read loop is now lib/sseReader.ts. This
+        // closure consumes each parsed event; returning 'terminal' tells
+        // the helper to stop draining (the SSE-terminal branches —
+        // cancelled / done / error — return 'terminal' AFTER setting
+        // their state, mirroring the prior `return` semantics). The
+        // (!live()) thread-switch bail also returns 'terminal' so the
+        // helper cancels the reader cleanly.
+        //
+        // Helper's terminal reasons (see lib/sseReader.ts):
+        //   'done'       — onEvent returned 'terminal'
+        //   'cancelled'  — ac.signal aborted (Stop/Steer path)
+        //   'premature'  — server closed without terminal SSE event
+        //                  (the 2026-06-09 reload-mid-stream class)
+        // We dispatch on that below.
+        const terminal = await readSSEStream({
+          // Hand the existing fetch in via a closure — caller already
+          // built the right URL/method/body above. The helper passes its
+          // own AbortSignal which we don't need to chain (ours is the
+          // single source of cancel via `ac.signal`).
+          fetcher: async () => res,
+          onEvent: (raw): void | 'terminal' => {
+            if (!live()) return 'terminal'  // thread switched — drop the rest
+            // Helper already JSON.parse'd raw frames; widen back to SSEEvent
+            // for the existing per-event switch.
+            const ev = raw as SSEEvent
 
             // C-1: every event carries `seq` (assigned by the TurnSink).
             // Persist to localStorage with the run_id so a hard reload
@@ -699,7 +707,7 @@ export function useChat(
                 queuedMessageRef.current = null
                 setQueuedMessage(null)
               }
-              return
+              return 'terminal'
             } else if (ev.type === 'entity_registered') {
               onERRef.current?.()
             } else if (ev.type === 'done') {
@@ -718,7 +726,7 @@ export function useChat(
                 setQueuedMessage(null)
                 setTimeout(() => flushSendRef.current?.(q), 0)
               }
-              return
+              return 'terminal'
             } else if (ev.type === 'error') {
               streamingBlocks.push({ type: 'error', text: ev.text, detail: ev.detail })
               setMessages(prev => [...prev, { id: assistantId, role: 'assistant', blocks: [...streamingBlocks] }])
@@ -728,19 +736,18 @@ export function useChat(
               // Don't auto-flush on error — user probably wants to see
               // the error and decide whether their queued message is
               // still appropriate. Keep the queue.
-              return
+              return 'terminal'
             }
-          }
-        }
-        // Stream closed without a terminal SSE event (`done`/`cancel`/
-        // `error`) — those branches all `return`, so reaching here means
-        // the server dropped the connection mid-stream (uvicorn worker
-        // reload, network blip, idle timeout). Don't strand the UI on
-        // "thinking…"; release the streaming flag, surface a brief
-        // notice, and try to pick the live turn back up via TurnSink
-        // (the agent loop survives client disconnect — and now also
-        // worker reload, since turns are persisted to disk per C-2).
-        if (live()) {
+          },  // /onEvent
+          abortSignal: ac.signal,
+        })
+
+        // Dispatch on the helper's terminal reason. 'done' = onEvent
+        // already did all its work + state cleanup before returning
+        // 'terminal'; nothing to do. 'cancelled' = ac aborted (Stop /
+        // Steer / thread switch — the catch block below handles that
+        // path too). 'premature' = the recovery branch.
+        if (terminal === 'premature' && live()) {
           const rid = currentRunIdRef.current
           setStreamMsg(null)
           setStreaming(false)
