@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kharchenkolab.aba.tray</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@APP_LAUNCHER@@</string>
+  </array>
+  <!-- Start the tray on login. We deliberately DO NOT set KeepAlive: if
+       the user picks Quit from the menu, launchd respawning would un-quit
+       it instantly and read as broken. The tray persists across logout/
+       login via this plist and across helper restarts on its own. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>@@HELPER_DIR@@</string>
+  <key>StandardOutPath</key>
+  <string>@@HELPER_DIR@@/tray.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@HELPER_DIR@@/tray.err.log</string>
+</dict>
+</plist>

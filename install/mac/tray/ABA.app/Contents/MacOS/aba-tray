@@ -1,0 +1,23 @@
+#!/bin/sh
+# ABA Tray launcher — Tier-0-tray (misc/mac-install.md § 3c).
+#
+# macOS spawns this when the user double-clicks Applications/ABA.app or
+# when the tray LaunchAgent kickstarts the bundle on login. We exec into
+# the helper venv's python (installed by setup.command via Tier-0b's
+# helper bootstrap) and run the rumps entrypoint.
+#
+# If the helper venv isn't present — user deleted ~/.aba/, or the install
+# never completed — we print a one-line message to the system log so the
+# user can find it in Console.app, then exit non-zero so macOS doesn't
+# pin a broken process in the menu bar.
+
+ABA_HOME="${ABA_HOME:-$HOME/.aba}"
+VENV_PY="$ABA_HOME/installer/venv/bin/python"
+
+if [ ! -x "$VENV_PY" ]; then
+  echo "ABA Tray: helper venv missing at $VENV_PY — run setup.command first." >&2
+  logger -t aba-tray "helper venv missing at $VENV_PY"
+  exit 1
+fi
+
+exec "$VENV_PY" -m aba_installer.tray

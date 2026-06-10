@@ -7,6 +7,10 @@ dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
   "PyYAML>=6.0",
+  # Tier-0-tray (misc/mac-install.md § 3c). darwin-only — pulls PyObjC,
+  # which is macOS-only. CI Linux skips the wheel and the tray modules'
+  # tests still run because they don't import rumps at module level.
+  "rumps>=0.4; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
