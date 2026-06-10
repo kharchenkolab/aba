@@ -130,7 +130,7 @@ def main() -> int:
         None,
         start_item, stop_item, restart_item,
         None,
-        updates_item, model_item, kickstart_item,
+        model_item, updates_item, kickstart_item,
         None,
         quit_item,
     ]
