@@ -40,7 +40,15 @@ def main() -> int:
 
     port = status_poll.helper_port()
 
-    app = rumps.App("ABA", icon=None, quit_button=None)
+    # Find the Template glyph inside the running .app bundle. We're being
+    # exec'd by Contents/MacOS/aba-tray, so the bundle root is two parents
+    # up. Fall back to a text title if the icon's missing (dev runs from
+    # the source tree before install_tray has copied the bundle in).
+    icon_path = (Path(sys.argv[0]).resolve().parent.parent / "Resources"
+                 / "TrayIconTemplate.png")
+    app = rumps.App("ABA", title=None if icon_path.exists() else "ABA",
+                    icon=str(icon_path) if icon_path.exists() else None,
+                    template=True, quit_button=None)
 
     status_item   = rumps.MenuItem("⏳  Connecting…")
     start_item    = rumps.MenuItem("▶  Start")
