@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.kharchenkolab.aba.tray</string>
+  <key>CFBundleName</key>
+  <string>ABA</string>
+  <key>CFBundleDisplayName</key>
+  <string>ABA</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleExecutable</key>
+  <string>aba-tray</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <!-- LSUIElement: no Dock entry, no application menu — pure menu-bar app.
+       Without this every double-click leaves a stranded Dock icon. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- The system menu-bar process needs a brief reason string for
+       AppleEvents (open browser, kickstart helper). Empty is fine; this
+       prevents a confusing TCC prompt on first launch. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>ABA Tray uses AppleEvents to open your browser and inspect ABA's status.</string>
+</dict>
+</plist>
