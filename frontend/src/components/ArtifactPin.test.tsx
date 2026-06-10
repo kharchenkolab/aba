@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import Message from './Message'
+import Message from '../bio/Message'
 import type { Message as Msg, Block } from '../types'
 
 
