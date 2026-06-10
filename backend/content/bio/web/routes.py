@@ -14,10 +14,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from core.web.deps import require_project
 from core.graph._schema import gen_entity_id
 from core.graph.edges import add_edge, remove_edge
 from core.graph.entities import create_entity, get_entity, update_entity
@@ -128,7 +129,7 @@ class StatusRequest(BaseModel):
 
 
 @router.post("/api/claims")
-def claim_create(req: ClaimRequest):
+def claim_create(req: ClaimRequest, _pid: str = Depends(require_project)):
     tid = _resolve_thread(req.thread_id)
     stmt = req.statement.strip() or "Untitled claim"
     cid = create_entity(
@@ -144,7 +145,7 @@ def claim_create(req: ClaimRequest):
 
 
 @router.patch("/api/claims/{cid}")
-def claim_patch(cid: str, req: ClaimPatch):
+def claim_patch(cid: str, req: ClaimPatch, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     upd: dict = {}
     if req.statement is not None:
@@ -158,7 +159,7 @@ def claim_patch(cid: str, req: ClaimPatch):
 
 
 @router.post("/api/claims/{cid}/evidence")
-def claim_add_evidence(cid: str, req: EvidenceRequest):
+def claim_add_evidence(cid: str, req: EvidenceRequest, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     ev = list((ent.get("metadata") or {}).get("evidence_ids") or [])
     if req.result_id not in ev:
@@ -168,7 +169,7 @@ def claim_add_evidence(cid: str, req: EvidenceRequest):
 
 
 @router.delete("/api/claims/{cid}/evidence/{rid}")
-def claim_del_evidence(cid: str, rid: str):
+def claim_del_evidence(cid: str, rid: str, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     ev = [x for x in ((ent.get("metadata") or {}).get("evidence_ids") or []) if x != rid]
     remove_edge(cid, rid, "supports")
@@ -176,7 +177,7 @@ def claim_del_evidence(cid: str, rid: str):
 
 
 @router.post("/api/claims/{cid}/caveats")
-def claim_add_caveat(cid: str, req: CaveatRequest):
+def claim_add_caveat(cid: str, req: CaveatRequest, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     cavs = list((ent.get("metadata") or {}).get("caveats") or [])
     cav = {"id": gen_entity_id("cav"), "text": req.text.strip(),
@@ -187,7 +188,7 @@ def claim_add_caveat(cid: str, req: CaveatRequest):
 
 
 @router.patch("/api/claims/{cid}/caveats/{caid}")
-def claim_patch_caveat(cid: str, caid: str, req: CaveatPatch):
+def claim_patch_caveat(cid: str, caid: str, req: CaveatPatch, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     cavs = list((ent.get("metadata") or {}).get("caveats") or [])
     found = None
@@ -207,7 +208,7 @@ def claim_patch_caveat(cid: str, caid: str, req: CaveatPatch):
 
 
 @router.delete("/api/claims/{cid}/caveats/{caid}")
-def claim_del_caveat(cid: str, caid: str):
+def claim_del_caveat(cid: str, caid: str, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     cavs = [c for c in ((ent.get("metadata") or {}).get("caveats") or []) if c.get("id") != caid]
     _save_claim(cid, ent, {"caveats": cavs})
@@ -215,7 +216,7 @@ def claim_del_caveat(cid: str, caid: str):
 
 
 @router.post("/api/claims/{cid}/alternatives")
-def claim_add_alt(cid: str, req: AltRequest):
+def claim_add_alt(cid: str, req: AltRequest, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     alts = list((ent.get("metadata") or {}).get("alternatives") or [])
     alt = {"id": gen_entity_id("alt"), "text": req.text.strip(),
@@ -226,7 +227,7 @@ def claim_add_alt(cid: str, req: AltRequest):
 
 
 @router.patch("/api/claims/{cid}/alternatives/{aid}")
-def claim_patch_alt(cid: str, aid: str, req: AltPatch):
+def claim_patch_alt(cid: str, aid: str, req: AltPatch, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     alts = list((ent.get("metadata") or {}).get("alternatives") or [])
     found = None
@@ -246,7 +247,7 @@ def claim_patch_alt(cid: str, aid: str, req: AltPatch):
 
 
 @router.post("/api/claims/{cid}/alternatives/{aid}/promote")
-def claim_promote_alt(cid: str, aid: str):
+def claim_promote_alt(cid: str, aid: str, _pid: str = Depends(require_project)):
     """Promote a competing explanation into its own claim, in the same thread."""
     ent = _claim_or_404(cid)
     meta = ent.get("metadata") or {}
@@ -262,7 +263,7 @@ def claim_promote_alt(cid: str, aid: str):
 
 
 @router.delete("/api/claims/{cid}/alternatives/{aid}")
-def claim_del_alt(cid: str, aid: str):
+def claim_del_alt(cid: str, aid: str, _pid: str = Depends(require_project)):
     ent = _claim_or_404(cid)
     alts = [a for a in ((ent.get("metadata") or {}).get("alternatives") or []) if a.get("id") != aid]
     _save_claim(cid, ent, {"alternatives": alts})
@@ -270,7 +271,7 @@ def claim_del_alt(cid: str, aid: str):
 
 
 @router.post("/api/claims/{cid}/status")
-def claim_status(cid: str, req: StatusRequest):
+def claim_status(cid: str, req: StatusRequest, _pid: str = Depends(require_project)):
     if req.to not in CONFIDENCE:
         raise HTTPException(400, f"invalid confidence: {req.to}")
     ent = _claim_or_404(cid)
@@ -321,7 +322,7 @@ def _result_or_404(rid: str) -> dict:
 
 
 @router.post("/api/results")
-def create_result(req: CreateResultRequest):
+def create_result(req: CreateResultRequest, _pid: str = Depends(require_project)):
     """Create a Result (an observation). Usually seeded with one cell; grows
     deliberately via add-member. Results are on the shelf by virtue of being
     Results — no explicit pinned flag needed."""
@@ -340,7 +341,7 @@ def create_result(req: CreateResultRequest):
 
 
 @router.post("/api/results/{rid}/members")
-def result_add_member(rid: str, req: MemberRequest):
+def result_add_member(rid: str, req: MemberRequest, _pid: str = Depends(require_project)):
     _result_or_404(rid)
     out = add_result_member(rid, kind=req.kind, ref=req.ref, text=req.text,
                             caption=req.caption, at=req.at)
@@ -350,14 +351,14 @@ def result_add_member(rid: str, req: MemberRequest):
 
 
 @router.patch("/api/results/{rid}/members/{member_id}")
-def result_update_member(rid: str, member_id: str, req: MemberRequest):
+def result_update_member(rid: str, member_id: str, req: MemberRequest, _pid: str = Depends(require_project)):
     _result_or_404(rid)
     return update_result_member(rid, member_id, caption=req.caption,
                                 text=req.text, caption_origin=req.caption_origin)
 
 
 @router.delete("/api/results/{rid}/members/{member_id}")
-def result_remove_member(rid: str, member_id: str):
+def result_remove_member(rid: str, member_id: str, _pid: str = Depends(require_project)):
     e = _result_or_404(rid)
     ref = next((m.get("ref") for m in (e.get("metadata") or {}).get("members", [])
                 if m.get("id") == member_id), None)
@@ -368,13 +369,13 @@ def result_remove_member(rid: str, member_id: str):
 
 
 @router.post("/api/results/{rid}/reorder")
-def result_reorder(rid: str, req: ReorderRequest):
+def result_reorder(rid: str, req: ReorderRequest, _pid: str = Depends(require_project)):
     _result_or_404(rid)
     return reorder_result_members(rid, req.order)
 
 
 @router.post("/api/results/{rid}/regenerate-interpretation")
-def regenerate_interpretation(rid: str):
+def regenerate_interpretation(rid: str, _pid: str = Depends(require_project)):
     """Re-fire the auto-interpret background job for a single Result. Used
     when the original schedule failed. Idempotent: auto_interpret skips
     if interpretation_origin=='user' (the user has edited)."""
@@ -403,7 +404,7 @@ class PromoteResultsRequest(BaseModel):
 
 
 @router.post("/api/entities/{figure_id}/promote-to-result")
-async def promote_to_result(figure_id: str, req: PromoteFigureRequest):
+async def promote_to_result(figure_id: str, req: PromoteFigureRequest, _pid: str = Depends(require_project)):
     import asyncio
     try:
         rid = promote_figure_to_result(figure_id, req.interpretation, req.title)
@@ -416,7 +417,7 @@ async def promote_to_result(figure_id: str, req: PromoteFigureRequest):
 
 
 @router.post("/api/findings")
-def create_finding(req: PromoteResultsRequest):
+def create_finding(req: PromoteResultsRequest, _pid: str = Depends(require_project)):
     try:
         fid = promote_results_to_finding(req.result_ids, req.text, req.title)
     except ValueError as e:
@@ -430,7 +431,7 @@ class NarrativeRequest(BaseModel):
 
 
 @router.post("/api/narratives")
-def create_narrative(req: NarrativeRequest):
+def create_narrative(req: NarrativeRequest, _pid: str = Depends(require_project)):
     eid = create_entity(
         entity_type="narrative",
         title=req.title or "Untitled section",
@@ -450,7 +451,7 @@ class DraftFindingRequest(BaseModel):
 
 
 @router.post("/api/findings/draft")
-def draft_finding(req: DraftFindingRequest):
+def draft_finding(req: DraftFindingRequest, _pid: str = Depends(require_project)):
     """Selection-to-finding draft. Heuristic for now (no tokens): title
     from the ask, summary from the discussion, evidence resolved from
     the figures referenced in the selection."""
@@ -477,7 +478,7 @@ class CreateFindingRequest(BaseModel):
 
 
 @router.post("/api/findings/from-draft")
-def create_finding_endpoint(req: CreateFindingRequest):
+def create_finding_endpoint(req: CreateFindingRequest, _pid: str = Depends(require_project)):
     from content.bio.lifecycle.promote import create_finding_from_draft
     fid = create_finding_from_draft(req.title, req.summary, req.evidence_ids,
                                     req.caveats, req.status)
@@ -492,7 +493,7 @@ class FindingFieldsRequest(BaseModel):
 
 
 @router.post("/api/findings/{finding_id}/fields")
-def finding_fields(finding_id: str, req: FindingFieldsRequest):
+def finding_fields(finding_id: str, req: FindingFieldsRequest, _pid: str = Depends(require_project)):
     from content.bio.lifecycle.promote import set_finding_fields
     try:
         return set_finding_fields(finding_id, summary=req.summary,
@@ -503,7 +504,7 @@ def finding_fields(finding_id: str, req: FindingFieldsRequest):
 
 
 @router.post("/api/findings/{finding_id}/add-result")
-def finding_add_result(finding_id: str, req: FindingResultRequest):
+def finding_add_result(finding_id: str, req: FindingResultRequest, _pid: str = Depends(require_project)):
     try:
         return add_result_to_finding(finding_id, req.result_id)
     except ValueError as e:
@@ -511,7 +512,7 @@ def finding_add_result(finding_id: str, req: FindingResultRequest):
 
 
 @router.post("/api/findings/{finding_id}/remove-result")
-def finding_remove_result(finding_id: str, req: FindingResultRequest):
+def finding_remove_result(finding_id: str, req: FindingResultRequest, _pid: str = Depends(require_project)):
     try:
         return remove_result_from_finding(finding_id, req.result_id)
     except ValueError as e:
@@ -522,7 +523,7 @@ def finding_remove_result(finding_id: str, req: FindingResultRequest):
 
 
 @router.post("/api/entities/{entity_id}/pin")
-def pin_entity_to_result(entity_id: str):
+def pin_entity_to_result(entity_id: str, _pid: str = Depends(require_project)):
     """EntityMenu Pin: promote this existing evidence entity (figure /
     table / cell / note / narrative) into a Result. Result is created
     immediately with a placeholder interpretation; a background job
@@ -550,7 +551,7 @@ def pin_entity_to_result(entity_id: str):
 
 
 @router.post("/api/entities/{entity_id}/unpin")
-def unpin_entity(entity_id: str):
+def unpin_entity(entity_id: str, _pid: str = Depends(require_project)):
     """Inverse of /pin — archive the wrapping Result(s) if this is the
     only evidence, else just remove this evidence as a member."""
     from content.bio.lifecycle.promote import unpin_evidence
@@ -598,7 +599,7 @@ class MakeRevisionRequest(BaseModel):
 
 
 @router.post("/api/entities/{entity_id}/delete-revision")
-def delete_revision_endpoint(entity_id: str):
+def delete_revision_endpoint(entity_id: str, _pid: str = Depends(require_project)):
     """Hard-delete a single figure/table revision, preserving chain
     integrity (children re-parent to grandparent; Result members
     re-anchor if their ref pointed at the deleted entity).
@@ -622,7 +623,7 @@ def delete_revision_endpoint(entity_id: str):
 
 
 @router.post("/api/entities/{entity_id}/make_revision")
-def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest):
+def make_revision_endpoint(entity_id: str, req: MakeRevisionRequest, _pid: str = Depends(require_project)):
     """Run `modified_code` and pin the new artifact as wasRevisionOf
     `entity_id`. Both stay pinned siblings — the original is NOT
     auto-superseded. Returns the new entity record (figure or table).
@@ -702,7 +703,7 @@ class PinArtifactRequest(BaseModel):
 
 @router.post("/api/artifacts/{exec_id}/{kind}/{idx}/pin")
 def pin_artifact_endpoint(exec_id: str, kind: str, idx: int,
-                           req: PinArtifactRequest):
+                           req: PinArtifactRequest, _pid: str = Depends(require_project)):
     """Materialize an artifact as an entity and (by default) wrap it in
     a Result. Idempotent: re-pinning the same artifact reuses the
     existing entity. The response's `was_new` flag tells the frontend
@@ -740,7 +741,7 @@ class PinCellRequest(BaseModel):
 
 
 @router.post("/api/exec_records/{exec_id}/pin_cell")
-def pin_cell_endpoint(exec_id: str, req: PinCellRequest):
+def pin_cell_endpoint(exec_id: str, req: PinCellRequest, _pid: str = Depends(require_project)):
     """Pin the output of `exec_id` as a `cell` entity (Stage 6 of
     misc/exec_records_and_versioning.md).
 
@@ -770,7 +771,7 @@ def pin_cell_endpoint(exec_id: str, req: PinCellRequest):
 
 
 @router.post("/api/entities/{entity_id}/reproduce")
-def reproduce_endpoint(entity_id: str):
+def reproduce_endpoint(entity_id: str, _pid: str = Depends(require_project)):
     """Re-run the exec that produced `entity_id` and report the result.
 
     Doesn't create any new entity — just runs and returns the reproduction
@@ -800,7 +801,7 @@ class PinMessageRequest(BaseModel):
 
 
 @router.post("/api/messages/pin")
-def pin_message(req: PinMessageRequest):
+def pin_message(req: PinMessageRequest, _pid: str = Depends(require_project)):
     """Pin a chat message: create a Note from the text + image_urls and
     wrap it in a Result. Toggles by content key — re-pinning the same
     message archives its Note."""
@@ -870,7 +871,7 @@ def _run_or_404(rid: str) -> dict:
 
 
 @router.post("/api/runs/{rid}/refresh-manifest")
-def runs_refresh_manifest(rid: str):
+def runs_refresh_manifest(rid: str, _pid: str = Depends(require_project)):
     """Re-scan a Run's output dir and rebuild its manifest. Useful after
     a server-side change to the manifester (e.g. new PDF-thumbnail support)."""
     from content.bio.lifecycle.runs import refresh_output_manifest
@@ -882,7 +883,7 @@ def runs_refresh_manifest(rid: str):
 
 
 @router.post("/api/runs/{rid}/cancel")
-def run_cancel(rid: str):
+def run_cancel(rid: str, _pid: str = Depends(require_project)):
     e = _run_or_404(rid)
     meta = dict(e.get("metadata") or {})
     run = dict(meta.get("run") or {})
@@ -902,7 +903,7 @@ class PinOutputRequest(BaseModel):
 
 
 @router.post("/api/runs/{rid}/pin-output")
-def run_pin_output(rid: str, req: PinOutputRequest):
+def run_pin_output(rid: str, req: PinOutputRequest, _pid: str = Depends(require_project)):
     """Pin one of a run's outputs as a Result wrapping the evidence
     (figure/table). Plots/tables we can render are kept with their
     thumbnail; everything else is a reference (origin=external + href)
@@ -935,7 +936,7 @@ class RegisterDatasetRequest(BaseModel):
 
 
 @router.post("/api/runs/{rid}/register-dataset")
-def run_register_dataset(rid: str, req: RegisterDatasetRequest):
+def run_register_dataset(rid: str, req: RegisterDatasetRequest, _pid: str = Depends(require_project)):
     """Lift a run's PRIMARY artifact (e.g. a processed-data bundle) into
     a first-class Dataset entity — by reference: we record where it
     lives, we do not host a copy."""
@@ -1047,7 +1048,7 @@ def dataset_tree(did: str):
 
 
 @router.post("/api/datasets")
-async def datasets_create(req: dict | None = None):
+async def datasets_create(req: dict | None = None, _pid: str = Depends(require_project)):
     """Create an empty directory-shaped dataset entity. Body:
     {name?, project_id?}. The dataset folder is created on disk so
     subsequent upload-folder?append_to= calls can drop files into it."""
@@ -1073,8 +1074,7 @@ async def upload_folder(
     files: list[UploadFile] = File(...),
     rel_paths: list[str] = Form(...),
     append_to: str | None = Form(None),
-    project_id: str | None = Form(None),
-):
+    project_id: str | None = Form(None), _pid: str = Depends(require_project)):
     """Upload N files as ONE directory-shaped dataset entity, preserving
     the folder layout. If `append_to=<dataset_id>`, files are appended
     to that existing dataset; the dataset's size/file_count/layout_hint
@@ -1151,7 +1151,7 @@ async def upload_folder(
 
 
 @router.post("/api/proposals/{pid}/accept")
-def proposal_accept(pid: int):
+def proposal_accept(pid: int, _pid: str = Depends(require_project)):
     from content.bio.proposals.scheduler import accept_proposal
     try:
         return accept_proposal(pid)
@@ -1160,13 +1160,13 @@ def proposal_accept(pid: int):
 
 
 @router.post("/api/proposals/{pid}/dismiss")
-def proposal_dismiss(pid: int):
+def proposal_dismiss(pid: int, _pid: str = Depends(require_project)):
     from content.bio.proposals.scheduler import dismiss_proposal
     return dismiss_proposal(pid)
 
 
 @router.post("/api/proposals/{pid}/undo")
-def proposal_undo(pid: int):
+def proposal_undo(pid: int, _pid: str = Depends(require_project)):
     from content.bio.proposals.scheduler import undo_proposal
     try:
         return undo_proposal(pid)
@@ -1186,7 +1186,7 @@ class AdvisorNoteStatusRequest(BaseModel):
 
 
 @router.post("/api/advisor-notes/{note_id}/status")
-def advisor_note_status(note_id: int, req: AdvisorNoteStatusRequest):
+def advisor_note_status(note_id: int, req: AdvisorNoteStatusRequest, _pid: str = Depends(require_project)):
     """Mark a note tried/dismissed so it no longer surfaces as a fresh idea."""
     if not set_advisor_note_status(note_id, req.status):
         raise HTTPException(404, f"Note {note_id} not found")
@@ -1194,7 +1194,7 @@ def advisor_note_status(note_id: int, req: AdvisorNoteStatusRequest):
 
 
 @router.post("/api/entities/{entity_id}/advise")
-async def entities_advise(entity_id: str):
+async def entities_advise(entity_id: str, _pid: str = Depends(require_project)):
     """Fire the appropriate on-focus advisor for an entity (Explorer for
     datasets, Stylist for narratives). Idempotent — advisors that have
     already spoken about the entity won't re-fire. Non-blocking."""
@@ -1230,7 +1230,7 @@ class SuggestionAction(BaseModel):
 
 
 @router.post("/api/context-suggestions/{sid}/action")
-def context_suggestion_action(sid: int, req: SuggestionAction):
+def context_suggestion_action(sid: int, req: SuggestionAction, _pid: str = Depends(require_project)):
     """Apply a reviewer action:
       approve → status='promoted' + append to the per-type policy file
       reject  → status='rejected'"""
@@ -1251,7 +1251,7 @@ def context_suggestion_action(sid: int, req: SuggestionAction):
 
 
 @router.post("/api/context-suggestions/reject-all")
-def context_suggestion_reject_all():
+def context_suggestion_reject_all(_pid: str = Depends(require_project)):
     """Bulk-reject every pending suggestion (any age). Returns count rejected."""
     return {"rejected": reject_all_pending_suggestions()}
 
@@ -1397,7 +1397,7 @@ def thread_proposals(tid: str, status: str = "pending"):
 
 
 @router.post("/api/threads/{tid}/evaluate")
-def thread_evaluate(tid: str, req: EvaluateRequest):
+def thread_evaluate(tid: str, req: EvaluateRequest, _pid: str = Depends(require_project)):
     """Run proposal detectors for a thread on demand (used by the
     thread-open event trigger). Post-turn evaluation fires from guide.py."""
     from content.bio.proposals.scheduler import evaluate_thread
@@ -1408,7 +1408,7 @@ def thread_evaluate(tid: str, req: EvaluateRequest):
 
 
 @router.post("/api/threads/{tid}/orient")
-def thread_orient(tid: str):
+def thread_orient(tid: str, _pid: str = Depends(require_project)):
     """Cold-start orientation: the Guide summarizes the project's data +
     suggests next steps. Idempotent — no-ops once the thread has a
     conversation or has already been oriented."""
@@ -1454,8 +1454,7 @@ def entities_provenance(entity_id: str):
 async def upload_external_result(
     file: UploadFile = File(...),
     thread_id: str = Form("default"),
-    interpretation: str = Form(""),
-):
+    interpretation: str = Form(""), _pid: str = Depends(require_project)):
     """Bring in an external result (a gel, a wet-lab readout, a figure
     from another tool) as a first-class Result wrapping the upload."""
     from content.bio.lifecycle.promote import pin_evidence
@@ -1487,8 +1486,7 @@ async def upload_external_result(
 async def result_upload_evidence(
     rid: str,
     file: UploadFile = File(...),
-    caption: str = Form(""),
-):
+    caption: str = Form(""), _pid: str = Depends(require_project)):
     """Result-page Add-evidence: upload a file and append it as a NEW
     member of this existing Result. Interpretation is NOT regenerated."""
     from content.bio.lifecycle.promote import pin_evidence
@@ -1561,7 +1559,7 @@ def home_summary(project_id: str | None = None):
 
 
 @router.post("/api/sample-project")
-def sample_project():
+def sample_project(_pid: str = Depends(require_project)):
     """One-click sample: register the bundled cells.csv as a dataset."""
     from core.config import current_project_id, project_data_dir
     src = Path(__file__).resolve().parents[3] / "data" / "cells.csv"

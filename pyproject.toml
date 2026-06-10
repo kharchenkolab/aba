@@ -1,0 +1,24 @@
+# ABA repo-level Python project config — pytest discovery + markers.
+#
+# Created 2026-06-10 as part of modularity Wave 2 (misc/refactoring2.md
+# §5.1). The audit's Tier 1 #4 called for platform/bio test markers; this
+# is that gate.
+#
+# Why pyproject.toml not setup.py: pytest reads ini_options here without
+# any extra plumbing, and we're not packaging the repo as a wheel —
+# this is just a marker config.
+
+[tool.pytest.ini_options]
+# Markers — strict so an unknown marker fails the run instead of
+# silently passing. New tests must opt in to one.
+markers = [
+  "platform: test does NOT import from content/ (kernel/runtime/graph/manifest/etc.)",
+  "bio: test exercises bio content (free to import content.bio.*)",
+]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+# Note on the standalone-script tests (tests/dN_*.py, tests/p*.py, etc.):
+# they're not pytest-discoverable; tests/check_platform_purity.py guards
+# them via AST scan. New pytest-discoverable tests (tests/test_*.py)
+# should pick a marker.
