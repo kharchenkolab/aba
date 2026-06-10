@@ -226,6 +226,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 onClick={e => { e.stopPropagation(); setMenuFor(menuFor === key ? null : key) }}>⋯</button>
         {menuFor === key && (
           <div className="home__menu" onClick={e => e.stopPropagation()}>
+            <button onClick={() => { setMenuFor(null); onEnter(p.id) }}>Open project</button>
             <button onClick={() => { setMenuFor(null); setModal({ kind: 'rename', pid: p.id, name: p.name }) }}>Rename</button>
             <button onClick={() => { setMenuFor(null); verifyRecovery(p.id) }}
                     title="Compare the FS recovery archive against the live DB. Reports any drift.">
