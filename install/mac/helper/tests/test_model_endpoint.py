@@ -74,15 +74,18 @@ def test_set_model_rejects_unknown_id():
     assert "unknown" in str(ei.value).lower() or "invalid" in str(ei.value).lower()
 
 
-def test_set_model_signals_restart_required(tmp_path):
-    """The backend reads ABA_MODEL at module-import time (config.py:56),
-    so a model change only takes effect after a backend restart. The
-    response must include a hint the UI can show — better than silent
-    no-op."""
+def test_set_model_signals_applied_on_next_turn(tmp_path):
+    """Hot model switch: backend's guide.py now resolves the model at the
+    turn boundary via config.current_model_for_primary(), so a write to
+    config.env takes effect on the next turn without a restart. The
+    response carries `applied_on_next_turn: true` on a real change so the
+    UI / tray can word the notification correctly."""
     from aba_installer import auth
     _seed_config(tmp_path, ABA_MODEL="claude-haiku-4-5")
     res = auth.set_model_tool({"model": "claude-sonnet-4-6"})
-    assert res.get("restart_required") is True
+    assert res.get("applied_on_next_turn") is True
+    # And NOT a stale 'restart_required' field — that contract is gone.
+    assert "restart_required" not in res
 
 
 def test_set_model_idempotent_no_op_when_already_set(tmp_path):
@@ -90,5 +93,5 @@ def test_set_model_idempotent_no_op_when_already_set(tmp_path):
     _seed_config(tmp_path, ABA_MODEL="claude-haiku-4-5")
     res = auth.set_model_tool({"model": "claude-haiku-4-5"})
     assert res.get("ok") is True
-    # No restart hint when nothing changed.
-    assert not res.get("restart_required")
+    # No "applied" hint when nothing actually changed.
+    assert not res.get("applied_on_next_turn")

@@ -347,21 +347,13 @@
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ model: sel.value }),
           });
-          restartEl.hidden = !res.restart_required;
+          // Hot-switch contract: backend re-reads at the next turn boundary.
+          // Show a small "applied" toast that auto-clears on the next
+          // dropdown change.
+          restartEl.hidden = !res.applied_on_next_turn;
         } catch (e) {
           noteEl.textContent = 'Failed to save — ' + (e.message || '');
         }
-      });
-      const rb = document.getElementById('model-restart-btn');
-      if (rb) rb.addEventListener('click', async () => {
-        rb.disabled = true;
-        try {
-          await fetchJSON('/api/stop',  { method: 'POST' });
-          await fetchJSON('/api/start', { method: 'POST' });
-          restartEl.hidden = true;
-        } catch (e) { /* surface via refresh */ }
-        rb.disabled = false;
-        boot();
       });
     })();
     const diag = document.getElementById('diag');

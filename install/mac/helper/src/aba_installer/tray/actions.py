@@ -29,8 +29,8 @@ _BACKEND_URL = "http://127.0.0.1:8000/"
 @dataclass(frozen=True)
 class ActionResult:
     ok: bool
-    message: str = ""             # one-line summary the menu can toast
-    restart_required: bool = False  # set by set_model when ABA_MODEL changed
+    message: str = ""              # one-line summary the menu can toast
+    applied_on_next_turn: bool = False  # set by set_model when ABA_MODEL changed
 
 
 # ─── HTTP helper ──────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ def set_model(*, model_id: str, port: int,
     return ActionResult(
         ok=bool(payload.get("ok")),
         message=str(payload.get("model") or model_id),
-        restart_required=bool(payload.get("restart_required")),
+        applied_on_next_turn=bool(payload.get("applied_on_next_turn")),
     )
 
 
