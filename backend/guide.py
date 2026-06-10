@@ -8,7 +8,12 @@ from core.graph.audit import log_context_assembly, session_assembly_summary, add
 from core.graph.entities import get_entity, update_entity
 from core.graph.messages import append_message, get_messages
 from core.graph.threads import get_or_create_default_thread
-from core.llm import make_open_stream
+from core.runtime.llm_runtime import TextDelta
+from core.runtime.llm_runtime_direct import (
+    _RetryNotice,
+    _StreamCompleted,
+    open_and_consume_stream,
+)
 from core.manifest.assembler import build_manifest, render_focus_preamble
 from core.hooks.dispatcher import dispatch
 from core.runtime.turn import Turn, TurnState, gen_run_id
@@ -24,7 +29,9 @@ from core.summarize.rolling import effective_history
 # hook registration as a side-effect; now BIO_PACK.register_hooks()
 # does that explicitly.
 
-open_stream = make_open_stream()
+# W1-A.2 phase 2: the stream open + retry loop moved to
+# core.runtime.llm_runtime_direct.open_and_consume_stream. guide.py
+# iterates its events; behavior is invariant.
 
 
 # WU-5: per-concern helpers extracted into sibling modules under
@@ -641,58 +648,29 @@ async def stream_response(
                 return
 
             # Open + consume the stream, retrying transient API failures
-            # (e.g. 529 overloaded) with exponential backoff. We only retry
-            # while no text has been emitted this turn — otherwise a retry
-            # would duplicate the partial reply.
+            # (e.g. 529 overloaded) with exponential backoff. Body moved
+            # to core.runtime.llm_runtime_direct.open_and_consume_stream
+            # in W1-A.2 phase 2; guide.py iterates its events here.
             final_msg = None
-            attempt = 0
-            max_retries = 4
-            while True:
-                emitted = False
-                try:
-                    # Async stream (2026-05-31 switch to AsyncAnthropic): `async for`
-                    # awaits the underlying HTTP read, so the event loop stays free
-                    # for OTHER HTTP requests (Files tab polling, /artifacts image
-                    # GETs, etc.) while the model is generating. The pre-fix
-                    # sync iteration parked the loop on each `next()` call.
-                    async with open_stream(llm_history, active_tools, system,
-                                           model=guide_model,
-                                           dynamic_system=dynamic_sys) as stream:
-                        async for event in stream:
-                            # Cancel check inside the streaming loop. Bail
-                            # immediately so we stop paying for tokens the
-                            # user no longer wants. The 'async with' block
-                            # closes the underlying HTTP connection.
-                            if cancel_token.cancelled:
-                                break
-                            if event.type == "content_block_delta":
-                                delta = event.delta
-                                if delta.type == "text_delta":
-                                    emitted = True
-                                    yield sse({"type": "delta", "text": delta.text})
-                        if cancel_token.cancelled:
-                            # Cancelled mid-stream — skip get_final_message
-                            # (the partial message isn't usable) and let the
-                            # outer loop check pick it up and emit cancelled.
-                            break
-                        final_msg = await stream.get_final_message()
-                    if getattr(final_msg, "usage", None):
-                        u = final_msg.usage
-                        usage_in += u.input_tokens or 0
-                        usage_out += u.output_tokens or 0
-                        usage_cr += getattr(u, "cache_read_input_tokens", 0) or 0
-                        usage_cw += getattr(u, "cache_creation_input_tokens", 0) or 0
-                    break
-                except Exception as e:
-                    if emitted or attempt >= max_retries or not _is_transient(e):
-                        raise
-                    attempt += 1
-                    backoff = min(2 ** attempt, 8)
-                    print(f"[guide] transient API error (attempt {attempt}/{max_retries}), "
-                          f"retrying in {backoff}s: {e}")
+            async for ev in open_and_consume_stream(
+                history=llm_history, tools=active_tools, system=system,
+                dynamic_system=dynamic_sys, model=guide_model,
+                cancel_token=cancel_token,
+            ):
+                if isinstance(ev, TextDelta):
+                    yield sse({"type": "delta", "text": ev.text})
+                elif isinstance(ev, _RetryNotice):
+                    print(f"[guide] transient API error (attempt {ev.attempt}/{ev.max_retries}), "
+                          f"retrying in {ev.backoff_s}s: {ev.error}")
                     yield sse({"type": "notice",
-                               "text": f"Model is busy — retrying ({attempt}/{max_retries})…"})
-                    await asyncio.sleep(backoff)
+                               "text": f"Model is busy — retrying ({ev.attempt}/{ev.max_retries})…"})
+                elif isinstance(ev, _StreamCompleted):
+                    final_msg = ev.final_msg
+                    if ev.usage_delta:
+                        usage_in += ev.usage_delta.get("input", 0)
+                        usage_out += ev.usage_delta.get("output", 0)
+                        usage_cr += ev.usage_delta.get("cache_read", 0)
+                        usage_cw += ev.usage_delta.get("cache_write", 0)
 
             # If cancellation arrived during streaming, final_msg won't
             # exist — short-circuit to the outer-loop top, which detects

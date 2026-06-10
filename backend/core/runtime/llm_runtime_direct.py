@@ -20,14 +20,120 @@ AgentSpec.
 """
 from __future__ import annotations
 
-from typing import AsyncIterator
+import asyncio
+from dataclasses import dataclass
+from typing import Any, AsyncIterator
 
+from core.llm import make_open_stream
+from core.runtime.llm_errors import is_transient
 from core.runtime.llm_runtime import (
     LLMRuntime,
     RuntimeEvent,
     RuntimeRequest,
+    TextDelta,
     ToolExecutor,
 )
+
+_open_stream = make_open_stream()
+
+
+# ─── Phase 2 helper ─────────────────────────────────────────────────
+# `open_and_consume_stream` is the lifted form of guide.py's former
+# 647-695 retry loop. It owns one stream open + the transient-error
+# retry policy + accumulates the usage delta. It's an async generator;
+# events flow back to the caller in causal order. Phase 3 wraps this
+# into the proper run_turn() event-protocol shape; for now it's an
+# extraction with private sentinel event types.
+
+
+@dataclass(frozen=True)
+class _RetryNotice:
+    """Yielded BEFORE each backoff sleep when a transient API error
+    triggers a retry. Caller surfaces it as the existing SSE 'notice'.
+    Private — collapses into a public RuntimeEvent in phase 3."""
+    attempt: int
+    max_retries: int
+    backoff_s: int
+    error: str
+
+
+@dataclass(frozen=True)
+class _StreamCompleted:
+    """Sentinel — yielded exactly once, as the LAST event of the
+    generator. Signals the retry loop ended successfully (or was
+    cancelled). Carries the final_msg the caller needs for tool
+    extraction + the usage delta accumulated from .usage. Private —
+    phase 3 replaces this with TurnDone + ToolUseStart events."""
+    final_msg: Any | None       # None when cancelled mid-stream
+    usage_delta: dict           # {input, output, cache_read, cache_write}
+
+
+async def open_and_consume_stream(
+    *,
+    history: list[dict],
+    tools: list[dict],
+    system: str,
+    dynamic_system: str,
+    model: str,
+    cancel_token,
+    max_retries: int = 4,
+) -> AsyncIterator[Any]:
+    """Open the model stream, consume content_block_delta events, retry
+    transient errors. Behaviorally invariant to the inline loop in
+    guide.py:stream_response (647-695 pre-W1-A.2).
+
+    Yields:
+      - TextDelta(text)              for each text chunk
+      - _RetryNotice(...)            before each backoff sleep
+      - _StreamCompleted(final_msg=, usage_delta=)
+                                     exactly once, as the last event
+
+    Cancellation: the cancel token is checked at each event boundary
+    inside the stream. If it fires mid-stream, _StreamCompleted lands
+    with final_msg=None; caller's outer-loop cancel-check handles the
+    cancelled SSE + cleanup (same shape as the original code).
+
+    Note we do NOT raise on cancel — caller controls the cancel path
+    via final_msg=None.
+    """
+    attempt = 0
+    while True:
+        emitted = False
+        try:
+            async with _open_stream(history, tools, system,
+                                    model=model,
+                                    dynamic_system=dynamic_system) as stream:
+                async for event in stream:
+                    if cancel_token.cancelled:
+                        break
+                    if event.type == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "text_delta":
+                            emitted = True
+                            yield TextDelta(text=delta.text)
+                if cancel_token.cancelled:
+                    yield _StreamCompleted(final_msg=None, usage_delta={})
+                    return
+                final_msg = await stream.get_final_message()
+            usage_delta: dict = {}
+            if getattr(final_msg, "usage", None):
+                u = final_msg.usage
+                usage_delta = {
+                    "input": u.input_tokens or 0,
+                    "output": u.output_tokens or 0,
+                    "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+                    "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                }
+            yield _StreamCompleted(final_msg=final_msg, usage_delta=usage_delta)
+            return
+        except Exception as e:
+            if emitted or attempt >= max_retries or not is_transient(e):
+                raise
+            attempt += 1
+            backoff = min(2 ** attempt, 8)
+            yield _RetryNotice(attempt=attempt, max_retries=max_retries,
+                               backoff_s=backoff, error=str(e))
+            await asyncio.sleep(backoff)
 
 
 class DirectAPIRuntime:
