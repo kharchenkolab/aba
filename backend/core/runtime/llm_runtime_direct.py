@@ -32,6 +32,7 @@ from core.runtime.llm_runtime import (
     RuntimeRequest,
     TextDelta,
     ToolExecutor,
+    ToolUseStart,
 )
 
 _open_stream = make_open_stream()
@@ -60,12 +61,26 @@ class _RetryNotice:
 @dataclass(frozen=True)
 class _StreamCompleted:
     """Sentinel — yielded exactly once, as the LAST event of the
-    generator. Signals the retry loop ended successfully (or was
-    cancelled). Carries the final_msg the caller needs for tool
-    extraction + the usage delta accumulated from .usage. Private —
-    phase 3 replaces this with TurnDone + ToolUseStart events."""
+    generator. Signals the retry loop + final-msg consumption ended.
+
+    Carries everything the caller needs for the rest of the turn:
+    - final_msg: the SDK's terminal Message (still needed by the
+      tool-dispatch loop; phase 4 retires it)
+    - usage_delta: per-turn usage accumulated from final_msg.usage
+    - assistant_blocks: text + tool_use blocks in Anthropic shape,
+      ready to hand to append_message("assistant", ...). Built here
+      so guide.py drops its own block-iteration of final_msg.content.
+    - stop_reason: 'end_turn' / 'tool_use' / 'max_tokens' / ...
+    - tool_calls_this_turn: list[str] of tool names (for logging /
+      context-assembly audit; preserves guide.py's prior accounting).
+    Private — phase 4 retires this in favor of TurnDone + per-block
+    events as the public protocol shape.
+    """
     final_msg: Any | None       # None when cancelled mid-stream
     usage_delta: dict           # {input, output, cache_read, cache_write}
+    assistant_blocks: list      # ready-to-persist Anthropic-shape blocks
+    stop_reason: str | None     # final_msg.stop_reason mirror
+    tool_calls_this_turn: list  # [tool_name] in order
 
 
 async def open_and_consume_stream(
@@ -112,7 +127,9 @@ async def open_and_consume_stream(
                             emitted = True
                             yield TextDelta(text=delta.text)
                 if cancel_token.cancelled:
-                    yield _StreamCompleted(final_msg=None, usage_delta={})
+                    yield _StreamCompleted(final_msg=None, usage_delta={},
+                                           assistant_blocks=[], stop_reason=None,
+                                           tool_calls_this_turn=[])
                     return
                 final_msg = await stream.get_final_message()
             usage_delta: dict = {}
@@ -124,7 +141,36 @@ async def open_and_consume_stream(
                     "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
                     "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
                 }
-            yield _StreamCompleted(final_msg=final_msg, usage_delta=usage_delta)
+            # Walk final_msg.content into Anthropic-shape blocks + emit
+            # ToolUseStart events. guide.py used to do this inline at
+            # the top of its outer loop (the pre-W1-A.2 681-704 region);
+            # owning the assembly here makes guide.py 25 LOC lighter
+            # and keeps the protocol-side close to its data source.
+            assistant_blocks: list[dict] = []
+            tool_calls_this_turn: list[str] = []
+            stop_reason = getattr(final_msg, "stop_reason", None)
+            for block in final_msg.content:
+                if block.type == "text":
+                    assistant_blocks.append({"type": "text", "text": block.text})
+                elif block.type == "tool_use":
+                    inp = block.input if isinstance(block.input, dict) else {}
+                    assistant_blocks.append({
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": inp,
+                    })
+                    tool_calls_this_turn.append(block.name)
+                    yield ToolUseStart(
+                        tool_use_id=block.id,
+                        tool_name=block.name,
+                        input=inp,
+                    )
+            yield _StreamCompleted(
+                final_msg=final_msg, usage_delta=usage_delta,
+                assistant_blocks=assistant_blocks, stop_reason=stop_reason,
+                tool_calls_this_turn=tool_calls_this_turn,
+            )
             return
         except Exception as e:
             if emitted or attempt >= max_retries or not is_transient(e):

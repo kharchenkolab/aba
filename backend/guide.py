@@ -8,7 +8,7 @@ from core.graph.audit import log_context_assembly, session_assembly_summary, add
 from core.graph.entities import get_entity, update_entity
 from core.graph.messages import append_message, get_messages
 from core.graph.threads import get_or_create_default_thread
-from core.runtime.llm_runtime import TextDelta
+from core.runtime.llm_runtime import TextDelta, ToolUseStart
 from core.runtime.llm_runtime_direct import (
     _RetryNotice,
     _StreamCompleted,
@@ -650,8 +650,12 @@ async def stream_response(
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. Body moved
             # to core.runtime.llm_runtime_direct.open_and_consume_stream
-            # in W1-A.2 phase 2; guide.py iterates its events here.
+            # in W1-A.2 phase 2; phase 3 added final_msg.content walk
+            # into the same helper so guide.py just consumes events.
             final_msg = None
+            assistant_blocks: list[dict] = []
+            tool_calls_this_turn: list[str] = []
+            stop_reason: str | None = None
             async for ev in open_and_consume_stream(
                 history=llm_history, tools=active_tools, system=system,
                 dynamic_system=dynamic_sys, model=guide_model,
@@ -659,6 +663,11 @@ async def stream_response(
             ):
                 if isinstance(ev, TextDelta):
                     yield sse({"type": "delta", "text": ev.text})
+                elif isinstance(ev, ToolUseStart):
+                    # Phase 3: informational only — assistant_blocks
+                    # already come via _StreamCompleted. Phase 4 will
+                    # use these to drive the tool-dispatch loop.
+                    pass
                 elif isinstance(ev, _RetryNotice):
                     print(f"[guide] transient API error (attempt {ev.attempt}/{ev.max_retries}), "
                           f"retrying in {ev.backoff_s}s: {ev.error}")
@@ -666,6 +675,9 @@ async def stream_response(
                                "text": f"Model is busy — retrying ({ev.attempt}/{ev.max_retries})…"})
                 elif isinstance(ev, _StreamCompleted):
                     final_msg = ev.final_msg
+                    assistant_blocks = ev.assistant_blocks
+                    tool_calls_this_turn = ev.tool_calls_this_turn
+                    stop_reason = ev.stop_reason
                     if ev.usage_delta:
                         usage_in += ev.usage_delta.get("input", 0)
                         usage_out += ev.usage_delta.get("output", 0)
@@ -678,30 +690,15 @@ async def stream_response(
             if cancel_token.cancelled:
                 continue
 
-            assistant_blocks = []
-            text_out = ""
-            tool_calls_this_turn: list[str] = []
-            truncated_tool_uses: list[str] = []
-            stop_reason = getattr(final_msg, "stop_reason", None)
-            for block in final_msg.content:
-                if block.type == "text":
-                    assistant_blocks.append({"type": "text", "text": block.text})
-                    text_out += block.text
-                elif block.type == "tool_use":
-                    inp = block.input if isinstance(block.input, dict) else {}
-                    # max_tokens hit mid-tool-input → SDK couldn't parse the
-                    # partial JSON → block.input == {} for a tool whose schema
-                    # requires fields. Flag it so the user isn't left wondering
-                    # "where's the draft?" (verified live 2026-06-01).
-                    if not inp and stop_reason == "max_tokens":
-                        truncated_tool_uses.append(block.name)
-                    assistant_blocks.append({
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": inp,
-                    })
-                    tool_calls_this_turn.append(block.name)
+            text_out = "".join(b["text"] for b in assistant_blocks if b["type"] == "text")
+            # max_tokens hit mid-tool-input → SDK couldn't parse the partial
+            # JSON → tool_use block.input == {} for a tool whose schema
+            # requires fields. Flag it so the user isn't left wondering
+            # "where's the draft?" (verified live 2026-06-01).
+            truncated_tool_uses: list[str] = [
+                b["name"] for b in assistant_blocks
+                if b["type"] == "tool_use" and not b["input"] and stop_reason == "max_tokens"
+            ]
             if truncated_tool_uses:
                 names = ", ".join(truncated_tool_uses)
                 # Tell the AGENT (not just the user) that the cap was hit.
