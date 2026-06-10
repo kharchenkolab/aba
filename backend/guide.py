@@ -1,5 +1,6 @@
 import json
 import asyncio
+import os
 from typing import AsyncGenerator
 
 from config import FAKE_SESSION
@@ -636,6 +637,463 @@ async def stream_response(
                 yield sse({"type": "done"})
                 return
 
+            # W1-A.2 phase 4.2 — feature-flagged path: route the whole
+            # turn through DirectAPIRuntime.run_turn() instead of the
+            # inline legacy loop. Enable with `ABA_USE_RUNTIME_LOOP=1`.
+            # Default OFF; the legacy path below runs byte-for-byte
+            # unchanged. Phase 5 deletes the legacy path once each halt
+            # type (plan / clarify / approval / deferred) has been
+            # live-validated via the UI under the flag.
+            if os.environ.get("ABA_USE_RUNTIME_LOOP"):
+                from core.runtime.llm_runtime import RuntimeRequest, SystemSpec
+                from core.runtime.llm_runtime import ToolResult, TurnDone, TurnHalt
+                from core.runtime.llm_runtime_direct import (
+                    DirectAPIRuntime, _ToolProgress,
+                )
+                _runtime = DirectAPIRuntime()
+                # Per-turn state mirrors the legacy path; we reset it
+                # each iteration of the outer `while True:`.
+                _tool_input_by_id: dict[str, dict] = {}
+                _tool_name_by_id: dict[str, str] = {}
+                _tool_result_blocks: list[dict] = []
+                _pending_halt_signal: str | None = None
+                _stop_reason: str | None = None
+                _assistant_blocks: list[dict] = []
+                _tool_calls_this_turn: list[str] = []
+                _emitted_tool_start: set[str] = set()
+
+                # tool_executor closure — owns approval + background +
+                # present_plan + ask_clarification + normal dispatch.
+                # Returns the result envelope; runtime catches the halt
+                # markers (_runtime_halt_before / _after / deferred).
+                async def _tool_executor(name: str, tool_input: dict, ctx: dict) -> dict:
+                    tool_use_id = ctx["tool_use_id"]
+
+                    # present_plan: validate + persist plan entity +
+                    # fire on_plan_presented hook. Return ack envelope
+                    # + halt-after.
+                    if name == "present_plan":
+                        from core.planning.validator import normalize_plan, validate_plan
+                        from core.graph.entities import create_entity
+                        _inp = tool_input if isinstance(tool_input, dict) else {}
+                        plan = validate_plan(normalize_plan(_inp))
+                        plan_eid = create_entity(
+                            entity_type="plan",
+                            title=plan.title or "Plan",
+                            parent_entity_id=focus_entity_id,
+                            metadata={
+                                "thread_id": store_tid,
+                                "plan": plan.to_dict(),
+                                "plan_lifecycle": "validated",
+                            },
+                        )
+                        turn.plan_entity_id = plan_eid
+                        dispatch("on_plan_presented", {
+                            "thread_id": store_tid,
+                            "plan_title": plan.title or "Analysis run",
+                            "focus_entity_id": focus_entity_id,
+                            "plan_entity_id": plan_eid,
+                        })
+                        return {
+                            "status": "presented",
+                            "plan_entity_id": plan_eid,
+                            "note": "Plan shown to the user with Go/Adjust controls. "
+                                    "Wait for their decision before executing.",
+                            "concerns": [c.to_dict() for c in plan.concerns],
+                            "_runtime_halt_after": "plan",
+                            "_emit_sse_post": {"type": "plan",
+                                               "entity_id": plan_eid,
+                                               **plan.to_dict()},
+                        }
+
+                    # ask_clarification: question validate, ack envelope.
+                    if name == "ask_clarification":
+                        _inp = tool_input if isinstance(tool_input, dict) else {}
+                        question = str(_inp.get("question") or "").strip()
+                        if not question:
+                            return {"status": "error",
+                                    "note": "ask_clarification needs a non-empty `question`."}
+                        return {
+                            "status": "asked",
+                            "note": "Question shown to the user. Stop here and "
+                                    "wait for their reply before continuing.",
+                            "_runtime_halt_after": "clarify",
+                            "_emit_sse_post": {"type": "clarification_pending",
+                                               "question": question,
+                                               "tool_use_id": tool_use_id,
+                                               "run_id": turn.run_id},
+                        }
+
+                    # Approval gate — halt BEFORE (no tool_result block;
+                    # held tool runs only after user approves at /resume).
+                    from core.runtime.approval import needs_approval
+                    tool_schema = next((t for t in active_tools if t["name"] == name), None)
+                    policy = tool_schema.get("approval_policy") if tool_schema else None
+                    if needs_approval(policy, store_tid or "default", name):
+                        turn.pending_approval = {
+                            "tool_name": name,
+                            "tool_input": tool_input if isinstance(tool_input, dict) else {},
+                            "tool_use_id": tool_use_id,
+                            "policy": policy,
+                        }
+                        summary = _summarize_tool_input(name, tool_input)
+                        return {
+                            "_runtime_halt_before": "approval",
+                            "_emit_sse_at_halt": {"type": "approval_pending",
+                                                  "tool_name": name,
+                                                  "summary": summary,
+                                                  "tool_use_id": tool_use_id,
+                                                  "run_id": turn.run_id,
+                                                  "policy": policy},
+                        }
+
+                    # Background run_python: submit job, return queued
+                    # result. The job runner's webhook fills the real
+                    # result later; in the meantime the model sees the
+                    # queued ack so it can decide what to do next.
+                    if (name == "run_python" and isinstance(tool_input, dict)
+                            and tool_input.get("background")):
+                        from core import projects as _projects
+                        _pid = _projects.current() or "default"
+                        _arid_ctx = {"thread_id": str(store_tid), "active_run_id": None}
+                        dispatch("on_background_job_submit", _arid_ctx)
+                        job = submit_python_job(
+                            code=tool_input.get("code", ""),
+                            title=tool_input.get("title") or "Background analysis",
+                            focus_entity_id=focus_entity_id,
+                            timeout_s=int(tool_input.get("timeout_s") or 300),
+                            project_id=str(_pid),
+                            thread_id=str(store_tid),
+                            run_id=_arid_ctx.get("active_run_id"),
+                        )
+                        return {
+                            "job_id": job["id"],
+                            "status": "queued",
+                            "note": "Submitted as a background job. Figures "
+                                    "will register when it finishes; watch "
+                                    "the Queues panel.",
+                            "_emit_sse_pre": {"type": "job_submitted", "job": job},
+                        }
+
+                    # Normal dispatch: ensure stream buffer, run in
+                    # thread, parse result, record telemetry.
+                    try:
+                        from core.runtime import tool_stream_buffer as _tsb_pre
+                        _tsb_pre.ensure(turn.run_id, tool_use_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    tool_ctx = {**ctx,
+                                "active_tools": active_tools,
+                                "thread_id": store_tid,
+                                "focus_entity_id": focus_entity_id,
+                                "session_id": session_id,
+                                "recipe_ctx": recipe_ctx,
+                                "intent": eff_intent,
+                                "cancel_token": cancel_token}
+                    import datetime as _dt
+                    _t_start = _dt.datetime.now(_dt.timezone.utc)
+                    _loop = asyncio.get_running_loop()
+                    result_str = await _loop.run_in_executor(
+                        None, _exec_tool, name, tool_input, tool_ctx)
+                    _t_end = _dt.datetime.now(_dt.timezone.utc)
+                    result_obj = json.loads(result_str)
+                    # Telemetry record (best-effort; mirrors legacy path).
+                    _telem_status = (
+                        "deferred" if isinstance(result_obj, dict) and result_obj.get("deferred")
+                        else "error" if isinstance(result_obj, dict) and (result_obj.get("error") or result_obj.get("status") == "error")
+                        else "ok"
+                    )
+                    _telem_err = None
+                    if _telem_status == "error" and isinstance(result_obj, dict):
+                        _telem_err = str(result_obj.get("error") or result_obj.get("note") or "")[:300]
+                        try:
+                            from core.runtime import tool_stream_buffer as _tsb_err
+                            _tsb_err.record_error(turn.run_id, tool_use_id,
+                                                  f"[tool error] {_telem_err}")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        from core.runtime.tool_telemetry import record as _record_invocation
+                        _record_invocation(
+                            run_id=turn.run_id, agent_spec=turn.agent_spec_name,
+                            tool_name=name, input_=tool_input,
+                            started_at=_t_start.isoformat(),
+                            ended_at=_t_end.isoformat(),
+                            duration_ms=int((_t_end - _t_start).total_seconds() * 1000),
+                            status=_telem_status, error_summary=_telem_err,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return result_obj
+
+                _req = RuntimeRequest(
+                    history=llm_history,
+                    tools=active_tools,
+                    system=SystemSpec(stable=system, dynamic=dynamic_sys),
+                    model=guide_model,
+                    max_tokens=8192,
+                    ctx={},
+                    cancel=cancel_token,
+                )
+
+                async for ev in _runtime.run_turn(_req, _tool_executor,
+                                                   halt_on_tools=frozenset()):
+                    # Capture tool_use_id → input/name for progress event
+                    # translation (which only has tool_use_id).
+                    if hasattr(ev, "tool_use_id"):
+                        if hasattr(ev, "input"):
+                            _tool_input_by_id[ev.tool_use_id] = ev.input
+                        if hasattr(ev, "tool_name"):
+                            _tool_name_by_id[ev.tool_use_id] = ev.tool_name
+
+                    if isinstance(ev, TextDelta):
+                        yield sse({"type": "delta", "text": ev.text})
+                    elif isinstance(ev, ToolUseStart):
+                        # Defer tool_start emit until ToolResult time (we
+                        # don't yet know if the tool will halt-before).
+                        pass
+                    elif isinstance(ev, _RetryNotice):
+                        print(f"[guide] transient API error (attempt {ev.attempt}/{ev.max_retries}), "
+                              f"retrying in {ev.backoff_s}s: {ev.error}")
+                        yield sse({"type": "notice",
+                                   "text": f"Model is busy — retrying ({ev.attempt}/{ev.max_retries})…"})
+                    elif isinstance(ev, _ToolProgress):
+                        _tname = _tool_name_by_id.get(ev.tool_use_id, "")
+                        payload = ev.payload if isinstance(ev.payload, dict) else {}
+                        if payload.get("type") == "chunk":
+                            from core.runtime import tool_stream_buffer as _tsb
+                            _tsb.record_chunk(
+                                run_id=turn.run_id, tool_use_id=ev.tool_use_id,
+                                stream=payload.get("stream", "stdout"),
+                                text=payload.get("text", ""),
+                                bytes_total=payload.get("bytes_total", 0),
+                                elapsed_s=payload.get("elapsed_s", 0.0),
+                            )
+                            yield sse({"type": "tool_chunk",
+                                       "tool_use_id": ev.tool_use_id,
+                                       "stream": payload.get("stream", "stdout"),
+                                       "text": payload.get("text", ""),
+                                       "bytes_total": payload.get("bytes_total", 0),
+                                       "elapsed_s": payload.get("elapsed_s", 0.0)})
+                        else:
+                            yield sse({"type": "tool_progress", "name": _tname,
+                                       "tool_use_id": ev.tool_use_id,
+                                       "message": payload.get("message"),
+                                       "phase": payload.get("phase")})
+                        await asyncio.sleep(0)
+                    elif isinstance(ev, _StreamCompleted):
+                        final_msg = ev.final_msg
+                        _assistant_blocks = ev.assistant_blocks
+                        _tool_calls_this_turn = ev.tool_calls_this_turn
+                        _stop_reason = ev.stop_reason
+                        if ev.usage_delta:
+                            usage_in += ev.usage_delta.get("input", 0)
+                            usage_out += ev.usage_delta.get("output", 0)
+                            usage_cr += ev.usage_delta.get("cache_read", 0)
+                            usage_cw += ev.usage_delta.get("cache_write", 0)
+                        # truncated_tool_uses inference + agent_note,
+                        # mirrors legacy (post-block-extraction logic).
+                        _truncated: list[str] = [
+                            b["name"] for b in _assistant_blocks
+                            if b["type"] == "tool_use" and not b["input"]
+                            and _stop_reason == "max_tokens"
+                        ]
+                        if _truncated:
+                            _names = ", ".join(_truncated)
+                            agent_note = (
+                                f"[system notice: your previous turn's tool call(s) ({_names}) hit the "
+                                "per-turn output token cap before their `input` could finish streaming, "
+                                "so the API returned an unparseable partial JSON and the tool dispatch "
+                                "was skipped (no tool_result was produced). When retrying, BREAK LARGE "
+                                "content into smaller pieces. For text/document content prefer "
+                                "`write_file(path, body)` for the first chunk + `write_file(path, body, "
+                                "mode='a')` (or `edit_file` for surgical changes) for subsequent pieces "
+                                "— `write_file`'s `body` field has no Python string-escape overhead, "
+                                "so the same content fits in roughly half the tokens vs `run_python` "
+                                "with `open().write(...)`. Do not repeat the same single large call — "
+                                "it will hit the cap again."
+                            )
+                            append_message("user", [{"type": "text", "text": agent_note}],
+                                           entity_id=entity_id,
+                                           focus_entity_id=focus_entity_id,
+                                           thread_id=store_tid)
+                            ui_note = (
+                                f"⚠ The {_names} call was cut off by the per-turn output cap. The agent "
+                                "has been told to break the content into smaller writes — ask it to retry."
+                            )
+                            yield sse({"type": "notice", "text": ui_note})
+                        append_message("assistant", _assistant_blocks,
+                                       entity_id=entity_id,
+                                       focus_entity_id=focus_entity_id,
+                                       thread_id=store_tid)
+                        text_out = "".join(b["text"] for b in _assistant_blocks
+                                           if b["type"] == "text")
+                        log_context_assembly(
+                            session_id=session_id,
+                            turn_index=turn_index,
+                            focus_entity_id=focus_entity_id,
+                            focus_entity_type=focus_type,
+                            fields_preloaded=fields_preloaded,
+                            tool_calls=_tool_calls_this_turn,
+                            turn_text_len=len(text_out),
+                            manifest=manifest.to_dict(),
+                        )
+                        turn_index += 1
+                        turn.turn_index = turn_index
+                        turn.usage_in = usage_in; turn.usage_out = usage_out
+                        turn.usage_cache_read = usage_cr; turn.usage_cache_write = usage_cw
+                        history = get_messages(entity_id, thread_id=store_tid)
+                        if _stop_reason != "tool_use":
+                            # No tools — outer loop will break via the
+                            # legacy fall-through after this `continue`.
+                            # Actually: we need an end-of-turn break. We
+                            # signal it by leaving _stop_reason captured
+                            # and breaking after the event loop.
+                            pass
+                        else:
+                            # About to dispatch tools — track the in-flight
+                            # set so the reaper can synthesize tool_results
+                            # if the process dies (A1).
+                            turn.pending_tool_ids = [
+                                b["id"] for b in _assistant_blocks
+                                if b["type"] == "tool_use"
+                            ]
+                            turn.transition(TurnState.EXECUTING_TOOLS); checkpoint(turn)
+                    elif isinstance(ev, ToolResult):
+                        # Emit pre-SSE (job_submitted for background path).
+                        _envelope = ev.result if isinstance(ev.result, dict) else {}
+                        if "_emit_sse_pre" in _envelope:
+                            yield sse(_envelope.pop("_emit_sse_pre"))
+                        # tool_start fires here, AFTER halt-before checks
+                        # in the closure have had their say. Idempotent
+                        # via _emitted_tool_start guard.
+                        if ev.tool_use_id not in _emitted_tool_start:
+                            yield sse({"type": "tool_start", "name": ev.tool_name,
+                                       "input": _tool_input_by_id.get(ev.tool_use_id, {}),
+                                       "tool_use_id": ev.tool_use_id})
+                            _emitted_tool_start.add(ev.tool_use_id)
+                        # on_post_tool hook + entity_registered emit.
+                        hook_ctx = {
+                            "tool_name": ev.tool_name,
+                            "tool_input": _tool_input_by_id.get(ev.tool_use_id, {}),
+                            "result_obj": _envelope,
+                            "focus_entity_id": focus_entity_id,
+                            "analysis_ctx": analysis_ctx,
+                            "thread_id": store_tid,
+                            "new_entities": [],
+                            "parent_run_id": turn.run_id,
+                        }
+                        dispatch("on_post_tool", hook_ctx)
+                        for _ent in hook_ctx["new_entities"]:
+                            yield sse({"type": "entity_registered", "entity": _ent})
+                        # create_scenario surfaces its entity outside the
+                        # artifact registrar path.
+                        if (ev.tool_name == "create_scenario"
+                                and isinstance(_envelope, dict)
+                                and _envelope.get("scenario")):
+                            from core.graph.entities import get_entity as _ge
+                            _ent = _ge(_envelope["scenario"]["id"])
+                            if _ent:
+                                yield sse({"type": "entity_registered", "entity": _ent})
+                        # Mark live-tail buffer done so TTL drops to 5min.
+                        try:
+                            from core.runtime import tool_stream_buffer as _tsb
+                            _tsb.mark_done(turn.run_id, ev.tool_use_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        yield sse({"type": "tool_result", "name": ev.tool_name,
+                                   "result": _envelope, "tool_use_id": ev.tool_use_id})
+                        # Vision-blocks envelope (view_figure, etc.):
+                        # passthrough as the tool_result's `content`.
+                        if (isinstance(_envelope, dict)
+                                and isinstance(_envelope.get("_vision_blocks"), list)):
+                            _tool_result_blocks.append({
+                                "type": "tool_result",
+                                "tool_use_id": ev.tool_use_id,
+                                "content": _envelope["_vision_blocks"],
+                            })
+                        else:
+                            _tool_result_blocks.append({
+                                "type": "tool_result",
+                                "tool_use_id": ev.tool_use_id,
+                                "content": json.dumps(_envelope),
+                            })
+                        # Post-SSE for halt-after envelopes (plan /
+                        # clarification_pending). The TurnHalt event for
+                        # the same halt-after comes RIGHT after this.
+                        if "_emit_sse_post" in _envelope:
+                            yield sse(_envelope["_emit_sse_post"])
+                    elif isinstance(ev, TurnHalt):
+                        if ev.reason in ('plan', 'clarify'):
+                            _pending_halt_signal = ev.reason
+                        elif ev.reason == 'approval':
+                            _pending_halt_signal = "approval"
+                            if isinstance(ev.detail, dict) and "_emit_sse_at_halt" in ev.detail:
+                                yield sse(ev.detail["_emit_sse_at_halt"])
+                        elif ev.reason == 'deferred':
+                            turn.pending_deferred = {
+                                "tool_name": ev.detail.get("tool_name"),
+                                "tool_use_id": ev.detail.get("tool_use_id"),
+                                "deferred_id": ev.detail.get("deferred_id"),
+                                "started_at": __import__("datetime").datetime.now(
+                                    __import__("datetime").timezone.utc).isoformat(),
+                                "timeout_s": int(ev.detail.get("timeout_s") or 0) or None,
+                            }
+                            yield sse({
+                                "type": "deferred_tool_pending",
+                                "tool_name": ev.detail.get("tool_name"),
+                                "deferred_id": ev.detail.get("deferred_id"),
+                                "tool_use_id": ev.detail.get("tool_use_id"),
+                                "run_id": turn.run_id,
+                            })
+                            if _tool_result_blocks:
+                                append_message("user", _tool_result_blocks,
+                                               entity_id=entity_id,
+                                               focus_entity_id=focus_entity_id,
+                                               thread_id=store_tid)
+                            turn.transition(TurnState.AWAITING_TOOL_RESULT)
+                            checkpoint(turn)
+                            yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                                       "cache_read": usage_cr, "cache_write": usage_cw})
+                            yield sse({"type": "done"})
+                            return
+                        elif ev.reason == 'cancelled':
+                            # Cancel path — the outer-loop top will see
+                            # cancel_token.cancelled and emit cancelled
+                            # SSE on the next iteration's pre-check.
+                            break
+                    elif isinstance(ev, TurnDone):
+                        # Phase ended; do nothing here (we already
+                        # updated state in _StreamCompleted).
+                        pass
+
+                # End of event loop. Persist tool_result_blocks (mirrors
+                # legacy 1199-1207). Skip if empty (= approval held the
+                # first tool, nothing ran).
+                if _tool_result_blocks:
+                    append_message("user", _tool_result_blocks,
+                                   entity_id=entity_id,
+                                   focus_entity_id=focus_entity_id,
+                                   thread_id=store_tid)
+                if _pending_halt_signal != "approval":
+                    turn.pending_tool_ids = []
+                checkpoint(turn)
+                history = get_messages(entity_id, thread_id=store_tid)
+                # End-of-turn break: no tool_use means the model is done.
+                if _stop_reason != "tool_use":
+                    break
+                # Halt-signal break-out (same shape as legacy 1217+).
+                if _pending_halt_signal:
+                    turn.transition(TurnState.AWAITING_USER)
+                    turn.pending_user_signal = _pending_halt_signal
+                    checkpoint(turn)
+                    yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                               "cache_read": usage_cr, "cache_write": usage_cw})
+                    yield sse({"type": "done"})
+                    return
+                continue   # next outer iteration
+
+            # ─── LEGACY PATH (default; the path quick_smoke validates) ───
             # Open + consume the stream, retrying transient API failures
             # (e.g. 529 overloaded) with exponential backoff. Body moved
             # to core.runtime.llm_runtime_direct.open_and_consume_stream
