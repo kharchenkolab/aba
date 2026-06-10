@@ -209,7 +209,10 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     return () => { cancelled = true }
   }, [currentId])
   const q = query.trim().toLowerCase()
-  const projectMatches = q ? list.filter(p => p.name.toLowerCase().includes(q)) : list
+  // A handful of legacy projects have a null name in the index (created
+  // before the rename modal was required). Treat those as empty for the
+  // filter so the user can still type without the page error-bounding.
+  const projectMatches = q ? list.filter(p => (p.name ?? '').toLowerCase().includes(q)) : list
   const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
 
   // Scope menu visibility by render-site (`central` vs `side`) so the current
