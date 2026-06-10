@@ -6,8 +6,8 @@
  */
 import { useState } from 'react'
 import type { Entity } from '../types'
-import { OverviewColumn, OverviewRow, AddResourceDialog, type OvGroup, type Tone } from '../components/OverviewKit'
-import EntityMenu from '../components/EntityMenu'
+import { OverviewColumn, OverviewRow, AddResourceDialog, type OvGroup, type Tone } from './OverviewKit'
+import EntityMenu from './EntityMenu'
 import './ProjectOverview.css'
 
 interface Props {

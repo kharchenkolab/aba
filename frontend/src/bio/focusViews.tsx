@@ -31,10 +31,10 @@ import type { Entity } from '../types'
 import RunView from './RunView'
 import ResultView from './ResultView'
 import ClaimView from './ClaimView'
-import FileBrowser, { type TreeNode } from '../components/FileBrowser'
+import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
-import UploadDrop from '../components/UploadDrop'
+import UploadDrop from '../platform/UploadDrop'
 // RevisionChevrons (floating overlay) is deprecated 2026-06-07. The
 // new RevisionStrip lives in ResultView's MemberPanel (below the figure,
 // not over it). Direct figure/table focus surfaces lean on the

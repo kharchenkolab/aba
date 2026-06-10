@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DisplayMessage, Entity, PendingClarification, PendingApproval } from '../types'
-import { AGENTS, AgentGlyph } from './icons'
-import Message from './Message'
+import { AGENTS, AgentGlyph } from '../components/icons'
+// Per-message rendering dispatches through the lib message-renderer
+// registry — ChatPane (platform infra) doesn't import from bio/
+// directly (enforced by src/platform/__platform_imports.test.ts).
+// Bio side registers ../bio/Message into the slot at startup.
+import { message_renderer } from '../lib/messageRenderer'
+import { type_label_for } from '../lib/typeLabels'
 import Composer from './Composer'
 import ErrorBoundary from './ErrorBoundary'
 import './ChatPane.css'
@@ -320,47 +325,51 @@ export default function ChatPane({
               <div className="chat-empty">
                 <p>
                   {focusedEntity && focusedEntity.type !== 'workspace'
-                    ? `Ask Guide about this ${focusedEntity.type === 'analysis' ? 'run' : focusedEntity.type}.`
+                    ? `Ask Guide about this ${(type_label_for(focusedEntity.type) ?? focusedEntity.type).toLowerCase()}.`
                     : 'Ask Guide about your data.'}
                 </p>
               </div>
             )}
-            {all.map((m, i) => (
-              <ErrorBoundary key={m.id} label="message"
-                fallback={reset => (
-                  <div className="errbound">
-                    <span className="errbound__text">This message couldn’t be displayed.</span>
-                    <button className="errbound__retry" onClick={reset}>Retry</button>
-                  </div>
-                )}>
-              <Message
-                key={m.id}
-                message={m}
-                fileMap={fileMap}
-                currentRunId={currentRunId}
-                isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
-                collapseTools={i !== all.length - 1}
-                onAnnotate={onAnnotate}
-                highlighting={highlighting}
-                anyDrawing={anyDrawing}
-                onDrawingChange={setAnyDrawing}
-                onHighlightDone={() => setHighlighting(false)}
-                annotClear={annotClear}
-                onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
-                entities={entities}
-                onPin={onPin}
-                onArtifactPinned={onArtifactPinned}
-                pinnedFigureIds={pinnedFigureIds}
-                keptKeys={keptKeys}
-                onKeepMessage={onKeepMessage}
-                planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
-                onPlanGo={(saveAsRun: boolean) => sendAndPin(saveAsRun
-                  ? 'Go ahead with the plan as proposed.'
-                  : 'Go ahead with the plan as proposed. Do not save this as a run.')}
-                onPlanAdjust={() => setExtraFocus(n => n + 1)}
-              />
-              </ErrorBoundary>
-            ))}
+            {all.map((m, i) => {
+              const Message = message_renderer()
+              if (!Message) return null   // bio hasn't loaded yet; chat will refresh
+              return (
+                <ErrorBoundary key={m.id} label="message"
+                  fallback={reset => (
+                    <div className="errbound">
+                      <span className="errbound__text">This message couldn’t be displayed.</span>
+                      <button className="errbound__retry" onClick={reset}>Retry</button>
+                    </div>
+                  )}>
+                <Message
+                  key={m.id}
+                  message={m}
+                  fileMap={fileMap}
+                  currentRunId={currentRunId}
+                  isStreaming={streaming && i === all.length - 1 && m.role === 'assistant'}
+                  collapseTools={i !== all.length - 1}
+                  onAnnotate={onAnnotate}
+                  highlighting={highlighting}
+                  anyDrawing={anyDrawing}
+                  onDrawingChange={setAnyDrawing}
+                  onHighlightDone={() => setHighlighting(false)}
+                  annotClear={annotClear}
+                  onRetry={!streaming && i === all.length - 1 ? onRetry : undefined}
+                  entities={entities}
+                  onPin={onPin}
+                  onArtifactPinned={onArtifactPinned}
+                  pinnedFigureIds={pinnedFigureIds}
+                  keptKeys={keptKeys}
+                  onKeepMessage={onKeepMessage}
+                  planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
+                  onPlanGo={(saveAsRun: boolean) => sendAndPin(saveAsRun
+                    ? 'Go ahead with the plan as proposed.'
+                    : 'Go ahead with the plan as proposed. Do not save this as a run.')}
+                  onPlanAdjust={() => setExtraFocus(n => n + 1)}
+                />
+                </ErrorBoundary>
+              )
+            })}
             {starters && starters.length > 0 && !all.some(m => m.role === 'user') && (
               <div className="chat-starters">
                 {starters.map((s, i) => (

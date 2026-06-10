@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react'
 import { EntityGlyph } from './icons'
-import HighlightableImage from './HighlightableImage'
+import HighlightableImage from '../bio/HighlightableImage'
 import './ResultList.css'
 
 export interface OutputItem {

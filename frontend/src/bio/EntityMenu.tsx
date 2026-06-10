@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Entity } from '../types'
 import { typeHasChatGesture, typeOf } from '../entityTypes'
-import { entity_menu_traits } from '../bio/menuActions'
+import { entity_menu_traits } from '../lib/menuActions'
 import './EntityMenu.css'
 
 interface Props {
