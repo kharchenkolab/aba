@@ -35,7 +35,17 @@ pytestmark = pytest.mark.platform
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 MAIN = BACKEND / "main.py"
-BIO_ROUTES = BACKEND / "content" / "bio" / "web" / "routes.py"
+# Wave 1 Track B: routes.py was split into per-entity files under
+# routes/. Test now walks every *.py in the package (and tolerates
+# either layout for backward compat in case rollback is needed).
+_BIO_ROUTES_PKG = BACKEND / "content" / "bio" / "web" / "routes"
+_BIO_ROUTES_FILE = BACKEND / "content" / "bio" / "web" / "routes.py"
+if _BIO_ROUTES_PKG.is_dir():
+    BIO_ROUTES_FILES = sorted(
+        p for p in _BIO_ROUTES_PKG.glob("*.py") if p.name != "__init__.py"
+    )
+else:
+    BIO_ROUTES_FILES = [_BIO_ROUTES_FILE]
 
 
 # (path, method) tuples exempted from the pin requirement. Each MUST
@@ -157,14 +167,17 @@ def test_main_py_mutations_all_pinned():
 
 
 def test_bio_routes_mutations_all_pinned():
-    missing = _missing_pin(BIO_ROUTES)
-    if missing:
+    rows: list[tuple[Path, int, str, str, str]] = []
+    for py in BIO_ROUTES_FILES:
+        for lineno, path, method, name in _missing_pin(py):
+            rows.append((py, lineno, path, method, name))
+    if rows:
         msg = "\n".join(
-            f"  bio/web/routes.py:{lineno}  {method} {path}  ({name})"
-            for lineno, path, method, name in missing
+            f"  {py.relative_to(ROOT)}:{lineno}  {method} {path}  ({name})"
+            for py, lineno, path, method, name in rows
         )
         pytest.fail(
-            f"{len(missing)} mutation endpoint(s) in bio/web/routes.py lack "
+            f"{len(rows)} mutation endpoint(s) in bio/web/routes/ lack "
             f"Depends(require_project) and aren't in EXEMPT_ENDPOINTS:\n{msg}\n\n"
             f"Either add the dep, or add to EXEMPT_ENDPOINTS with a one-line "
             f"justification."
@@ -175,7 +188,7 @@ def test_exemptions_are_real_endpoints():
     """Every EXEMPT_ENDPOINTS entry must correspond to a real endpoint —
     catches typos that would silently make the gate vacuous."""
     real = set()
-    for py in (MAIN, BIO_ROUTES):
+    for py in (MAIN, *BIO_ROUTES_FILES):
         for _lineno, path, method, _name in _decorators_in(py):
             real.add((path, method))
     bogus = set(EXEMPT_ENDPOINTS) - real
