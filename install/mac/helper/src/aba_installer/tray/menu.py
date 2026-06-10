@@ -87,7 +87,17 @@ def apply_model_submenu(submenu: Any, *, current: Optional[str],
     behaviour when the helper hasn't surfaced a current model yet
     (config.env mid-write, brand-new install, etc.).
     """
-    submenu.clear()
+    # rumps.MenuItem.clear() crashes with AttributeError if the parent has
+    # never had children added — the underlying NSMenu only gets created
+    # on the first .add(). Guard on len() so the first poll cycle still
+    # populates instead of dying silently in _poll's except-Exception.
+    if len(submenu) > 0:
+        try:
+            submenu.clear()
+        except (AttributeError, TypeError):
+            # Belt-and-suspenders for older rumps releases that don't
+            # implement clear() on a never-materialised submenu.
+            pass
     # Construct fresh children. rumps's MenuItem has the same API our
     # _Item stub exposes — title in ctor, set_callback, state attribute.
     try:
