@@ -40,14 +40,28 @@ def main() -> int:
 
     port = status_poll.helper_port()
 
-    # Find the Template glyph inside the running .app bundle. We're being
-    # exec'd by Contents/MacOS/aba-tray, so the bundle root is two parents
-    # up. Fall back to a text title if the icon's missing (dev runs from
-    # the source tree before install_tray has copied the bundle in).
-    icon_path = (Path(sys.argv[0]).resolve().parent.parent / "Resources"
-                 / "TrayIconTemplate.png")
-    app = rumps.App("ABA", title=None if icon_path.exists() else "ABA",
-                    icon=str(icon_path) if icon_path.exists() else None,
+    # Find the Template glyph inside the running .app bundle. The launcher
+    # (Contents/MacOS/aba-tray) exports ABA_TRAY_BUNDLE pointing at the
+    # Contents/ dir — we look for Resources/ underneath. Falling back to
+    # walking up from this module's __file__ does NOT work because pip
+    # installed the package into the venv's site-packages, which has no
+    # relation to the .app bundle on disk.
+    bundle_contents = os.environ.get("ABA_TRAY_BUNDLE")
+    icon_path = Path(bundle_contents) / "Resources" / "TrayIconTemplate.png" \
+        if bundle_contents else None
+    # Source-tree dev: ABA_TRAY_BUNDLE unset, but the repo template lives
+    # at a discoverable relative path next to the helper package.
+    if icon_path is None or not icon_path.exists():
+        repo_template = (Path(__file__).resolve().parents[5]
+                         / "install" / "mac" / "tray" / "ABA.app"
+                         / "Contents" / "Resources"
+                         / "TrayIconTemplate.png") \
+            if len(Path(__file__).resolve().parents) >= 6 else None
+        if repo_template and repo_template.exists():
+            icon_path = repo_template
+    has_icon = icon_path is not None and icon_path.exists()
+    app = rumps.App("ABA", title=None if has_icon else "ABA",
+                    icon=str(icon_path) if has_icon else None,
                     template=True, quit_button=None)
 
     status_item   = rumps.MenuItem("⏳  Connecting…")

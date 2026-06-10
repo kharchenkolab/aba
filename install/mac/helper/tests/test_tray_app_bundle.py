@@ -77,6 +77,16 @@ def test_launcher_script_executable_and_well_formed():
     assert "exec " in body, (
         "use exec to replace the shell process — otherwise we leave a "
         "stranded /bin/sh in the process tree forever")
+    # Bundle-root anchor: __main__.py can't find the icon from sys.argv[0]
+    # when run via python -m (argv[0] = installed package's __main__.py,
+    # NOT this launcher). The launcher exports ABA_TRAY_BUNDLE pointing at
+    # Contents/ so the tray module can locate Resources/TrayIconTemplate.png.
+    assert "ABA_TRAY_BUNDLE" in body, (
+        "launcher must export ABA_TRAY_BUNDLE for the tray module to find "
+        "its icons. Without this the menu-bar item falls back to a text "
+        "title — likely invisible-looking to the user.")
+    assert 'export' in body and 'ABA_TRAY_BUNDLE' in body, (
+        "ABA_TRAY_BUNDLE must be exported, not just assigned")
 
 
 def test_launcher_starts_with_shebang():

@@ -14,6 +14,12 @@
 ABA_HOME="${ABA_HOME:-$HOME/.aba}"
 VENV_PY="$ABA_HOME/installer/venv/bin/python"
 
+# Pass the bundle root to the tray entrypoint. python -m sets sys.argv[0]
+# to the *installed package's* __main__.py, NOT to this launcher, so the
+# tray module can't otherwise discover the .app bundle to find its icons.
+# Export the Contents/ dir; __main__.py looks for Resources/ underneath.
+export ABA_TRAY_BUNDLE="$(cd "$(dirname "$0")/.." && pwd)"
+
 if [ ! -x "$VENV_PY" ]; then
   echo "ABA Tray: helper venv missing at $VENV_PY — run setup.command first." >&2
   logger -t aba-tray "helper venv missing at $VENV_PY"
