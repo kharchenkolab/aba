@@ -352,19 +352,56 @@ class DirectAPIRuntime:
                 pass
             result_obj = await exec_task
 
-            # Deferred-tool envelope: tool went to a background job, the
-            # webhook will write the real result later. Halt the phase.
-            if isinstance(result_obj, dict) and result_obj.get("deferred"):
-                yield TurnHalt(reason='deferred', detail={
-                    "tool_use_id": tool_use_id,
-                    "tool_name": tool_name,
-                    "deferred_id": result_obj.get("deferred_id"),
-                    "timeout_s": result_obj.get("timeout_s"),
-                })
-                return
+            # Halt envelopes carried by the executor's return value. Three
+            # shapes the runtime recognizes; everything else is a normal
+            # ToolResult:
+            #   {deferred: True, deferred_id, timeout_s?}
+            #       → TurnHalt(deferred) — no ToolResult yielded. The
+            #         deferred-tool wait + webhook fills the real result
+            #         in caller-side state, NOT in history-as-tool_result.
+            #   {_runtime_halt_before: "<reason>", ...}
+            #       → TurnHalt(<reason>) — no ToolResult yielded. The
+            #         tool's tool_use stays unresolved; caller's resume
+            #         endpoint writes the real result later. Used by
+            #         approval (the held tool runs only after user OK).
+            #   {_runtime_halt_after: "<reason>", ...}
+            #       → ToolResult + TurnHalt(<reason>). The ack stays in
+            #         history (well-formed tool_use/tool_result pair).
+            #         Used by present_plan + ask_clarification.
+            # The `detail` on the emitted TurnHalt carries the whole
+            # result envelope minus the marker key, so guide.py can pull
+            # out validator outputs (concerns, plan_entity_id) etc.
+            if isinstance(result_obj, dict):
+                if result_obj.get("deferred"):
+                    yield TurnHalt(reason='deferred', detail={
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
+                        "deferred_id": result_obj.get("deferred_id"),
+                        "timeout_s": result_obj.get("timeout_s"),
+                    })
+                    return
+                if "_runtime_halt_before" in result_obj:
+                    reason = result_obj.pop("_runtime_halt_before")
+                    yield TurnHalt(reason=reason, detail={
+                        **result_obj,
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
+                    })
+                    return
+                halt_after = result_obj.pop("_runtime_halt_after", None)
+            else:
+                halt_after = None
 
             yield ToolResult(tool_use_id=tool_use_id, tool_name=tool_name,
                              result=result_obj)
+
+            if halt_after:
+                yield TurnHalt(reason=halt_after, detail={
+                    **(result_obj if isinstance(result_obj, dict) else {}),
+                    "tool_use_id": tool_use_id,
+                    "tool_name": tool_name,
+                })
+                return
 
         yield TurnDone(stop_reason=stop_reason, usage=usage_delta)
 
