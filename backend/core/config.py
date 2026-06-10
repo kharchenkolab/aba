@@ -53,7 +53,69 @@ BIOMNI_DIR = Path(os.getenv("ABA_BIOMNI_DIR", _biomni_default)).resolve() if (
     os.getenv("ABA_BIOMNI_DIR") or _biomni_default.is_dir()) else None
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Module-load snapshot, kept as the "baseline" — process-startup default + the
+# fallback for callers that don't pass one to current_model_for_primary().
 MODEL = os.environ.get("ABA_MODEL", "claude-haiku-4-5-20251001")
+
+
+def current_model_for_primary(default: str = "") -> str:
+    """Resolve the model the **primary chat agent** should use *right now*.
+
+    Precedence (live, re-evaluated on every call — no caching):
+
+        1. ABA_PRIMARY_MODEL  in-process env  (targeted override, matches
+                                               load_agent_spec's order)
+        2. ABA_MODEL          in-process env  (back-compat alias)
+        3. ABA_MODEL=...      in ~/.aba/config.env  (rewritten by the
+                                               helper's POST /api/auth/model
+                                               on tray / Control-page swaps)
+        4. default            caller-supplied  (usually the spec's YAML model)
+        5. MODEL              module-load snapshot  (last-resort fallback)
+
+    Hot model switch (misc/mac-install.md § 3c — tray Model submenu): the
+    backend reads this at the start of every turn in guide.py, so a switch
+    from the helper UI takes effect on the next turn without a restart.
+
+    Robustness: a missing or malformed config.env never raises; we fall
+    through to the next layer so an interrupted write or a comment-only
+    file doesn't take a turn down."""
+    # Live env vars first — picks up monkeypatch in tests and the launcher-
+    # sourced env in production.
+    env = (os.environ.get("ABA_PRIMARY_MODEL")
+           or os.environ.get("ABA_MODEL"))
+    if env and env.strip():
+        return env.strip()
+    # Fresh re-parse of config.env each call. The file is tiny (handful of
+    # export lines) so this is microseconds and avoids the per-turn caching
+    # complexity that would otherwise hide cross-turn changes.
+    cfg_val = _read_aba_model_from_config_env()
+    if cfg_val:
+        return cfg_val
+    return default or MODEL
+
+
+def _read_aba_model_from_config_env() -> str:
+    """Parse ~/.aba/config.env for ABA_MODEL. Returns '' on any failure.
+    Standalone (no aba_installer dep) so the backend can read it without
+    pulling the helper package."""
+    home = Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    cfg = home / "config.env"
+    if not cfg.exists():
+        return ""
+    try:
+        text = cfg.read_text(errors="replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    import re as _re
+    # Match the helper's emit_config_env shape:  export ABA_MODEL=<value>
+    # Tolerant of optional quotes around the value (shlex.quote leaves
+    # single-token strings unquoted but quotes anything weird).
+    m = _re.search(r"^\s*(?:export\s+)?ABA_MODEL\s*=\s*"
+                   r"(?:'([^']*)'|\"([^\"]*)\"|(\S+))\s*$",
+                   text, _re.MULTILINE)
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or m.group(3) or "").strip()
 FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")
 # Capability proposal approval (capdat_impl.md P2′): "auto" publishes a
 # proposed capability immediately (solo/dev; every add still audited), "ask"

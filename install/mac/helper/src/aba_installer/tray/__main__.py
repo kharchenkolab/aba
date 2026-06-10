@@ -110,10 +110,12 @@ def main() -> int:
     def make_model_callback(model_id: str):
         def _click(_sender):
             res = actions.set_model(model_id=model_id, port=port)
-            if res.ok and res.restart_required:
+            if res.ok and res.applied_on_next_turn:
+                # Hot-switch contract: backend reads the new model at the
+                # start of the next turn. No restart needed.
                 rumps.notification("ABA", "Switched model",
-                                   f"{model_id} — restart ABA from the menu "
-                                   f"to apply.")
+                                   f"{model_id} — takes effect on your next "
+                                   f"message.")
             elif not res.ok:
                 rumps.notification("ABA", "Error", res.message or "")
         return _click

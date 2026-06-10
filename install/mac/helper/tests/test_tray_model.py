@@ -52,10 +52,10 @@ def test_set_model_posts_to_endpoint_with_payload():
         seen.append({"url": req.full_url, "method": req.get_method(),
                      "data": req.data})
         return _StubResp({"ok": True, "model": "claude-sonnet-4-6",
-                          "restart_required": True})
+                          "applied_on_next_turn": True})
     res = actions.set_model(model_id="claude-sonnet-4-6", port=8765, urlopen=fake)
     assert res.ok
-    assert res.restart_required is True
+    assert res.applied_on_next_turn is True
     # Right endpoint + method
     assert seen[0]["url"].endswith("/api/auth/model")
     assert seen[0]["method"] == "POST"
@@ -64,13 +64,13 @@ def test_set_model_posts_to_endpoint_with_payload():
     assert body == {"model": "claude-sonnet-4-6"}
 
 
-def test_set_model_no_restart_when_unchanged():
+def test_set_model_no_apply_when_unchanged():
     def fake(req, timeout=None):
         return _StubResp({"ok": True, "model": "claude-opus-4-7",
-                          "restart_required": False})
+                          "applied_on_next_turn": False})
     res = actions.set_model(model_id="claude-opus-4-7", port=8765, urlopen=fake)
     assert res.ok
-    assert res.restart_required is False
+    assert res.applied_on_next_turn is False
 
 
 def test_set_model_returns_actionable_error_on_helper_offline():

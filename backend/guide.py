@@ -303,8 +303,15 @@ async def stream_response(
     # extraction into Agent.run() is deferred; for now the spec is
     # consulted for model + role only, while the loop body stays here.
     from core.runtime.agent import get_agent_spec
+    from core.config import current_model_for_primary
     spec = get_agent_spec("guide")
-    guide_model = spec.model if spec else None    # falls back to MODEL default
+    # Resolve the primary model AT THE TURN BOUNDARY (not import time) so
+    # the tray / Control-page model selector takes effect on the next turn
+    # without a backend restart. Precedence: live env vars > config.env >
+    # spec.model (YAML default) > module MODEL constant. See
+    # core.config.current_model_for_primary for the full chain.
+    guide_model = current_model_for_primary(
+        default=(spec.model if spec else None))
 
     # Turn checkpointing (Pass E): create a Turn row at the start; update
     # state through transitions; mark DONE/FAILED at the end. Lets resume-

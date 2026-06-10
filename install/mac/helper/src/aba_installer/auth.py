@@ -409,7 +409,14 @@ def get_model_tool() -> dict:
 
 def set_model_tool(payload: dict) -> dict:
     """Tool-shaped setter. Validates the model id, persists, signals
-    restart_required when the value actually changed."""
+    `applied_on_next_turn` when the value actually changed.
+
+    Hot-switch contract: the backend's guide.py reads
+    config.current_model_for_primary() at the start of each turn, so a
+    write to ~/.aba/config.env takes effect on the *next* user turn — no
+    restart required. The response carries `applied_on_next_turn: true`
+    on a real change so the UI / tray can word the notification correctly.
+    """
     model = (payload or {}).get("model")
     if not isinstance(model, str) or model not in _MODEL_IDS:
         raise HTTPException(status_code=400,
@@ -418,12 +425,12 @@ def set_model_tool(payload: dict) -> dict:
     entries = _read_config_env()
     current = entries.get("ABA_MODEL")
     if current == model:
-        return {"ok": True, "model": model, "restart_required": False}
+        return {"ok": True, "model": model, "applied_on_next_turn": False}
     entries["ABA_MODEL"] = model
     _write_config_env(entries)
-    return {"ok": True, "model": model, "restart_required": True,
-            "note": "Backend reads ABA_MODEL at startup — restart ABA to "
-                    "pick up the new model."}
+    return {"ok": True, "model": model, "applied_on_next_turn": True,
+            "note": "Backend resolves the model at each turn boundary — "
+                    "the new model takes effect on your next message."}
 
 
 @router.get("/model")
