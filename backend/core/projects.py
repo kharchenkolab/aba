@@ -10,6 +10,7 @@ Bypassed entirely in single-project / test mode — when ``ABA_DB_PATH`` or
 layer just runs ``init_db`` on it.
 """
 from __future__ import annotations
+import fcntl
 import json
 import os
 import sqlite3
@@ -64,6 +65,44 @@ def _load() -> list:
 def _save(reg: list) -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     REGISTRY.write_text(json.dumps(reg, indent=2))
+
+
+# Lock a sidecar file, NOT registry.json itself: write_text() replaces the
+# inode so any flock held on registry.json would be invalidated mid-cycle.
+# Holding the lock on a stable sidecar serializes the whole load→edit→save.
+_REGISTRY_LOCK = "registry.lock"
+
+
+@contextlib.contextmanager
+def _locked_registry():
+    """Serialize read-modify-write on the project registry.
+
+    Yields the current registry as a mutable list. Mutate IN PLACE
+    (`reg.append(...)`, `reg[:] = [...]`, item field edits — not
+    `reg = ...`); on exit the modified list is written back. Holds an
+    exclusive flock on a sidecar file the whole time, so concurrent
+    callers (curl bulk-delete, the agent tool API, simultaneous UI
+    clicks) queue up instead of clobbering each other.
+
+    Background: 2026-06-10 ran 256 parallel DELETE /api/projects via
+    `xargs -P 4`. Each handler did `reg = _load(); reg.remove(pid);
+    _save(reg)` with no lock. End state: registry empty (every save
+    overwrote a stale snapshot with one pid removed; the LAST snapshot
+    was a tiny one). Fix is this context manager — every mutating
+    helper goes through it. See feedback_no_parallel_destructive_api.md.
+    """
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = PROJECTS_DIR / _REGISTRY_LOCK
+    # O_CREAT for first-run; r+/w both work, "a" never truncates the lockfile
+    # in case anyone wrote to it. Mode is irrelevant — we only use the fd.
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            reg = _load()
+            yield reg
+            _save(reg)
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
 
 def _db_file(pid: str) -> Path:
@@ -214,11 +253,10 @@ def bind(pid: str | None):
 
 
 def _touch(pid: str) -> None:
-    reg = _load()
-    for p in reg:
-        if p["id"] == pid:
-            p["last_touched"] = _now()
-    _save(reg)
+    with _locked_registry() as reg:
+        for p in reg:
+            if p["id"] == pid:
+                p["last_touched"] = _now()
 
 
 def _db_mtime_iso(pid: str) -> str | None:
@@ -255,12 +293,11 @@ def list_projects() -> list:
 def create_project(name: str) -> dict:
     if SINGLE:
         return list_projects()[0]
-    reg = _load()
     pid = "prj_" + uuid.uuid4().hex[:8]
     entry = {"id": pid, "name": (name or "Untitled project").strip()[:80],
              "created_at": _now(), "last_touched": _now()}
-    reg.append(entry)
-    _save(reg)
+    with _locked_registry() as reg:
+        reg.append(entry)
     set_current(pid)
     update_entity("workspace", title=entry["name"])  # in-project title = project name
     _emit_project_meta(pid)
@@ -270,25 +307,25 @@ def create_project(name: str) -> dict:
 def rename_project(pid: str, name: str) -> None:
     if SINGLE:
         return
-    reg = _load()
-    for p in reg:
-        if p["id"] == pid:
-            p["name"] = (name or p["name"]).strip()[:80]
-    _save(reg)
+    with _locked_registry() as reg:
+        for p in reg:
+            if p["id"] == pid:
+                p["name"] = (name or p["name"]).strip()[:80]
     _emit_project_meta(pid)
 
 
 def delete_project(pid: str) -> None:
     if SINGLE:
         return
-    reg = [p for p in _load() if p["id"] != pid]
-    _save(reg)
+    with _locked_registry() as reg:
+        reg[:] = [p for p in reg if p["id"] != pid]
+        survivors = list(reg)
     f = _db_file(pid)
     if f.exists():
         f.unlink()
     if _state["current"] == pid:
-        if reg:
-            set_current(reg[-1]["id"])
+        if survivors:
+            set_current(survivors[-1]["id"])
         else:
             _park_scratch()       # true empty state — no phantom project
 
