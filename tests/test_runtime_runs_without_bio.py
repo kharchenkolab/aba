@@ -113,27 +113,24 @@ def test_guide_module_has_no_top_level_bio_imports():
     )
 
 
-def test_guide_lazy_bio_imports_are_gated():
-    """Residual lazy/conditional content.bio.* imports inside guide.py
-    function bodies. Tracked so the count can only go DOWN.
+def test_guide_has_no_bio_imports_anywhere():
+    """Stricter form of the top-level audit: guide.py must NEVER import
+    from content.bio, top-level OR in function bodies. W1-A.2 phase 4'
+    lifted the residual 9 lazy imports into hook subscribers in
+    content/bio/lifecycle/guide_hooks.py — guide.py now fires generic
+    events via core.hooks.dispatcher.dispatch and any content pack can
+    subscribe. A new lazy import here would be a regression.
 
-    Today (Wave 2 A.3 landed): 9 lazy imports.
-        - figure_history (figure-history halt handling)
-        - lifecycle.runs (open_run / close_run / active_run_id)
-        - lifecycle.plans (set_plan_lifecycle on plan halts)
-        - tools._feedlog (debug logging)
-
-    These get lifted via the BioPack protocol or moved into
-    core/runtime/ helpers as part of W1-A.2 (the deeper guide.py
-    extraction). When that lands, this gate count drops to 0 and the
-    test can be deleted.
+    This test replaces the prior gated-at-9 ceiling. If a guide.py edit
+    legitimately needs to lift a NEW bio behavior out of inline calls
+    into a hook, register a new event type instead of importing
+    content.bio.*.
     """
     import ast
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[1] / "backend" / "guide.py"
     tree = ast.parse(src.read_text())
-    # Walk EVERY node — top-level + nested.
     bio_imports: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
@@ -143,10 +140,10 @@ def test_guide_lazy_bio_imports_are_gated():
             for alias in node.names:
                 if alias.name.startswith("content.bio"):
                     bio_imports.append((node.lineno, alias.name))
-    EXPECTED = 9
-    assert len(bio_imports) <= EXPECTED, (
-        f"residual lazy content.bio imports in guide.py rose to "
-        f"{len(bio_imports)} (was {EXPECTED}). Lift via BioPack methods "
-        f"or move to core/runtime/ helpers. Found: {bio_imports}"
+    assert not bio_imports, (
+        "guide.py must not import from content.bio (any level). Lift "
+        "the behavior into a hook subscriber in "
+        "content/bio/lifecycle/guide_hooks.py and fire a generic "
+        f"on_<event> via dispatch(). Found: {bio_imports}"
     )
 

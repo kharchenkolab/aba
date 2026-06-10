@@ -184,14 +184,12 @@ def _build_focus_change_marker(prev_focus_id: str | None,
                 cell = get_entity(ref)
                 if not cell:
                     continue
-                displayed_id = cell["id"]
-                try:
-                    from content.bio.graph.figure_history import figure_history
-                    chain = figure_history(ref)
-                    if chain:
-                        displayed_id = chain[0]["id"]
-                except Exception:  # noqa: BLE001
-                    pass
+                # Content packs may override displayed_id via the
+                # on_resolve_displayed_id hook (bio uses figure_history
+                # to show the latest revision instead of the anchor).
+                _dctx = {"ref": ref, "displayed_id": cell["id"]}
+                dispatch("on_resolve_displayed_id", _dctx)
+                displayed_id = _dctx["displayed_id"]
                 t = (cell.get("title") or "").strip()
                 member_bits.append(f"{kind} {t!r} (id {displayed_id})")
             if member_bits:
@@ -236,14 +234,9 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
             if not cell: continue
             # If the figure/table has a revision chain, the panel shows
             # chain[0] (latest), not the anchor — so cite the displayed id.
-            displayed_id = cell["id"]
-            try:
-                from content.bio.graph.figure_history import figure_history
-                chain = figure_history(ref)
-                if chain:
-                    displayed_id = chain[0]["id"]
-            except Exception:  # noqa: BLE001
-                pass
+            _dctx = {"ref": ref, "displayed_id": cell["id"]}
+            dispatch("on_resolve_displayed_id", _dctx)
+            displayed_id = _dctx["displayed_id"]
             t = (cell.get("title") or "").strip()
             member_bits.append(f"{kind} {t!r} (id {displayed_id})")
         if member_bits:
@@ -550,11 +543,7 @@ async def stream_response(
     # approved with "Save as a run" UNCHECKED, the Go message carries this marker,
     # so discard the just-opened (still-empty) Run before execution groups under it.
     if "do not save this as a run" in (user_text or "").lower():
-        try:
-            from content.bio.lifecycle.runs import close_run
-            close_run(store_tid)
-        except Exception:  # noqa: BLE001
-            pass
+        dispatch("on_run_save_opt_out", {"thread_id": store_tid})
 
     # Drawer sidecar: send the structured Manifest snapshot to the client
     # so the right-rail drawer can render what the agent is currently
@@ -810,23 +799,15 @@ async def stream_response(
                     # #160: stash on the Turn row so the resume endpoint can
                     # find which plan to transition when the user clicks Go.
                     turn.plan_entity_id = plan_eid
-                    # Open the analysis Run for this plan NOW, server-side — the
-                    # default-save the user expects, robust even if the agent never
-                    # calls open_run. Rotates any prior open Run; an empty one is
-                    # discarded on the next rotation or on the unchecked-box opt-out
-                    # (handled at turn start). The agent does NOT open for plans.
-                    try:
-                        from content.bio.lifecycle.runs import open_run as _open_run
-                        from content.bio.tools import _feedlog as _fl
-                        _rid = _open_run(store_tid, plan.title or "Analysis run",
-                                         focus_entity_id=focus_entity_id, plan_entity_id=plan_eid)
-                        _fl(f"SERVER open_run @present_plan title={(plan.title or 'Analysis run')!r} "
-                            f"plan_eid={plan_eid} -> run={_rid}")
-                    except Exception as _e:  # noqa: BLE001
-                        try:
-                            from content.bio.tools import _feedlog as _fl
-                            _fl(f"SERVER open_run @present_plan FAILED: {_e}")
-                        except Exception: pass  # noqa: BLE001, E701
+                    # Bio reacts to this event by opening the analysis
+                    # Run server-side (default-save). Handler lives in
+                    # content/bio/lifecycle/guide_hooks.py.
+                    dispatch("on_plan_presented", {
+                        "thread_id": store_tid,
+                        "plan_title": plan.title or "Analysis run",
+                        "focus_entity_id": focus_entity_id,
+                        "plan_entity_id": plan_eid,
+                    })
                     yield sse({"type": "plan", "entity_id": plan_eid, **plan.to_dict()})
                     ack = {
                         "status": "presented",
@@ -920,13 +901,13 @@ async def stream_response(
                     # 2026-06-05, prj_840cd021 — first user attempt at
                     # sleep-test backgrounding).
                     from core import projects as _projects
-                    from content.bio.lifecycle.runs import active_run_id as _arid
                     _pid = _projects.current() or "default"
-                    _arid_val = None
-                    try:
-                        _arid_val = _arid(str(store_tid))
-                    except Exception:  # noqa: BLE001
-                        pass
+                    # Content pack fills in active_run_id (bio uses the
+                    # lifecycle.runs table). Other packs may not have a
+                    # concept of "active run" — they leave it None.
+                    _arid_ctx = {"thread_id": str(store_tid), "active_run_id": None}
+                    dispatch("on_background_job_submit", _arid_ctx)
+                    _arid_val = _arid_ctx.get("active_run_id")
                     job = submit_python_job(
                         code=tool_input.get("code", ""),
                         title=tool_input.get("title") or "Background analysis",
@@ -1260,11 +1241,7 @@ async def stream_response(
             # #160: if this turn was driving a plan's execution, mark the
             # plan completed. Idempotent + safe on a missing entity.
             if turn.plan_entity_id:
-                try:
-                    from content.bio.lifecycle.plans import set_plan_lifecycle
-                    set_plan_lifecycle(turn.plan_entity_id, "completed")
-                except Exception:  # noqa: BLE001
-                    pass    # plan-tracking is best-effort; never block normal completion
+                dispatch("on_plan_complete", {"plan_entity_id": turn.plan_entity_id})
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
                    "cache_read": usage_cr, "cache_write": usage_cw})
         yield sse({"type": "done"})
@@ -1275,11 +1252,7 @@ async def stream_response(
         turn.transition(TurnState.FAILED)
         checkpoint(turn)
         if turn.plan_entity_id:
-            try:
-                from content.bio.lifecycle.plans import set_plan_lifecycle
-                set_plan_lifecycle(turn.plan_entity_id, "failed")
-            except Exception:  # noqa: BLE001
-                pass
+            dispatch("on_plan_failed", {"plan_entity_id": turn.plan_entity_id})
         yield sse({"type": "error", "text": _friendly_error(e),
                    "detail": f"{type(e).__name__}: {e}"})
         yield sse({"type": "usage", "input": usage_in, "output": usage_out,
