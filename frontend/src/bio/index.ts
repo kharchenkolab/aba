@@ -15,6 +15,10 @@ import './railIcons'
 import './menuActions'
 import './searchFacets'
 import './homeTiles'
+import './typeLabels'
+import './entityClasses'
+import './sectionCounts'
+import './projectSignals'
 
 // Re-export the public registry APIs so platform components can import
 // from `src/bio` directly (rather than from each sub-module).
@@ -50,5 +54,38 @@ export {
   register_home_tile,
   home_tiles,
   home_tile_for,
+  register_card_order,
+  card_order,
   type HomeTile,
 } from './homeTiles'
+
+export {
+  register_type_label,
+  type_label_for,
+  type_label_or_fallback,
+} from './typeLabels'
+
+export {
+  register_entity_class,
+  type_in_class,
+  types_in_class,
+} from './entityClasses'
+
+export {
+  register_section_count,
+  section_count,
+  section_counts,
+  type SectionName,
+} from './sectionCounts'
+
+export {
+  dataset_count,
+  has_any_dataset,
+  has_pinned_figure,
+  has_user_question,
+  kept_message_keys,
+  pinned_figure_ids,
+  default_pin_kind,
+  uses_claim_focus_route,
+  supports_focused_highlighting,
+} from './projectSignals'

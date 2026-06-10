@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Entity } from '../types'
 import { typeHasChatGesture, typeOf } from '../entityTypes'
+import { entity_menu_traits } from '../bio/menuActions'
 import './EntityMenu.css'
 
 interface Props {
@@ -17,17 +18,17 @@ interface Props {
 
 // Pin = "promote this evidence into a Result" (lifecycle/promote.pin_evidence).
 // Pinnability is declared per type in `creation.user_gestures_chat` of
-// the entity-type YAMLs (Phase 4.6) — entity_types/{figure,table,note,
-// narrative}.yaml include "pin"; result/claim/finding don't (they ARE
-// the curation layer, not pinnable themselves). The fallback below
-// covers the brief window before the catalog has loaded.
-const _PINNABLE_FALLBACK = new Set(['figure', 'table', 'cell', 'note', 'narrative'])
+// the entity-type YAMLs (Phase 4.6) — figure/table/note/narrative include
+// "pin"; result/claim/finding don't (they ARE the curation layer, not
+// pinnable themselves). The fallback (bio menuActions registry) covers
+// the brief window before the catalog has loaded.
 function isPinnable(entityType: string): boolean {
   // If the catalog isn't loaded yet, typeOf returns null — fall back
-  // to the legacy set so the UI doesn't briefly hide the affordance.
+  // to the bio menu-traits registry so the UI doesn't briefly hide the
+  // affordance.
   return typeOf(entityType)
     ? typeHasChatGesture(entityType, 'pin')
-    : _PINNABLE_FALLBACK.has(entityType)
+    : entity_menu_traits(entityType).pinnable
 }
 
 type Editing =
@@ -97,11 +98,12 @@ export default function EntityMenu({ entity, onChange }: Props) {
 
   async function hardDelete() {
     setDeleting(true); setDelError(null)
-    // For Results we cascade to members + their revision chains; the
-    // backend skips members that are also referenced from outside the
-    // cascade (shared with another Result, cited by a Claim) and detaches
-    // only the includes/supports/wasDerivedFrom edges from THIS Result.
-    const qs = entity.type === 'result'
+    // For Results (and any bio type whose menu-traits set cascadeMembers)
+    // we cascade to members + their revision chains; the backend skips
+    // members that are also referenced from outside the cascade (shared
+    // with another Result, cited by a Claim) and detaches only the
+    // includes/supports/wasDerivedFrom edges from THIS Result.
+    const qs = entity_menu_traits(entity.type).cascadeMembers
       ? '?hard=true&cascade=members'
       : '?hard=true'
     try {
@@ -240,8 +242,12 @@ function DeleteConfirm({
   error: { msg: string; refs?: Blocker[] } | null
   style?: React.CSSProperties
 }) {
-  const isDataset = entity.type === 'dataset'
-  const isResult = entity.type === 'result'
+  // Bio menu-traits decides the delete-confirm body variant. dataset →
+  // shows file-count + size summary; result → shows member-cascade
+  // summary; generic → plain "permanently removed" warning.
+  const traits = entity_menu_traits(entity.type)
+  const isDataset = traits.deleteVariant === 'dataset'
+  const isResult = traits.deleteVariant === 'result'
   const fc = entity.metadata?.file_count as number | undefined
   const bytes = entity.metadata?.size_bytes as number | undefined
   // Count Result members so the user sees what cascade-delete will sweep

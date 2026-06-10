@@ -4,6 +4,10 @@
  * snippets. Pick an entity to focus it.
  */
 import { useEffect, useRef, useState } from 'react'
+// Search placeholder text dispatches through the bio search-facet
+// registry. The shell never lists "figures, findings, datasets"; bio
+// decides what it can usefully be searched for.
+import { search_placeholder } from '../bio/searchFacets'
 import './SearchModal.css'
 
 interface EntityHit { id: string; type: string; title: string; status: string; created_at: string }
@@ -54,7 +58,7 @@ export default function SearchModal({ open, onClose, onPick }: Props) {
           <input
             ref={inputRef}
             className="search-q"
-            placeholder="Search figures, findings, datasets, chat…"
+            placeholder={search_placeholder()}
             value={q}
             onChange={e => setQ(e.target.value)}
           />

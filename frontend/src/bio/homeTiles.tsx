@@ -40,6 +40,18 @@ export function home_tile_for(key: string): HomeTile | null {
 }
 
 
+// ---------- Per-project card meta order ----------
+// The Home page's side rail shows one short meta line per project
+// listing the types that have entities in that project ("3 threads ·
+// 1 claim · …"). Order + the type-set is bio.
+const _CARD_ORDER: string[] = []
+
+export function register_card_order(...types: string[]): void {
+  for (const t of types) if (!_CARD_ORDER.includes(t)) _CARD_ORDER.push(t)
+}
+export function card_order(): string[] { return [..._CARD_ORDER] }
+
+
 // ---------- Default bio home tiles ----------
 // Mirror the prior HOME_STATS constant in Home.tsx — the projectCount()
 // special-case for runs/results is folded into each tile's count() now.
@@ -75,3 +87,5 @@ register_home_tile({
   count: c => ['figure', 'table', 'result', 'note', 'narrative']
                 .reduce((sum, t) => sum + (c[t] ?? 0), 0),
 })
+
+register_card_order('thread', 'claim', 'figure', 'dataset')

@@ -23,6 +23,12 @@ import ProjectOverview from './bio/ProjectOverview'
 // Must run BEFORE any shell component asks its registry (rail_icon_for,
 // entity_menu_traits, ...) to see anything but the empty defaults.
 import './bio'
+import {
+  type_label_or_fallback, type_in_class, section_counts,
+  dataset_count, has_any_dataset, has_pinned_figure, has_user_question,
+  kept_message_keys, pinned_figure_ids, default_pin_kind,
+  uses_claim_focus_route, supports_focused_highlighting,
+} from './bio'
 import { useProposals, ProposalCard, UndoToast } from './components/Proposals'
 import { useChat } from './useChat'
 import { useEntities } from './useEntities'
@@ -50,34 +56,17 @@ function findNodeByPath(root: FileNode | undefined, path: string): FileNode | nu
   return null
 }
 
-// Display label for an entity type — note `analysis` reads as "Run" (the v3
-// "analysis run"), avoiding confusion with the thread/investigation idea.
+// Display labels dispatch through the bio type-label registry (typeLabels.tsx).
+// The shell never enumerates entity-type names — bio populates the table on
+// import and the shell asks for one string. Note: `analysis` reads as "Run"
+// (the v3 "analysis run"), avoiding confusion with the thread / investigation
+// concept; bio's registration controls that.
 function typeLabel(t?: string): string {
-  switch (t) {
-    case 'figure': return 'Figure'
-    case 'table': return 'Table'
-    case 'finding': return 'Finding'
-    case 'result': return 'Result'
-    case 'dataset': return 'Dataset'
-    case 'narrative': return 'Section'
-    case 'analysis': return 'Run'
-    case 'claim': return 'Claim'
-    case 'thread': return 'Thread'
-    default: return 'Entity'
-  }
+  return type_label_or_fallback(t)
 }
 
 function entityLabel(e: Entity | null): string {
-  switch (e?.type) {
-    case 'figure': return 'Figure'
-    case 'table': return 'Table'
-    case 'finding': return 'Finding'
-    case 'result': return 'Result'
-    case 'dataset': return 'Dataset'
-    case 'narrative': return 'Section'
-    case 'analysis': return 'Run'
-    default: return 'Entity'
-  }
+  return type_label_or_fallback(e?.type)
 }
 
 /** Central-header thread title — click to rename inline (mirrors ResultView). */
@@ -243,9 +232,8 @@ export default function App() {
   // framing needs. Computed up here (before the Home early-return) so the
   // collapse effects below can read them; sectionCounts reuses activeEntities.
   const activeEntities = entities.filter(e => e.status !== 'archived' && e.status !== 'superseded')
-  const datasetCount = activeEntities.filter(e => e.type === 'dataset').length
-  const downstreamCount = activeEntities.filter(e =>
-    ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type)).length
+  const datasetCount = dataset_count(activeEntities)
+  const downstreamCount = activeEntities.filter(e => type_in_class(e.type, 'downstream')).length
 
   const refreshCurrent = () => {
     fetch('/api/projects/current')
@@ -351,9 +339,8 @@ export default function App() {
   type _Row = { type?: string; status?: string; metadata?: Record<string, unknown> }
   const frameOnProjectEntry = (rows: _Row[]) => {
     const active = rows.filter(e => e.status !== 'archived' && e.status !== 'superseded')
-    const ds = active.filter(e => e.type === 'dataset').length
-    const downstream = active.filter(e =>
-      ['figure', 'table', 'result', 'note', 'narrative', 'analysis', 'claim'].includes(e.type ?? '')).length
+    const ds = dataset_count(active as Entity[])
+    const downstream = active.filter(e => type_in_class(e.type, 'downstream')).length
     const threadCount = active.filter(e => e.type === 'thread').length
 
     // Left tree:
@@ -378,14 +365,10 @@ export default function App() {
     }
     else                setTreeCollapsed(true)
 
-    // Right rail — content-driven.
-    const hasPinnedFigure = active.some(e =>
-      e.type === 'result' &&
-      Array.isArray(e.metadata?.members) &&
-      (e.metadata!.members as Array<{ kind?: string }>).some(m => m.kind === 'figure'))
-    const hasUserQuestion = active.some(e =>
-      e.type === 'thread' && (e.metadata?.question_source === 'user'))
-    frameRail(!(hasPinnedFigure || hasUserQuestion))
+    // Right rail — content-driven. Both signals (pinned figures, user
+    // questions) are bio rules; the shell asks the bio registry.
+    const activeEnts = active as Entity[]
+    frameRail(!(has_pinned_figure(activeEnts) || has_user_question(activeEnts)))
   }
 
   // Enter a project picked in Home: pure navigation; the useEffect above
@@ -475,7 +458,7 @@ export default function App() {
   useEffect(() => {
     if (view !== 'workspace' || streaming) return
     if (messages.length > 0) return
-    if (!entities.some(e => e.type === 'dataset')) return
+    if (!has_any_dataset(entities)) return
     const key = `${projectKey}:${threadId}`
     if (orientedRef.current.has(key)) return
     orientedRef.current.add(key)
@@ -554,7 +537,7 @@ export default function App() {
   const goToEntity = (id: string) => {
     setViewedFile(null)  // clear any synthesized-file view first
     const e = entities.find(x => x.id === id)
-    if (e?.type === 'claim') openClaim(id)
+    if (uses_claim_focus_route(e?.type)) openClaim(id)
     else openEntity(id)
   }
 
@@ -653,7 +636,7 @@ export default function App() {
     if (!runId) return
     await fetch(`/api/runs/${encodeURIComponent(runId)}/pin-output`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: item.kind ?? 'figure', label: item.label, thumb: item.thumb, href: item.href, size: item.size }),
+      body: JSON.stringify({ kind: item.kind ?? default_pin_kind(), label: item.label, thumb: item.thumb, href: item.href, size: item.size }),
     }).catch(() => {})
     refresh()
   }
@@ -727,26 +710,12 @@ export default function App() {
       body: JSON.stringify({ key, text, image_urls, thread_id: currentThread?.id ?? threadId }),
     }).then(() => refresh()).catch(() => {})
   }
-  // Keys of currently-kept message notes (to reflect pin state in chat).
-  // Only active notes count — an archived (unpinned) note must not keep the
-  // chat pin button lit.
-  const keptKeys = new Set(
-    entities
-      .filter(e => e.type === 'note' && e.status === 'active' && (e.metadata?.source_key as string))
-      .map(e => e.metadata!.source_key as string),
-  )
-
-  // Figures kept by an active Result — derives chat figure pin state on
-  // re-entry. (Task #318 dropped the `entity.pinned` flag in favor of
-  // membership: a figure is "pinned" iff it appears as a member of an
-  // active Result.)
-  const pinnedFigureIds = new Set<string>(
-    entities
-      .filter(e => e.type === 'result' && e.status === 'active')
-      .flatMap(e => ((e.metadata?.members as Array<{kind?: string, ref?: string}>) ?? [])
-        .filter(m => m.kind === 'figure' && m.ref)
-        .map(m => m.ref as string)),
-  )
+  // Chat-pin state derives from bio: kept message keys + figure ids
+  // pinned via active-Result membership. The shell just passes the
+  // sets to ChatPane; bio decides the rules (which Note source_keys
+  // mark a message "kept", which member kind counts as a figure pin).
+  const keptKeys = kept_message_keys(entities)
+  const pinnedFigureIds = pinned_figure_ids(entities)
 
   if (view === 'home') {
     return (
@@ -758,20 +727,11 @@ export default function App() {
   }
 
   const gridCols = `var(--w-rail) ${treeCollapsed ? 0 : treeW}px ${treeCollapsed ? 8 : 10}px 1fr`
-  const sectionCounts = {
-    threads: 1 + activeEntities.filter(e => e.type === 'thread' && !e.metadata?.is_default).length,
-    claims: activeEntities.filter(e => e.type === 'claim').length,
-    data: activeEntities.filter(e => e.type === 'dataset').length,
-    // Exclude the ambient catch-all analysis (lifecycle/registry.py:_ensure_analysis)
-    // — structural bookkeeping, never user-facing.
-    runs: activeEntities.filter(e => e.type === 'analysis' && !(e.metadata as { ambient?: boolean } | undefined)?.ambient).length,
-    // Aligned with PinnedShelf + ProjectTree's Results tab: only Result entities
-    // count as "Results" — figures/tables live as evidence under Runs/Results.
-    results: activeEntities.filter(e => e.type === 'result').length,
-    // Virtual files view shows the same artifacts as Results but via a folder
-    // tree projection — count = same as results for now.
-    files: activeEntities.filter(e => ['figure', 'table', 'result', 'note', 'narrative'].includes(e.type) && e.artifact_path).length,
-  }
+  // Section counts dispatch through the bio registry (sectionCounts.tsx) — the
+  // shell no longer carries the bio rules ("a Run is an analysis that isn't
+  // ambient", "Files == artifact types with a file", ...). Bio decides; we
+  // just render the badges.
+  const sectionCountsByName = section_counts(activeEntities)
   const openProjectSection = (section: ProjectSection) => {
     setProjectSection(section)
     if (treeCollapsed) setTreeCollapsed(false)
@@ -888,7 +848,7 @@ export default function App() {
         onNavigate={goToView}
         collapsed={treeCollapsed}
         projectTitle={projectName}
-        sectionCounts={sectionCounts}
+        sectionCounts={sectionCountsByName}
         activeSection={projectSection}
         onProjectSection={openProjectSection}
       />
@@ -945,13 +905,13 @@ export default function App() {
             </>)}
           </div>
           <div className="canvas-actions">
-            {!overview && !inventory && (posture === 'chat' || focused?.type === 'result') && (
+            {!overview && !inventory && (posture === 'chat' || supports_focused_highlighting(focused?.type)) && (
               <button
                 className={`canvas-hl ${highlighting ? 'is-on' : ''}`}
                 onClick={() => setHighlighting(v => !v)}
                 title={highlighting
                   ? 'Cancel highlight'
-                  : (focused?.type === 'result'
+                  : (supports_focused_highlighting(focused?.type)
                      ? 'Highlight a region of any panel (figure, caption, or note) to ask Guide about it'
                      : 'Highlight a region of any message to ask Guide about it')}
               >

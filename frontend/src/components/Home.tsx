@@ -11,6 +11,10 @@
  * deleting goes through a full confirmation modal reached from a ⋯ menu.
  */
 import { useCallback, useEffect, useState } from 'react'
+// Home stat tiles dispatch through the bio home-tile registry — the
+// shell asks for the tile list, bio decides the labels + count rules
+// (which entity types roll up into "results", "runs", etc.).
+import { home_tiles, card_order } from '../bio/homeTiles'
 import './Home.css'
 
 interface Project {
@@ -44,26 +48,10 @@ type Modal =
   | { kind: 'delete'; pid: string; name: string }
   | null
 
-const CARD_ORDER = ['thread', 'claim', 'figure', 'dataset']  // shown on project cards
-const HOME_STATS = [
-  { key: 'thread', label: 'threads' },
-  { key: 'claim', label: 'claims' },
-  { key: 'dataset', label: 'datasets' },
-  { key: 'runs', label: 'runs' },
-  { key: 'results', label: 'results' },
-]
+// Bio decides which entity types surface as the side-card meta line.
 const EVENT_LABEL: Record<string, string> = {
   entity_created: 'created', scenario_created: 'scenario',
   advisor_note: 'advisor note', suggestion_logged: 'suggestion',
-}
-
-function projectCount(counts: Record<string, number>, key: string): number {
-  if (key === 'runs') return counts.analysis ?? counts.run ?? 0
-  if (key === 'results') {
-    return ['figure', 'table', 'result', 'note', 'narrative']
-      .reduce((sum, t) => sum + (counts[t] ?? 0), 0)
-  }
-  return counts[key] ?? 0
 }
 
 function baseName(fn: string): string {
@@ -334,10 +322,10 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 </div>
 
                 <div className="home__stats">
-                  {HOME_STATS.map(stat => (
-                    <div key={stat.key} className="home__stat">
-                      <span className="home__stat-n">{projectCount(currentCounts, stat.key)}</span>
-                      <span className="home__stat-t">{stat.label}</span>
+                  {home_tiles().map(tile => (
+                    <div key={tile.key} className="home__stat">
+                      <span className="home__stat-n">{tile.count(currentCounts)}</span>
+                      <span className="home__stat-t">{tile.label}</span>
                     </div>
                   ))}
                 </div>
@@ -409,7 +397,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 ) : (
                   <div className="home__side-list">
                     {projectMatches.map(p => {
-                      const stats = CARD_ORDER.filter(t => p.counts[t])
+                      const stats = card_order().filter(t => p.counts[t])
                       return (
                         <div
                           key={p.id}

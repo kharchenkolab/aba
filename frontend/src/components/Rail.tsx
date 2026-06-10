@@ -1,9 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import Settings from './Settings'
-import { RailIcon } from './icons'
+// Rail icons dispatch through the bio registry — the shell hands a name
+// and gets back whatever bio registered. Falls back to a small circle
+// when nothing is registered, so an unmounted bio side doesn't crash
+// the rail (just leaves the slots empty-looking).
+import { rail_icon_for } from '../bio/railIcons'
 import './Rail.css'
 
 type ProjectSection = 'threads' | 'claims' | 'data' | 'runs' | 'results' | 'files'
+
+/** Thin platform-side wrapper around the bio rail-icon registry. The
+ *  shell uses this in place of the old `<RailIcon name="..." />` so any
+ *  bio domain can replace the entire glyph set by registering its own. */
+function RailIcon({ name, size = 24 }: { name: string; size?: number }) {
+  const Comp = rail_icon_for(name)
+  if (!Comp) {
+    // Unknown name — render a small ring so a layout slot is still
+    // visible (and a missing icon shows up loudly during dev).
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <circle cx="12" cy="12" r="8" strokeWidth="1.6" />
+      </svg>
+    )
+  }
+  return <Comp size={size} />
+}
 
 interface Props {
   onEntitiesChanged: () => void
