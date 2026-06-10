@@ -87,3 +87,14 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--soft); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
 .page > p { margin: 12px 0; }
+
+/* Model selector on the Control page */
+.model-row { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.model-row .label { margin-bottom: 2px; }
+.model-select { width: 100%; padding: 7px 10px; font: inherit; font-size: 13px;
+  color: var(--fg); background: white; border: 1px solid var(--border); border-radius: 6px; }
+.model-select:focus { outline: none; border-color: var(--accent); }
+.model-note { margin: 6px 0 0; font-size: 12.5px; }
+.model-restart { margin: 8px 0 0; padding: 8px 10px; font-size: 12.5px;
+  background: var(--warn-bg); color: var(--warn-fg); border-radius: 6px; }
+.model-restart .btn.link { color: var(--warn-fg); text-decoration: underline; padding: 0 4px; }

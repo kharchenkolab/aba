@@ -89,6 +89,15 @@
         <button class="btn link" id="ctl-help">🛟 Help</button>
         <button class="btn link" id="ctl-uninstall">Uninstall</button>
       </div>
+      <div class="model-row">
+        <label class="label" for="model-select">Model</label>
+        <select id="model-select" class="model-select"></select>
+        <p class="muted model-note" id="model-note"></p>
+        <p class="model-restart" id="model-restart" hidden>
+          Saved. Restart ABA for the new model to take effect.
+          <button class="btn link" id="model-restart-btn">Restart now</button>
+        </p>
+      </div>
       <details id="diag">
         <summary>Show details</summary>
         <p class="muted" id="diag-meta"></p>

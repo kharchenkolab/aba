@@ -378,6 +378,64 @@ def auth_status() -> dict:
     }
 
 
+# ─── model selector ────────────────────────────────────────────────────
+# Surfaced via the Control page's model dropdown so users can flip between
+# haiku (cheap, fast), sonnet (balanced), opus (highest quality) without
+# editing config.env by hand. Backend reads ABA_MODEL at startup
+# (backend/core/config.py:56), so changes need a restart — the response
+# carries restart_required=True so the UI can tell the user.
+#
+# IDs MUST match what backend/core/runtime/agent.py accepts; keep in sync
+# if the model registry there changes.
+_AVAILABLE_MODELS = [
+    {"id": "claude-haiku-4-5",  "label": "Haiku 4.5  (fast, cheap)",
+     "note": "Best for simple lookups / quick edits. Default for cost."},
+    {"id": "claude-sonnet-4-6", "label": "Sonnet 4.6  (balanced)",
+     "note": "Recommended for most real work. Good quality, reasonable cost."},
+    {"id": "claude-opus-4-7",   "label": "Opus 4.7  (highest quality)",
+     "note": "Best for complex multi-step bioinformatics. Higher cost / latency."},
+]
+_DEFAULT_MODEL = "claude-opus-4-7"      # mirrors auth.py:175 default for authed users
+_MODEL_IDS = {m["id"] for m in _AVAILABLE_MODELS}
+
+
+def get_model_tool() -> dict:
+    """Tool-shaped accessor (no FastAPI) — exposes current model + the
+    choices list. Used by the router below and by the unit tests."""
+    entries = _read_config_env()
+    return {"model": entries.get("ABA_MODEL") or _DEFAULT_MODEL,
+            "available": list(_AVAILABLE_MODELS)}
+
+
+def set_model_tool(payload: dict) -> dict:
+    """Tool-shaped setter. Validates the model id, persists, signals
+    restart_required when the value actually changed."""
+    model = (payload or {}).get("model")
+    if not isinstance(model, str) or model not in _MODEL_IDS:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown model id {model!r}; valid: "
+                                   f"{sorted(_MODEL_IDS)}")
+    entries = _read_config_env()
+    current = entries.get("ABA_MODEL")
+    if current == model:
+        return {"ok": True, "model": model, "restart_required": False}
+    entries["ABA_MODEL"] = model
+    _write_config_env(entries)
+    return {"ok": True, "model": model, "restart_required": True,
+            "note": "Backend reads ABA_MODEL at startup — restart ABA to "
+                    "pick up the new model."}
+
+
+@router.get("/model")
+def get_model_endpoint() -> dict:
+    return get_model_tool()
+
+
+@router.post("/model")
+def set_model_endpoint(payload: dict) -> dict:
+    return set_model_tool(payload)
+
+
 @router.post("/clear")
 def clear_credentials() -> dict:
     """Remove the API key / token from config.env. Other entries preserved."""
