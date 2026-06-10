@@ -24,7 +24,7 @@ class _Item:
       - .title (str, writable)
       - .set_callback(cb or None)         → enabled/disabled gate
       - .state (int)                       → 1 = checkmark, 0 = none
-      - .clear() / .add(item)              → submenu mutation
+      - .clear() / .add(item) / __len__()  → submenu mutation + size check
     """
     def __init__(self, title: str = "", callback=None):
         self.title = title
@@ -37,6 +37,8 @@ class _Item:
         self._children.clear()
     def add(self, child):
         self._children.append(child)
+    def __len__(self):
+        return len(self._children)
     @property
     def enabled(self) -> bool:
         return self.callback is not None
@@ -175,6 +177,40 @@ def test_apply_model_submenu_rebuilds_children_with_one_checkmark():
     assert checked[0].title.startswith("Sonnet")
     # Factory got called once per model so callbacks are bound to specific ids
     assert factory_calls == [opt["id"] for opt in _AVAILABLE]
+
+
+def test_apply_model_submenu_handles_fresh_parent_without_clear_crash():
+    """rumps.MenuItem.clear() crashes with AttributeError if the parent has
+    never had children added — the underlying NSMenu is None until the
+    first .add() call materialises it. Our apply must guard so the FIRST
+    poll cycle still populates the submenu instead of silently dying in
+    the _poll except-Exception swallow.
+
+    Mirror the rumps behaviour with a stub whose .clear() raises until
+    something's been .add()'d."""
+    class _BrittleClearItem:
+        def __init__(self, title):
+            self.title = title
+            self.callback = None
+            self.state = 0
+            self._children: list = []
+        def set_callback(self, cb): self.callback = cb
+        def clear(self):
+            if not self._children:
+                raise AttributeError("'NoneType' has no attribute "
+                                     "'removeAllItems'")
+            self._children.clear()
+        def add(self, child): self._children.append(child)
+        def __len__(self):    return len(self._children)
+
+    sub = _BrittleClearItem("Model")
+    # No prior .add() — same condition as the first tray poll cycle.
+    m.apply_model_submenu(sub, current=None,
+                          available=_AVAILABLE,
+                          callback_factory=lambda _id: _CB)
+    assert len(sub._children) == len(_AVAILABLE), (
+        "first-call population must succeed even when parent had no prior "
+        "children (rumps clear() crash path)")
 
 
 def test_apply_model_submenu_no_check_when_current_is_none():
