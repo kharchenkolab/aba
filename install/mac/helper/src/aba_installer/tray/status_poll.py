@@ -100,6 +100,36 @@ def fetch_status(*, port: int,
     return _to_tray_status(payload)
 
 
+# ─── /api/auth/model state for the tray's Model submenu ────────────────────
+@dataclass(frozen=True)
+class ModelState:
+    """One snapshot of the model selector — what's chosen + what's offered."""
+    current: Optional[str]    # canonical model id, or None on helper failure
+    available: list           # list[dict] mirroring auth._AVAILABLE_MODELS
+
+
+def fetch_model_state(*, port: int,
+                      urlopen: Callable = urllib.request.urlopen,
+                      timeout_s: float = 2.0) -> ModelState:
+    """GET /api/auth/model and normalize. Transport failure → empty state
+    (the menu code then renders an empty submenu rather than crashing on
+    a partial poll cycle)."""
+    url = f"http://127.0.0.1:{port}/api/auth/model"
+    try:
+        req = urllib.request.Request(url)
+        with urlopen(req, timeout=timeout_s) as resp:
+            payload = json.loads(resp.read())
+    except (urllib.error.URLError, socket.timeout, ConnectionError,
+            TimeoutError, json.JSONDecodeError, ValueError):
+        return ModelState(current=None, available=[])
+    if not isinstance(payload, dict):
+        return ModelState(current=None, available=[])
+    return ModelState(
+        current=payload.get("model"),
+        available=payload.get("available") or [],
+    )
+
+
 # ─── port discovery ────────────────────────────────────────────────────────
 _DEFAULT_PORT = 8765      # matches setup.command's documented default
 

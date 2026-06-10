@@ -64,28 +64,29 @@ def main() -> int:
                     icon=str(icon_path) if has_icon else None,
                     template=True, quit_button=None)
 
-    status_item   = rumps.MenuItem("⏳  Connecting…")
-    start_item    = rumps.MenuItem("▶  Start")
-    stop_item     = rumps.MenuItem("⏻  Stop")
-    restart_item  = rumps.MenuItem("↻  Restart")
-    open_item     = rumps.MenuItem("↗  Open ABA")
-    updates_item  = rumps.MenuItem("⤓  Check for updates…")
+    status_item    = rumps.MenuItem("⏳  Connecting…")
+    start_item     = rumps.MenuItem("▶  Start")
+    stop_item      = rumps.MenuItem("⏻  Stop")
+    restart_item   = rumps.MenuItem("↻  Restart")
+    updates_item   = rumps.MenuItem("⤓  Check for updates…")
+    model_item     = rumps.MenuItem("Model")            # submenu container
     kickstart_item = rumps.MenuItem("Start helper…")
-    quit_item     = rumps.MenuItem("Quit ABA Tray")
+    quit_item      = rumps.MenuItem("Quit ABA Tray")
 
     items = {
         "status":    status_item,
         "start":     start_item,
         "stop":      stop_item,
         "restart":   restart_item,
-        "open":      open_item,
         "updates":   updates_item,
+        "model":     model_item,
         "kickstart": kickstart_item,
     }
 
-    # Sender-name → handler. rumps passes the MenuItem as the sender of a
-    # click; we dispatch by title prefix so menu.apply_status's title-edit
-    # doesn't fight us.
+    # Sender-name → handler. The status row's title varies ('●  Open ABA'
+    # when running, '○  ABA Stopped' otherwise) but apply_status only sets
+    # its callback when running, so a title match on '●  Open' is enough
+    # to identify the Open action.
     def on_click(sender):
         title = sender.title
         if title.startswith("▶"):
@@ -94,7 +95,7 @@ def main() -> int:
             res = actions.stop(port=port)
         elif title.startswith("↻"):
             res = actions.restart(port=port)
-        elif title.startswith("↗"):
+        elif title.startswith("●") and "Open" in title:
             res = actions.open_abc_browser(open_url=_open_url)
         elif title.startswith("⤓"):
             res = actions.check_updates(port=port, open_url=_open_url)
@@ -102,9 +103,20 @@ def main() -> int:
             res = actions.kickstart_helper()
         else:
             return
-        # Surface success / failure in the macOS notification centre rather
-        # than blocking the menu thread on a dialog.
         rumps.notification("ABA", "" if res.ok else "Error", res.message or "")
+
+    # Model submenu — one callback per model id (created via factory so
+    # the id is captured by closure, not lost in the rumps sender chain).
+    def make_model_callback(model_id: str):
+        def _click(_sender):
+            res = actions.set_model(model_id=model_id, port=port)
+            if res.ok and res.restart_required:
+                rumps.notification("ABA", "Switched model",
+                                   f"{model_id} — restart ABA from the menu "
+                                   f"to apply.")
+            elif not res.ok:
+                rumps.notification("ABA", "Error", res.message or "")
+        return _click
 
     def on_quit(_sender):
         rumps.quit_application()
@@ -112,25 +124,30 @@ def main() -> int:
     quit_item.set_callback(on_quit)
 
     # Build the menu in display order. None inserts a separator.
+    # Note: NO separate Open row — the status row at top does double duty.
     app.menu = [
         status_item,
         None,
         start_item, stop_item, restart_item,
         None,
-        open_item,
-        None,
-        updates_item, kickstart_item,
+        updates_item, model_item, kickstart_item,
         None,
         quit_item,
     ]
-
-    # Status row is informational; never clickable.
-    status_item.set_callback(None)
 
     @rumps.timer(_POLL_SECONDS)
     def _poll(_sender):
         s = status_poll.fetch_status(port=port)
         menu.apply_status(items, s, callback=on_click)
+        # Refresh the Model submenu — current selection may have changed
+        # via the browser Control page; available list could have widened.
+        try:
+            ms = status_poll.fetch_model_state(port=port)
+            menu.apply_model_submenu(model_item, current=ms.current,
+                                     available=ms.available,
+                                     callback_factory=make_model_callback)
+        except Exception:  # noqa: BLE001 — keep the poll resilient
+            pass
 
     # Trigger an immediate first paint so the user doesn't sit on "Connecting…"
     _poll(None)

@@ -29,7 +29,8 @@ _BACKEND_URL = "http://127.0.0.1:8000/"
 @dataclass(frozen=True)
 class ActionResult:
     ok: bool
-    message: str = ""        # one-line summary the menu can toast
+    message: str = ""             # one-line summary the menu can toast
+    restart_required: bool = False  # set by set_model when ABA_MODEL changed
 
 
 # ─── HTTP helper ──────────────────────────────────────────────────────────
@@ -141,6 +142,33 @@ def _gui_target() -> str:
     """``gui/<uid>/<label>`` is the modern launchctl target. Use it; older
     macOS versions accept it too."""
     return f"gui/{os.getuid()}/{_HELPER_LABEL}"
+
+
+def set_model(*, model_id: str, port: int,
+              urlopen: Callable = urllib.request.urlopen) -> ActionResult:
+    """POST /api/auth/model with the chosen id. The helper persists it to
+    config.env and tells us whether a restart is needed; we propagate
+    restart_required so the tray can surface a notification."""
+    url = f"http://127.0.0.1:{port}/api/auth/model"
+    body = json.dumps({"model": model_id}).encode()
+    req = urllib.request.Request(url, method="POST", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=10.0) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return ActionResult(False, f"helper rejected model change (HTTP {e.code})")
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+        return ActionResult(False, ("Helper offline — start it from the menu "
+                                    "('Start helper…') or System Settings → "
+                                    "Login Items."))
+    except (json.JSONDecodeError, ValueError):
+        return ActionResult(False, "helper returned non-JSON from /api/auth/model")
+    return ActionResult(
+        ok=bool(payload.get("ok")),
+        message=str(payload.get("model") or model_id),
+        restart_required=bool(payload.get("restart_required")),
+    )
 
 
 def kickstart_helper(*, run: Callable = subprocess.run) -> ActionResult:
