@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -94,12 +95,74 @@ def open_abc_browser(*, open_url: Callable[[str], None]) -> ActionResult:
     return ActionResult(True, _BACKEND_URL)
 
 
+def _helper_reachable(*, port: int, urlopen: Callable,
+                      timeout_s: float = 1.5) -> bool:
+    """True if /api/status responds within timeout_s. Cheap; runs on the
+    tray's main loop so it MUST stay snappy."""
+    url = f"http://127.0.0.1:{port}/api/status"
+    try:
+        with urlopen(urllib.request.Request(url), timeout=timeout_s) as resp:
+            resp.read()
+            return True
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+        return False
+
+
+def ensure_helper_reachable(*, port: int,
+                            urlopen: Callable = urllib.request.urlopen,
+                            run: Callable = subprocess.run,
+                            sleep: Callable[[float], None] = None,
+                            ) -> bool:
+    """Make a best-effort attempt to get the helper LaunchAgent answering
+    at :{port}. Returns True if it's already up OR if a kickstart succeeded
+    and the port came back within ~5s. Used before opening the browser
+    Control page so a click doesn't 404 in the user's face.
+
+    Robust to the dead-helper case the 2026-06-11 update bug hit: tray
+    rendered while the helper was alive, then it died, and the click
+    forwarded to a dead URL. The auto-recover gives us one chance to
+    revive it before falling back to the inline path.
+    """
+    if _helper_reachable(port=port, urlopen=urlopen):
+        return True
+    ks = kickstart_helper(run=run)
+    if not ks.ok:
+        return False
+    # Poll for readiness — launchctl returns as soon as it fires the
+    # spawn; the FastAPI server takes a beat to bind the socket.
+    import time as _time
+    _sleep = sleep or _time.sleep
+    for _ in range(10):                    # up to ~5s total
+        _sleep(0.5)
+        if _helper_reachable(port=port, urlopen=urlopen):
+            return True
+    return False
+
+
 def check_updates(*, port: int,
-                  open_url: Callable[[str], None]) -> ActionResult:
+                  open_url: Callable[[str], None],
+                  urlopen: Callable = urllib.request.urlopen,
+                  run: Callable = subprocess.run,
+                  sleep: Callable[[float], None] = None) -> ActionResult:
     """Delegate the multi-step update to the helper's existing browser
-    Control page — it already renders the SSE step list + live log. The tray
-    just opens the right URL; the user watches there. See misc/mac-install.md
-    § 3c.3 (the design choice not to rebuild that UI in Cocoa)."""
+    Control page — it already renders the SSE step list + live log. The
+    tray opens the right URL; the user watches there.
+
+    Robustness (2026-06-11): if the helper isn't answering, try a
+    kickstart first so the browser doesn't get forwarded to a dead URL.
+    If the kickstart can't revive it within ~5s, return an error so the
+    menu surfaces the right next move (Update now / Start helper…)
+    instead of silently opening a 404 in the browser. See
+    misc/mac-install.md § 3c.3 for the original design and the
+    fallback rationale.
+    """
+    if not ensure_helper_reachable(port=port, urlopen=urlopen, run=run,
+                                   sleep=sleep):
+        return ActionResult(
+            False,
+            "Helper not responding. Use 'Update now (no UI)…' from the "
+            "menu, or 'Start helper…' and try again.",
+        )
     url = f"http://127.0.0.1:{port}/"
     open_url(url)
     return ActionResult(True, url)
@@ -169,6 +232,149 @@ def set_model(*, model_id: str, port: int,
         message=str(payload.get("model") or model_id),
         applied_on_next_turn=bool(payload.get("applied_on_next_turn")),
     )
+
+
+# ─── inline update (no helper / no browser) ──────────────────────────────
+# Module-level guard so a double-click on 'Update now…' doesn't spawn two
+# concurrent playbook runs. The flag is owned by `update_inline`; reset
+# by the worker on done OR failure.
+_INLINE_UPDATE_LOCK = threading.Lock()
+_INLINE_UPDATE_INFLIGHT = False
+
+
+def _inline_log_path() -> Path:
+    """Where the inline updater streams its events. One stable file per
+    run (overwritten each invocation) so the user can keep TextEdit open
+    on it across attempts."""
+    from aba_installer.paths import logs_dir
+    return logs_dir() / "tray-update.log"
+
+
+def update_inline(*,
+                  open_path: Callable[[Path], None],
+                  notify: Callable[[str, str, str], None] = None,
+                  log_path: Optional[Path] = None,
+                  thread_factory: Callable = None,
+                  ) -> ActionResult:
+    """Run the update playbook DIRECTLY in the tray process — no helper
+    HTTP, no browser. Streams one line per executor event to
+    ``$ABA_HOME/logs/tray-update.log`` and opens that file so the user
+    can watch in TextEdit. Fires a rumps notification on done / fail.
+
+    The point: when the helper is wedged or refusing to start, the
+    update path that would FIX it (which includes a fresh
+    ``pull-aba``, env refresh, and bounce-backend) becomes the very
+    thing you can't run. This bypass closes that loop. Same playbook
+    the browser Control page uses (update.yml), same Executor — only
+    the front-end is different.
+
+    Implementation:
+      - Refuses with a clear error if another inline update is in flight.
+      - Spawns a daemon thread (the run takes minutes; the tray must
+        stay responsive). Notification fires when the thread finishes.
+      - Worker writes one human-readable line per executor event AND
+        flushes after each, so a `tail -f` (or a manual reload in
+        TextEdit) shows progress in real time.
+
+    `thread_factory` exists for tests — pass a lambda that records the
+    target function and runs it synchronously."""
+    import time
+    from aba_installer.playbook import Executor, load_playbook
+
+    global _INLINE_UPDATE_INFLIGHT
+    with _INLINE_UPDATE_LOCK:
+        if _INLINE_UPDATE_INFLIGHT:
+            return ActionResult(
+                False,
+                "An inline update is already running — watch "
+                f"{_inline_log_path()}.",
+            )
+        _INLINE_UPDATE_INFLIGHT = True
+
+    notify = notify or (lambda *a: None)
+    log_path = log_path or _inline_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Find update.yml in the installed helper package. Mirrors the
+    # control endpoint's resolution (_playbook_path) without importing
+    # FastAPI just for that.
+    pb_path = Path(__file__).resolve().parent.parent / "update.yml"
+    if not pb_path.exists():
+        with _INLINE_UPDATE_LOCK:
+            _INLINE_UPDATE_INFLIGHT = False
+        return ActionResult(
+            False, f"update.yml not found at {pb_path}")
+    pb = load_playbook(pb_path)
+
+    def _worker():
+        global _INLINE_UPDATE_INFLIGHT
+        ok = False
+        last_step = ""
+        try:
+            with open(log_path, "w", buffering=1) as f:
+                f.write(f"=== ABA inline update started "
+                        f"{time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                f.write(f"playbook: {pb_path}\n")
+                f.write(f"steps: {', '.join(s.id for s in pb.steps)}\n\n")
+
+                def on_event(name: str, payload: dict) -> None:
+                    # Compact one-line render. The browser Control page
+                    # has a richer UI; this is the 'I can tail this'
+                    # alternative.
+                    nonlocal last_step
+                    if name == "step_start":
+                        last_step = str(payload.get("title")
+                                        or payload.get("step_id") or "")
+                        f.write(f"\n>>> {last_step}\n")
+                    elif name == "command_output":
+                        line = str(payload.get("line") or "")
+                        f.write(f"    {line}\n")
+                    elif name == "command_end":
+                        rc = payload.get("returncode")
+                        if rc not in (None, 0):
+                            f.write(f"    [command exit {rc}]\n")
+                    elif name == "step_end":
+                        ok_step = payload.get("ok")
+                        f.write(f"<<< {last_step}: "
+                                f"{'OK' if ok_step else 'FAILED'}\n")
+                    else:
+                        f.write(f"[{name}] {payload}\n")
+                    f.flush()
+
+                ex = Executor(pb, on_event=on_event)
+                results = ex.run_all()
+                ok = all(r.ok for r in results)
+                f.write(f"\n=== {'DONE OK' if ok else 'DONE FAILED'} ===\n")
+        except Exception as e:                                   # noqa: BLE001
+            try:
+                with open(log_path, "a") as f:
+                    f.write(f"\n!!! tray-update exception: {e!r}\n")
+            except Exception:                                    # noqa: BLE001
+                pass
+            ok = False
+        finally:
+            with _INLINE_UPDATE_LOCK:
+                _INLINE_UPDATE_INFLIGHT = False
+            try:
+                notify(
+                    "ABA update",
+                    "OK" if ok else "Failed",
+                    f"See {log_path}",
+                )
+            except Exception:                                    # noqa: BLE001
+                pass
+
+    # Open the log immediately so the user can watch.
+    try:
+        open_path(log_path)
+    except Exception:  # noqa: BLE001 — opening is best-effort; the run still goes
+        pass
+
+    factory = thread_factory or (lambda target: threading.Thread(
+        target=target, daemon=True, name="aba-tray-inline-update"))
+    t = factory(_worker)
+    t.start()
+    return ActionResult(True, f"Update started — watch {log_path}.")
 
 
 def kickstart_helper(*, run: Callable = subprocess.run) -> ActionResult:

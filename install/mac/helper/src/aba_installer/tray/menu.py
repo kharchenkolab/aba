@@ -68,6 +68,11 @@ def apply_status(items: Dict[str, Any], status: TrayStatus,
     # Check for updates → opens the browser Control page; pointless if the
     # helper is unreachable or an update is already running.
     _set("updates", status.state not in ("helper_offline", "updating"))
+    # Inline 'Update now (no UI)' — bypasses the helper. The whole point
+    # is to remain usable when the helper is dead, so it stays enabled
+    # in helper_offline. Disabled only mid-update to avoid double-spawn.
+    if "update_now" in items:
+        _set("update_now", status.state != "updating")
     # Model submenu: persistence-only operation. Gate the parent on helper
     # reachability so a click doesn't hit a dead /api/auth/model.
     _set("model",   status.state != "helper_offline")
