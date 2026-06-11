@@ -32,6 +32,14 @@ class AgentSpec:
     max_iterations:   int = 20
     timeout_s:        int = 120
     fake_text:        Optional[str] = None          # canned reply for FAKE_SESSION
+    # W1-A.2 / R-2.2: which LLMRuntime serves this agent's turns.
+    #   "direct" (default) — DirectAPIRuntime; raw anthropic.messages.stream
+    #   "sdk"               — AgentSDKRuntime; claude_agent_sdk wrapper
+    #   "fake"              — FakeRuntime; scripted JSONL replay (eval/tests)
+    # Existing specs default to "direct" so this field is backwards-
+    # compatible with the per-spec YAMLs. The env var ABA_FAKE_SESSION
+    # still globally forces "fake" — same kill-switch as before.
+    runtime:          str = "direct"
 
 
 def _resolve_prompt(prompt_field: str, anchor_dir: Path) -> str:
@@ -70,6 +78,12 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
         src = "env override" if override else "yaml"
         print(f"[agent-spec] {raw.get('name','?')} (primary): model={model} ({src}, yaml={yaml_model})",
               flush=True)
+    runtime = (raw.get("runtime") or "direct").strip()
+    if runtime not in ("direct", "sdk", "fake"):
+        raise ValueError(
+            f"AgentSpec {raw.get('name','?')!r}: runtime={runtime!r} must "
+            "be one of: direct, sdk, fake"
+        )
     return AgentSpec(
         name=raw["name"],
         role=role,
@@ -82,7 +96,41 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
         max_iterations=int(raw.get("max_iterations", 8)),
         timeout_s=int(raw.get("timeout_s", 60)),
         fake_text=raw.get("fake_text"),
+        runtime=runtime,
     )
+
+
+def make_runtime(spec: AgentSpec):
+    """Pick the LLMRuntime implementation for this agent.
+
+    Selection precedence:
+      1. env var ABA_FAKE_SESSION (any truthy value) → FakeRuntime,
+         regardless of spec. Same global override as the legacy
+         core.llm.make_open_stream() path.
+      2. env var ABA_RUNTIME_OVERRIDE (one of direct/sdk/fake) → that
+         runtime, regardless of spec. For per-process A/B testing.
+      3. spec.runtime field (default "direct").
+
+    Returns an instance implementing the LLMRuntime protocol. Lazy
+    imports keep agent.py free of llm_runtime_* module weight on the
+    paths that don't actually run turns.
+    """
+    import os
+    if os.environ.get("ABA_FAKE_SESSION"):
+        chosen = "fake"
+    else:
+        chosen = (os.environ.get("ABA_RUNTIME_OVERRIDE")
+                  or spec.runtime or "direct").strip().lower()
+    if chosen == "direct":
+        from core.runtime.llm_runtime_direct import DirectAPIRuntime
+        return DirectAPIRuntime()
+    if chosen == "sdk":
+        from core.runtime.llm_runtime_sdk import AgentSDKRuntime
+        return AgentSDKRuntime()
+    if chosen == "fake":
+        from core.runtime.llm_runtime_fake import FakeRuntime
+        return FakeRuntime()
+    raise ValueError(f"unknown runtime: {chosen!r}")
 
 
 # Spec registry — populated by content at startup via register_agent_spec.
