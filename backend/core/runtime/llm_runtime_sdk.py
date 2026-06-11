@@ -98,22 +98,23 @@ def _parse_tool_result_content(content) -> dict:
 class AgentSDKRuntime:
     """LLMRuntime backed by claude_agent_sdk.ClaudeSDKClient.
 
-    R-3.2 scope:
-      - text + tool dispatch + TurnDone work end-to-end.
-      - Bio tools exposed via in-process MCP (memory transport).
-      - History seeded via interleaved `query()` messages
-        (validated by spike #2: SDK accepts pre-baked tool_use /
-        tool_result blocks).
-      - Dynamic system catalog rides as a `<system-reminder>`-wrapped
-        synthetic first user message (Option A; spike #4 measured
-        +0.4% cache cost — within noise).
+    Current support (R-3.2 + R-3.3.a):
+      - text + tool dispatch + TurnDone end-to-end
+      - bio tools via in-process MCP (memory transport)
+      - history seeded via interleaved query() messages (spike #2)
+      - dynamic catalog as <system-reminder>-wrapped first user message
+        (Option A; spike #4 measured +0.4% cache cost)
+      - halt_on_tools: when the model issues a tool in the set, the
+        PreToolUse hook returns continue_=False + permissionDecision=
+        "deny" → SDK ends the session before MCP dispatch → we emit
+        TurnHalt(reason='pending_tool', detail=...) instead of TurnDone.
 
-    NOT yet supported (R-3.3 work):
-      - halt_on_tools (present_plan, ask_clarification) — raises if non-empty.
-      - {_runtime_halt_before / _runtime_halt_after} envelopes — they
-        flow through to the model unchanged today.
-      - {deferred: True} envelopes — same; the SDK will keep iterating.
-      - PreToolUse / PostToolUse hook bridging.
+    NOT yet wired (R-3.3.b-e):
+      - {_runtime_halt_before / _after} envelopes flow through unchanged.
+      - {deferred: True} envelopes flow through (model sees the queued
+        ack and the session ends naturally — same as DirectAPIRuntime).
+      - PreToolUse / PostToolUse hook bridging (R-3.3.c).
+      - SDK-native defer for approval halts (R-3.3.b).
     """
 
     async def run_turn(
@@ -122,18 +123,13 @@ class AgentSDKRuntime:
         tool_executor: ToolExecutor,
         halt_on_tools: frozenset[str] = frozenset(),
     ) -> AsyncIterator[RuntimeEvent]:
-        if halt_on_tools:
-            raise NotImplementedError(
-                "AgentSDKRuntime: halt_on_tools is R-3.3 work. "
-                f"Got: {set(halt_on_tools)!r}"
-            )
-
         # Lazy-import — the SDK is ~75 MB and only this code path needs
         # it. Direct + fake runtimes don't pay this cost.
         from claude_agent_sdk import (   # noqa: PLC0415
             ClaudeAgentOptions, ClaudeSDKClient,
             SdkMcpTool, create_sdk_mcp_server,
             AssistantMessage, UserMessage, ResultMessage,
+            HookMatcher,
         )
         from claude_agent_sdk.types import (   # noqa: PLC0415
             TextBlock, ToolUseBlock, ToolResultBlock,
@@ -189,6 +185,48 @@ class AgentSDKRuntime:
             )
             allowed_tools = [f"{_MCP_TOOL_PREFIX}{t.name}" for t in sdk_tools]
 
+        # R-3.3.a halt_on_tools: intercept via PreToolUse hook.
+        #
+        # Why a hook, not `can_use_tool`: `can_use_tool` only fires when
+        # the SDK's permission ladder evaluates to "ask". We run under
+        # permission_mode="bypassPermissions" so MCP bio tools dispatch
+        # without prompting — and that mode also skips `can_use_tool`
+        # entirely. PreToolUse hooks always fire (verified by inspection
+        # of claude_agent_sdk/_internal/transport hook plumbing).
+        #
+        # The hook returns `continue_: False` + `permissionDecision:
+        # "deny"`, which (a) suppresses the MCP handler dispatch and
+        # (b) ends the session with a ResultMessage. We translate to
+        # TurnHalt(pending_tool) at the post-session step.
+        #
+        # nonlocal state captures the intercepted tool so the post-
+        # session translator can synthesize TurnHalt. None = no halt
+        # observed; dict = the held tool.
+        halt_intercepted: dict | None = None
+
+        async def _pre_tool_use_hook(input_data: dict, tool_use_id, context):
+            nonlocal halt_intercepted
+            raw_name = input_data.get("tool_name", "")
+            stripped = _strip_mcp_prefix(raw_name)
+            if stripped in halt_on_tools:
+                halt_intercepted = {
+                    "tool_name": stripped,
+                    "input": input_data.get("tool_input") or {},
+                    "tool_use_id": input_data.get("tool_use_id")
+                                    or tool_use_id,
+                }
+                return {
+                    "continue_": False,
+                    "stopReason": f"halt-on-tool: {stripped}",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason":
+                            "halt_on_tools intercept",
+                    },
+                }
+            return {}
+
         opts = ClaudeAgentOptions(
             system_prompt=req.system.stable,
             mcp_servers=mcp_servers,
@@ -199,13 +237,14 @@ class AgentSDKRuntime:
             # run_turn() call. ABA's outer loop in guide.py re-enters
             # run_turn() per phase, so a generous SDK budget here is
             # fine — the outer halt-state machine still controls phase
-            # boundaries. Default 20 (matches typical AgentSpec
-            # max_iterations).
+            # boundaries.
             max_turns=20,
-            # Approval gating lives in our tool_executor / outer layer.
-            # The SDK's permission_mode='bypassPermissions' tells the
-            # SDK not to inject its own approval prompts.
+            # bypassPermissions skips SDK prompt UI for MCP bio tools.
+            # halt_on_tools rides through PreToolUse below (always fires
+            # regardless of permission_mode).
             permission_mode="bypassPermissions",
+            hooks={"PreToolUse": [HookMatcher(matcher=None,
+                                              hooks=[_pre_tool_use_hook])]},
         )
 
         # ── 3. Seed history + dynamic-catalog as a stream of query frames ──
@@ -241,6 +280,18 @@ class AgentSDKRuntime:
             await client.query(_msg_stream())
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
+                    # If a halt was already intercepted on a prior
+                    # ToolUseBlock, the model's follow-up retries (more
+                    # ToolUseBlocks) and its filler-text explanation of
+                    # the denial both belong in the bit-bucket, not in
+                    # guide.py's event stream. Interrupt and break so
+                    # the session ends promptly.
+                    if halt_intercepted is not None:
+                        try:
+                            await client.interrupt()
+                        except Exception:
+                            pass
+                        break
                     # Per-block translation: TextBlock -> TextDelta;
                     # ToolUseBlock -> ToolUseStart. ThinkingBlock blocks
                     # are silently dropped (we don't surface them in
@@ -268,7 +319,13 @@ class AgentSDKRuntime:
                     # The SDK delivers tool_results back as UserMessage
                     # with ToolResultBlock content. Mirror these into
                     # our ToolResult events so the outer layer can
-                    # persist + render them.
+                    # persist + render them — but suppress synthetic
+                    # tool_results the SDK fabricates after a hook
+                    # denial (those are halt-echoes, not real executor
+                    # output). The synthetic block carries the same
+                    # tool_use_id that the hook stamped on the halt.
+                    if halt_intercepted is not None:
+                        continue
                     if isinstance(msg.content, list):
                         for blk in msg.content:
                             if isinstance(blk, ToolResultBlock):
@@ -300,6 +357,26 @@ class AgentSDKRuntime:
                 # info, RateLimitEvent, etc.) we currently ignore.
                 # When R-3.3 adds hook bridging, some may surface.
 
+        # R-3.3.a: if can_use_tool denied a halt-on-tools call, the
+        # session aborted before TurnDone semantics apply. Emit
+        # TurnHalt(pending_tool) with the intercepted tool's details
+        # instead. The ToolUseStart event was already yielded above
+        # (before the SDK consulted can_use_tool), so guide.py has
+        # already observed the model's intent; the halt event tells
+        # it the dispatch was suppressed.
+        if halt_intercepted is not None:
+            # If the SDK didn't surface a tool_use_id via the
+            # PermissionContext (older SDK builds), synthesize one so
+            # downstream consumers have something stable to key on.
+            tool_use_id = halt_intercepted.get("tool_use_id") or \
+                          f"toolu_halt_{uuid.uuid4().hex[:12]}"
+            from core.runtime.llm_runtime import TurnHalt
+            yield TurnHalt(reason="pending_tool", detail={
+                "tool_name":   halt_intercepted["tool_name"],
+                "input":       halt_intercepted["input"],
+                "tool_use_id": tool_use_id,
+            })
+            return
         yield TurnDone(stop_reason=stop_reason, usage=usage_delta)
 
 
