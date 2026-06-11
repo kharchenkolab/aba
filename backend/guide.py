@@ -654,7 +654,10 @@ async def stream_response(
             # deferred) to the SSE wire shapes the frontend speaks.
             # Tool execution + progress streaming go through the
             # runtime; guide.py just consumes events + translates.
-            _runtime = DirectAPIRuntime()
+            # R-2.2: pick the runtime from the agent spec (default 'direct').
+            # ABA_FAKE_SESSION / ABA_RUNTIME_OVERRIDE env vars take priority.
+            from core.runtime.agent import make_runtime
+            _runtime = make_runtime(spec)
             # Reset per-turn state each iteration of the outer while.
             _tool_input_by_id: dict[str, dict] = {}
             _tool_name_by_id: dict[str, str] = {}
