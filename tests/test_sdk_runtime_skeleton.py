@@ -50,9 +50,10 @@ def test_run_turn_is_async_generator():
     assert inspect.isasyncgenfunction(AgentSDKRuntime.run_turn)
 
 
-def test_skeleton_raises_not_implemented():
-    """Until R-3.2, calling run_turn must fail loudly so make_runtime()
-    callers picking 'sdk' don't get a silent dud."""
+def test_halt_on_tools_raises_until_r33():
+    """halt_on_tools support is R-3.3. Passing a non-empty set today
+    should raise loudly so callers know not to expect the present_plan /
+    ask_clarification halt semantics through the SDK yet."""
     import asyncio
     rt = AgentSDKRuntime()
     req = RuntimeRequest(
@@ -61,10 +62,12 @@ def test_skeleton_raises_not_implemented():
     )
 
     async def _consume():
-        async for _ev in rt.run_turn(req, lambda *_a: None, frozenset()):
+        async for _ev in rt.run_turn(
+                req, lambda *_a: None,
+                halt_on_tools=frozenset({"present_plan"})):
             pass
 
-    with pytest.raises(NotImplementedError, match="R-3.1"):
+    with pytest.raises(NotImplementedError, match="R-3.3"):
         asyncio.run(_consume())
 
 

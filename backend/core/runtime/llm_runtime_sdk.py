@@ -8,9 +8,8 @@ model-driven phase to Anthropic's Claude Agent SDK
 Why it earns its place alongside DirectAPIRuntime:
 - The SDK absorbs retry / cache placement / per-session compaction
   that we hand-roll in core/llm.py + open_and_consume_stream.
-- The SDK speaks MCP natively; bio's aba_core MCP server runs
-  in-process via `create_sdk_mcp_server` (memory transport, no
-  subprocess).
+- The SDK speaks MCP natively; bio tools surface via
+  `create_sdk_mcp_server` (memory transport, no subprocess).
 - The SDK ships its own CC marker for oauth_cc credentials; verified
   to work with Haiku/Sonnet/Opus during 2026-06-11 spike #3.
 
@@ -19,42 +18,102 @@ What stays in ABA's outer harness regardless of runtime:
 - The TurnSink / scribe / focus / manifest / on_stop hook layer.
 - The eval-harness history-seeding path — DirectAPIRuntime owns that.
 
-Phase plan:
-  R-3.1 (this file) — skeleton; run_turn raises NotImplementedError.
-                       Protocol-purity test passes; importing this module
-                       has no side effect on the runtime selector path.
-  R-3.2             — implement run_turn: SDK session lifecycle + event
-                       translation + tool_executor adapter.
-  R-3.3             — hook adapters (PreToolUse / PostToolUse /
-                       can_use_tool) wiring core/runtime/hooks.
-  R-3.4             — catalog-as-first-user-message (Option A from
-                       spike #4, +0.4% cache cost, well within noise).
-  R-3.5             — flip Methodologist + Critic onto runtime: sdk.
-
-The lazy-import of `claude_agent_sdk` keeps this module cheap to import
-on the direct/fake paths (where it's never needed). The SDK pulls in
-~75 MB and a ton of transitive deps; we only pay that when sdk runtime
-is actually selected.
+Phase status:
+  R-3.1 — skeleton                                              [done]
+  R-3.2 — run_turn: SDK session + event translation + tool
+          executor adapter. Halt support NOT yet — halt_on_tools
+          raises NotImplementedError, and result envelopes
+          (_runtime_halt_*, deferred) flow through unchanged.    [this commit]
+  R-3.3 — hook adapters + halt support (halt_on_tools, deferred,
+          _runtime_halt_before/after)                            [next]
+  R-3.4 — full Methodologist/Critic flip                          [later]
 """
 from __future__ import annotations
 
+import json as _json
+import queue as _queue
+import uuid
 from typing import AsyncIterator
 
 from core.runtime.llm_runtime import (
     LLMRuntime,
     RuntimeEvent,
     RuntimeRequest,
+    TextDelta,
     ToolExecutor,
+    ToolResult,
+    ToolUseStart,
+    TurnDone,
 )
+
+
+# MCP server name we use to expose bio tools to the SDK. The full
+# SDK-side name is `mcp__<this>__<tool_name>`; we strip the prefix
+# when emitting ToolUseStart / ToolResult so the rest of ABA sees
+# the bare tool name it expects.
+_MCP_SERVER_NAME = "aba_runtime"
+_MCP_TOOL_PREFIX = f"mcp__{_MCP_SERVER_NAME}__"
+
+# Claude Code default tools we explicitly disallow — without these the
+# model sees ToolSearch, Read, Write, Edit, Bash, etc. as candidates
+# (Spike #1 observed the model trying ToolSearch on a simple add task).
+# ABA agents speak bio's MCP surface only.
+_DISALLOWED_CC_DEFAULTS = [
+    "Read", "Write", "Edit", "Bash", "Grep", "Glob",
+    "WebFetch", "WebSearch", "ToolSearch",
+    "Task", "TodoWrite", "NotebookEdit",
+]
+
+
+def _strip_mcp_prefix(name: str) -> str:
+    """`mcp__aba_runtime__foo` → `foo`. Any other prefix passes through
+    untouched (defensive: lets us evolve the server name without
+    breaking translation)."""
+    return name[len(_MCP_TOOL_PREFIX):] if name.startswith(_MCP_TOOL_PREFIX) else name
+
+
+def _parse_tool_result_content(content) -> dict:
+    """SDK's ToolResultBlock.content is what the MCP server returned —
+    a list of {type, text} blocks or a raw string. Our internal
+    ToolResult event carries a dict (the result the executor returned).
+    Round-trip via JSON since our handler dumps the result as JSON in
+    the text block."""
+    if isinstance(content, list):
+        for blk in content:
+            if isinstance(blk, dict) and blk.get("type") == "text":
+                txt = blk.get("text", "")
+                try:
+                    return _json.loads(txt)
+                except (_json.JSONDecodeError, TypeError):
+                    return {"text": txt}
+        return {}
+    if isinstance(content, str):
+        try:
+            return _json.loads(content)
+        except (_json.JSONDecodeError, TypeError):
+            return {"text": content}
+    return {}
 
 
 class AgentSDKRuntime:
     """LLMRuntime backed by claude_agent_sdk.ClaudeSDKClient.
 
-    Skeleton — run_turn raises NotImplementedError until R-3.2 lands the
-    real session lifecycle + event translation. The class exists today
-    so make_runtime(spec) can return AgentSDKRuntime instances and the
-    protocol-purity test can assert structural conformance.
+    R-3.2 scope:
+      - text + tool dispatch + TurnDone work end-to-end.
+      - Bio tools exposed via in-process MCP (memory transport).
+      - History seeded via interleaved `query()` messages
+        (validated by spike #2: SDK accepts pre-baked tool_use /
+        tool_result blocks).
+      - Dynamic system catalog rides as a `<system-reminder>`-wrapped
+        synthetic first user message (Option A; spike #4 measured
+        +0.4% cache cost — within noise).
+
+    NOT yet supported (R-3.3 work):
+      - halt_on_tools (present_plan, ask_clarification) — raises if non-empty.
+      - {_runtime_halt_before / _runtime_halt_after} envelopes — they
+        flow through to the model unchanged today.
+      - {deferred: True} envelopes — same; the SDK will keep iterating.
+      - PreToolUse / PostToolUse hook bridging.
     """
 
     async def run_turn(
@@ -63,21 +122,188 @@ class AgentSDKRuntime:
         tool_executor: ToolExecutor,
         halt_on_tools: frozenset[str] = frozenset(),
     ) -> AsyncIterator[RuntimeEvent]:
-        """Skeleton: raises NotImplementedError. R-3.2 lands the real
-        implementation — ClaudeSDKClient session, in-process MCP via
-        create_sdk_mcp_server, event-stream translation to
-        RuntimeEvents, halt-envelope handling matching DirectAPIRuntime."""
-        raise NotImplementedError(
-            "AgentSDKRuntime.run_turn is a skeleton (W1-A.2 / R-3.1). "
-            "R-3.2 implements ClaudeSDKClient session + event translation."
+        if halt_on_tools:
+            raise NotImplementedError(
+                "AgentSDKRuntime: halt_on_tools is R-3.3 work. "
+                f"Got: {set(halt_on_tools)!r}"
+            )
+
+        # Lazy-import — the SDK is ~75 MB and only this code path needs
+        # it. Direct + fake runtimes don't pay this cost.
+        from claude_agent_sdk import (   # noqa: PLC0415
+            ClaudeAgentOptions, ClaudeSDKClient,
+            SdkMcpTool, create_sdk_mcp_server,
+            AssistantMessage, UserMessage, ResultMessage,
         )
-        # Unreachable; keeps the type checker happy that this is an
-        # async generator.
-        yield   # type: ignore[unreachable]
+        from claude_agent_sdk.types import (   # noqa: PLC0415
+            TextBlock, ToolUseBlock, ToolResultBlock,
+        )
+
+        # ── 1. Build SDK MCP server bridging bio tools to our executor ──
+        # Each entry in req.tools is an Anthropic-format schema
+        # ({name, description, input_schema}). The SDK accepts a full
+        # JSON Schema dict when it has type+properties keys (verified
+        # against claude_agent_sdk/__init__.py:_build_schema).
+        sdk_tools: list = []
+        for schema in (req.tools or []):
+            t_name = schema["name"]
+
+            # Closure captures the tool name so SDK's handler invocation
+            # (which doesn't pass the name) can still tell which tool
+            # was called.
+            def _make_handler(tname: str):
+                async def _handler(args: dict) -> dict:
+                    # Per-call ctx: our tool_use_id is fresh (the SDK's
+                    # tool_use_id isn't passed through to MCP handlers;
+                    # we reconcile via the ToolUseStart event below).
+                    ctx = {**req.ctx,
+                           "tool_use_id": f"toolu_sdk_{uuid.uuid4().hex[:12]}",
+                           "progress_q": _queue.Queue()}
+                    result = await tool_executor(tname, args, ctx)
+                    # Wrap our dict result in MCP's content shape. R-3.3
+                    # will translate halt envelopes here; for now they
+                    # flow through to the model unchanged.
+                    return {
+                        "content": [{"type": "text",
+                                      "text": _json.dumps(result, default=str)}],
+                        "isError": bool(isinstance(result, dict)
+                                         and (result.get("error")
+                                              or result.get("status") == "error")),
+                    }
+                return _handler
+
+            sdk_tools.append(SdkMcpTool(
+                name=t_name,
+                description=schema.get("description", ""),
+                input_schema=schema.get("input_schema", {"type": "object",
+                                                          "properties": {}}),
+                handler=_make_handler(t_name),
+            ))
+
+        # ── 2. Build SDK options ──
+        mcp_servers: dict = {}
+        allowed_tools: list[str] = []
+        if sdk_tools:
+            mcp_servers[_MCP_SERVER_NAME] = create_sdk_mcp_server(
+                _MCP_SERVER_NAME, tools=sdk_tools,
+            )
+            allowed_tools = [f"{_MCP_TOOL_PREFIX}{t.name}" for t in sdk_tools]
+
+        opts = ClaudeAgentOptions(
+            system_prompt=req.system.stable,
+            mcp_servers=mcp_servers,
+            allowed_tools=allowed_tools,
+            disallowed_tools=_DISALLOWED_CC_DEFAULTS,
+            model=req.model,
+            # max_turns caps the SDK's own multi-turn loop within ONE
+            # run_turn() call. ABA's outer loop in guide.py re-enters
+            # run_turn() per phase, so a generous SDK budget here is
+            # fine — the outer halt-state machine still controls phase
+            # boundaries. Default 20 (matches typical AgentSpec
+            # max_iterations).
+            max_turns=20,
+            # Approval gating lives in our tool_executor / outer layer.
+            # The SDK's permission_mode='bypassPermissions' tells the
+            # SDK not to inject its own approval prompts.
+            permission_mode="bypassPermissions",
+        )
+
+        # ── 3. Seed history + dynamic-catalog as a stream of query frames ──
+        # Per spike #2: the SDK accepts pre-baked assistant + tool_use
+        # + tool_result blocks via interleaved query() calls. The
+        # `type` field is 'user' or 'assistant'; 'message.content' is
+        # the same shape as the Anthropic API.
+        history = list(req.history)
+        # Option A (spike #4, +0.4% cache neutral): the dynamic recipes
+        # catalog rides as a synthetic <system-reminder>-wrapped user
+        # message BEFORE the conversation. The stable system stays in
+        # the SDK-cached system block.
+        catalog_msg: dict | None = None
+        if req.system.dynamic:
+            catalog_msg = {
+                "role": "user",
+                "content": f"<system-reminder>\n{req.system.dynamic}\n</system-reminder>",
+            }
+
+        async def _msg_stream():
+            if catalog_msg is not None:
+                yield {"type": "user", "message": catalog_msg,
+                       "parent_tool_use_id": None}
+            for msg in history:
+                yield {"type": msg["role"],
+                       "message": {"role": msg["role"], "content": msg["content"]},
+                       "parent_tool_use_id": None}
+
+        # ── 4. Run the session; translate events ──
+        stop_reason = "end_turn"
+        usage_delta = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        async with ClaudeSDKClient(options=opts) as client:
+            await client.query(_msg_stream())
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    # Per-block translation: TextBlock -> TextDelta;
+                    # ToolUseBlock -> ToolUseStart. ThinkingBlock blocks
+                    # are silently dropped (we don't surface them in
+                    # DirectAPIRuntime either).
+                    for blk in msg.content:
+                        if isinstance(blk, TextBlock):
+                            yield TextDelta(text=blk.text)
+                        elif isinstance(blk, ToolUseBlock):
+                            yield ToolUseStart(
+                                tool_use_id=blk.id,
+                                tool_name=_strip_mcp_prefix(blk.name),
+                                input=blk.input or {},
+                            )
+                    # Accumulate per-turn usage from the assistant message
+                    # if the SDK populates it. ResultMessage at the end
+                    # has the canonical totals; this is a best-effort
+                    # tick-by-tick fallback.
+                    u = getattr(msg, "usage", None)
+                    if u:
+                        usage_delta["input"]       += u.get("input_tokens", 0) or 0
+                        usage_delta["output"]      += u.get("output_tokens", 0) or 0
+                        usage_delta["cache_read"]  += u.get("cache_read_input_tokens", 0) or 0
+                        usage_delta["cache_write"] += u.get("cache_creation_input_tokens", 0) or 0
+                elif isinstance(msg, UserMessage):
+                    # The SDK delivers tool_results back as UserMessage
+                    # with ToolResultBlock content. Mirror these into
+                    # our ToolResult events so the outer layer can
+                    # persist + render them.
+                    if isinstance(msg.content, list):
+                        for blk in msg.content:
+                            if isinstance(blk, ToolResultBlock):
+                                yield ToolResult(
+                                    tool_use_id=blk.tool_use_id,
+                                    # Tool name isn't carried on the
+                                    # ToolResultBlock; caller correlates
+                                    # by tool_use_id with the prior
+                                    # ToolUseStart.
+                                    tool_name="",
+                                    result=_parse_tool_result_content(blk.content),
+                                )
+                elif isinstance(msg, ResultMessage):
+                    # Terminal event for this session. Use the canonical
+                    # usage + stop_reason. break out of the loop so
+                    # __aexit__ runs and ClaudeSDKClient cleans up.
+                    if msg.stop_reason:
+                        stop_reason = msg.stop_reason
+                    u = msg.usage or {}
+                    if u:
+                        usage_delta = {
+                            "input":       u.get("input_tokens", 0) or 0,
+                            "output":      u.get("output_tokens", 0) or 0,
+                            "cache_read":  u.get("cache_read_input_tokens", 0) or 0,
+                            "cache_write": u.get("cache_creation_input_tokens", 0) or 0,
+                        }
+                    break
+                # Other message types (SystemMessage with init/setup
+                # info, RateLimitEvent, etc.) we currently ignore.
+                # When R-3.3 adds hook bridging, some may surface.
+
+        yield TurnDone(stop_reason=stop_reason, usage=usage_delta)
 
 
 def _conforms_to_protocol() -> bool:
     """Cheap method-presence check — the protocol module doesn't use
-    `runtime_checkable`, so we inline a hasattr check here. Same shape
-    as llm_runtime_direct._conforms_to_protocol."""
+    `runtime_checkable`, so we inline a hasattr check here."""
     return all(hasattr(AgentSDKRuntime, m) for m in ("run_turn",))
