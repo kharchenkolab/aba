@@ -25,9 +25,11 @@ Phase status:
   R-3.3.a — halt_on_tools via PreToolUse hook + interrupt.       [done]
   R-3.3.b — translate executor halt envelopes
             ({deferred}, {_runtime_halt_before}, {_runtime_halt_after})
-            into TurnHalt + interrupt.                           [this commit]
-  R-3.3.c — bridge ABA PreToolUse/PostToolUse hook stack.        [next]
-  R-3.5  — flip Methodologist + Critic to runtime: sdk.          [later]
+            into TurnHalt + interrupt.                           [done]
+  R-3.3.c — verify ABA PreToolUse/PostToolUse hooks fire under
+            SDK runtime (no bridging needed — they ride inside
+            `_dispatch_tool` via the tool_executor callback).    [this commit]
+  R-3.5  — flip Methodologist + Critic to runtime: sdk.          [next]
 """
 from __future__ import annotations
 
@@ -99,7 +101,7 @@ def _parse_tool_result_content(content) -> dict:
 class AgentSDKRuntime:
     """LLMRuntime backed by claude_agent_sdk.ClaudeSDKClient.
 
-    Current support (R-3.2 + R-3.3.a + R-3.3.b):
+    Current support (R-3.2 + R-3.3.a + R-3.3.b + R-3.3.c):
       - text + tool dispatch + TurnDone end-to-end
       - bio tools via in-process MCP (memory transport)
       - history seeded via interleaved query() messages (spike #2)
@@ -114,10 +116,15 @@ class AgentSDKRuntime:
               (reason). present_plan + ask_clarification ride this.
           {deferred: True, deferred_id, timeout_s?} → TurnHalt(deferred);
               ToolResult event SUPPRESSED. HPC / background jobs.
+      - core/runtime/hooks (R-3.3.c): NO bridging needed. ABA hooks
+        fire inside `_dispatch_tool`, which is called by guide.py's
+        `_tool_executor`, which is the callback this runtime invokes
+        from its MCP handler. The SDK never sees the hook layer; it
+        only sees the final envelope. Verified by
+        tests/e2e/sdk_runtime_hooks_smoke.py.
 
-    NOT yet wired (R-3.3.c, R-3.5):
-      - PreToolUse / PostToolUse hook bridging into core/runtime/hooks.
-      - Methodologist + Critic agent flip to runtime: sdk (R-3.5).
+    NOT yet wired (R-3.5):
+      - Methodologist + Critic agent flip to runtime: sdk.
     """
 
     async def run_turn(
