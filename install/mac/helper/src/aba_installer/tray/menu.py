@@ -65,14 +65,11 @@ def apply_status(items: Dict[str, Any], status: TrayStatus,
     _set("start",   status.can_start)
     _set("stop",    status.can_stop)
     _set("restart", status.can_stop)         # mirror Stop's gate
-    # Check for updates → opens the browser Control page; pointless if the
-    # helper is unreachable or an update is already running.
-    _set("updates", status.state not in ("helper_offline", "updating"))
-    # Inline 'Update now (no UI)' — bypasses the helper. The whole point
-    # is to remain usable when the helper is dead, so it stays enabled
-    # in helper_offline. Disabled only mid-update to avoid double-spawn.
-    if "update_now" in items:
-        _set("update_now", status.state != "updating")
+    # Check for updates → smart cascade (probes '/', kickstarts helper if
+    # broken, falls back to inline). It works in helper_offline because
+    # the inline path doesn't need the helper. Disabled only mid-update
+    # so a second click can't spawn a parallel run.
+    _set("updates", status.state != "updating")
     # Model submenu: persistence-only operation. Gate the parent on helper
     # reachability so a click doesn't hit a dead /api/auth/model.
     _set("model",   status.state != "helper_offline")

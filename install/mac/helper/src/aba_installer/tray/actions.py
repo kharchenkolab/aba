@@ -95,77 +95,86 @@ def open_abc_browser(*, open_url: Callable[[str], None]) -> ActionResult:
     return ActionResult(True, _BACKEND_URL)
 
 
-def _helper_reachable(*, port: int, urlopen: Callable,
-                      timeout_s: float = 1.5) -> bool:
-    """True if /api/status responds within timeout_s. Cheap; runs on the
-    tray's main loop so it MUST stay snappy."""
-    url = f"http://127.0.0.1:{port}/api/status"
+def _control_page_ok(*, port: int, urlopen: Callable,
+                     timeout_s: float = 1.5) -> bool:
+    """True iff the helper's CONTROL PAGE ('/' — what we forward the user
+    to) returns 2xx within timeout_s. Probing '/' rather than '/api/status'
+    is deliberate: the 2026-06-11 bug shape had /api/status returning 200
+    while '/' threw 500 from a stale StaticFiles path. Probing the actual
+    target URL is the only honest health check."""
+    url = f"http://127.0.0.1:{port}/"
     try:
         with urlopen(urllib.request.Request(url), timeout=timeout_s) as resp:
             resp.read()
-            return True
+            status = getattr(resp, "status", None) or resp.getcode()
+            return 200 <= int(status) < 300
+    except urllib.error.HTTPError:
+        return False                     # any 4xx/5xx is "not OK"
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         return False
 
 
-def ensure_helper_reachable(*, port: int,
-                            urlopen: Callable = urllib.request.urlopen,
-                            run: Callable = subprocess.run,
-                            sleep: Callable[[float], None] = None,
-                            ) -> bool:
-    """Make a best-effort attempt to get the helper LaunchAgent answering
-    at :{port}. Returns True if it's already up OR if a kickstart succeeded
-    and the port came back within ~5s. Used before opening the browser
-    Control page so a click doesn't 404 in the user's face.
-
-    Robust to the dead-helper case the 2026-06-11 update bug hit: tray
-    rendered while the helper was alive, then it died, and the click
-    forwarded to a dead URL. The auto-recover gives us one chance to
-    revive it before falling back to the inline path.
-    """
-    if _helper_reachable(port=port, urlopen=urlopen):
-        return True
-    ks = kickstart_helper(run=run)
-    if not ks.ok:
-        return False
-    # Poll for readiness — launchctl returns as soon as it fires the
-    # spawn; the FastAPI server takes a beat to bind the socket.
-    import time as _time
-    _sleep = sleep or _time.sleep
-    for _ in range(10):                    # up to ~5s total
-        _sleep(0.5)
-        if _helper_reachable(port=port, urlopen=urlopen):
-            return True
-    return False
-
-
 def check_updates(*, port: int,
                   open_url: Callable[[str], None],
+                  open_path: Callable[[Path], None] = None,
+                  notify: Callable[[str, str, str], None] = None,
                   urlopen: Callable = urllib.request.urlopen,
                   run: Callable = subprocess.run,
-                  sleep: Callable[[float], None] = None) -> ActionResult:
-    """Delegate the multi-step update to the helper's existing browser
-    Control page — it already renders the SSE step list + live log. The
-    tray opens the right URL; the user watches there.
+                  sleep: Callable[[float], None] = None,
+                  thread_factory: Callable = None,
+                  ) -> ActionResult:
+    """One-stop update flow. Tries every path that might work, in order,
+    and falls through silently — the user clicks ONE menu item and the
+    tray handles every contingency:
 
-    Robustness (2026-06-11): if the helper isn't answering, try a
-    kickstart first so the browser doesn't get forwarded to a dead URL.
-    If the kickstart can't revive it within ~5s, return an error so the
-    menu surfaces the right next move (Update now / Start helper…)
-    instead of silently opening a 404 in the browser. See
-    misc/mac-install.md § 3c.3 for the original design and the
-    fallback rationale.
+      1. Probe '/' on the helper. If 2xx → open the browser Control
+         page; the user watches the SSE step list + live log there.
+      2. If '/' is broken (500 from a stale dist, connect-refused,
+         etc.), launchctl kickstart -k the helper, wait ~5s, re-probe.
+         A stale-dist 500 self-heals across a restart because the new
+         process picks up the current package layout.
+      3. If '/' is STILL bad after the kickstart, fall back to the
+         inline update path — same playbook (update.yml) run in the
+         tray process, streaming to ~/.aba/logs/tray-update.log,
+         opening that file in the OS's default .log handler so the
+         user can watch. A notification fires on done/fail.
+
+    The user never sees a backup button; the cascading fallbacks are
+    invisible unless they want to look at the notification stream.
+
+    Pre-2026-06-11 the only path was 'open the browser'. A helper that
+    answered /api/status but threw 500 on '/' (stale StaticFiles path
+    after a package layout change) made the user click straight into
+    Internal Server Error with no recovery affordance.
     """
-    if not ensure_helper_reachable(port=port, urlopen=urlopen, run=run,
-                                   sleep=sleep):
-        return ActionResult(
-            False,
-            "Helper not responding. Use 'Update now (no UI)…' from the "
-            "menu, or 'Start helper…' and try again.",
-        )
+    notify = notify or (lambda *a: None)
     url = f"http://127.0.0.1:{port}/"
-    open_url(url)
-    return ActionResult(True, url)
+
+    # Path 1: control page is healthy.
+    if _control_page_ok(port=port, urlopen=urlopen):
+        open_url(url)
+        return ActionResult(True, url)
+
+    # Path 2: kickstart the helper and re-probe.
+    notify("ABA update", "Reviving helper…",
+           "Control page wasn't responding; restarting it.")
+    ks = kickstart_helper(run=run)
+    if ks.ok:
+        import time as _time
+        _sleep = sleep or _time.sleep
+        for _ in range(10):                   # up to ~5s
+            _sleep(0.5)
+            if _control_page_ok(port=port, urlopen=urlopen):
+                open_url(url)
+                return ActionResult(True, url)
+
+    # Path 3: inline update as last resort. Bypasses the helper entirely.
+    notify("ABA update", "Running inline",
+           "Helper still unhealthy — updating in the tray. "
+           "Watch ~/.aba/logs/tray-update.log.")
+    _op = open_path or (lambda _p: None)
+    return update_inline(open_path=_op, notify=notify,
+                         thread_factory=thread_factory, run=run)
 
 
 # ─── show logs ───────────────────────────────────────────────────────────
@@ -255,6 +264,7 @@ def update_inline(*,
                   notify: Callable[[str, str, str], None] = None,
                   log_path: Optional[Path] = None,
                   thread_factory: Callable = None,
+                  run: Callable = subprocess.run,
                   ) -> ActionResult:
     """Run the update playbook DIRECTLY in the tray process — no helper
     HTTP, no browser. Streams one line per executor event to
@@ -355,6 +365,15 @@ def update_inline(*,
         finally:
             with _INLINE_UPDATE_LOCK:
                 _INLINE_UPDATE_INFLIGHT = False
+            # On success, kickstart the helper so any stale-dist '/' 500
+            # from a layout swap in the run we just did self-heals. The
+            # browser Control page works on next click without a manual
+            # restart. Best-effort: a failure here doesn't change `ok`.
+            if ok:
+                try:
+                    kickstart_helper(run=run)
+                except Exception:                                # noqa: BLE001
+                    pass
             try:
                 notify(
                     "ABA update",
