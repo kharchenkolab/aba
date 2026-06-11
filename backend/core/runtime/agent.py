@@ -166,6 +166,56 @@ def filter_tools_by_allowlist(tools: list[dict], allowlist: tuple[str, ...]) -> 
     return [t for t in tools if t.get("name") in keep]
 
 
+def _advisor_via_runtime(spec: "AgentSpec", user_prompt: str,
+                          max_tokens: int, chosen: str) -> tuple[str, int, int]:
+    """Drive an advisor one-shot through `make_runtime(spec)` for the
+    SDK (and any future non-direct) path. Returns (text, usage_in,
+    usage_out).
+
+    Why sync→async bridge: advisor callers are all sync today. The
+    SDK runtime is an async generator. We spin a fresh asyncio loop
+    per call. This is fine because:
+      - Advisors are not streaming — one turn, one consumer, no
+        cancellation requirement.
+      - `run_advisor_one_shot` is only called from sync paths
+        (FastAPI sync handlers, runner.py side effects) — never from
+        inside a running event loop.
+    """
+    import asyncio
+    from core.runtime.llm_runtime import (
+        RuntimeRequest, SystemSpec, TextDelta, TurnDone,
+    )
+
+    rt = make_runtime(spec)
+    req = RuntimeRequest(
+        history=[{"role": "user", "content": user_prompt}],
+        tools=[],
+        system=SystemSpec(stable=spec.system_prompt, dynamic=""),
+        model=spec.model,
+        max_tokens=max_tokens,
+        ctx={},
+    )
+
+    async def _no_tools(name, args, ctx):
+        return {"error": f"advisor {spec.name!r} called unexpected tool "
+                          f"{name!r} — advisors run with no tool surface"}
+
+    async def _drive() -> tuple[str, int, int]:
+        chunks: list[str] = []
+        in_tok = 0
+        out_tok = 0
+        async for ev in rt.run_turn(req, _no_tools):
+            if isinstance(ev, TextDelta):
+                chunks.append(ev.text)
+            elif isinstance(ev, TurnDone):
+                u = ev.usage or {}
+                in_tok = int(u.get("input") or 0)
+                out_tok = int(u.get("output") or 0)
+        return "".join(chunks).strip(), in_tok, out_tok
+
+    return asyncio.run(_drive())
+
+
 def run_advisor_one_shot(
     spec: AgentSpec,
     *,
@@ -223,34 +273,48 @@ def run_advisor_one_shot(
         if FAKE_SESSION and spec.fake_text:
             text = spec.fake_text
         else:
-            import anthropic
-            from core.llm import _credential_mode, _oauth_bearer, _wants_cc_marker, _CC_MARKER_BLOCK
-            # Honor the configured credential mode (was hardcoded apikey →
-            # silently failed on oauth_cc with a zero-balance .env key,
-            # 2026-06-03). Mirrors core.llm._llm_client + the sync helper
-            # in content/bio/lifecycle/promote.py.
-            if _credential_mode() in ("oauth", "oauth_cc") and _oauth_bearer():
-                client = anthropic.Anthropic(auth_token=_oauth_bearer())
+            # R-3.6: route through make_runtime when the spec — or an
+            # ABA_RUNTIME_OVERRIDE env knob — asks for a non-direct
+            # runtime. For the historical "direct" case we keep the
+            # tight messages.create() call, which is cheaper (no async
+            # bridge, no MCP overhead) for a non-streaming no-tool turn.
+            import os as _os
+            override = (_os.environ.get("ABA_RUNTIME_OVERRIDE") or "").strip().lower()
+            chosen = override or (spec.runtime or "direct").strip().lower()
+            if chosen == "sdk":
+                text, used_in, used_out = _advisor_via_runtime(
+                    spec, user_prompt, max_tokens, chosen)
+                turn.usage_in  = used_in
+                turn.usage_out = used_out
             else:
-                client = anthropic.Anthropic(api_key=API_KEY)
-            if _wants_cc_marker():
-                system_payload = [_CC_MARKER_BLOCK,
-                                  {"type": "text", "text": spec.system_prompt}]
-            else:
-                system_payload = spec.system_prompt
-            msg = client.messages.create(
-                model=spec.model,
-                max_tokens=max_tokens,
-                system=system_payload,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            text = "".join(
-                b.text for b in msg.content if getattr(b, "type", None) == "text"
-            ).strip()
-            # Record usage so /api/turns/{id} surfaces token spend.
-            if getattr(msg, "usage", None):
-                turn.usage_in  = getattr(msg.usage, "input_tokens", 0) or 0
-                turn.usage_out = getattr(msg.usage, "output_tokens", 0) or 0
+                import anthropic
+                from core.llm import _credential_mode, _oauth_bearer, _wants_cc_marker, _CC_MARKER_BLOCK
+                # Honor the configured credential mode (was hardcoded apikey →
+                # silently failed on oauth_cc with a zero-balance .env key,
+                # 2026-06-03). Mirrors core.llm._llm_client + the sync helper
+                # in content/bio/lifecycle/promote.py.
+                if _credential_mode() in ("oauth", "oauth_cc") and _oauth_bearer():
+                    client = anthropic.Anthropic(auth_token=_oauth_bearer())
+                else:
+                    client = anthropic.Anthropic(api_key=API_KEY)
+                if _wants_cc_marker():
+                    system_payload = [_CC_MARKER_BLOCK,
+                                      {"type": "text", "text": spec.system_prompt}]
+                else:
+                    system_payload = spec.system_prompt
+                msg = client.messages.create(
+                    model=spec.model,
+                    max_tokens=max_tokens,
+                    system=system_payload,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                text = "".join(
+                    b.text for b in msg.content if getattr(b, "type", None) == "text"
+                ).strip()
+                # Record usage so /api/turns/{id} surfaces token spend.
+                if getattr(msg, "usage", None):
+                    turn.usage_in  = getattr(msg.usage, "input_tokens", 0) or 0
+                    turn.usage_out = getattr(msg.usage, "output_tokens", 0) or 0
         turn.transition(TurnState.DONE)
     except Exception as e:  # noqa: BLE001
         turn.error = {"type": type(e).__name__, "message": str(e)}
