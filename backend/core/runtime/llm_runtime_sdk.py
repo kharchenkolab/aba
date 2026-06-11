@@ -20,13 +20,14 @@ What stays in ABA's outer harness regardless of runtime:
 
 Phase status:
   R-3.1 — skeleton                                              [done]
-  R-3.2 — run_turn: SDK session + event translation + tool
-          executor adapter. Halt support NOT yet — halt_on_tools
-          raises NotImplementedError, and result envelopes
-          (_runtime_halt_*, deferred) flow through unchanged.    [this commit]
-  R-3.3 — hook adapters + halt support (halt_on_tools, deferred,
-          _runtime_halt_before/after)                            [next]
-  R-3.4 — full Methodologist/Critic flip                          [later]
+  R-3.2 — run_turn: SDK session + event translation +
+          tool-executor adapter.                                 [done]
+  R-3.3.a — halt_on_tools via PreToolUse hook + interrupt.       [done]
+  R-3.3.b — translate executor halt envelopes
+            ({deferred}, {_runtime_halt_before}, {_runtime_halt_after})
+            into TurnHalt + interrupt.                           [this commit]
+  R-3.3.c — bridge ABA PreToolUse/PostToolUse hook stack.        [next]
+  R-3.5  — flip Methodologist + Critic to runtime: sdk.          [later]
 """
 from __future__ import annotations
 
@@ -98,23 +99,25 @@ def _parse_tool_result_content(content) -> dict:
 class AgentSDKRuntime:
     """LLMRuntime backed by claude_agent_sdk.ClaudeSDKClient.
 
-    Current support (R-3.2 + R-3.3.a):
+    Current support (R-3.2 + R-3.3.a + R-3.3.b):
       - text + tool dispatch + TurnDone end-to-end
       - bio tools via in-process MCP (memory transport)
       - history seeded via interleaved query() messages (spike #2)
       - dynamic catalog as <system-reminder>-wrapped first user message
         (Option A; spike #4 measured +0.4% cache cost)
-      - halt_on_tools: when the model issues a tool in the set, the
-        PreToolUse hook returns continue_=False + permissionDecision=
-        "deny" → SDK ends the session before MCP dispatch → we emit
-        TurnHalt(reason='pending_tool', detail=...) instead of TurnDone.
+      - halt_on_tools (R-3.3.a): a PreToolUse hook denies + interrupts
+        the session before MCP dispatch → TurnHalt(pending_tool).
+      - executor halt envelopes (R-3.3.b):
+          {_runtime_halt_before: <reason>, ...}  → TurnHalt(reason);
+              ToolResult event SUPPRESSED. Approval halts ride this.
+          {_runtime_halt_after:  <reason>, ...}  → ToolResult + TurnHalt
+              (reason). present_plan + ask_clarification ride this.
+          {deferred: True, deferred_id, timeout_s?} → TurnHalt(deferred);
+              ToolResult event SUPPRESSED. HPC / background jobs.
 
-    NOT yet wired (R-3.3.b-e):
-      - {_runtime_halt_before / _after} envelopes flow through unchanged.
-      - {deferred: True} envelopes flow through (model sees the queued
-        ack and the session ends naturally — same as DirectAPIRuntime).
-      - PreToolUse / PostToolUse hook bridging (R-3.3.c).
-      - SDK-native defer for approval halts (R-3.3.b).
+    NOT yet wired (R-3.3.c, R-3.5):
+      - PreToolUse / PostToolUse hook bridging into core/runtime/hooks.
+      - Methodologist + Critic agent flip to runtime: sdk (R-3.5).
     """
 
     async def run_turn(
@@ -135,6 +138,21 @@ class AgentSDKRuntime:
             TextBlock, ToolUseBlock, ToolResultBlock,
         )
 
+        # R-3.3.b envelope-driven halts: the executor returns one of
+        # three special envelopes to signal a halt. The MCP handler
+        # cannot synthesize a halt directly (it must return a content
+        # block to satisfy the SDK contract), so it stashes the halt
+        # intent here and the main loop reacts when the synthetic
+        # ToolResultBlock surfaces. Mirrors DirectAPIRuntime semantics:
+        #   {deferred: True, deferred_id, timeout_s?}
+        #       → TurnHalt(deferred); ToolResult event suppressed.
+        #   {_runtime_halt_before: "<reason>", ...}
+        #       → TurnHalt(<reason>); ToolResult event suppressed; the
+        #         tool's tool_use stays unresolved in ABA's manifest.
+        #   {_runtime_halt_after: "<reason>", ...}
+        #       → ToolResult emitted (sans marker) + TurnHalt(<reason>).
+        envelope_halt: dict | None = None
+
         # ── 1. Build SDK MCP server bridging bio tools to our executor ──
         # Each entry in req.tools is an Anthropic-format schema
         # ({name, description, input_schema}). The SDK accepts a full
@@ -149,6 +167,7 @@ class AgentSDKRuntime:
             # was called.
             def _make_handler(tname: str):
                 async def _handler(args: dict) -> dict:
+                    nonlocal envelope_halt
                     # Per-call ctx: our tool_use_id is fresh (the SDK's
                     # tool_use_id isn't passed through to MCP handlers;
                     # we reconcile via the ToolUseStart event below).
@@ -156,9 +175,44 @@ class AgentSDKRuntime:
                            "tool_use_id": f"toolu_sdk_{uuid.uuid4().hex[:12]}",
                            "progress_q": _queue.Queue()}
                     result = await tool_executor(tname, args, ctx)
-                    # Wrap our dict result in MCP's content shape. R-3.3
-                    # will translate halt envelopes here; for now they
-                    # flow through to the model unchanged.
+
+                    # Envelope translation. First halt observed wins —
+                    # subsequent dispatches in the same run_turn are
+                    # cut off by the interrupt the main loop fires.
+                    if isinstance(result, dict) and envelope_halt is None:
+                        if result.get("deferred"):
+                            envelope_halt = {
+                                "kind": "before",   # suppress ToolResult
+                                "reason": "deferred",
+                                "tool_name": tname,
+                                "detail": {
+                                    "deferred_id": result.get("deferred_id"),
+                                    "timeout_s": result.get("timeout_s"),
+                                },
+                            }
+                        elif "_runtime_halt_before" in result:
+                            reason = result.pop("_runtime_halt_before")
+                            envelope_halt = {
+                                "kind": "before",
+                                "reason": reason,
+                                "tool_name": tname,
+                                "detail": dict(result),
+                            }
+                        elif "_runtime_halt_after" in result:
+                            reason = result.pop("_runtime_halt_after")
+                            envelope_halt = {
+                                "kind": "after",    # yield ToolResult first
+                                "reason": reason,
+                                "tool_name": tname,
+                                "detail": dict(result),
+                            }
+
+                    # Wrap our dict result in MCP's content shape. The
+                    # SDK requires a return value even when we plan to
+                    # interrupt — for `before`/`deferred` the model
+                    # would see this stub momentarily, but the main
+                    # loop's interrupt aborts the next assistant turn
+                    # so it never persists in ABA's manifest history.
                     return {
                         "content": [{"type": "text",
                                       "text": _json.dumps(result, default=str)}],
@@ -280,13 +334,13 @@ class AgentSDKRuntime:
             await client.query(_msg_stream())
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
-                    # If a halt was already intercepted on a prior
-                    # ToolUseBlock, the model's follow-up retries (more
-                    # ToolUseBlocks) and its filler-text explanation of
-                    # the denial both belong in the bit-bucket, not in
-                    # guide.py's event stream. Interrupt and break so
-                    # the session ends promptly.
-                    if halt_intercepted is not None:
+                    # If a halt was already raised on a prior
+                    # ToolUseBlock — either via the halt_on_tools
+                    # PreToolUse hook OR via an executor envelope —
+                    # the model's follow-up retries (more ToolUseBlocks)
+                    # and its filler-text explanation of the denial
+                    # belong in the bit-bucket. Interrupt + break.
+                    if halt_intercepted is not None or envelope_halt is not None:
                         try:
                             await client.interrupt()
                         except Exception:
@@ -319,25 +373,56 @@ class AgentSDKRuntime:
                     # The SDK delivers tool_results back as UserMessage
                     # with ToolResultBlock content. Mirror these into
                     # our ToolResult events so the outer layer can
-                    # persist + render them — but suppress synthetic
-                    # tool_results the SDK fabricates after a hook
-                    # denial (those are halt-echoes, not real executor
-                    # output). The synthetic block carries the same
-                    # tool_use_id that the hook stamped on the halt.
+                    # persist + render them — but two halt cases
+                    # suppress or rewrite the event:
+                    #   1) halt_on_tools (R-3.3.a) — synthetic deny echo
+                    #   2) envelope halt before/deferred (R-3.3.b) — the
+                    #      stub stays out of guide.py's manifest
+                    #   3) envelope halt after — yield the stripped real
+                    #      content, then emit TurnHalt + interrupt
                     if halt_intercepted is not None:
                         continue
-                    if isinstance(msg.content, list):
-                        for blk in msg.content:
-                            if isinstance(blk, ToolResultBlock):
+                    if not isinstance(msg.content, list):
+                        continue
+                    for blk in msg.content:
+                        if not isinstance(blk, ToolResultBlock):
+                            continue
+                        if envelope_halt is not None:
+                            # First ToolResultBlock observed after a
+                            # halt envelope is the one the held tool
+                            # produced. Capture the SDK's real
+                            # tool_use_id into the halt detail.
+                            envelope_halt["tool_use_id"] = blk.tool_use_id
+                            if envelope_halt["kind"] == "before":
+                                # suppress entirely; main loop's break
+                                # below + post-loop translator emit
+                                # TurnHalt(reason).
+                                pass
+                            else:
+                                # halt_after: emit ToolResult with the
+                                # stripped real content + the SDK's
+                                # tool_use_id, then break to translator.
                                 yield ToolResult(
                                     tool_use_id=blk.tool_use_id,
-                                    # Tool name isn't carried on the
-                                    # ToolResultBlock; caller correlates
-                                    # by tool_use_id with the prior
-                                    # ToolUseStart.
-                                    tool_name="",
-                                    result=_parse_tool_result_content(blk.content),
+                                    tool_name=envelope_halt["tool_name"],
+                                    result=envelope_halt["detail"],
                                 )
+                            try:
+                                await client.interrupt()
+                            except Exception:
+                                pass
+                            break
+                        yield ToolResult(
+                            tool_use_id=blk.tool_use_id,
+                            # Tool name isn't carried on the
+                            # ToolResultBlock; caller correlates
+                            # by tool_use_id with the prior
+                            # ToolUseStart.
+                            tool_name="",
+                            result=_parse_tool_result_content(blk.content),
+                        )
+                    if envelope_halt is not None:
+                        break
                 elif isinstance(msg, ResultMessage):
                     # Terminal event for this session. Use the canonical
                     # usage + stop_reason. break out of the loop so
@@ -357,17 +442,15 @@ class AgentSDKRuntime:
                 # info, RateLimitEvent, etc.) we currently ignore.
                 # When R-3.3 adds hook bridging, some may surface.
 
-        # R-3.3.a: if can_use_tool denied a halt-on-tools call, the
-        # session aborted before TurnDone semantics apply. Emit
-        # TurnHalt(pending_tool) with the intercepted tool's details
-        # instead. The ToolUseStart event was already yielded above
-        # (before the SDK consulted can_use_tool), so guide.py has
-        # already observed the model's intent; the halt event tells
-        # it the dispatch was suppressed.
+        # R-3.3.a: PreToolUse hook denied a halt-on-tools call.
+        # Translate to TurnHalt(pending_tool). The ToolUseStart event
+        # was already yielded above (before the SDK consulted the
+        # hook), so guide.py has already observed the model's intent;
+        # the halt event tells it the dispatch was suppressed.
         if halt_intercepted is not None:
-            # If the SDK didn't surface a tool_use_id via the
-            # PermissionContext (older SDK builds), synthesize one so
-            # downstream consumers have something stable to key on.
+            # If the SDK didn't surface a tool_use_id via the hook
+            # input (older SDK builds), synthesize one so downstream
+            # consumers have something stable to key on.
             tool_use_id = halt_intercepted.get("tool_use_id") or \
                           f"toolu_halt_{uuid.uuid4().hex[:12]}"
             from core.runtime.llm_runtime import TurnHalt
@@ -377,6 +460,21 @@ class AgentSDKRuntime:
                 "tool_use_id": tool_use_id,
             })
             return
+
+        # R-3.3.b: executor returned a halt envelope. Translate to the
+        # matching TurnHalt. The ToolResult event (for `after` only)
+        # has already been yielded inside the UserMessage branch
+        # above; here we emit the halt signal.
+        if envelope_halt is not None:
+            from core.runtime.llm_runtime import TurnHalt
+            detail = {
+                **envelope_halt["detail"],
+                "tool_name": envelope_halt["tool_name"],
+                "tool_use_id": envelope_halt.get("tool_use_id"),
+            }
+            yield TurnHalt(reason=envelope_halt["reason"], detail=detail)
+            return
+
         yield TurnDone(stop_reason=stop_reason, usage=usage_delta)
 
 
