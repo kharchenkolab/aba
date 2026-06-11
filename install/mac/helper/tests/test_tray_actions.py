@@ -7,6 +7,7 @@ ActionResult the menu can show as a toast.
 from __future__ import annotations
 import json
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -89,10 +90,75 @@ def test_check_updates_opens_browser_to_control_page():
     browser Control page — which already has the SSE renderer + step list.
     See misc/mac-install.md § 3c.3."""
     opened: list = []
-    res = actions.check_updates(port=8765,
-                                open_url=lambda u: opened.append(u))
+    # Helper is reachable → check_updates opens the URL straight away.
+    res = actions.check_updates(
+        port=8765,
+        open_url=lambda u: opened.append(u),
+        urlopen=_record([], {"ok": True}),   # /api/status responds OK
+    )
     assert res.ok
     assert opened == ["http://127.0.0.1:8765/"]
+
+
+def test_check_updates_auto_kickstarts_when_helper_offline():
+    """Robustness (2026-06-11 follow-up): if the helper isn't answering
+    at click-time, the tray's first move is launchctl kickstart -k. If
+    the helper comes back within ~5s, we proceed to open the browser as
+    normal. If it stays dead, we refuse with a message pointing at the
+    inline path so the user isn't dropped onto a 404."""
+    # First /api/status raises (dead), second succeeds (after kickstart).
+    pings = iter([
+        urllib.error.URLError("Connection refused"),
+        _StubResp({"ok": True}),
+    ])
+    def fake_urlopen(req, timeout=None):
+        nxt = next(pings)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    launchctl_calls: list = []
+    def fake_run(argv, **kw):
+        launchctl_calls.append(argv)
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    opened: list = []
+    res = actions.check_updates(
+        port=8765,
+        open_url=lambda u: opened.append(u),
+        urlopen=fake_urlopen,
+        run=fake_run,
+    )
+    assert res.ok
+    assert launchctl_calls and launchctl_calls[0][0] == "launchctl"
+    assert opened == ["http://127.0.0.1:8765/"]
+
+
+def test_check_updates_refuses_when_kickstart_cant_revive_helper():
+    """If the helper stays unreachable after kickstart, the tray must
+    return an error pointing at the inline path — NOT silently open a
+    dead URL in the browser (the 2026-06-11 bug shape)."""
+    # Every /api/status call fails.
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.URLError("refused")
+    # launchctl 'succeeds' but the helper never comes back up.
+    def fake_run(argv, **kw):
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    opened: list = []
+    res = actions.check_updates(
+        port=8765,
+        open_url=lambda u: opened.append(u),
+        urlopen=fake_urlopen,
+        run=fake_run,
+        sleep=lambda _s: None,   # skip the 5s readiness wait in tests
+    )
+    assert not res.ok
+    assert "update now" in res.message.lower() \
+        or "no ui" in res.message.lower(), res.message
+    assert opened == [], "must NOT open a dead URL when kickstart fails"
 
 
 def test_open_browser_targets_backend_port_8000():
@@ -168,3 +234,81 @@ def test_kickstart_helper_reports_failure_with_stderr():
     res = actions.kickstart_helper(run=fake_run)
     assert not res.ok
     assert "not permitted" in (res.message or "").lower()
+
+
+# ─── update_inline: the helper-free escape hatch ──────────────────────────
+def test_update_inline_loads_playbook_and_spawns_worker(tmp_path,
+                                                         monkeypatch):
+    """Inline update reads the package's update.yml, hands it to Executor,
+    and spawns a daemon thread. The test runs the worker synchronously
+    via thread_factory so we can assert on the log shape.
+
+    What we pin (the 'this is the actual fallback' contract):
+      - the log file is created at the requested path,
+      - the file gets opened for the user to watch,
+      - a notification fires on completion,
+      - the inflight flag releases (so a second call doesn't lock out).
+    """
+    import threading
+    # Stub Executor so the test doesn't actually pull repos / build
+    # frontend / restart backend on the dev machine.
+    class FakeExecutor:
+        def __init__(self, pb, on_event=None, **kw):
+            self.pb = pb
+            self.on_event = on_event
+        def run_all(self, only=None):
+            self.on_event("step_start", {"step_id": "pull-aba",
+                                           "title": "Update aba"})
+            self.on_event("command_output", {"step_id": "pull-aba",
+                                              "line": "Already up to date."})
+            self.on_event("step_end", {"step_id": "pull-aba", "ok": True})
+            class _R:
+                ok = True
+                error = None
+            return [_R()]
+    monkeypatch.setattr("aba_installer.playbook.Executor", FakeExecutor)
+
+    # Make threading run the worker inline so the test can inspect state.
+    class _Sync:
+        def __init__(self, target): self._target = target
+        def start(self): self._target()
+    log = tmp_path / "tray-update.log"
+
+    opened: list = []
+    notes: list = []
+    res = actions.update_inline(
+        open_path=lambda p: opened.append(Path(p)),
+        notify=lambda t, sub, body: notes.append((t, sub, body)),
+        log_path=log,
+        thread_factory=lambda target: _Sync(target),
+    )
+    assert res.ok, res.message
+    assert opened == [log], "log must open immediately so user can tail it"
+    # Worker ran synchronously and wrote events
+    contents = log.read_text()
+    assert "Update aba" in contents
+    assert "Already up to date." in contents
+    assert "DONE OK" in contents
+    # Notification fired with the OK status
+    assert notes and notes[-1][1] == "OK"
+    # Inflight flag released so another invocation isn't blocked
+    assert actions._INLINE_UPDATE_INFLIGHT is False
+
+
+def test_update_inline_refuses_when_one_is_already_running(tmp_path):
+    """Second click while a run is in flight must return a clean error,
+    not double-spawn the playbook (which would race on git pull / npm
+    ci output)."""
+    # Force the inflight flag without going through a real run.
+    actions._INLINE_UPDATE_INFLIGHT = True
+    try:
+        res = actions.update_inline(
+            open_path=lambda p: None,
+            log_path=tmp_path / "x.log",
+            thread_factory=lambda target: type("T", (),
+                                               {"start": lambda self: None})(),
+        )
+        assert not res.ok
+        assert "already running" in (res.message or "").lower()
+    finally:
+        actions._INLINE_UPDATE_INFLIGHT = False
