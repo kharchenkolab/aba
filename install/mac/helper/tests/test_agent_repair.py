@@ -345,17 +345,29 @@ def test_executor_unchanged_when_no_hook():
 
 
 # ─── control wiring: pre-flight is flag-gated ───────────────────────────────
-def test_control_preflight_runs_only_when_flag_enabled(monkeypatch):
+def test_control_preflight_runs_unless_explicit_opt_out(monkeypatch):
+    """Default ON as of 2026-06-11. Env unset → enabled; '0'/'false'/etc → off.
+    Pre-flight gracefully no-ops when claude / credentials are unavailable,
+    so default-on is safe for users without a Claude session."""
     from aba_installer import control
     monkeypatch.setattr(ar, "ensure_claude", lambda **k: "claude")
     calls = []
     monkeypatch.setattr(ar, "run_preflight", lambda *a, **k: calls.append(1))
     pb = Playbook(steps=[_step("true")])
 
+    # Default: env unset → enabled
     monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
     control._run_preflight_if_enabled(pb, lambda n, p: None)
-    assert calls == [], "pre-flight must not run when the flag is off"
+    assert calls == [1], "pre-flight must run by default (env unset)"
 
+    # Explicit opt-out: '0' disables
+    calls.clear()
+    monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR", "0")
+    control._run_preflight_if_enabled(pb, lambda n, p: None)
+    assert calls == [], "ABA_INSTALL_AGENT_REPAIR=0 must disable pre-flight"
+
+    # Explicit opt-in keeps working
+    calls.clear()
     monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR", "1")
     control._run_preflight_if_enabled(pb, lambda n, p: None)
-    assert calls == [1], "pre-flight must run when the flag is on"
+    assert calls == [1], "explicit '1' must still enable"

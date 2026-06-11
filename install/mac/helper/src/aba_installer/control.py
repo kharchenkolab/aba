@@ -115,7 +115,17 @@ def _is_installed() -> bool:
 
 
 def _agent_repair_enabled() -> bool:
-    return os.environ.get("ABA_INSTALL_AGENT_REPAIR", "").lower() in ("1", "true", "yes", "on")
+    """Default ON as of 2026-06-11. The agent-repair hook itself fails
+    soft when the `claude` CLI / ABA credentials aren't available (see
+    agent_repair.run_repair's no-credential and no-claude gates added in
+    Tier-0 commits d1d0812 + 318b29a), so a default-on policy doesn't
+    fail an install for users without a Claude session — it just turns
+    into a no-op. The user explicit opt-out is ABA_INSTALL_AGENT_REPAIR=0
+    (or 'false'/'no'/'off')."""
+    raw = (os.environ.get("ABA_INSTALL_AGENT_REPAIR") or "").lower().strip()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True   # default ON
 
 
 def _repair_hook(on_event):
