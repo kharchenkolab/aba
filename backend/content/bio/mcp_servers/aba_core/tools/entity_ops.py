@@ -507,7 +507,9 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         the high-level interpretation block, not per-panel text.
 
         member_id comes from read_entity(result_id) →
-        fields.members_summary[i].member_id.
+        fields.members_summary[i].member_id. Also accepts a
+        figure/table id from anywhere in a member's revision chain —
+        the tool resolves it to the right slot (see note below).
 
         Sets caption_origin='ai' so the ✨ indicator stays accurate
         (the user can later edit it manually, which flips the origin
@@ -515,11 +517,18 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
 
         Arguments:
           result_id  — the Result entity id.
-          member_id  — the member id (from read_entity).
+          member_id  — the member id (preferred), OR any figure/table
+                       id that lives in a member's revision chain. If a
+                       figure id is passed and exactly one member's
+                       chain contains it, that member is targeted —
+                       saves a round-trip read_entity. Pass an explicit
+                       member id when the same figure id appears in
+                       multiple slots (rare).
           caption    — new caption text. Empty string clears.
 
-        Returns: {"status": "ok", "result_id", "member_id"} on
-        success; {"error": "..."} on bad inputs.
+        Returns: {"status": "ok", "result_id", "member_id",
+        "resolved_via": "member_id" | "figure_chain"} on success;
+        {"error": "..."} on bad inputs.
         """
         from core.graph.entities import get_entity
         from content.bio.graph.result_members import update_result_member
@@ -532,12 +541,47 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                     f"not 'result'. update_member_caption only "
                     f"operates on Result members."}
         members = (r.get("metadata") or {}).get("members") or []
+
+        resolved_via = "member_id"
         if not any(m.get("id") == member_id for m in members):
-            seen = [m.get("id") for m in members]
-            return {"error":
-                    f"member {member_id!r} not in result {result_id}. "
-                    f"Members: {seen}. Call read_entity to see "
-                    f"members_summary."}
+            # Fallback: the agent may have passed a figure/table id
+            # (any entry in a member's revision chain) instead of the
+            # slot's member id. This is the same confusion shape that
+            # bit prj_ab1b55fe thr_e692a202 (2026-06-11) — same figure
+            # title across four revisions, the agent kept the latest
+            # figure id in working memory and tried to update on it.
+            # Resolve to the slot whose revision chain contains the
+            # supplied id; refuse only if there's no match or it's
+            # ambiguous (multiple slots share that chain entry).
+            from content.bio.graph.figure_history import figure_history
+            candidates: list[str] = []
+            for m in members:
+                ref = m.get("ref")
+                if not ref:
+                    continue
+                try:
+                    chain = figure_history(ref, include_superseded=True)
+                except Exception:  # noqa: BLE001
+                    chain = []
+                if any(e.get("id") == member_id for e in chain):
+                    candidates.append(m.get("id"))
+
+            if len(candidates) == 1:
+                member_id = candidates[0]
+                resolved_via = "figure_chain"
+            else:
+                seen = [m.get("id") for m in members]
+                if len(candidates) > 1:
+                    return {"error":
+                            f"id {member_id!r} matches the revision "
+                            f"chain of multiple members ({candidates}). "
+                            f"Pass the specific member id you mean. "
+                            f"Result members: {seen}."}
+                return {"error":
+                        f"member {member_id!r} not in result {result_id}. "
+                        f"Members: {seen}. Call read_entity to see "
+                        f"members_summary."}
+
         if not isinstance(caption, str):
             return {"error":
                     f"caption must be a string, got "
@@ -558,6 +602,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
             pass
         return {"status": "ok",
                 "result_id": result_id,
+                "resolved_via": resolved_via,
                 "member_id": member_id}
 
     @mcp.tool()

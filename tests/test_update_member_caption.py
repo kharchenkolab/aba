@@ -151,5 +151,105 @@ def test_rejects_unknown_member_id():
     assert "m_abc" in res["error"], res
 
 
+# ─── figure-id fallback (the prj_ab1b55fe friction shape) ────────────────
+def _seed_result_with_revision_chain() -> tuple[str, str, list[str]]:
+    """Mirror the live session: a Result whose member.ref points at the
+    chain ANCHOR (oldest figure), with several revisions newer than the
+    anchor. Returns (result_id, member_id, [chain_ids oldest→newest])."""
+    from core.graph.entities import create_entity
+    from core.graph.edges import add_edge
+    chain: list[str] = []
+    for i in range(4):
+        p = os.path.join(_tmp, f"chain_{i}.png")
+        open(p, "w").write("x")
+        chain.append(create_entity(
+            entity_type="figure", title="UMAP of cells",
+            artifact_path=p, metadata={"thread_id": "thr_member_cap"},
+        ))
+    # v1 ← v2 ← v3 ← v4
+    for i in range(1, len(chain)):
+        add_edge(source_id=chain[i], target_id=chain[i-1],
+                 rel_type="wasRevisionOf")
+    rid = create_entity(
+        entity_type="result", title="UMAP Result",
+        metadata={"thread_id": "thr_member_cap",
+                  "members": [{"id": "m_slot", "kind": "figure",
+                                "ref": chain[0],            # anchor
+                                "caption": "auto-caption",
+                                "caption_origin": "ai"}]},
+    )
+    add_edge(rid, chain[0], "includes")
+    return rid, "m_slot", chain
+
+
+def test_resolves_latest_figure_id_to_member_slot():
+    """Live friction shape (prj_ab1b55fe thr_e692a202, 2026-06-11): after
+    multiple make_revision calls the agent kept the LATEST figure id in
+    memory and passed it as member_id. Tool must self-heal: walk each
+    member's revision chain and route to the slot if exactly one chain
+    contains the supplied id."""
+    rid, mid, chain = _seed_result_with_revision_chain()
+    latest = chain[-1]   # v4 — what the agent thinks of as "this figure"
+    res = _call("update_member_caption",
+                {"result_id": rid, "member_id": latest,
+                 "caption": "new caption from agent"})
+    assert res.get("status") == "ok", res
+    assert res.get("member_id") == mid, res
+    assert res.get("resolved_via") == "figure_chain", res
+    summary = _members_summary(rid)
+    assert summary and summary[0]["caption"] == "new caption from agent"
+
+
+def test_resolves_oldest_anchor_id_to_member_slot():
+    """A figure id from anywhere in the chain — head, middle, anchor —
+    resolves to the same slot. Mirrors the agent passing the displayed
+    id vs. the anchor."""
+    rid, mid, chain = _seed_result_with_revision_chain()
+    middle = chain[1]   # v2
+    res = _call("update_member_caption",
+                {"result_id": rid, "member_id": middle,
+                 "caption": "middle-id resolved"})
+    assert res.get("status") == "ok", res
+    assert res.get("member_id") == mid
+    assert res.get("resolved_via") == "figure_chain"
+
+
+def test_direct_member_id_keeps_resolved_via_unchanged():
+    """When the agent gets it right, no fallback fires and the resolution
+    path is reported as 'member_id' — useful as a tracer for telemetry."""
+    rid, mid, _chain = _seed_result_with_revision_chain()
+    res = _call("update_member_caption",
+                {"result_id": rid, "member_id": mid, "caption": "ok"})
+    assert res.get("status") == "ok"
+    assert res.get("resolved_via") == "member_id"
+
+
+def test_ambiguous_figure_id_refuses_with_helpful_error():
+    """If the SAME figure id sits in two different members' chains (rare
+    but possible — same chain referenced by two slots), refuse rather
+    than guess. The error names the candidates so the agent can retry."""
+    rid, _mid, chain = _seed_result_with_revision_chain()
+    # Add a second member whose ref is also in the chain.
+    from core.graph.entities import get_entity, update_entity
+    from core.graph.edges import add_edge
+    r = get_entity(rid)
+    meta = dict(r.get("metadata") or {})
+    meta["members"] = list(meta.get("members") or []) + [
+        {"id": "m_slot2", "kind": "figure", "ref": chain[-1],
+         "caption": "second slot"},
+    ]
+    update_entity(rid, metadata=meta)
+    add_edge(rid, chain[-1], "includes")
+
+    # chain[1] (a middle revision) is in both slots' chains now.
+    middle = chain[1]
+    res = _call("update_member_caption",
+                {"result_id": rid, "member_id": middle, "caption": "x"})
+    assert "error" in res, res
+    assert "multiple" in res["error"].lower() \
+        or "ambiguous" in res["error"].lower(), res
+    assert "m_slot" in res["error"] and "m_slot2" in res["error"], res
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
