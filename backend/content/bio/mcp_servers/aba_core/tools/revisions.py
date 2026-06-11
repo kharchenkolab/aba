@@ -124,18 +124,91 @@ def register_revision_tools(mcp: FastMCP) -> None:
             return {"error": str(e)}
 
     @mcp.tool()
+    def list_revisions(entity_id: str,
+                       aba_ctx_id: str | None = None) -> dict:
+        """List the full revision chain for a figure/table with
+        user-facing version numbers (v1 = oldest, vN = newest = the
+        currently-displayed one). The labels match the chevrons under
+        the focused Result so the agent can translate the user's
+        "version N" / "vN" reference directly to an entity id.
+
+        USE THIS WHENEVER the user mentions a figure/table by version
+        number ("go back to v6", "remove version 3", "compare v2 vs
+        v4") — call list_revisions first to map the version label to
+        a concrete entity id, then pass that id to read_entity,
+        view_artifact, set_current_revision, delete_revision, or
+        make_revision. Beats get_provenance for this purpose: depth-
+        unbounded, includes exec_id, and counts from the oldest.
+
+        Accepts ANY id in the chain (head, anchor, or anything in
+        between) — the chain is resolved bidirectionally.
+
+        Arguments:
+          entity_id — any figure/table id in the chain.
+
+        Returns: {total, current_id, revisions: [{version, id, title,
+        created_at, exec_id, is_current}, ...]} ordered newest first
+        (matching the chevron strip in the UI). Returns
+        {"error": "..."} when the entity is unknown or wrong type.
+        """
+        from content.bio.lifecycle.revisions import list_revisions as _ls
+        try:
+            return _ls(entity_id)
+        except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def set_current_revision(entity_id: str,
+                             aba_ctx_id: str | None = None) -> dict:
+        """Make `entity_id` the displayed/current revision in its chain
+        WITHOUT destroying any other revision.
+
+        USE THIS (not delete_revision) when the user wants to "go back
+        to v3", "show version 4", "make v6 the current one", or any
+        non-destructive revision switch. Newer revisions are flipped
+        to status='superseded' so they vanish from the chevron strip
+        but stay on disk and queryable; older revisions stay active.
+        Fully reversible: another set_current_revision call promotes
+        whatever the user wants next.
+
+        Pair with list_revisions:
+          revs = list_revisions(<any chain id>)        # → v1…vN map
+          set_current_revision(revs[idx_for_v6].id)    # switch
+
+        Prefer set_current_revision over delete_revision unless the
+        user explicitly asks to DELETE a revision permanently.
+
+        Arguments:
+          entity_id — id of the figure/table revision to make current.
+
+        Returns: {current_id, total_in_chain, superseded: [...],
+        restored: [...], re_anchored_members: [...]} on success;
+        {"error": "..."} on bad inputs.
+        """
+        from content.bio.lifecycle.revisions import set_current_revision as _set
+        try:
+            return _set(entity_id)
+        except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
     def delete_revision(entity_id: str,
                         aba_ctx_id: str | None = None) -> dict:
-        """Hard-delete a single figure/table revision while keeping the
-        chain intact. Children (newer revisions pointing at this one)
-        re-parent to this revision's parent; if the deleted entity was
-        the chain anchor that a Result member.ref points at, the member
-        is re-anchored to the next-oldest active descendant.
+        """Hard-delete a single figure/table revision (PERMANENT).
+        Children re-parent to this revision's parent; if the deleted
+        entity was the chain anchor that a Result member.ref points
+        at, the member is re-anchored to the next-oldest active
+        descendant.
 
-        USE THIS when the user wants to throw away a specific version
-        of a figure/table (e.g. "delete this revision", "remove v3",
-        "roll back: I want to keep only v1 and v2"). The chain stays
-        navigable; the deleted entity is gone permanently.
+        USE THIS ONLY when the user wants to PERMANENTLY THROW AWAY a
+        specific version — e.g. "delete this revision", "wipe v3",
+        "remove this version forever".
+
+        For "go back to vN", "come back to v6", "show version 4",
+        "make v2 the current one", or any NAVIGATION between
+        revisions, use `set_current_revision` instead — it's
+        non-destructive (the hidden revisions stay on disk and the
+        user can switch back).
 
         DO NOT use this to remove a figure FROM a Result without
         deleting the figure itself — that's `remove_result_member`

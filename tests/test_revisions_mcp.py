@@ -21,7 +21,7 @@ os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
-os.environ["ABA_ENVS_DIR"] = "/workspace/aba-runtime/envs"
+os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                  # noqa: E402
@@ -36,7 +36,7 @@ def check(label, cond, detail=""):
 
 
 def test_register_revision_tools():
-    print("\n[1] register_revision_tools adds 3 tools to the FastMCP server")
+    print("\n[1] register_revision_tools adds the revision tools to FastMCP")
     init_db()
     from mcp.server.fastmcp import FastMCP
     from content.bio.mcp_servers.aba_core.tools.revisions import register_revision_tools
@@ -55,7 +55,15 @@ def test_register_revision_tools():
     check("reproduce_from_exec registered", "reproduce_from_exec" in names)
     check("delete_revision registered", "delete_revision" in names,
           f"got {names}")
-    check("exactly 3 tools", len(names) == 3, f"got {names}")
+    check("list_revisions registered", "list_revisions" in names,
+          f"got {names}")
+    check("set_current_revision registered",
+          "set_current_revision" in names, f"got {names}")
+    expected = {"make_revision", "reproduce_from_exec",
+                "delete_revision", "list_revisions",
+                "set_current_revision"}
+    check("revision tool set is exactly the expected five",
+          set(names) == expected, f"got {names}")
 
 
 def test_make_server_includes_revision_tools():
@@ -93,8 +101,14 @@ def test_tool_descriptions_have_guardrails():
     check("make_revision tool exists", mr is not None)
     if mr:
         desc = (mr.description or "").lower()
-        check("make_revision description warns 'only when user explicitly asks'",
-              "only when the user" in desc or "only when user" in desc,
+        # Guardrail: docstring discourages calling unprompted. Wording
+        # has drifted ("only when the user" → "Do NOT call this on your
+        # own initiative"); accept either phrasing as long as the
+        # don't-self-trigger framing is there.
+        check("make_revision description discourages unprompted calls",
+              ("only when the user" in desc or "only when user" in desc
+               or "do not call this on your own" in desc
+               or "do not use it to" in desc),
               f"desc: {desc[:200]}")
         check("make_revision description mentions wasRevisionOf",
               "wasrevisionof" in desc)

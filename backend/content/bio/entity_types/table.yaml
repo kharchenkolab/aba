@@ -18,7 +18,10 @@ status_model:
   states: [active, superseded, archived]
   transitions:
     active: [superseded, archived]
-    superseded: [archived]
+    # 'superseded -> active' enables the non-destructive 'go back to
+    # vN' path used by set_current_revision (Slice C 2026-06-11). Same
+    # rationale as figure.yaml.
+    superseded: [active, archived]
 
 allowed_edges:
   # produced_by mirrors figure.out — promote_to_result links evidence

@@ -21,7 +21,12 @@ status_model:
   states: [active, superseded, archived]
   transitions:
     active: [superseded, archived]
-    superseded: [archived]
+    # 'superseded -> active' is the non-destructive 'go back to vN'
+    # path used by set_current_revision (Slice C 2026-06-11). The
+    # chevron strip uses superseded as a "hidden from default view"
+    # flag, not a terminal state — restoring is a normal user gesture,
+    # so the transition is allowed.
+    superseded: [active, archived]
     # 'restore' (archived → active) is supported by restore_entity but
     # NOT declared as a normal transition — restore is an admin action,
     # not part of the everyday lifecycle.

@@ -48,13 +48,21 @@ def read_csv_info(input_: dict) -> dict:
 def get_provenance(input_: dict) -> dict:
     from core.graph.provenance import provenance_text, neighborhood
     eid = input_.get("entity_id", "")
-    return {"text": provenance_text(eid), "graph": neighborhood(eid)["upstream"]}
+    # max_depth default raised to 8 here (vs. the underlying default of 3)
+    # so the agent sees long revision/derivation chains in a single call.
+    # A 2026-06-11 live-session bug had the agent unable to count past v3
+    # in a 7-revision chain because depth-3 silently truncated the trace.
+    depth = int(input_.get("max_depth") or 8)
+    return {"text": provenance_text(eid, max_depth=depth),
+            "graph": neighborhood(eid, max_depth=depth)["upstream"]}
 
 
 def get_dependents(input_: dict) -> dict:
     from core.graph.provenance import dependents_text, neighborhood
     eid = input_.get("entity_id", "")
-    return {"text": dependents_text(eid), "graph": neighborhood(eid)["downstream"]}
+    depth = int(input_.get("max_depth") or 8)
+    return {"text": dependents_text(eid, max_depth=depth),
+            "graph": neighborhood(eid, max_depth=depth)["downstream"]}
 
 
 def _invoke_skill_core(name: str, args: str, ctx: dict | None,

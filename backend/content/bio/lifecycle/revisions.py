@@ -429,6 +429,191 @@ def delete_revision(entity_id: str) -> dict:
     }
 
 
+def set_current_revision(entity_id: str) -> dict:
+    """Make `entity_id` the displayed/current revision in its chain
+    without destroying any other revision.
+
+    Mechanics:
+      - revisions in the chain that are NEWER (by created_at) than
+        `entity_id` are marked status='superseded' — figure_history's
+        default mode (used by the chevron strip) skips them, so they
+        vanish from the UI but remain on disk + queryable.
+      - `entity_id` itself and any OLDER revisions are flipped back to
+        status='active' (a previous set_current_revision may have hidden
+        them — this restores them).
+      - Result members whose `ref` points at one of the now-superseded
+        ids are re-anchored to `entity_id`; an `includes` edge from
+        each affected Result to `entity_id` is added.
+
+    Fully reversible: calling set_current_revision on a hidden (older)
+    revision restores it and hides whatever was current.
+
+    Returns: {
+        "current_id": entity_id,
+        "total_in_chain": N (after the switch),
+        "superseded": [ids newly hidden],
+        "restored":   [ids that were superseded and are now active again],
+        "re_anchored_members": [{"result_id", "member_id", "new_ref"}],
+    }
+    Raises ValueError when entity_id is unknown or not a figure/table.
+    """
+    from content.bio.graph.figure_history import figure_history
+    ent = get_entity(entity_id)
+    if not ent:
+        raise ValueError(f"entity {entity_id} not found")
+    if ent.get("type") not in ("figure", "table"):
+        raise ValueError(
+            f"set_current_revision only operates on figure/table entities, "
+            f"got {ent.get('type')}"
+        )
+
+    full = figure_history(entity_id, include_superseded=True)
+    # figure_history with include_superseded=True orders by created_at DESC
+    # → newest first. Find where the target sits.
+    target_idx = next((i for i, e in enumerate(full)
+                       if e.get("id") == entity_id), -1)
+    if target_idx < 0:
+        raise ValueError(
+            f"entity {entity_id} not found in its own revision chain "
+            f"(internal invariant violated)"
+        )
+
+    newer = full[:target_idx]                  # strictly newer
+    target_and_older = full[target_idx:]       # target + older
+
+    superseded_now: list[str] = []
+    restored_now: list[str] = []
+
+    for e in newer:
+        if e.get("status") != "superseded":
+            update_entity(e["id"], status="superseded")
+            superseded_now.append(e["id"])
+
+    for e in target_and_older:
+        if e.get("status") == "superseded":
+            update_entity(e["id"], status="active")
+            restored_now.append(e["id"])
+
+    # Re-anchor members. Any Result member whose ref points at ANY
+    # entry in this chain other than the target should be retargeted —
+    # the user picked target_id as "current", so the canonical anchor
+    # for the chain is target_id. This covers two cases:
+    #   - newly-superseded entries that had member.refs (the user
+    #     stepped back; the result was anchored at the previously-
+    #     visible head),
+    #   - newly-restored entries whose refs were re-pointed by an
+    #     earlier set_current_revision and now need to follow back.
+    re_anchored: list[dict] = []
+    chain_ids = {e["id"] for e in full if e.get("id") and e["id"] != entity_id}
+    for old_id in chain_ids:
+        for rid, mid in _result_members_referencing(old_id):
+            r = get_entity(rid)
+            if not r:
+                continue
+            meta = dict(r.get("metadata") or {})
+            members = list(meta.get("members") or [])
+            changed = False
+            for m in members:
+                if m.get("ref") == old_id:
+                    m["ref"] = entity_id
+                    changed = True
+            if changed:
+                meta["members"] = members
+                update_entity(rid, metadata=meta)
+                try:
+                    add_edge(rid, entity_id, "includes",
+                             {"created_by": "set_current_revision"})
+                except Exception as e:  # noqa: BLE001
+                    _log.warning("set_current: add includes %s→%s failed: %s",
+                                 rid, entity_id, e)
+                re_anchored.append({"result_id": rid, "member_id": mid,
+                                    "new_ref": entity_id})
+
+    try:
+        from core.runtime.notifications import broadcast
+        seen_results: set[str] = set()
+        for ra in re_anchored:
+            rid = ra["result_id"]
+            if rid in seen_results:
+                continue
+            seen_results.add(rid)
+            broadcast({"type": "entity_updated",
+                       "entity_id": rid,
+                       "reason": "revision_anchor_changed",
+                       "new_current": entity_id})
+        broadcast({"type": "entity_updated",
+                   "entity_id": entity_id,
+                   "reason": "revision_anchor_changed",
+                   "superseded": superseded_now,
+                   "restored": restored_now,
+                   "re_anchored_members": re_anchored})
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "current_id": entity_id,
+        "total_in_chain": len(target_and_older),
+        "superseded": superseded_now,
+        "restored": restored_now,
+        "re_anchored_members": re_anchored,
+    }
+
+
+def list_revisions(entity_id: str) -> dict:
+    """Return the full revision chain for a figure/table, labeled with
+    user-facing version numbers (v1 = oldest, vN = newest = displayed).
+
+    The labels match RevisionStrip.tsx:242 so the agent can translate a
+    user's "version 6 / v6" reference to a concrete entity id without
+    having to count manually from a depth-capped provenance walk.
+
+    Accepts ANY entity id in the chain — the implementation walks the
+    full wasRevisionOf chain in both directions (figure_history()) and
+    numbers from the oldest backwards.
+
+    Returns:
+        {
+          "total": N,
+          "current_id": <id of v N — the latest in the chain>,
+          "revisions": [
+            {"version": N, "id": ..., "title": ..., "created_at": ...,
+             "exec_id": ..., "is_current": True},
+            ...
+            {"version": 1, "id": ..., "title": ..., "created_at": ...,
+             "exec_id": ..., "is_current": False},
+          ],
+        }
+    Raises ValueError when entity_id is unknown or not a figure/table.
+    """
+    from content.bio.graph.figure_history import figure_history
+    ent = get_entity(entity_id)
+    if not ent:
+        raise ValueError(f"entity {entity_id} not found")
+    if ent.get("type") not in ("figure", "table"):
+        raise ValueError(
+            f"list_revisions only operates on figure/table entities, "
+            f"got {ent.get('type')}"
+        )
+    chain = figure_history(entity_id)
+    total = len(chain)
+    revisions = [
+        {
+            "version": total - idx,
+            "id": e["id"],
+            "title": e["title"],
+            "created_at": e.get("created_at"),
+            "exec_id": e.get("exec_id"),
+            "is_current": idx == 0,
+        }
+        for idx, e in enumerate(chain)
+    ]
+    return {
+        "total": total,
+        "current_id": chain[0]["id"] if chain else None,
+        "revisions": revisions,
+    }
+
+
 def reproduce_from_exec(entity_id: str, *,
                          thread_id: Optional[str] = None) -> dict:
     """Re-run the exec that produced `entity_id` and report the result.
