@@ -409,8 +409,11 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                     f"revisions, edges) use the typed workflow tools — see "
                     f"list_entity_operations('{ftype}')."}
 
-        # Validate title non-empty if being updated.
-        if "title" in fields:
+        # Validate title non-empty if being updated. A title=None is the
+        # PATCH "no change" sentinel (see Semantics in the docstring); it
+        # gets skipped below alongside other top-level Nones. Only reject
+        # explicit attempts to BLANK the title (empty string or whitespace).
+        if "title" in fields and fields["title"] is not None:
             t = fields["title"]
             if not isinstance(t, str) or not t.strip():
                 return {"error": "title cannot be empty"}
@@ -448,6 +451,20 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         # don't auto-flip interpretation_origin — let the caller decide. The
         # frontend sets it explicitly; the agent's interpretation is left as
         # whatever it was (usually 'ai').
+
+        # Notify the frontend so cards driven by this entity re-fetch.
+        # Without this the data writes succeed silently and the Result
+        # card / focus pane keeps showing the pre-update value (live bug
+        # prj_128380fd thr_deed230d, 2026-06-11: agent updated a Result's
+        # interpretation, disk had the new value, UI kept the old caption).
+        # Mirrors the typed-tool broadcast pattern in
+        # lifecycle/promote.py:549 and lifecycle/revisions.py:408.
+        try:
+            from core.runtime.notifications import broadcast
+            broadcast({"type": "entity_updated", "entity_id": entity_id,
+                       "reason": "agent_update"})
+        except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
+            pass
 
         return {"status": "ok", "entity_id": entity_id,
                 "updated": list(fields.keys())}
