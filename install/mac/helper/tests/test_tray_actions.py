@@ -84,35 +84,38 @@ def test_restart_aborts_if_stop_fails():
 
 
 # ─── check_updates streams the existing /api/update SSE — open browser ────
-def test_check_updates_opens_browser_to_control_page():
-    """rumps's main thread can't host a long-running SSE renderer well.
-    The tray delegates the multi-step update flow to the helper's existing
-    browser Control page — which already has the SSE renderer + step list.
-    See misc/mac-install.md § 3c.3."""
+def _ok_resp(req=None, timeout=None):
+    """Stub urlopen that returns a 200 for any GET."""
+    return _StubResp({"ok": True})
+
+
+def test_check_updates_happy_path_opens_browser_when_control_page_ok():
+    """Step 1 of the cascade: '/' returns 2xx → open browser, done."""
     opened: list = []
-    # Helper is reachable → check_updates opens the URL straight away.
     res = actions.check_updates(
         port=8765,
         open_url=lambda u: opened.append(u),
-        urlopen=_record([], {"ok": True}),   # /api/status responds OK
+        urlopen=_ok_resp,
     )
     assert res.ok
     assert opened == ["http://127.0.0.1:8765/"]
 
 
-def test_check_updates_auto_kickstarts_when_helper_offline():
-    """Robustness (2026-06-11 follow-up): if the helper isn't answering
-    at click-time, the tray's first move is launchctl kickstart -k. If
-    the helper comes back within ~5s, we proceed to open the browser as
-    normal. If it stays dead, we refuse with a message pointing at the
-    inline path so the user isn't dropped onto a 404."""
-    # First /api/status raises (dead), second succeeds (after kickstart).
-    pings = iter([
-        urllib.error.URLError("Connection refused"),
+def test_check_updates_kickstarts_when_control_page_is_5xx():
+    """The 2026-06-11 bug shape: /api/status is fine but '/' returns
+    500 from a stale StaticFiles path. The smart action MUST probe '/'
+    (the actual URL it forwards to), not /api/status. On 500 it
+    kickstarts the helper and re-probes; if '/' is healthy after the
+    restart it opens the browser normally."""
+    # First probe of '/' raises a 500 HTTPError; subsequent probes (post-
+    # kickstart) succeed.
+    calls = iter([
+        urllib.error.HTTPError("http://127.0.0.1:8765/", 500,
+                                "Internal Server Error", None, None),
         _StubResp({"ok": True}),
     ])
     def fake_urlopen(req, timeout=None):
-        nxt = next(pings)
+        nxt = next(calls)
         if isinstance(nxt, Exception):
             raise nxt
         return nxt
@@ -124,41 +127,83 @@ def test_check_updates_auto_kickstarts_when_helper_offline():
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     opened: list = []
+    notes: list = []
     res = actions.check_updates(
         port=8765,
         open_url=lambda u: opened.append(u),
         urlopen=fake_urlopen,
         run=fake_run,
+        sleep=lambda _s: None,
+        notify=lambda t, sub, body: notes.append((t, sub, body)),
     )
-    assert res.ok
+    assert res.ok, res.message
     assert launchctl_calls and launchctl_calls[0][0] == "launchctl"
     assert opened == ["http://127.0.0.1:8765/"]
+    # User saw a notification explaining the restart — no silent flicker.
+    assert any("Reviving" in sub for _, sub, _ in notes), notes
 
 
-def test_check_updates_refuses_when_kickstart_cant_revive_helper():
-    """If the helper stays unreachable after kickstart, the tray must
-    return an error pointing at the inline path — NOT silently open a
-    dead URL in the browser (the 2026-06-11 bug shape)."""
-    # Every /api/status call fails.
+def test_check_updates_falls_back_to_inline_when_kickstart_doesnt_help(
+        tmp_path, monkeypatch):
+    """Step 3 of the cascade: kickstart didn't fix '/', so run the
+    inline update transparently. The user clicks ONE item; the inline
+    path fires automatically with a notification."""
+    # All '/' probes return 500.
     def fake_urlopen(req, timeout=None):
-        raise urllib.error.URLError("refused")
-    # launchctl 'succeeds' but the helper never comes back up.
+        raise urllib.error.HTTPError(
+            req.full_url, 500, "Internal Server Error", None, None)
     def fake_run(argv, **kw):
         import subprocess
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    opened: list = []
+    # Stub Executor so the test doesn't actually pull repos / restart anything.
+    class FakeExecutor:
+        def __init__(self, pb, on_event=None, **kw):
+            self.on_event = on_event
+        def run_all(self, only=None):
+            self.on_event("step_start", {"step_id": "pull-aba",
+                                           "title": "Update aba"})
+            self.on_event("step_end", {"step_id": "pull-aba", "ok": True})
+            class _R: ok = True; error = None
+            return [_R()]
+    monkeypatch.setattr("aba_installer.playbook.Executor", FakeExecutor)
+    # Force the inline log into tmp_path so the test isn't dirty.
+    monkeypatch.setattr(actions, "_inline_log_path",
+                         lambda: tmp_path / "tray-update.log")
+    # Reset the inflight flag in case a prior test left it set.
+    actions._INLINE_UPDATE_INFLIGHT = False
+
+    class _Sync:
+        def __init__(self, target): self._t = target
+        def start(self): self._t()
+
+    opened_urls: list = []
+    opened_paths: list = []
+    notes: list = []
     res = actions.check_updates(
         port=8765,
-        open_url=lambda u: opened.append(u),
+        open_url=lambda u: opened_urls.append(u),
+        open_path=lambda p: opened_paths.append(Path(p)),
         urlopen=fake_urlopen,
         run=fake_run,
-        sleep=lambda _s: None,   # skip the 5s readiness wait in tests
+        sleep=lambda _s: None,
+        notify=lambda t, sub, body: notes.append((t, sub, body)),
+        thread_factory=lambda target: _Sync(target),
     )
-    assert not res.ok
-    assert "update now" in res.message.lower() \
-        or "no ui" in res.message.lower(), res.message
-    assert opened == [], "must NOT open a dead URL when kickstart fails"
+    assert res.ok, res.message
+    # Browser was NEVER opened (control page stayed broken)
+    assert opened_urls == []
+    # Log file was opened so the user can watch
+    assert opened_paths == [tmp_path / "tray-update.log"]
+    # User got the "running inline" notification (the explanation of why
+    # the browser didn't pop up).
+    assert any("inline" in sub.lower() or "inline" in body.lower()
+               for _, sub, body in notes), notes
+    # And the inline run actually executed: log file exists with the
+    # FakeExecutor's events.
+    contents = (tmp_path / "tray-update.log").read_text()
+    assert "Update aba" in contents
+    assert "DONE OK" in contents
 
 
 def test_open_browser_targets_backend_port_8000():

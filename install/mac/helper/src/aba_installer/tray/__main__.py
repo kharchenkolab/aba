@@ -69,20 +69,18 @@ def main() -> int:
     stop_item      = rumps.MenuItem("⏻  Stop")
     restart_item   = rumps.MenuItem("↻  Restart")
     updates_item   = rumps.MenuItem("⤓  Check for updates…")
-    update_now_item = rumps.MenuItem("⚙  Update now (no UI)…")
     model_item     = rumps.MenuItem("Model")            # submenu container
     kickstart_item = rumps.MenuItem("Start helper…")
     quit_item      = rumps.MenuItem("Quit ABA Tray")
 
     items = {
-        "status":     status_item,
-        "start":      start_item,
-        "stop":       stop_item,
-        "restart":    restart_item,
-        "updates":    updates_item,
-        "update_now": update_now_item,
-        "model":      model_item,
-        "kickstart":  kickstart_item,
+        "status":    status_item,
+        "start":     start_item,
+        "stop":      stop_item,
+        "restart":   restart_item,
+        "updates":   updates_item,
+        "model":     model_item,
+        "kickstart": kickstart_item,
     }
 
     # Sender-name → handler. The status row's title varies ('●  Open ABA'
@@ -100,11 +98,13 @@ def main() -> int:
         elif title.startswith("●") and "Open" in title:
             res = actions.open_abc_browser(open_url=_open_url)
         elif title.startswith("⤓"):
-            res = actions.check_updates(port=port, open_url=_open_url)
-        elif title.startswith("⚙") and "Update" in title:
-            # Inline update — bypasses the helper entirely. Notification
-            # callback bound below carries title + body through rumps.
-            res = actions.update_inline(
+            # Single smart 'Check for updates' — probes the control page
+            # at '/', kickstarts the helper if it's broken, falls back to
+            # inline if a restart doesn't fix it. The user clicks once;
+            # the tray handles every failure path. Notifications keep
+            # them informed without making them choose.
+            res = actions.check_updates(
+                port=port, open_url=_open_url,
                 open_path=lambda p: subprocess.Popen(["open", str(p)]),
                 notify=lambda t, sub, body: rumps.notification(t, sub, body),
             )
@@ -141,7 +141,7 @@ def main() -> int:
         None,
         start_item, stop_item, restart_item,
         None,
-        model_item, updates_item, update_now_item, kickstart_item,
+        model_item, updates_item, kickstart_item,
         None,
         quit_item,
     ]
