@@ -611,4 +611,140 @@ describe('ResultView.MemberPanel (redesigned)', () => {
     // SplitButton still present
     expect(screen.getByRole('button', { name: /💬 Chat/ })).toBeTruthy()
   })
+
+  // The "agent updates caption in background" regression: backend
+  // wrote the new caption + broadcast entity_updated; App.refresh()
+  // updated the entities prop with the new member.caption. The
+  // <textarea> MUST pick it up without a browser reload. Pre-2026-06-11
+  // the picker effect's condition was `prev === '' || prev ===
+  // member.caption`, which compared local state against the NEW prop —
+  // so once local had ever held the OLD value it stayed pinned to it.
+  it('LIVE: agent updates member.caption in background → textarea picks it up', async () => {
+    const anchor = fig('fig_anchor', '2026-01-01T00:00:00', 'Anchor')
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/revisions')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            chain: [anchor], position: 0, prev: null, next: null,
+          }),
+        } as unknown as Response)
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as unknown as Response)
+    }) as typeof globalThis.fetch
+
+    // 1) Initial render: Result has the old auto-caption on its single member.
+    const resultWithCaption = (cap: string): Entity => ({
+      id: 'res_cap',
+      type: 'result',
+      title: 'Caption regression',
+      status: 'active',
+      artifact_path: null,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+      metadata: {
+        thread_id: 'thr_t',
+        members: [{ id: 'm_1', kind: 'figure', ref: anchor.id,
+                     caption: cap, caption_origin: 'ai' }],
+        interpretation: '',
+      },
+    } as unknown as Entity)
+
+    const { rerender } = render(
+      <ResultView
+        result={resultWithCaption('old auto caption')}
+        entities={[anchor]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+    await waitFor(() => {
+      const ta = document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement | null
+      expect(ta?.value).toBe('old auto caption')
+    })
+
+    // 2) Agent updates the caption; App refetches entities; prop changes.
+    rerender(
+      <ResultView
+        result={resultWithCaption('new caption from agent')}
+        entities={[anchor]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+
+    // 3) The textarea MUST reflect the new value without a browser refresh.
+    await waitFor(() => {
+      const ta = document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement | null
+      expect(ta?.value).toBe('new caption from agent')
+    })
+  })
+
+  // Regression guard for the in-flight edit protection — flipping the
+  // picker effect must NOT clobber a user mid-typing. Same setup as
+  // above but with a user edit between the two renders.
+  it('does NOT clobber an in-flight user edit when server caption changes', async () => {
+    const anchor = fig('fig_anchor', '2026-01-01T00:00:00', 'Anchor')
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/revisions')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            chain: [anchor], position: 0, prev: null, next: null,
+          }),
+        } as unknown as Response)
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as unknown as Response)
+    }) as typeof globalThis.fetch
+
+    const resultWithCaption = (cap: string): Entity => ({
+      id: 'res_cap2',
+      type: 'result',
+      title: 'In-flight edit guard',
+      status: 'active',
+      artifact_path: null,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+      metadata: {
+        thread_id: 'thr_t',
+        members: [{ id: 'm_1', kind: 'figure', ref: anchor.id,
+                     caption: cap, caption_origin: 'ai' }],
+        interpretation: '',
+      },
+    } as unknown as Entity)
+
+    const { rerender } = render(
+      <ResultView
+        result={resultWithCaption('initial caption')}
+        entities={[anchor]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+    const ta = await waitFor(() => {
+      const t = document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement
+      expect(t.value).toBe('initial caption')
+      return t
+    })
+
+    // User starts editing — local state diverges from the prop.
+    fireEvent.change(ta, { target: { value: 'user typing…' } })
+    expect((document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement).value)
+      .toBe('user typing…')
+
+    // Meanwhile auto_interpret server-side overwrites the caption. The
+    // user has NOT blurred yet, so their edit must survive.
+    rerender(
+      <ResultView
+        result={resultWithCaption('autodaemon rewrite')}
+        entities={[anchor]}
+        onChange={() => {}}
+        onFocus={() => {}}
+      />
+    )
+    // A brief wait to let any straggling effects fire.
+    await new Promise(r => setTimeout(r, 30))
+    expect((document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement).value)
+      .toBe('user typing…')
+  })
 })
