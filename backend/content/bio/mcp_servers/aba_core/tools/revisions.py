@@ -19,6 +19,7 @@ def register_revision_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def make_revision(entity_id: str, modified_code: str,
                       title: str | None = None,
+                      language: str | None = None,
                       supersede_newer: bool = False,
                       aba_ctx_id: str | None = None) -> dict:
         """Create a revision of an existing figure or table by re-running
@@ -67,6 +68,13 @@ def register_revision_tools(mcp: FastMCP) -> None:
                              names + structure so the diff is meaningful.
           title            — optional title for the new revision; defaults
                              to the parent's title.
+          language         — 'python' or 'r'. Optional override; when
+                             omitted, the language is detected from
+                             modified_code (Python signals like `import`,
+                             `def` → python; R signals like `library(`,
+                             `<-`, `ggplot` → r). Use the override only
+                             when the auto-detection is wrong (e.g.,
+                             reticulate-style mixed snippet).
           supersede_newer  — when True, accepts revising from a non-latest
                              revision by marking any currently-newer
                              revisions as status='superseded'. Default
@@ -84,9 +92,14 @@ def register_revision_tools(mcp: FastMCP) -> None:
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.lifecycle.revisions import make_revision as _make
         ctx = peek_ctx(aba_ctx_id) or {}
+        lang = (language or "").lower().strip() or None
+        if lang and lang not in ("python", "r"):
+            return {"error":
+                    f"language must be 'python' or 'r', got {language!r}"}
         try:
             return _make(
                 entity_id, modified_code, title=title,
+                language=lang,
                 thread_id=ctx.get("thread_id"),
                 supersede_newer=supersede_newer,
             )
