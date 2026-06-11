@@ -699,9 +699,20 @@ export function useChat(
               if (steerFlushRef.current && queuedMessageRef.current) {
                 const q = queuedMessageRef.current
                 steerFlushRef.current = false
-                queuedMessageRef.current = null
-                setQueuedMessage(null)
-                setTimeout(() => flushSendRef.current?.(q), 0)
+                // Don't clear the ref until the flush actually runs — if
+                // setTimeout never fires (tab throttle, unmount), the
+                // queue stays available for the next attempt instead of
+                // disappearing silently. See the matching `done` branch.
+                setTimeout(() => {
+                  const flush = flushSendRef.current
+                  if (!flush) {
+                    console.warn('[useChat] steer auto-flush: flushSendRef null; queue preserved')
+                    return
+                  }
+                  queuedMessageRef.current = null
+                  setQueuedMessage(null)
+                  flush(q)
+                }, 0)
               } else {
                 steerFlushRef.current = false
                 queuedMessageRef.current = null
@@ -719,12 +730,27 @@ export function useChat(
               // a silently-refined thread question (guide-owned) shows in the brief.
               onERRef.current?.()
               // Auto-flush any queued message so the user can think+type
-              // while the agent works.
+              // while the agent works. The clear happens INSIDE the
+              // timeout — so if the callback never fires (tab throttle,
+              // unmount, render race) the queue persists rather than
+              // vanishing without sending. Live bug, 2026-06-11
+              // (prj_128380fd thr_deed230d): user queued 'what model are
+              // you?' mid-turn; the chip cleared on done but no message
+              // ever landed in chat. The clear-before-schedule pattern
+              // had no recovery path; this fix preserves the queue on
+              // any failure path.
               if (queuedMessageRef.current) {
                 const q = queuedMessageRef.current
-                queuedMessageRef.current = null
-                setQueuedMessage(null)
-                setTimeout(() => flushSendRef.current?.(q), 0)
+                setTimeout(() => {
+                  const flush = flushSendRef.current
+                  if (!flush) {
+                    console.warn('[useChat] auto-flush: flushSendRef null; queue preserved')
+                    return
+                  }
+                  queuedMessageRef.current = null
+                  setQueuedMessage(null)
+                  flush(q)
+                }, 0)
               }
               return 'terminal'
             } else if (ev.type === 'error') {
