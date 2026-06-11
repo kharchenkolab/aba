@@ -28,8 +28,15 @@ Phase status:
             into TurnHalt + interrupt.                           [done]
   R-3.3.c — verify ABA PreToolUse/PostToolUse hooks fire under
             SDK runtime (no bridging needed — they ride inside
-            `_dispatch_tool` via the tool_executor callback).    [this commit]
-  R-3.5  — flip Methodologist + Critic to runtime: sdk.          [next]
+            `_dispatch_tool` via the tool_executor callback).    [done]
+  R-3.5  — advisor-shaped one-shots (methodologist + skeptic
+            system prompts) under SDK runtime; ABA credential
+            mode honored in the SDK env (CLAUDE_CODE_OAUTH_TOKEN
+            forwarded, ANTHROPIC_API_KEY blanked when oauth_cc). [this commit]
+  later  — wire `run_advisor_one_shot` to dispatch through
+            `make_runtime(spec)` so YAML `runtime: sdk` is
+            actually honored in production (deferred — current
+            advisors don't need the SDK's streaming + tool path).
 """
 from __future__ import annotations
 
@@ -123,8 +130,16 @@ class AgentSDKRuntime:
         only sees the final envelope. Verified by
         tests/e2e/sdk_runtime_hooks_smoke.py.
 
-    NOT yet wired (R-3.5):
-      - Methodologist + Critic agent flip to runtime: sdk.
+    Credential routing (R-3.5):
+      ABA's `_credential_mode()` (apikey / oauth / oauth_cc) is
+      respected: for the OAuth modes we fetch the bearer via
+      `core.llm._oauth_bearer()` and forward it as
+      `$CLAUDE_CODE_OAUTH_TOKEN` in `ClaudeAgentOptions.env` while
+      blanking `$ANTHROPIC_API_KEY` in the same dict. Otherwise the
+      SDK's preferred-order discovery would pick up a stale .env
+      ANTHROPIC_API_KEY and silently bypass the Claude Code
+      subscription. Verified by tests/e2e/sdk_runtime_advisor_smoke.py
+      (without the fix: "Credit balance is too low"; with: real text).
     """
 
     async def run_turn(
@@ -288,12 +303,36 @@ class AgentSDKRuntime:
                 }
             return {}
 
+        # Honor ABA's credential preference. The SDK's credential-discovery
+        # ladder prefers $ANTHROPIC_API_KEY over $CLAUDE_CODE_OAUTH_TOKEN
+        # over the Keychain/credentials.json — so when ABA wants to bill
+        # the Claude Code subscription (mode `oauth_cc`), we must pass an
+        # explicit $CLAUDE_CODE_OAUTH_TOKEN AND blank $ANTHROPIC_API_KEY
+        # in the SDK's per-call env, or the SDK will silently route to
+        # the (often credit-depleted) API key. Mirrors the auth_token
+        # branch in core/llm.py + core/runtime/agent.py's advisor path.
+        sdk_env: dict[str, str] = {}
+        try:
+            from core.llm import _credential_mode, _oauth_bearer   # noqa: PLC0415
+            mode = _credential_mode()
+            if mode in ("oauth", "oauth_cc"):
+                tok = _oauth_bearer()
+                if tok:
+                    sdk_env["CLAUDE_CODE_OAUTH_TOKEN"] = tok
+                    sdk_env["ANTHROPIC_API_KEY"] = ""   # masks any
+                                                         # leaked .env
+        except Exception:   # noqa: BLE001
+            # core.llm not importable (e.g. minimal test harness) → let
+            # the SDK fall back to its default discovery.
+            pass
+
         opts = ClaudeAgentOptions(
             system_prompt=req.system.stable,
             mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
             disallowed_tools=_DISALLOWED_CC_DEFAULTS,
             model=req.model,
+            env=sdk_env,
             # max_turns caps the SDK's own multi-turn loop within ONE
             # run_turn() call. ABA's outer loop in guide.py re-enters
             # run_turn() per phase, so a generous SDK budget here is
