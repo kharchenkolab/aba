@@ -362,6 +362,22 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
           - narrative: title, notes, tags, text
           - note:      title, notes, tags, text
 
+        Result.interpretation vs per-figure caption — DO NOT CONFUSE.
+        `interpretation` is the Result-level SYNTHESIS / READING /
+        OVERVIEW prose that the UI renders as its own block ABOVE the
+        member panels. The text directly under each figure or table
+        image is a PER-MEMBER caption on members[i].caption — a
+        different field, written via the separate
+        `update_member_caption(result_id, member_id, caption)` tool.
+
+        If the user says "update the caption" while a figure is the
+        focused / discussed evidence, they almost always mean the
+        per-figure caption — call `update_member_caption`, NOT
+        update_entity_fields with `interpretation`. Live bug
+        (prj_128380fd thr_deed230d, 2026-06-11): the agent picked
+        `interpretation`, leaving the old per-figure caption in place
+        and surfacing the new text as a separate block.
+
         Semantics:
           - Only keys present in `fields` are touched; everything else
             is left alone.
@@ -468,6 +484,81 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
 
         return {"status": "ok", "entity_id": entity_id,
                 "updated": list(fields.keys())}
+
+    @mcp.tool()
+    def update_member_caption(result_id: str, member_id: str,
+                              caption: str,
+                              aba_ctx_id: str | None = None) -> dict:
+        """Update the caption text directly under a Result's member —
+        the per-figure (or per-table) caption the user sees beneath
+        each panel image. NOT the same as the Result's `interpretation`
+        field, which is the result-level synthesis prose.
+
+        USE THIS WHEN the user asks to "update / change / fix / rewrite
+        the caption" on a figure or table inside a Result, or asks to
+        recast the description of a single panel. The per-member
+        caption renders directly under the image; updating
+        `interpretation` via update_entity_fields would have left the
+        old caption in place AND added the new text as a separate
+        prose block (live bug prj_128380fd thr_deed230d, 2026-06-11).
+
+        Use update_entity_fields(result_id, {interpretation: ...}) for
+        the Result-level READING / OVERVIEW that spans all members —
+        the high-level interpretation block, not per-panel text.
+
+        member_id comes from read_entity(result_id) →
+        fields.members_summary[i].member_id.
+
+        Sets caption_origin='ai' so the ✨ indicator stays accurate
+        (the user can later edit it manually, which flips the origin
+        to 'user' and clears the indicator).
+
+        Arguments:
+          result_id  — the Result entity id.
+          member_id  — the member id (from read_entity).
+          caption    — new caption text. Empty string clears.
+
+        Returns: {"status": "ok", "result_id", "member_id"} on
+        success; {"error": "..."} on bad inputs.
+        """
+        from core.graph.entities import get_entity
+        from content.bio.graph.result_members import update_result_member
+        r = get_entity(result_id)
+        if not r:
+            return {"error": f"result {result_id} not found"}
+        if r.get("type") != "result":
+            return {"error":
+                    f"entity {result_id} is type {r.get('type')!r}, "
+                    f"not 'result'. update_member_caption only "
+                    f"operates on Result members."}
+        members = (r.get("metadata") or {}).get("members") or []
+        if not any(m.get("id") == member_id for m in members):
+            seen = [m.get("id") for m in members]
+            return {"error":
+                    f"member {member_id!r} not in result {result_id}. "
+                    f"Members: {seen}. Call read_entity to see "
+                    f"members_summary."}
+        if not isinstance(caption, str):
+            return {"error":
+                    f"caption must be a string, got "
+                    f"{type(caption).__name__}"}
+        out = update_result_member(result_id, member_id,
+                                    caption=caption, caption_origin="ai")
+        if out is None:
+            return {"error":
+                    f"update_result_member failed for "
+                    f"{result_id}/{member_id}"}
+        try:
+            from core.runtime.notifications import broadcast
+            broadcast({"type": "entity_updated",
+                       "entity_id": result_id,
+                       "reason": "member_caption_updated",
+                       "member_id": member_id})
+        except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
+            pass
+        return {"status": "ok",
+                "result_id": result_id,
+                "member_id": member_id}
 
     @mcp.tool()
     def list_entity_operations(entity_type: str | None = None,
