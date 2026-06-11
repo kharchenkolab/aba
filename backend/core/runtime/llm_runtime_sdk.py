@@ -376,6 +376,22 @@ class AgentSDKRuntime:
         # ── 4. Run the session; translate events ──
         stop_reason = "end_turn"
         usage_delta = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        # Accumulators for the `_StreamCompleted` sentinel guide.py
+        # still consumes (DirectAPIRuntime's internal carrier, currently
+        # also surfaced by AgentSDKRuntime for parity until guide.py is
+        # refactored to use public events only). guide.py's loop uses
+        # the sentinel to persist `assistant_blocks` into history, tally
+        # usage into the SSE, and gate the tool-use vs end-turn break.
+        _text_chunks: list[str] = []
+        _tool_use_blocks: list[dict] = []
+        _tool_calls_this_turn: list[str] = []
+        # SDK's ToolResultBlock carries only `tool_use_id`, not the tool
+        # name — so we correlate ToolResult.tool_name back to the prior
+        # ToolUseStart here. guide.py's tool_start / tool_result SSE
+        # emit (lines 977 + 1010) reads `ev.tool_name` directly from
+        # the ToolResult event, so emitting it blank breaks SSE
+        # rendering even though the dispatch itself completed.
+        _name_by_tool_use_id: dict[str, str] = {}
         async with ClaudeSDKClient(options=opts) as client:
             await client.query(_msg_stream())
             async for msg in client.receive_response():
@@ -395,16 +411,29 @@ class AgentSDKRuntime:
                     # Per-block translation: TextBlock -> TextDelta;
                     # ToolUseBlock -> ToolUseStart. ThinkingBlock blocks
                     # are silently dropped (we don't surface them in
-                    # DirectAPIRuntime either).
+                    # DirectAPIRuntime either). Side-buffer the same
+                    # blocks in Anthropic shape so `_StreamCompleted`
+                    # can hand guide.py a ready-to-persist list.
                     for blk in msg.content:
                         if isinstance(blk, TextBlock):
                             yield TextDelta(text=blk.text)
+                            _text_chunks.append(blk.text)
                         elif isinstance(blk, ToolUseBlock):
+                            stripped = _strip_mcp_prefix(blk.name)
+                            inp = blk.input or {}
+                            _name_by_tool_use_id[blk.id] = stripped
                             yield ToolUseStart(
                                 tool_use_id=blk.id,
-                                tool_name=_strip_mcp_prefix(blk.name),
-                                input=blk.input or {},
+                                tool_name=stripped,
+                                input=inp,
                             )
+                            _tool_use_blocks.append({
+                                "type": "tool_use",
+                                "id": blk.id,
+                                "name": stripped,
+                                "input": inp,
+                            })
+                            _tool_calls_this_turn.append(stripped)
                     # Accumulate per-turn usage from the assistant message
                     # if the SDK populates it. ResultMessage at the end
                     # has the canonical totals; this is a best-effort
@@ -460,11 +489,8 @@ class AgentSDKRuntime:
                             break
                         yield ToolResult(
                             tool_use_id=blk.tool_use_id,
-                            # Tool name isn't carried on the
-                            # ToolResultBlock; caller correlates
-                            # by tool_use_id with the prior
-                            # ToolUseStart.
-                            tool_name="",
+                            tool_name=_name_by_tool_use_id.get(
+                                blk.tool_use_id, ""),
                             result=_parse_tool_result_content(blk.content),
                         )
                     if envelope_halt is not None:
@@ -487,6 +513,37 @@ class AgentSDKRuntime:
                 # Other message types (SystemMessage with init/setup
                 # info, RateLimitEvent, etc.) we currently ignore.
                 # When R-3.3 adds hook bridging, some may surface.
+
+        # ── 5. Emit guide.py's `_StreamCompleted` sentinel ──
+        # DirectAPIRuntime emits this internal event to hand guide.py
+        # the assistant blocks + usage + stop_reason in one shot;
+        # AgentSDKRuntime must do the same for `assistant` history
+        # persistence + SSE usage to work under SDK runtime. The shape
+        # mirrors DirectAPIRuntime's emission exactly so guide.py needs
+        # no runtime-specific code paths. Lazy-imported to keep this
+        # module free of any direct-runtime dependency at import time.
+        from core.runtime.llm_runtime_direct import _StreamCompleted   # noqa: PLC0415
+        _assistant_blocks: list[dict] = []
+        if _text_chunks:
+            _assistant_blocks.append({"type": "text",
+                                       "text": "".join(_text_chunks)})
+        _assistant_blocks.extend(_tool_use_blocks)
+        # When a halt fired, stop_reason needs to look like a tool_use
+        # break to guide.py — otherwise its `if _stop_reason != "tool_use"
+        # break` exits the outer loop before the halt-state machine
+        # gets a chance to run. The TurnHalt event below carries the
+        # actual halt reason; the sentinel just tells the outer loop
+        # not to terminate the turn.
+        _completed_stop = ("tool_use" if (halt_intercepted is not None
+                                            or envelope_halt is not None)
+                            else stop_reason)
+        yield _StreamCompleted(
+            final_msg=None,
+            usage_delta=usage_delta,
+            assistant_blocks=_assistant_blocks,
+            stop_reason=_completed_stop,
+            tool_calls_this_turn=_tool_calls_this_turn,
+        )
 
         # R-3.3.a: PreToolUse hook denied a halt-on-tools call.
         # Translate to TurnHalt(pending_tool). The ToolUseStart event
