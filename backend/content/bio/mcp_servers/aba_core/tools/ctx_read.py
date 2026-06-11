@@ -69,18 +69,27 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
     # --- pure read tools (no ctx use) ---
 
     @mcp.tool()
-    def get_provenance(entity_id: str) -> dict:
+    def get_provenance(entity_id: str, max_depth: int = 8) -> dict:
         """Provenance trace for an entity — what produced it
-        (upstream). Returns a graph + a human-readable summary."""
+        (upstream). Returns a graph + a human-readable summary.
+
+        `max_depth` (default 8) controls how far back the walk goes.
+        For a long revision chain (figure with many revisions), pass
+        a larger number — or use `list_revisions` directly, which is
+        depth-unbounded and pre-labels every entry with its v1…vN
+        version number. Use get_provenance for cross-type derivation
+        traces (figure → result → analysis → dataset)."""
         from content.bio.tools import get_provenance as _impl
-        return _impl({"entity_id": entity_id})
+        return _impl({"entity_id": entity_id, "max_depth": max_depth})
 
     @mcp.tool()
-    def get_dependents(entity_id: str) -> dict:
+    def get_dependents(entity_id: str, max_depth: int = 8) -> dict:
         """Downstream entities — what depends on this one. Useful
-        before archive/supersede to spot what would orphan."""
+        before archive/supersede to spot what would orphan.
+
+        `max_depth` (default 8) controls how far down the walk goes."""
         from content.bio.tools import get_dependents as _impl
-        return _impl({"entity_id": entity_id})
+        return _impl({"entity_id": entity_id, "max_depth": max_depth})
 
     @mcp.tool()
     def read_capability(name: str | None = None,

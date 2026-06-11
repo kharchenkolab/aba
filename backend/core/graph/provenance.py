@@ -73,12 +73,12 @@ def _dedupe_titles(nodes: list[dict]) -> list[dict]:
     return out
 
 
-def provenance_text(entity_id: str) -> str:
+def provenance_text(entity_id: str, *, max_depth: int = 3) -> str:
     """Plain-English upstream description for the agent."""
     e = get_entity(entity_id)
     if not e:
         return "Entity not found."
-    up = _dedupe_titles(upstream(entity_id))
+    up = _dedupe_titles(upstream(entity_id, max_depth=max_depth))
     if not up:
         return f'"{e["title"]}" has no recorded upstream provenance.'
     lines = [f'"{e["title"]}" ({e["type"]}) was derived from:']
@@ -88,12 +88,12 @@ def provenance_text(entity_id: str) -> str:
     return "\n".join(lines)
 
 
-def dependents_text(entity_id: str) -> str:
+def dependents_text(entity_id: str, *, max_depth: int = 3) -> str:
     """Plain-English downstream description for the agent."""
     e = get_entity(entity_id)
     if not e:
         return "Entity not found."
-    down = _dedupe_titles(downstream(entity_id))
+    down = _dedupe_titles(downstream(entity_id, max_depth=max_depth))
     if not down:
         return f'Nothing currently depends on "{e["title"]}".'
     lines = [f'If "{e["title"]}" changed, these would need to be reconsidered:']
@@ -103,9 +103,9 @@ def dependents_text(entity_id: str) -> str:
     return "\n".join(lines)
 
 
-def neighborhood(entity_id: str) -> dict:
+def neighborhood(entity_id: str, *, max_depth: int = 3) -> dict:
     """Structured upstream + downstream for the UI panel."""
     return {
-        "upstream": _dedupe_titles(upstream(entity_id)),
-        "downstream": _dedupe_titles(downstream(entity_id)),
+        "upstream": _dedupe_titles(upstream(entity_id, max_depth=max_depth)),
+        "downstream": _dedupe_titles(downstream(entity_id, max_depth=max_depth)),
     }
