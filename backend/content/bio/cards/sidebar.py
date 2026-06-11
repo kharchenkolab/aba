@@ -30,20 +30,42 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
     """
     parts: list[str] = ["[PROJECT — current snapshot]"]
 
-    # Datasets: small N, very useful. Show name + path so the agent
-    # can pass it to inspect_upload / read straight away.
+    # Datasets: small N, very useful. Show name + path + the layout
+    # hint that register_dataset computed (e.g. "6 flat files (.mtx.gz,
+    # .tsv.gz)"). The path alone made the agent confidently invent
+    # filenames — prj_ab1b55fe thr_e692a202 (2026-06-11) burned three
+    # round-trips per workflow guessing names like
+    # "GSM5746259_matrix.mtx.gz" when the real name was
+    # "GSM5746259_MGI0369_1_SLAB-145-0.matrix.mtx.gz". The hint is
+    # already on metadata.layout_hint (curation.py:347); just surface it.
+    # The one-line nudge below sits AT THE BLOCK so the rule about
+    # cwd-shifted relative paths is read at the same eye-level as the
+    # tempting absolute path, not buried 10K characters later in the
+    # Paths paragraph.
     datasets = list_entities(type_filter="dataset", include_archived=False)
     if datasets:
         parts.append(f"Datasets ({len(datasets)}):")
         for e in datasets[:10]:
             title = (e.get("title") or "").strip() or e.get("id", "")
             path = e.get("artifact_path") or ""
+            layout = ((e.get("metadata") or {}).get("layout_hint") or "").strip()
             line = f"  - {title}"
             if path:
                 line += f"  →  {path}"
+            if layout:
+                line += f"  ·  {layout}"
             parts.append(line)
         if len(datasets) > 10:
             parts.append(f"  (… {len(datasets) - 10} more — list_data_files for full list)")
+        # One-line reminder co-located with the path. The Paths paragraph
+        # in the system prompt says the same thing more verbosely; this
+        # is the salient copy at the spot where it matters.
+        parts.append(
+            "  Tip: for exact filenames call `list_data_files()`; relative "
+            "paths like `./geo_data/` resolve from the kernel's current cwd, "
+            "which shifts when a Run opens — use the absolute path above or "
+            "the result of list_data_files()."
+        )
 
     # Threads: small N usually. Mark the CURRENT one. Title-only —
     # detail belongs on a focused-thread card, not the firehose.
