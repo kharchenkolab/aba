@@ -360,13 +360,43 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const [moreOpen, setMoreOpen] = useState(false)
   const [caption, setCaption] = useState(member.caption ?? '')
   const [text, setText] = useState(member.text ?? '')
-  useEffect(() => { setCaption(member.caption ?? ''); setText(member.text ?? '') }, [member.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Pick up server-side updates to the caption (background auto_interpret
-  // daemon completes ~1-3s after pin) — but only if the user hasn't started
-  // editing locally (i.e. local is still empty OR matches the OLD server
-  // value). Prevents the daemon's write from clobbering an in-flight edit.
+  // Track the last server caption we synced to. The picker effect below
+  // compares local state against THIS ref (not against the new prop) so
+  // it can tell whether the user has an in-flight edit. Pre-2026-06-11
+  // the picker compared `prev === member.caption` which used the NEW
+  // prop value — meaning once local had ever held a non-empty value,
+  // server updates were ignored until a browser refresh. The agent's
+  // update_member_caption broadcasts arrived but the chip stayed
+  // stale.
+  const lastSyncedCaption = useRef(member.caption ?? '')
   useEffect(() => {
-    setCaption(prev => (prev === '' || prev === member.caption ? (member.caption ?? '') : prev))
+    setCaption(member.caption ?? '')
+    setText(member.text ?? '')
+    lastSyncedCaption.current = member.caption ?? ''
+  }, [member.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Pick up server-side updates to the caption (background auto_interpret
+  // daemon completes ~1-3s after pin; agent's update_member_caption
+  // broadcasts an entity_updated that triggers a project refetch). Do
+  // NOT clobber an in-flight user edit — detected by local state
+  // diverging from the last server value we synced.
+  useEffect(() => {
+    const next = member.caption ?? ''
+    setCaption(prev => {
+      if (prev === lastSyncedCaption.current) {
+        // No local divergence → safe to take the new server value.
+        lastSyncedCaption.current = next
+        return next
+      }
+      if (prev === next) {
+        // Local already matches the new prop (e.g. the user's own blur
+        // round-tripped). Bump the ref forward so subsequent server
+        // updates aren't gated on a stale baseline.
+        lastSyncedCaption.current = next
+        return prev
+      }
+      // User has an unsaved edit → keep it.
+      return prev
+    })
   }, [member.caption])
 
   // ─── Highlight surface state (mirrors Message.tsx's pattern) ──────────
