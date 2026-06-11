@@ -87,6 +87,17 @@ def ensure_micromamba() -> str:
 def _mamba_env() -> dict:
     env = os.environ.copy()
     env["MAMBA_ROOT_PREFIX"] = str(MAMBA_ROOT)
+    # Force an English UTF-8 locale on subprocesses when the parent has
+    # no LANG set. macOS LaunchAgents inherit a near-empty env by
+    # default; without LANG, R falls back to the system's AppleLanguages
+    # preference list and picks de-AT for technical messages on a
+    # German-leaning machine (live bug 2026-06-11: "Fehler in parse:
+    # unerwartetes Symbol" instead of "Error in parse: unexpected
+    # symbol"). Only override missing-OR-empty values so an explicit
+    # user locale survives (setdefault alone wouldn't replace LANG="").
+    for k in ("LANG", "LC_ALL", "LC_MESSAGES"):
+        if not (env.get(k) or "").strip():
+            env[k] = "en_US.UTF-8"
     return env
 
 
