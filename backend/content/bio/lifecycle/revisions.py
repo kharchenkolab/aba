@@ -28,7 +28,7 @@ from core.graph.entities import (
     create_entity, get_entity, update_entity, delete_entity_hard,
 )
 from core.graph import exec_records
-from content.bio.lifecycle.scenarios import _detect_language
+from content.bio.lifecycle.scenarios import _detect_language, _PY_SIGNALS, _R_SIGNALS
 
 _log = logging.getLogger(__name__)
 
@@ -52,6 +52,38 @@ def _resolve_language(parent_entity: dict) -> Language:
             pass
     code = exec_records.lookup_code_for_entity(parent_entity)
     return _detect_language(code) if code else "python"
+
+
+def _detect_revision_language(modified_code: str,
+                              parent_entity: dict) -> Language:
+    """Pick the language for `modified_code` in make_revision.
+
+    Sniff the submitted code first — it is what's about to run, and the
+    agent may legitimately rewrite an R-produced figure in Python (or
+    vice versa). Only fall back to the parent's language hint when the
+    submitted code carries NO signal either way (very short snippets,
+    pure logic with no imports/library calls).
+
+    Pre-2026-06-11 the resolution went `parent first` — make_revision
+    consulted the parent's exec record before looking at modified_code.
+    A live-bug shape (events 188 + 200 in prj_128380fd thr_deed230d):
+    agent submitted Python to revise an R-produced parent → R runner
+    saw `import matplotlib.pyplot` → 'unerwartetes Symbol'.
+    """
+    if not modified_code or not modified_code.strip():
+        return _resolve_language(parent_entity)
+    py_hits = sum(1 for p in _PY_SIGNALS if p.search(modified_code))
+    r_hits = sum(1 for p in _R_SIGNALS if p.search(modified_code))
+    if py_hits > 0 and r_hits == 0:
+        return "python"
+    if r_hits > 0 and py_hits == 0:
+        return "r"
+    if py_hits == 0 and r_hits == 0:
+        # Truly ambiguous → trust the parent's hint.
+        return _resolve_language(parent_entity)
+    # Mixed signals (rare; reticulate-ish). _detect_language's tiebreak
+    # rule applies: majority wins, python on tie.
+    return "r" if r_hits > py_hits else "python"
 
 
 def _newer_than(entity_id: str) -> list[str]:
@@ -139,7 +171,17 @@ def make_revision(
             f"newer entries: {newer})"
         )
 
-    lang: Language = language or _resolve_language(parent)
+    # Detect language from the CODE THAT'S ABOUT TO RUN, not from the
+    # parent's exec record. The agent's modified_code is the authority
+    # — running R interpreter on Python code (or vice versa) was the
+    # 2026-06-11 live-bug shape: agent rewrote an R-produced figure in
+    # Python, but _resolve_language(parent) returned 'r' and the R
+    # runner choked on `import matplotlib.pyplot` ("unerwartetes
+    # Symbol"). _resolve_language(parent) is kept as a last-resort
+    # fallback for the rare case where detection is ambiguous on a
+    # short snippet — _detect_language defaults to python in that case
+    # but a parent hint is strictly better when available.
+    lang: Language = language or _detect_revision_language(modified_code, parent)
     from content.bio.tools.run_exec import run_python, run_r
 
     # Carry forward the parent's thread so the exec lands in the same Run
