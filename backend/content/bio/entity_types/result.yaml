@@ -52,7 +52,12 @@ ui:
 
 creation:
   rail_plus: false
-  agent_tools: [promote_to_result, promote_figure_to_result]
+  # add_result_member / remove_result_member are also surfaced as agent
+  # tools as of 2026-06-12 — without them the agent had no way to grow
+  # an existing Result and had to fall back to the user-only focus
+  # gesture (prj_8143327c thr_80190faf).
+  agent_tools: [promote_to_result, promote_figure_to_result,
+                add_result_member, remove_result_member]
   user_gestures_chat: [pin, promote_to_result, group_figures]
   user_gestures_focus: [add_member, remove_member, edit_interpretation]
 
