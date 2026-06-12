@@ -352,7 +352,13 @@ export function useChat(
       const pq = projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''
       const r = await fetch(`/api/messages?thread_id=${encodeURIComponent(threadId)}${pq}`)
       const raw = (await r.json()) as RawMsg[]
-      if (r.ok && genRef.current === myGen) setMessages(collapseHistory(raw))
+      // Skip the overwrite if a send started AFTER this fetch was
+      // launched — the optimistic user bubble is the source of truth
+      // until the SSE finalizes it. (Race fix, 2026-06-12: see
+      // sendMessage for the matching synchronous streamingRef flip.)
+      if (r.ok && genRef.current === myGen && !streamingRef.current) {
+        setMessages(collapseHistory(raw))
+      }
     } catch { /* ignore */ }
     finally { if (genRef.current === myGen) setLoading(false) }
     if (streamingRef.current) return    // already streaming via our own POST
@@ -820,6 +826,15 @@ export function useChat(
   const sendMessage = useCallback(
     async (text: string, annotation?: Annotation | null) => {
       if (streaming) return
+      // Set streamingRef SYNCHRONOUSLY (the state-driven effect at line
+      // 202 runs after React renders, leaving a window where an
+      // in-flight loadMessages can resolve and `setMessages(server-
+      // history)` wipes the optimistic user bubble before SSE delivers
+      // the assistant turn. Race observed 2026-06-12 on a freshly-
+      // opened project: project-switch kicks loadMessages, user types
+      // and sends before that fetch returns, then the empty-history
+      // response overwrites the just-added user message. PK
+      streamingRef.current = true
       setMessages(prev => [...prev, {
         id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }],
       }])
@@ -832,6 +847,9 @@ export function useChat(
   // can dispatch the queued message correctly.
   sendMessageRef.current = (text: string) => sendMessage(text)
   flushSendRef.current = (text: string) => {
+    // Same sync-streamingRef flip as sendMessage — the auto-flush
+    // can fire in the same tick as a project-switch'd loadMessages.
+    streamingRef.current = true
     setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }] }])
     runStream({ text })
   }
@@ -853,6 +871,7 @@ export function useChat(
   const answerClarification = useCallback(
     async (text: string) => {
       if (streaming || !pendingClarification) return
+      streamingRef.current = true   // see sendMessage for the race-fix rationale
       setMessages(prev => [...prev, {
         id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }],
       }])
