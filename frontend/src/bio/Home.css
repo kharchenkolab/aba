@@ -395,6 +395,21 @@
   color: #98a2b3;
   font-size: 11px;
 }
+.home__side-more {
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.home__side-more:hover {
+  background: #f1f5f9;
+}
 
 @media (max-width: 900px) {
   .home__hub {

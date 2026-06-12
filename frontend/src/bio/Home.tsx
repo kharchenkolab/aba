@@ -73,6 +73,12 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   const [modal, setModal] = useState<Modal>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // Side rail starts capped at 5 most-recent projects so a populated
+  // workspace doesn't dump a tall scrolling list on first glance; the
+  // "Show all N" toggle expands it. A non-empty filter implies the
+  // user is searching the WHOLE set, so we ignore the cap then.
+  const [showAllProjects, setShowAllProjects] = useState(false)
+  const SIDE_RAIL_DEFAULT = 5
   // Per-project recovery-report cache (I5). Populated lazily for any project
   // whose dir contains recovery_report.json — i.e. projects that came in via
   // aba-recover and may have missing deps the admin should know about.
@@ -177,7 +183,17 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
     setBusy(true)
     try {
       await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: 'DELETE' })
-      setModal(null); await load()
+      // Optimistically remove from local state + drop the selection
+      // if it pointed at the deleted project, so the "Open project"
+      // buttons un-grey AS SOON AS the DELETE returns — the refetch
+      // can finish in the background. Awaiting load() before unbusy
+      // makes the whole UI feel locked when there are many projects
+      // (load() fans out one /recovery-report per project, which
+      // dominates the wall-clock on a populated workspace).
+      setProjects(prev => (prev ? prev.filter(p => p.id !== pid) : prev))
+      if (selectedId === pid) setSelectedId(null)
+      setModal(null)
+      load().catch(() => { /* refetch is best-effort; UI already updated */ })
     } finally { setBusy(false) }
   }
 
@@ -213,6 +229,13 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
   // before the rename modal was required). Treat those as empty for the
   // filter so the user can still type without the page error-bounding.
   const projectMatches = q ? list.filter(p => (p.name ?? '').toLowerCase().includes(q)) : list
+  // Default-capped side rail (bug #2 2026-06-12). Cap drops when a
+  // filter is active so the user can search across ALL projects.
+  const railCapApplies = !q && !showAllProjects && projectMatches.length > SIDE_RAIL_DEFAULT
+  const projectMatchesVisible = railCapApplies
+    ? projectMatches.slice(0, SIDE_RAIL_DEFAULT)
+    : projectMatches
+  const projectMatchesHidden = projectMatches.length - projectMatchesVisible.length
   const currentCounts = { ...(summary?.counts ?? {}), ...(current?.counts ?? {}) }
 
   // Scope menu visibility by render-site (`central` vs `side`) so the current
@@ -399,29 +422,39 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
                 {projectMatches.length === 0 ? (
                   <div className="home__muted">No matches.</div>
                 ) : (
-                  <div className="home__side-list">
-                    {projectMatches.map(p => {
-                      const stats = card_order().filter(t => p.counts[t])
-                      return (
-                        <div
-                          key={p.id}
-                          className={`home__side-item ${current && current.id === p.id ? 'is-current' : ''}`}
-                          role="button"
-                          onClick={() => selectProject(p.id)}
-                        >
-                          <div className="home__side-item-head">
-                            <span className="home__side-item-name">{p.name}</span>
-                            {recoveryChip(p)}
-                            {menu(p, 'side')}
+                  <>
+                    <div className="home__side-list">
+                      {projectMatchesVisible.map(p => {
+                        const stats = card_order().filter(t => p.counts[t])
+                        return (
+                          <div
+                            key={p.id}
+                            className={`home__side-item ${current && current.id === p.id ? 'is-current' : ''}`}
+                            role="button"
+                            onClick={() => selectProject(p.id)}
+                          >
+                            <div className="home__side-item-head">
+                              <span className="home__side-item-name">{p.name}</span>
+                              {recoveryChip(p)}
+                              {menu(p, 'side')}
+                            </div>
+                            <div className="home__side-item-meta">
+                              {stats.length ? stats.map(t => `${p.counts[t]} ${t}${p.counts[t] > 1 ? 's' : ''}`).join(' · ') : 'empty'}
+                            </div>
+                            <div className="home__side-item-foot">Last touched {rel(p.last_touched)}</div>
                           </div>
-                          <div className="home__side-item-meta">
-                            {stats.length ? stats.map(t => `${p.counts[t]} ${t}${p.counts[t] > 1 ? 's' : ''}`).join(' · ') : 'empty'}
-                          </div>
-                          <div className="home__side-item-foot">Last touched {rel(p.last_touched)}</div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                        )
+                      })}
+                    </div>
+                    {(projectMatchesHidden > 0 || (!q && showAllProjects && projectMatches.length > SIDE_RAIL_DEFAULT)) && (
+                      <button className="home__side-more"
+                              onClick={() => setShowAllProjects(v => !v)}>
+                        {projectMatchesHidden > 0
+                          ? `Show ${projectMatchesHidden} other project${projectMatchesHidden === 1 ? '' : 's'} ›`
+                          : 'Show fewer'}
+                      </button>
+                    )}
+                  </>
                 )}
               </aside>
             )}
