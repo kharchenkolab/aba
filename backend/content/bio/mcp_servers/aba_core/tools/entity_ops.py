@@ -285,6 +285,34 @@ _UNIVERSAL_FALLBACK = ["title", "status", "tags", "notes"]
 _TOP_LEVEL_COLUMNS = {"title", "notes", "tags", "status"}
 
 
+def _log_warn(msg: str) -> None:
+    """Module-internal warn helper that doesn't crash if logging is misconfigured."""
+    try:
+        import logging
+        logging.getLogger(__name__).warning(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _broadcast_member_change(result_id: str, member_id: str | None,
+                             reason: str, *,
+                             entity_id: str | None = None) -> None:
+    """Fire an entity_updated SSE so the focused Result card re-fetches.
+    Best-effort — broadcast must NEVER fail the write."""
+    try:
+        from core.runtime.notifications import broadcast
+        payload = {"type": "entity_updated",
+                   "entity_id": result_id,
+                   "reason": reason}
+        if member_id:
+            payload["member_id"] = member_id
+        if entity_id:
+            payload["attached_entity_id"] = entity_id
+        broadcast(payload)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def register_entity_ops_tools(mcp: FastMCP) -> None:
     """Register the generic entity-mgmt primitives on `mcp`."""
 
@@ -604,6 +632,215 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                 "result_id": result_id,
                 "resolved_via": resolved_via,
                 "member_id": member_id}
+
+    @mcp.tool()
+    def add_result_member(result_id: str,
+                          kind: str = "figure",
+                          ref: str | None = None,
+                          exec_id: str | None = None,
+                          artifact_idx: int = 0,
+                          text: str | None = None,
+                          caption: str | None = None,
+                          at: int | None = None,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Append a panel to an existing Result. The primary way to add
+        figures, tables, or text panels to a Result the user is curating.
+
+        USE THIS WHEN the user asks to "add this to the Result", "put
+        the new plot next to the existing one", "add a text note to
+        this Result", or any similar gesture extending a Result the
+        user already created. Pre-2026-06-12 the agent literally had
+        no MCP tool for this — the entity_ops docstring named the
+        function but it wasn't registered, so the agent's only
+        affordances were promote_to_result (creates a NEW Result —
+        wrong shape) or giving up. Now you can attach in one call.
+
+        Three input shapes:
+
+          1. EXISTING entity — pass `ref` = the entity id of the
+             figure/table you want to attach.
+
+          2. FRESH run output — pass `kind` + `exec_id` + optional
+             `artifact_idx` (default 0 = the first artifact). The
+             tool calls pin_artifact internally to mint the entity
+             from the exec record's produced[] list (post-Phase-5
+             cutover: run_python / run_r artifacts no longer
+             auto-mint entities; they live in the exec record until
+             explicitly pinned). The new entity is then attached.
+             Result: ONE call goes from 'figure I just rendered' to
+             'panel in the Result'.
+
+          3. TEXT panel — pass `kind='text'` + `text='…'`. No
+             entity ref needed.
+
+        Arguments:
+          result_id    — the Result to append to.
+          kind         — 'figure' | 'table' | 'text'. Defaults to 'figure'.
+          ref          — entity id of an existing figure/table to attach.
+          exec_id      — exec record from a recent run_python/run_r call.
+                         Used when no ref is supplied to pin-then-attach
+                         in one shot.
+          artifact_idx — which artifact in the exec's produced[] list
+                         (default 0). For runs producing multiple plots
+                         this picks the Nth one (0-based, in produced[]
+                         order).
+          text         — inline text for kind='text' panels.
+          caption      — optional initial caption for the panel.
+          at           — insert position; None = append.
+
+        Returns:
+          {"status": "ok", "result_id", "member_id",
+           "entity_id": id_of_attached_entity_or_None_for_text,
+           "was_new": True_if_pin_artifact_minted_a_fresh_entity}
+        On failure: {"error": "..."}.
+        """
+        from core.graph.entities import get_entity
+        from core.graph.edges import add_edge
+        from content.bio.graph.result_members import add_result_member as _add
+        from core.runtime.tool_ctx import peek_ctx
+
+        ctx = peek_ctx(aba_ctx_id) or {}
+        tid = ctx.get("thread_id")
+
+        # Validate the Result up front so the error names what's wrong.
+        r = get_entity(result_id)
+        if not r:
+            return {"error": f"result {result_id} not found"}
+        if r.get("type") != "result":
+            return {"error":
+                    f"entity {result_id} is type {r.get('type')!r}, "
+                    f"not 'result'. add_result_member only operates "
+                    f"on Result entities."}
+
+        kind = (kind or "figure").strip().lower()
+        if kind not in ("figure", "table", "text"):
+            return {"error":
+                    f"kind must be 'figure', 'table', or 'text'; "
+                    f"got {kind!r}."}
+
+        # ── kind=text: simplest path, no entity needed ────────────────
+        if kind == "text":
+            if not (text or "").strip():
+                return {"error":
+                        "kind='text' requires non-empty `text` content."}
+            out = _add(result_id, kind="text", text=text,
+                        caption=caption or "", at=at)
+            if not out:
+                return {"error": f"add_result_member failed for {result_id}"}
+            mid = ((out.get("metadata") or {}).get("members") or [])[-1].get("id")
+            _broadcast_member_change(result_id, mid, "member_added")
+            return {"status": "ok", "result_id": result_id,
+                    "member_id": mid, "entity_id": None, "was_new": False}
+
+        # ── kind=figure / table: need a ref. Either supplied or pinned. ─
+        was_new = False
+        entity_id = ref
+        if not entity_id:
+            if not exec_id:
+                return {"error":
+                        f"kind={kind!r} needs either `ref` (an existing "
+                        f"entity id) or `exec_id` (to pin a loose "
+                        f"artifact from a recent run_python/run_r). "
+                        f"Got neither."}
+            try:
+                from content.bio.lifecycle.artifacts import pin_artifact
+                pin = pin_artifact(exec_id, kind, int(artifact_idx),
+                                    wrap_in_result=False, thread_id=tid)
+                entity_id = pin.get("entity_id")
+                was_new = bool(pin.get("was_new"))
+            except Exception as e:  # noqa: BLE001
+                return {"error":
+                        f"pin_artifact({exec_id!r}, {kind!r}, "
+                        f"{artifact_idx}) failed: {e}"}
+            if not entity_id:
+                return {"error":
+                        f"pin_artifact returned no entity_id for "
+                        f"{exec_id}/{kind}/{artifact_idx}"}
+
+        # Sanity: the ref must actually exist and match the requested kind.
+        ent = get_entity(entity_id)
+        if not ent:
+            return {"error": f"entity {entity_id} not found"}
+        if ent.get("type") != kind:
+            return {"error":
+                    f"entity {entity_id} is type {ent.get('type')!r}, "
+                    f"not the requested kind {kind!r}. Pass a matching "
+                    f"ref or omit it and let exec_id+idx pick the "
+                    f"right artifact."}
+
+        out = _add(result_id, kind=kind, ref=entity_id,
+                    caption=caption or "", at=at)
+        if not out:
+            return {"error":
+                    f"add_result_member failed for {result_id}/{entity_id}"}
+        # The new member is at the end (or at `at`); pull its id from the
+        # updated metadata.
+        members = (out.get("metadata") or {}).get("members") or []
+        if at is None or at >= len(members):
+            mid = members[-1].get("id") if members else None
+        else:
+            mid = members[max(0, at)].get("id")
+
+        # Mirror the HTTP endpoint: add an `includes` edge so provenance
+        # walkers see the membership without scanning metadata.
+        try:
+            add_edge(source_id=result_id, target_id=entity_id,
+                     rel_type="includes",
+                     attributes={"created_by": "add_result_member"})
+        except Exception as e:  # noqa: BLE001
+            _log_warn(f"add_result_member: edge add failed: {e}")
+
+        _broadcast_member_change(result_id, mid, "member_added",
+                                 entity_id=entity_id)
+        return {"status": "ok", "result_id": result_id,
+                "member_id": mid, "entity_id": entity_id,
+                "was_new": was_new}
+
+    @mcp.tool()
+    def remove_result_member(result_id: str, member_id: str,
+                             aba_ctx_id: str | None = None) -> dict:
+        """Remove a panel from a Result without deleting the underlying
+        figure / table entity.
+
+        USE THIS WHEN the user asks to drop a panel from a Result —
+        "remove the UMAP from this Result", "take out the second
+        figure". Does NOT delete the figure entity; just unlinks the
+        membership. To delete the figure too, use delete_revision (for
+        a revision) or archive_entity (for the whole figure).
+
+        Arguments:
+          result_id  — the Result to edit.
+          member_id  — the member slot to remove (from
+                       read_entity → members_summary[i].member_id).
+
+        Returns: {"status": "ok", "result_id", "removed_member_id"}
+        on success; {"error": "..."} on bad inputs.
+        """
+        from core.graph.entities import get_entity
+        from content.bio.graph.result_members import (
+            remove_result_member as _remove,
+        )
+        r = get_entity(result_id)
+        if not r:
+            return {"error": f"result {result_id} not found"}
+        if r.get("type") != "result":
+            return {"error":
+                    f"entity {result_id} is type {r.get('type')!r}, "
+                    f"not 'result'."}
+        members = (r.get("metadata") or {}).get("members") or []
+        if not any(m.get("id") == member_id for m in members):
+            seen = [m.get("id") for m in members]
+            return {"error":
+                    f"member {member_id!r} not in result {result_id}. "
+                    f"Members: {seen}."}
+        out = _remove(result_id, member_id)
+        if not out:
+            return {"error":
+                    f"remove_result_member failed for "
+                    f"{result_id}/{member_id}"}
+        _broadcast_member_change(result_id, member_id, "member_removed")
+        return {"status": "ok", "result_id": result_id,
+                "removed_member_id": member_id}
 
     @mcp.tool()
     def list_entity_operations(entity_type: str | None = None,
