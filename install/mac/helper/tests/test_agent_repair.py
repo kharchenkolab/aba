@@ -281,8 +281,8 @@ def test_run_repair_marks_failure_on_error(monkeypatch, seeded_credential):
 
 
 # ─── Executor failure → repair → retry ──────────────────────────────────────
-def _step(cmd: str) -> Step:
-    return Step(id="probe-step", title="Probe", why="t", commands=[cmd], timeout_seconds=30)
+def _step(cmd: str, id: str = "probe-step") -> Step:
+    return Step(id=id, title=id, why="t", commands=[cmd], timeout_seconds=30)
 
 
 def test_executor_retries_after_repair_fixes_the_system(tmp_path, monkeypatch, seeded_credential):
@@ -371,3 +371,115 @@ def test_control_preflight_runs_unless_explicit_opt_out(monkeypatch):
     monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR", "1")
     control._run_preflight_if_enabled(pb, lambda n, p: None)
     assert calls == [1], "explicit '1' must still enable"
+
+
+# ─── control wiring: preflight skipped for update by default ───────────────
+def test_preflight_skipped_for_update_kind_by_default(monkeypatch):
+    """User feedback 2026-06-13: adaptive preflight took ~half the update
+    time with no payoff (system already passed install). Default for
+    kind='update' is OFF; opt-in via ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT=1.
+    Repair hook still active on step failure either way."""
+    from aba_installer import control
+    monkeypatch.setattr(ar, "ensure_claude", lambda **k: "claude")
+    calls = []
+    monkeypatch.setattr(ar, "run_preflight", lambda *a, **k: calls.append(1))
+    pb = Playbook(steps=[_step("true")])
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT", raising=False)
+
+    # update kind → skipped even though agent_repair is enabled overall
+    control._run_preflight_if_enabled(pb, lambda n, p: None, kind="update")
+    assert calls == [], "update kind must skip preflight by default"
+
+    # install kind → still runs (regression guard)
+    control._run_preflight_if_enabled(pb, lambda n, p: None, kind="install")
+    assert calls == [1], "install kind must still run preflight"
+
+    # update + explicit opt-in → runs
+    calls.clear()
+    monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT", "1")
+    control._run_preflight_if_enabled(pb, lambda n, p: None, kind="update")
+    assert calls == [1], "explicit ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT=1 must enable"
+
+
+def test_preflight_emits_step_start_and_step_end_for_checklist(monkeypatch):
+    """The checklist UI seeds ○ items from step_planned and ✓-checks them
+    on step_end. Pre-2026-06-13 the preflight emitted only 'repair' frames,
+    so the user saw a long unexplained delay with no ✓ at the end. Now
+    preflight wraps itself in step_start/step_end with id 'adaptive-preflight'."""
+    from aba_installer import control
+    monkeypatch.setattr(ar, "ensure_claude", lambda **k: "claude")
+    # Stub run_preflight: claim success, no side effects.
+    class _Outcome:
+        ok = True
+    monkeypatch.setattr(ar, "run_preflight", lambda *a, **k: _Outcome())
+    pb = Playbook(steps=[_step("true")])
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+
+    events: list[tuple[str, dict]] = []
+    control._run_preflight_if_enabled(
+        pb, lambda name, payload: events.append((name, payload)),
+        kind="install",
+    )
+
+    pid = control.PREFLIGHT_STEP_ID
+    starts = [p for (n, p) in events if n == "step_start" and p.get("step_id") == pid]
+    ends   = [p for (n, p) in events if n == "step_end"   and p.get("step_id") == pid]
+    assert len(starts) == 1, f"expected exactly one step_start for {pid}, got {events}"
+    assert len(ends)   == 1, f"expected exactly one step_end   for {pid}, got {events}"
+    assert ends[0].get("ok") is True
+
+
+def test_preflight_step_end_carries_ok_false_on_exception(monkeypatch):
+    """If run_preflight raises, we still emit step_end (ok=false) so the
+    checklist doesn't get stuck on an active ○ forever."""
+    from aba_installer import control
+    monkeypatch.setattr(ar, "ensure_claude", lambda **k: "claude")
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(ar, "run_preflight", _boom)
+    pb = Playbook(steps=[_step("true")])
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+
+    events: list[tuple[str, dict]] = []
+    control._run_preflight_if_enabled(
+        pb, lambda name, payload: events.append((name, payload)),
+        kind="install",
+    )
+    pid = control.PREFLIGHT_STEP_ID
+    ends = [p for (n, p) in events if n == "step_end" and p.get("step_id") == pid]
+    assert ends and ends[0].get("ok") is False, events
+
+
+# ─── planned-steps helper prepends the virtual preflight item ──────────────
+def test_planned_steps_prepends_adaptive_preflight_for_install(monkeypatch):
+    """The browser-side checklist is seeded from step_planned. For
+    install runs, the preflight needs its own ○ from the start."""
+    from aba_installer import control
+    pb = Playbook(steps=[_step("true", "step-a"), _step("true", "step-b")])
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+
+    steps = control._planned_steps(pb, kind="install")
+    assert steps[0]["id"] == control.PREFLIGHT_STEP_ID
+    assert [s["id"] for s in steps[1:]] == ["step-a", "step-b"]
+
+
+def test_planned_steps_no_preflight_for_update_by_default(monkeypatch):
+    from aba_installer import control
+    pb = Playbook(steps=[_step("true", "step-a"), _step("true", "step-b")])
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR", raising=False)
+    monkeypatch.delenv("ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT", raising=False)
+
+    steps = control._planned_steps(pb, kind="update")
+    assert [s["id"] for s in steps] == ["step-a", "step-b"]
+    assert all(s["id"] != control.PREFLIGHT_STEP_ID for s in steps)
+
+
+def test_planned_steps_no_preflight_when_repair_disabled(monkeypatch):
+    """If the user opted out of agent repair globally, the virtual
+    preflight item shouldn't appear in the checklist either."""
+    from aba_installer import control
+    pb = Playbook(steps=[_step("true", "step-a")])
+    monkeypatch.setenv("ABA_INSTALL_AGENT_REPAIR", "0")
+    steps = control._planned_steps(pb, kind="install")
+    assert all(s["id"] != control.PREFLIGHT_STEP_ID for s in steps)
