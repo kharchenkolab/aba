@@ -143,11 +143,43 @@ def _repair_hook(on_event):
     return make_repair_hook(cwd=os.environ.get("ABA_HOME"), on_event=on_event, ensure=True)
 
 
-def _run_preflight_if_enabled(pb, on_event) -> None:
-    """When agent repair is enabled, run a proactive pre-flight BEFORE the
-    playbook: probe the system + pre-fix known blockers. Best-effort; never
-    blocks the install (errors are surfaced, not raised)."""
+PREFLIGHT_STEP_ID    = "adaptive-preflight"
+PREFLIGHT_STEP_TITLE = "Pre-flight system check (adaptive)"
+
+
+def _preflight_will_run(kind: str) -> bool:
+    """Decide if the adaptive Claude-Code preflight should fire for this
+    playbook run. As of 2026-06-13: install only.
+
+    Rationale: on an UPDATE the install has already succeeded, so the
+    blockers preflight checks for (Gatekeeper quarantine, missing tools,
+    disk, network) are largely resolved. Running it on every update cost
+    the user ~half the total update time with little payoff. The on-
+    failure repair hook still catches real problems. Opt-in for users
+    who want it: set ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT=1.
+    """
     if not _agent_repair_enabled():
+        return False
+    if kind == "install":
+        return True
+    if kind == "update":
+        raw = (os.environ.get("ABA_INSTALL_AGENT_REPAIR_UPDATE_PREFLIGHT")
+                or "").lower().strip()
+        return raw in ("1", "true", "yes", "on")
+    # Unknown playbook kinds: be conservative; don't preflight.
+    return False
+
+
+def _run_preflight_if_enabled(pb, on_event, *, kind: str = "install") -> None:
+    """When agent repair is enabled AND this playbook kind warrants it,
+    run a proactive pre-flight BEFORE the playbook: probe the system +
+    pre-fix known blockers.
+
+    Emits step_start / step_end around the run so the browser checklist
+    shows it as its own ○ → ✓ item (provided the caller prepended the
+    virtual `adaptive-preflight` entry into the step_planned payload —
+    see `_planned_steps`). Best-effort; never raises into the caller."""
+    if not _preflight_will_run(kind):
         return
     try:
         from .agent_repair import ensure_claude, run_preflight
@@ -155,9 +187,31 @@ def _run_preflight_if_enabled(pb, on_event) -> None:
         if not claude:
             return
         plan = "; ".join(f"{s.id}: {s.title}" for s in pb.steps)
-        run_preflight(plan, cwd=os.environ.get("ABA_HOME"), claude=claude, on_event=on_event)
+        on_event("step_start", {"step_id": PREFLIGHT_STEP_ID,
+                                 "title": PREFLIGHT_STEP_TITLE})
+        outcome = run_preflight(plan, cwd=os.environ.get("ABA_HOME"),
+                                 claude=claude, on_event=on_event)
+        on_event("step_end", {"step_id": PREFLIGHT_STEP_ID,
+                               "ok": bool(getattr(outcome, "ok", True))})
     except Exception as e:  # noqa: BLE001
-        on_event("repair", {"phase": "error", "message": f"pre-flight error: {e}"})
+        on_event("step_end", {"step_id": PREFLIGHT_STEP_ID, "ok": False,
+                               "error": f"pre-flight error: {e}"})
+        on_event("repair", {"phase": "error",
+                             "message": f"pre-flight error: {e}"})
+
+
+def _planned_steps(pb, *, kind: str, skip: set | None = None) -> list[dict]:
+    """Build the `step_planned` payload's `steps` list. Prepends the
+    virtual adaptive-preflight step when the preflight will actually
+    run, so the UI checklist shows it from the start instead of having
+    a mystery delay before the first ○."""
+    skip = skip or set()
+    steps = [{"id": s.id, "title": s.title}
+             for s in pb.steps if s.id not in skip]
+    if _preflight_will_run(kind):
+        steps.insert(0, {"id": PREFLIGHT_STEP_ID,
+                         "title": PREFLIGHT_STEP_TITLE})
+    return steps
 
 
 def _bg_worker() -> None:
@@ -184,10 +238,9 @@ def _bg_worker() -> None:
         # first event so the UI's event-replay sees it; /api/install/auto also
         # exposes the same list as a top-level field for late subscribers.
         on_event("step_planned", {
-            "steps": [{"id": s.id, "title": s.title}
-                      for s in pb.steps if s.id not in _BG_SKIP]
+            "steps": _planned_steps(pb, kind="install", skip=_BG_SKIP)
         })
-        _run_preflight_if_enabled(pb, on_event)
+        _run_preflight_if_enabled(pb, on_event, kind="install")
         results = Executor(pb, on_event=on_event,
                            on_step_failed=_repair_hook(on_event)).run_all(only=set(steps))
         ok = bool(results) and all(r.ok for r in results)
@@ -292,9 +345,9 @@ def _run_playbook_in_background(name: str) -> queue.Queue:
             # Tell the UI the planned checklist up front (same shape the auto
             # path emits — see _bg_worker).
             on_event("step_planned", {
-                "steps": [{"id": s.id, "title": s.title} for s in pb.steps]
+                "steps": _planned_steps(pb, kind=name)
             })
-            _run_preflight_if_enabled(pb, on_event)
+            _run_preflight_if_enabled(pb, on_event, kind=name)
             ex = Executor(pb, on_event=on_event, on_step_failed=_repair_hook(on_event))
             results = ex.run_all()
             ok = all(r.ok for r in results)
