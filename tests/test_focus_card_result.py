@@ -28,7 +28,7 @@ os.environ["ABA_RUNTIME_DIR"] = str(_tmp)
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"]  = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"]      = str(Path(_tmp) / "data")
-os.environ["ABA_ENVS_DIR"]  = "/workspace/aba-runtime/envs"
+os.environ["ABA_ENVS_DIR"]  = str(Path(_tmp) / "envs")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db  # noqa: E402
@@ -64,6 +64,13 @@ def _revise(eid: str, y: float):
     code = (f"import matplotlib;matplotlib.use('Agg');import matplotlib.pyplot as plt;"
             f"plt.figure();plt.plot([1,2,3],[{y},{y+1},{y+2}]);plt.savefig('r.png');plt.close('all')")
     return make_revision(eid, code)["new_entity_id"]
+
+
+def _build_card_with_focus(result_id: str, focus_member_id: str | None) -> str:
+    from core.graph.entities import get_entity
+    from content.bio.cards.result import build_result_card
+    return build_result_card(get_entity(result_id),
+                              focus_member_id=focus_member_id)[0]
 
 
 def _build_card(result_id: str) -> str:
@@ -148,6 +155,92 @@ def test_text_note_member_inline_preview():
           f"card was:\n{card}")
 
 
+def _member_ids(result_id: str) -> list[str]:
+    from core.graph.entities import get_entity
+    members = (get_entity(result_id).get("metadata") or {}).get("members") or []
+    return [m.get("id") for m in members]
+
+
+def test_focus_member_marks_active_panel_in_multi_member_result():
+    """Multi-member Result + focus_member_id from chat → the matching
+    member line gets a '← user is looking at this one' marker so the
+    agent anchors on it for 'this plot' gestures."""
+    print("\n[6] multi-member Result + focus_member_id → ← marker on the right line")
+    init_db()
+    f1 = _seed_figure("thr_card_6")
+    f2 = _seed_figure("thr_card_6")
+    rid = _make_result("Two-fig result",
+                       [{"kind": "figure", "ref": f1},
+                        {"kind": "figure", "ref": f2}],
+                       thread_id="thr_card_6")
+    mids = _member_ids(rid)
+    card = _build_card_with_focus(rid, focus_member_id=mids[1])
+    check("← marker present in card", "← user is looking at this one" in card,
+          f"card was:\n{card}")
+    # The marker must be on m_two's line, not m_one's
+    lines = card.splitlines()
+    f1_line = next(l for l in lines if f1 in l)
+    f2_line = next(l for l in lines if f2 in l)
+    check("← marker is on f2's line", "←" in f2_line, f"f2_line={f2_line!r}")
+    check("← marker is NOT on f1's line", "←" not in f1_line, f"f1_line={f1_line!r}")
+    check("header mentions in-view callout",
+          "the user has one of these in their viewport" in card,
+          f"card was:\n{card}")
+
+
+def test_focus_member_suppressed_for_single_member_result():
+    """Single-member Result: focus_member_id is irrelevant — no marker,
+    no header callout. Single-panel behavior unchanged."""
+    print("\n[7] single-member Result + focus_member_id → no marker (suppressed)")
+    init_db()
+    fig = _seed_figure("thr_card_7")
+    rid = _make_result("Solo result",
+                       [{"kind": "figure", "ref": fig}],
+                       thread_id="thr_card_7")
+    mids = _member_ids(rid)
+    card = _build_card_with_focus(rid, focus_member_id=mids[0])
+    check("no ← marker for single-member result", "←" not in card,
+          f"card was:\n{card}")
+    check("no in-view header callout",
+          "the user has one of these" not in card, f"card was:\n{card}")
+
+
+def test_focus_member_stale_id_is_ignored():
+    """A focus_member_id that doesn't match any member (stale from a
+    prior focus) is silently dropped — no marker, no error. Defends
+    against retry-with-stale-payload paths."""
+    print("\n[8] stale focus_member_id → silently ignored (no marker)")
+    init_db()
+    f1 = _seed_figure("thr_card_8")
+    f2 = _seed_figure("thr_card_8")
+    rid = _make_result("Two-fig result",
+                       [{"kind": "figure", "ref": f1},
+                        {"kind": "figure", "ref": f2}],
+                       thread_id="thr_card_8")
+    card = _build_card_with_focus(rid, focus_member_id="m_does_not_exist")
+    check("stale id → no ← marker", "←" not in card, f"card was:\n{card}")
+    check("members still listed normally", "Members (2)" in card,
+          f"card was:\n{card}")
+
+
+def test_legacy_builder_signature_still_works():
+    """Sanity: legacy callers that invoke build_result_card with just
+    the entity (no kwarg) still get the unmarked card. The kwarg has
+    a default of None; the gate suppresses the marker in that case."""
+    print("\n[9] legacy 1-arg call → no marker, no error")
+    init_db()
+    f1 = _seed_figure("thr_card_9")
+    rid = _make_result("Result",
+                       [{"kind": "figure", "ref": f1}],
+                       thread_id="thr_card_9")
+    # Call without the kwarg, mirroring the pre-2026-06-13 call shape.
+    from core.graph.entities import get_entity
+    from content.bio.cards.result import build_result_card
+    text, _fields = build_result_card(get_entity(rid))
+    check("legacy call returns text without marker", "←" not in text,
+          f"text was:\n{text}")
+
+
 def test_empty_result_flagged():
     print("\n[5] empty Result → card flags it as empty (no member list)")
     init_db()
@@ -164,6 +257,10 @@ def main() -> int:
     test_multiple_members_listed_in_order()
     test_revision_chain_displayed_id_surfaced()
     test_text_note_member_inline_preview()
+    test_focus_member_marks_active_panel_in_multi_member_result()
+    test_focus_member_suppressed_for_single_member_result()
+    test_focus_member_stale_id_is_ignored()
+    test_legacy_builder_signature_still_works()
     test_empty_result_flagged()
     print()
     if _failures:

@@ -811,6 +811,13 @@ class ChatRequest(BaseModel):
     # The entity the user is *focused on* (chip / canvas). Used to augment
     # the model's context.
     focus_entity_id: str = WORKSPACE_ID
+    # Multi-member Result viewport hint (2026-06-13): when a Result has
+    # more than one panel, the frontend names the member the user has in
+    # view at send time. None when there's only one major member (the
+    # single-panel case behaves as before) or the focused entity isn't a
+    # Result. The Result focus card marks the named member so the agent
+    # anchors on it when the user says "this plot".
+    focus_member_id: str | None = None
     # The thread (line of inquiry) this turn belongs to. "default" = the
     # implicit default thread (small projects never name one).
     thread_id: str = "default"
@@ -867,6 +874,7 @@ async def chat(req: ChatRequest):
         body_gen = stream_response(
             req.text,
             focus_entity_id=req.focus_entity_id,
+            focus_member_id=req.focus_member_id,
             thread_id=req.thread_id,
             annotation_image=req.annotation_image,
             annotation_note=req.annotation_note,

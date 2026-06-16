@@ -14,18 +14,33 @@ from core.graph._schema import WORKSPACE_ID
 from core.manifest.types import FocusCard, ThreadContext, Manifest
 
 
-# Registry: type-name → builder(entity_dict) -> (text, fields_loaded)
-CardBuilder = Callable[[dict], tuple[str, list[str]]]
+# Registry: type-name → builder(entity_dict, **kwargs) -> (text, fields_loaded)
+# Builders may accept optional kwargs (e.g. focus_member_id for Result cards);
+# we call them defensively so legacy 1-arg builders keep working.
+CardBuilder = Callable[..., tuple[str, list[str]]]
 _BUILDERS: dict[str, CardBuilder] = {}
 
 
 def register_card_builder(entity_type: str, builder: CardBuilder) -> None:
     """Content registers per-type builders at import time, e.g.
         register_card_builder(\"type_a\", build_type_a_card)
-    Each builder takes the entity dict and returns (text_for_system_prompt,
+    Each builder takes the entity dict (+ optional kwargs like
+    focus_member_id) and returns (text_for_system_prompt,
     list_of_field_names_loaded). The list goes into log_context_assembly so
     we can see what the agent saw."""
     _BUILDERS[entity_type] = builder
+
+
+def _call_builder(builder: CardBuilder, entity: dict,
+                  **kwargs) -> tuple[str, list[str]]:
+    """Invoke a registered builder, gracefully degrading to the 1-arg form
+    when the builder doesn't accept the new kwarg. Lets us thread
+    focus_member_id without flag-day-migrating every content pack."""
+    try:
+        return builder(entity, **kwargs)
+    except TypeError:
+        # Builder doesn't accept the kwarg — fall back to the simple shape.
+        return builder(entity)
 
 
 # Thread-context renderer: content provides the per-thread text shape
@@ -123,10 +138,16 @@ def _generic_card(entity: dict) -> tuple[str, list[str]]:
     return "\n".join(lines), fields
 
 
-def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]:
+def _build_focus(focus_entity_id: Optional[str],
+                  *, focus_member_id: Optional[str] = None,
+                  ) -> tuple[FocusCard | None, str]:
     """Build the focus card. Returns (card, policy_text). The bio adaptive
     layer contributes policy_text via a deferred import — it is content,
-    not platform, but the manifest carries the slot."""
+    not platform, but the manifest carries the slot.
+
+    `focus_member_id` (when supplied) names the specific member panel the
+    user has in their viewport for a multi-member Result. Builders that
+    don't take the kwarg ignore it transparently."""
     if not focus_entity_id or focus_entity_id == WORKSPACE_ID:
         # The "workspace" focus is the no-focus case: just the optional
         # policy text for workspace-scoped guidance.
@@ -137,7 +158,8 @@ def _build_focus(focus_entity_id: Optional[str]) -> tuple[FocusCard | None, str]
         return None, ""
 
     builder = _BUILDERS.get(e["type"], _generic_card)
-    text, fields_loaded = builder(e)
+    text, fields_loaded = _call_builder(builder, e,
+                                         focus_member_id=focus_member_id)
     # The card text includes a trailing "answer in this context" line
     # the renderer appends, so it's not duplicated by per-type builders.
 
@@ -220,6 +242,7 @@ def build_manifest(
     session_id: str,
     turn_index: int,
     focus_entity_id: Optional[str] = None,
+    focus_member_id: Optional[str] = None,
     thread_id: Optional[str] = None,
     role: str = "primary",
 ) -> Manifest:
@@ -235,7 +258,8 @@ def build_manifest(
     Does not touch tools, knowledge files, memory, or skills — those
     slots get filled by the system-prompt assembler at render time.
     """
-    focus, policy_text = _build_focus(focus_entity_id)
+    focus, policy_text = _build_focus(focus_entity_id,
+                                       focus_member_id=focus_member_id)
 
     thread: ThreadContext | None = None
     if thread_id and role == "primary" and _THREAD_CONTEXT_RENDERER is not None:

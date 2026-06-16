@@ -14,6 +14,17 @@
    the live stroke. Anchored on .rv-panel / .rv-panel--text via
    position:relative. */
 .rv-panel { display: flex; flex-direction: column; gap: 5px; position: relative; }
+/* Multi-member viewport pick: when a Result has more than one panel,
+   ResultView's IntersectionObserver marks the most-visible panel with
+   rv-panel--active so the user can see what the chat "focus" will
+   resolve to. Thin + soft — never competes with the highlight surface
+   (which uses a 2px yellow inset on rv-panel__hl). Outline keeps the
+   layout pixel-stable; using `border` would shift content. */
+.rv-panel--active {
+  outline: 1px solid var(--accent, #6366f1);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
 .rv-panel__hl {
   position: absolute; inset: 0; z-index: 5;
   cursor: crosshair;

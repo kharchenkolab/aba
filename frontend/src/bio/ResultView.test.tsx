@@ -747,4 +747,179 @@ describe('ResultView.MemberPanel (redesigned)', () => {
     expect((document.querySelector('textarea.rv-panel__caption') as HTMLTextAreaElement).value)
       .toBe('user typing…')
   })
+
+  // ─── multi-member viewport pick (2026-06-13) ─────────────────────────
+  // The IntersectionObserver isn't implemented in happy-dom, so we stub
+  // it: record the callbacks and provide a manual "fire" hook. Verifies
+  // (a) panels are observed when members > 1, (b) the most-visible
+  // panel becomes active with the rv-panel--active class, and (c) the
+  // module ref carries the same id for useChat to pick up.
+
+  it('LIVE: 2-member Result + scroll → most-visible panel becomes active', async () => {
+    const { setActiveMember, getActiveMember, clearActiveMember } =
+      await import('./activeMemberRef')
+    clearActiveMember()
+
+    // Capture every IntersectionObserver the component constructs.
+    const observers: Array<{
+      callback: IntersectionObserverCallback
+      targets: Element[]
+    }> = []
+    class FakeIO {
+      callback: IntersectionObserverCallback
+      targets: Element[] = []
+      constructor(cb: IntersectionObserverCallback) {
+        this.callback = cb
+        observers.push(this)
+      }
+      observe(el: Element) { this.targets.push(el) }
+      unobserve() { /* no-op */ }
+      disconnect() { /* no-op */ }
+      takeRecords() { return [] }
+      root = null; rootMargin = ''; thresholds = []
+    }
+    const origIO = (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = FakeIO
+
+    const f1 = fig('fig_a', '2026-01-01T00:00:00', 'A')
+    const f2 = fig('fig_b', '2026-02-01T00:00:00', 'B')
+    installFetchMock([f1])
+
+    const res: Entity = {
+      id: 'res_two',
+      type: 'result',
+      title: 'Two-fig result',
+      status: 'active',
+      artifact_path: null,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+      metadata: {
+        thread_id: 'thr_t',
+        members: [
+          { id: 'm_top',    kind: 'figure', ref: f1.id },
+          { id: 'm_bottom', kind: 'figure', ref: f2.id },
+        ],
+        interpretation: '',
+      },
+    } as unknown as Entity
+
+    try {
+      render(
+        <ResultView
+          result={res}
+          entities={[f1, f2]}
+          onChange={() => {}}
+          onFocus={() => {}}
+        />
+      )
+      await waitFor(() => {
+        const panels = document.querySelectorAll('[data-member-id]')
+        expect(panels.length).toBe(2)
+      })
+
+      // Seed pick: the top panel is active before any observer fires
+      // (matches "user opened the Result and immediately asked about
+      // the first panel without scrolling").
+      await waitFor(() => {
+        const active = document.querySelector('.rv-panel--active') as HTMLElement | null
+        expect(active?.getAttribute('data-member-id')).toBe('m_top')
+      })
+      await waitFor(() => {
+        expect(getActiveMember('res_two')).toBe('m_top')
+      })
+
+      // Simulate scrolling: m_bottom takes up 80% of the viewport,
+      // m_top only 10%. Fire the observer callback with the synthetic
+      // entries. The most-visible panel wins.
+      const io = observers[0]
+      expect(io).toBeTruthy()
+      const topEl = document.querySelector('[data-member-id="m_top"]') as Element
+      const botEl = document.querySelector('[data-member-id="m_bottom"]') as Element
+      act(() => {
+        io.callback(
+          [
+            { target: topEl, intersectionRatio: 0.10,
+              isIntersecting: true, boundingClientRect: {} as DOMRectReadOnly,
+              intersectionRect: {} as DOMRectReadOnly,
+              rootBounds: null, time: 0 } as IntersectionObserverEntry,
+            { target: botEl, intersectionRatio: 0.80,
+              isIntersecting: true, boundingClientRect: {} as DOMRectReadOnly,
+              intersectionRect: {} as DOMRectReadOnly,
+              rootBounds: null, time: 0 } as IntersectionObserverEntry,
+          ],
+          io as unknown as IntersectionObserver,
+        )
+      })
+
+      await waitFor(() => {
+        const active = document.querySelector('.rv-panel--active') as HTMLElement | null
+        expect(active?.getAttribute('data-member-id')).toBe('m_bottom')
+      })
+      await waitFor(() => {
+        expect(getActiveMember('res_two')).toBe('m_bottom')
+      })
+    } finally {
+      ;(globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver = origIO
+      // suppress unused warning
+      void setActiveMember
+    }
+  })
+
+  it('single-member Result: NO active class, NO observer, ref stays clear', async () => {
+    const { getActiveMember, clearActiveMember } =
+      await import('./activeMemberRef')
+    clearActiveMember()
+
+    let observerConstructed = false
+    class FakeIO {
+      constructor() { observerConstructed = true }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return [] }
+      root = null; rootMargin = ''; thresholds = []
+    }
+    const origIO = (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = FakeIO
+
+    const fSolo = fig('fig_solo', '2026-01-01T00:00:00', 'Solo')
+    installFetchMock([fSolo])
+    const res: Entity = {
+      id: 'res_solo',
+      type: 'result',
+      title: 'Solo result',
+      status: 'active',
+      artifact_path: null,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+      metadata: {
+        thread_id: 'thr_t',
+        members: [{ id: 'm_only', kind: 'figure', ref: fSolo.id }],
+        interpretation: '',
+      },
+    } as unknown as Entity
+
+    try {
+      render(
+        <ResultView
+          result={res}
+          entities={[fSolo]}
+          onChange={() => {}}
+          onFocus={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(document.querySelectorAll('[data-member-id]').length).toBe(1)
+      })
+      // The active class must NOT appear on a single-member Result.
+      expect(document.querySelector('.rv-panel--active')).toBeNull()
+      // Observer also shouldn't have been constructed for the gate.
+      expect(observerConstructed).toBe(false)
+      // And the module ref stays clear so useChat sends no
+      // focus_member_id for this single-panel case.
+      expect(getActiveMember('res_solo')).toBeNull()
+    } finally {
+      ;(globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver = origIO
+    }
+  })
 })

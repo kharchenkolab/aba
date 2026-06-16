@@ -102,6 +102,18 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const [picker, setPicker] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [focusMember, setFocusMember] = useState<string | null>(null)
+  // Multi-member viewport pick: which panel the user has scrolled into
+  // view. Used to surface a focus_member_id with the next chat send so
+  // the agent's Result focus card marks the right panel for "this
+  // plot" gestures. Suppressed entirely when the Result has ≤ 1 major
+  // member (the visual cue + the signal both vanish — there's nothing
+  // to disambiguate).
+  const [activeMemberId, setActiveMemberId] = useState<string | null>(null)
+  const membersRef = useRef<HTMLDivElement | null>(null)
+  // Count panels for the gate. Every member kind is considered "major"
+  // — figures, tables, and text notes all render as their own panel
+  // and so deserve disambiguation when more than one is present.
+  const trackFocus = members.length > 1
   // Freehand-highlight mode. When the prop is wired (i.e. mounted inside
   // FocusCanvas), use the external state — the canvas-actions row's ✏️
   // button is the single toggle. When undefined (standalone tests), fall
@@ -133,6 +145,96 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
+
+  // ── Multi-member viewport tracking ──────────────────────────────────────
+  // Gated on members.length > 1: a one-panel Result has nothing to
+  // disambiguate, so we don't pay observer cost and don't render a
+  // border. When tracking IS active, an IntersectionObserver keeps a
+  // per-panel visibility ratio map up to date as the user scrolls;
+  // a small computation picks the most-visible panel as the active
+  // one. The pick is NOT triggered by hover or mouse movement — only
+  // by intersection changes — so the border stays put when the user
+  // moves to the chat box to type, matching the "looks at" reading.
+  useEffect(() => {
+    setActiveMemberId(null)
+    if (!trackFocus) {
+      // Clear the module-level ref so a previous result's pick can't
+      // leak into a single-member result's first message.
+      import('./activeMemberRef').then(m => m.clearActiveMember(result.id))
+      return
+    }
+    const container = membersRef.current
+    if (!container) return
+    const panels = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-member-id]')
+    )
+    if (panels.length === 0) return
+    const visibility = new Map<string, number>()
+    // Seed with the topmost panel so the first user message before any
+    // scroll has a non-null pick (matches "I just opened this Result
+    // and asked about the first panel without scrolling").
+    const firstId = panels[0].getAttribute('data-member-id') || ''
+    if (firstId) setActiveMemberId(firstId)
+
+    type Best = { id: string; ratio: number; domOrder: number }
+    const recompute = () => {
+      let best: Best | null = null
+      panels.forEach((p, i) => {
+        const id = p.getAttribute('data-member-id') || ''
+        if (!id) return
+        const ratio = visibility.get(id) ?? 0
+        const cur: Best = { id, ratio, domOrder: i }
+        if (!best
+            || cur.ratio > best.ratio
+            || (cur.ratio === best.ratio && cur.domOrder < best.domOrder)) {
+          best = cur
+        }
+      })
+      const winner = best as Best | null
+      if (winner && winner.ratio > 0) setActiveMemberId(winner.id)
+    }
+
+    const io = new IntersectionObserver(
+      entries => {
+        for (const e of entries) {
+          const id = (e.target as HTMLElement).getAttribute('data-member-id') || ''
+          if (!id) continue
+          visibility.set(id, e.intersectionRatio)
+        }
+        recompute()
+      },
+      { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1.0] },
+    )
+    panels.forEach(p => io.observe(p))
+    return () => io.disconnect()
+  }, [trackFocus, result.id, members.length])
+
+  // Sync the local active-member state into the module-level ref so
+  // useChat can read it at chat-send time without prop drilling.
+  useEffect(() => {
+    let cancelled = false
+    import('./activeMemberRef').then(m => {
+      if (cancelled) return
+      if (trackFocus && activeMemberId) {
+        m.setActiveMember(result.id, activeMemberId)
+      } else {
+        // No tracking, OR tracking but no pick yet — clear the slot for
+        // this result id so a stale pick doesn't leak.
+        m.clearActiveMember(result.id)
+      }
+    })
+    return () => { cancelled = true }
+  }, [trackFocus, activeMemberId, result.id])
+
+  // Drop the recorded pick when this ResultView unmounts (focus moved
+  // away). The result-id-gated getter in useChat would already refuse
+  // a stale id, but clearing on unmount keeps the module ref tidy.
+  useEffect(() => {
+    const rid = result.id
+    return () => {
+      import('./activeMemberRef').then(m => m.clearActiveMember(rid))
+    }
+  }, [result.id])
 
   async function api(path: string, method = 'POST', body?: unknown) {
     await fetch(path, {
@@ -231,7 +333,7 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
       )}
 
-      <div className="rv__members">
+      <div className="rv__members" ref={membersRef}>
         {members.map((m, i) => (
           <MemberPanel key={m.id} member={m} idx={i} count={members.length}
             cell={cellById(m.ref)} autoFocus={m.id === focusMember} onZoom={setZoom} onRemove={removeMember} onMove={move}
@@ -246,7 +348,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
             anyDrawing={anyDrawing}
             onDrawingChange={setAnyDrawing}
             onAnnotate={onPanelAnnotate}
-            entities={entities} />
+            entities={entities}
+            isActive={trackFocus && m.id === activeMemberId} />
         ))}
         {members.length === 0 && <div className="rv__empty">Empty result — add a panel or a note below.</div>}
       </div>
@@ -309,7 +412,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }
 
 function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, onMove, onCaption, onText, onFocus, onChatResult, onAsk, onDeleteRevision, resultTitle, isLastNonAutoMember, revisionsSignal,
-                       highlighting, anyDrawing, onDrawingChange, onAnnotate, entities }: {
+                       highlighting, anyDrawing, onDrawingChange, onAnnotate, entities,
+                       isActive }: {
   member: ResultMember
   idx: number
   count: number
@@ -349,6 +453,13 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   onAnnotate?: (a: { image: string; note: string }) => void
   /** Project entities (for figure-entity lookup inside describeHighlightedFigure). */
   entities?: Entity[]
+  /** True when this panel is the multi-member Result's current viewport
+   *  pick (the one the user has scrolled into view, per ResultView's
+   *  IntersectionObserver). Renders a thin accent border via the
+   *  rv-panel--active class. Always false when the parent Result has
+   *  one major member — the visual cue is suppressed in that case
+   *  because there's nothing to disambiguate. */
+  isActive?: boolean
 }) {
   // Removal confirmation modes:
   //   'figure'  = standard figure/table remove-from-Result warning
@@ -605,7 +716,10 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   if (member.kind === 'text') {
     return (
       <>
-        <div className="rv-panel rv-panel--text" ref={contentRef} {...hoverHandlers}>
+        <div className={`rv-panel rv-panel--text${isActive ? ' rv-panel--active' : ''}`}
+             ref={contentRef} {...hoverHandlers}
+             data-member-id={member.id}
+             data-active={isActive ? 'true' : 'false'}>
           <textarea className="rv-panel__note" value={text} placeholder="Write a note…" autoFocus={autoFocus}
                     onChange={e => setText(e.target.value)} onBlur={() => onText(member.id, text)} />
           {controls}
@@ -634,7 +748,10 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
   const cellStyle = (member.kind === 'figure' && minCellHeight != null)
     ? { minHeight: minCellHeight } : undefined
   return (
-    <div className="rv-panel" ref={contentRef} {...hoverHandlers}>
+    <div className={`rv-panel${isActive ? ' rv-panel--active' : ''}`}
+         ref={contentRef} {...hoverHandlers}
+         data-member-id={member.id}
+         data-active={isActive ? 'true' : 'false'}>
       <div className="rv-panel__cell" ref={cellRef} style={cellStyle}>
         {member.kind === 'figure' && url
           ? <img className="rv-panel__img" src={url} alt={displayedFigure?.title ?? cell?.title}
