@@ -14,16 +14,18 @@
    the live stroke. Anchored on .rv-panel / .rv-panel--text via
    position:relative. */
 .rv-panel { display: flex; flex-direction: column; gap: 5px; position: relative; }
-/* Multi-member viewport pick: when a Result has more than one panel,
-   ResultView's IntersectionObserver marks the most-visible panel with
-   rv-panel--active so the user can see what the chat "focus" will
-   resolve to. Thin + soft — never competes with the highlight surface
-   (which uses a 2px yellow inset on rv-panel__hl). Outline keeps the
-   layout pixel-stable; using `border` would shift content. */
+/* Multi-member viewport pick: ResultView's IntersectionObserver picks
+   the most-visible panel and tags it rv-panel--active. The cue is
+   deliberately VERY soft — it tells the user "this is where 'this plot'
+   will resolve" without competing with the highlight surface (yellow
+   inset on rv-panel__hl) or the actual content. Outline (not border)
+   keeps layout pixel-stable; the offset gives it room to breathe so
+   it doesn't run into the panel's own border on text-type panels. */
+.rv-panel { transition: outline-color 200ms ease; }
 .rv-panel--active {
-  outline: 1px solid var(--accent, #6366f1);
-  outline-offset: 4px;
-  border-radius: 6px;
+  outline: 1px dashed rgba(99, 102, 241, 0.30);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 .rv-panel__hl {
   position: absolute; inset: 0; z-index: 5;
@@ -136,14 +138,27 @@
   min-width: 200px; padding: 4px; z-index: 50;
   display: flex; flex-direction: column;
 }
+/* IMPORTANT: native <button> defaults its own font (sans-serif-ish on
+   most platforms) and IGNORES box-sizing inheritance. Without these
+   resets, width:100% + padding overflows the popover (min-width: 200px
+   + padding wider than the container), the items get squashed
+   horizontally, and the hover halo wraps weirdly. font: inherit picks
+   up the app's family so labels match the rest of the UI. */
 .rv-panel__more-item {
+  box-sizing: border-box;
   display: block; width: 100%; text-align: left;
   background: none; border: none; cursor: pointer;
-  font-size: 13px; line-height: 1.3;
-  padding: 8px 12px; border-radius: 5px;
+  font: inherit;
+  font-size: 13px; line-height: 1.35;
+  padding: 7px 10px; border-radius: 5px;
   color: var(--text-1);
+  white-space: nowrap;
 }
 .rv-panel__more-item:hover { background: var(--tree-active-bg); }
+.rv-panel__more-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .rv-panel__more-danger { color: #b91c1c; }
 .rv-panel__more-danger:hover { background: #fef2f2; }
 
