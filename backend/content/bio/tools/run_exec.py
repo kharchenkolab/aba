@@ -52,11 +52,22 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
     repeat cells. Relative writes (savefig('x.png'), saveRDS(o,'x.rds')) then land
     in the Run's folder, captured as that Run's outputs.
 
-    Sets `sess._aba_cwd_just_switched` to the PREVIOUS cwd when the cwd actually
-    moves — the next run_python/run_r call reads + clears that flag and emits a
-    one-shot 'Files from prior runs' preamble so bare filenames the agent learned
-    in the old cwd are recoverable as absolute paths. (Fix B for #324 session
-    drift: less-invasive variant — cwd architecture untouched.)"""
+    Marks `sess._aba_cwd_just_switched` so the next run_python/run_r call reads
+    + clears the flag and emits a one-shot 'Workspace orientation' preamble
+    (see _prior_run_files_preamble) listing registered datasets + prior-run
+    files + thread-scratch contents. The agent then knows where bare-filename
+    loads will resolve and where files from earlier turns persist.
+
+    The flag fires in TWO cases:
+      - cwd genuinely moved (prev != path): one-shot at the moment of switch.
+      - kernel just spawned (prev was None): the FRESH KERNEL signal. Live
+        bug 2026-06-16 (prj_8143327c thr_80190faf): a backend restart killed
+        the R kernel; the respawned kernel's prev was None, so the previous
+        guard suppressed the preamble. The agent then tried to use `obj` (gone)
+        and guessed wrong paths reloading .rds files. The fresh-kernel marker
+        ("__FRESH__") triggers the same preamble plus an extra header so the
+        agent recognizes 'in-memory state is gone, paths persist'.
+    """
     path = str(cwd)
     prev = getattr(sess, "_aba_cwd", None)
     if prev == path:
@@ -69,8 +80,9 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
                        f'_os.environ["WORK_DIR"]={path!r}; WORK_DIR={path!r}')
         sess.execute(snippet, timeout_s=15)
         sess._aba_cwd = path
-        if prev is not None:                       # genuine switch, not first-time set
-            sess._aba_cwd_just_switched = prev
+        # Mark just-switched on BOTH a real cwd change and a fresh kernel.
+        # The sentinel "__FRESH__" distinguishes the cases for the preamble.
+        sess._aba_cwd_just_switched = prev if prev is not None else "__FRESH__"
     except Exception:  # noqa: BLE001 — best-effort; the run still works in the kernel's prior cwd
         pass
 
@@ -156,7 +168,8 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                               current_run_id: str | None,
                               max_runs: int = 4, max_files: int = 12,
                               max_scratch_files: int = 12,
-                              cwd: str | None = None) -> str:
+                              cwd: str | None = None,
+                              fresh_kernel: bool = False) -> str:
     """Inject a small, focused orientation block at the moment the cwd shifts
     (a new run opens, the kernel restarts, etc.). Lists what's reachable from
     the new cwd that ISN'T in it, so bare-filename loads recover gracefully.
@@ -229,6 +242,30 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 if len(run_mapped) >= max_files: break
             if len(run_mapped) >= max_files or scanned >= max_runs: break
 
+        # (2b) Files in the CURRENT cwd. The default preamble path skips
+        # this (the cwd contents are reachable by bare filename so the
+        # agent doesn't need a path), but on a fresh kernel the agent
+        # doesn't know what's already in the cwd from previous turns —
+        # this listing closes that gap.
+        cwd_mapped: list[tuple[str, str]] = []
+        if fresh_kernel and cwd:
+            try:
+                cp = Path(cwd)
+                if cp.is_dir():
+                    cands = []
+                    for entry in cp.iterdir():
+                        if not _keep(entry.name): continue
+                        cands.append(entry)
+                    cands.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0,
+                               reverse=True)
+                    for f in cands[:max_files]:
+                        if f.name in seen_names: continue
+                        seen_names.add(f.name)
+                        suffix = "/" if f.is_dir() else ""
+                        cwd_mapped.append((f.name + suffix, str(f)))
+            except Exception:  # noqa: BLE001
+                pass
+
         # (3) Thread shared-scratch files + dirs.
         scratch_mapped: list[tuple[str, str]] = []
         try:
@@ -252,10 +289,22 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         except Exception:  # noqa: BLE001
             pass
 
-        if not datasets and not run_mapped and not scratch_mapped: return ""
-        lines: list[str] = [
-            "── Workspace orientation (cwd just shifted) ──",
-        ]
+        if not datasets and not run_mapped and not scratch_mapped and not fresh_kernel:
+            return ""
+        header = ("── Fresh kernel — workspace orientation ──"
+                  if fresh_kernel
+                  else "── Workspace orientation (cwd just shifted) ──")
+        lines: list[str] = [header]
+        if fresh_kernel:
+            # The agent's most likely next move on a fresh kernel is to
+            # reach for a variable that no longer exists. Spell it out
+            # so 'object obj not found' surfaces as 'reload from disk'
+            # rather than 'guess at the path'.
+            lines.append(
+                "In-memory state (R/Python objects, loaded libraries) is GONE. "
+                "Files saved to disk in previous turns persist; reload them "
+                "with readRDS()/load_h5ad()/read_csv() etc. from the absolute "
+                "paths listed below.")
         if cwd:
             lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
         lines.append("")
@@ -265,6 +314,11 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 label = title or path.rsplit("/", 1)[-1]
                 tail = f"  [{hint}]" if hint else ""
                 lines.append(f"  - {label} → {path}{tail}")
+            lines.append("")
+        if cwd_mapped:
+            lines.append("Files already in the current cwd (saved earlier in this Run):")
+            for name, full in cwd_mapped:
+                lines.append(f"  - {name} → {full}")
             lines.append("")
         if run_mapped:
             lines.append("Files from prior runs in this thread:")
@@ -481,9 +535,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                     out["namespace"] = ns
             if getattr(sess, "_aba_cwd_just_switched", None):
                 from content.bio.lifecycle.runs import active_run_id as _arid
+                _was = sess._aba_cwd_just_switched
                 preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
                                                     current_run_id=_arid(str(thread_id)),
-                                                    cwd=getattr(sess, "cwd", None))
+                                                    cwd=getattr(sess, "_aba_cwd", None),
+                                                    fresh_kernel=(_was == "__FRESH__"))
                 sess._aba_cwd_just_switched = None
                 if preamble:
                     out["stdout"] = preamble + "\n" + (out["stdout"] or "")
@@ -619,9 +675,11 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
             out["namespace"] = ns
     if getattr(sess, "_aba_cwd_just_switched", None):
         from content.bio.lifecycle.runs import active_run_id as _arid
+        _was = sess._aba_cwd_just_switched
         preamble = _prior_run_files_preamble(str(project_id), str(thread_id),
                                              current_run_id=_arid(str(thread_id)),
-                                             cwd=getattr(sess, "cwd", None))
+                                             cwd=getattr(sess, "_aba_cwd", None),
+                                             fresh_kernel=(_was == "__FRESH__"))
         sess._aba_cwd_just_switched = None
         if preamble:
             out["stdout"] = preamble + "\n" + (out["stdout"] or "")

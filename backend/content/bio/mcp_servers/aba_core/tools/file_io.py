@@ -63,6 +63,130 @@ def register_file_io_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def find_files(pattern: str,
+                   root: Literal["project", "work", "data", "artifacts"] = "project",
+                   max_results: int = 50,
+                   aba_ctx_id: str | None = None) -> dict:
+        """Glob-style file search across the project tree. Use this when
+        you need to locate a file by name without remembering the exact
+        path — e.g. reloading state after a kernel restart, finding a
+        figure produced by an earlier Run, or just answering 'where did
+        I save that?' without shelling out to `find`.
+
+        USE THIS instead of subprocess.run(['find', ...]) inside
+        run_python/run_r. It works from R too (no Python-only escape
+        hatch needed) and returns structured data the agent can act on
+        directly. The 2026-06-16 live bug (prj_8143327c thr_80190faf)
+        burned several tool calls reaching for shell `find` to locate
+        a missing seurat_integrated.rds — this tool collapses that to
+        one call.
+
+        Arguments:
+          pattern      Glob like '*.rds', 'seurat_*.rds', 'umap_*.png',
+                       'GSM5746259*'. Matches against the basename only
+                       (the standard 'find -name' semantic). Case-sensitive.
+          root         Where to search:
+                         - 'project'  (default) — everything under
+                           projects/<pid>/: work, data, artifacts, entities,
+                           threads, etc. The widest net.
+                         - 'work'     — scratch tree: run scratch dirs
+                           (work/ana_*) + thread scratch
+                           (work/thread-thr_*). Most common for 'where
+                           did the last Run save its outputs'.
+                         - 'data'     — registered DATA_DIR datasets.
+                         - 'artifacts' — harvested figures / tables
+                           (artifacts/<pid>/).
+          max_results  Cap on matches returned (default 50). Newest
+                       matches (by mtime) come first.
+
+        Returns:
+          {
+            "root_path": "/abs/.../projects/<pid>",
+            "pattern":   "*.rds",
+            "matches": [
+              {"name": "seurat_integrated.rds",
+               "path": "/abs/.../work/ana_e92634df/seurat_integrated.rds",
+               "size_bytes": 86_543_210,
+               "mtime": "2026-06-16T13:07:42+00:00"},
+              ...
+            ],
+            "truncated": false
+          }
+          On bad inputs: {"error": "..."}.
+        """
+        import fnmatch, os
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from core.config import (current_project_id, project_data_dir,
+                                  project_work_dir, ARTIFACTS_DIR)
+        # The project resolution uses the request-pinned current project
+        # (#18, see chat handler) — no need for aba_ctx_id, but accept
+        # it so the dispatcher's hidden-arg injection doesn't break us.
+        pid = current_project_id()
+        if not pid:
+            return {"error": "no current project; open a project first"}
+        if not pattern or "/" in pattern or pattern.startswith("."):
+            return {"error":
+                    f"pattern must be a basename glob (no '/' or leading "
+                    f"'.'); got {pattern!r}. Examples: '*.rds', "
+                    f"'umap_*.png', 'seurat_integrated.rds'."}
+        max_results = max(1, min(int(max_results), 500))
+        # Resolve search root.
+        if root == "project":
+            from core.config import PROJECTS_DIR
+            search_root = PROJECTS_DIR / pid
+        elif root == "work":
+            search_root = project_work_dir(pid)
+        elif root == "data":
+            search_root = project_data_dir(pid)
+        elif root == "artifacts":
+            search_root = Path(ARTIFACTS_DIR) / pid
+        else:
+            return {"error":
+                    f"root must be 'project'|'work'|'data'|'artifacts'; "
+                    f"got {root!r}"}
+        if not search_root.exists():
+            return {"root_path": str(search_root), "pattern": pattern,
+                    "matches": [], "truncated": False}
+
+        # Walk + filter. Skip noisy + huge dirs early (.git, node_modules,
+        # __pycache__, .exec sidecars — exec records aren't user data
+        # the agent is looking for). dotfiles/dotdirs skipped too.
+        skip_dirs = {".git", "node_modules", "__pycache__", ".exec",
+                     "envs", ".cache", ".pytest_cache"}
+        matches: list[dict] = []
+        truncated = False
+        for dirpath, dirnames, filenames in os.walk(str(search_root)):
+            dirnames[:] = [d for d in dirnames
+                            if d not in skip_dirs and not d.startswith(".")]
+            for name in filenames:
+                if name.startswith("."):
+                    continue
+                if not fnmatch.fnmatchcase(name, pattern):
+                    continue
+                fp = Path(dirpath) / name
+                try:
+                    st = fp.stat()
+                except OSError:
+                    continue
+                matches.append({
+                    "name": name,
+                    "path": str(fp),
+                    "size_bytes": int(st.st_size),
+                    "mtime": datetime.fromtimestamp(
+                        st.st_mtime, tz=timezone.utc).isoformat(),
+                })
+        # Newest first.
+        matches.sort(key=lambda m: m["mtime"], reverse=True)
+        if len(matches) > max_results:
+            matches = matches[:max_results]
+            truncated = True
+        return {"root_path": str(search_root),
+                "pattern": pattern,
+                "matches": matches,
+                "truncated": truncated}
+
+    @mcp.tool()
     def read_file(path: str,
                   offset: int | None = None,
                   limit: int | None = None,
