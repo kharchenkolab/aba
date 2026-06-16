@@ -136,7 +136,11 @@
   background: var(--bg); border: 1px solid var(--border-strong);
   border-radius: 8px; box-shadow: var(--shadow-md, 0 6px 18px rgba(0,0,0,0.12));
   min-width: 200px; padding: 4px; z-index: 50;
-  display: flex; flex-direction: column;
+  /* Plain block flow — flex-column had a subtle interaction with
+     `width: 100%` on native <button> items that left the hover
+     background painted only over the text glyph width on some
+     setups ("squashed to the left"). Block layout makes each item
+     fill the popover's content width unconditionally. */
 }
 /* IMPORTANT: native <button> defaults its own font (sans-serif-ish on
    most platforms) and IGNORES box-sizing inheritance. Without these
@@ -146,7 +150,13 @@
    up the app's family so labels match the rest of the UI. */
 .rv-panel__more-item {
   box-sizing: border-box;
-  display: block; width: 100%; text-align: left;
+  display: block; width: 100%;
+  /* Defensive — some browsers/themes render native <button> inside
+     a flex/grid parent as a flex item with shrink-to-fit; the
+     min-width pins the hit area + hover halo to the full popover
+     content width regardless. */
+  min-width: 100%;
+  text-align: left;
   background: none; border: none; cursor: pointer;
   font: inherit;
   font-size: 13px; line-height: 1.35;
