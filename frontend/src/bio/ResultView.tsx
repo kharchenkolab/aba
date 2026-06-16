@@ -194,6 +194,18 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
       if (winner && winner.ratio > 0) setActiveMemberId(winner.id)
     }
 
+    // Debounce the visual pick: the cosmetic border should only update
+    // when scrolling settles, not on every visibility-ratio frame.
+    // Otherwise the dashed outline flickers between panels during the
+    // scroll itself, which the user reads as "weird, follows page
+    // position". Send-time correctness is unaffected — useChat reads
+    // the module ref directly when the user presses send.
+    let timer: number | null = null
+    const scheduleRecompute = () => {
+      if (timer != null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => { timer = null; recompute() }, 220)
+    }
+
     const io = new IntersectionObserver(
       entries => {
         for (const e of entries) {
@@ -201,12 +213,15 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
           if (!id) continue
           visibility.set(id, e.intersectionRatio)
         }
-        recompute()
+        scheduleRecompute()
       },
       { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1.0] },
     )
     panels.forEach(p => io.observe(p))
-    return () => io.disconnect()
+    return () => {
+      if (timer != null) window.clearTimeout(timer)
+      io.disconnect()
+    }
   }, [trackFocus, result.id, members.length])
 
   // Sync the local active-member state into the module-level ref so
