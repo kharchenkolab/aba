@@ -257,6 +257,7 @@ async def stream_response(
     user_text: str,
     *,
     focus_entity_id: str = WORKSPACE_ID,
+    focus_member_id: str | None = None,
     thread_id: str = "default",
     annotation_image: str | None = None,
     annotation_note: str | None = None,
@@ -497,6 +498,7 @@ async def stream_response(
         session_id=session_id,
         turn_index=turn_index,
         focus_entity_id=focus_entity_id,
+        focus_member_id=focus_member_id,
         thread_id=store_tid,
         role=guide_role,
     )

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo } from './types'
+import { getActiveMember } from './bio/activeMemberRef'
 // W2-#4 phase 2: the SSE reader loop lives in a small reusable helper.
 // Pulls ~50 LOC out of runStream and makes the terminal-event / premature-
 // close / cancellation behavior unit-testable in isolation.
@@ -473,6 +474,16 @@ export function useChat(
                 text: opts.text ?? '',
                 retry: !!opts.retry,
                 focus_entity_id: focusEntityId,
+                // Multi-member Result viewport pick (2026-06-13). Only
+                // populated when the focused entity is a Result with
+                // >1 panels AND ResultView's observer has settled on
+                // a pick. Null for everything else (single-panel
+                // Results, non-Result focus, no observer yet) — the
+                // backend treats null as "no signal, behave as before".
+                ...(() => {
+                  const mid = getActiveMember(focusEntityId)
+                  return mid ? { focus_member_id: mid } : {}
+                })(),
                 thread_id: threadId,
                 ...(projectId ? { project_id: projectId } : {}),
                 ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
