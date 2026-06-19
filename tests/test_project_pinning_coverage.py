@@ -74,7 +74,6 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/upload", "POST"): "body-sourced pid (FormData)",
     ("/api/files/promote", "POST"): "body-sourced pid",
     ("/api/files/ai-summary", "POST"): "body-sourced pid",
-    ("/api/history", "DELETE"): "body-sourced pid",
 }
 
 
