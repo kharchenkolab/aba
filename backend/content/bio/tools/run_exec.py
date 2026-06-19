@@ -213,10 +213,15 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         except Exception:  # noqa: BLE001
             pass
 
-        # (2) Prior-run files.
-        run_mapped: list[tuple[str, str]] = []
+        # (2) Prior-run files — grouped by Run so the agent has a stable
+        # lexical anchor ("Run ana_…") to reference in chat, not just a flat
+        # file list. Dedup by filename across Runs (older copies hide behind
+        # the most recent), so a recurring artifact name doesn't clutter the
+        # block.
+        run_groups: list[tuple[str, str, list[tuple[str, str]]]] = []   # (run_id, title, files)
         seen_names: set[str] = set()
         scanned = 0
+        total_files = 0
         for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
             md = e.get("metadata") or {}
             if md.get("thread_id") != thread_id: continue
@@ -235,12 +240,16 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             except OSError:
                 continue
             files.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
+            kept: list[tuple[str, str]] = []
             for f in files:
                 if f.name in seen_names: continue
                 seen_names.add(f.name)
-                run_mapped.append((f.name, str(f)))
-                if len(run_mapped) >= max_files: break
-            if len(run_mapped) >= max_files or scanned >= max_runs: break
+                kept.append((f.name, str(f)))
+                total_files += 1
+                if total_files >= max_files: break
+            if kept:
+                run_groups.append((e["id"], (e.get("title") or "").strip(), kept))
+            if total_files >= max_files or scanned >= max_runs: break
 
         # (2b) Files in the CURRENT cwd. The default preamble path skips
         # this (the cwd contents are reachable by bare filename so the
@@ -320,10 +329,13 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
             for name, full in cwd_mapped:
                 lines.append(f"  - {name} → {full}")
             lines.append("")
-        if run_mapped:
+        if run_groups:
             lines.append("Files from prior runs in this thread:")
-            for name, full in run_mapped:
-                lines.append(f"  - {name} → {full}")
+            for run_id, title, files in run_groups:
+                header = f"Run {run_id}" + (f" — \"{title}\"" if title else "")
+                lines.append(f"  - {header}:")
+                for name, full in files:
+                    lines.append(f"      - {name} → {full}")
             lines.append("")
         if scratch_mapped:
             lines.append("Thread shared-scratch (your ad-hoc downloads / intermediates):")
