@@ -49,15 +49,14 @@ def test_mac_default(tmp_path: Path, monkeypatch):
     """Mac dev with no env vars + no site.yaml.
 
     Result should be exactly two scopes (system + user), with system
-    pointing at the repo's backend/system_bundle/ default and user at
-    ~/.aba/bundle. State dir defaults to ~/.aba/state.
+    pointing at the repo's backend/system_bundle/ (P4 makes this a
+    real path) and user at ~/.aba/bundle. State dir defaults to
+    ~/.aba/state.
     """
     home = tmp_path / "home"
     home.mkdir()
     env = {"HOME": str(home), "USER": "alice"}
 
-    # The default system path points at backend/system_bundle (not yet
-    # present pre-P4). We let it stay missing.
     r = resolve_scopes(env=env, site_config_path=tmp_path / "no-site.yaml")
 
     assert r.user == "alice"
@@ -68,8 +67,10 @@ def test_mac_default(tmp_path: Path, monkeypatch):
     assert r.composed_bundle is None
     # State dir is auto-created.
     assert r.state_dir in r.auto_created or r.state_dir.exists()
-    # System bundle missing → warning recorded, not a hard error.
-    assert any("system bundle not found" in w for w in r.warnings)
+    # System bundle should be discovered (P4 onwards).
+    sys_scope = next(s for s in r.scope_chain if s.name == "system")
+    assert sys_scope.present, \
+        "system bundle should be present at backend/system_bundle/ post-P4"
 
 
 def test_user_bundle_present(tmp_path: Path):

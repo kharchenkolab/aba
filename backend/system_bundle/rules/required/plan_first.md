@@ -1,0 +1,1 @@
+../../../content/bio/prompts/plan_first.md
