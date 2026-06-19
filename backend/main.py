@@ -1314,19 +1314,6 @@ async def upload_url(req: URLUploadRequest):
     return get_entity(eid)
 
 
-# ---------- Legacy aliases (kept until frontend migration is done) ----------
-
-@app.get("/api/history")
-def history_legacy():
-    return get_messages(WORKSPACE_ID)
-
-
-@app.delete("/api/history")
-def history_clear_legacy():
-    clear_messages(WORKSPACE_ID)
-    return {"ok": True}
-
-
 # ---------- Jobs (Phase 17 + Phase A) ----------
 
 @app.get("/api/jobs")
