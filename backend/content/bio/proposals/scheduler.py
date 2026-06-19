@@ -26,7 +26,7 @@ import hashlib
 import json as _json
 from typing import Optional
 
-from config import FAKE_SESSION, API_KEY, MODEL
+from core.config import FAKE_SESSION, API_KEY, MODEL
 from core.graph._schema import gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge
 from core.graph.entities import get_entity, update_entity, create_entity, archive_entity, list_entities

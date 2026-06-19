@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import ARTIFACTS_DIR, DATA_DIR
+from core.config import ARTIFACTS_DIR, DATA_DIR
 from content.bio.graph.result_members import add_result_member, remove_result_member, update_result_member, reorder_result_members
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to

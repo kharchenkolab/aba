@@ -14,7 +14,7 @@ import json
 import re
 from typing import Literal, Optional
 
-from config import API_KEY, MODEL, FAKE_SESSION
+from core.config import API_KEY, MODEL, FAKE_SESSION
 from core.graph.edges import add_edge
 from core.graph.entities import create_entity, get_entity
 from content.bio.tools import execute_tool

@@ -60,7 +60,7 @@ from core.config import project_data_dir                           # noqa: E402
 from core.graph.entities import create_entity                      # noqa: E402
 from content.bio.tools import register_dataset_tool                # noqa: E402
 from core.data.workspace import scratch_dir                        # noqa: E402
-from config import DATA_DIR as MODULE_DATA_DIR                     # noqa: E402
+from core.config import DATA_DIR as MODULE_DATA_DIR                # noqa: E402
 
 _PID = projects.current() or "single"
 _PROJECT_DATA_DIR = Path(project_data_dir(_PID))                   # creates the dir
