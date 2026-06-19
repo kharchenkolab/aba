@@ -231,7 +231,6 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     # (script.R + Rscript) instead of the Python path.
     from core.exec.run import run_python_code, run_r_code
     from core.runtime import cancellation
-    biomni = str(Path(__file__).resolve().parents[2] / "biomni")
     token = cancellation.acquire(job_id)
     kind = job.get("kind") or "run_python"
     try:
@@ -246,8 +245,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             result_obj = await loop.run_in_executor(
                 None,
                 lambda: run_python_code(code, project_id=str(effective_pid), run_id=job_id,
-                                        timeout_s=timeout_s, cancel_token=token,
-                                        extra_syspath=[biomni]),
+                                        timeout_s=timeout_s, cancel_token=token),
             )
 
         if job_id in _CANCELLED or result_obj.get("status") == "cancelled":

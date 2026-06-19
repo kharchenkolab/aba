@@ -61,10 +61,10 @@ def list_capabilities_tool(input_: dict) -> dict:
         e = {"name": c.get("name"), "version": c.get("version"),
              "archetype": c.get("archetype"), "summary": c.get("summary"),
              "domain_tags": c.get("domain_tags"), "status": c.get("status")}
-        # Mark mined reference entries (e.g. extracted from biomni) so the agent
-        # doesn't reach for one as a runnable tool — ensure_capability can't
-        # install it; it's know-how to read (read_capability → source_ref), or a
-        # cue to find a real maintained library.
+        # Mark mined reference entries so the agent doesn't reach for one as
+        # a runnable tool — ensure_capability can't install it; it's know-how
+        # to read (read_capability → source_ref), or a cue to find a real
+        # maintained library.
         if c.get("reference"):
             e["reference"] = True
             e["runnable"] = False

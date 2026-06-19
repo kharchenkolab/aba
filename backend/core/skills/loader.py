@@ -63,8 +63,9 @@ class SkillSpec:
     produces:       tuple[str, ...] = ()
     parameter_schema: dict[str, Any] = field(default_factory=dict)
     resource_profile: str = ""
-    # Provenance of the procedure (e.g. 'biomni:tool/genomics.py::…',
-    # 'github:kharchenkolab/pagoda2 + vignette …'). Surfaced in the catalog UI.
+    # Provenance of the procedure (e.g. 'github:kharchenkolab/pagoda2 +
+    # vignette …', '<external-catalog>:tool/<file>::<function>'). Surfaced
+    # in the catalog UI.
     source:         str = ""
     body:           str = ""
     source_path:    str = ""           # for diagnostics; not part of identity

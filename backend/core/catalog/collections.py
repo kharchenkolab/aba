@@ -4,8 +4,8 @@ A collection is a directory with a `collection.yaml` (name, scope, runtime +
 provisioning recipe) and a generated `index.json` (one entry per capability).
 Its capabilities are loaded once per process into a searchable layer that
 `search_capabilities` / `resolve_capability` / `read_capability` consult
-alongside DB entities — not seeded as graph entities (so a large bundle like
-biomni doesn't bloat every project DB).
+alongside DB entities — not seeded as graph entities (so a large external
+catalogue doesn't bloat every project DB).
 
 Adding a collection = register its directory; no code changes per collection.
 """
@@ -51,8 +51,8 @@ def _load_one(d: Path) -> list[dict]:
     scope = meta.get("scope") or "institution"
     origin = meta.get("origin") or cname
     source = meta.get("source") or origin
-    # kind "reference" = extracted knowledge, not runnable here (biomni today):
-    # no provisioning, flagged so ensure_capability/read_capability explain it.
+    # kind "reference" = extracted knowledge, not runnable here: no
+    # provisioning, flagged so ensure_capability/read_capability explain it.
     # kind "runtime" (future) = a real collection with a provisioning recipe.
     kind = meta.get("kind") or "runtime"
     runtime = meta.get("runtime") or {}

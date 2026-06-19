@@ -5,16 +5,13 @@ background job runner, so a backgrounded run inherits the same project scratch
 workspace, the materialized-library overlay (pylib on sys.path), the conda
 tools env (on PATH), killpg cancellation, and png/csv artifact harvest. Before
 P5 the background path was an older parallel copy that saw none of P1–P4.
-
-Domain-neutral: the only bio-specific input is `extra_syspath` (e.g. the
-vendored biomni path), passed by the caller.
 """
 from __future__ import annotations
 import shutil
 import sys
 import uuid
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.data.workspace import scratch_dir
@@ -28,7 +25,6 @@ def run_python_code(
     run_id: Optional[str] = None,
     timeout_s: int = 90,
     cancel_token=None,
-    extra_syspath: Optional[Sequence[str]] = None,
 ) -> dict:
     """Run `code` in the project's scratch workspace and return the run_python
     result shape ({stdout, stderr, returncode, plots, tables} | {error} |
@@ -38,14 +34,12 @@ def run_python_code(
     run_id = run_id or uuid.uuid4().hex
     scratch = scratch_dir(str(project_id), str(run_id))
 
-    # Preamble: DATA_DIR + caller extras (biomni) prepended; the pylib overlay
-    # APPENDED so the .venv wins and the overlay only supplies what's missing.
-    # DATA_DIR is per-project (post 2026-05-31 reorg).
+    # Preamble: DATA_DIR prepended; the pylib overlay APPENDED so the .venv
+    # wins and the overlay only supplies what's missing. DATA_DIR is per-
+    # project (post 2026-05-31 reorg).
     from core.config import current_project_id, project_data_dir
     _data_dir = project_data_dir(current_project_id())
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    for p in (extra_syspath or []):
-        lines.append(f"_sys.path.insert(0, {str(p)!r})")
     for _p in pylib_paths():
         lines.append(f"_sys.path.append({str(_p)!r})")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)

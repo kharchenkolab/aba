@@ -490,8 +490,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "awaiting_approval", "name": cap.get("name"),
                 "note": f"'{name}' is proposed but not yet approved; it can't be "
                         f"materialized until approval."}
-    # Reference catalogue entry (e.g. extracted from biomni): know-how, not a
-    # runnable artifact in ABA. Don't pretend to install it.
+    # Reference catalogue entry: know-how mined offline, not a runnable
+    # artifact in ABA. Don't pretend to install it.
     if cap.get("reference"):
         return {"status": "reference", "name": cap.get("name"),
                 "origin": cap.get("origin"), "source_ref": cap.get("source_ref"),
