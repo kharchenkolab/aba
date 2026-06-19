@@ -66,13 +66,58 @@ class Provenance:
 
 @dataclass
 class EffectiveBundle:
-    """The result of composition. Consumed by prompt/skill assembly."""
-    policy_text: str = ""
+    """The result of composition. Consumed by prompt/skill assembly.
+
+    `policy_blocks` is the per-scope breakdown: list of (scope_name,
+    label, content) tuples in scope-chain order. `policy_text` is the
+    rendered concatenation (matches the spec format). Callers that need
+    only some scopes (e.g. "everything except system") use
+    `policy_text_excluding()`.
+    """
+    policy_blocks: list[tuple[str, str, str]] = field(default_factory=list)  # (scope_name, label, content)
     required_rules: list[Rule] = field(default_factory=list)
     overrideable_rules: list[Rule] = field(default_factory=list)
     skills: list[Skill] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
     provenance: Provenance = field(default_factory=Provenance)
+
+    @property
+    def policy_text(self) -> str:
+        """Full rendered policy text (matches the layering spec)."""
+        return _render_policy(self.policy_blocks)
+
+    def policy_text_excluding(self, exclude_scopes: set[str]) -> str:
+        """Rendered policy with named scopes filtered out. Useful when
+        certain scopes' content is being injected via another path
+        (e.g. the system scope's content already shows up via build.py's
+        existing _Block reads of identity.md / behavior.md / etc.)."""
+        kept = [(n, l, c) for n, l, c in self.policy_blocks
+                if n not in exclude_scopes]
+        return _render_policy(kept)
+
+    def rules_excluding(self, exclude_scopes: set[str]) -> list[Rule]:
+        """Required + overrideable rules with named scopes filtered out.
+        Useful for the same reason as policy_text_excluding."""
+        out: list[Rule] = []
+        for r in self.required_rules + self.overrideable_rules:
+            if r.source_scope not in exclude_scopes:
+                out.append(r)
+        return out
+
+
+def _render_policy(blocks: list[tuple[str, str, str]]) -> str:
+    """Concatenation rules from misc/bundle_layering.md:
+    - 0 blocks → empty string
+    - 1 block  → just the body, no section header (matches existing
+      build.py output style)
+    - 2+ blocks → each with a "## <label> policy" header
+    """
+    if not blocks:
+        return ""
+    if len(blocks) == 1:
+        return blocks[0][2].rstrip() + "\n"
+    parts = [f"## {label} policy\n\n{content.rstrip()}\n" for _, label, content in blocks]
+    return "\n".join(parts)
 
 
 # -----------------------------------------------------------------------
@@ -156,28 +201,21 @@ def _read_policy_md(scope_path: Path) -> str | None:
 # Per-subsystem composition
 # -----------------------------------------------------------------------
 
-def _compose_policy_text(chain: list[ScopeBundle],
-                          provenance: Provenance) -> str:
-    """Concatenate AGENTS.md across scopes with section headers.
-    Single-scope case omits the header (matches today's behavior)."""
-    present_blocks: list[tuple[str, str]] = []  # (label, content)
+def _compose_policy_blocks(chain: list[ScopeBundle],
+                            provenance: Provenance,
+                            ) -> list[tuple[str, str, str]]:
+    """Read AGENTS.md/CLAUDE.md across scopes; return ordered per-scope
+    blocks as (scope_name, label, content) tuples. Rendering is delegated
+    to `_render_policy` so callers can filter blocks before render."""
+    blocks: list[tuple[str, str, str]] = []
     for s in chain:
         if not s.present:
             continue
         content = _read_policy_md(s.path)
         if content:
-            present_blocks.append((s.label, content))
+            blocks.append((s.name, s.label, content))
             provenance.policy_scopes.append(s.name)
-
-    if not present_blocks:
-        return ""
-    if len(present_blocks) == 1:
-        # Single-scope: no header noise.
-        return present_blocks[0][1].rstrip() + "\n"
-    parts = []
-    for label, content in present_blocks:
-        parts.append(f"## {label} policy\n\n{content.rstrip()}\n")
-    return "\n".join(parts)
+    return blocks
 
 
 def _compose_required_rules(chain: list[ScopeBundle],
@@ -482,7 +520,7 @@ def load_bundle(resolution: ScopeResolution) -> EffectiveBundle:
     chain = resolution.scope_chain
 
     # 1. AGENTS.md / CLAUDE.md
-    eb.policy_text = _compose_policy_text(chain, eb.provenance)
+    eb.policy_blocks = _compose_policy_blocks(chain, eb.provenance)
 
     # 2. rules/required/* (additive)
     eb.required_rules = _compose_required_rules(chain, eb.provenance)

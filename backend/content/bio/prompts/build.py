@@ -163,6 +163,30 @@ def _memory_index(_tools: list[dict]) -> str:
     return memory_index_block()
 
 
+def _bundle_overlay(_tools: list[dict]) -> str:
+    """Non-system policy text from the EffectiveBundle — i.e. institution,
+    lab, user AGENTS.md content composed via the bundle layering algorithm.
+
+    System-scope policy reaches the prompt through the existing `identity`
+    block (which reads identity.md directly), so we exclude it here to
+    avoid duplication. When no non-system scopes are present (Mac default),
+    this returns empty string and contributes nothing → output stays
+    byte-identical with pre-bundle behavior.
+
+    Failures in bundle resolution must not break prompt assembly — fall
+    back to empty string and log.
+    """
+    try:
+        from core.bundle.active import get_bundle
+        return get_bundle().policy_text_excluding({"system"})
+    except Exception as e:                             # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "bundle_overlay: bundle resolution failed (%s); "
+            "skipping non-system policy injection", e)
+        return ""
+
+
 # ── recipe-uptake strategy ARMS (eval) ───────────────────────────────────────
 # Selected by ABA_PROMPT_ARM. 'control' (default) = current behaviour, so the
 # live server is unaffected. Each arm changes HOW the most-relevant recipe
@@ -358,6 +382,11 @@ def _declared_recipes_block(active_tools: list[dict]) -> str:
 
 _BLOCKS: tuple[_Block, ...] = (
     _Block("identity",     None,                   None,             _md("identity.md")),
+    # Institution / lab / user policy layered on top of the system identity.
+    # Renders empty when no non-system scopes are present (Mac default), so
+    # the live prompt is byte-identical with pre-bundle behavior until a
+    # site.yaml / ABA_*_BUNDLE env var puts a bundle in front of the loader.
+    _Block("bundle_overlay", None, None, _bundle_overlay),
     # Non-negotiables (integrity invariants) — 'nonneg' arm only; isolated + salient
     # at the top so they don't compete with the operational wall. control = no-op.
     _Block("nonnegotiables", frozenset({"primary"}), None, _md("nonnegotiables.md"),
