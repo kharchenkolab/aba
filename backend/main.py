@@ -403,6 +403,21 @@ def projects_verify_recovery(pid: str, depth: str = "full"):
     return rep.to_dict()
 
 
+# ---------- Bundle ----------
+
+@app.get("/api/bundle/state")
+def bundle_state(reload: bool = False):
+    """Active EffectiveBundle snapshot for admin/diagnostic UI.
+
+    `?reload=true` forces a re-resolution (drops the module-level cache)
+    so admins can pick up a freshly-edited site.yaml or env change without
+    restarting the backend."""
+    from core.bundle.active import get_bundle, get_resolution, reload_bundle
+    from core.bundle.cli import _state_dict
+    eb = reload_bundle() if reload else get_bundle()
+    return _state_dict(get_resolution(), eb)
+
+
 # ---------- Entities ----------
 
 @app.get("/api/entity-types")
