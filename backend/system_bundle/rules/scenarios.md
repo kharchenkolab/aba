@@ -1,0 +1,1 @@
+../../content/bio/prompts/scenarios.md

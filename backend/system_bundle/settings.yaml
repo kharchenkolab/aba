@@ -1,0 +1,4 @@
+# system bundle — ABA built-in defaults
+# Overridden by institution/lab/user bundles per the layering spec.
+default_model: claude-haiku-4-5-20251001
+advisor_model: claude-haiku-4-5-20251001
