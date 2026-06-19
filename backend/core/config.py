@@ -44,13 +44,6 @@ os.environ["JUPYTER_DATA_DIR"] = str(ENVS_DIR / "jupyter")
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
 REFS_DIR = Path(os.getenv("ABA_REFS_DIR", RUNTIME_DIR / "refs")).resolve()
-# BIOMNI_DIR is the runtime location of the biomni capability collection
-# (collections.md): the dir to put on sys.path so `import biomni.*` works in
-# run_python / the kernel. Transitional fallback until biomni is provisioned as
-# a real pip install; defaults to the vendored copy at repo root if present.
-_biomni_default = BASE_DIR.parent / "biomni"
-BIOMNI_DIR = Path(os.getenv("ABA_BIOMNI_DIR", _biomni_default)).resolve() if (
-    os.getenv("ABA_BIOMNI_DIR") or _biomni_default.is_dir()) else None
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Module-load snapshot, kept as the "baseline" — process-startup default + the

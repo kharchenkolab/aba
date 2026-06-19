@@ -567,8 +567,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
               or uuid.uuid4().hex)
     try:
         result = run_python_code(code, project_id=str(project_id), run_id=str(run_id),
-                                 timeout_s=timeout_s, cancel_token=cancel_token,
-                                 extra_syspath=[])
+                                 timeout_s=timeout_s, cancel_token=cancel_token)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
     # Fix 2: if we degraded to stateless because the kernel was unavailable (NOT

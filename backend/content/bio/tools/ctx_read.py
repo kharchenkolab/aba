@@ -161,8 +161,8 @@ def read_skill(input_: dict, ctx: dict | None = None) -> dict:
 
 def read_capability(input_: dict) -> dict:
     """Full detail for one capability by name — what it does, its inputs, and
-    (for a reference entry like a biomni tool) where the implementation lives.
-    Mirrors read_skill: list/search stay trimmed; this expands one on demand."""
+    (for a reference entry) where the upstream implementation lives. Mirrors
+    read_skill: list/search stay trimmed; this expands one on demand."""
     name = (input_.get("name") or input_.get("capability") or "").strip()
     if not name:
         return {"status": "error", "note": "read_capability needs a non-empty `name`."}

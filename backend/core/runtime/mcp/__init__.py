@@ -2,13 +2,12 @@
 live in separate processes (MCP servers) alongside the in-process
 bio/tools.py executors.
 
-Goal: importing a large external library of tools (lakefs, hpc,
-biomni-*) shouldn't require hand-wrapping each one in bio/tools.py.
-The gateway:
+Goal: importing a large external library of tools (lakefs, hpc, …)
+shouldn't require hand-wrapping each one in bio/tools.py. The gateway:
   - spawns configured MCP servers at app startup
   - fetches their tool catalogs
   - exposes name-prefixed tools to the Guide loop ('lakefs:read_object',
-    'biomni:annotate', …)
+    'hpc:submit_job', …)
   - routes calls from sync code into its background async loop
 
 Configuration: bio/mcp/servers.yaml (empty by default). When any server

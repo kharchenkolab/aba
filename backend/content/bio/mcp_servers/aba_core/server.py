@@ -42,10 +42,10 @@ def make_server() -> FastMCP:
             "In-process MCP server hosting ABA bio's tool catalogue. "
             "Phase 6 of arch3.md — see misc/phase6_mcp_wrapping.md. "
             "All tools are exposed via the same gateway channel as "
-            "external stdio servers (lakefs, biomni, ...). Tools "
-            "requiring runtime context (cancel_token, kernel session) "
-            "read it from a contextvar set by the dispatcher before "
-            "the call lands here."
+            "external stdio servers (e.g. lakefs). Tools requiring "
+            "runtime context (cancel_token, kernel session) read it "
+            "from a contextvar set by the dispatcher before the call "
+            "lands here."
         ),
     )
 
