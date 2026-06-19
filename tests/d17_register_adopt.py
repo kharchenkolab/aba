@@ -44,8 +44,7 @@ from content.bio.lifecycle.runs import open_run               # noqa: E402
 from content.bio.tools import register_dataset_tool           # noqa: E402
 from core.data.workspace import scratch_dir                   # noqa: E402
 from core import projects                                      # noqa: E402
-from config import DATA_DIR                                    # noqa: E402
-from core.config import WORK_DIR                                # noqa: E402,F401
+from core.config import DATA_DIR, WORK_DIR                     # noqa: E402,F401
 
 _PID = projects.current() or "default"   # what run_python/_scratch_bases use
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from config import API_KEY, MODEL, FAKE_SESSION
+from core.config import API_KEY, MODEL, FAKE_SESSION
 
 
 # Turn-count threshold at which the reflection prompt fires.

@@ -19,7 +19,7 @@ caused the voice-mimicry loop seen in thr_67f0b8ba on 2026-05-31).
 from __future__ import annotations
 from typing import Optional
 
-from config import FAKE_SESSION
+from core.config import FAKE_SESSION
 from core.summarize.pruning import prune_transcript
 from core.summarize.budget_summary import maybe_summarize
 

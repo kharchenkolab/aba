@@ -169,7 +169,7 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     this caused the agent's natural "save to DATA_DIR/foo then register 'foo'"
     pattern to fail with "Nothing to register"."""
     import os
-    from config import DATA_DIR
+    from core.config import DATA_DIR
     from core.config import current_project_id, project_data_dir
     if os.path.isabs(path):
         return os.path.normpath(path)        # also collapses `./` segments
@@ -221,7 +221,7 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
 
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
-    from config import DATA_DIR
+    from core.config import DATA_DIR
     from core.config import (WORK_DIR, current_project_id, project_data_dir,
                              project_work_dir)
     # Per-project equivalents of DATA_DIR / WORK_DIR — what the agent actually

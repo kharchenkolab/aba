@@ -3,7 +3,7 @@ import asyncio
 import os
 from typing import AsyncGenerator
 
-from config import FAKE_SESSION
+from core.config import FAKE_SESSION
 from core.graph._schema import WORKSPACE_ID
 from core.graph.audit import log_context_assembly, session_assembly_summary, add_context_suggestion
 from core.graph.entities import get_entity, update_entity

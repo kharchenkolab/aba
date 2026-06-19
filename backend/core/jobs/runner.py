@@ -41,7 +41,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
-from config import DATA_DIR, ARTIFACTS_DIR
+from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.graph.jobs import create_job, get_job, update_job
 from core.hooks.dispatcher import dispatch
 
