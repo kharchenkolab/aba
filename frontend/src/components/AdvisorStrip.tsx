@@ -62,7 +62,7 @@ export default function AdvisorStrip({ focusedId, focusedType, onTry, onFocus }:
           .then(() => { if (!stop) load() }).catch(() => {})
       }, 4000)
     }
-    const tick = setInterval(() => { if (!stop) load() }, 2500)
+    const tick = setInterval(() => { if (!stop) load() }, 10000)
     return () => { cancelled = true; stop = true; clearInterval(tick); if (adviseTimer) clearTimeout(adviseTimer) }
   }, [focusedId, focusedType])
 
