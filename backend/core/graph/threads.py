@@ -10,14 +10,47 @@ import json
 from typing import Optional
 
 from core.graph._schema import _conn
-from core.graph.entities import create_entity, list_entities
+from core.graph.entities import create_entity, list_entities, get_entity, update_entity
 
 
-def create_thread(title: str, question: str = "") -> str:
+def create_thread(title: str, question: str = "",
+                  spec: Optional[str] = None) -> str:
+    """Create a new thread entity. `spec` (optional) pins this thread
+    to a specific primary AgentSpec — overrides ABA_PRIMARY_SPEC and
+    the "guide" default for any turn served on this thread. Useful
+    for "new chat with lean backend" without flipping the install-wide
+    env var."""
+    md: dict = {"question": question, "open_questions": [], "lifecycle": "open"}
+    if spec:
+        md["spec"] = spec
     return create_entity(
         entity_type="thread", title=title or "Untitled investigation",  # noqa: seam
-        metadata={"question": question, "open_questions": [], "lifecycle": "open"},
+        metadata=md,
     )
+
+
+def get_thread_spec(thread_id: str) -> Optional[str]:
+    """Read the spec pinned on a thread (if any). Returns None when
+    the thread doesn't exist OR has no spec set — callers fall back to
+    the env override / "guide" default."""
+    ent = get_entity(thread_id)
+    if not ent:
+        return None
+    return (ent.get("metadata") or {}).get("spec")
+
+
+def set_thread_spec(thread_id: str, spec: Optional[str]) -> None:
+    """Pin or clear the spec for a thread. Passing None / empty string
+    clears it (the thread reverts to env/default resolution)."""
+    ent = get_entity(thread_id)
+    if not ent:
+        return
+    md = dict(ent.get("metadata") or {})
+    if spec:
+        md["spec"] = spec
+    else:
+        md.pop("spec", None)
+    update_entity(thread_id, metadata=md)
 
 
 def list_threads() -> list[dict]:

@@ -848,6 +848,13 @@ class ChatRequest(BaseModel):
     # Regenerate the last turn's reply without appending a new user message
     # (used by the message-level retry after a transient API failure).
     retry: bool = False
+    # Per-turn primary-spec override. Highest precedence in the lean-vs-
+    # full selection chain:
+    #   request.spec → thread.metadata.spec → ABA_PRIMARY_SPEC env →
+    #   "guide" default
+    # Used by the new-chat backend selector when starting a fresh
+    # conversation. None / empty → fall through.
+    spec: str | None = None
 
 
 def _require_project_context(project_id: str | None) -> str:
@@ -895,6 +902,7 @@ async def chat(req: ChatRequest):
             annotation_note=req.annotation_note,
             retry=req.retry,
             run_id=run_id,
+            spec_override=req.spec,
         )
         sink = turn_executor.start_turn(
             run_id=run_id,
@@ -1007,6 +1015,10 @@ class ThreadRequest(BaseModel):
     title: str = ""
     question: str = ""
     question_source: str | None = None   # 'user' when the user typed the question
+    # Primary spec to pin this thread to (e.g. "lean_guide"). None →
+    # the thread falls through to ABA_PRIMARY_SPEC env / "guide"
+    # default at chat time. See core.runtime.agent.resolve_spec_for_turn.
+    spec: str | None = None
 
 
 class ThreadPatch(BaseModel):
@@ -1014,6 +1026,9 @@ class ThreadPatch(BaseModel):
     question: str | None = None
     open_questions: list[dict] | None = None
     lifecycle: str | None = None
+    # Pin or clear the per-thread primary spec. Empty string clears
+    # (UI dropdown reverts to "use default"). None leaves unchanged.
+    spec: str | None = None
 
 
 @app.get("/api/threads")
@@ -1022,10 +1037,35 @@ def threads_list():
     return list_threads()
 
 
+@app.get("/api/specs/primary")
+def specs_primary_list():
+    """List all registered primary AgentSpecs. The frontend uses this
+    to populate the new-chat "Backend" dropdown; the per-thread chooser
+    on the chat screen reads it too. Empty list when nothing's
+    registered (advisor-only contents)."""
+    from core.runtime.agent import _SPECS, resolve_primary_spec_name
+    active = resolve_primary_spec_name()
+    items = []
+    for name, spec in _SPECS.items():
+        if spec.role != "primary":
+            continue
+        items.append({
+            "name":            name,
+            "model":           spec.model,
+            "prompt_mode":     spec.prompt_mode,
+            "tool_count":      (len(spec.tool_allowlist)
+                                if "*" not in spec.tool_allowlist else None),
+            "summary_budget":  spec.summary_budget_chars,
+            "is_default":      name == active,
+        })
+    items.sort(key=lambda i: (not i["is_default"], i["name"]))
+    return {"specs": items, "default": active}
+
+
 @app.post("/api/threads")
 def threads_create(req: ThreadRequest):
     from core.graph.threads import create_thread
-    tid = create_thread(req.title, req.question)
+    tid = create_thread(req.title, req.question, spec=req.spec)
     # A user-typed question is user-owned — keep the Guide from silently
     # rewriting it later.
     if req.question and req.question_source:
@@ -1051,6 +1091,12 @@ def threads_patch(tid: str, req: ThreadPatch, _pid: str = Depends(require_projec
         meta["open_questions"] = req.open_questions
     if req.lifecycle is not None:
         meta["lifecycle"] = req.lifecycle
+    if req.spec is not None:
+        # Empty string clears the pin (revert to env/default).
+        if req.spec.strip():
+            meta["spec"] = req.spec.strip()
+        else:
+            meta.pop("spec", None)
     fields["metadata"] = meta
     return update_entity(tid, **fields)
 
