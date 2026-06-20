@@ -33,7 +33,12 @@ from core.graph._schema import _conn, _utcnow
 # Default 400K chars (~100K tokens) matches CC's autoCompactWindow default —
 # fires rarely, lets the prompt cache extend across long sessions instead of
 # flushing the message-tail prefix every few turns.
-def _threshold() -> int:
+def _threshold(budget_chars: Optional[int] = None) -> int:
+    """Caller-supplied `budget_chars` (e.g. from the active AgentSpec)
+    overrides the global default. Used by the lean spec to demand
+    earlier Tier-2 summarization in a small-context backend window."""
+    if budget_chars is not None and budget_chars > 0:
+        return int(budget_chars)
     from core.config import HISTORY_SUMMARY_THRESHOLD_CHARS
     return HISTORY_SUMMARY_THRESHOLD_CHARS
 
@@ -129,18 +134,69 @@ def _render_msgs_for_synth(messages: list[dict]) -> str:
     return "\n".join(lines)[:50000]   # hard cap
 
 
+def _summary_model() -> str:
+    """Pick the model used by Tier-2 history synthesis.
+
+    Tier-2 is a Haiku-class job (structured rewriting of a bounded
+    transcript, not creative reasoning). It's intentionally
+    DECOUPLED from `ABA_MODEL` / `ABA_PRIMARY_MODEL` (which steer the
+    chat agent) because (a) the primary chat model and the synth
+    model have different optimal choices; (b) using the primary chat
+    model means Tier-2 inherits its rate-limit budget, which 429'd
+    under live load and silently dropped summarization (observed in
+    prj_30d7535f 2026-06-19).
+
+    Override knob: `ABA_SUMMARY_MODEL`. Forward-looking: once the
+    local-LLM runtime lands, point this at the local endpoint —
+    cheaper than Anthropic Haiku and the summarization workload
+    doesn't need frontier quality.
+    """
+    import os as _os
+    return (_os.environ.get("ABA_SUMMARY_MODEL")
+            or "claude-haiku-4-5-20251001").strip()
+
+
+# Observable failure modes for Tier-2. Counters so the next "Tier-2
+# isn't firing" mystery is one `print(_TIER2_DIAG)` away from the
+# answer. Last-error string is the one the most recent _synthesize
+# raised (or empty if it succeeded). Stays in-process; not persisted.
+_TIER2_DIAG: dict = {
+    "calls":            0,    # _synthesize entered
+    "ok":               0,    # synth returned non-empty wrapped text
+    "skipped_no_prompt": 0,   # `thread_summary` registration absent
+    "raised":           0,    # any Exception path
+    "last_error":       "",
+}
+
+
+def tier2_diag() -> dict:
+    """Snapshot of the failure-mode counters above. Tests + admin
+    debug pages read this to confirm Tier-2 is doing what it claims."""
+    return dict(_TIER2_DIAG)
+
+
 def _synthesize(thread_id: str, old_messages: list[dict],
                 prior_summary: Optional[str]) -> str:
     """Call the synth LLM. Returns the SYSTEM SUMMARY block text. Empty
     string on any failure — caller falls back gracefully (returns the
-    pruned-but-unsummarized list, which is bigger but correct)."""
+    pruned-but-unsummarized list, which is bigger but correct).
+
+    Every entry/exit lane bumps a counter in `_TIER2_DIAG`. Tests
+    assert on those counters instead of patching this function to a
+    stub — the stub-test pattern hid three real bugs (no prompt
+    registration, MODEL-as-Opus, 429 on shared rate budget) in the
+    prj_30d7535f 2026-06-19 session. Once burned, twice shy."""
+    _TIER2_DIAG["calls"] += 1
     try:
         from core.llm import sync_anthropic_client
         from core.prompts import get as get_prompt
-        from core.config import MODEL
         client = sync_anthropic_client()
         system = get_prompt("thread_summary") or ""
         if not system:
+            _TIER2_DIAG["skipped_no_prompt"] += 1
+            _TIER2_DIAG["last_error"] = (
+                "thread_summary prompt is not registered — bio import "
+                "side-effects must have failed before _synthesize ran")
             return ""
 
         transcript = _render_msgs_for_synth(old_messages)
@@ -156,7 +212,7 @@ def _synthesize(thread_id: str, old_messages: list[dict],
         user_text += f"Transcript to summarize:\n{transcript}"
 
         r = client.messages.create(
-            model=MODEL,
+            model=_summary_model(),
             max_tokens=1500,
             system=system,
             messages=[{"role": "user", "content": user_text}],
@@ -179,31 +235,43 @@ def _synthesize(thread_id: str, old_messages: list[dict],
                    f"Covers: {len(old_messages)} messages\n\n"
                    + out
                    + "\n</summary>")
+        _TIER2_DIAG["ok"] += 1
+        _TIER2_DIAG["last_error"] = ""
         return out
-    except Exception:  # noqa: BLE001 — summary is best-effort
+    except Exception as e:                                       # noqa: BLE001
+        _TIER2_DIAG["raised"] += 1
+        _TIER2_DIAG["last_error"] = f"{type(e).__name__}: {e}"
         return ""
 
 
-def maybe_summarize(thread_id: Optional[str], messages: list[dict]) -> list[dict]:
+def maybe_summarize(thread_id: Optional[str], messages: list[dict],
+                    budget_chars: Optional[int] = None,
+                    tail_keep:    Optional[int] = None) -> list[dict]:
     """If `messages` exceeds the size budget, replace the OLDEST
     contiguous block with a single SYSTEM SUMMARY message. Otherwise
     return `messages` unchanged.
 
     Tail (most recent TAIL_KEEP messages) is always preserved verbatim.
     Per-thread summary is cached + incrementally regenerated.
+
+    `budget_chars` overrides the global threshold for THIS call.
+    `tail_keep` overrides the global TAIL_KEEP guard (default 20 was
+    calibrated for the 400k-char budget; lean's 25k budget needs ~6).
+    Both None ⇒ preserves today's behavior bit-for-bit.
     """
     if not thread_id:
         # No thread context — skip summarization (no place to cache).
         return messages
 
-    if _message_chars(messages) <= _threshold():
+    if _message_chars(messages) <= _threshold(budget_chars):
         return messages
 
-    if len(messages) <= TAIL_KEEP + 2:
+    eff_tail = tail_keep if tail_keep is not None and tail_keep > 0 else TAIL_KEEP
+    if len(messages) <= eff_tail + 2:
         # Not enough room to collapse meaningfully — bail.
         return messages
 
-    to_cover_n = len(messages) - TAIL_KEEP
+    to_cover_n = len(messages) - eff_tail
     old_block = messages[:to_cover_n]
     tail = messages[to_cover_n:]
 

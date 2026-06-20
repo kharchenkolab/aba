@@ -24,15 +24,25 @@ from core.summarize.pruning import prune_transcript
 from core.summarize.budget_summary import maybe_summarize
 
 
-def effective_history(thread_id: Optional[str], messages: list[dict]) -> list[dict]:
+def effective_history(thread_id: Optional[str], messages: list[dict],
+                      budget_chars: Optional[int] = None,
+                      tail_keep:    Optional[int] = None) -> list[dict]:
     """Return the message list to send to the LLM:
        1. prune (Phase 2 — no LLM, fast)
        2. if still over budget AND thread_id is known, fold the
           oldest portion into a per-thread SYSTEM SUMMARY (Phase 3).
 
     `thread_id` keys the per-thread summary cache. Pass `None` to skip
-    Phase 3 (pruning still runs)."""
+    Phase 3 (pruning still runs).
+
+    `budget_chars` overrides the global HISTORY_SUMMARY_THRESHOLD_CHARS
+    for THIS call only — used by the lean primary spec to demand much
+    earlier Tier-2 summarization (≤25k chars instead of 400k), so the
+    synthesized neutral-voice summary fires inside the 40k vLLM
+    window. None preserves today's behavior bit-for-bit."""
     if FAKE_SESSION:
         return messages
     pruned = prune_transcript(messages)
-    return maybe_summarize(thread_id, pruned)
+    return maybe_summarize(thread_id, pruned,
+                           budget_chars=budget_chars,
+                           tail_keep=tail_keep)
