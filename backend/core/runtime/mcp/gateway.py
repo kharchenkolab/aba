@@ -182,7 +182,27 @@ def shutdown() -> None:
     _thread = None
 
 
-def list_tools() -> list[dict[str, Any]]:
+def _compact_description(text: str) -> str:
+    """Reduce a verbose tool description to a 1-line summary.
+
+    Most `@mcp.tool` docstrings open with a sentence-length summary,
+    then expand into multi-paragraph prose about USE/DON'T-USE patterns
+    that the model has seen thousands of times in training. For the
+    catalog prefix, just the summary suffices — the model knows the
+    name and the role; the rest is recoverable from `describe_tool`.
+
+    Heuristic: take the first paragraph, then the first line of that
+    paragraph, then cap at 200 chars. Returns "" for empty input."""
+    if not text:
+        return ""
+    head = text.split("\n\n", 1)[0]
+    head = head.split("\n", 1)[0]
+    head = head.strip()
+    return head[:200]
+
+
+def list_tools(compact: bool = False,
+               priority_tools: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """Tool schemas in Anthropic wire shape (name, description,
     input_schema), one entry per MCP-exposed tool across all CONNECTED
     servers. Disconnected/dead servers contribute nothing.
@@ -194,7 +214,15 @@ def list_tools() -> list[dict[str, Any]]:
     Handles with `strip_prefix_in_catalog=True` (aba_core after WU-1)
     contribute their tools at the RAW name — bare `Skill` rather than
     `aba_core:Skill` — preserving the model's existing tool catalog and
-    every downstream reference to tool names by bare key."""
+    every downstream reference to tool names by bare key.
+
+    `compact=True` runs each description through `_compact_description`
+    UNLESS the tool's name is in `priority_tools` — that two-tier shape
+    is the "lean catalog" optimization (prj_a6f40e94 2026-06-20). The
+    `input_schema` is NEVER compacted; parameter contracts are
+    semantic, not prose. Calls to the same compacted tool work
+    identically — only the catalog prefix shrinks."""
+    keep_full = frozenset(priority_tools)
     out: list[dict[str, Any]] = []
     for h in _handles.values():
         if h.state != HandleState.CONNECTED:
@@ -203,9 +231,13 @@ def list_tools() -> list[dict[str, Any]]:
             continue
         strip = getattr(h, "strip_prefix_in_catalog", False)
         for t in h.tools:
+            name = t.raw_name if strip else t.name
+            desc = t.description or ""
+            if compact and name not in keep_full:
+                desc = _compact_description(desc)
             out.append({
-                "name":         t.raw_name if strip else t.name,
-                "description":  t.description,
+                "name":         name,
+                "description":  desc,
                 "input_schema": t.input_schema,
             })
     return out
