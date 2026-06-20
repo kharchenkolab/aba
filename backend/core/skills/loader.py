@@ -435,8 +435,23 @@ def recipes_for_capability(cap: str) -> list[str]:
 
 
 def _skill_bullets(skills: list[SkillSpec]) -> list[str]:
-    return [f"- `{s.name}` — {s.description}" if s.description else f"- `{s.name}`"
-            for s in skills]
+    """Render skills with the literal CALL SYNTAX as the lead token, not
+    just the bare name. Without this, the bullet list `- name — desc`
+    is structurally identical to the tool catalog at the top of the
+    system prompt, and a pattern-matching model dispatches the name
+    as a bare tool. With this, the entry visibly carries the
+    `Skill(skill="…")` wrapper the model is supposed to use.
+    Observed in prj_2c015847 2026-06-20 — Qwen3-30B (thinking on)
+    dispatched `fetch-geo-processed-matrices(...)` after seeing it in a
+    name-only bullet list."""
+    out = []
+    for s in skills:
+        call = f'Skill(skill="{s.name}")'
+        if s.description:
+            out.append(f"- `{call}` — {s.description}")
+        else:
+            out.append(f"- `{call}`")
+    return out
 
 
 def _diversify(pool: list[SkillSpec], k: int, *, reserve: int = 3) -> list[SkillSpec]:

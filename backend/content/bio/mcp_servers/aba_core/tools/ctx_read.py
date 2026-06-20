@@ -35,8 +35,23 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def Skill(skill: str | None = None, args: str = "",
               aba_ctx_id: str | None = None) -> dict:
-        """Execute a skill within the main conversation. `$ARGUMENTS` in
-        the skill body is substituted with `args`."""
+        """Fetch (load) a registered skill / recipe BY NAME and return
+        its body. THIS DOES NOT EXECUTE — your NEXT call must be
+        `run_python` (or `run_r`) with the code block from the body.
+
+        Skill names are NOT separate tools. The only way to invoke a
+        skill is `Skill(skill="<name>", args=...)`. Recipe NAMES from
+        search_skills cannot be called directly — those calls fail
+        with "Unknown tool". Always wrap them in Skill(skill="…").
+
+        Typical flow:
+          1. Skill(skill="fetch-geo-processed-matrices", args="GSE192391")
+             → returns {body: "<recipe markdown with python code>"}
+          2. run_python(code="<the python from the body>")
+             → actually performs the work.
+
+        Skill itself is a doc-loader. If you stop after Skill without
+        running its code, nothing has been done."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import skill_tool
         return skill_tool({"skill": skill, "args": args},

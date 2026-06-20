@@ -20,8 +20,15 @@ def register_file_io_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def list_data_files() -> dict:
-        """List files in the project DATA_DIR. Use to discover the
-        filenames you'll need to pass to read_csv_info / register_dataset."""
+        """List files the user UPLOADED to DATA_DIR — DO NOT call
+        before a download recipe (GEO/SRA/Ensembl); those recipes
+        populate DATA_DIR themselves via run_python.
+
+        Use this when the user mentions "the file" or "my data" and
+        you need to find it. Returns {files, message}; if the
+        message says "no datasets yet" you're not supposed to ask
+        the user to upload — you're supposed to run the recipe that
+        produces data."""
         from content.bio.tools import list_data_files as _impl
         return _impl({})
 

@@ -66,12 +66,27 @@ def search_skills_tool(input_: dict) -> dict:
         return {"status": "error", "note": "search_skills needs a non-empty `query`."}
     limit = input_.get("limit") or 8
     hits = search_skills(q, limit=int(limit), domain=input_.get("domain"))
-    return {"skills": [
-        {"name": s.name, "description": s.description,
-         "when_to_use": s.when_to_use, "domain": s.domain,
-         "capabilities_needed": list(s.capabilities_needed)}
-        for s in hits
-    ]}
+    return {
+        "skills": [
+            {
+                # `invoke_with` is the literal tool call the agent
+                # should make next. We put it FIRST so it leads on
+                # serialization — for a pattern-matching model the
+                # first visible field shapes its next action far more
+                # than a wrapping note in the description does.
+                "invoke_with": f'Skill(skill="{s.name}")',
+                "name":        s.name,
+                "description": s.description,
+                "when_to_use": s.when_to_use,
+                "domain":      s.domain,
+                "capabilities_needed": list(s.capabilities_needed),
+            }
+            for s in hits
+        ],
+        "note": ("Each result is a SKILL — invoke it via its "
+                 "`invoke_with` value (which calls the `Skill` tool). "
+                 "The `name` alone is NOT a callable tool."),
+    }
 
 
 def search_bioconda(input_: dict) -> dict:
