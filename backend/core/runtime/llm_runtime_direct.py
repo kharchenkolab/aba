@@ -130,10 +130,20 @@ async def open_and_consume_stream(
     while True:
         emitted = False
         try:
+            import os as _os
+            import time as _time
+            _debug_timing = bool(_os.environ.get("ABA_DEBUG_TIMING"))
+            _t_create_begin = _time.perf_counter()
             async with _open_stream(history, tools, system,
                                     model=model,
                                     dynamic_system=dynamic_system) as stream:
+                _t_create_done = _time.perf_counter()
+                _t_first_event = None
+                _n_events = 0
                 async for event in stream:
+                    if _t_first_event is None:
+                        _t_first_event = _time.perf_counter()
+                    _n_events += 1
                     if cancel_token.cancelled:
                         break
                     if event.type == "content_block_delta":
@@ -147,6 +157,24 @@ async def open_and_consume_stream(
                                            tool_calls_this_turn=[])
                     return
                 final_msg = await stream.get_final_message()
+            # Per-call timing breakdown — symmetric to llm_runtime_openai
+            # so multi-runtime sessions are equally diagnosable. Gated by
+            # ABA_DEBUG_TIMING.
+            if _debug_timing:
+                _t_stream_done = _time.perf_counter()
+                _create_ms = (_t_create_done - _t_create_begin) * 1000
+                _ttft_ms = ((_t_first_event or _t_stream_done) - _t_create_done) * 1000
+                _gen_ms  = (_t_stream_done - (_t_first_event or _t_create_done)) * 1000
+                _u = getattr(final_msg, "usage", None)
+                _in = (getattr(_u, "input_tokens", 0) or 0) if _u else 0
+                _out = (getattr(_u, "output_tokens", 0) or 0) if _u else 0
+                _cr = (getattr(_u, "cache_read_input_tokens", 0) or 0) if _u else 0
+                _cw = (getattr(_u, "cache_creation_input_tokens", 0) or 0) if _u else 0
+                print(f"[direct-timing] create={_create_ms:.0f}ms "
+                      f"TTFT={_ttft_ms:.0f}ms gen={_gen_ms:.0f}ms "
+                      f"events={_n_events} in={_in}t out={_out}t "
+                      f"cache_read={_cr}t cache_write={_cw}t",
+                      flush=True)
             usage_delta: dict = {}
             if getattr(final_msg, "usage", None):
                 u = final_msg.usage
