@@ -1,0 +1,61 @@
+name: lean_guide
+role: primary
+# Lean variant of the Guide. Same role + halt behavior, same FUNCTIONAL
+# REACH (all tools available), but the catalog prefix sent to the
+# model is rewritten compact: 1-line summaries for tools the agent
+# doesn't reach for every turn, full schemas for the hot ones.
+#
+# Earlier design (replaced 2026-06-20): a curated 18-tool allowlist.
+# That masked function the agent needed (figure-update broke when
+# `make_revision` wasn't included, env install broke without
+# `ensure_capability`, …) and was destined to converge to the full
+# catalog one missing-tool-bug at a time. The compact-catalog design
+# keeps every tool reachable while shrinking the prompt budget.
+#
+# Selected via env override: `export ABA_PRIMARY_SPEC=lean_guide`
+# (resolved per-turn by core.runtime.agent.resolve_primary_spec_name)
+# or per-thread via the chat header's "Backend" dropdown.
+model: claude-haiku-4-5-20251001
+system_prompt: ../prompts/identity.md
+manifest_role: primary
+# `prompt_mode: lean` does two things:
+#   (a) build_system skips the heavy/dynamic blocks (skills_recipes
+#       BM25 catalog, recipe_arm, declared_recipes, highlighting,
+#       data_orientation) and swaps behavior.md → behavior_slim.md.
+#       See _LEAN_DROP in content/bio/prompts/build.py.
+#   (b) list_tools renders descriptions compact (first-paragraph
+#       1-liner) for non-priority tools, while priority tools (the
+#       few the agent uses on most turns) keep full descriptions.
+#       The priority set lives at the call site in backend/guide.py;
+#       the exact membership is not a spec concern.
+# Together these halve the catalog prefix from ~17k tokens to ~9k
+# without removing any callable function. The agent can fetch the
+# verbose description for any compacted tool via `describe_tool`.
+prompt_mode: lean
+# Full reach — all 60 tools are visible to the model. The catalog
+# rendering (compact vs full per-tool) is governed by prompt_mode +
+# the priority list in guide.py, not by this field.
+tool_allowlist: ['*']
+# Tier-2 history summarization fires when the conversation
+# (post-Tier-1 pruning) exceeds this many CHARACTERS. The global
+# default (400k, matching CC's autoCompactWindow) never fires inside
+# a 40k window. 25k chars ≈ 6k tokens, leaving room for the static
+# load (~14k), summary header (~1k), plan/memory state, and the
+# current user message — keeping the whole turn comfortably inside
+# the lean static budget projection.
+#
+# The "stick to the plan" continuity flows through the synthesized
+# summary's Open-work + Agent-did sections; plan/recipe state ALSO
+# lives in thread entities (durable across summarization) and in
+# memory tools (read_memory/write_memory are now always reachable).
+summary_budget_chars: 25000
+# Tail-keep: how many of the MOST RECENT messages stay verbatim when
+# Tier-2 fires. Global default is 20 (calibrated for a 400k budget).
+# At lean's 25k budget that would deadlock the trigger — you'd need
+# 23+ messages before maybe_summarize even tried. 6 lets the gate
+# fire on a typical multi-turn analysis flow (~10–15 messages).
+summary_tail_keep: 6
+streaming: true
+halts_allowed: true
+max_iterations: 20
+timeout_s: 300

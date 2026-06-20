@@ -52,12 +52,15 @@ class BioPack:
         guide.py — included here so a future caller doesn't have to
         rediscover the import path.
         """
-        from content.bio.prompts.build import build_system, build_recipes_reminder
+        from content.bio.prompts.build import (build_system,
+                                                build_recipes_reminder,
+                                                build_discovery_reminder)
         from core.manifest.assembler import render_focus_preamble
         return {
-            "system":           build_system,
-            "recipes_reminder": build_recipes_reminder,
-            "focus_preamble":   render_focus_preamble,
+            "system":             build_system,
+            "recipes_reminder":   build_recipes_reminder,
+            "discovery_reminder": build_discovery_reminder,
+            "focus_preamble":     render_focus_preamble,
         }
 
     def tools(self) -> list[dict]:

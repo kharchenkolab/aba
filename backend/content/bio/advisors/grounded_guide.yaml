@@ -1,0 +1,66 @@
+name: grounded_guide
+role: primary
+# Balanced primary spec — restores the analysis-correctness rails the
+# original `lean_guide` traded away for token budget, while keeping
+# lean's compact-catalog optimization. Intended as the default for
+# capable models with comfortable context windows (Anthropic Opus /
+# Sonnet, Qwen3-Next-80B class and up).
+#
+# Compared to `lean_guide`:
+#   - behavior.md (full) instead of behavior_slim.md — restores the
+#     "Never invent or infer data" anti-fabrication rule + verbose
+#     ensure_capability / run_r examples + Rscript anti-pattern call-out.
+#   - `data_orientation` renders again — "observe before assume" anchor
+#     for any analysis on a not-yet-inspected dataset.
+#   - `skills_recipes` (BM25 dynamic catalog) renders again — gives the
+#     model a top-K of relevant recipes for the current turn's intent,
+#     reducing search_skills round-trips.
+#   - `highlighting` renders again (still gated on focused-figure turns).
+#   - summary_budget_chars 100k (vs lean's 25k) — lets multi-turn
+#     debugging keep more verbatim tool output before tier-2 compaction.
+#   - summary_tail_keep 15 (vs lean's 6).
+#
+# Compared to `guide.yaml` (the legacy "full" spec):
+#   - prompt_mode `standard` keeps the compact-catalog policy from lean
+#     (1-line description for non-priority tools; full schemas + verbose
+#     description for the priority set). Saves ~1-2k tokens on the
+#     tools array with no measured correctness regression on Claude;
+#     describe_tool is the documented fallback for unfamiliar tools.
+#
+# Qwen3-30B-specific compromises in lean_qwen_guide (V5 discovery
+# directive block, per-turn discovery reminder, skills_core+conventions
+# block drops) DO NOT propagate here. They were small-model crutches
+# for a context-attention-budget issue we don't have at this scale.
+# Capable models derive the search_skills → Skill → run_python flow
+# from the existing tool docstrings and behavior block.
+#
+# Selected via env override: `export ABA_PRIMARY_SPEC=grounded_guide`
+# or per-thread via the chat header's "Backend" dropdown.
+model: claude-opus-4-7
+system_prompt: ../prompts/identity.md
+manifest_role: primary
+# `prompt_mode: standard` does two things:
+#   (a) build_system applies NO mode-specific drops — all blocks render
+#       (data_orientation, skills_recipes, behavior.md full, etc.). See
+#       _mode_drops in content/bio/prompts/build.py.
+#   (b) list_tools renders descriptions compact (first-paragraph
+#       1-liner) for non-priority tools, while priority tools keep
+#       full schemas + verbose descriptions. Same policy as `lean`.
+prompt_mode: standard
+# Full reach — every tool visible to the model.
+tool_allowlist: ['*']
+# Tier-2 history compaction trigger. Lean's 25k was calibrated for the
+# old 40k vLLM window; on a 200k-context Anthropic model (or a properly
+# sized open model) we can let history grow ~4x before compacting,
+# which preserves more verbatim tool output for debugging-heavy turns.
+# Still well below the 400k global default — we don't want sprawl.
+summary_budget_chars: 100000
+# More recent messages stay verbatim through compaction. Default is 20;
+# 15 is a middle ground that lets multi-step recipes keep their last
+# few tool round-trips intact while still triggering compaction often
+# enough to bound prompt size.
+summary_tail_keep: 15
+streaming: true
+halts_allowed: true
+max_iterations: 20
+timeout_s: 300
