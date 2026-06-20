@@ -164,6 +164,51 @@ _PREAMBLE_SKIP_SUFFIXES = (".log", ".pyc", ".cache", ".tmp", ".lock", ".swp")
 _PREAMBLE_SKIP_PREFIXES = (".", "_")
 
 
+# File-open error patterns that should re-fire the path orientation
+# preamble on the SAME tool_result. From prj_a6f40e94 2026-06-19 we saw
+# `Error in open.connection(file): cannot open the connection` and
+# `Error in nrow(seurat_...)` repeatedly with no path hint — exactly
+# when the agent needed one.
+import re as _re                                                          # noqa: E402
+_FILE_ERROR_PATTERNS = _re.compile(
+    r"(cannot open the connection|"
+    r"FileNotFoundError|"
+    r"No such file or directory|"
+    r"file\.exists.*FALSE|"
+    r"\[Errno 2\]|"
+    r"could not find function .* in file|"
+    r"object .* not found.*file)",
+    _re.IGNORECASE,
+)
+
+
+def _maybe_force_preamble_on_file_error(sess, stderr: str, stdout: str) -> bool:
+    """Flip sess._aba_cwd_just_switched to 'FILE_ERR' so the next-call
+    block at the end of run_python/run_r emits the preamble — except
+    we also call that block on THIS call, since the agent will pay the
+    same cost either way and seeing the hint with the error is more
+    useful than seeing it on the retry.
+
+    Idempotent within a turn: tracks `sess._aba_recent_err_preamble` so
+    we don't re-prepend if we already did in the last 3 calls (avoids
+    spamming the agent if it can't figure out the path).
+    """
+    if not (stderr or stdout):
+        return False
+    blob = (stderr or "") + "\n" + (stdout or "")
+    if not _FILE_ERROR_PATTERNS.search(blob):
+        return False
+    cooldown = int(getattr(sess, "_aba_recent_err_preamble", 0))
+    if cooldown > 0:
+        sess._aba_recent_err_preamble = cooldown - 1
+        return False
+    # Set the flag so the end-of-call preamble block fires and tag it
+    # FILE_ERR so a future tester can tell why it fired.
+    sess._aba_cwd_just_switched   = "FILE_ERR"
+    sess._aba_recent_err_preamble = 3
+    return True
+
+
 def _prior_run_files_preamble(project_id: str, thread_id: str,
                               current_run_id: str | None,
                               max_runs: int = 4, max_files: int = 12,
@@ -298,7 +343,21 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
         except Exception:  # noqa: BLE001
             pass
 
-        if not datasets and not run_mapped and not scratch_mapped and not fresh_kernel:
+        # Early-bail historically: skip the preamble when nothing useful
+        # to surface AND not a fresh-kernel signal. But the P2/P3 force-
+        # preamble triggers (FILE_ERR, RUN_OPEN) want at least the cwd
+        # line on a brand-new project — without that, a "cannot open the
+        # connection" error gets no hint at all (prj_da58dbab live-drive
+        # 2026-06-20). So emit a minimal preamble whenever cwd is set,
+        # even with no datasets/runs/scratch.
+        # NB: variable was `run_mapped` here historically, which never
+        # existed — the function built `run_groups` instead. That
+        # NameError silently bailed every non-fresh-kernel call out via
+        # the outer try/except, which is why prj_a6f40e94 saw 1
+        # preamble in 37 tool_results (only the FRESH path ever
+        # rendered). Fixed during the 2026-06-20 P2/P3 work.
+        if (not datasets and not run_groups and not scratch_mapped
+                and not fresh_kernel and not cwd):
             return ""
         header = ("── Fresh kernel — workspace orientation ──"
                   if fresh_kernel
@@ -323,6 +382,26 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 label = title or path.rsplit("/", 1)[-1]
                 tail = f"  [{hint}]" if hint else ""
                 lines.append(f"  - {label} → {path}{tail}")
+                # List a few representative filenames inside directory-
+                # shaped datasets so the agent sees layout patterns
+                # (sample prefixes, 10x triplet roles, etc.) without
+                # having to os.listdir(). prj_61bb79a0 friction
+                # 2026-06-20: agent burned 3 calls discovering the
+                # GSM5746259_… prefix on a flat-files 10x bundle.
+                try:
+                    dp = Path(path)
+                    if dp.is_dir():
+                        kids = sorted(
+                            (e for e in dp.iterdir() if _keep(e.name)),
+                            key=lambda f: (f.is_dir(), f.name),
+                        )
+                        for k in kids[:5]:
+                            suffix = "/" if k.is_dir() else ""
+                            lines.append(f"      {k.name}{suffix}")
+                        if len(kids) > 5:
+                            lines.append(f"      … (+{len(kids)-5} more)")
+                except Exception:                                  # noqa: BLE001
+                    pass
             lines.append("")
         if cwd_mapped:
             lines.append("Files already in the current cwd (saved earlier in this Run):")
@@ -545,6 +624,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 ns = _kernel_namespace_preview(sess, "python")
                 if ns:
                     out["namespace"] = ns
+            # Re-fire path orientation when the run errored on a missing
+            # file/path (prj_a6f40e94 friction). Sets the just_switched
+            # flag, which the existing block below renders.
+            _maybe_force_preamble_on_file_error(
+                sess, res.stderr or "", res.stdout or "")
             if getattr(sess, "_aba_cwd_just_switched", None):
                 from content.bio.lifecycle.runs import active_run_id as _arid
                 _was = sess._aba_cwd_just_switched
@@ -684,6 +768,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         ns = _kernel_namespace_preview(sess, "r")
         if ns:
             out["namespace"] = ns
+    # Re-fire path orientation when the run errored on a missing file/path.
+    _maybe_force_preamble_on_file_error(sess, res.stderr or "", res.stdout or "")
     if getattr(sess, "_aba_cwd_just_switched", None):
         from content.bio.lifecycle.runs import active_run_id as _arid
         _was = sess._aba_cwd_just_switched

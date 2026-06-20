@@ -122,6 +122,25 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
         update_entity(rid, artifact_path=str(d))
     except Exception:  # noqa: BLE001 — never block opening a run on dir setup
         pass
+    # Force the path-orientation preamble on the next run_python /
+    # run_r call in this thread. The cwd is about to shift into the
+    # new Run's output dir, but the kernel hasn't been touched yet —
+    # without this nudge the existing _ensure_kernel_cwd hook would
+    # still fire on the next call, BUT only if the agent makes a
+    # run_python/run_r call in this turn. The flag is harmless if the
+    # agent doesn't run code yet; it just primes the next invocation.
+    # prj_a6f40e94 2026-06-19: 1 preamble in 37 tool_results,
+    # straight into "cannot open the connection" loop.
+    try:
+        from core.exec.kernels import get_pool
+        pool = get_pool()
+        for lang in ("python", "r"):
+            sess = pool.peek(thread_id, lang)
+            if sess is None:
+                continue
+            sess._aba_cwd_just_switched = "RUN_OPEN"
+    except Exception:                                            # noqa: BLE001
+        pass
     return rid
 
 
