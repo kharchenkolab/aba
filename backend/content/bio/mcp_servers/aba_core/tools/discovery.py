@@ -20,15 +20,136 @@ def register_discovery_tools(mcp: FastMCP) -> None:
 
     # --- search (all pure, no ctx) ---
 
+    # H6 experiment — env-gated prescriptive docstring. When
+    # ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS is set, register the
+    # search_skills tool with a directive-shaped description aimed at
+    # small open models (Qwen3-30B class) that narrate-instead-of-
+    # dispatch after seeing the result. Production (Anthropic) reads
+    # the original docstring.
+    import os as _os
+    if _os.environ.get("ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS"):
+
+        @mcp.tool()
+        def search_skills(query: str, limit: int = 8) -> dict:
+            """STEP 1 of a MANDATORY two-step recipe-discovery flow.
+
+            Your IMMEDIATE NEXT call after this MUST be:
+                Skill(skill="<name from the top result>", args="...")
+
+            Do not stop after this call to summarize what you found.
+            Do not switch to run_python before dispatching Skill.
+            Do not invent a recipe name — only use names that appear
+            in the `skills[*].name` list this returns.
+
+            Pass `query` as a short natural-language phrase like
+            "fetch GEO data", "single-cell QC", "differential
+            expression". Returns up to `limit` skills ranked by
+            relevance — each entry's `invoke_with` field shows the
+            exact call shape for step 2."""
+            from content.bio.tools import search_skills_tool
+            return search_skills_tool({"query": query, "limit": limit})
+
+    else:
+
+        @mcp.tool()
+        def search_skills(query: str, limit: int = 8) -> dict:
+            """Intent search over the skill (recipe) library.
+
+            Pass a short natural-language `query` like "fetch GEO data",
+            "single-cell QC", or "differential expression". Returns up
+            to `limit` skills ranked by relevance.
+
+            Returns: {"skills": [{"name": "...", "description": "..."}]}.
+            The names in this result are SKILL NAMES, not tool names —
+            invoke each one via `Skill(skill="<name>", args="...")`.
+            Calling `<name>(...)` directly will fail with "Unknown tool"."""
+            from content.bio.tools import search_skills_tool
+            return search_skills_tool({"query": query, "limit": limit})
+
+    # ── Experimental: combined fetch_recipe ─────────────────────────
+    # Gated by ABA_EXPERIMENTAL_FETCH_RECIPE because it's an open
+    # hypothesis test: does a 1-call discover+load tool work better
+    # for small models (Qwen3-class) than a 2-call search_skills +
+    # Skill chain? Phase 3 of the Qwen3 qualification suite uses this
+    # to isolate "chain length is the bottleneck" from other
+    # explanations. NOT in production until we've shown the change
+    # is net-positive.
+    import os as _os
+    if _os.environ.get("ABA_EXPERIMENTAL_FETCH_RECIPE"):
+
+        @mcp.tool()
+        def fetch_recipe(query: str, args: str = "",
+                         aba_ctx_id: str | None = None) -> dict:
+            """Find and load a recipe in ONE call. Combines
+            `search_skills` + `Skill` into a single dispatch.
+
+            Use this when you know what kind of task you need a recipe
+            for but not the exact recipe name. Pass `query` as a short
+            natural-language phrase (e.g. "fetch GEO data",
+            "single-cell QC", "differential expression"). Optionally
+            pass `args` — the string substituted into the recipe's
+            `$ARGUMENTS` placeholder.
+
+            Returns the recipe body (markdown with code blocks). Your
+            NEXT call should be `run_python` (or `run_r`) with the
+            code from the body — this tool only LOADS, it does not
+            EXECUTE.
+
+            Prefer this when the user gives you a topic. Use
+            `search_skills` + `Skill` instead only when you need to
+            compare multiple candidates before picking one."""
+            from content.bio.tools import (search_skills_tool,
+                                            skill_tool)
+            from core.runtime.tool_ctx import peek_ctx
+            search_result = search_skills_tool({"query": query, "limit": 1})
+            skills = search_result.get("skills") or []
+            if not skills:
+                return {"error":
+                        f"no recipe matches the query {query!r}. "
+                        "Try a simpler / different phrasing, or "
+                        "call `search_skills` directly to inspect "
+                        "candidates."}
+            top = skills[0]
+            # Delegate to the same skill_tool the Skill MCP wrapper
+            # uses — keeps semantics identical.
+            body = skill_tool({"skill": top.get("name"), "args": args},
+                              peek_ctx(aba_ctx_id))
+            # Annotate so the model knows what was chosen + that the
+            # next step is run_python/run_r on the body.
+            body["_resolved_skill"] = top.get("name")
+            body["_resolved_via"]   = "fetch_recipe"
+            return body
+
     @mcp.tool()
-    def search_skills(query: str, domain: str | None = None,
-                      limit: int = 8) -> dict:
-        """Intent search over the skill (recipe) library — surfaces
-        recipes beyond what made it into the slice in the system
-        prompt for this turn."""
-        from content.bio.tools import search_skills_tool
-        return search_skills_tool(
-            {"query": query, "domain": domain, "limit": limit})
+    def describe_tool(name: str) -> dict:
+        """Return the FULL schema for a tool by name — the verbose
+        description plus the input_schema, regardless of how the tool
+        was rendered in the catalog prefix for this turn.
+
+        Use this when the catalog shows only a 1-line summary (lean
+        catalog mode) and you need the full doc before calling — e.g.
+        to confirm parameter names, optional vs required, or the
+        nuanced "use this when X / not when Y" guidance.
+
+        Always available regardless of compaction. Returns
+        {name, description, input_schema} on success, {error: …}
+        on lookup miss."""
+        from core.runtime.mcp.gateway import _handles
+        from core.runtime.mcp.server_handle import HandleState
+        for h in _handles.values():
+            if h.state != HandleState.CONNECTED:
+                continue
+            if not getattr(h, "expose_in_catalog", True):
+                continue
+            strip = getattr(h, "strip_prefix_in_catalog", False)
+            for t in h.tools:
+                n = t.raw_name if strip else t.name
+                if n == name:
+                    return {"name":         n,
+                            "description":  t.description or "",
+                            "input_schema": t.input_schema}
+        return {"error": f"tool {name!r} not found in any connected "
+                         "MCP server"}
 
     @mcp.tool()
     def search_bioconda(query: str) -> dict:
@@ -82,7 +203,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                            archetype: Literal["library", "cli", "r_package",
                                               "mcp_server", "pipeline"] | None = None,
                            channel: str | None = None,
-                           source: Literal["cran", "bioconductor", "github"] | None = None,
+                           source: Literal["pypi", "bioconda", "cran",
+                                            "bioconductor", "github"] | None = None,
                            package: str | None = None,
                            library: str | None = None,
                            ref: str | None = None,
@@ -161,8 +283,17 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def lookup_sra_runinfo(accession: str,
                            aba_ctx_id: str | None = None) -> dict:
-        """Look up SRA / GEO / ENA run info for an accession before
-        downloading."""
+        """Look up SRA / ENA run info for an accession before
+        downloading. Accepts SRA/ENA accession types ONLY:
+
+          - run:     SRR…, ERR…, DRR…
+          - study:   SRP…, ERP…, DRP…
+          - project: PRJNA…, PRJEB…, PRJDB…
+          - sample:  SRS…, SAMN…
+
+        This tool does NOT handle GEO accessions (GSE…, GSM…). For
+        GEO use `search_skills(query="GEO")` then
+        `Skill(skill="fetch-geo-processed-matrices", args="<GSE…>")`."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import lookup_sra_runinfo as _impl
         return _impl({"accession": accession}, peek_ctx(aba_ctx_id))
