@@ -1,0 +1,35 @@
+/* SpecPicker: compact inline selector. Matches the thread-brief row
+ * density (small label + bordered control, no large vertical bumps). */
+
+.spec-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted, #5a6270);
+}
+
+.spec-picker__label {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.spec-picker__select {
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: #fff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.spec-picker__select:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.34);
+}
+
+.spec-picker__select:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
