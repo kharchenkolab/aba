@@ -264,6 +264,7 @@ async def stream_response(
     retry: bool = False,
     plan_entity_id: str | None = None,
     run_id: str | None = None,
+    spec_override: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Append user message to the workspace thread, run the Guide loop, yield
@@ -303,9 +304,30 @@ async def stream_response(
     # declares the model + role + halt/streaming flags. Full loop-body
     # extraction into Agent.run() is deferred; for now the spec is
     # consulted for model + role only, while the loop body stays here.
-    from core.runtime.agent import get_agent_spec
+    from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
     from core.config import current_model_for_primary
-    spec = get_agent_spec("guide")
+    # Resolution precedence is encoded in resolve_spec_for_turn():
+    #   request_override → thread.metadata.spec → ABA_PRIMARY_SPEC env →
+    #   "guide" default
+    # Look up the thread's pinned spec only if a real thread id was
+    # passed; "default" is a sentinel the chat handler may not have
+    # materialized yet, and we don't want to introduce side effects
+    # here.
+    thread_spec: str | None = None
+    if thread_id and thread_id != "default":
+        try:
+            from core.graph.threads import get_thread_spec
+            thread_spec = get_thread_spec(thread_id)
+        except Exception:                                    # noqa: BLE001
+            thread_spec = None
+    spec_name = resolve_spec_for_turn(
+        request_override=spec_override, thread_spec=thread_spec)
+    spec = get_agent_spec(spec_name)
+    if spec is None and spec_name != "guide":
+        print(f"[guide] WARNING: spec={spec_name!r} "
+              f"is not registered; falling back to 'guide'", flush=True)
+        spec_name = "guide"
+        spec = get_agent_spec(spec_name)
     # Resolve the primary model AT THE TURN BOUNDARY (not import time) so
     # the tray / Control-page model selector takes effect on the next turn
     # without a backend restart. Precedence: live env vars > config.env >
@@ -321,7 +343,7 @@ async def stream_response(
         run_id=run_id or gen_run_id(),
         session_id=session_id,
         turn_index=0,
-        agent_spec_name="guide",
+        agent_spec_name=spec_name,
         state=TurnState.GENERATING,
         focus_entity_id=focus_entity_id,
         thread_id=thread_id,
@@ -485,9 +507,31 @@ async def stream_response(
     active_tools = [t for t in _tools_all if t["name"] not in disabled]
     # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
     # Empty when no MCP server is configured/connected.
+    #
+    # Lean spec optimization (2026-06-20): when prompt_mode == "lean" we
+    # ask the gateway to render compact descriptions (first-paragraph
+    # 1-liners) for all tools EXCEPT the priority set. The agent can
+    # call any tool — only the catalog prefix shrinks. The priority
+    # set lives HERE (not in YAML) because membership is a runtime
+    # tuning concern, not a spec-author concern: the right list is
+    # whichever tools are most often called per turn, which we adjust
+    # as we learn from real sessions.
+    lean_catalog = bool(spec and spec.prompt_mode in ("lean", "lean_small",
+                                                       "standard"))
+    _PRIORITY_TOOLS: tuple[str, ...] = (
+        "run_python", "run_r",
+        "Skill", "search_skills",
+        "present_plan", "ask_clarification",
+        "register_dataset", "list_data_files", "find_files",
+        "ensure_capability", "describe_tool",
+    )
     try:
         from core.runtime.mcp import list_tools as mcp_list_tools
-        active_tools.extend(t for t in mcp_list_tools() if t["name"] not in disabled)
+        mcp_tools = mcp_list_tools(
+            compact=lean_catalog,
+            priority_tools=(_PRIORITY_TOOLS if lean_catalog else ()),
+        )
+        active_tools.extend(t for t in mcp_tools if t["name"] not in disabled)
     except Exception:  # noqa: BLE001
         pass    # gateway failure must never block normal tool dispatch
     if spec is not None:
@@ -524,8 +568,17 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
+    import time as _time
+    _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
+    _t_prompt_begin = _time.perf_counter()
     stable_sys, dynamic_sys = _prompts["system"](
-        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx)
+        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
+        mode=(spec.prompt_mode if spec else "full"))
+    _t_prompt_done = _time.perf_counter()
+    if _debug_timing:
+        print(f"[guide-timing] prompt_assembly={(_t_prompt_done-_t_prompt_begin)*1000:.0f}ms "
+              f"sys_chars={len(stable_sys or '') + len(dynamic_sys or '')}",
+              flush=True)
     # CC-convergence Phase 4 (cache split): system is sent as TWO blocks at the
     # transport layer — the stable prefix (cache_control: ephemeral) plus the
     # uncached dynamic tail (the BM25 recipes slice). Per-turn intent changes
@@ -537,9 +590,20 @@ async def stream_response(
     # skips planning when recipes sit next to the user request). The helpers
     # stay in the codebase for the future user-invocable verb palette (Phase 5).
     recipes_reminder = ""
-    _dump_turn_context(turn.run_id, user_text=user_text, system=system, history=history,
-                       active_tools=active_tools, model=guide_model, thread_id=store_tid,
-                       focus_entity_id=focus_entity_id)
+    # Per-turn discovery reminder (lean_small / Qwen3-class only). Empty
+    # for every other mode. Rides next to the user message via the same
+    # splice path as recipes_reminder — Qwen3's documented recency bias
+    # makes this position particularly salient.
+    discovery_reminder = _prompts["discovery_reminder"](
+        spec.prompt_mode if spec else "full",
+        user_text or "")
+    # NOTE: the dump moved INTO the loop (below, gated on `_ctx_dumped`)
+    # so it captures the POST-effective_history view — the actual
+    # message list the LLM sees, not the raw pre-Tier-2 history. The
+    # pre-fix endpoint silently misled debugging (prj_a6f40e94
+    # 2026-06-19: dev tab showed 42 unsummarized msgs while the model
+    # was actually receiving the Tier-2-collapsed 7-msg version).
+    _ctx_dumped = False
     entity_id = WORKSPACE_ID
     focus_type = focus_ent["type"] if focus_ent else None
 
@@ -598,14 +662,37 @@ async def stream_response(
             # running. The summarize call itself remains sync internally —
             # only the wait is moved off the loop.
             llm_history = _ensure_tool_pair_completeness(
-                await asyncio.to_thread(effective_history, store_tid, history)
+                await asyncio.to_thread(
+                    effective_history, store_tid, history,
+                    (spec.summary_budget_chars if spec else None),
+                    (spec.summary_tail_keep    if spec else None),
+                )
             )
+            # Dump the EFFECTIVE context (post-Tier-1 prune + Tier-2
+            # summary substitution) once per turn. Earlier code dumped
+            # the raw `history` before this point, which silently
+            # misled debugging — see the note above where the flag is
+            # initialized.
+            if not _ctx_dumped:
+                _dump_turn_context(turn.run_id,
+                                   user_text=user_text, system=system,
+                                   history=llm_history,
+                                   active_tools=active_tools,
+                                   model=guide_model, thread_id=store_tid,
+                                   focus_entity_id=focus_entity_id)
+                _ctx_dumped = True
             # CC-convergence Phase 4: prepend the recipes catalog as a
             # <system-reminder> on the latest user-text message. The splice is a
             # no-op when the latest message is a tool_result (in-progress agent
             # loop) — the catalog was already presented on the first iteration
             # of this turn.
-            llm_history = _splice_recipes_reminder(llm_history, recipes_reminder)
+            # Discovery reminder rides next to the user message via the
+            # same splice path. Concatenating preserves order: discovery
+            # first (highest recency salience), then any recipes_reminder
+            # that may be re-enabled later.
+            _combined_reminder = (discovery_reminder + "\n\n"
+                                  + recipes_reminder).strip()
+            llm_history = _splice_recipes_reminder(llm_history, _combined_reminder)
             # Compact pre-send fingerprint — matched by `[llm-sent]` printed in
             # core/llm.py at the moment the stream opens. If they agree:
             # what guide.py prepared == what hit the API. If they differ:
@@ -844,8 +931,19 @@ async def stream_response(
                 cancel=cancel_token,
             )
 
+            _t_iter_begin = _time.perf_counter()
+            _t_first_delta: float | None = None
+            _t_first_tool:  float | None = None
             async for ev in _runtime.run_turn(_req, _tool_executor,
                                                halt_on_tools=frozenset()):
+                if _debug_timing and _t_first_delta is None and isinstance(ev, TextDelta):
+                    _t_first_delta = _time.perf_counter()
+                    print(f"[guide-timing] iter_TTFT={(_t_first_delta-_t_iter_begin)*1000:.0f}ms",
+                          flush=True)
+                if _debug_timing and _t_first_tool is None and isinstance(ev, ToolUseStart):
+                    _t_first_tool = _time.perf_counter()
+                    print(f"[guide-timing] iter_TTFTool={(_t_first_tool-_t_iter_begin)*1000:.0f}ms",
+                          flush=True)
                 # Capture tool_use_id → input/name for progress event
                 # translation (which only has tool_use_id).
                 if hasattr(ev, "tool_use_id"):

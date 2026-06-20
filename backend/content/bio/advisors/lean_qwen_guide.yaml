@@ -1,0 +1,56 @@
+name: lean_qwen_guide
+role: primary
+# Small-model variant of the Guide, tuned for Qwen3-30B-A3B (and
+# similar open-source instruct models served via vLLM). Same role +
+# halt behavior + functional reach as lean_guide, but the system
+# prompt is shrunk further to compensate for these models' weaker
+# instruction-following under long context.
+#
+# Derived from the H7 / H8 OODA runs against Qwen3-30B 2026-06-20:
+#   - The lean_guide prompt scores 1/7 on the discovery flow (P3:
+#     search_skills → Skill) on Qwen3-30B. Same prompt scores 7/7 on
+#     Claude — so it's a small-model issue, not a logic issue.
+#   - The single biggest move (+4) is an explicit "search_skills FIRST,
+#     then Skill" directive at the top of the behavior block. Bundled
+#     into prompt_mode=lean_small via _H5_DISCOVERY_DIRECTIVE.
+#   - The second biggest move (+2) is dropping the `skills_core`
+#     block. That block declares Core recipes by name — on Qwen3 it
+#     fights the directive (two conflicting "how do I reach a recipe"
+#     paths). Anthropic doesn't get confused. lean_small drops it.
+#   - The third move (+2 on the same scenarios — likely the same
+#     ceiling effect, but worth noting) is dropping `conventions`
+#     (file-naming + plot-DPI guidance). Unrelated to tool use, yet
+#     its presence still dilutes the directive — classic softmax
+#     attention-dilution. lean_small drops it.
+# After all three: discovery converges at 6-7/7 on Qwen3 with no
+# tool-result framing tricks. See _LEAN_SMALL_DROP in
+# content/bio/prompts/build.py.
+#
+# Selected via env override: `export ABA_PRIMARY_SPEC=lean_qwen_guide`
+# or per-thread via the chat header's "Backend" dropdown.
+#
+# NB: ANTHROPIC IS UNAFFECTED. Selecting this spec only changes the
+# system prompt; the Anthropic-served `lean_guide` and `guide` specs
+# render their original (richer) prompts as before.
+model: qwen3-30b
+system_prompt: ../prompts/identity.md
+manifest_role: primary
+# `prompt_mode: lean_small` does three things on top of `lean`:
+#   (a) build_system also drops `skills_core` + `conventions` (the
+#       interferers identified in H8). See _LEAN_SMALL_DROP.
+#   (b) _behavior_block prepends _H5_DISCOVERY_DIRECTIVE — the
+#       explicit "search_skills FIRST → Skill" decision-tree with
+#       a few-shot example. Built-in for this mode (does not
+#       require ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE).
+#   (c) Catalog rendering follows the same compact policy as `lean`.
+prompt_mode: lean_small
+# Full reach — all tools visible to the model.
+tool_allowlist: ['*']
+# Same budget as lean_guide. Small models don't benefit from a
+# larger summarization budget; if anything they suffer more.
+summary_budget_chars: 25000
+summary_tail_keep: 6
+streaming: true
+halts_allowed: true
+max_iterations: 20
+timeout_s: 300

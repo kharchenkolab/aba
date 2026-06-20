@@ -36,6 +36,49 @@ _INTENT: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_intent
 # agent declared on `present_plan.steps[].skill` in earlier turns) without changing
 # every block's render signature.
 _THREAD_ID: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_thread_id", default="")
+# Per-assembly "mode": "full" (default) reproduces today's prompt exactly;
+# "lean" drops a hard-coded subset of heavy/dynamic blocks and forces
+# behavior_slim.md. Set by build_system() at entry, consulted by blocks
+# whose membership or render depends on the mode (see _LEAN_DROP and
+# _behavior_block). Plumbed via a ContextVar (not a parameter) so we
+# don't have to extend every _Block.render(tools) signature.
+_MODE: contextvars.ContextVar[str] = contextvars.ContextVar("aba_prompt_mode", default="full")
+# Block names dropped when mode == "lean". Justification:
+#   skills_recipes   — BM25 catalog of 255 recipes; the only dynamic
+#                      block. The agent can fetch a recipe on demand
+#                      via Skill(skill=...).
+#   recipe_arm       — eval-only, empty for control.
+#   highlighting     — gated to figure-focus turns only; cheap to
+#                      drop entirely when the lean agent rarely takes
+#                      highlight actions.
+#   data_orientation — env-knob already exists; lean folds it in.
+#
+# DO NOT add `declared_recipes` here. That block pins the "Most-
+# relevant recipe — key rules + expected outputs" card per skill the
+# agent declared on present_plan, surviving Tier-2 summarization.
+# Without it, when Tier-2 fires after the agent has fetched the
+# recipe body via Skill, the recipe's thresholds/gotchas/done-
+# criteria fold into "Invoked skill X" and the agent drifts. Observed
+# in prj_1141348f 2026-06-19: 38,894-char recipe body summarized to
+# "Invoked fetch-geo-…" with no rules retained → agent kept the step
+# titles but lost the parameter choices the recipe specified.
+_LEAN_DROP = frozenset({"skills_recipes", "recipe_arm",
+                        "highlighting", "data_orientation"})
+
+# Small-model variant ("lean_small" mode): on top of _LEAN_DROP, also
+# drop blocks empirically shown to interfere with — or merely dilute —
+# small-model tool-dispatch discipline. Established by the H8 block
+# ablation against Qwen3-30B-A3B 2026-06-20:
+#   - skills_core:   declares recipes by name → contradicts the
+#                    "search_skills FIRST" discovery directive
+#                    (split-brain on which path to take).
+#   - conventions:   file-naming + plot-DPI guidance, unrelated to
+#                    tool use, but its presence still moved P3 from
+#                    5/7 → 7/7 when ablated — classic softmax
+#                    attention-dilution signature.
+# Anthropic / regular spec is unaffected; this only fires for specs
+# that opt in via `prompt_mode: lean_small`.
+_LEAN_SMALL_DROP = _LEAN_DROP | frozenset({"skills_core", "conventions"})
 
 
 @lru_cache(maxsize=None)
@@ -211,8 +254,125 @@ def _is_nonneg() -> bool:
     return _current_arm() == "nonneg"
 
 
+_H5_DISCOVERY_DIRECTIVE = """\
+## Recipe discovery + execution flow
+
+When the user's request matches a possible recipe (data fetch, QC,
+clustering, integration, DE, PDF extract, primer design, …):
+
+  1. `search_skills(query="<short intent phrase>")` — FIRST.
+  2. Look at the returned `skills[*]` list. Pick the most relevant.
+  3. `Skill(skill="<that name>", args="<args if any>")` —
+     IMMEDIATELY after, same turn. This LOADS the recipe body
+     into your history; the recipe is now your reference.
+  4. `run_python` (or `run_r`) with the code from the recipe body —
+     this is where the work actually happens. You only call `Skill`
+     ONCE per task; do not re-load the same recipe.
+
+Do NOT skip step 1 and try to remember a recipe name yourself.
+Do NOT stop after step 1 to narrate what you found.
+Do NOT switch to `run_python` before reading the recipe body (step 3).
+
+### When a `run_python` / `run_r` background job FAILED
+
+You will see a `[continuation: background job ... FAILED]` user
+message with a traceback. The recipe is still loaded in your
+history. Your next action is DEBUGGING, not re-discovery:
+
+  - Read the traceback. Identify the line and error type
+    (NameError, ImportError, KeyError, ValueError, …).
+  - Fix the offending code — add the missing import, correct the
+    argument, rename the variable. Stdlib imports (`re`, `os`,
+    `json`, `subprocess`, `time`, …) are very common slip-ups;
+    if the traceback says `name 'X' is not defined`, the fix is
+    usually `import X` at the top of your next `run_python`.
+  - Submit the corrected code via a new `run_python` call.
+
+Do NOT call `search_skills` or `Skill` again on a job failure —
+the failure is a code bug, not a wrong-recipe problem. Restarting
+discovery is the most common cycling failure mode and produces no
+new information.
+
+Examples (the SHAPE is the rule, not the specific names):
+
+  User: "help me fetch matrices for GSE192391"
+    → search_skills(query="fetch GEO data")
+    → Skill(skill="fetch-geo-processed-matrices", args="GSE192391")
+    → run_python(code=<recipe code, adapted to GSE192391>)
+
+  Continuation: "[... FAILED] Error: NameError: name 're' is not defined"
+    → run_python(code=<same code, with `import re` added at top>)
+
+  User: "design PCR primers"
+    → search_skills(query="primer design")
+    → Skill(skill="design-primer")
+    → run_python(code=<recipe code>)
+"""
+
+
 def _behavior_block(_tools: list[dict]) -> str:
-    return _prompt("behavior_slim.md" if _is_nonneg() else "behavior.md")
+    # Lean mode forces the slim variant regardless of arm. The `mode`
+    # signal is plumbed via a ContextVar so we don't have to thread it
+    # through every block's render(tools) signature.
+    current_mode = _MODE.get("full")
+    if current_mode in ("lean", "lean_small"):
+        body = _prompt("behavior_slim.md")
+    else:
+        body = _prompt("behavior_slim.md" if _is_nonneg()
+                       else "behavior.md")
+    return body
+
+
+def _discovery_directive_block(_tools: list[dict]) -> str:
+    """Top-of-prompt anchor for the search_skills → Skill flow.
+
+    Promoted out of `_behavior_block` 2026-06-20 to ride the "critical
+    info at the start or end" principle from the 'lost in the middle'
+    long-context literature. Within `_BLOCKS` we position this right
+    after identity/bundle_overlay so it sits at position 2-3 in the
+    assembled system prompt — as early as we can get it without
+    displacing the model's role framing."""
+    import os as _os
+    current_mode = _MODE.get("full")
+    if (current_mode == "lean_small"
+            or _os.environ.get("ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE")):
+        return _H5_DISCOVERY_DIRECTIVE
+    return ""
+
+
+def build_discovery_reminder(mode: str, user_text: str = "") -> str:
+    """Per-turn discovery reminder — a tight one-paragraph anchor that
+    rides next to the user's latest message via splice_recipes_reminder.
+
+    Returns "" except in `lean_small` mode. Leverages Qwen3's recency
+    bias: the model is documented to follow the most recent instruction
+    in multi-turn conversations, so a short directive adjacent to the
+    user message has high effective attention weight even when the
+    system prompt is long. Pairs with the system-prompt-level
+    `discovery_directive` block — same content, different positions.
+
+    Suppressed on background-job-failed continuations (prj_3aa75c1f
+    2026-06-20): those arrive as `role:"user"` text starting with
+    `[continuation:` and aren't fresh discovery turns — they're
+    error-recovery turns where the right next action is debugging
+    the failed code, NOT restarting from search_skills.
+    """
+    if mode != "lean_small":
+        return ""
+    if user_text.lstrip().startswith("[continuation:"):
+        return ""
+    return (
+        "<system-reminder>\n"
+        "Discovery flow this turn: if the user's request could match "
+        "a recipe (data fetch, QC, clustering, integration, DE, PDF "
+        "extract, primer design, …), your FIRST tool call is "
+        "`search_skills(query=\"<intent>\")`, your SECOND is "
+        "`Skill(skill=\"<name from the search result>\", args=\"…\")`, "
+        "and your THIRD is `run_python` (or `run_r`) with the code "
+        "from the recipe body. Do not call `Skill` twice for the same "
+        "task.\n"
+        "</system-reminder>"
+    )
 
 
 def _split_sections(body: str) -> list[tuple[str, str]]:
@@ -330,12 +490,22 @@ def _highlight_relevant(c: dict) -> bool:
 
 def _has_declared_recipes(c: dict) -> bool:
     """Render the declared-recipes block only when the agent has named >=1 recipe
-    on a present_plan step.skill field in this thread."""
+    on a present_plan step.skill field in this thread.
+
+    Cache-miss recovery: if `_THREAD_DECLARED_RECIPES` is empty for this
+    thread (server bounce wiped the in-process cache, or another
+    advisor process is asking), rehydrate from the durable plan entity.
+    Without this, every restart silently drops the recipe-rules card
+    that anchors a long thread to the recipe's gotchas (prj_1141348f
+    2026-06-19)."""
     tid = str(c.get("thread_id") or "")
     if not tid: return False
     try:
-        from content.bio.tools import _THREAD_DECLARED_RECIPES
-        return bool(_THREAD_DECLARED_RECIPES.get(tid))
+        from content.bio.tools import (_THREAD_DECLARED_RECIPES,
+                                        rehydrate_declared_recipes)
+        if _THREAD_DECLARED_RECIPES.get(tid):
+            return True
+        return bool(rehydrate_declared_recipes(tid))
     except Exception:
         return False
 
@@ -345,16 +515,24 @@ def _declared_recipes_block(active_tools: list[dict]) -> str:
     fields, each LABELED with the specific plan step(s) that declared it
     (#324 Phase 3 — step-labeled). The label says e.g. "for step 4 (DESeq2…)
     — use `deseq2-r`" so the agent can't leak APIs across steps. Agent-driven:
-    if the agent didn't bind a recipe to a step, none is pushed."""
+    if the agent didn't bind a recipe to a step, none is pushed.
+
+    LEAN MODE: dump the GOTCHAS card per recipe (~1.6k chars each) instead
+    of the full body (~30-40k each). The full-mode dump explodes the system
+    budget for any recipe-bound thread; in lean we keep just the
+    rules/caveats/produces-list anchor so the agent stays on-recipe through
+    Tier-2 collapses without paying for the full procedure twice. The full
+    procedure is still fetch-able via `Skill(skill="…")`."""
     tid = _THREAD_ID.get() or ""
     if not tid: return ""
     try:
-        from content.bio.tools import _THREAD_DECLARED_RECIPES
+        from content.bio.tools import _THREAD_DECLARED_RECIPES, rehydrate_declared_recipes
         from core.skills import get_skill
     except Exception:
         return ""
-    bindings = _THREAD_DECLARED_RECIPES.get(tid) or []
+    bindings = _THREAD_DECLARED_RECIPES.get(tid) or rehydrate_declared_recipes(tid)
     if not bindings: return ""
+    lean_mode = _MODE.get("full") in ("lean", "lean_small")
     # Group steps by recipe so each recipe body appears once, listing all
     # bound steps. Preserve first-mention order across the plan.
     by_recipe: dict[str, list[tuple[int, str]]] = {}
@@ -366,14 +544,27 @@ def _declared_recipes_block(active_tools: list[dict]) -> str:
     parts: list[str] = ["## Recipes you declared in your plan — bound to specific steps"]
     for rn in order:
         spec = get_skill(rn)
-        body = getattr(spec, "body", None) if spec else None
-        if not body: continue
+        if not spec: continue
+        body = getattr(spec, "body", None)
         slots = by_recipe[rn]
         labels = ", ".join(f"step {i}" + (f" ({t[:60]})" if t else "") for i, t in slots)
-        parts.append(
-            f"\n### `{rn}` — declared for: {labels}\n"
-            f"Apply this recipe's APIs and ordering ONLY for the listed step(s); "
-            f"other steps may use a different recipe or none.\n\n{body}")
+        if lean_mode:
+            # GOTCHAS slice only — preserves the recipe's rules /
+            # caveats / "Done = produce" anchor without the full
+            # procedure body.
+            card = _gotchas_card(spec)
+            if not card: continue
+            parts.append(
+                f"\n### `{rn}` — declared for: {labels}\n"
+                f"Apply this recipe's rules + done-criteria for the listed "
+                f"step(s); fetch the full procedure with "
+                f"`Skill(skill=\"{rn}\")` if you need API specifics.\n\n{card}")
+        else:
+            if not body: continue
+            parts.append(
+                f"\n### `{rn}` — declared for: {labels}\n"
+                f"Apply this recipe's APIs and ordering ONLY for the listed step(s); "
+                f"other steps may use a different recipe or none.\n\n{body}")
     if len(parts) == 1: return ""   # nothing resolved → don't emit the header
     parts.append("\nIf a step actually needs a different recipe than you bound to it, "
                  "present a revised plan rather than coding around the binding.")
@@ -387,6 +578,11 @@ _BLOCKS: tuple[_Block, ...] = (
     # the live prompt is byte-identical with pre-bundle behavior until a
     # site.yaml / ABA_*_BUNDLE env var puts a bundle in front of the loader.
     _Block("bundle_overlay", None, None, _bundle_overlay),
+    # Top-of-prompt anchor for the discovery flow (lean_small / Qwen3-class).
+    # Empty for every other mode. Renders right after identity to ride the
+    # "critical info at the start" finding from the long-context literature.
+    _Block("discovery_directive", frozenset({"primary"}), None,
+           _discovery_directive_block),
     # Non-negotiables (integrity invariants) — 'nonneg' arm only; isolated + salient
     # at the top so they don't compete with the operational wall. control = no-op.
     _Block("nonnegotiables", frozenset({"primary"}), None, _md("nonnegotiables.md"),
@@ -435,7 +631,8 @@ _BLOCKS: tuple[_Block, ...] = (
 
 
 def build_system(active_tools: list[dict], role: str = "primary", intent: str = "",
-                 ctx: Optional[dict] = None) -> tuple[str, str]:
+                 ctx: Optional[dict] = None,
+                 mode: str = "full") -> tuple[str, str]:
     """Assemble a role-appropriate system prompt as TWO cache blocks
     (CC-convergence Phase 4 cache split):
 
@@ -454,14 +651,40 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
     Backward-compat: legacy callers that did `system = build_system(...)` (one
     string) now get a tuple; either join it with "\\n\\n" or pass both to the
     transport layer as a 2-block system."""
-    token = _INTENT.set(intent or "")
-    ctx = ctx or {}
+    if mode not in ("full", "standard", "lean", "lean_small"):
+        raise ValueError(f"build_system: mode={mode!r} must be 'full', "
+                         "'standard', 'lean', or 'lean_small'")
+    token     = _INTENT.set(intent or "")
+    ctx       = ctx or {}
     tid_token = _THREAD_ID.set(str(ctx.get("thread_id") or ""))
+    mode_tok  = _MODE.set(mode)
     try:
         names = {t["name"] for t in active_tools}
+        # Env-gated block ablation (kept for ad-hoc experiments).
+        # Comma-separated block names to drop on top of the mode's
+        # built-in drops.
+        _ablate = {n.strip() for n in
+                   (os.environ.get("ABA_EXPERIMENTAL_ABLATE_BLOCKS") or "")
+                   .split(",") if n.strip()}
+        # Pick the mode-specific drop set.
+        #   - lean_small: lean's drops + skills_core + conventions
+        #   - lean:       static drops only (heavy/dynamic blocks)
+        #   - standard:   no drops; behavior.md (full); compact catalog
+        #                 (the catalog-prefix policy is decided in guide.py)
+        #   - full:       no drops; behavior.md; non-compact catalog
+        if mode == "lean_small":
+            _mode_drops = _LEAN_SMALL_DROP
+        elif mode == "lean":
+            _mode_drops = _LEAN_DROP
+        else:
+            _mode_drops = frozenset()
         stable_parts: list[str] = []
         dynamic_parts: list[str] = []
         for blk in _BLOCKS:
+            if blk.name in _mode_drops:
+                continue
+            if blk.name in _ablate:
+                continue
             if blk.roles is not None and role not in blk.roles:
                 continue
             if blk.required_tool is not None and blk.required_tool not in names:
@@ -476,3 +699,4 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
     finally:
         _INTENT.reset(token)
         _THREAD_ID.reset(tid_token)
+        _MODE.reset(mode_tok)

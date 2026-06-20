@@ -36,10 +36,48 @@ class AgentSpec:
     #   "direct" (default) — DirectAPIRuntime; raw anthropic.messages.stream
     #   "sdk"               — AgentSDKRuntime; claude_agent_sdk wrapper
     #   "fake"              — FakeRuntime; scripted JSONL replay (eval/tests)
+    #   "openai"            — OpenAICompatibleRuntime; any OpenAI-shape
+    #                          Chat Completions endpoint. Today's target
+    #                          is a self-hosted vLLM serving Qwen3-8B at
+    #                          ABA_OPENAI_BASE_URL (default
+    #                          http://localhost:8001/v1).
     # Existing specs default to "direct" so this field is backwards-
     # compatible with the per-spec YAMLs. The env var ABA_FAKE_SESSION
     # still globally forces "fake" — same kill-switch as before.
+    # ABA_RUNTIME_OVERRIDE can flip the choice per process.
     runtime:          str = "direct"
+    # Prompt-assembly mode passed to bio/prompts/build.py:build_system.
+    #   "full"  (default) — every applicable _Block renders; behavior.md
+    #                       full-length. ~30k chars / ~7.7k tokens for the
+    #                       primary today. Identical to pre-lean behavior.
+    #   "lean"            — drops the heavy/dynamic blocks (skills_recipes
+    #                       BM25 catalog, recipe_arm, declared_recipes,
+    #                       highlighting, data_orientation) and swaps
+    #                       behavior.md → behavior_slim.md. Paired with a
+    #                       tight tool_allowlist this brings the static
+    #                       primary prompt + tools list below 10k tokens —
+    #                       the budget for small-context backends like a
+    #                       40,960-token Qwen3-8B vLLM.
+    prompt_mode:      str = "full"
+    # Per-spec history-summary budget (Tier-2 trigger threshold in CHARACTERS).
+    # None ⇒ fall through to the global HISTORY_SUMMARY_THRESHOLD_CHARS
+    # default (~400k, matches Claude Code's autoCompactWindow).
+    # Lean specs targeting small-context backends set this much lower
+    # (~25k chars / ~6k tokens) so the LLM-synthesized neutral-voice
+    # summary fires within the 40k vLLM window. Without this, the
+    # default never triggers and history grows unbounded until the API
+    # truncates.
+    summary_budget_chars: Optional[int] = None
+    # Tier-2 also has a TAIL_KEEP guard: it won't summarize if
+    # len(messages) <= summary_tail_keep + 2 (need enough head to
+    # justify collapsing). Default 20 was calibrated for the global
+    # 400k-char budget; under lean's 25k budget you'd need 23+
+    # messages before Tier-2 even tries — which a short lean session
+    # never reaches. Lean overrides this to ~6 so the trigger gate
+    # is governed by the budget alone, not the message count.
+    # None ⇒ fall through to the global TAIL_KEEP default in
+    # core.summarize.budget_summary.
+    summary_tail_keep:    Optional[int] = None
 
 
 def _resolve_prompt(prompt_field: str, anchor_dir: Path) -> str:
@@ -79,10 +117,16 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
         print(f"[agent-spec] {raw.get('name','?')} (primary): model={model} ({src}, yaml={yaml_model})",
               flush=True)
     runtime = (raw.get("runtime") or "direct").strip()
-    if runtime not in ("direct", "sdk", "fake"):
+    if runtime not in ("direct", "sdk", "fake", "openai"):
         raise ValueError(
             f"AgentSpec {raw.get('name','?')!r}: runtime={runtime!r} must "
-            "be one of: direct, sdk, fake"
+            "be one of: direct, sdk, fake, openai"
+        )
+    prompt_mode = (raw.get("prompt_mode") or "full").strip()
+    if prompt_mode not in ("full", "standard", "lean", "lean_small"):
+        raise ValueError(
+            f"AgentSpec {raw.get('name','?')!r}: prompt_mode={prompt_mode!r}"
+            " must be one of: full, standard, lean, lean_small"
         )
     return AgentSpec(
         name=raw["name"],
@@ -97,6 +141,13 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
         timeout_s=int(raw.get("timeout_s", 60)),
         fake_text=raw.get("fake_text"),
         runtime=runtime,
+        prompt_mode=prompt_mode,
+        summary_budget_chars=(int(raw["summary_budget_chars"])
+                              if raw.get("summary_budget_chars") is not None
+                              else None),
+        summary_tail_keep=(int(raw["summary_tail_keep"])
+                           if raw.get("summary_tail_keep") is not None
+                           else None),
     )
 
 
@@ -107,8 +158,9 @@ def make_runtime(spec: AgentSpec):
       1. env var ABA_FAKE_SESSION (any truthy value) → FakeRuntime,
          regardless of spec. Same global override as the legacy
          core.llm.make_open_stream() path.
-      2. env var ABA_RUNTIME_OVERRIDE (one of direct/sdk/fake) → that
-         runtime, regardless of spec. For per-process A/B testing.
+      2. env var ABA_RUNTIME_OVERRIDE (one of direct/sdk/fake/openai)
+         → that runtime, regardless of spec. For per-process A/B
+         testing.
       3. spec.runtime field (default "direct").
 
     Returns an instance implementing the LLMRuntime protocol. Lazy
@@ -130,6 +182,9 @@ def make_runtime(spec: AgentSpec):
     if chosen == "fake":
         from core.runtime.llm_runtime_fake import FakeRuntime
         return FakeRuntime()
+    if chosen == "openai":
+        from core.runtime.llm_runtime_openai import OpenAICompatibleRuntime
+        return OpenAICompatibleRuntime()
     raise ValueError(f"unknown runtime: {chosen!r}")
 
 
@@ -147,6 +202,48 @@ def get_agent_spec(name: str) -> Optional[AgentSpec]:
 
 def list_agent_specs() -> list[str]:
     return sorted(_SPECS)
+
+
+def resolve_primary_spec_name() -> str:
+    """Pick the primary-agent spec from process-wide signals only.
+
+    Precedence (lowest → highest):
+      1. "guide" — the historical default
+      2. ABA_PRIMARY_SPEC env var, e.g. "lean_guide"
+
+    Resolved fresh per call so the tray or a `~/.aba/config.env`
+    update takes effect on the next turn without a restart. If the
+    env names an unregistered spec, returns it anyway; callers
+    handle the None lookup and decide whether to fall back or fail.
+
+    For the full per-turn chain (request override → thread pin → env
+    → default) see resolve_spec_for_turn() below.
+    """
+    import os
+    return (os.environ.get("ABA_PRIMARY_SPEC") or "").strip() or "guide"
+
+
+def resolve_spec_for_turn(*, request_override: Optional[str] = None,
+                          thread_spec: Optional[str] = None) -> str:
+    """Pick the primary spec for ONE turn.
+
+    Precedence (highest → lowest):
+      1. request_override   — ChatRequest.spec, when set explicitly
+                              (e.g. admin tool, new-chat dialog)
+      2. thread_spec        — thread.metadata.spec, pinned at thread
+                              creation or via a later /thread settings
+                              edit
+      3. resolve_primary_spec_name() — env var ABA_PRIMARY_SPEC, or
+                              the "guide" default
+
+    Empty strings and whitespace are treated as "unset", so a UI that
+    clears its dropdown to `""` falls through correctly. Returns a
+    name — callers do get_agent_spec(name) and handle the None case.
+    """
+    for candidate in (request_override, thread_spec):
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return resolve_primary_spec_name()
 
 
 def filter_tools_by_allowlist(tools: list[dict], allowlist: tuple[str, ...]) -> list[dict]:
