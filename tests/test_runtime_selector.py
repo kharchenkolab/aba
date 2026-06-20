@@ -136,3 +136,56 @@ def test_load_agent_spec_rejects_unknown(tmp_path: Path):
     """))
     with pytest.raises(ValueError, match="runtime="):
         load_agent_spec(yml)
+
+
+# ── L1.3 — OpenAICompatibleRuntime branch ──────────────────────────
+def test_load_agent_spec_accepts_openai_runtime(tmp_path: Path):
+    yml = tmp_path / "agent.yaml"
+    yml.write_text(textwrap.dedent("""\
+        name: test_agent
+        role: primary
+        model: qwen3-8b
+        system_prompt: hi
+        manifest_role: test
+        runtime: openai
+    """))
+    spec = load_agent_spec(yml)
+    assert spec.runtime == "openai"
+
+
+def test_make_runtime_openai_branch():
+    """spec.runtime='openai' → returns an OpenAICompatibleRuntime."""
+    from core.runtime.llm_runtime_openai import OpenAICompatibleRuntime
+    os.environ.pop("ABA_FAKE_SESSION", None)
+    os.environ.pop("ABA_RUNTIME_OVERRIDE", None)
+    rt = make_runtime(_spec("openai"))
+    assert isinstance(rt, OpenAICompatibleRuntime)
+
+
+def test_runtime_override_to_openai():
+    """ABA_RUNTIME_OVERRIDE=openai flips a direct-spec into OpenAI mode
+    without touching the YAML — the per-process A/B knob."""
+    from core.runtime.llm_runtime_openai import OpenAICompatibleRuntime
+    os.environ.pop("ABA_FAKE_SESSION", None)
+    os.environ["ABA_RUNTIME_OVERRIDE"] = "openai"
+    try:
+        rt = make_runtime(_spec("direct"))
+        assert isinstance(rt, OpenAICompatibleRuntime)
+    finally:
+        del os.environ["ABA_RUNTIME_OVERRIDE"]
+
+
+def test_error_message_lists_openai_in_valid_set(tmp_path: Path):
+    """An invalid `runtime:` value's error message should now list
+    'openai' as a valid choice — so a typo points to the right fix."""
+    yml = tmp_path / "agent.yaml"
+    yml.write_text(textwrap.dedent("""\
+        name: test_agent
+        role: advisor
+        model: claude-haiku-4-5-20251001
+        system_prompt: hi
+        manifest_role: test
+        runtime: oopen-ai
+    """))
+    with pytest.raises(ValueError, match="openai"):
+        load_agent_spec(yml)
