@@ -660,6 +660,52 @@ def _capture_declared_recipes(name: str, input_: dict, result: dict, ctx: dict |
         del _THREAD_DECLARED_RECIPES[tid]
 
 
+def rehydrate_declared_recipes(thread_id: str) -> list[tuple[int, str, str]]:
+    """Read the thread's most recent plan entity's `metadata.plan.steps[]`
+    and re-populate `_THREAD_DECLARED_RECIPES[tid]` from any `step.skill`
+    bindings. Lossless: the hook above populates it at present_plan time,
+    but the cache is in-process and gets wiped on bounce. Without this
+    rebuild, every server restart silently drops the persistent
+    "recipe rules" the agent declared — even though the plan entity
+    itself survives. Observed in prj_1141348f 2026-06-19: the
+    declared_recipes block stopped rendering after a bounce, so the
+    agent kept the step titles but lost the recipe's thresholds/
+    gotchas. Returns the populated list."""
+    tid = str(thread_id or "")
+    if not tid:
+        return []
+    if _THREAD_DECLARED_RECIPES.get(tid):
+        return _THREAD_DECLARED_RECIPES[tid]
+    try:
+        from core.graph.entities import list_entities
+        import json as _j
+        plans = [
+            e for e in list_entities(type_filter="plan",            # noqa: seam
+                                      include_archived=False)
+            if ((e.get("metadata") or {}).get("thread_id") == tid)
+        ]
+    except Exception:                                            # noqa: BLE001
+        return []
+    if not plans:
+        return []
+    plans.sort(key=lambda e: e.get("created_at") or "", reverse=True)
+    md = plans[0].get("metadata") or {}
+    steps = ((md.get("plan") or {}).get("steps")) or []
+    out: list[tuple[int, str, str]] = []
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        sk = (s.get("skill") or "").strip()
+        if not sk:
+            continue
+        n = int(s.get("n") or len(out) + 1)
+        title = (s.get("title") or "").strip()
+        out.append((n, title, sk))
+    if out:
+        _THREAD_DECLARED_RECIPES[tid] = out
+    return out
+
+
 # ── Tool-lifecycle hook registration ──────────────────────────────────────────
 # The guardrails above are registered into the in-process hook registry
 # (core.runtime.hooks), which adopts the Claude Agent SDK's Pre/Post/PostFailure
