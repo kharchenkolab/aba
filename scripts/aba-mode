@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# aba-mode — toggle which repo the `aba` launcher serves from.
+#
+# prod (default):  ~/.aba/repo/aba (normal Mac install,
+#                  updated by `aba update` from the menu widget)
+# dev [path]:      another writable checkout — for iterating without
+#                  `aba update` round-trips. Path resolution:
+#                    1. explicit arg:    aba-mode dev /path/to/repo
+#                    2. $ABA_DEV_REPO env var (set in ~/.aba/config.env
+#                       or your shell), or
+#                    3. compiled-in default below.
+#
+# Mechanism: writes / removes `export ABA_REPO=<parent>` in
+# ~/.aba/config.env. The `aba` launcher already sources config.env
+# AFTER its hardcoded default, so any value set here wins. Mac control
+# widget + `aba update` continue to work in either mode — the widget
+# just bounces the server using whatever ABA_REPO is current, and
+# `aba update` always operates on ~/.aba/repo regardless (pre-staging
+# the next prod swap if you happen to be in dev mode).
+#
+# Install (per-user, one-time):
+#   ln -s $HOME/.aba/repo/aba/scripts/aba-mode $HOME/.aba/bin/aba-mode
+# (the installer puts ~/.aba/bin/ on PATH so `aba-mode` is then
+# available from any shell; the symlink keeps it in sync with whatever
+# `aba update` pulls in.)
+
+set -euo pipefail
+
+ABA_HOME="${ABA_HOME:-$HOME/.aba}"
+CONFIG_ENV="$ABA_HOME/config.env"
+ABA_BIN="$ABA_HOME/bin/aba"
+DEFAULT_PROD_REPO="$ABA_HOME/repo"
+# Default dev tree location, in precedence order:
+#   1. ABA_DEV_REPO env var (set in ~/.aba/config.env or shell rc)
+#   2. compiled-in fallback $HOME/aba
+# Override per-call with: aba-mode dev /some/other/path
+DEFAULT_DEV_REPO="${ABA_DEV_REPO:-$HOME/aba}"
+
+usage() {
+  cat <<EOF
+usage: aba-mode <command>
+  dev [path]   Serve from a dev tree (default: $DEFAULT_DEV_REPO).
+               'path' must be the PARENT of the 'aba' directory;
+               the launcher serves \$path/aba/backend. Rebuilds that
+               tree's frontend dist and bounces the server.
+  prod         Serve from the install at $DEFAULT_PROD_REPO.
+               Bounces the server.
+  status       Print current mode, the served tree's HEAD, and
+               whether the server is up + which tree it's actually
+               serving (from the running process's --app-dir).
+EOF
+}
+
+_read_repo_override() {
+  # Empty when not set. Defensive: handles missing config, BSD/GNU sed,
+  # whitespace, multiple lines (last one wins, matching shell semantics).
+  if [ ! -f "$CONFIG_ENV" ]; then
+    printf ''
+    return
+  fi
+  grep -E '^[[:space:]]*export[[:space:]]+ABA_REPO=' "$CONFIG_ENV" \
+    | tail -1 \
+    | sed -E 's/^[[:space:]]*export[[:space:]]+ABA_REPO=//' \
+    | sed -E "s/^['\"]//; s/['\"]$//" \
+    || true
+}
+
+_set_repo() {
+  # Pass empty string to clear; nonempty to set.
+  local newval="$1"
+  local tmp
+  tmp=$(mktemp)
+  if [ -f "$CONFIG_ENV" ]; then
+    grep -vE '^[[:space:]]*export[[:space:]]+ABA_REPO=' "$CONFIG_ENV" > "$tmp" || true
+  fi
+  if [ -n "$newval" ]; then
+    printf 'export ABA_REPO=%s\n' "$newval" >> "$tmp"
+  fi
+  mv "$tmp" "$CONFIG_ENV"
+  chmod 600 "$CONFIG_ENV"   # matches installer's mode
+}
+
+_head_of() {
+  local repo="$1"
+  git -C "$repo/aba" log -1 --format='%h %s' 2>/dev/null || echo "(no git)"
+}
+
+_stop() {
+  # Must be called BEFORE _set_repo, otherwise the launcher's
+  # BACKEND_MATCH (derived from the new ABA_REPO) won't match the
+  # currently-running process (started with the old ABA_REPO), and
+  # pkill silently fails → two uvicorns racing for port 8000.
+  "$ABA_BIN" stop >/dev/null 2>&1 || true
+  sleep 0.5
+}
+
+_up() {
+  "$ABA_BIN" up
+}
+
+cmd="${1:-status}"
+
+case "$cmd" in
+  status)
+    val=$(_read_repo_override)
+    if [ -n "$val" ]; then
+      mode="DEV"
+      repo="$val"
+    else
+      mode="PROD"
+      repo="$DEFAULT_PROD_REPO"
+    fi
+    echo "mode:        $mode"
+    if [ -n "$val" ]; then
+      echo "ABA_REPO:    $val   (override in config.env)"
+    else
+      echo "ABA_REPO:    (unset → defaults to $DEFAULT_PROD_REPO)"
+    fi
+    echo "tree HEAD:   $(_head_of "$repo")"
+    if pgrep -f "uvicorn main:app" >/dev/null 2>&1; then
+      pid=$(pgrep -f "uvicorn main:app" | head -1)
+      appdir=$(ps -o command= -p "$pid" 2>/dev/null \
+               | grep -oE -- '--app-dir [^ ]+' \
+               | sed 's|^--app-dir ||' || echo "?")
+      echo "server:      running (pid $pid, app-dir=$appdir)"
+    else
+      echo "server:      stopped"
+    fi
+    ;;
+
+  prod)
+    _stop
+    _set_repo ""
+    echo "Set mode: PROD ($DEFAULT_PROD_REPO)"
+    _up
+    ;;
+
+  dev)
+    repo="${2:-$DEFAULT_DEV_REPO}"
+    if [ ! -d "$repo" ]; then
+      echo "error: $repo does not exist" >&2
+      exit 1
+    fi
+    repo=$(cd "$repo" && pwd)
+    if [ ! -f "$repo/aba/backend/main.py" ]; then
+      echo "error: $repo/aba/backend/main.py not found — expected the parent of an aba checkout" >&2
+      exit 1
+    fi
+    if [ -f "$repo/aba/frontend/package.json" ]; then
+      echo "Rebuilding frontend dist in $repo/aba/frontend ..."
+      ( cd "$repo/aba/frontend" && npx vite build 2>&1 | tail -3 )
+    fi
+    _stop
+    _set_repo "$repo"
+    echo "Set mode: DEV ($repo)"
+    _up
+    ;;
+
+  -h|--help|help)
+    usage
+    ;;
+
+  *)
+    usage
+    exit 2
+    ;;
+esac
