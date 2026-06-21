@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Institutional branding assets — operator drops the institution's logo
+# at public/branding/<name>.png and points VITE_BRAND_LOGO at it. Not
+# version-controlled because each deployment supplies its own.
+public/branding/*
+!public/branding/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
