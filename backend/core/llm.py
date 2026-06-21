@@ -307,6 +307,50 @@ class OAuthTokenUnavailable(RuntimeError):
     Caught by guide.py's stream error handler — mapped to a friendly UI toast."""
 
 
+# Module-level cache for AsyncAnthropic / Anthropic clients. Keyed by
+# (mode, auth_material) so a refreshed OAuth token (which the SDK can't
+# update on a constructed client) just produces a new cache entry —
+# the old client lingers until GC, doesn't break in-flight calls.
+#
+# Before this cache + HTTP/2: every LLM call constructed a fresh
+# AsyncAnthropic, which created a fresh httpx.AsyncClient over HTTP/1.1,
+# which performed a fresh TLS handshake to api.anthropic.com.
+# HTTP/1.1 streaming responses cannot multiplex — so even when reusing
+# the AsyncAnthropic instance, each `messages.stream(...)` call still
+# opened a new connection. Measured 1.2-2.4s of `create` overhead per
+# turn on [direct-timing] markers (2026-06-21), ~13s of dead time across
+# a 4-turn agentic loop.
+#
+# Fix: cache the AsyncAnthropic, BUT also pass a custom httpx client
+# with http2=True so streams multiplex over a single connection.
+_ASYNC_CLIENT_CACHE: dict[tuple[str, str], "object"] = {}
+_SYNC_CLIENT_CACHE:  dict[tuple[str, str], "object"] = {}
+
+
+def _httpx_async_client():
+    """Tuned httpx.AsyncClient for the Anthropic SDK. http2 enables
+    stream multiplexing (the source of the per-call TLS handshake);
+    keepalive_expiry kept generous so an idle thread doesn't drop the
+    connection."""
+    import httpx
+    return httpx.AsyncClient(
+        http2=True,
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        limits=httpx.Limits(max_keepalive_connections=10,
+                            keepalive_expiry=300.0),
+    )
+
+
+def _httpx_sync_client():
+    import httpx
+    return httpx.Client(
+        http2=True,
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        limits=httpx.Limits(max_keepalive_connections=4,
+                            keepalive_expiry=300.0),
+    )
+
+
 def _llm_client():
     """Live-agent Anthropic ASYNC client.
 
@@ -329,7 +373,13 @@ def _llm_client():
     if mode in ("oauth", "oauth_cc"):
         tok = _oauth_bearer()
         if tok:
-            return anthropic.AsyncAnthropic(auth_token=tok)
+            key = (mode, tok)
+            cli = _ASYNC_CLIENT_CACHE.get(key)
+            if cli is None:
+                cli = anthropic.AsyncAnthropic(
+                    auth_token=tok, http_client=_httpx_async_client())
+                _ASYNC_CLIENT_CACHE[key] = cli
+            return cli
         # No token + oauth_cc means the user explicitly chose subscription billing;
         # silently falling back to the .env API key would burn an unrelated budget
         # and hide the real problem. Refuse with a clear, actionable error.
@@ -338,7 +388,13 @@ def _llm_client():
                 "Claude Code OAuth token is missing or expired. "
                 "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
                 "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
-    return anthropic.AsyncAnthropic(api_key=API_KEY)
+    key = ("apikey", API_KEY or "")
+    cli = _ASYNC_CLIENT_CACHE.get(key)
+    if cli is None:
+        cli = anthropic.AsyncAnthropic(
+            api_key=API_KEY, http_client=_httpx_async_client())
+        _ASYNC_CLIENT_CACHE[key] = cli
+    return cli
 
 
 def sync_anthropic_client():
@@ -354,13 +410,25 @@ def sync_anthropic_client():
     if mode in ("oauth", "oauth_cc"):
         tok = _oauth_bearer()
         if tok:
-            return anthropic.Anthropic(auth_token=tok)
+            key = (mode, tok)
+            cli = _SYNC_CLIENT_CACHE.get(key)
+            if cli is None:
+                cli = anthropic.Anthropic(
+                    auth_token=tok, http_client=_httpx_sync_client())
+                _SYNC_CLIENT_CACHE[key] = cli
+            return cli
         if mode == "oauth_cc":
             raise OAuthTokenUnavailable(
                 "Claude Code OAuth token is missing or expired. "
                 "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
                 "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
-    return anthropic.Anthropic(api_key=API_KEY)
+    key = ("apikey", API_KEY or "")
+    cli = _SYNC_CLIENT_CACHE.get(key)
+    if cli is None:
+        cli = anthropic.Anthropic(
+            api_key=API_KEY, http_client=_httpx_sync_client())
+        _SYNC_CLIENT_CACHE[key] = cli
+    return cli
 
 
 def _real_factory():
