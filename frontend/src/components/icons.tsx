@@ -5,7 +5,17 @@
  * everywhere an agent appears (advisor rail, chat tabs, message avatars) so
  * they're instantly tellable apart. Glyphs inherit `currentColor`.
  */
+import { useState } from 'react'
 import type { CSSProperties } from 'react'
+
+// Branding override: when VITE_BRAND_LOGO is set, the top-left brand
+// mark renders that URL instead of the default 'aba' hexagon. The URL
+// is browser-resolved (no Vite static-import dance) so the file can
+// live anywhere — typically `public/branding/<name>.png` (served at
+// `/branding/<name>.png`) or an absolute external URL. Drop the file
+// at the URL the env points to, restart the dev server, done.
+// Falls back to the default hexagon if the URL 404s — so a repo
+// without the asset still renders cleanly.
 
 export type AgentKey = 'guide' | 'methodologist' | 'skeptic' | 'explorer' | 'stylist'
 
@@ -163,17 +173,35 @@ export type RailIconName =
   | 'files'
   | 'results'
 
+// Brand mark for the rail's top-left slot. Reads VITE_BRAND_LOGO at
+// runtime; if it's set AND the resource loads, renders it as <img>.
+// On 404 / any image-load error we flip to the default hexagon, so a
+// repo cloned without the operator's asset still renders cleanly.
+function BrandLogo({ size }: { size: number }) {
+  const url = import.meta.env.VITE_BRAND_LOGO as string | undefined
+  const [errored, setErrored] = useState(false)
+  if (url && !errored) {
+    return (
+      <img src={url} alt="" width={size} height={size}
+           style={{ display: 'block' }}
+           onError={() => setErrored(true)} />
+    )
+  }
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" stroke="currentColor">
+      <path d="M16 3l11 6v14l-11 6L5 23V9l11-6z" strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="M16 3v26M5 9l22 14M27 9L5 23" strokeWidth="1.3" opacity="0.6" />
+    </svg>
+  )
+}
+
+
 export function RailIcon({ name, size = 24 }: { name: RailIconName; size?: number }) {
   const svg = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
                 stroke: 'currentColor' as const }
   switch (name) {
     case 'brand':
-      return (
-        <svg width={size} height={size} viewBox="0 0 32 32" fill="none" stroke="currentColor">
-          <path d="M16 3l11 6v14l-11 6L5 23V9l11-6z" strokeWidth="1.7" strokeLinejoin="round" />
-          <path d="M16 3v26M5 9l22 14M27 9L5 23" strokeWidth="1.3" opacity="0.6" />
-        </svg>
-      )
+      return <BrandLogo size={size} />
     case 'home':
       return (
         <svg {...svg}>
