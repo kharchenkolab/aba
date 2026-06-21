@@ -2419,6 +2419,18 @@ if (_FRONTEND_DIST / "index.html").is_file():
     if _assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
 
+    # index.html is the SPA bootstrap — it references hashed assets by
+    # name, so the *contents* of index.html change every build, but the
+    # *URL* doesn't. Without an explicit no-store, browsers cache it
+    # indefinitely and keep loading the OLD bundle hash on the next
+    # build, even when the server has the new one. Hashed assets under
+    # /assets/* don't have this problem (their URLs change with content)
+    # so they stay aggressively cacheable.
+    _INDEX_NO_CACHE = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma":        "no-cache",
+    }
+
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
         """Serve a real file from dist/ if it exists, else the SPA shell.
@@ -2433,4 +2445,5 @@ if (_FRONTEND_DIST / "index.html").is_file():
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(str(_FRONTEND_DIST / "index.html"))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"),
+                            headers=_INDEX_NO_CACHE)

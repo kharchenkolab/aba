@@ -12,6 +12,7 @@
  * icons.tsx so the migration is mechanical. A future bio domain could
  * register entirely different glyphs without editing the shell.
  */
+import { useState } from 'react'
 import type { ComponentType } from 'react'
 
 export type RailIconName =
@@ -62,7 +63,23 @@ const baseSvg = { fill: 'none' as const, stroke: 'currentColor' as const,
                   strokeLinecap: 'round' as const }
 
 
+// Branding override: when VITE_BRAND_LOGO is set, the rail's top-left
+// mark renders that URL instead of the default hexagon. The URL is
+// browser-resolved (no Vite static-import dance) so the file can live
+// anywhere — typically `public/branding/<name>.png` (served at
+// `/branding/<name>.png`) or an absolute external URL. Image-load
+// errors flip to the hexagon — a repo without the operator's asset
+// still renders cleanly.
 function BrandIcon({ size = 24 }: RailIconProps) {
+  const url = import.meta.env.VITE_BRAND_LOGO as string | undefined
+  const [errored, setErrored] = useState(false)
+  if (url && !errored) {
+    return (
+      <img src={url} alt="" width={size} height={size}
+           style={{ display: 'block' }}
+           onError={() => setErrored(true)} />
+    )
+  }
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" stroke="currentColor">
       <path d="M16 3l11 6v14l-11 6L5 23V9l11-6z" strokeWidth="1.7" strokeLinejoin="round" />
