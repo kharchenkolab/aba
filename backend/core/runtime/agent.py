@@ -207,20 +207,37 @@ def list_agent_specs() -> list[str]:
 def resolve_primary_spec_name() -> str:
     """Pick the primary-agent spec from process-wide signals only.
 
-    Precedence (lowest → highest):
-      1. "guide" — the historical default
-      2. ABA_PRIMARY_SPEC env var, e.g. "lean_guide"
+    Precedence (highest → lowest):
+      1. ABA_PRIMARY_SPEC env var, e.g. "lean_guide" — operator override
+         (one-off experiments without editing the bundle).
+      2. EffectiveBundle.settings["primary_spec"] — deployment-time
+         policy from the layered bundle (system → institution → lab →
+         user). Cached at process startup, so this is O(1).
+      3. "guide" — last-resort historical default.
 
-    Resolved fresh per call so the tray or a `~/.aba/config.env`
-    update takes effect on the next turn without a restart. If the
-    env names an unregistered spec, returns it anyway; callers
+    Resolved fresh per call so an ABA_PRIMARY_SPEC change picks up on
+    the next turn without a restart (the bundle itself is cached, so
+    editing settings.yaml needs `python -m core.bundle.cli inspect
+    --reload` or a backend bounce).
+
+    If a named spec isn't registered, returns the name anyway; callers
     handle the None lookup and decide whether to fall back or fail.
 
     For the full per-turn chain (request override → thread pin → env
-    → default) see resolve_spec_for_turn() below.
+    → bundle → default) see resolve_spec_for_turn() below.
     """
     import os
-    return (os.environ.get("ABA_PRIMARY_SPEC") or "").strip() or "guide"
+    env_val = (os.environ.get("ABA_PRIMARY_SPEC") or "").strip()
+    if env_val:
+        return env_val
+    try:
+        from core.bundle.active import get_bundle
+        v = get_bundle().settings.get("primary_spec")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    except Exception:  # noqa: BLE001 — never let bundle issues take a turn down
+        pass
+    return "guide"
 
 
 def resolve_spec_for_turn(*, request_override: Optional[str] = None,
