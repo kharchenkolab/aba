@@ -1,4 +1,19 @@
 # system bundle — ABA built-in defaults
 # Overridden by institution/lab/user bundles per the layering spec.
+
+# Default model the primary chat agent uses when no env / config.env
+# override is set. ABA_PRIMARY_MODEL / ABA_MODEL still take precedence
+# per core.config.current_model_for_primary.
 default_model: claude-haiku-4-5-20251001
+# Model the advisor agents (skeptic / explorer / stylist / ...) use for
+# their one-shot calls. Same spirit as default_model but for advisors.
 advisor_model: claude-haiku-4-5-20251001
+
+# Primary agent spec — which spec drives the chat loop. Available in
+# tree: guide (default; full prompt), grounded_guide (standard prompt +
+# 100K rolling summary), lean_guide (lean prompt, smaller tool set),
+# lean_qwen_guide (lean + qwen YAML model — gets overridden by ABA_MODEL
+# today). See backend/content/bio/advisors/*.yaml for the individual
+# spec files. ABA_PRIMARY_SPEC env still takes precedence for one-off
+# operator overrides per core.runtime.agent.resolve_primary_spec_name.
+primary_spec: grounded_guide

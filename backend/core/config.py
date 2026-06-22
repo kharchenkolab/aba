@@ -62,8 +62,12 @@ def current_model_for_primary(default: str = "") -> str:
         3. ABA_MODEL=...      in ~/.aba/config.env  (rewritten by the
                                                helper's POST /api/auth/model
                                                on tray / Control-page swaps)
-        4. default            caller-supplied  (usually the spec's YAML model)
-        5. MODEL              module-load snapshot  (last-resort fallback)
+        4. EffectiveBundle.settings["default_model"]
+                              (deployment-time policy from the layered bundle:
+                               system → institution → lab → user. The bundle is
+                               cached at process startup, so this is O(1).)
+        5. default            caller-supplied  (usually the spec's YAML model)
+        6. MODEL              module-load snapshot  (last-resort fallback)
 
     Hot model switch (misc/mac-install.md § 3c — tray Model submenu): the
     backend reads this at the start of every turn in guide.py, so a switch
@@ -71,7 +75,7 @@ def current_model_for_primary(default: str = "") -> str:
 
     Robustness: a missing or malformed config.env never raises; we fall
     through to the next layer so an interrupted write or a comment-only
-    file doesn't take a turn down."""
+    file doesn't take a turn down. Same for a bundle that fails to load."""
     # Live env vars first — picks up monkeypatch in tests and the launcher-
     # sourced env in production.
     env = (os.environ.get("ABA_PRIMARY_MODEL")
@@ -84,7 +88,24 @@ def current_model_for_primary(default: str = "") -> str:
     cfg_val = _read_aba_model_from_config_env()
     if cfg_val:
         return cfg_val
+    bundle_val = _read_setting_from_bundle("default_model")
+    if bundle_val:
+        return bundle_val
     return default or MODEL
+
+
+def _read_setting_from_bundle(key: str) -> str:
+    """Return a string-valued setting from the active EffectiveBundle, or
+    "" on any failure (bundle not loadable, key absent, non-string value).
+    Lazy import keeps core.config importable from inside the bundle stack."""
+    try:
+        from core.bundle.active import get_bundle
+        v = get_bundle().settings.get(key)
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    return ""
 
 
 def _read_aba_model_from_config_env() -> str:
