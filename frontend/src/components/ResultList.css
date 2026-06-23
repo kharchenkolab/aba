@@ -45,6 +45,17 @@
 .rl-act--hl.is-on { background: #fef9c3; }
 .rl-act--sm { width: 22px; height: 22px; }
 .rl-act.is-sel { background: #fef9c3; color: #a16207; }
+/* "Already pinned" state. Always visible (no hover-reveal), red icon
+   on a soft accent background — matches Message.css .msg__tool--pinned
+   so the gesture reads identically across surfaces. */
+.rl-act--pinned {
+  opacity: 1;
+  color: var(--red);
+  background: var(--accent-soft);
+}
+.rl-plot__frame .rl-acts:has(.rl-act--pinned),
+.rl-row .rl-acts:has(.rl-act--pinned) { opacity: 1; }
+.rl-act--pinned:hover { color: var(--red); }
 .rl-modal__sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; flex: none; }
 
 .rl-browse { font-size: 12.5px; color: var(--accent); text-decoration: none; }
