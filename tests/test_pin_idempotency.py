@@ -214,6 +214,22 @@ def test_pin_artifact_reports_was_new_result_separately():
     assert b["was_new_result"] is False
 
 
+def test_pin_then_unpin_then_repin_round_trip():
+    """Re-pin after unpin must create a brand-new Result (not resurrect
+    the archived one). Drives the UI toggle: red → click → unpinned →
+    click → red again, with a fresh Result entity each cycle."""
+    from content.bio.lifecycle.promote import pin_evidence, unpin_evidence
+    fig = _make_figure_entity("round_trip")
+    a = pin_evidence(thread_id="thr_rt", evidence_kind="figure", evidence_id=fig)
+    assert a.get("created_result") is True
+    unpin_evidence(fig, thread_id="thr_rt")
+    # After unpin, the prior Result is no longer active; pin_evidence
+    # must create a fresh one (NOT silently reuse the archived shell).
+    c = pin_evidence(thread_id="thr_rt", evidence_kind="figure", evidence_id=fig)
+    assert c.get("created_result") is True, c
+    assert c["result_id"] != a["result_id"]
+
+
 def test_pin_artifact_orphan_entity_then_pin_wraps_new_result():
     """Edge case: materialize the figure entity FIRST without wrapping
     (wrap_in_result=False), THEN pin it. was_new=False (entity reused)
