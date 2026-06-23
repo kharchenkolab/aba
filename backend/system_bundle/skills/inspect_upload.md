@@ -1,1 +1,0 @@
-../../content/bio/library/core/inspect_upload.md

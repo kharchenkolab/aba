@@ -1,1 +1,0 @@
-../../content/bio/library/core/promote_result.md

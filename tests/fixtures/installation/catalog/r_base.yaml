@@ -1,0 +1,24 @@
+# Curated shared R base (r_provisioning.md).
+#
+# Common, stable, heavy-to-build R packages, batch-solved once via micromamba
+# (bioconda/conda-forge binaries, no source compile, no root) into the shared
+# tools env. They sit on the BASE of .libPaths(); per-project native installs
+# stack ahead of them. This list is grown by scope-ladder curation
+# (institution/lab), NOT mutated at runtime.
+#
+# The R runtime itself (r-base + toolchain + remotes + BiocManager) is handled
+# by core.exec.r.ensure_r_runtime — this file is the curated package layer.
+name: r_base
+channels: [conda-forge, bioconda]
+packages:
+  - r-rcpp
+  - r-rcpparmadillo
+  - r-rcppeigen
+  - r-cairo
+  - r-seurat
+  - bioconductor-deseq2
+  - bioconductor-limma
+  - bioconductor-edger
+  - bioconductor-apeglm
+  - r-ggplot2
+  - r-tidyverse

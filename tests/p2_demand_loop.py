@@ -21,6 +21,11 @@ os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 os.environ["ABA_CAPABILITY_APPROVAL"] = "auto"
 sys.path.insert(0, str(ROOT / "backend"))
+# Catalog content is pack-sourced (installation scope) — point it at the shared
+# seed fixture so the capability catalog is populated (pack seeds as test data).
+sys.path.insert(0, str(Path(__file__).resolve().parent))       # tests/ for the helper
+import _catalog_fixture                                          # noqa: E402
+_catalog_fixture.install()
 
 from core.graph._schema import init_db                       # noqa: E402
 from core.graph.audit import list_events                     # noqa: E402

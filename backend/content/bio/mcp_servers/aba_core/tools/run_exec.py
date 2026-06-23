@@ -48,6 +48,12 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         let the router decide based on estimated_runtime_min) for
         deferred long-runs.
 
+        INSTALLING PACKAGES: to use a library that isn't already in the
+        sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,
+        `!pip`, or a `subprocess` package install. `ensure_capability` uses
+        prebuilt wheels/conda binaries. (The stdlib — urllib, json, os, … —
+        is always present; import it directly.)
+
         Returns plots/tables/files harvested from the run's working dir.
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
@@ -81,6 +87,14 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         Shares the working dir with run_python so the two can hand
         files off (CSV/Parquet/RDS). For Bioconductor / DESeq2 /
         edgeR / limma / Seurat work.
+
+        INSTALLING PACKAGES: to use an R package that isn't loaded, call
+        `ensure_capability(name)` FIRST — NEVER `install.packages()`,
+        `BiocManager::install()`, or `devtools::install_github()` in R
+        code. Those source-compile against system libs that aren't here
+        and fail; `ensure_capability` installs the prebuilt conda/bioconda
+        binary. (For a public database — GEO, SRA, ENA — `ensure_capability`
+        the maintained package, e.g. GEOquery, rather than hand-rolling.)
 
         Pass `background=True` (or `estimated_runtime_min` above the
         router threshold, ~5 min) for long Seurat integrations / DESeq2

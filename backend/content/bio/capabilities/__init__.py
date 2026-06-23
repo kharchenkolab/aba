@@ -1,40 +1,46 @@
-"""Bio capability seed: registers the seed-catalog loader with core.catalog.
+"""Bio capability seed: projects the composed bundle's catalog into core.catalog.
 
-Capabilities are per-project entities, so they can't be loaded at import time
-(no project DB is active yet). Instead we register a *seed provider* callback;
-core.catalog invokes it lazily the first time a project's catalog is queried
-and found empty (dependency inversion — content registers into core, not the
-reverse).
+The capability catalog is soft-config like skills and policy: it lives in each
+scope's `catalog/` dir (system → installation → lab → user) and is composed by
+`core.bundle.loader` into `EffectiveBundle.catalog` (capability specs,
+narrowest-wins by name), `EffectiveBundle.r_base_specs` (the curated shared
+R-base conda list), and `EffectiveBundle.collection_dirs` (file-backed
+reference collections like biomni). This module just turns those projections
+into live catalog state — the exact mirror of `content.bio.skills`
+(`register_from_bundle`). No second discovery, no local seed dir.
+
+Capabilities are per-project entities, so the seed can't run at import (no
+project DB is active yet): `load_seed` is registered as a *seed provider* and
+invoked lazily the first time a project's catalog is queried and found empty
+(dependency inversion — content registers into core). Collections are
+file-backed + process-global, so they register at import.
+
+The system scope's catalog content is materialized under
+`system_bundle/catalog/` (bio_seed.yaml + r_base.yaml + biomni/), the same way
+`system_bundle/skills/` holds the materialized skills.
 """
 from __future__ import annotations
-from pathlib import Path
 
 from core.catalog import register_capability, register_seed_provider, register_collection_dir
 
-# Capability CONTENT lives in the content library, not next to this code:
-# `content/bio/library/capabilities/` holds the seed YAML(s) + collection
-# subdirs. Keeping content out of the code tree mirrors the skills registrar
-# and is overlay-ready.
-_SEED_DIR = Path(__file__).parent.parent / "library" / "capabilities"
 
-# Extracted reference catalogues (collections.md) are subdirs of the capability
-# content root — file-backed + process-global (not per-project entities), so
-# register them at import time. Reference catalogues are mined offline; they
-# are NOT runtime dependencies.
-for _cdir in sorted(p for p in _SEED_DIR.glob("*") if p.is_dir()):
-    register_collection_dir(_cdir)
+def register_collections_from_bundle() -> int:
+    """Register the bundle's file-backed collection dirs (biomni, …) for search.
+    Idempotent (register_collection_dir dedupes). Returns the count registered."""
+    from core.bundle.active import get_bundle
+    n = 0
+    for cdir in get_bundle().collection_dirs:
+        register_collection_dir(cdir)
+        n += 1
+    return n
 
 
 def load_r_base_specs() -> list[str]:
-    """Curated shared-R-base conda specs from r_base.yaml (r_provisioning.md).
-    Content lives in the library; core.exec.r provides the batch-install
-    mechanism. Returns [] if the manifest is absent."""
-    import yaml
-    f = _SEED_DIR / "r_base.yaml"
-    if not f.exists():
-        return []
-    doc = yaml.safe_load(f.read_text()) or {}
-    return [str(p) for p in (doc.get("packages") or [])]
+    """Curated shared-R-base conda specs, composed across scopes from the
+    bundle's catalog/ (*.yaml `packages:` lists). core.exec.r provides the
+    batch-install mechanism. Returns [] if no scope contributes a manifest."""
+    from core.bundle.active import get_bundle
+    return list(get_bundle().r_base_specs)
 
 
 def provision_r_base() -> None:
@@ -46,25 +52,26 @@ def provision_r_base() -> None:
 
 
 def load_seed() -> int:
-    """Upsert seed capabilities from *.yaml into the active project's catalog.
-    Idempotent: skips any (name, version) already present. Returns count added."""
-    import yaml
+    """Upsert the bundle's composed capability catalog into the active project's
+    catalog. Idempotent: skips any (name, version) already present. Returns the
+    count added. Registered as a core.catalog seed provider (runs lazily, once
+    per project DB)."""
+    from core.bundle.active import get_bundle
     from core.catalog import resolve_capability
 
     added = 0
-    for yf in sorted(_SEED_DIR.glob("*.yaml")):
-        try:
-            doc = yaml.safe_load(yf.read_text()) or {}
-        except Exception:  # noqa: BLE001
+    for entry in get_bundle().catalog:
+        spec = entry.spec
+        name, ver = spec.get("name"), str(spec.get("version", ""))
+        existing = resolve_capability(name)
+        if existing and str(existing.get("version", "")) == ver:
             continue
-        for spec in doc.get("capabilities", []):
-            name, ver = spec.get("name"), str(spec.get("version", ""))
-            existing = resolve_capability(name)
-            if existing and str(existing.get("version", "")) == ver:
-                continue
-            register_capability(spec)
-            added += 1
+        register_capability(spec)
+        added += 1
     return added
 
 
+# Collections are file-backed + process-global → register at import.
+register_collections_from_bundle()
+# Capabilities are per-project → seed lazily on first catalog query.
 register_seed_provider(load_seed)

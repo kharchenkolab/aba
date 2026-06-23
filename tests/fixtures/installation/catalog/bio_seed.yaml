@@ -1,0 +1,488 @@
+# Seed capability catalog (capabilities.md §4.2). Loaded into the active
+# project's entity store on first catalog query (idempotent, by name+version).
+#
+# P1 standardizes on pip: `pip`-provisioned entries materialize on demand into
+# the wipeable overlay (ensure_capability). `conda`-provisioned entries are
+# discoverable in the catalog but their materialization is deferred until the
+# conda path is wired (capdat_impl.md task 186) — ensure_capability reports
+# that clearly rather than failing opaquely.
+capabilities:
+  # --- pip-materializable (library) ---
+  - name: gseapy
+    version: "1.1.3"
+    archetype: library
+    domain_tags: [enrichment, pathway, gene-set, rna-seq]
+    summary: Gene-set enrichment analysis (Enrichr / GSEA) in Python.
+    provisioning: {pip: ["gseapy"]}
+    scope: system
+    status: published
+
+  - name: pyfaidx
+    version: "0.8"
+    archetype: library
+    domain_tags: [sequence, fasta, indexing, genomics]
+    summary: Efficient random access to FASTA sequences via an index.
+    provisioning: {pip: ["pyfaidx"]}
+    scope: system
+    status: published
+
+  - name: requests
+    version: "latest"
+    archetype: library
+    domain_tags: [http, api, web, download]
+    summary: HTTP client. NOTE the sandbox venv does NOT ship it — prefer urllib (stdlib) for HTTP; ensure this only if you specifically need the requests API.
+    provisioning: {pip: ["requests"]}
+    scope: system
+    status: published
+
+  - name: biopython
+    version: "1.83"
+    archetype: library
+    domain_tags: [sequence, parsing, alignment, bioinformatics]
+    summary: Tools for biological sequence parsing, I/O, and analysis.
+    provisioning: {pip: ["biopython"]}
+    scope: system
+    status: published
+
+  - name: pydeseq2
+    version: "0.4"
+    archetype: library
+    domain_tags: [rna-seq, differential-expression, statistics]
+    summary: Python implementation of DESeq2 for bulk RNA-seq DE.
+    provisioning: {pip: ["pydeseq2"]}
+    scope: system
+    status: published
+
+  - name: adjusttext
+    version: "1.1"
+    archetype: library
+    domain_tags: [visualization, labels, plotting]
+    summary: Automatically reposition matplotlib text labels to avoid overlap.
+    provisioning: {pip: ["adjustText"]}
+    scope: system
+    status: published
+
+  # --- pip-installable CLI tools (materializable; agent tool-exposure is P2) ---
+  - name: multiqc
+    version: "1.21"
+    archetype: cli
+    domain_tags: [qc, reporting, rna-seq, sequencing]
+    summary: Aggregate per-sample QC reports (FastQC etc.) into one summary.
+    provisioning: {pip: ["multiqc"]}
+    scope: institution
+    status: published
+
+  - name: cutadapt
+    version: "4.7"
+    archetype: cli
+    domain_tags: [qc, trimming, adapters, sequencing]
+    summary: Trim adapters and primers from high-throughput sequencing reads.
+    provisioning: {pip: ["cutadapt"]}
+    scope: institution
+    status: published
+
+  # --- data acquisition (GEO / SRA / ENA → matrices, FASTQ, counts) ---
+  - name: GEOparse
+    version: "1.2"
+    archetype: library
+    domain_tags: [geo, gse, gsm, download, expression, supplementary, metadata]
+    summary: Query GEO and download series/sample SOFT metadata + supplementary (processed) files.
+    provisioning: {pip: ["GEOparse"]}
+    scope: system
+    status: published
+
+  - name: pysradb
+    version: "2.5"
+    archetype: cli
+    domain_tags: [sra, ena, geo, accession, fastq, run-metadata, download]
+    summary: Resolve GEO/SRA accessions to run metadata + ENA FASTQ links; convert between accession types.
+    provisioning: {pip: ["pysradb"]}
+    scope: system
+    status: published
+
+  - name: ffq
+    version: "0.3"
+    archetype: cli
+    domain_tags: [sra, ena, accession, download-links, fastq, metadata, doi]
+    summary: Fetch metadata and raw-data download links (ENA/SRA/AWS/GCP) for sequencing accessions and DOIs.
+    provisioning: {pip: ["ffq"]}
+    scope: system
+    status: published
+
+  - name: gget
+    version: "0.29"
+    archetype: cli
+    domain_tags: [reference, ensembl, genome, annotation, genomics, query]
+    summary: Fetch reference genomes/annotations and query genomic databases from the command line.
+    provisioning: {pip: ["gget"]}
+    scope: system
+    status: published
+
+  - name: kb-python
+    version: "0.29"
+    archetype: cli
+    domain_tags: [scrna-seq, quantification, kallisto, bustools, count-matrix, pseudoalignment]
+    summary: kallisto|bustools wrapper (bundled) to build indexes and quantify FASTQ into count matrices.
+    provisioning: {pip: ["kb-python"]}
+    scope: system
+    status: published
+
+  # --- conda CLI tools (materialize via micromamba into the shared tools env) ---
+  - name: sra-tools
+    version: "3.1"
+    archetype: cli
+    domain_tags: [sra, fastq, prefetch, fasterq-dump, ncbi, download]
+    summary: NCBI SRA Toolkit — prefetch + fasterq-dump to download SRA runs and convert to FASTQ.
+    provisioning: {conda: {channel: bioconda, spec: "sra-tools"}}
+    scope: institution
+    status: published
+
+  - name: seqkit
+    version: "2.8"
+    archetype: cli
+    domain_tags: [sequence, fasta, fastq, manipulation]
+    summary: Fast cross-platform toolkit for FASTA/FASTQ manipulation.
+    provisioning: {conda: {channel: bioconda, spec: "seqkit"}}
+    scope: institution
+    status: published
+
+  - name: salmon
+    version: "1.10.3"
+    archetype: cli
+    domain_tags: [rna-seq, quantification, transcriptomics]
+    summary: Fast transcript-level quantification by selective alignment.
+    provisioning: {conda: {channel: bioconda, spec: "salmon=1.10.3"}}
+    scope: institution
+    status: published
+
+  - name: fastqc
+    version: "0.12.1"
+    archetype: cli
+    domain_tags: [qc, sequencing, reads]
+    summary: Per-sample quality-control report for sequencing reads.
+    provisioning: {conda: {channel: bioconda, spec: "fastqc=0.12.1"}}
+    scope: institution
+    status: published
+
+  - name: star
+    version: "2.7.11b"
+    archetype: cli
+    domain_tags: [rna-seq, alignment, spliced]
+    summary: Spliced aligner for RNA-seq reads against a genome.
+    provisioning: {conda: {channel: bioconda, spec: "star=2.7.11b"}}
+    scope: institution
+    status: published
+
+  # --- r_package (kharchenkolab single-cell stack; r_provisioning.md) ---
+  # DECLARATIONS only — discoverable + installable on demand via
+  # ensure_capability (native GitHub install into the project R library). NOT
+  # pre-installed. The R runtime already carries igraph/irlba/Matrix/Rcpp*/xml2
+  # as conda binaries, so these build without source-compiling the heavy deps.
+  - name: pagoda2
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, embedding, differential-expression, pagoda2]
+    summary: R6 single-cell RNA-seq pipeline — fast normalization, PCA, KNN clustering, largeVis/UMAP embedding, and differential expression.
+    provisioning: {r: {source: cran, package: pagoda2, library: pagoda2}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: conos
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, integration, joint-clustering, alignment, conos]
+    summary: Joint analysis of multiple single-cell RNA-seq samples — builds a cross-sample graph for clustering, label propagation, and joint embedding.
+    # CRAN (fast PPM binary). conos hard-depends on the Bioconductor pkg
+    # ComplexHeatmap, which a CRAN-only install can't fetch — but r_install
+    # auto-recovers it (installs ComplexHeatmap as a conda Bioc binary, then
+    # retries), so the CRAN path works without a slow GitHub source compile.
+    provisioning: {r: {source: cran, package: conos, library: conos}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: leidenAlg
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, leiden, community-detection, kharchenkolab]
+    summary: Leiden community detection for R (kharchenkolab) — leiden.community(); the clustering backend pagoda2/conos use for Leiden. See the pagoda2-scrna recipe.
+    provisioning: {r: {source: cran, package: leidenAlg, library: leidenAlg}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: ComplexHeatmap
+    version: "latest"
+    archetype: r_package
+    domain_tags: [visualization, heatmap, bioconductor, marker-genes, single-cell]
+    summary: Bioconductor ComplexHeatmap — flexible heatmaps; the renderer behind conos/pagoda2 plotDEheatmap for cluster-marker visualization. Installs via the conda Bioconductor binary (a source compile is heavy).
+    provisioning: {r: {source: bioconductor, package: ComplexHeatmap, library: ComplexHeatmap}}
+    source: bioconductor
+    scope: system
+    status: published
+
+  - name: DESeq2
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, differential-expression, bioconductor, deseq2, statistics]
+    summary: Bioconductor DESeq2 — the authoritative bulk RNA-seq differential-expression method (negative-binomial GLM; Wald + LRT, shrinkage, multi-factor designs, custom contrasts). See the deseq2-r recipe.
+    provisioning: {r: {source: bioconductor, package: DESeq2, library: DESeq2}}
+    source: bioconductor
+    scope: system
+    status: published
+
+  - name: limma
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, microarray, differential-expression, bioconductor, limma, voom, contrasts, statistics]
+    summary: Bioconductor limma — linear models + empirical-Bayes DE for RNA-seq (voom) and microarray/normalized data; flexible custom contrasts, blocking/repeated measures, fold-change-thresholded tests. See the limma-voom recipe.
+    provisioning: {r: {source: bioconductor, package: limma, library: limma}}
+    source: bioconductor
+    scope: system
+    status: published
+
+  - name: edgeR
+    version: "latest"
+    archetype: r_package
+    domain_tags: [bulk-rnaseq, differential-expression, bioconductor, edger, normalization, counts, statistics]
+    summary: Bioconductor edgeR — count-based RNA-seq DE (negative-binomial); provides DGEList, filterByExpr, and TMM normalization (calcNormFactors) used by the limma-voom path. See the limma-voom recipe.
+    provisioning: {r: {source: bioconductor, package: edgeR, library: edgeR}}
+    source: bioconductor
+    scope: system
+    status: published
+
+  # --- single-cell Python stack (scanpy ecosystem) ---
+  # scanpy/anndata/leidenalg/igraph ship in the .venv base; declared here so the
+  # catalog is complete and ensure_capability is a clean no-op (import_name guard)
+  # rather than a redundant --target reinstall. The rest materialize on demand.
+  - name: scanpy
+    version: "latest"
+    archetype: library
+    domain_tags: [scrna-seq, single-cell, clustering, umap, leiden, marker-genes, analysis]
+    summary: The standard Python toolkit for single-cell analysis — QC, normalization, HVGs, PCA, neighbors, Leiden clustering, UMAP, and marker DE on AnnData. Anchors the best-practice (bp-*) recipes.
+    provisioning: {pip: ["scanpy"]}
+    import_name: scanpy
+    scope: system
+    status: published
+
+  - name: anndata
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, data-structure, h5ad, matrix, scrna-seq]
+    summary: Annotated data matrix (AnnData/.h5ad) — the in-memory + on-disk container for single-cell observations, variables, layers and embeddings used across scanpy/scvi-tools.
+    provisioning: {pip: ["anndata"]}
+    import_name: anndata
+    scope: system
+    status: published
+
+  - name: leidenalg
+    version: "latest"
+    archetype: library
+    domain_tags: [clustering, community-detection, graph, single-cell, leiden]
+    summary: Leiden community-detection backend used by scanpy's clustering (sc.tl.leiden).
+    provisioning: {pip: ["leidenalg"]}
+    import_name: leidenalg
+    scope: system
+    status: published
+
+  - name: igraph
+    version: "latest"
+    archetype: library
+    domain_tags: [graph, network, clustering, single-cell]
+    summary: Python igraph — graph construction/analysis backing neighborhood graphs and Leiden/Louvain clustering.
+    provisioning: {pip: ["igraph"]}
+    import_name: igraph
+    scope: system
+    status: published
+
+  - name: scvi-tools
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, deep-learning, scvi, scanvi, totalvi, multivi, differential-expression]
+    summary: Probabilistic deep-generative models for single-cell omics (scVI/scANVI/totalVI/MULTIVI/PeakVI) — batch-aware integration, label transfer, reference mapping, multimodal modeling, and model-based DE. See the scvi-* recipes.
+    provisioning: {pip: ["scvi-tools"]}
+    import_name: scvi
+    scope: system
+    status: published
+
+  - name: harmonypy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, harmony]
+    summary: Python port of Harmony — fast linear batch integration in PCA space (sc.external.pp.harmony_integrate). See the bp-data-integration recipe.
+    provisioning: {pip: ["harmonypy"]}
+    import_name: harmonypy
+    scope: system
+    status: published
+
+  - name: scanorama
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, panorama-stitching]
+    summary: Mutual-nearest-neighbor panorama stitching for batch integration of heterogeneous single-cell datasets. See the bp-data-integration recipe.
+    provisioning: {pip: ["scanorama"]}
+    import_name: scanorama
+    scope: system
+    status: published
+
+  - name: bbknn
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, batch-correction, knn-graph]
+    summary: Batch-balanced kNN — a fast graph-based batch correction that replaces sc.pp.neighbors. See the bp-data-integration recipe.
+    provisioning: {pip: ["bbknn"]}
+    import_name: bbknn
+    scope: system
+    status: published
+
+  - name: scib-metrics
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, integration, benchmarking, metrics]
+    summary: Batch-correction vs bio-conservation benchmarking metrics (scIB) to compare integration methods. See the bp-data-integration recipe.
+    provisioning: {pip: ["scib-metrics"]}
+    import_name: scib_metrics
+    scope: system
+    status: published
+
+  - name: decoupler
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, pathway, transcription-factor, enrichment, gene-set, activity]
+    summary: Footprint/enrichment methods for inferring pathway and transcription-factor activities from expression (works on AnnData). See the bp-gsea-pathway and bp-differential-expression recipes.
+    provisioning: {pip: ["decoupler"]}
+    import_name: decoupler
+    scope: system
+    status: published
+
+  - name: omnipath
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, prior-knowledge, signaling, pathway, gene-set, database]
+    summary: Python client for the OmniPath prior-knowledge database (signaling, TF-target, pathway gene sets) — supplies networks/regulons to decoupler. See the bp-gsea-pathway recipe.
+    provisioning: {pip: ["omnipath"]}
+    import_name: omnipath
+    scope: system
+    status: published
+
+  - name: scrublet
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, quality-control, doublet-detection]
+    summary: Simulation-based doublet detection for droplet scRNA-seq (also wrapped as sc.pp.scrublet). See the bp-quality-control recipe.
+    provisioning: {pip: ["scrublet"]}
+    import_name: scrublet
+    scope: system
+    status: published
+
+  - name: scvelo
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, rna-velocity, dynamics, trajectory]
+    summary: RNA velocity (stochastic/dynamical models) from spliced + unspliced counts to infer directional cell-state dynamics. See the bp-rna-velocity recipe.
+    provisioning: {pip: ["scvelo"]}
+    import_name: scvelo
+    scope: system
+    status: published
+
+  - name: palantir
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, trajectory, pseudotime, cell-fate, differentiation]
+    summary: Diffusion-based trajectory inference — pseudotime, terminal-state probabilities, and branch/fate analysis of differentiation. See the bp-trajectory-inference recipe.
+    provisioning: {pip: ["palantir"]}
+    import_name: palantir
+    scope: system
+    status: published
+
+  - name: celltypist
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, annotation, cell-type, classifier, label-transfer]
+    summary: Automated cell-type annotation via pre-trained logistic-regression models (e.g. Immune_All_Low). See the bp-annotation recipe.
+    provisioning: {pip: ["celltypist"]}
+    import_name: celltypist
+    scope: system
+    status: published
+
+  - name: snapatac2
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, atac, chromatin-accessibility, epigenomics, fragments]
+    summary: Single-cell ATAC-seq analysis — fragment import, tile matrices, dimensionality reduction, clustering and peak calling on AnnData. See the bp-atac recipe.
+    provisioning: {pip: ["snapatac2"]}
+    import_name: snapatac2
+    scope: system
+    status: published
+
+  - name: muon
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, multimodal, cite-seq, multiome, mudata]
+    summary: Multimodal single-cell framework (RNA + protein/ATAC) built on MuData — WNN integration and per-modality processing. See the bp-cite-seq recipe.
+    provisioning: {pip: ["muon"]}
+    import_name: muon
+    scope: system
+    status: published
+
+  - name: mudata
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, multimodal, data-structure, h5mu]
+    summary: MuData (.h5mu) — the multimodal container pairing several AnnData modalities for CITE-seq / multiome workflows. See the bp-cite-seq recipe.
+    provisioning: {pip: ["mudata"]}
+    import_name: mudata
+    scope: system
+    status: published
+
+  - name: pertpy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, perturbation, compositional-analysis, differential-abundance, sccoda]
+    summary: Perturbation-analysis toolkit — scCODA/tascCODA compositional tests, Milo, Augur and more for multi-condition single-cell designs. See the bp-compositional-analysis recipe.
+    provisioning: {pip: ["pertpy"]}
+    import_name: pertpy
+    scope: system
+    status: published
+
+  - name: milopy
+    version: "latest"
+    archetype: library
+    domain_tags: [single-cell, differential-abundance, neighborhoods, compositional-analysis, milo]
+    summary: Differential-abundance testing on cell neighborhoods (Milo) for AnnData. GitHub-only (emdann/milopy); pertpy's pt.tl.Milo is the maintained alternative. See the bp-compositional-analysis recipe.
+    provisioning: {pip: ["git+https://github.com/emdann/milopy.git"]}
+    import_name: milopy
+    scope: system
+    status: published
+
+  # --- single-cell R frameworks (on-demand; heavy frameworks are NOT pre-baked) ---
+  - name: Seurat
+    version: "latest"
+    archetype: r_package
+    domain_tags: [scrna-seq, single-cell, clustering, integration, seurat, r, marker-genes]
+    summary: The Seurat R toolkit — QC, SCTransform/log normalization, PCA, neighbors, clustering, UMAP, marker DE and anchor/Harmony integration on Seurat objects. CRAN binary via PPM on first install. See the seurat-scrna recipe.
+    provisioning: {r: {source: cran, package: Seurat, library: Seurat}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: harmony
+    version: "latest"
+    archetype: r_package
+    domain_tags: [single-cell, integration, batch-correction, harmony, r, seurat]
+    summary: Harmony R package — fast linear batch integration; RunHarmony() plugs directly into the Seurat workflow. See the harmony-integration recipe.
+    provisioning: {r: {source: cran, package: harmony, library: harmony}}
+    source: cran
+    scope: system
+    status: published
+
+  - name: scry
+    version: "latest"
+    archetype: r_package
+    domain_tags: [single-cell, feature-selection, deviance, bioconductor, r]
+    summary: Bioconductor scry — deviance-based feature selection (devianceFeatureSelection) on raw counts, called from Python via rpy2. See the bp-feature-selection recipe.
+    provisioning: {r: {source: bioconductor, package: scry, library: scry}}
+    source: bioconductor
+    scope: system
+    status: published

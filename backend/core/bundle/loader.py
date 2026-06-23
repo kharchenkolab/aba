@@ -10,6 +10,7 @@ Composition operations:
   - rules/required/*.md:   concatenate additively, including same-name across scopes
   - rules/*.md (loose):    override by filename, narrowest wins
   - skills/*:              override by skill name, narrowest wins; agents-filter; disable_recipes
+  - catalog/*.yaml:        capabilities override by name (narrowest wins); R-base packages extend; collections register
   - settings.yaml/json:    deep dict-merge, scalars narrowest-wins, lists extend (default)
   - commands/, hooks/:     skipped by ABA (reserved for Claude Code consumers)
 
@@ -50,6 +51,25 @@ class Skill:
     frontmatter: dict
     source_scope: str
     is_folder: bool                     # True for folder skills
+    # Visibility tier — folder-driven, never per-file: skills/core/* → 'always'
+    # (rendered in the system prompt every turn), everything else → 'local'
+    # (searchable cookbook). A generated/lab recipe outside core/ can't promote
+    # itself into the always-on tier.
+    visibility: str = "local"
+    # Flat facet for the in-prompt domain map + search filter, from
+    # skills/recipes/<domain>/… (empty otherwise; frontmatter `domain:` can win
+    # downstream in the live SkillSpec).
+    domain: str = ""
+
+
+@dataclass
+class CatalogEntry:
+    """One capability spec from a scope's catalog/ dir (capabilities.md §4.2).
+    The bio seeder projects these into the live per-project catalog, exactly as
+    content.bio.skills projects EffectiveBundle.skills into the skill registry."""
+    name: str
+    spec: dict                          # the full capability spec (name, archetype, provisioning, …)
+    source_scope: str
 
 
 @dataclass
@@ -59,6 +79,7 @@ class Provenance:
     required_files: dict[str, list[str]] = field(default_factory=dict)
     overrideable_files: dict[str, dict] = field(default_factory=dict)
     skills: dict[str, dict] = field(default_factory=dict)
+    capabilities: dict[str, dict] = field(default_factory=dict)
     settings_keys: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -78,6 +99,13 @@ class EffectiveBundle:
     required_rules: list[Rule] = field(default_factory=list)
     overrideable_rules: list[Rule] = field(default_factory=list)
     skills: list[Skill] = field(default_factory=list)
+    # Capability catalog, composed from each scope's catalog/ dir. The bio
+    # seeder projects `catalog` into the per-project entity store; `r_base_specs`
+    # is the curated shared-R-base conda list; `collection_dirs` are file-backed
+    # reference collections (e.g. biomni) to register for search.
+    catalog: list[CatalogEntry] = field(default_factory=list)
+    r_base_specs: list[str] = field(default_factory=list)
+    collection_dirs: list[Path] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
     provenance: Provenance = field(default_factory=Provenance)
 
@@ -103,6 +131,24 @@ class EffectiveBundle:
             if r.source_scope not in exclude_scopes:
                 out.append(r)
         return out
+
+    def rule_content(self, filename: str) -> str | None:
+        """Composed content for one rule filename, as build.py's named rule
+        blocks consume it: an overrideable rule → the narrowest-scope winner;
+        a required rule → all scopes' copies concatenated (additive). None when
+        no scope provides it (caller falls back to the on-disk file)."""
+        for r in self.overrideable_rules:
+            if r.filename == filename:
+                return r.content
+        req = [r.content.rstrip() for r in self.required_rules if r.filename == filename]
+        if req:
+            return "\n\n".join(req)
+        return None
+
+    def system_policy(self) -> str:
+        """The system scope's AGENTS.md policy block (what build.py's identity
+        block injects). '' if the system scope contributed no policy."""
+        return next((c for n, _l, c in self.policy_blocks if n == "system"), "")
 
 
 def _render_policy(blocks: list[tuple[str, str, str]]) -> str:
@@ -300,52 +346,69 @@ def _skill_canonical_name(path: Path, frontmatter: dict,
     return path.stem                   # filename without .md
 
 
+def _skill_tier(rel_parts: tuple) -> tuple[str, str]:
+    """(visibility, domain) from a skill path relative to skills/.
+    skills/core/**            → ('always', '')   (system-prompt tier)
+    skills/recipes/<domain>/** → ('local', '<domain>')
+    everything else           → ('local', '')"""
+    vis = "always" if rel_parts and rel_parts[0] == "core" else "local"
+    dom = rel_parts[1] if (len(rel_parts) >= 3 and rel_parts[0] == "recipes") else ""
+    return vis, dom
+
+
 def _discover_skills(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
-    """Walk a scope's skills/ dir. Returns both folder and flat skills."""
+    """Walk a scope's skills/ tree (recursively, following symlinks). Recognizes
+    folder skills (<dir>/SKILL.md) and flat skills (<name>.md); visibility +
+    domain come from the tier subdir (_skill_tier). The recursive walk is what
+    lets the system scope expose the tiered library (skills/core/,
+    skills/recipes/<domain>/, skills/vendor_skills/<pkg>/) as well as a simple
+    bundle's flat skills/<name>.md."""
+    import os as _os
     skills_dir = scope.path / "skills"
     if not skills_dir.is_dir():
         return []
+    all_md: list[Path] = []
+    for dp, _dn, fns in _os.walk(skills_dir, followlinks=True):
+        for fn in fns:
+            if fn.endswith(".md"):
+                all_md.append(Path(dp) / fn)
+    all_md.sort()
     found: list[Skill] = []
+    consumed: set[Path] = set()        # folder-skill dirs (internals aren't standalone)
+    folder_names: set[str] = set()
 
-    # Folder skills first (each subdir with SKILL.md)
-    seen_folder_names: set[str] = set()
-    for child in sorted(skills_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        skill_md = child / "SKILL.md"
-        if not skill_md.is_file():
-            continue
+    for skill_md in [f for f in all_md if f.name == "SKILL.md"]:
+        folder = skill_md.parent
         try:
-            text = skill_md.read_text()
+            fm, body = _parse_frontmatter(skill_md.read_text())
         except Exception as e:
-            provenance.warnings.append(
-                f"{scope.name}: unreadable {skill_md}: {e}")
+            provenance.warnings.append(f"{scope.name}: unreadable {skill_md}: {e}")
             continue
-        fm, body = _parse_frontmatter(text)
         name = _skill_canonical_name(skill_md, fm, is_folder=True)
-        seen_folder_names.add(name)
-        found.append(Skill(
-            name=name, path=skill_md, body=body,
-            frontmatter=fm, source_scope=scope.name, is_folder=True,
-        ))
+        vis, dom = _skill_tier(skill_md.relative_to(skills_dir).parts)
+        found.append(Skill(name=name, path=skill_md, body=body, frontmatter=fm,
+                           source_scope=scope.name, is_folder=True,
+                           visibility=vis, domain=dom))
+        consumed.add(folder)
+        folder_names.add(name)
 
-    # Flat skills (top-level .md files; skip if name collides with a
-    # folder skill that already won)
-    for f in sorted(skills_dir.glob("*.md")):
+    for f in all_md:
+        if f.name == "SKILL.md":
+            continue
+        if any(f.is_relative_to(d) for d in consumed):
+            continue                    # a folder skill's internal .md (references/…)
         try:
-            text = f.read_text()
+            fm, body = _parse_frontmatter(f.read_text())
         except Exception as e:
-            provenance.warnings.append(
-                f"{scope.name}: unreadable {f}: {e}")
+            provenance.warnings.append(f"{scope.name}: unreadable {f}: {e}")
             continue
-        fm, body = _parse_frontmatter(text)
         name = _skill_canonical_name(f, fm, is_folder=False)
-        if name in seen_folder_names:
+        if name in folder_names:
             continue
-        found.append(Skill(
-            name=name, path=f, body=body,
-            frontmatter=fm, source_scope=scope.name, is_folder=False,
-        ))
+        vis, dom = _skill_tier(f.relative_to(skills_dir).parts)
+        found.append(Skill(name=name, path=f, body=body, frontmatter=fm,
+                           source_scope=scope.name, is_folder=False,
+                           visibility=vis, domain=dom))
     return found
 
 
@@ -505,6 +568,76 @@ def _compose_settings(chain: list[ScopeBundle],
     return merged
 
 
+def _compose_catalog(chain: list[ScopeBundle],
+                     provenance: Provenance,
+                     ) -> tuple[list[CatalogEntry], list[str], list[Path]]:
+    """Compose each present scope's catalog/ dir into three projections:
+
+      - capability specs, override by name (narrowest scope wins, like skills);
+      - the curated R-base conda spec list, extended broadest→narrowest (deduped,
+        order preserved) — labs add to the base, they don't replace it;
+      - file-backed collection dirs (subdirs with a collection.yaml) to register
+        for search (collections.md).
+
+    Dispatch is by YAML content, not filename: a catalog/*.yaml with a
+    `capabilities:` list contributes capability specs; one with a `packages:`
+    list contributes R-base specs (a file may carry both). So the materialized
+    system scope (bio_seed.yaml / r_base.yaml) and a future imported pack
+    (python_bio.yaml / r_bioconductor.yaml) compose identically.
+    """
+    # Read every catalog/*.yaml once, grouped by scope (chain = broadest-first).
+    scope_docs: list[tuple[ScopeBundle, list[dict]]] = []
+    collection_dirs: list[Path] = []
+    for s in chain:
+        if not s.present:
+            continue
+        cat_dir = s.path / "catalog"
+        if not cat_dir.is_dir():
+            continue
+        docs = [d for yf in sorted(cat_dir.glob("*.yaml"))
+                if (d := _read_yaml_safe(yf, provenance, s.name))]
+        scope_docs.append((s, docs))
+        for sub in sorted(p for p in cat_dir.iterdir() if p.is_dir()):
+            if (sub / "collection.yaml").is_file():
+                collection_dirs.append(sub.resolve())
+
+    # Capabilities: narrowest-first so a lab/user entry overrides a system one
+    # of the same name.
+    seen: dict[str, CatalogEntry] = {}
+    shadowed: dict[str, list[str]] = {}
+    for s, docs in reversed(scope_docs):
+        for doc in docs:
+            for spec in (doc.get("capabilities") or []):
+                if not isinstance(spec, dict):
+                    continue
+                name = spec.get("name")
+                if not name:
+                    continue
+                if name in seen:
+                    shadowed.setdefault(name, []).append(s.name)
+                    continue
+                seen[name] = CatalogEntry(name=name, spec=spec, source_scope=s.name)
+
+    # R-base packages: broadest-first extend (dedup, preserve first occurrence).
+    r_base: list[str] = []
+    r_seen: set[str] = set()
+    for s, docs in scope_docs:
+        for doc in docs:
+            for pkg in (doc.get("packages") or []):
+                p = str(pkg)
+                if p not in r_seen:
+                    r_seen.add(p)
+                    r_base.append(p)
+
+    for name, entry in seen.items():
+        provenance.capabilities[name] = {
+            "effective_scope": entry.source_scope,
+            "shadowed_in": shadowed.get(name, []),
+        }
+
+    return sorted(seen.values(), key=lambda c: c.name), r_base, collection_dirs
+
+
 # -----------------------------------------------------------------------
 # Top-level entry
 # -----------------------------------------------------------------------
@@ -538,6 +671,10 @@ def load_bundle(resolution: ScopeResolution) -> EffectiveBundle:
     # 5. skills (override + agents filter + disable_recipes)
     eb.skills = _compose_skills(chain, disabled, eb.provenance)
 
+    # 6. catalog (capabilities override-by-name + curated R-base + collections)
+    eb.catalog, eb.r_base_specs, eb.collection_dirs = _compose_catalog(
+        chain, eb.provenance)
+
     # Carry resolver-side warnings through
     eb.provenance.warnings.extend(resolution.warnings)
 
@@ -563,6 +700,9 @@ def format_effective_bundle(eb: EffectiveBundle) -> str:
                      if v.get("skipped_reason"))
     lines.append(f"[bundle] skills: {len(eb.skills)} "
                   f"({n_disabled} disabled, {n_skipped} agent-filtered)")
+    lines.append(f"[bundle] catalog: {len(eb.catalog)} capabilities, "
+                  f"{len(eb.r_base_specs)} r-base pkgs, "
+                  f"{len(eb.collection_dirs)} collection(s)")
     lines.append(f"[bundle] settings: {len(eb.settings)} top-level keys")
     if eb.provenance.warnings:
         lines.append(f"[bundle] warnings: {len(eb.provenance.warnings)}")

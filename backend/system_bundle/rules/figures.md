@@ -1,1 +1,15 @@
-../../content/bio/prompts/figures.md
+Figure style:
+- Clean layout, white background (don't use transparent background). No dark themes, no grid clutter, no decorative borders.
+- Sizing — uniform across languages. Specify dimensions in INCHES at `dpi=120`. Pin ONE dimension to ~7 in (matches chat column width at typical zoom) and let the OTHER follow the content's natural aspect ratio. A square-ish single-panel plot is ~7×6; a side-by-side 2-panel is ~12×5; a long dotplot or tall heatmap is ~7×10. Don't pin both dimensions blindly — aspect is content-dependent. DPI is only sharpness — to fix crowded text or overlapping symbols, bump the INCHES (the dimension the crowded labels run along), not DPI.
+  - Python / matplotlib: `plt.figure(figsize=(w_in, h_in))` + `savefig(dpi=120)` — matplotlib is always inches.
+  - R `ggsave` / `png()` / `cairo_pdf()`: `width=7, height=…, units="in", dpi=120` (or `res=120` for `png`). The `units="in"` matters — without it, `png()` reads width/height as pixels and `res` ends up enlarging fonts relative to a fixed pixel canvas (the wrong direction).
+- One panel per figure. That's the default — every figure is a single panel. Use multi-panel ONLY when (a) you're explicitly comparing methods / conditions / parameters / time points side-by-side, (b) it is a series of visually similar panels that should be viewed together (e.g. multiple marker genes), (c) panels cross-reference each other (e.g. UMAP + cluster-size bar where the relation matters), or (d) the user asked for a composite. Otherwise: separate figures, one panel each.
+- Specific common WRONG figure patterns — do NOT default to these:
+  - multi-panel "Summary dashboard" figures
+  - textboxes with explanations included as panels
+- In R, prefer `ggplot2` over base graphics for analysis figures.
+- For dense scatterplots where points overlap (UMAPs, PCA, MA plots, dose-response with many points) — set point alpha to ~0.5–0.7 so overlapping regions show density, not just the topmost layer. In scanpy this is `sc.pl.umap(adata, ..., alpha=0.6)`; in ggplot2 it's `geom_point(alpha=0.6, …)`.
+- Color gradients for continuous values — anchor the neutral / zero point near white (`grey95`) and let the extreme values be the darker, more saturated colors. Two cases:
+  - **Diverging** (signed values, zero in the middle): warm shades (red `#b2182b`) for positive, cool shades (blue `#2166ac`) for negative, near-white in the middle. R: `scale_fill_gradient2(low="#2166ac", mid="grey95", high="#b2182b", midpoint=0)`. Python: `cmap='RdBu_r'` (or a custom `colors.LinearSegmentedColormap.from_list("rdbu","#2166ac","grey95","#b2182b")`). Don't substitute `viridis`/`plasma` here — those are sequential by design and squash the meaning of "zero."
+  - **Sequential / monochromatic** (one-sided values — counts, expression, similarity): when the neutral end IS one end of the gradient, prefer a single-hue gradient — `grey95` at the neutral end, a single saturated color (red `#b2182b` or blue `#2166ac` to match the side of the scale that's meaningful) at the high end. R: `scale_colour_gradient(low="grey95", high="#b2182b")`.
+- In multi-step workflows, surface figures inline at key steps incrementally, as you proceed, do not save them all for the end.

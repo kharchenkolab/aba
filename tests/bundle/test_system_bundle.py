@@ -70,16 +70,17 @@ def test_system_bundle_has_settings_yaml():
 
 
 def test_system_bundle_skills_are_discoverable():
-    """Skills dir has both flat skills (core) + folder skills
-    (vendor)."""
+    """Skills dir exposes the tiered library: core/ flat skills (the always
+    tier) + folder skills (vendor) somewhere in the tree."""
+    import os
     skills = SYSTEM_BUNDLE / "skills"
     assert skills.is_dir()
-    # Flat skills (core)
-    flat = list(skills.glob("*.md"))
-    assert len(flat) >= 5, f"expected ≥5 core flat skills, got {len(flat)}"
-    # Folder skills (vendor)
-    folder_skills = [d for d in skills.iterdir()
-                     if d.is_dir() and (d / "SKILL.md").exists()]
+    # Core (always-tier) flat skills live under skills/core/.
+    core_flat = list((skills / "core").glob("*.md"))
+    assert len(core_flat) >= 5, f"expected ≥5 core skills, got {len(core_flat)}"
+    # Folder skills (e.g. vendor_skills/<pkg>/SKILL.md) anywhere under skills/.
+    folder_skills = [dp for dp, _dn, fns in os.walk(skills, followlinks=True)
+                     if "SKILL.md" in fns]
     assert len(folder_skills) >= 1, "no folder skills found"
 
 
@@ -119,12 +120,13 @@ def test_claude_md_bridge_present():
     assert c.exists(), "CLAUDE.md bridge symlink missing"
 
 
-def test_dot_claude_self_symlink_present():
-    """.claude → . self-link, so .claude/skills resolves to ./skills/."""
-    dotclaude = SYSTEM_BUNDLE / ".claude"
-    assert dotclaude.is_symlink(), ".claude self-link missing"
-    # And it resolves to the bundle itself
-    assert dotclaude.resolve() == SYSTEM_BUNDLE.resolve()
-    # And nested resolution works
-    assert (dotclaude / "AGENTS.md").exists()
-    assert (dotclaude / "skills").is_dir()
+def test_system_bundle_has_no_symlinks():
+    """The system bundle is real files now — no symlink veneer over content/bio/
+    (the repo shouldn't carry symlinks). The old .claude self-link + the
+    content/bio symlinks were removed when the content moved in."""
+    import os
+    links = [Path(dp) / fn
+             for dp, dns, fns in os.walk(SYSTEM_BUNDLE)
+             for fn in (dns + fns)
+             if (Path(dp) / fn).is_symlink()]
+    assert not links, f"unexpected symlinks in system_bundle: {links}"

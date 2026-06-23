@@ -23,6 +23,28 @@ os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
+
+# The capability catalog is pack-sourced (installation scope), NOT vendored in
+# the backend. Stand up a minimal fixture installation bundle so the projection
+# (bundle compose → bio seeder) is exercised end-to-end without the real pack —
+# the same DESeq2/pagoda2/conos + R-base manifest the pack supplies.
+_inst = Path(_tmp) / "installation" / "catalog"
+_inst.mkdir(parents=True, exist_ok=True)
+(_inst / "seed.yaml").write_text(
+    "capabilities:\n"
+    "  - name: DESeq2\n    version: latest\n    archetype: r_package\n"
+    "    summary: Bioconductor DESeq2 — bulk RNA-seq differential expression.\n"
+    "    provisioning: {r: {source: bioconductor, package: DESeq2, library: DESeq2}}\n"
+    "    scope: system\n    status: published\n"
+    "  - name: pagoda2\n    version: latest\n    archetype: r_package\n"
+    "    provisioning: {r: {source: cran, package: pagoda2, library: pagoda2}}\n"
+    "    scope: system\n    status: published\n"
+    "  - name: conos\n    version: latest\n    archetype: r_package\n"
+    "    provisioning: {r: {source: cran, package: conos, library: conos}}\n"
+    "    scope: system\n    status: published\n"
+    "packages: [r-rcpparmadillo, r-cairo, r-seurat, bioconductor-deseq2, r-tidyverse]\n")
+os.environ["ABA_INSTITUTION_BUNDLE"] = str(Path(_tmp) / "installation")
+
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                # noqa: E402
