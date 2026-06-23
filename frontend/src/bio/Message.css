@@ -353,21 +353,22 @@
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.6); cursor: zoom-out; padding: 40px;
 }
+/* Inline-flex frame that shrinks to the image's rendered size so the
+   toolbar above it is anchored to the IMAGE's left edge, not the
+   viewport's. */
+.lightbox__frame {
+  display: inline-flex; flex-direction: column; align-items: flex-start;
+  gap: 6px; cursor: default;
+}
 .lightbox .lightbox__img {
-  max-width: 92vw; max-height: 88vh; object-fit: contain;
+  max-width: 92vw; max-height: 84vh; object-fit: contain;
+  display: block;
 }
-.lightbox__close {
-  position: fixed; top: 16px; right: 20px;
-  font-size: 28px; line-height: 1; color: #fff;
-  background: none; border: none; cursor: pointer;
-}
-/* Pin (and any future actions) live in their own toolbar in the upper-
-   left, mirroring where the close button sits on the upper-right. White
-   on the dark backdrop with the same red flip on the .msg__tool--pinned
-   state so the gesture is identical to the inline one. */
+/* Pin + close share one short toolbar sitting just above the image's
+   left corner — same pattern as the Run-view modal's header bar but
+   without the box chrome. */
 .lightbox__tools {
-  position: fixed; top: 16px; left: 20px;
-  display: flex; gap: 8px;
+  display: flex; align-items: center; gap: 6px;
 }
 .lightbox__tools .msg__tool {
   background: rgba(255, 255, 255, 0.92);
@@ -375,6 +376,14 @@
   opacity: 1;
 }
 .lightbox__tools .msg__tool--pinned { color: var(--red); }
+.lightbox__close {
+  font-size: 22px; line-height: 1; color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border: none; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.lightbox__close:hover { background: rgba(255, 255, 255, 0.22); }
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg); color: var(--text-3);
