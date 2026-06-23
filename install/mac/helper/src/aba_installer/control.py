@@ -67,26 +67,11 @@ def prepare_install_artifacts() -> Path:
     dest = installer_dir() / "aba"
     dest.write_text(launcher.render(launcher.default_context()))
     os.chmod(dest, 0o755)
-    _write_deployment_yaml()
+    # The recipe library is wired in by the playbook's `import-recipes` step
+    # (pack recipes/<domain>/ → $ABA_HOME/installation/skills/recipes/<domain>/
+    # + catalog/), the installation scope the bundle loader reads. The old
+    # deployment.yaml / content-layers path was retired with core/config_layers.py.
     return dest
-
-
-def _write_deployment_yaml() -> None:
-    """Register the cloned recipe library as a content layer.
-
-    The backend reads $ABA_HOME/deployment.yaml (core/config_layers.py) to
-    find overlay content; without this file the cloned aba-recipes sits on
-    disk but never loads. A layer whose path is missing is skipped silently,
-    so writing this unconditionally is safe even before the clone lands.
-    """
-    recipes = repo_dir() / "aba-recipes"
-    (aba_home() / "deployment.yaml").write_text(
-        "# Auto-written by the ABA installer. Points the backend at the\n"
-        "# cloned recipe library (see core/config_layers.py).\n"
-        "layers:\n"
-        "  - name: aba-recipes\n"
-        f"    path: {recipes}\n"
-    )
 
 
 # ─── background install: everything that doesn't need credentials ───────────
@@ -412,7 +397,7 @@ async def install():
 
 @router.post("/update")
 async def update():
-    """Pull latest aba + aba-recipes, refresh env, rebuild frontend, bounce
+    """Pull latest aba + aba-recipe-pack, refresh env, rebuild frontend, bounce
     backend. Surfaced as the UI's "Check for updates" button."""
     q = _start_op("update")
     return StreamingResponse(_drain_queue_as_sse(q), media_type="text/event-stream")

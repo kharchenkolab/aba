@@ -21,7 +21,7 @@ Layout under the root:
   <root>/mamba/                     → conda package cache (kept across runs
                                       unless --purge, so re-installs are fast)
   <root>/bin/micromamba             → the micromamba binary (kept)
-  <root>/empty-recipes/             → stand-in for aba-recipes
+  <root>/empty-recipes/             → stand-in for aba-recipe-pack
 
 Usage:
   smoke.py up                 full from-scratch install (all steps)
@@ -76,8 +76,8 @@ def _isolated_env() -> dict[str, str]:
         # host key accepted without a known_hosts under the fake home.
         GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new",
     )
-    # aba-recipes: clone the real repo when ABA_RECIPES_URL is exported
-    # (e.g. git@github.com:kharchenkolab/aba-recipes.git); otherwise stand in
+    # aba-recipe-pack: clone the real repo when ABA_RECIPES_URL is exported
+    # (e.g. git@github.com:kharchenkolab/aba-recipe-pack.git); otherwise stand in
     # an empty dir so recipe content isn't a variable in mechanics testing.
     recipes_url = os.environ.get("ABA_RECIPES_URL")
     if recipes_url:
