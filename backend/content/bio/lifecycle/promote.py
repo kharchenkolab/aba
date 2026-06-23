@@ -17,6 +17,33 @@ from core.graph.entities import create_entity, get_entity, update_entity
 AI_INTERPRETATION_PLACEHOLDER = "✨ generating…"
 
 
+def _existing_active_result_for_evidence(evidence_id: str,
+                                          thread_id: Optional[str]) -> Optional[str]:
+    """Return the id of an active Result already wrapping `evidence_id`.
+
+    The auto-wrap pin path (target_result_id=None) needs to be idempotent —
+    re-clicking pin must NOT mint a second Result around the same figure.
+    We scan incoming `includes` edges, filter to active results, and
+    prefer one in the same `thread_id` when available so cross-thread
+    pins don't collide (a pin in thread A shouldn't suppress a pin in
+    thread B). Returns None when nothing matches; caller proceeds to
+    create a new Result."""
+    candidates: list[str] = []
+    for e in edges_to(evidence_id):
+        if e.get("rel_type") != "includes":
+            continue
+        rid = e.get("source_id")
+        if not rid:
+            continue
+        r = get_entity(rid)
+        if not r or r.get("type") != "result" or r.get("status") != "active":
+            continue
+        if thread_id and (r.get("metadata") or {}).get("thread_id") not in (None, thread_id):
+            continue
+        candidates.append(rid)
+    return candidates[0] if candidates else None
+
+
 def pin_evidence(
     *,
     thread_id: str,
@@ -86,6 +113,23 @@ def pin_evidence(
         member_id = members[-1].get("id") if members else None
         return {"result_id": target_result_id, "member_id": member_id, "evidence_id": evidence_id, "created_result": False}
 
+    # Idempotency guard — when no target Result was specified and this
+    # evidence is already wrapped in an active Result via an `includes`
+    # edge, reuse it instead of minting a duplicate. Closes the
+    # "rapid double-pin creates two Results" bug that affected every
+    # auto-wrap caller (pin_artifact, pin_cell_from_exec, run_pin_output,
+    # pin_entity_to_result). Belt-and-suspenders: the storage layer
+    # refuses the dupe so individual callers don't each need their own
+    # check.
+    if evidence_id:
+        existing_rid = _existing_active_result_for_evidence(evidence_id, thread_id)
+        if existing_rid:
+            ex = get_entity(existing_rid) or {}
+            members = (ex.get("metadata") or {}).get("members", [])
+            member_id = members[-1].get("id") if members else None
+            return {"result_id": existing_rid, "member_id": member_id,
+                    "evidence_id": evidence_id, "created_result": False}
+
     # New Result. The figure CAPTION lives on the member (filled by the A3
     # background auto_interpret daemon — see auto_interpret below). The
     # Result-level `interpretation` field is reserved for an explicit
@@ -115,6 +159,11 @@ def pin_evidence(
             "interpretation_origin": "user" if interp else "",
             "invested": bool(interp),   # user supplied an interpretation at create-time → invested
             "members": [],
+            # Primary evidence id — lets clients derive "this evidence
+            # is already pinned" without hitting the edges API. Multi-
+            # evidence Results still get their first wrap recorded here;
+            # the full list is reachable via `includes` edges or members.
+            "primary_evidence_id": evidence_id,
         },
     )
     # Initial member of an auto-created wrapper Result — NOT a user
