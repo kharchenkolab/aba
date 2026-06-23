@@ -361,6 +361,20 @@
   font-size: 28px; line-height: 1; color: #fff;
   background: none; border: none; cursor: pointer;
 }
+/* Pin (and any future actions) live in their own toolbar in the upper-
+   left, mirroring where the close button sits on the upper-right. White
+   on the dark backdrop with the same red flip on the .msg__tool--pinned
+   state so the gesture is identical to the inline one. */
+.lightbox__tools {
+  position: fixed; top: 16px; left: 20px;
+  display: flex; gap: 8px;
+}
+.lightbox__tools .msg__tool {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-3);
+  opacity: 1;
+}
+.lightbox__tools .msg__tool--pinned { color: var(--red); }
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg); color: var(--text-3);
