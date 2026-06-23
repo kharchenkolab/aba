@@ -59,6 +59,7 @@ R_CORE_DEPS = ["r-matrix", "r-rcpp", "r-rcpparmadillo", "r-rcppeigen", "r-rcpppr
 _CRAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._]*$")          # CRAN/Bioc package name
 _GH_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")   # owner/repo
 _REF_RE = re.compile(r"^[A-Za-z0-9_./-]+$")                 # tag / branch / sha
+_CONDA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")     # conda package name (e.g. r-hdf5r)
 
 # "ERROR/Warning: dependency 'X' is not available for package 'Y'" — a CRAN
 # install can hard-depend on a Bioconductor package the CRAN/PPM repo lacks.
@@ -252,7 +253,30 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
         return {"status": "error", "note": err}
     ensure_r_runtime(cancel_token=cancel_token)
     lib = project_r_lib(project_id)
-    libname = library or (package.split("/")[-1] if source == "github" else package)
+    libname = library or (
+        package.split("/")[-1] if source == "github"
+        else (package[2:] if source == "conda" and package.startswith("r-") else package))
+
+    # conda source: install a prebuilt conda-forge/bioconda R binary into the
+    # shared base (e.g. r-hdf5r, which bundles the HDF5 system lib — the
+    # source-compile path can't find it). Goes to the tools env's R library, so
+    # it's on .libPaths() for every project. This is the explicit, no-compile
+    # path for R packages with heavy system-lib deps.
+    if source == "conda":
+        from core.runtime import progress
+        progress.emit(f"R: installing {package} from conda into the shared base "
+                      f"(prebuilt binary — no source compile)…", phase="r")
+        try:
+            ensure_r_base([package])
+        except Exception as e:  # noqa: BLE001
+            return {"status": "error", "package": package, "source": "conda",
+                    "note": f"conda install of {package!r} failed: {e}"}
+        if r_has_package(libname, project_id=project_id):
+            return {"status": "ready", "package": package, "source": "conda",
+                    "library": libname, "lib": str(tools_env())}
+        return {"status": "error", "package": package, "source": "conda",
+                "note": f"{package!r} installed via conda but R library({libname}) "
+                        f"isn't loadable — check the 'library' name (conda 'r-foo' → library 'foo')."}
 
     # Heavy/popular Bioconductor packages (DESeq2/limma/edgeR + their dep trees)
     # are fragile to source-compile (e.g. XVector → 'make Error 1'); prefer the
@@ -411,8 +435,8 @@ def _parallel_expr() -> str:
 
 def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[str]:
     """Return an error string if the install spec is unsafe/malformed, else None."""
-    if source not in ("cran", "bioconductor", "github"):
-        return f"unknown R source {source!r} (cran|bioconductor|github)"
+    if source not in ("cran", "bioconductor", "github", "conda"):
+        return f"unknown R source {source!r} (cran|bioconductor|github|conda)"
     if source == "github":
         if not _GH_RE.match(package or ""):
             return (
@@ -422,6 +446,11 @@ def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[
                 "tag / commit (default 'main'). "
                 f"Got package={package!r}."
             )
+    elif source == "conda":
+        # conda coordinate (conda-forge/bioconda binary, e.g. 'r-hdf5r') — these
+        # legitimately contain hyphens, which the CRAN name rule rejects.
+        if not _CONDA_RE.match(package or ""):
+            return "conda package name has invalid characters"
     elif not _CRAN_RE.match(package or ""):
         return "package name has invalid characters"
     if ref and not _REF_RE.match(ref):

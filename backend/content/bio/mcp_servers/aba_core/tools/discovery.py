@@ -188,15 +188,26 @@ def register_discovery_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def ensure_capability(name: str,
+                          source: str | None = None,
+                          package: str | None = None,
+                          ref: str | None = None,
                           aba_ctx_id: str | None = None) -> dict:
         """Install / make-ready a named capability (PyPI, conda,
         bioconda, MCP server, …). Long-running for installs — uses
         in_tool_ctx so progress.emit phase lines reach the handler-
-        thread sink and stream to the chat as tool_progress events."""
+        thread sink and stream to the chat as tool_progress events.
+
+        R-package per-install override (no re-cataloguing): pass
+        source='github', package='owner/repo', ref='<branch/tag>' to
+        install a catalogued R package from a dev branch for THIS install."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import ensure_capability as _impl
+        _in: dict = {"name": name}
+        if source:  _in["source"] = source
+        if package: _in["package"] = package
+        if ref:     _in["ref"] = ref
         with in_tool_ctx(aba_ctx_id) as ctx:
-            return _impl({"name": name}, ctx)
+            return _impl(_in, ctx)
 
     @mcp.tool()
     def propose_capability(name: str,
@@ -204,7 +215,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                                               "mcp_server", "pipeline"] | None = None,
                            channel: str | None = None,
                            source: Literal["pypi", "bioconda", "cran",
-                                            "bioconductor", "github"] | None = None,
+                                            "bioconductor", "github", "conda"] | None = None,
                            package: str | None = None,
                            library: str | None = None,
                            ref: str | None = None,

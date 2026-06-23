@@ -126,6 +126,39 @@ def propose_capability(spec: dict, ctx: Optional[ExecContext] = None) -> str:
     return cap_id
 
 
+def update_capability(name_or_id: str, spec: dict,
+                      ctx: Optional[ExecContext] = None) -> Optional[str]:
+    """Update an EXISTING capability's mutable fields (provisioning, source,
+    summary, domain_tags, version, …) IN PLACE — keeping its id + published
+    status. Returns the entity id, or None if not found / not writable.
+
+    Only **project**- or **user**-scoped capabilities are updatable: those are
+    agent-/operator-proposed and meant to be corrected. system/installation
+    scope entries are curated catalog content and are left untouched (the caller
+    should propose a differently-named variant, or override at
+    ensure_capability time). This is what lets the agent fix a wrong git ref /
+    source on a capability it just proposed, instead of being stuck with a stale
+    entry it can't change."""
+    cap = resolve_capability(name_or_id, ctx=ctx)
+    cap_id = cap.get("id") if cap else None
+    ent = get_entity(cap_id) if cap_id else None
+    if ent is None or ent.get("type") != CAPABILITY:
+        return None  # not found, or a file-backed collection (no entity to update)
+    meta = dict(ent.get("metadata") or {})
+    scope = str(meta.get("scope", "system"))
+    if not (scope.startswith("project") or scope.startswith("user")):
+        return None  # curated entry — don't clobber
+    for k, v in spec.items():
+        if k in ("name", "scope", "status"):  # identity/lifecycle stay put
+            continue
+        meta[k] = v
+    meta["status"] = "published"
+    update_entity(cap_id, metadata=meta)
+    log_event("capability_updated", entity_id=cap_id, title=meta.get("name"),
+              detail={"source": meta.get("source"), "provisioning": meta.get("provisioning")})
+    return cap_id
+
+
 def list_capabilities(
     query: Optional[str] = None,
     tags: Optional[list[str]] = None,
