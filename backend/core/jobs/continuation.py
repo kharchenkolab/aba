@@ -154,6 +154,24 @@ def _list_job_output_files(job_id: str, project_id: str | None) -> tuple[str | N
         return None, []
 
 
+# Strong failure signals that survive a clean (exit-0) worker — e.g. a script
+# that caught an install error and still returned 0 (the pagoda2/hdf5r case).
+# Used to re-label a 'finished, no artifacts' job as an actual failure.
+_JOB_FAIL_MARKERS = (
+    "had non-zero exit status",
+    "ERROR:",
+    "is not available",
+    "Execution halted",
+    "Traceback (most recent call last)",
+)
+
+
+def _output_failure_lines(text: str) -> list[str]:
+    """Lines from a job's log that indicate a real failure despite a 0 exit."""
+    return [ln.strip() for ln in (text or "").splitlines()
+            if any(m.lower() in ln.lower() for m in _JOB_FAIL_MARKERS)]
+
+
 def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     """The synthetic user message the Guide sees as fresh evidence. Starts
     with the literal `[continuation: …]` prefix so the frontend can render
@@ -212,6 +230,22 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
         # subprocess no-op'd, kernel produced no plots). DO NOT claim
         # artifacts are registered when none are.
         tail = (job.get("log_tail") or "").strip()
+        # Masked failure: the worker exited 0 but the log reports an error — a
+        # script that caught an install/exec error and still returned 0. Call it
+        # a FAILURE so the agent fixes the cause instead of treating it as a
+        # benign no-op (the pagoda2/hdf5r continuation that read "no artifacts").
+        fail_lines = _output_failure_lines(tail)
+        if fail_lines:
+            blurb = "\n".join(fail_lines[-6:])[:600]
+            return (
+                f"[continuation: background job `{job_id}` ({title}) FAILED — its "
+                f"output reports an error even though the worker exited 0 (the "
+                f"script likely swallowed it). No artifacts were produced.]\n\n"
+                f"Error(s) from the job log:\n```\n{blurb}\n```\n"
+                f"Fix the cause (often a missing dependency / system library), then "
+                f"retry — prefer ensure_capability over a hand-rolled install so the "
+                f"runtime's dependency recovery applies.{files_blurb}"
+            )
         tail_blurb = ""
         if tail:
             short_tail = tail[-400:] if len(tail) > 400 else tail
