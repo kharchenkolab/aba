@@ -554,9 +554,9 @@ def _orchestrator_subskills(target: str) -> list[str]:
         if spec is None:
             # Lazy-register both tiers — registry is keyed by skill name so
             # this is idempotent if anyone else already registered.
-            register_skill_dir(os.path.join(BACKEND, "content/bio/library/core"),
+            register_skill_dir(os.path.join(BACKEND, "system_bundle/skills/core"),
                               visibility="always")
-            register_skill_dir(os.path.join(BACKEND, "content/bio/library/recipes"),
+            register_skill_dir(os.path.join(BACKEND, "system_bundle/skills/recipes"),
                               visibility="local")
             spec = get_skill(target)
     except Exception:

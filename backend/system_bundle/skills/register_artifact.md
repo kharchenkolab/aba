@@ -1,1 +1,0 @@
-../../content/bio/library/core/register_artifact.md

@@ -373,6 +373,11 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 "Files saved to disk in previous turns persist; reload them "
                 "with readRDS()/load_h5ad()/read_csv() etc. from the absolute "
                 "paths listed below.")
+            lines.append(
+                "Need a library that isn't loaded? ensure_capability(name) FIRST "
+                "— do NOT install.packages()/BiocManager::install()/pip install "
+                "(they source-compile against missing system libs and fail; "
+                "ensure_capability installs prebuilt conda/bioconda binaries).")
         if cwd:
             lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
         lines.append("")

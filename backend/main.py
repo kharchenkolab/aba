@@ -1,8 +1,18 @@
 import asyncio
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Size BLAS/OMP thread pools to the CPU ALLOCATION (Slurm/cgroup/affinity), not
+# the host core count — BEFORE numpy/torch import here or in any kernel/subprocess
+# we later spawn. On a node allocated few CPUs out of many (e.g. an OnDemand Slurm
+# node), OpenBLAS would otherwise spawn one thread per host core and hit the
+# per-user process limit (pthread EAGAIN), killing run_r/run_python. See
+# core/exec/cpu.py. setdefault, so a launch-script/operator value still wins.
+from core.exec.cpu import pin_blas_threads as _pin_blas_threads
+_pin_blas_threads()
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import StreamingResponse, FileResponse, Response
@@ -1858,6 +1868,9 @@ def skills_list():
             "requires_tools": list(s.requires_tools),
             "produces": list(s.produces),
             "resource_profile": s.resource_profile,
+            "layer": s.layer,              # provenance: which scope contributed it
+            "visibility": s.visibility,    # 'always' (core tier) | 'local'
+            "domain": s.domain,
         }
         for s in list_skills()
     ]
@@ -2063,37 +2076,32 @@ def _write_zip_text(zf, arcname: str, content: str, mtime: float | None) -> None
 
 @app.post("/api/skills/reload")
 def skills_reload():
-    """Re-register every skill root across every configured content layer
-    (system + any overlays declared in deployment.yaml). Lets vendor-skill
-    edits OR an overlay update (e.g. `git pull` in `/srv/aba/content/
-    aba-recipes/`) take effect without a backend bounce.
+    """Re-resolve the bundle scope chain and re-project its skills into the live
+    catalog (system + installation + lab + user). Lets a `git pull` in any
+    scope's bundle (or an edited vendor skill) take effect without a backend
+    bounce.
 
     Why an explicit endpoint instead of relying on uvicorn's --reload watcher:
-    overlay clones AND vendor clones live outside the source tree (or behind
-    --reload-exclude), so file edits there don't bounce uvicorn — but that
-    also means new content doesn't propagate. This endpoint is the manual
-    refresh seam.
+    the institution/lab/user bundles live outside the source tree (or behind
+    --reload-exclude), so edits there don't bounce uvicorn — but that also means
+    new content doesn't propagate. This endpoint is the manual refresh seam.
 
-    Response includes per-layer counts so operators can confirm the overlay
-    they expected to load actually loaded (L-A, misc/content_layers.md)."""
-    from core.skills.loader import _REGISTRY, _ALIASES
-    from content.bio.skills import register_all_layers
+    Response includes per-scope counts so operators can confirm the scope they
+    expected to load actually loaded."""
+    from core.skills.loader import _REGISTRY, list_skills
+    from core.bundle.active import reload_bundle
+    from content.bio.skills import register_from_bundle
     before = len(_REGISTRY)
-    _REGISTRY.clear()
-    _ALIASES.clear()
-    by_layer = register_all_layers()
-    after = len(_REGISTRY)
+    reload_bundle()                       # re-resolve scope chain + re-compose
+    by_scope = register_from_bundle(clear=True)
+    sk = list_skills()
     return {
         "status": "ok",
         "before": before,
-        "after": after,
-        "by_layer": by_layer,
-        # Back-compat: the previous response carried flat core/recipes/vendor
-        # totals. Surface the system-layer numbers under the same keys so
-        # older callers don't break.
-        "core":    by_layer.get("system", {}).get("core", 0),
-        "recipes": by_layer.get("system", {}).get("recipes", 0),
-        "vendor":  by_layer.get("system", {}).get("vendor", 0),
+        "after": len(sk),
+        "by_scope": by_scope,             # {scope_name: skill count}
+        "always": sum(1 for s in sk if s.visibility == "always"),
+        "local":  sum(1 for s in sk if s.visibility != "always"),
     }
 
 
@@ -2413,7 +2421,8 @@ def health():
 # is a no-op in dev and only engages once `npm run build` has produced a
 # dist/. Registered last, so it never shadows the /api or /artifacts routes
 # above (Starlette matches routes in registration order).
-_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_FRONTEND_DIST = Path(os.environ.get("ABA_FRONTEND_DIST")
+                      or (Path(__file__).resolve().parent.parent / "frontend" / "dist"))
 if (_FRONTEND_DIST / "index.html").is_file():
     _assets_dir = _FRONTEND_DIST / "assets"
     if _assets_dir.is_dir():

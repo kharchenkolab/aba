@@ -251,13 +251,20 @@ def resolve_scopes(env: dict[str, str] | None = None,
         optional=False,
     )
 
-    # ---- Institution scope (optional)
-    inst_default = None
+    # ---- Installation scope (the deployment's own bundle; named "institution"
+    # in the chain). ALWAYS present in the chain (present iff the dir exists):
+    # every install has an installation bundle — that's where the imported recipe
+    # pack + site-wide policy live, so even a solo Mac gets the cookbook there.
+    # Defaults to {home}/.aba/installation (the single user IS the installation);
+    # a cluster points it at /cluster/aba/installation via site.yaml.
+    inst_default = home / ".aba" / "installation"
     if site_config:
         inst_default_path = (site_config.get("scopes") or {}) \
             .get("institution", {}).get("bundle_path")
         if inst_default_path:
-            inst_default = Path(inst_default_path)
+            inst_default = Path(_expand_placeholders(
+                str(inst_default_path), user=user, group=group, home=home)
+                or str(inst_default_path))
     institution_path = _candidate_path(
         "ABA_INSTITUTION_BUNDLE", env, inst_default,
         user=user, group=group, home=home,

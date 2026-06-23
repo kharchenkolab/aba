@@ -24,6 +24,11 @@ os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 os.environ["ABA_REFS_DIR"] = str(Path(_tmp) / "refs")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 sys.path.insert(0, str(ROOT / "backend"))
+# Catalog content is pack-sourced (installation scope) — point it at the shared
+# seed fixture so the capability catalog is populated (pack seeds as test data).
+sys.path.insert(0, str(Path(__file__).resolve().parent))       # tests/ for the helper
+import _catalog_fixture                                          # noqa: E402
+_catalog_fixture.install()
 
 from core.graph._schema import init_db                       # noqa: E402
 from core.graph.entities import list_entities                # noqa: E402
@@ -86,15 +91,27 @@ def test_env_unification():
 
 
 def test_lifecycle_and_artifacts():
-    print("job lifecycle + artifact registration on completion")
+    print("job lifecycle + artifact harvest on completion")
+    # Post-cutover (Option B / Phase 5) a harvested PNG is NOT auto-minted as a
+    # figure entity (that created shadow-entity clutter) — it lands in the exec
+    # result's plots[] and is copied into the artifact registry, to be pinned on
+    # demand. So assert the background job HARVESTED the figure (the real
+    # contract), not that a figure entity magically appeared. Capture the
+    # completed job's result via the same on_job_complete hook the bio
+    # registrar listens on.
+    from core.hooks.dispatcher import register as _register_hook
+    captured: dict = {}
+    _register_hook("on_job_complete",
+                   lambda ctx: captured.setdefault("ro", ctx.get("result_obj") or {}), priority=1)
     job = submit_python_job(
         "import matplotlib.pyplot as plt\nplt.plot([1,2,3]); plt.savefig('bg.png')\nprint('made plot')",
         title="bg-plot", focus_entity_id=None, timeout_s=60, project_id="single")
     asyncio.run(_drive(job["id"]))
     j = get_job(job["id"])
     check("job done", j and j["status"] == "done", str(j and j["status"]))
-    figs = [e for e in list_entities(type_filter="figure")]
-    check("figure registered from background job", len(figs) >= 1, f"{len(figs)} figures")
+    plots = (captured.get("ro") or {}).get("plots") or []
+    check("figure harvested from background job (plots[])",
+          any(p.get("original_name") == "bg.png" for p in plots), f"plots={plots}")
 
 
 def test_cancel():

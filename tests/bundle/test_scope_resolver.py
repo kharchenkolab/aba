@@ -61,7 +61,10 @@ def test_mac_default(tmp_path: Path, monkeypatch):
 
     assert r.user == "alice"
     assert r.group is None                    # no group on solo Mac
-    assert _names(r) == ["system", "user"]
+    # The installation ("institution") scope is ALWAYS in the chain, but absent
+    # here (no ~/.aba/installation on a bare Mac) so it contributes nothing.
+    assert _names(r) == ["system", "institution", "user"]
+    assert not next(s for s in r.scope_chain if s.name == "institution").present
     assert r.state_dir == (home / ".aba" / "state").resolve()
     assert r.scratch_dir is None
     assert r.composed_bundle is None
@@ -121,7 +124,7 @@ def test_lab_scope_via_env(tmp_path: Path):
         site_config_path=None,
     )
 
-    assert _names(r) == ["system", "lab", "user"]
+    assert _names(r) == ["system", "institution", "lab", "user"]
     assert r.group == "kharchenko"
     lab_scope = next(s for s in r.scope_chain if s.name == "lab")
     assert lab_scope.path == lab.resolve()

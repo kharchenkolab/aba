@@ -161,8 +161,8 @@ def main():
     # Load the live skill registry.
     from core.skills.loader import register_skill_dir, _REGISTRY, get_skill
     _REGISTRY.clear()
-    register_skill_dir(os.path.join(BACKEND, "content/bio/library/core"), visibility="always")
-    register_skill_dir(os.path.join(BACKEND, "content/bio/library/recipes"), visibility="local")
+    register_skill_dir(os.path.join(BACKEND, "system_bundle/skills/core"), visibility="always")
+    register_skill_dir(os.path.join(BACKEND, "system_bundle/skills/recipes"), visibility="local")
     registry = dict(_REGISTRY)
     print(f"Live registry: {len(registry)} skills")
 

@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 _HERE = Path(__file__).parent
-_BIO_ROOT = _HERE.parent  # backend/content/bio/
+# The system bundle is the real home for system policy/rules now (no symlinks).
+# build.py sources them via the bundle; this is the on-disk fallback location.
+_SYS_BUNDLE = _HERE.parents[2] / "system_bundle"   # backend/system_bundle
 
 # The turn's intent (the user's message, usually) — set by build_system for
 # the duration of one assembly so retrieval-gated blocks (the skills index)
@@ -88,13 +90,6 @@ def _prompt(name: str) -> str:
     return (_HERE / name).read_text().rstrip()
 
 
-@lru_cache(maxsize=None)
-def _bio_doc(relpath: str) -> str:
-    """Read a bio doc (e.g. conventions.md) once and cache."""
-    p = _BIO_ROOT / relpath
-    return p.read_text().rstrip() if p.exists() else ""
-
-
 def _capabilities_block(active_tools: list[dict]) -> str:
     """Dynamic block — list each active tool's name + first sentence of its
     description. Stays in code because it composes runtime state, not text."""
@@ -115,7 +110,7 @@ def _capabilities_block(active_tools: list[dict]) -> str:
     # the agent won't redundantly ensure_capability it.
     if _is_nonneg():
         return body
-    return body + "\n\n" + _prompt("sandbox_libs.md")
+    return body + "\n\n" + _bundle_rule_text("sandbox_libs.md")
 
 
 @dataclass(frozen=True)
@@ -145,11 +140,6 @@ class _Block:
     # caches across the whole session; dynamic tail is small (~3-4K) and cheap
     # to recompute. See open_stream in core/llm.py for the wire-format split.
     dynamic:       bool = False
-
-
-def _md(name: str) -> Callable[[list[dict]], str]:
-    """Closure that ignores active_tools and returns a static .md file."""
-    return lambda _tools: _prompt(name)
 
 
 # Only the agent-actionable essentials go in every prompt. The full run/result/
@@ -227,6 +217,74 @@ def _bundle_overlay(_tools: list[dict]) -> str:
         logging.getLogger(__name__).warning(
             "bundle_overlay: bundle resolution failed (%s); "
             "skipping non-system policy injection", e)
+        return ""
+
+
+# ── system policy + rules now come FROM the bundle (one loader) ───────────────
+# build.py used to read content/bio/prompts/<name>.md directly for the system
+# scope and never injected the bundle's composed rules — so an institution/lab
+# override of a rule (e.g. figures.md) composed in the bundle but never reached
+# the prompt. These helpers source each named block's content from the bundle
+# (overrideable → narrowest-scope winner, required → additive), falling back to
+# the on-disk file if bundle resolution fails. For the system-only case the
+# composed content is byte-identical to the old direct read (verified).
+def _bundle_rule_text(name: str) -> str:
+    try:
+        from core.bundle.active import get_bundle
+        c = get_bundle().rule_content(name)
+        if c is not None:
+            return c.rstrip()
+    except Exception as e:                             # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "bundle rule %s failed (%s); using system bundle copy", name, e)
+    for sub in ("rules", "rules/required"):            # fallback: the real file
+        p = _SYS_BUNDLE / sub / name
+        if p.is_file():
+            return p.read_text().rstrip()
+    return ""
+
+
+def _rule(name: str) -> Callable[[list[dict]], str]:
+    """Like _md, but sources `name` from the bundle's composed rules so a
+    lab/institution override of that rule reaches the prompt."""
+    return lambda _tools: _bundle_rule_text(name)
+
+
+def _system_policy_block(_tools: list[dict]) -> str:
+    """The identity block — system-scope AGENTS.md, from the bundle."""
+    try:
+        from core.bundle.active import get_bundle
+        c = get_bundle().system_policy()
+        if c:
+            return c.rstrip()
+    except Exception:                                  # noqa: BLE001
+        pass
+    p = _SYS_BUNDLE / "AGENTS.md"
+    return p.read_text().rstrip() if p.is_file() else ""
+
+
+# Rule filenames already injected by a NAMED block (with their own position +
+# gates). The bundle_rules catch-all skips these so it only carries NEW rules an
+# institution/lab/user added under a fresh filename.
+_NAMED_RULES = frozenset({
+    "figures.md", "data_orientation.md", "highlighting.md", "recipes.md",
+    "plan_first.md", "nonnegotiables.md", "behavior.md", "behavior_slim.md",
+    "sandbox_libs.md", "scenarios.md", "identity.md",
+})
+
+
+def _bundle_extra_rules(_tools: list[dict]) -> str:
+    """Institution/lab/user rules NOT already covered by a named block — i.e.
+    rule files a scope added under a new filename. System rules are excluded so
+    the system-only prompt is unchanged."""
+    try:
+        from core.bundle.active import get_bundle
+        parts = [r.content.rstrip()
+                 for r in get_bundle().rules_excluding({"system"})
+                 if r.filename not in _NAMED_RULES and r.content.strip()]
+        return "\n\n".join(parts)
+    except Exception:                                  # noqa: BLE001
         return ""
 
 
@@ -315,11 +373,10 @@ def _behavior_block(_tools: list[dict]) -> str:
     # signal is plumbed via a ContextVar so we don't have to thread it
     # through every block's render(tools) signature.
     current_mode = _MODE.get("full")
-    if current_mode in ("lean", "lean_small"):
+    if current_mode in ("lean", "lean_small") or _is_nonneg():
         body = _prompt("behavior_slim.md")
     else:
-        body = _prompt("behavior_slim.md" if _is_nonneg()
-                       else "behavior.md")
+        body = _bundle_rule_text("behavior.md")   # full behavior, bundle-sourced
     return body
 
 
@@ -478,10 +535,6 @@ def _recipe_arm_block(_tools: list[dict]) -> str:
 
 
 # Gate predicates over the turn context (see build_system's `ctx`).
-def _has_focus_figure(c: dict) -> bool:
-    return bool(c.get("focus_is_figure"))
-
-
 def _highlight_relevant(c: dict) -> bool:
     # Relevant when the user highlighted THIS turn, or a figure is in focus (so
     # "here"/"this region" references resolve). Otherwise it's dead weight.
@@ -572,12 +625,16 @@ def _declared_recipes_block(active_tools: list[dict]) -> str:
 
 
 _BLOCKS: tuple[_Block, ...] = (
-    _Block("identity",     None,                   None,             _md("identity.md")),
+    _Block("identity",     None,                   None,             _system_policy_block),
     # Institution / lab / user policy layered on top of the system identity.
     # Renders empty when no non-system scopes are present (Mac default), so
     # the live prompt is byte-identical with pre-bundle behavior until a
     # site.yaml / ABA_*_BUNDLE env var puts a bundle in front of the loader.
     _Block("bundle_overlay", None, None, _bundle_overlay),
+    # Institution/lab/user RULES added under a NEW filename (overrides of the
+    # named rule blocks below already flow through those blocks via the bundle).
+    # Empty for the system-only default → byte-identical.
+    _Block("bundle_rules", None, None, _bundle_extra_rules),
     # Top-of-prompt anchor for the discovery flow (lean_small / Qwen3-class).
     # Empty for every other mode. Renders right after identity to ride the
     # "critical info at the start" finding from the long-context literature.
@@ -585,10 +642,10 @@ _BLOCKS: tuple[_Block, ...] = (
            _discovery_directive_block),
     # Non-negotiables (integrity invariants) — 'nonneg' arm only; isolated + salient
     # at the top so they don't compete with the operational wall. control = no-op.
-    _Block("nonnegotiables", frozenset({"primary"}), None, _md("nonnegotiables.md"),
+    _Block("nonnegotiables", frozenset({"primary"}), None, _rule("nonnegotiables.md"),
            gate=lambda c: _is_nonneg()),
     _Block("capabilities", frozenset({"primary"}), None,             _capabilities_block),
-    _Block("recipes",      frozenset({"primary"}), None,             _md("recipes.md")),
+    _Block("recipes",      frozenset({"primary"}), None,             _rule("recipes.md")),
     # The "scenarios" prompt block (gated on the legacy create_scenario tool)
     # was removed 2026-06-06 — variant-figure flow is now the revisions
     # cluster (Stage 5 of misc/exec_records_and_versioning.md). The
@@ -596,12 +653,12 @@ _BLOCKS: tuple[_Block, ...] = (
     # the user EXPLICITLY asks for a variant"), so no replacement block is
     # needed. Highlighting still renders on focused-figure turns below.
     _Block("behavior",     None,                   None,             _behavior_block),
-    _Block("highlighting", frozenset({"primary"}), None,             _md("highlighting.md"),
+    _Block("highlighting", frozenset({"primary"}), None,             _rule("highlighting.md"),
            gate=_highlight_relevant),
     _Block("conventions",  None,                   None,             _conventions),
     # Figure-style directive — clean layout, one panel by default, ggplot2 in R,
     # alpha-blending on dense scatters. Primary only (advisors don't draw figures).
-    _Block("figures",      frozenset({"primary"}), None,             _md("figures.md")),
+    _Block("figures",      frozenset({"primary"}), None,             _rule("figures.md")),
     # Skills index, Core tier — always-on, stable. Cached with the rest of the
     # system prefix. Renders the leading "### Skills you can reference..." prose
     # + the Core skills bullets.
@@ -615,9 +672,9 @@ _BLOCKS: tuple[_Block, ...] = (
     # Data-first / observe-before-assume (PK #2-via-instruction). Salient END
     # position (like plan_first). Toggle off with ABA_DATA_SUMMARY=off (for eval
     # isolation); on by default live.
-    _Block("data_orientation", frozenset({"primary"}), None, _md("data_orientation.md"),
+    _Block("data_orientation", frozenset({"primary"}), None, _rule("data_orientation.md"),
            gate=lambda c: (os.environ.get("ABA_DATA_SUMMARY") or "on").lower() != "off"),
-    _Block("plan_first",   frozenset({"primary"}), "present_plan",   _md("plan_first.md")),
+    _Block("plan_first",   frozenset({"primary"}), "present_plan",   _rule("plan_first.md")),
     # Agent-declared recipes pinned for the rest of the thread (#324 Phase 2).
     # Renders only when the agent has populated >=1 step.skill on present_plan.
     _Block("declared_recipes", frozenset({"primary"}), "present_plan",

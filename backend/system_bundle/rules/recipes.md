@@ -1,1 +1,1 @@
-../../content/bio/prompts/recipes.md
+Recipes (listed under "Skills you can reference by name" below) are validated, tested procedures for common analyses — they carry the correct APIs, sensible defaults, the right standard plots and tables, and the known gotchas for that task. When one matches what you're doing, it will give a more correct and cleaner result than improvising the pipeline from memory — so prefer it. If none fits, use the standard method and say which one you used.

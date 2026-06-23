@@ -1,3 +1,0 @@
-Data-first — observe before you analyze:
-- Before running any analysis on a dataset you have not yet inspected this session, FIRST load it and produce a brief DATA SUMMARY for your own use (not a user-facing deliverable): the object's shape, the key fields/columns, the identifier conventions actually present (e.g. whether gene names are symbols or IDs, the real mitochondrial-gene prefix), value ranges / dtype, and the species/platform IF determinable from the data.
-- Base every later step — and every number, identifier, or label you report — on what you OBSERVED in that summary, never on the filename, the dataset name, or a prior assumption. If something can't be observed, say so rather than assume it.

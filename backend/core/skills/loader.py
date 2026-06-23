@@ -83,12 +83,10 @@ class SkillSpec:
     argument_hint:  str = ""
     allowed_tools:  tuple[str, ...] = ()
     version:        str = ""
-    # Content-layer attribution (misc/content_layers.md L-A). The skills
-    # loader walks N roots lowest-to-highest precedence; this field records
-    # which one provided this spec. Defaults to 'system' (the platform-
-    # shipped library/, register_skill_dir's pre-L-A behaviour). Surfaced
-    # in /api/admin/refresh-skills so operators can see how many recipes
-    # each overlay contributed.
+    # Bundle-scope attribution: which scope contributed this spec —
+    # 'system' | 'installation' ('institution') | 'lab' | 'user' (the
+    # source_scope from the bundle projection in content/bio/skills). Surfaced
+    # in /api/skills so operators see which scope each recipe came from.
     layer:          str = "system"
 
 
@@ -118,10 +116,20 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
-def _spec_from_text(text: str, source_path: str = "", *,
-                    default_domain: str = "", visibility: str = "local",
-                    layer: str = "system") -> SkillSpec:
-    fm, body = _split_frontmatter(text)
+def _agents_allows_aba(fm: dict) -> bool:
+    """`agents:` frontmatter (a non-empty list) restricts a skill to named
+    agents; ABA keeps it only if 'aba' or '*' is listed. Absent/empty => all
+    agents. Mirrors the bundle loader's agents filter so the live catalog and
+    EffectiveBundle agree on which skills ABA sees."""
+    a = fm.get("agents") if isinstance(fm, dict) else None
+    if not isinstance(a, list) or not a:
+        return True
+    return "aba" in a or "*" in a
+
+
+def _spec_from_parsed(fm: dict, body: str, source_path: str = "", *,
+                      default_domain: str = "", visibility: str = "local",
+                      layer: str = "system") -> SkillSpec:
     name = (fm.get("name") or "").strip()
     if not name:
         raise ValueError(f"skill {source_path or '?'} missing required `name`")
@@ -249,9 +257,16 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local",
         # like recipes/genomics/scrna-qc/SKILL.md classifies under 'genomics'.
         default_domain = rel_folder.parts[0] if len(rel_folder.parts) > 1 else ""
         try:
-            spec = _spec_from_text(skill_md.read_text(), source_path=str(folder),
-                                   default_domain=default_domain, visibility=visibility,
-                                   layer=layer)
+            fm, body = _split_frontmatter(skill_md.read_text())
+        except (ValueError, OSError) as e:
+            print(f"[skills] skip {skill_md}: {e}")
+            continue
+        if not _agents_allows_aba(fm):
+            continue
+        try:
+            spec = _spec_from_parsed(fm, body, source_path=str(folder),
+                                     default_domain=default_domain, visibility=visibility,
+                                     layer=layer)
         except ValueError as e:
             print(f"[skills] skip {skill_md}: {e}")
             continue
@@ -274,11 +289,11 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local",
         _REGISTRY[spec.name] = spec
         register_skill(spec.name)
         for a in spec.aliases:
-            # Overlay-as-override semantics (L-A): if an alias collides with a
-            # canonical name already in _REGISTRY (e.g. an overlay declares
+            # Scope-override via alias: if an alias collides with a canonical
+            # name already in _REGISTRY (e.g. a narrower scope declares
             # `aliases: [scrna-qc-clustering-v2]` to hijack the base recipe),
             # SHADOW the base canonical so all lookups for that name now
-            # resolve through the alias to the overlay's spec. Without this,
+            # resolve through the alias to the narrower scope's spec. Without this,
             # get_skill(base) still hits the base entry first and the alias
             # is dead.
             if a in _REGISTRY and a != spec.name:
@@ -297,9 +312,16 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local",
         rel = f.relative_to(p)
         default_domain = rel.parts[0] if len(rel.parts) > 1 else ""
         try:
-            spec = _spec_from_text(f.read_text(), source_path=str(f),
-                                   default_domain=default_domain, visibility=visibility,
-                                   layer=layer)
+            fm, body = _split_frontmatter(f.read_text())
+        except (ValueError, OSError) as e:
+            print(f"[skills] skip {f.name}: {e}")
+            continue
+        if not _agents_allows_aba(fm):
+            continue
+        try:
+            spec = _spec_from_parsed(fm, body, source_path=str(f),
+                                     default_domain=default_domain, visibility=visibility,
+                                     layer=layer)
         except ValueError as e:
             print(f"[skills] skip {f.name}: {e}")
             continue
@@ -316,6 +338,32 @@ def register_skill_dir(path: str | Path, *, visibility: str = "local",
     if n:
         _invalidate_index()
     return n
+
+
+def clear_registry() -> None:
+    """Wipe registry + aliases + index. Used when rebuilding the whole catalog
+    from the bundle scope chain (e.g. /api/admin/refresh-skills)."""
+    _REGISTRY.clear()
+    _ALIASES.clear()
+    _invalidate_index()
+
+
+def register_skill_spec(spec: SkillSpec, resources: tuple = ()) -> None:
+    """Insert one already-built SkillSpec (+ optional bundled resources) into the
+    registry, with the same alias-override + plan-validator side-effects as
+    register_skill_dir. Used by the bundle projection (content.bio.skills) so the
+    live catalog is materialized straight from EffectiveBundle.skills."""
+    from core.planning.validator import register_skill
+    if resources:
+        spec = _spec_with_resources(spec, resources)
+    _REGISTRY[spec.name] = spec
+    register_skill(spec.name)
+    for a in spec.aliases:
+        if a in _REGISTRY and a != spec.name:   # scope alias-override
+            del _REGISTRY[a]
+        _ALIASES[a] = spec.name
+        register_skill(a)
+    _invalidate_index()
 
 
 def list_skills() -> list[SkillSpec]:

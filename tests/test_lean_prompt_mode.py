@@ -82,14 +82,14 @@ def test_lean_mode_swaps_behavior_to_slim():
     size; lean forces behavior_slim.md regardless of arm. Detect via
     content fingerprint rather than file path (the block emits a
     distinguishable opening line in slim vs full)."""
-    from content.bio.prompts.build import build_system, _prompt
+    from content.bio.prompts.build import build_system, _prompt, _bundle_rule_text
     full_stable, _ = build_system(
         _TOOLS, role="primary", intent="x",
         ctx={"thread_id": "t"}, mode="full")
     lean_stable, _ = build_system(
         _TOOLS, role="primary", intent="x",
         ctx={"thread_id": "t"}, mode="lean")
-    behavior_full = _prompt("behavior.md")
+    behavior_full = _bundle_rule_text("behavior.md")   # full behavior lives in system_bundle now
     behavior_slim = _prompt("behavior_slim.md")
     # behavior_slim should appear in lean output; behavior (full) should NOT.
     # Pick a marker from the FULL file that ISN'T in slim.
