@@ -833,8 +833,12 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   // On past messages we collapse the tool/step indicators to keep the thread
   // tidy, but offer an eye toggle to bring them back per message.
   const stepCount = visibleBlocks.filter(b => b.type === 'tool_start').length
+  const hasError = visibleBlocks.some(b => b.type === 'error')
   const canCollapse = !!collapseTools && !isStreaming && stepCount > 0
-  const hideSteps = canCollapse && !showSteps
+  // Errored cells default to expanded so the intermediate tool calls /
+  // outputs that led to the failure stay visible alongside the red error
+  // line. The eye toggle still works for manual collapse.
+  const hideSteps = canCollapse && !showSteps && !hasError
 
   const rendered = renderBlocks(visibleBlocks, hideSteps, onRetry, entities, isUser ? undefined : onPin, isUser, planActive, onPlanGo, onPlanAdjust, isStreaming, pinnedFigureIds, fileMap, currentRunId, isUser ? undefined : onArtifactPinned)
   if (rendered.length === 0 && !isStreaming) return null
