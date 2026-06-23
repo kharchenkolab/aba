@@ -422,7 +422,20 @@ def _bioconda_exact(name: str) -> dict | None:
 # Order suggestions: prefer R sources for R-shaped names (the agent's
 # common case for Bioconductor/CRAN). PyPI sits in the middle; bioconda
 # (CLI) last. Within strict-name matching, this just controls UI order.
-_SUGGESTION_ORDER = {"cran": 0, "bioconductor": 1, "pypi": 2, "bioconda": 3}
+_SUGGESTION_ORDER = {"cran": 0, "bioconductor": 1, "conda": 2, "pypi": 3, "bioconda": 4}
+
+
+def _conda_r_alternative(name: str) -> dict:
+    """A propose_capability-shaped conda-forge candidate for an R package: the
+    prebuilt 'r-<name>' binary, which bundles any system libs. The robust path
+    for R packages a CRAN/Bioc source compile can't build because they need a
+    system library (hdf5r→HDF5, sf→GDAL). conda R is global-only, so this
+    installs into the SHARED R base, not a per-project library."""
+    return {"source": "conda", "archetype": "r_package",
+            "package": f"r-{name.lower()}", "library": name, "version": "latest",
+            "summary": (f"{name} as a prebuilt conda-forge R binary (r-{name.lower()}) — "
+                        f"bundles system libs; use when a source compile fails on a "
+                        f"missing system library. Installs into the shared R base.")}
 
 
 def _search_external_for_name(name: str,
@@ -458,6 +471,11 @@ def _search_external_for_name(name: str,
                 continue
             if c is not None:
                 candidates.append(c)
+    # If it resolved as an R package, also offer the conda-forge binary as an
+    # alternative — the robust path when a CRAN/Bioc source compile fails on a
+    # missing system library (hdf5r→HDF5). (conda R is global/shared-base.)
+    if any(c.get("source") in ("cran", "bioconductor") for c in candidates):
+        candidates.append(_conda_r_alternative(name))
     candidates.sort(key=lambda c: _SUGGESTION_ORDER.get(c.get("source", ""), 9))
     return candidates
 

@@ -48,6 +48,11 @@ dependencies:
   - r-irlba
   - r-xml2
   - libxml2
+  # r-hdf5r bundles the HDF5 system lib — a common hard dep (Seurat .h5 I/O,
+  # pagoda2, scRNA loaders) that CANNOT be source-installed per-project (it
+  # needs the global HDF5 C lib). Baking the prebuilt binary into the base
+  # avoids the on-demand conda-recover-then-compile dance entirely.
+  - r-hdf5r
   - r-ggrepel
   - bioconductor-biomart
   - r-kernsmooth

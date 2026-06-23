@@ -173,7 +173,8 @@ _SYSLIB_RE = re.compile(
     r"|cannot open shared object file:[^\n]*?\b(lib[A-Za-z0-9_.+-]+\.so[0-9.]*)"
     r"|No package '([A-Za-z0-9_.+-]+)' found"               # pkg-config miss
     r"|\b([A-Za-z][A-Za-z0-9_.+-]{2,}) was not found"       # configure: 'libfoo was not found'
-    r"|[Cc]annot find ([A-Za-z][A-Za-z0-9_.+-]{2,}) (?:library|headers?)",  # 'Cannot find X library'
+    r"|[Cc]annot find ([A-Za-z][A-Za-z0-9_.+-]{2,}) (?:library|headers?)"   # 'Cannot find X library'
+    r"|could not find (?:your |the )?([A-Za-z][A-Za-z0-9_.+-]{2,})(?: installation)?",  # hdf5r: 'could not find your HDF5 installation'
     re.I,
 )
 
