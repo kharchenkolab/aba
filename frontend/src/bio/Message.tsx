@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { prepareAssistantText } from '../markdown/prepareAssistantText'
@@ -497,20 +498,21 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
       // download target for any future "open original" affordance.
       const previewUrl = (b as { preview_url?: string }).preview_url
       const displaySrc = previewUrl ?? b.url
+      // Build the pin control once, reuse it in BOTH the inline frame
+      // (top-right corner) AND the lightbox overlay — the chat's
+      // zoom view used to be pinless, surprising users who expected
+      // the gesture to follow the figure.
+      const pinSlot = ent && onPin
+        ? <FigurePin entity={ent} isPinned={!!pinnedFigureIds?.has(ent.id)} onPin={onPin} />
+        : artifactId
+          ? <ArtifactPin artifact_id={artifactId} onPinned={onArtifactPinned} />
+          : null
       out.push(
         <div key={i} className="msg-image">
           {ent && <div className="msg-image__head"><span className="msg-image__title">{ent.title}</span></div>}
           <div className="msg-image__frame">
-            <ZoomableImg src={displaySrc} alt={b.alt ?? 'plot'} />
-            {ent && onPin ? (
-              <div className="msg-image__tools">
-                <FigurePin entity={ent} isPinned={!!pinnedFigureIds?.has(ent.id)} onPin={onPin} />
-              </div>
-            ) : artifactId ? (
-              <div className="msg-image__tools">
-                <ArtifactPin artifact_id={artifactId} onPinned={onArtifactPinned} />
-              </div>
-            ) : null}
+            <ZoomableImg src={displaySrc} alt={b.alt ?? 'plot'} pinSlot={pinSlot} />
+            {pinSlot && <div className="msg-image__tools">{pinSlot}</div>}
           </div>
         </div>,
       )
@@ -533,7 +535,14 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
 // disclosure reveals the exact code — the inner-loop detail the Trace panel used
 // A chat plot that opens to a full-viewport lightbox on click — the chat column
 // downsizes the (≈150 DPI) PNG, so click-to-zoom surfaces the native resolution.
-function ZoomableImg({ src, alt }: { src: string; alt: string }) {
+function ZoomableImg({ src, alt, pinSlot }: {
+  src: string
+  alt: string
+  /** Optional pin control rendered in the lightbox toolbar so the
+   *  gesture follows the figure into zoom — same component the inline
+   *  frame uses, so pinned-state stays consistent. */
+  pinSlot?: ReactNode
+}) {
   const [open, setOpen] = useState(false)
   // crossOrigin enables highlight-to-canvas, but if the load fails for any
   // reason, retry WITHOUT it (an image is more useful than blank space — the
@@ -558,6 +567,11 @@ function ZoomableImg({ src, alt }: { src: string; alt: string }) {
           <img className="lightbox__img" src={src} alt={alt}
             crossOrigin={cors ? 'anonymous' : undefined}
             onClick={e => e.stopPropagation()} />
+          {pinSlot && (
+            <div className="lightbox__tools" onClick={e => e.stopPropagation()}>
+              {pinSlot}
+            </div>
+          )}
           <button className="lightbox__close" onClick={() => setOpen(false)} aria-label="Close">×</button>
         </div>
       )}
