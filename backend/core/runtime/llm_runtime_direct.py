@@ -128,6 +128,15 @@ async def open_and_consume_stream(
     """
     attempt = 0
     while True:
+        if cancel_token.cancelled:
+            # Stop pressed before (re)opening the stream — crucially this also
+            # catches a Stop BETWEEN transient-error retries (overloaded opus),
+            # where no stream events fire so the in-stream cancel checks below
+            # are never reached. Bail to the cancelled-completion shape instead
+            # of looping into another retry.
+            yield _StreamCompleted(final_msg=None, usage_delta={}, assistant_blocks=[],
+                                   stop_reason=None, tool_calls_this_turn=[])
+            return
         emitted = False
         try:
             import os as _os
@@ -222,7 +231,14 @@ async def open_and_consume_stream(
             backoff = min(2 ** attempt, 8)
             yield _RetryNotice(attempt=attempt, max_retries=max_retries,
                                backoff_s=backoff, error=str(e))
-            await asyncio.sleep(backoff)
+            # Cancel-aware backoff: a Stop during 'model busy — retrying' breaks
+            # out promptly (the loop-top check then returns the cancelled
+            # completion) instead of sleeping the full backoff and re-opening
+            # the stream into yet another overloaded retry.
+            for _ in range(backoff * 10):
+                if cancel_token.cancelled:
+                    break
+                await asyncio.sleep(0.1)
 
 
 class DirectAPIRuntime:
