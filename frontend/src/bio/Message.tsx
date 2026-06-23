@@ -950,7 +950,7 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
   const strokePts = stroke.map(p => `${p.x * 100},${p.y * 100}`).join(' ')
 
   return (
-    <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'} ${isContinuation ? 'msg--continuation' : ''}`}>
+    <div className={`msg ${isUser ? 'msg--user' : 'msg--guide'} ${isContinuation ? 'msg--continuation' : ''} ${isStreaming ? 'msg--streaming' : ''}`}>
       {isContinuation
         ? <div className="msg__avatar msg__avatar--cont" title="Auto-continuation from a background job">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -966,7 +966,6 @@ export default function Message({ message, isStreaming, collapseTools, onAnnotat
            onMouseLeave={() => setHovered(false)}>
         <div className="msg__content" ref={contentRef}>
           {rendered}
-          {isStreaming && <span className="cursor-blink">▌</span>}
         </div>
         {showSurface && (
           <div className="msg__hl" onMouseDown={hlDown}>

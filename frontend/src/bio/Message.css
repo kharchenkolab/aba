@@ -438,13 +438,19 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.cursor-blink {
-  display: inline-block;
-  color: var(--guide);
-  animation: blink 1s step-end infinite;
-  margin-left: 1px;
+/* Streaming indicator — a calm vertical accent strip on the cell's
+   left edge while the model is producing output. Replaces a blinking
+   caret which was distracting in peripheral vision. */
+.msg--streaming::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--guide);
+  border-radius: 1px;
 }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
 /* T2.5: structured-plan styling — summary, assumptions, per-step
    description, expected outputs, skill chip, validator concerns. */
