@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Launch the REAL ABA backend on this compute node, served on $host:$port and
+# reverse-proxied by OOD at /rnode/$host/$port/.
+#
+# ABA_RUNTIME_DIR (per-user, persistent) + ABA_ENVS_DIR (group-shared) are set
+# by before.sh.erb under /groups/<group>/aba/. Only the frontend dist is
+# per-session here (the proxy prefix differs each launch).
+set -x
+
+ABA=/home/pkharchenko/aba/aba
+VENV=/home/pkharchenko/aba/aba_runtime/.venv
+
+export HOME="${ABA_RUNTIME_DIR}/.home"; mkdir -p "$HOME"
+export ABA_MODEL="${ABA_MODEL:-claude-haiku-4-5-20251001}"
+
+# ABA_HOME = where ABA keeps its per-user store, incl. the refreshable OAuth
+# token store ($ABA_HOME/oauth.json). This equals config.py's own default
+# ($HOME/.aba) — set explicitly because the OAuth tier-1 (auto-refresh) lookup
+# only activates when ABA_HOME is present in the env. Without it, OAuth falls
+# back to the non-refreshable static-token tier.
+export ABA_HOME="${ABA_HOME:-${HOME}/.aba}"; mkdir -p "$ABA_HOME"
+
+# R/CLI base lives in the IMAGE, beside the venv (pre-baked, shared read-only
+# across labs) so R does NOT rebuild for every group. Growth (r_libs, pylib)
+# still goes under ABA_ENVS_DIR (the group). Mirrors the Python split: the
+# venv (Python base) already ships in the image; this pins the R base the same
+# way. Override-able for alternate deployments.
+export ABA_TOOLS_DIR="${ABA_TOOLS_DIR:-$(dirname "${VENV}")/envs/tools}"
+
+# Per-session SPA build: bake this session's OOD reverse-proxy prefix into a
+# private copy (the build ships /__OOD_PREFIX__/ placeholders).
+cp -r "${ABA}/frontend/dist" "${PWD}/dist"
+find "${PWD}/dist" -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.svg' \) \
+  -exec sed -i "s|__OOD_PREFIX__|rnode/${host}/${port}|g" {} +
+export ABA_FRONTEND_DIST="${PWD}/dist"
+
+cd "${ABA}/backend"
+echo "ABA: uvicorn on ${host}:${port} | runtime=${ABA_RUNTIME_DIR} | envs=${ABA_ENVS_DIR}"
+
+# --- Clean shutdown ---------------------------------------------------------
+# ABA spawns Jupyter/R kernels in their own sessions; on stop the OOD wrapper
+# only pkill -P's direct children, so kernels orphan -> <defunct> zombies and
+# the Slurm job hangs in CG. Run uvicorn as a child (not exec) and, on TERM/INT,
+# recursively kill uvicorn's WHOLE descendant tree (scoped to THIS job, so it's
+# multi-user safe) — graceful TERM first, then KILL any stragglers.
+killtree() {                      # killtree <pid> <signal>
+  local _pid="$1" _sig="$2" _c
+  for _c in $(pgrep -P "$_pid" 2>/dev/null); do killtree "$_c" "$_sig"; done
+  kill -"$_sig" "$_pid" 2>/dev/null || true
+}
+"${VENV}/bin/python" -m uvicorn main:app --host 0.0.0.0 --port "${port}" &
+UV=$!
+shutdown() {
+  echo "ABA: shutting down (uvicorn pid ${UV}) ..."
+  killtree "$UV" TERM
+  for _ in $(seq 1 8); do kill -0 "$UV" 2>/dev/null || break; sleep 1; done
+  killtree "$UV" KILL
+}
+trap shutdown TERM INT EXIT
+wait "$UV"

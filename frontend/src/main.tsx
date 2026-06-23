@@ -1,3 +1,4 @@
+import './oodBase'   // install OOD base-path shim before any request is made
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
@@ -20,7 +21,7 @@ createRoot(document.getElementById('root')!).render(
         <button onClick={() => window.location.reload()}>Reload</button>
       </div>
     )}>
-      {isPreview ? <PreviewWindow /> : <BrowserRouter><App /></BrowserRouter>}
+      {isPreview ? <PreviewWindow /> : <BrowserRouter basename={import.meta.env.BASE_URL}><App /></BrowserRouter>}
     </ErrorBoundary>
   </StrictMode>,
 )

@@ -1,0 +1,10 @@
+---
+name: ABA
+category: Interactive Apps
+subcategory: Servers
+role: batch_connect
+description: |
+  AI Bioinformatics Agent — the real ABA web app launched on a compute node
+  and reverse-proxied to your browser. Dev validation of the OnDemand
+  integration (ondemand.md). Paste an Anthropic API key in the form to enable
+  chat; the UI loads either way.

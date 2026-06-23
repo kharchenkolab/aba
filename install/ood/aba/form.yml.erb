@@ -1,0 +1,51 @@
+<%-
+  # ── Preflight at form-render time, driven by /cluster/aba/site.yaml ──
+  # Discover candidate lab groups + whether each has an ABA bundle, and whether
+  # the user already has a saved credential. All paths come from site.yaml, so
+  # the form is generic across deployments (site-config.md surface 1).
+  require 'yaml'
+  site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || '/cluster/aba/site.yaml')) rescue nil) || {}
+  gcfg = (site['scopes'] || {})['group'] || {}
+  root_tmpl    = gcfg['root_path'] || '/groups/{group}/aba'
+  groups_root  = root_tmpl.split('/{group}').first        # e.g. /groups
+  bundle_sub   = gcfg['bundle_subdir'] || 'bundle'
+  ui           = site['ui_text'] || {}
+
+  labs = (gcfg['enabled'] && Dir.exist?(groups_root)) ? Dir.children(groups_root).sort : []
+  lab_opts = labs.map do |g|
+    has = Dir.exist?(File.join(groups_root, g, 'aba', bundle_sub))
+    [(has ? "#{g}  ✓ ABA bundle" : "#{g}  — no ABA bundle yet"), g]
+  end
+  lab_opts = [["(no groups under #{groups_root})", ""]] if lab_opts.empty?
+-%>
+---
+cluster: "dev-cluster"
+form:
+  - aba_lab
+  - aba_instance
+  - has_gpu
+  - aba_token
+attributes:
+  aba_instance:
+    widget: "select"
+    label: "Instance"
+    help: "Light = 1 core; Heavy = 10 cores."
+    options:
+      - ["Light — 1 core", "light"]
+      - ["Heavy — 10 cores", "heavy"]
+  aba_lab:
+    widget: "select"
+    label: "Lab"
+    help: "<%= ui['form_intro'] || 'Groups discovered on disk; ✓ marks a present ABA bundle.' %>"
+    options:
+<%- lab_opts.each do |label, val| -%>
+      - ["<%= label %>", "<%= val %>"]
+<%- end -%>
+  has_gpu:
+    widget: "check_box"
+    label: "Request a GPU"
+  aba_token:
+    widget: "text_field"
+    label: "Anthropic API key or OAuth token"
+    value: ""
+    help: "Paste an API key (sk-ant-api…) or a Claude Code OAuth token (sk-ant-oat…, from `claude setup-token`) to enable chat — auto-detected. Leave blank to use a saved/lab credential. The UI loads either way."

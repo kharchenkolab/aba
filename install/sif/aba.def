@@ -1,0 +1,29 @@
+Bootstrap: docker
+From: debian:12-slim
+
+# Self-contained ABA image (v1): bakes the working conda venv + the ABA backend
+# + the prefix-built frontend dist. No %post (so it builds rootless, no fakeroot).
+# The venv is copied to its ORIGINAL host path so the conda prefix's internal
+# paths stay valid; run with --containall so the host $HOME doesn't shadow it.
+# (Slim image + a mounted shared conda env is the documented follow-up.)
+
+%files
+    /home/pkharchenko/aba/aba_runtime/.venv /opt/aba-venv
+    /home/pkharchenko/aba/tools/stage/backend /opt/aba/backend
+    /home/pkharchenko/aba/tools/stage/frontend-dist /opt/aba/frontend-dist
+
+%environment
+    export PATH=/opt/aba-venv/bin:$PATH
+    export ABA_FRONTEND_DIST=${ABA_FRONTEND_DIST:-/opt/aba/frontend-dist}
+
+%runscript
+    # HOME must be writable; derive it from the runtime dir (bound at run time).
+    export HOME="${ABA_RUNTIME_DIR:-/tmp/aba}/.home"
+    mkdir -p "$HOME"
+    cd /opt/aba/backend
+    exec /opt/aba-venv/bin/python -m uvicorn main:app \
+        --host 0.0.0.0 --port "${ABA_PORT:-8000}"
+
+%labels
+    org.aba.role ondemand-backend
+    org.aba.variant self-contained-v1

@@ -1,0 +1,15 @@
+---
+# 'basic' = plain HTTP web app. The form's Instance select maps to cores here
+# (Light=1, Heavy=10); GPU adds --gres. Walltime defaults to 8h (no form field).
+batch_connect:
+  template: "basic"
+script:
+  wall_time: 28800
+  native:
+    # submit.yml.erb renders with the form-values struct as self, so attributes
+    # are bare names here (NOT context.x — that's for the template/ scripts).
+    - "-n"
+    - "<%= aba_instance.to_s == 'heavy' ? '10' : '1' %>"
+<%- if has_gpu.to_s == '1' -%>
+    - "--gres=gpu:1"
+<%- end -%>
