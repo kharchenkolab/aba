@@ -16,7 +16,7 @@
 #
 # Override the sources (e.g. SSH while private, or a fork):
 #   ABA_REPO_URL=git@github.com:kharchenkolab/aba.git \
-#   ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipes.git \
+#   ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipe-pack.git \
 #       "./ABA Setup.command"
 #
 # Override the branch (default: whatever each remote's HEAD points to). Useful
@@ -27,7 +27,7 @@
 # fact, remove $REPO_DIR/aba and re-run.
 #
 # What this touches:
-#   ~/.aba/repo/{aba,aba-recipes}   (source)
+#   ~/.aba/repo/{aba,aba-recipe-pack}   (source)
 #   ~/.aba/installer/               (helper venv + state)
 #   ~/Library/LaunchAgents/com.kharchenkolab.aba.helper.plist  (auto-start)
 
@@ -37,7 +37,7 @@ ABA_HOME="$HOME/.aba"
 REPO_DIR="$ABA_HOME/repo"
 HELPER_DIR="$ABA_HOME/installer"
 ABA_REPO_URL="${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}"
-ABA_RECIPES_URL="${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipes}"
+ABA_RECIPES_URL="${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}"
 
 cat <<EOF
 ABA Setup
@@ -81,7 +81,7 @@ clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
   fi
 }
 clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"          "${ABA_REPO_BRANCH:-}"
-clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipes"  "${ABA_RECIPES_BRANCH:-}"
+clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipe-pack"  "${ABA_RECIPES_BRANCH:-}"
 
 # Install the helper from the cloned repo into a private venv (never touches
 # the user's system Python).

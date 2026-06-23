@@ -66,6 +66,43 @@ def test_load_playbook_rejects_bad_root(tmp_path):
         load_playbook(bad)
 
 
+def test_install_yml_has_import_recipes_step():
+    pb_path = Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml"
+    ids = [s.id for s in load_playbook(pb_path).steps]
+    assert "import-recipes" in ids
+    # must run AFTER the clone so the pack is on disk
+    assert ids.index("import-recipes") > ids.index("clone-repos")
+
+
+def test_import_recipes_maps_pack_into_installation_scope(tmp_path, monkeypatch):
+    """import-recipes copies pack recipes/<domain>/ → installation
+    skills/recipes/<domain>/ and catalog/*.yaml → catalog/ — the wiring that
+    makes the recipe library actually surface to the agent."""
+    # env_vars are rendered with os.path.expandvars against the real os.environ,
+    # so redirect HOME + ABA_HOME there (NOT via base_env) to stay hermetic.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / ".aba"))
+    pb_path = Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml"
+    pb = load_playbook(pb_path)
+    step = next(s for s in pb.steps if s.id == "import-recipes")
+
+    pack = tmp_path / ".aba" / "repo" / "aba-recipe-pack"   # = $REPO_DIR/aba-recipe-pack
+    (pack / "recipes" / "genomics").mkdir(parents=True)
+    (pack / "recipes" / "genomics" / "scrna.md").write_text("# recipe\n")
+    (pack / "recipes" / "biomni-derived" / "database").mkdir(parents=True)
+    (pack / "recipes" / "biomni-derived" / "database" / "fetch.md").write_text("# b\n")
+    (pack / "catalog").mkdir(parents=True)
+    (pack / "catalog" / "python_bio.yaml").write_text("capabilities: []\n")
+
+    res = Executor(pb).run_step(step)
+    assert res.ok, res.error
+
+    inst = tmp_path / ".aba" / "installation"
+    assert (inst / "skills" / "recipes" / "genomics" / "scrna.md").exists()
+    assert (inst / "skills" / "recipes" / "biomni-derived" / "database" / "fetch.md").exists()
+    assert (inst / "catalog" / "python_bio.yaml").exists()
+
+
 def test_step_lookup(tmp_path):
     p = Playbook(steps=[
         Step(id="a", title="A", why="", commands=["true"]),

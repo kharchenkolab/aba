@@ -22,10 +22,21 @@ steps:
     timeout_seconds: 60
 
   - id: pull-recipes
-    title: Update aba-recipes
+    title: Update aba-recipe-pack
     why: Pull the latest skill/recipe library so newly-published recipes appear.
     commands:
-      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else cd "$REPO_DIR/aba-recipes" && git fetch --depth 1 && git reset --hard origin/main; fi'
+      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; elif [ -d "$REPO_DIR/aba-recipe-pack/.git" ]; then cd "$REPO_DIR/aba-recipe-pack" && git fetch --depth 1 && git reset --hard origin/main; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
+    timeout_seconds: 60
+
+  - id: import-recipes
+    title: Re-import the recipe pack
+    why: |
+      Re-map the freshly-pulled pack into the installation-scope bundle the
+      backend reads ($ABA_HOME/installation): recipes/<domain>/ →
+      skills/recipes/<domain>/ and catalog/*.yaml → catalog/. Same step as the
+      install playbook, so updates surface newly-published recipes.
+    commands:
+      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi'
     timeout_seconds: 60
 
   - id: refresh-env

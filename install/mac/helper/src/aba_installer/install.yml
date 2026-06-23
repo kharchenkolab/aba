@@ -61,13 +61,26 @@ steps:
     timeout_seconds: 1200
 
   - id: clone-repos
-    title: Clone aba + aba-recipes
+    title: Clone aba + aba-recipe-pack
     why: Source for the backend, the frontend, and the recipe library.
     commands:
       - 'mkdir -p "$REPO_DIR"'
       - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
-      - 'if [ -d "$REPO_DIR/aba-recipes" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipes" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipes/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipes}" "$REPO_DIR/aba-recipes"; fi'
+      - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
     timeout_seconds: 120
+
+  - id: import-recipes
+    title: Import the recipe pack
+    why: |
+      Map the cloned recipe pack into the installation-scope bundle the backend
+      actually reads ($ABA_HOME/installation): recipes/<domain>/ →
+      skills/recipes/<domain>/ and catalog/*.yaml → catalog/. Without this the
+      pack sits on disk unused and the agent sees only the ~9 system skills.
+      Idempotent + always re-copied (it's kilobytes), so an update refreshes it.
+    commands:
+      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi'
+      - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files into $ABA_HOME/installation"'
+    timeout_seconds: 60
 
   - id: create-r-tools-env
     title: Build the R toolchain
