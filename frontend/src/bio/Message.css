@@ -365,25 +365,25 @@
   display: block;
 }
 /* Pin + close share one short toolbar sitting just above the image's
-   left corner — same pattern as the Run-view modal's header bar but
-   without the box chrome. */
+   right edge — plain white glyphs on the dark backdrop, no chrome.
+   Pinned state still flips red via the shared .msg__tool--pinned. */
 .lightbox__tools {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 10px;
 }
 .lightbox__tools .msg__tool {
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text-3);
+  background: none;
+  border: none;
+  color: #fff;
   opacity: 1;
 }
+.lightbox__tools .msg__tool:hover { color: rgba(255, 255, 255, 0.75); }
 .lightbox__tools .msg__tool--pinned { color: var(--red); }
 .lightbox__close {
-  font-size: 22px; line-height: 1; color: #fff;
-  background: rgba(255, 255, 255, 0.12);
-  border: none; cursor: pointer;
-  width: 28px; height: 28px; border-radius: 6px;
-  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 26px; line-height: 1; color: #fff;
+  background: none; border: none; cursor: pointer;
+  padding: 0 2px;
 }
-.lightbox__close:hover { background: rgba(255, 255, 255, 0.22); }
+.lightbox__close:hover { color: rgba(255, 255, 255, 0.75); }
 .tool-line__script-toggle {
   margin-left: 8px; padding: 0 6px; height: 16px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--bg); color: var(--text-3);

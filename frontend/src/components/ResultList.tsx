@@ -167,9 +167,8 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
       )}
 
       {preview && (
-        <OutputPreview item={preview} runId={runId} onPin={onPin} onChat={onChat}
-          onChatAnnotated={onChatAnnotated} onClose={() => setPreview(null)}
-          isPinned={isItemPinned(preview)} />
+        <OutputPreview item={preview} runId={runId} onChat={onChat}
+          onChatAnnotated={onChatAnnotated} onClose={() => setPreview(null)} />
       )}
     </div>
   )
@@ -181,17 +180,12 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
  * the chat isn't trapped behind it). "Detach" pops the plot into a real, separate
  * browser window — the user can park it on another monitor and keep working.
  */
-function OutputPreview({ item, runId, onPin, onChat, onChatAnnotated, onClose, isPinned }: {
+function OutputPreview({ item, runId, onChat, onChatAnnotated, onClose }: {
   item: OutputItem
   runId?: string
-  onPin: (i: OutputItem) => void
   onChat: (i: OutputItem) => void
   onChatAnnotated?: (i: OutputItem, annotation: { image: string; note: string }) => void
   onClose: () => void
-  /** Mirrors PinChat — fills the pin red when an active wrapping Result
-   *  already exists. Click still toggles via onPin (which now unpins
-   *  when already pinned). */
-  isPinned?: boolean
 }) {
   const [marking, setMarking] = useState(false)
   const [mode, setMode] = useState<'highlight' | 'box'>('highlight')
@@ -250,17 +244,9 @@ function OutputPreview({ item, runId, onPin, onChat, onChatAnnotated, onClose, i
               <svg viewBox="0 0 24 24" width="14" height="14" fill="#fde047" stroke="#ca8a04" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
             </button>
           )}
-          <button
-            className={`rl-act${isPinned ? ' rl-act--pinned' : ''}`}
-            title={isPinned ? 'Unpin (archive the wrapping Result)' : 'Pin as a result (evidence)'}
-            onClick={() => onPin(item)}
-          >
-            <svg viewBox="0 0 24 24" width="13" height="13"
-                 fill={isPinned ? 'currentColor' : 'none'}
-                 stroke="currentColor" strokeWidth="2">
-              <path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/>
-            </svg>
-          </button>
+          {/* No pin here — the surrounding tile already carries one;
+              two pins side by side were confusing. The tile flips red
+              on the same gesture either way. */}
           <button className="rl-act" title="Discuss with Guide" onClick={doChat}>
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           </button>
