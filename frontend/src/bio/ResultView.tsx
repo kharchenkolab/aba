@@ -418,8 +418,13 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 
       {zoom && (
         <div className="rv__zoom" onClick={() => setZoom(null)}>
-          <img src={zoom} onClick={e => e.stopPropagation()} />
-          <button className="rv__zoom-x" onClick={() => setZoom(null)}>×</button>
+          {/* Same inline-flex frame the chat lightbox uses so the X sits
+              above the image's top-right corner instead of in the
+              viewport's corner. */}
+          <div className="rv__zoom-frame" onClick={e => e.stopPropagation()}>
+            <button className="rv__zoom-x" onClick={() => setZoom(null)} aria-label="Close">×</button>
+            <img src={zoom} />
+          </div>
         </div>
       )}
     </div>

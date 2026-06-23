@@ -189,10 +189,14 @@
 .rv__picker-ask { margin-top: 8px; font-size: 12.5px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 2px; }
 .rv__picker-ask:hover { text-decoration: underline; }
 
-/* Zoom lightbox */
-.rv__zoom { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 40px; }
-.rv__zoom img { max-width: 92vw; max-height: 88vh; object-fit: contain; }
-.rv__zoom-x { position: fixed; top: 16px; right: 20px; font-size: 28px; line-height: 1; color: #fff; background: none; border: none; cursor: pointer; }
+/* Zoom lightbox — same frame pattern as the chat lightbox so the close
+   button sits above the image's top-right corner, not in the viewport
+   corner. Consistency across all figure-lightbox surfaces. */
+.rv__zoom { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 40px; cursor: zoom-out; }
+.rv__zoom-frame { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 6px; cursor: default; }
+.rv__zoom-frame img { max-width: 92vw; max-height: 84vh; object-fit: contain; display: block; }
+.rv__zoom-x { font-size: 26px; line-height: 1; color: #fff; background: none; border: none; cursor: pointer; padding: 0 2px; }
+.rv__zoom-x:hover { color: rgba(255, 255, 255, 0.75); }
 
 /* A3: ✨ AI tag next to the auto-generated interpretation; goes away on first user edit. */
 /* Legend lives under the figure (caption-like). Margin separates it
