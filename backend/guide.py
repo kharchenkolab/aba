@@ -955,9 +955,18 @@ async def stream_response(
                 if isinstance(ev, TextDelta):
                     yield sse({"type": "delta", "text": ev.text})
                 elif isinstance(ev, ToolUseStart):
-                    # Defer tool_start emit until ToolResult time (we
-                    # don't yet know if the tool will halt-before).
-                    pass
+                    # Emit tool_start as soon as the model issues the
+                    # tool_use block so the UI renders the running chip
+                    # + has a streaming block for incoming tool_progress
+                    # lines to attach to. The ToolResult-time emit below
+                    # stays as an idempotent backstop (guarded by
+                    # _emitted_tool_start) for halt-before paths that
+                    # never reach a normal ToolResult.
+                    if ev.tool_use_id not in _emitted_tool_start:
+                        yield sse({"type": "tool_start", "name": ev.tool_name,
+                                   "input": ev.input,
+                                   "tool_use_id": ev.tool_use_id})
+                        _emitted_tool_start.add(ev.tool_use_id)
                 elif isinstance(ev, _RetryNotice):
                     print(f"[guide] transient API error (attempt {ev.attempt}/{ev.max_retries}), "
                           f"retrying in {ev.backoff_s}s: {ev.error}")
