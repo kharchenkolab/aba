@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Entity } from '../types'
 import { EntityGlyph } from '../components/icons'
 import ResultList, { type OutputItem } from '../components/ResultList'
+import ConfirmDialog from '../components/ConfirmDialog'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
@@ -189,25 +190,68 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const plotOutputs = outputs
     .filter(o => o.kind === 'figure' || o.kind === 'view')
     .filter(isLatestOutput)
-  // Pin/unpin toggle. The pin button reports whether the output is
-  // currently pinned via `pinnedArtifactIds`; clicking flips it:
-  //   - already pinned  → POST /api/entities/{evidence_id}/unpin
-  //                       (archives the wrapping Result via unpin_evidence)
-  //   - not pinned      → POST /api/artifacts/{exec}/{kind}/{idx}/pin
-  //                       (idempotent, materializes + wraps in a Result)
-  // The /pin-output fallback stays for run outputs that don't have an
-  // artifact_id (truly orphan manifest entries) — those can't be
-  // toggled, only added.
+  // Mirrors the ResultView ⋯ → "Remove from Result" UX. Unpinning is
+  // equivalent to (a) removing the figure from its wrapping Result when
+  // other meaningful members exist or (b) archiving the whole Result
+  // when this is the only non-auto member. (a) → confirm dialog; (b) →
+  // blocking info dialog directing the user to delete via the rail ⋯
+  // menu, since destroying a Result via a per-figure pin gesture
+  // surprises users who expected "unpin this" to be local.
+  const [unpinTarget, setUnpinTarget] = useState<
+    { it: OutputItem; mode: 'figure' | 'last' } | null
+  >(null)
+  function _classifyUnpin(it: OutputItem): 'figure' | 'last' | null {
+    if (!it.artifact_id) return null
+    const fig = entityByArtifactId[it.artifact_id]
+    if (!fig) return null
+    const wrapping = entities.find(e =>
+      e.type === 'result' && e.status === 'active' &&
+      ((e.metadata as { primary_evidence_id?: string } | null)?.primary_evidence_id === fig.id),
+    )
+    if (!wrapping) return null
+    const members = ((wrapping.metadata as { members?: Array<{ kind: string; text?: string; ref?: string }> } | null)?.members) ?? []
+    // Same predicate as ResultView._memberIsNonAuto — figure/table
+    // always meaningful, text only if non-empty.
+    const nonAuto = members.filter(m =>
+      m.kind === 'figure' || m.kind === 'table' ||
+      (m.kind === 'text' && (m.text ?? '').trim() !== ''),
+    )
+    // If this evidence is the only non-auto member, unpinning empties
+    // the Result.
+    const thisIsLastNonAuto = nonAuto.length <= 1 &&
+      nonAuto.some(m => m.ref === fig.id)
+    return thisIsLastNonAuto ? 'last' : 'figure'
+  }
+  async function _commitUnpin(it: OutputItem): Promise<void> {
+    if (!it.artifact_id) return
+    const ent = entityByArtifactId[it.artifact_id]
+    if (!ent) return
+    await fetch(`/api/entities/${encodeURIComponent(ent.id)}/unpin`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    }).catch(() => {})
+    setUnpinTarget(null)
+    onChange()
+  }
+  // Pin/unpin toggle. Already-pinned outputs route through the confirm
+  // flow above; unpinned outputs go straight to /api/artifacts/.../pin
+  // (idempotent, materializes + wraps in a Result). The /pin-output
+  // fallback covers run outputs without an artifact_id (orphan manifest
+  // entries — those can't be toggled, only added).
   const pinOutput = async (it: OutputItem) => {
     if (it.artifact_id) {
       const already = pinnedArtifactIds.has(it.artifact_id)
       if (already) {
+        const mode = _classifyUnpin(it)
+        if (mode) {
+          setUnpinTarget({ it, mode })
+          return
+        }
+        // Edge: pinnedArtifactIds said pinned but we can't find the
+        // wrapping Result (entities out of sync). Fall through to the
+        // direct unpin so the user isn't stuck.
         const ent = entityByArtifactId[it.artifact_id]
         if (ent) {
-          await fetch(`/api/entities/${encodeURIComponent(ent.id)}/unpin`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-          }).catch(() => {})
-          onChange()
+          await _commitUnpin(it)
           return
         }
       }
@@ -357,6 +401,45 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
             </div>
           </div>
         </div>
+      )}
+      {unpinTarget && unpinTarget.mode === 'last' && (
+        <ConfirmDialog
+          title="That would empty the Result"
+          mode="info" variant="info" primaryLabel="Got it"
+          onPrimary={() => setUnpinTarget(null)}
+          onCancel={() => setUnpinTarget(null)}
+          body={
+            <>
+              <p>
+                <strong>{unpinTarget.it.label}</strong> is the only meaningful
+                content in the Result that wraps it — unpinning would leave the
+                Result effectively empty.
+              </p>
+              <p>
+                That's equivalent to deleting the Result itself. To do that, use
+                the <strong>⋯ menu</strong> next to the Result in the left rail
+                (look for <code>Delete</code> there).
+              </p>
+            </>
+          }
+        />
+      )}
+      {unpinTarget && unpinTarget.mode === 'figure' && (
+        <ConfirmDialog
+          title={`Unpin "${unpinTarget.it.label}"?`}
+          variant="destructive" primaryLabel="Unpin"
+          onPrimary={() => _commitUnpin(unpinTarget.it)}
+          onCancel={() => setUnpinTarget(null)}
+          body={
+            <>
+              <p>
+                <strong>{unpinTarget.it.label}</strong> will be removed from the
+                Result that includes it. The figure itself (and any revisions)
+                stay in the project — only the Result-membership is dropped.
+              </p>
+            </>
+          }
+        />
       )}
     </div>
   )
