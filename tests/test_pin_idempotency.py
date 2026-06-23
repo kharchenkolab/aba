@@ -214,6 +214,38 @@ def test_pin_artifact_reports_was_new_result_separately():
     assert b["was_new_result"] is False
 
 
+def test_backfill_primary_evidence_id_idempotent():
+    """Pre-PIN-B Results don't carry primary_evidence_id in metadata —
+    the frontend pin-state derivation fails on them. The startup
+    backfill recovers the field via the `includes` edge and must be
+    idempotent (no-op on already-stamped Results)."""
+    from content.bio.lifecycle.promote import (
+        pin_evidence, backfill_primary_evidence_id,
+    )
+    from core.graph.entities import get_entity, update_entity
+    fig = _make_figure_entity("backfill_target")
+    out = pin_evidence(thread_id="thr_bf", evidence_kind="figure", evidence_id=fig)
+    rid = out["result_id"]
+    # Simulate pre-PIN-B state: strip the stamped field from metadata.
+    r = get_entity(rid)
+    md = dict(r["metadata"] or {})
+    md.pop("primary_evidence_id", None)
+    update_entity(rid, metadata=md)
+    assert "primary_evidence_id" not in (get_entity(rid).get("metadata") or {})
+    # First backfill run finds + fixes it.
+    n1 = backfill_primary_evidence_id()
+    assert n1 >= 1
+    r2 = get_entity(rid)
+    assert (r2.get("metadata") or {}).get("primary_evidence_id") == fig
+    # Second run is a no-op for THIS row (idempotent — count may include
+    # other test rows but the field can't be re-stamped on this one).
+    md3 = dict((get_entity(rid).get("metadata") or {}))
+    n2 = backfill_primary_evidence_id()
+    md4 = dict((get_entity(rid).get("metadata") or {}))
+    assert md3 == md4
+    assert n2 == 0  # this row was the only one needing it
+
+
 def test_pin_then_unpin_then_repin_round_trip():
     """Re-pin after unpin must create a brand-new Result (not resurrect
     the archived one). Drives the UI toggle: red → click → unpinned →

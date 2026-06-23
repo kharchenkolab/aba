@@ -17,6 +17,60 @@ from core.graph.entities import create_entity, get_entity, update_entity
 AI_INTERPRETATION_PLACEHOLDER = "✨ generating…"
 
 
+def backfill_primary_evidence_id() -> int:
+    """One-shot migration for Results created before the PIN-B fix.
+
+    Pre-PIN-B Results don't carry `metadata.primary_evidence_id`, so the
+    frontend (RunView.pinnedArtifactIds) can't tell which figure each
+    Result wraps. The data is still recoverable via incoming `includes`
+    edges, so we walk those and stamp the field idempotently. Safe to
+    re-run: any Result that already has `primary_evidence_id` is
+    skipped, so the cost on a clean DB is one query.
+
+    Returns the count of Results updated."""
+    from core.graph._schema import _conn
+    import json as _json
+    updated = 0
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, metadata FROM entities "
+            "WHERE type = 'result' AND status = 'active'",
+        ).fetchall()
+    for r in rows:
+        md = _json.loads(r["metadata"] or "{}")
+        if md.get("primary_evidence_id"):
+            continue
+        # Pick the first `includes` edge whose source is THIS Result
+        # (edges_to gives incoming edges by target; we want outgoing
+        # by source, so reach for edges_from). The evidence_id is
+        # the target.
+        from core.graph.edges import edges_from
+        ev: Optional[str] = None
+        for e in edges_from(r["id"]):
+            if e.get("rel_type") == "includes" and e.get("target_id"):
+                ev = e["target_id"]
+                break
+        if not ev:
+            continue
+        md["primary_evidence_id"] = ev
+        update_entity(r["id"], metadata=md)
+        updated += 1
+    return updated
+
+
+def _on_project_open(ctx: dict) -> None:
+    """Hook handler: backfill primary_evidence_id on every project switch.
+    Each project has its own DB and pre-PIN-B Results in that project
+    can only be backfilled once the project is bound. Cheap (one query
+    + zero-to-few updates) and idempotent."""
+    try:
+        n = backfill_primary_evidence_id()
+        if n:
+            print(f"[on_project_open] backfilled primary_evidence_id for {n} Result(s)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[on_project_open] primary_evidence_id backfill failed: {e}")
+
+
 def _existing_active_result_for_evidence(evidence_id: str,
                                           thread_id: Optional[str]) -> Optional[str]:
     """Return the id of an active Result already wrapping `evidence_id`.
