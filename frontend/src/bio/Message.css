@@ -354,10 +354,10 @@
   background: rgba(0, 0, 0, 0.6); cursor: zoom-out; padding: 40px;
 }
 /* Inline-flex frame that shrinks to the image's rendered size so the
-   toolbar above it is anchored to the IMAGE's left edge, not the
+   toolbar above it is anchored to the IMAGE's right edge, not the
    viewport's. */
 .lightbox__frame {
-  display: inline-flex; flex-direction: column; align-items: flex-start;
+  display: inline-flex; flex-direction: column; align-items: flex-end;
   gap: 6px; cursor: default;
 }
 .lightbox .lightbox__img {
