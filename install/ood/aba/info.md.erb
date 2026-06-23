@@ -1,0 +1,26 @@
+<%#
+  Session-card info view. Renders in the BatchConnect::Session binding (self =
+  session), so `staged_root` is available here (unlike view.html.erb). Reads the
+  status.yaml aba-preflight wrote and shows the scope/credential checklist
+  (site-config.md surface 2).
+%>
+<%
+  status = {}
+  begin
+    sf = staged_root.join("status.yaml")
+    status = (YAML.safe_load(File.read(sf)) || {}) if File.exist?(sf)
+  rescue => _e
+    status = {}
+  end
+%>
+<% if status.is_a?(Hash) && status["scopes"] %>
+**ABA workspace<%= status["group"] ? " — #{status["group"]} lab" : "" %>**
+
+<% status["scopes"].each do |name, info| %>
+- <%= info["state"].to_s.start_with?("ok", "skeleton", "created") ? "✓" : "○" %> **<%= name.capitalize %>** — <%= info["detail"] %>
+<% end %>
+- <%= status.dig("credentials", "resolved") ? "✓" : "⚠" %> **Credentials** — <%= status.dig("credentials", "resolved") ? "using #{status.dig("credentials","source").to_s.tr("_"," ")}" : "no key — will prompt in chat" %>
+<% (status["warnings"] || []).each do |w| %>
+- ⚠ <%= w %>
+<% end %>
+<% end %>

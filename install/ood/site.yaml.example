@@ -1,0 +1,45 @@
+# /cluster/aba/site.yaml — dev OOD stack (mock, VBC-flavored).
+# Read by aba-preflight (node) AND form.yml.erb (dashboard). The ONE file that
+# describes this deployment; the OOD app + ABA loader are otherwise generic.
+site:
+  name: "Vienna BioCenter (dev)"
+  install_id: "vbc-dev"
+  docs_url: "https://example.org/aba/docs"
+
+scopes:
+  institution:
+    bundle_path: /cluster/aba/installation   # installation bundle: imported recipe pack + site policy
+  group:
+    enabled: true
+    root_path: /groups/{group}/aba     # ABA's area inside the group share
+    bundle_subdir: .bundle             # dot-named group bundle (our convention)
+    auto_create_skeleton: true
+    skeleton_template: /cluster/aba/group-skeleton
+  user:
+    home_dir: "{home}/.aba"
+    state_dir: /groups/{group}/aba/{user}   # projects/runs/db — persists
+
+group_resolution:
+  source: ood_form
+  fallback: unix_primary_group
+  candidate_groups: unix_groups
+
+credentials:
+  # Prefer OAuth: user_oauth picks up a seeded refreshable store
+  # ({home}/.aba/oauth.json — auto-renewing) or the Claude Code CLI store
+  # (~/.claude/.credentials.json). Falls back to a saved key, the lab-shared
+  # key, then a form paste (which auto-detects sk-ant-oat OAuth vs sk-ant-api).
+  order: [user_oauth, user_saved, group_shared, user_form_paste]
+  user_key_path: /groups/{group}/aba/{user}/credentials.json
+  group_key_path: /groups/{group}/aba/.credentials.json     # lab-shared key (apikey or oauth)
+  on_missing: prompt_at_launch
+
+fallbacks:
+  no_group_bundle: use_institution_only
+  no_institution_bundle: use_system_only
+  no_group_root: auto_create_per_skeleton
+  malformed_group_bundle: warn_and_skip
+
+ui_text:
+  form_intro: "Launch your ABA session in your lab's workspace."
+  no_group_key_help: "Paste your Anthropic API key, or save one to your lab's ABA folder."

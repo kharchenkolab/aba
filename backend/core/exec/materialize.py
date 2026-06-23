@@ -21,6 +21,7 @@ Non-Python CLI tools (salmon/STAR/fastqc — not on PyPI) need conda; that path
 is deferred (capdat_impl.md task 186) and raises NotImplementedError here.
 """
 from __future__ import annotations
+import os
 import re
 import shutil
 import subprocess
@@ -33,8 +34,32 @@ from core.config import ENVS_DIR
 from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
 
-PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --prefix overlay for libraries
-TOOLS_ENV = ENVS_DIR / "tools"          # one shared conda env for CLI tools
+PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --prefix overlay (per-group growth)
+
+
+def _resolve_tools_env() -> Path:
+    """Where the shared conda **tools env** (R base + CLI binaries) lives.
+
+    Default: ``ENVS_DIR/tools`` — the legacy/dev/test location, beside the
+    per-group growth layers (``pylib`` overlay, ``r_libs``). Unchanged behavior
+    when ``ABA_TOOLS_DIR`` is unset, so dev + the ~30 tests that point
+    ``ABA_ENVS_DIR`` at a throwaway dir stay byte-identical.
+
+    Override: ``ABA_TOOLS_DIR`` pins the base to an explicit path. The R/CLI
+    base is expensive to build and is IDENTICAL for every group, so production
+    (the OOD launch) points this at a pre-baked, **image-resident** copy that
+    ships beside the Python venv — same base/growth split as Python (venv base
+    in the image; ``pylib`` overlay per-group). That stops R rebuilding for
+    every lab. Growth (``r_libs``, ``pylib``) stays under ``ENVS_DIR``
+    regardless of where the base resolves.
+    """
+    override = os.environ.get("ABA_TOOLS_DIR")
+    if override and override.strip():
+        return Path(override).resolve()
+    return ENVS_DIR / "tools"
+
+
+TOOLS_ENV = _resolve_tools_env()        # shared conda env: R base + CLI tools
 
 
 def pylib_dir() -> Path:

@@ -1,0 +1,31 @@
+# Pick a free port (the basic template provides find_port + $host).
+port=$(find_port ${host})
+
+# --- site.yaml-driven config -----------------------------------------------
+# Everything deployment-specific (scope paths, credential chain, group bundle,
+# auto-create policy) now comes from /cluster/aba/site.yaml via aba-preflight.
+# The preflight writes aba-env.sh (the env block) + status.yaml (the session
+# card), and sets ABA_SITE_CONFIG so ABA's own scope_resolver reads the SAME
+# site.yaml for the bundle scopes (no hand-set ABA_LAB_BUNDLE anymore).
+export ABA_SITE_CONFIG="/cluster/aba/site.yaml"
+export ABA_PF_GROUP="<%= context.aba_lab %>"
+export ABA_PF_USER="${USER:-$(whoami)}"
+export ABA_PF_HOME="${HOME}"
+export ABA_PF_STAGED="${PWD}"
+<%- unless context.aba_token.to_s.strip.empty? -%>
+export ABA_PF_TOKEN="<%= context.aba_token %>"
+<%- end -%>
+
+echo "before.sh: PWD=${PWD}" > "${PWD}/preflight.log"
+/home/pkharchenko/aba/aba_runtime/.venv/bin/python \
+  /home/pkharchenko/aba/aba/install/ood/aba_preflight.py >> "${PWD}/preflight.log" 2>&1
+pf_rc=$?
+echo "preflight rc=${pf_rc}" >> "${PWD}/preflight.log"
+# rc 10 = preflight refused (e.g. the group's /aba folder isn't an ABA workspace).
+# Abort the launch: the status card explains why; no server starts.
+if [ "${pf_rc}" = "10" ]; then
+  echo "ABA: preflight blocked this launch — see the session card."
+  exit 1
+fi
+[ -f "${PWD}/aba-env.sh" ] && . "${PWD}/aba-env.sh"
+true

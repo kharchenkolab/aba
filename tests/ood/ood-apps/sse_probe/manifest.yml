@@ -1,0 +1,7 @@
+---
+name: SSE Probe
+category: Interactive Apps
+subcategory: Servers
+role: batch_connect
+description: |
+  Diagnostic: streams 12 SSE events 400ms apart to measure OOD proxy buffering.

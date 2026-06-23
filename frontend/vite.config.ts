@@ -22,6 +22,10 @@ const proxyAgent = new http.Agent({
 })
 
 export default defineConfig({
+  // Normally served at root ("/"). For an Open OnDemand build we bake a
+  // placeholder prefix that the app's script.sh rewrites to /rnode/<host>/<port>/
+  // at session start (set ABA_OOD_BASE=/__OOD_PREFIX__/ for `npm run build`).
+  base: process.env.ABA_OOD_BASE || '/',
   plugins: [react()],
   server: {
     proxy: {
