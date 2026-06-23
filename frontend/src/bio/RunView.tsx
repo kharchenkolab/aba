@@ -156,6 +156,30 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
     }
     return m
   }, [entities])
+  // Artifact_ids already wrapped in an active Result — drives the pin
+  // icon flip in ResultList. Backend stamps Result.metadata.
+  // primary_evidence_id on create (see pin_evidence). We walk Results,
+  // resolve evidence → entity → artifact_id, and emit the matching keys.
+  // Cross-thread Results don't show as pinned here (they belong to a
+  // different conversation's pin state).
+  const entityById = useMemo(() => {
+    const m: Record<string, typeof entities[number]> = {}
+    for (const e of entities) m[e.id] = e
+    return m
+  }, [entities])
+  const pinnedArtifactIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const e of entities) {
+      if (e.type !== 'result' || e.status !== 'active') continue
+      const eid = (e.metadata as { primary_evidence_id?: string } | null)?.primary_evidence_id
+      if (!eid) continue
+      const ev = entityById[eid]
+      if (ev?.exec_id && ev.artifact_kind && ev.artifact_idx != null) {
+        s.add(`${ev.exec_id}:${ev.artifact_kind}:${ev.artifact_idx}`)
+      }
+    }
+    return s
+  }, [entities, entityById])
   const isLatestOutput = (it: OutputItem): boolean => {
     if (!it.artifact_id) return true                 // unpinned/legacy → keep
     const ent = entityByArtifactId[it.artifact_id]
@@ -276,7 +300,8 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           <div className="runview__outputs-head">Plots</div>
           <ResultList items={plotOutputs} runId={run.id} onPin={pinOutput} onChat={chatOutput}
             onChatAnnotated={(it, annot) => onChatResult?.(it.label, undefined, annot)}
-            onRegister={registerOutput} />
+            onRegister={registerOutput}
+            pinnedArtifactIds={pinnedArtifactIds} />
         </section>
       )}
 

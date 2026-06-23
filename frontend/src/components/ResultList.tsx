@@ -26,11 +26,27 @@ export interface OutputItem {
   artifact_id?: string
 }
 
-function PinChat({ item, onPin, onChat }: { item: OutputItem; onPin: (i: OutputItem) => void; onChat: (i: OutputItem) => void }) {
+function PinChat({ item, onPin, onChat, isPinned }: {
+  item: OutputItem
+  onPin: (i: OutputItem) => void
+  onChat: (i: OutputItem) => void
+  /** Already wrapped in an active Result — fills the pin red so the
+   *  click target communicates state, not just affordance. Derived in
+   *  the parent from Result.metadata.primary_evidence_id (see RunView). */
+  isPinned?: boolean
+}) {
   return (
     <span className="rl-acts">
-      <button className="rl-act" title="Pin as a result (evidence)" onClick={e => { e.stopPropagation(); e.preventDefault(); onPin(item) }}>
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
+      <button
+        className={`rl-act${isPinned ? ' rl-act--pinned' : ''}`}
+        title={isPinned ? 'Pinned as a result' : 'Pin as a result (evidence)'}
+        onClick={e => { e.stopPropagation(); e.preventDefault(); onPin(item) }}
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13"
+             fill={isPinned ? 'currentColor' : 'none'}
+             stroke="currentColor" strokeWidth="2">
+          <path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/>
+        </svg>
       </button>
       <button className="rl-act" title="Discuss with Guide" onClick={e => { e.stopPropagation(); e.preventDefault(); onChat(item) }}>
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -39,7 +55,7 @@ function PinChat({ item, onPin, onChat }: { item: OutputItem; onPin: (i: OutputI
   )
 }
 
-export default function ResultList({ items, runId, browse, bulk, onPin, onChat, onChatAnnotated, onRegister }: {
+export default function ResultList({ items, runId, browse, bulk, onPin, onChat, onChatAnnotated, onRegister, pinnedArtifactIds }: {
   items: OutputItem[]
   runId?: string
   browse?: { label: string; href: string }
@@ -48,7 +64,12 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
   onChat: (i: OutputItem) => void
   onChatAnnotated?: (i: OutputItem, annotation: { image: string; note: string }) => void
   onRegister?: (i: OutputItem) => void
+  /** Set of artifact_ids that already have an active wrapping Result.
+   *  Items whose `artifact_id` matches render with a filled pin. */
+  pinnedArtifactIds?: Set<string>
 }) {
+  const isItemPinned = (it: OutputItem): boolean =>
+    !!it.artifact_id && !!pinnedArtifactIds?.has(it.artifact_id)
   const primaries = items.filter(i => i.role === 'primary')
   const rest = items.filter(i => i.role !== 'primary' && i.role !== 'bulk')
   const plots = rest.filter(i => i.kind === 'figure' || i.kind === 'view')
@@ -91,7 +112,7 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
                           </span>
                         )}
                       </span>}
-                  <PinChat item={p} onPin={onPin} onChat={onChat} />
+                  <PinChat item={p} onPin={onPin} onChat={onChat} isPinned={isItemPinned(p)} />
                 </div>
                 <div className="rl-plot__label" title={p.label}>{p.label}</div>
               </div>
@@ -111,7 +132,7 @@ export default function ResultList({ items, runId, browse, bulk, onPin, onChat, 
                   <span className="rl-row__label">{f.label}</span>
                   {f.size && <span className="rl-row__size">{f.size}</span>}
                   {f.href && <span className="rl-row__ext">↗</span>}
-                  <PinChat item={f} onPin={onPin} onChat={onChat} />
+                  <PinChat item={f} onPin={onPin} onChat={onChat} isPinned={isItemPinned(f)} />
                 </>
               )
               return f.href
