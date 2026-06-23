@@ -23,6 +23,11 @@ from . import prompts        # noqa: F401  — registers named prompts (e.g. thr
 from core.hooks.dispatcher import register as _register_hook
 from .graph.display import _on_project_open as _display_on_project_open
 _register_hook("on_project_open", _display_on_project_open, priority=10)
+# PIN-B follow-up: stamp `primary_evidence_id` on Results created before
+# pin_evidence learned to. Same pattern — fires per project so each
+# project's DB gets visited.
+from .lifecycle.promote import _on_project_open as _promote_on_project_open
+_register_hook("on_project_open", _promote_on_project_open, priority=10)
 
 # Wave 2 A.3: ContentPack singleton. Re-exported here so callers can do
 # `from content.bio import BIO_PACK`. The pack object's constructor is
