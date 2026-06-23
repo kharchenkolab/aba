@@ -71,7 +71,12 @@ def pin_artifact_endpoint(exec_id: str, kind: str, idx: int,
                             wrap_in_result=req.wrap_in_result)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    if req.wrap_in_result and out.get("result_id") and out.get("was_new"):
+    # Fire auto_interpret only when a NEW Result was created. Pre-PIN-B
+    # this was gated on `was_new` (entity-level); that under-fired in the
+    # orphan-entity case (entity reused but Result freshly wrapped) and
+    # over-fired in the dupe-Result case (which can no longer happen now
+    # that pin_evidence dedupes). was_new_result is the correct signal.
+    if req.wrap_in_result and out.get("result_id") and out.get("was_new_result"):
         import threading
         threading.Thread(target=auto_interpret, args=(out["result_id"],),
                          daemon=True).start()

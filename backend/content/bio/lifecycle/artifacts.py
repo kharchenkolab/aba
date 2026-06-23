@@ -172,11 +172,19 @@ def pin_artifact(
     """Materialize the artifact's entity and optionally wrap it in a Result.
 
     Returns: {entity_id, result_id, member_id, kind, exec_id, idx,
-              was_new (bool)}.
+              was_new (bool), was_new_result (bool)}.
 
-    `was_new` is False on the idempotent path (the artifact had already
-    been pinned and we're just re-acknowledging). Frontends can use this
-    to tell the user "already pinned" vs "pinned just now."
+    Two distinct newness signals:
+      - `was_new`        — the figure/table entity is freshly minted (vs.
+                           reusing one materialized earlier).
+      - `was_new_result` — pin_evidence created a fresh wrapping Result
+                           (vs. reusing one that already wraps this
+                           evidence). Drives auto_interpret gating and
+                           UX "pinned just now" vs "already pinned"
+                           toasts. Decoupled because an entity can exist
+                           without a Result (e.g., transcluded into chat
+                           but never pinned) — wrapping it later still
+                           creates a new Result even though was_new=False.
     """
     pre_existing = _existing_entity_for_artifact(exec_id, kind, idx)
     eid = materialize_entity_from_artifact(
@@ -185,19 +193,22 @@ def pin_artifact(
     was_new = pre_existing is None
 
     out: dict = {
-        "entity_id": eid,
-        "result_id": None,
-        "member_id": None,
-        "kind":      kind,
-        "exec_id":   exec_id,
-        "idx":       idx,
-        "was_new":   was_new,
+        "entity_id":      eid,
+        "result_id":      None,
+        "member_id":      None,
+        "kind":           kind,
+        "exec_id":        exec_id,
+        "idx":            idx,
+        "was_new":        was_new,
+        "was_new_result": False,
     }
     if not wrap_in_result:
         return out
 
     # Wrap-in-Result reuses the standard evidence flow (kind-aware for
-    # cells per pin_evidence's evidence_kind argument).
+    # cells per pin_evidence's evidence_kind argument). pin_evidence is
+    # idempotent — re-wrap of an already-wrapped evidence returns the
+    # existing Result with created_result=False.
     from content.bio.lifecycle.promote import pin_evidence
     rec = exec_records.get(exec_id) or {}
     tid = thread_id or rec.get("thread_id") or ""
@@ -208,8 +219,9 @@ def pin_artifact(
         evidence_id=eid,
         origin="internal",
     )
-    out["result_id"] = wrap.get("result_id")
-    out["member_id"] = wrap.get("member_id")
+    out["result_id"]      = wrap.get("result_id")
+    out["member_id"]      = wrap.get("member_id")
+    out["was_new_result"] = bool(wrap.get("created_result"))
     return out
 
 

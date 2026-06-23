@@ -67,6 +67,16 @@ def create_cell_from_exec(
     rec = exec_records.get(exec_id)
     if not rec:
         raise ValueError(f"exec record {exec_id} not found")
+    # Idempotency: an exec can be the source of at most one active cell
+    # entity. Repeat calls reuse the existing one rather than minting a
+    # duplicate (same shape as materialize_entity_from_artifact for
+    # figures/tables). Without this, every Pin click duplicates the
+    # cell entity even before the Result-level dedupe in pin_evidence
+    # gets a chance to fire.
+    from content.bio.lifecycle.artifacts import _existing_entity_for_artifact
+    existing = _existing_entity_for_artifact(exec_id, "cell", 0)
+    if existing:
+        return existing["id"]
     # An exec with neither stdout nor produced is uninteresting — refuse
     # to pin a blank cell rather than mint a useless entity.
     has_text = bool((rec.get("stdout_tail") or "").strip() or
