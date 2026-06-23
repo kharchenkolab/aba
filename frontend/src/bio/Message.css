@@ -375,7 +375,11 @@
   border: none;
   color: #fff;
   opacity: 1;
+  /* +25% over the inline 13/20px chrome — the pin needs more presence
+     in the lightbox where the rest of the controls breathe more. */
+  width: 25px; height: 25px;
 }
+.lightbox__tools .msg__tool svg { width: 16px; height: 16px; }
 .lightbox__tools .msg__tool:hover { color: rgba(255, 255, 255, 0.75); }
 .lightbox__tools .msg__tool--pinned { color: var(--red); }
 .lightbox__close {
