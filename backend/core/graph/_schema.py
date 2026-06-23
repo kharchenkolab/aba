@@ -102,6 +102,16 @@ def _project_conn(project_id: Optional[str] = None):
     legacy callsite behaviour."""
     if project_id is None:
         return _conn()
+    # SINGLE mode (ABA_DB_PATH set: tests, single-user deployments) has exactly
+    # ONE database — the workspace DB. Per-project DB files are never created or
+    # init_db()'d there (bind()/ensure_opened() are no-ops), and current()
+    # returns the "single" sentinel, so a job created with project_id="single"
+    # would otherwise open an empty, table-less per-project file ("no such table:
+    # jobs"). Route it to the one DB instead. (Lazy import: projects imports this
+    # module.)
+    from core import projects
+    if projects.SINGLE:
+        return _conn()
     from core.config import project_db_path
     p = project_db_path(project_id)
     c = sqlite3.connect(p)
