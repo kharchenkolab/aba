@@ -215,50 +215,57 @@ function OutputPreview({ item, runId, onChat, onChatAnnotated, onClose }: {
 
   return (
     <div className="rl-modal" onClick={onClose}>
-      <div className="rl-modal__box" onClick={e => e.stopPropagation()}>
-        <div className="rl-modal__head">
-          {item.thumb && (
-            <button className="rl-modal__btn" onClick={detachToWindow} title="Open in a separate browser window">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="13" height="13" rx="1.5" /><path d="M8 8h13v13H8" />
-              </svg>
+      {/* Frame mirrors the chat .lightbox__frame: inline-flex column,
+          right-aligned, so the close button sits exactly above the
+          box's top-right corner instead of in the modal's header bar
+          with the other controls. Visual + interaction consistency
+          with the chat lightbox. */}
+      <div className="rl-modal__frame" onClick={e => e.stopPropagation()}>
+        <button className="rl-modal__close-floating" onClick={onClose} aria-label="Close" title="Close">×</button>
+        <div className="rl-modal__box">
+          <div className="rl-modal__head">
+            {item.thumb && (
+              <button className="rl-modal__btn" onClick={detachToWindow} title="Open in a separate browser window">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="13" height="13" rx="1.5" /><path d="M8 8h13v13H8" />
+                </svg>
+              </button>
+            )}
+            <span className="rl-modal__title">{item.label}</span>
+            {marking && (
+              <>
+                <button className={`rl-act rl-act--sm ${mode === 'highlight' ? 'is-sel' : ''}`} title="Freehand marker" onClick={() => pickMode('highlight')}>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M4 18 Q9 6 14 13 T20 8"/></svg>
+                </button>
+                <button className={`rl-act rl-act--sm ${mode === 'box' ? 'is-sel' : ''}`} title="Box" onClick={() => pickMode('box')}>
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>
+                </button>
+                <button className="rl-act rl-act--sm" title="Clear mark" onClick={() => setClearSig(s => s + 1)}>
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+                <span className="rl-modal__sep" />
+              </>
+            )}
+            {item.thumb && (
+              <button className={`rl-act rl-act--hl ${marking ? 'is-on' : ''}`} title="Highlight a region to ask the Guide about" onClick={() => setMarking(m => !m)}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="#fde047" stroke="#ca8a04" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
+              </button>
+            )}
+            {/* No pin here — the surrounding tile already carries one;
+                two pins side by side were confusing. The tile flips red
+                on the same gesture either way. */}
+            <button className="rl-act" title="Discuss with Guide" onClick={doChat}>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             </button>
-          )}
-          <span className="rl-modal__title">{item.label}</span>
-          {marking && (
-            <>
-              <button className={`rl-act rl-act--sm ${mode === 'highlight' ? 'is-sel' : ''}`} title="Freehand marker" onClick={() => pickMode('highlight')}>
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M4 18 Q9 6 14 13 T20 8"/></svg>
-              </button>
-              <button className={`rl-act rl-act--sm ${mode === 'box' ? 'is-sel' : ''}`} title="Box" onClick={() => pickMode('box')}>
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>
-              </button>
-              <button className="rl-act rl-act--sm" title="Clear mark" onClick={() => setClearSig(s => s + 1)}>
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-              </button>
-              <span className="rl-modal__sep" />
-            </>
-          )}
-          {item.thumb && (
-            <button className={`rl-act rl-act--hl ${marking ? 'is-on' : ''}`} title="Highlight a region to ask the Guide about" onClick={() => setMarking(m => !m)}>
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="#fde047" stroke="#ca8a04" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.6 2.6a2 2 0 012.8 0l3 3a2 2 0 010 2.8l-9 9-5.2 1.2 1.2-5.2 9-9zM5 19h14v2H5z"/></svg>
-            </button>
-          )}
-          {/* No pin here — the surrounding tile already carries one;
-              two pins side by side were confusing. The tile flips red
-              on the same gesture either way. */}
-          <button className="rl-act" title="Discuss with Guide" onClick={doChat}>
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          </button>
-          {item.href && <a className="rl-modal__open" href={item.href} target="_blank" rel="noreferrer">Open ↗</a>}
-          <button className="rl-modal__x" onClick={onClose} title="Close">×</button>
-        </div>
-        <div className="rl-modal__body">
-          {item.thumb
-            ? <HighlightableImage src={item.thumb} label={item.label} onAttach={doHighlight} className="rl-modal__img"
-                                  marking={marking} onMarkingChange={setMarking} mode={mode} onModeChange={setMode}
-                                  clearMarkSignal={clearSig} hideToolbar showToggle={false} />
-            : <div className="rl-modal__noimg">No preview available for this output.</div>}
+            {item.href && <a className="rl-modal__open" href={item.href} target="_blank" rel="noreferrer">Open ↗</a>}
+          </div>
+          <div className="rl-modal__body">
+            {item.thumb
+              ? <HighlightableImage src={item.thumb} label={item.label} onAttach={doHighlight} className="rl-modal__img"
+                                    marking={marking} onMarkingChange={setMarking} mode={mode} onModeChange={setMode}
+                                    clearMarkSignal={clearSig} hideToolbar showToggle={false} />
+              : <div className="rl-modal__noimg">No preview available for this output.</div>}
+          </div>
         </div>
       </div>
     </div>
