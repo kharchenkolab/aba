@@ -10,7 +10,7 @@ P1-P3 fill in behavior without reshaping callers.
 from core.catalog.catalog import (
     CAPABILITY, REFERENCE,
     register_capability, list_capabilities, search_capabilities, resolve_capability,
-    propose_capability, approve_capability, capability_status,
+    propose_capability, update_capability, approve_capability, capability_status,
     register_seed_provider,
 )
 from core.catalog.collections import (
@@ -21,7 +21,7 @@ from core.catalog.collections import (
 __all__ = [
     "CAPABILITY", "REFERENCE",
     "register_capability", "list_capabilities", "search_capabilities", "resolve_capability",
-    "propose_capability", "approve_capability", "capability_status",
+    "propose_capability", "update_capability", "approve_capability", "capability_status",
     "register_seed_provider",
     "register_collection_dir", "collection_capabilities", "find_collection_capability",
     "collection_domains",

@@ -623,11 +623,24 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # R package (r_provisioning.md): already on the library path → ready;
         # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
         # shared base is never mutated here — only curation grows it.
-        rp = prov["r"]
+        rp = dict(prov["r"])
+        # Per-install overrides (P5 fix #2): the caller can pin a different git
+        # ref / source / package for THIS install without re-cataloguing — e.g.
+        # ensure_capability(name='pagoda2', source='github',
+        # package='kharchenkolab/pagoda2', ref='devel') installs from a branch
+        # even though the catalog entry is the CRAN release. Transient: the
+        # catalog row is not mutated.
+        for _k in ("ref", "source", "package"):
+            if input_.get(_k):
+                rp[_k] = input_[_k]
         from core.exec import r as rexec
         from core import projects
         pid = projects.current() or "default"
-        libname = rp.get("library") or rp.get("package") or cap.get("name")
+        _src = rp.get("source", "cran")
+        _pkg = rp.get("package") or cap.get("name")
+        libname = rp.get("library") or (
+            _pkg.split("/")[-1] if _src == "github"
+            else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
         # The runtime now carries the foundational compiled deps (igraph/irlba/
         # Rcpp*/xml2) as binaries, so GitHub/CRAN installs find them on
         # .libPaths() instead of source-compiling. Heavy frameworks stay on-demand.
@@ -636,8 +649,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                     "library": libname,
                     "note": f"Already available — library({libname}) works in run_r."}
-        res = rexec.r_install(rp.get("source", "cran"), rp.get("package") or cap.get("name"),
-                              project_id=pid, library=libname, ref=rp.get("ref"), cancel_token=_ct)
+        res = rexec.r_install(_src, _pkg, project_id=pid, library=libname,
+                              ref=rp.get("ref"), cancel_token=_ct)
         if res.get("status") == "ready":
             if res.get("via") == "conda":
                 note = (f"Installed as a Bioconductor binary into the shared R environment; "
@@ -668,13 +681,8 @@ def propose_capability_tool(input_: dict) -> dict:
     name = (input_.get("name") or "").strip()
     if not name:
         return {"error": "name is required"}
-    from core.catalog import resolve_capability, propose_capability as _propose, capability_status
-
-    existing = resolve_capability(name)
-    if existing:
-        return {"status": "already_available", "name": existing.get("name"),
-                "version": existing.get("version"),
-                "note": "Already in the catalog — call ensure_capability to install it."}
+    from core.catalog import (resolve_capability, propose_capability as _propose,
+                              update_capability, capability_status)
 
     archetype = (input_.get("archetype") or "library").strip()
     version = str(input_.get("version") or "latest")
@@ -715,7 +723,12 @@ def propose_capability_tool(input_: dict) -> dict:
         # the R library() name used for the present-check (defaults sensibly).
         r_source = (input_.get("source") or "cran").strip()
         pkg = (input_.get("package") or name).strip()
-        lib = input_.get("library") or (pkg.split("/")[-1] if r_source == "github" else pkg)
+        if r_source == "github":
+            lib = input_.get("library") or pkg.split("/")[-1]
+        elif r_source == "conda":           # conda 'r-foo' → R library 'foo'
+            lib = input_.get("library") or (pkg[2:] if pkg.startswith("r-") else pkg)
+        else:
+            lib = input_.get("library") or pkg
         from core.exec.r import validate_install
         verr = validate_install(r_source, pkg, input_.get("ref"))
         if verr:
@@ -749,6 +762,24 @@ def propose_capability_tool(input_: dict) -> dict:
         }
         if input_.get("import_name"):
             spec["import_name"] = input_["import_name"]
+
+    # De-dupe: if it already exists, UPDATE a project/user-scoped entry in place
+    # (so the agent can correct a wrong git ref / source it just proposed)
+    # instead of silently keeping the stale one. Curated system/installation
+    # catalog entries are left untouched.
+    existing = resolve_capability(name)
+    if existing:
+        scope = str(existing.get("scope", "system"))
+        if (scope.startswith("project") or scope.startswith("user")) and update_capability(name, spec):
+            return {"status": "updated", "name": name, "archetype": archetype,
+                    "note": "Updated the existing catalog entry (e.g. corrected the "
+                            "source / git ref / provisioning). Call ensure_capability to (re)install."}
+        return {"status": "already_available", "name": existing.get("name"),
+                "version": existing.get("version"),
+                "note": "Already in the catalog as a curated entry — re-proposing can't "
+                        "modify it. Install it with ensure_capability (pass ref= / source= / "
+                        "package= to override the branch/source for THIS install), or propose "
+                        "a differently-named project variant."}
 
     cap_id = _propose(spec)
     if capability_status(cap_id) != "published":
