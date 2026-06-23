@@ -381,7 +381,13 @@
 }
 .lightbox__tools .msg__tool svg { width: 16px; height: 16px; }
 .lightbox__tools .msg__tool:hover { color: rgba(255, 255, 255, 0.75); }
+/* Pinned-red is hard to read against the dark backdrop on its own —
+   a soft white drop-shadow on the SVG glyph (not the button rect)
+   lifts the silhouette so the gesture state reads at a glance. */
 .lightbox__tools .msg__tool--pinned { color: var(--red); }
+.lightbox__tools .msg__tool--pinned svg {
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.85));
+}
 .lightbox__close {
   font-size: 26px; line-height: 1; color: #fff;
   background: none; border: none; cursor: pointer;
