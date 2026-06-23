@@ -189,13 +189,28 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   const plotOutputs = outputs
     .filter(o => o.kind === 'figure' || o.kind === 'view')
     .filter(isLatestOutput)
-  // Option B / Phase 4: prefer the canonical artifact-pin path when the
-  // manifest entry carries an artifact_id. Falls back to the legacy
-  // /pin-output disk-scan path for older manifests that don't have it
-  // (pre-cutover Runs, or manifests refreshed before the artifact
-  // augmentation landed).
+  // Pin/unpin toggle. The pin button reports whether the output is
+  // currently pinned via `pinnedArtifactIds`; clicking flips it:
+  //   - already pinned  → POST /api/entities/{evidence_id}/unpin
+  //                       (archives the wrapping Result via unpin_evidence)
+  //   - not pinned      → POST /api/artifacts/{exec}/{kind}/{idx}/pin
+  //                       (idempotent, materializes + wraps in a Result)
+  // The /pin-output fallback stays for run outputs that don't have an
+  // artifact_id (truly orphan manifest entries) — those can't be
+  // toggled, only added.
   const pinOutput = async (it: OutputItem) => {
     if (it.artifact_id) {
+      const already = pinnedArtifactIds.has(it.artifact_id)
+      if (already) {
+        const ent = entityByArtifactId[it.artifact_id]
+        if (ent) {
+          await fetch(`/api/entities/${encodeURIComponent(ent.id)}/unpin`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+          }).catch(() => {})
+          onChange()
+          return
+        }
+      }
       const m = it.artifact_id.match(/^(.+):([^:]+):(\d+)$/)
       if (m) {
         const [, exec_id, kind, idxs] = m
