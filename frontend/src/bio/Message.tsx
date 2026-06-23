@@ -564,15 +564,17 @@ function ZoomableImg({ src, alt, pinSlot }: {
         onClick={() => setOpen(true)} />
       {open && (
         <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
-          <img className="lightbox__img" src={src} alt={alt}
-            crossOrigin={cors ? 'anonymous' : undefined}
-            onClick={e => e.stopPropagation()} />
-          {pinSlot && (
-            <div className="lightbox__tools" onClick={e => e.stopPropagation()}>
+          {/* Frame shrinks to the image's rendered size; toolbar sits
+              above its left edge — same idea as the Run-view modal's
+              header bar but without the box chrome. */}
+          <div className="lightbox__frame" onClick={e => e.stopPropagation()}>
+            <div className="lightbox__tools">
               {pinSlot}
+              <button className="lightbox__close" onClick={() => setOpen(false)} aria-label="Close">×</button>
             </div>
-          )}
-          <button className="lightbox__close" onClick={() => setOpen(false)} aria-label="Close">×</button>
+            <img className="lightbox__img" src={src} alt={alt}
+              crossOrigin={cors ? 'anonymous' : undefined} />
+          </div>
         </div>
       )}
     </>
