@@ -256,19 +256,14 @@ def _harvest_helpers_py() -> str:
 
 
 def _kernel_threads() -> int:
-    """Thread count for the BLAS/OMP pools inside a kernel. Default
-    ``min(cpu_count, 8)`` — enough to keep numpy/torch/R BLAS and host-side data
-    loading multithreaded, capped so a fat box doesn't oversubscribe (64+ OMP
-    threads on small matrices is slower, not faster, and collides with DataLoader
-    workers). Override with ``ABA_KERNEL_THREADS``."""
-    import os
-    override = os.environ.get("ABA_KERNEL_THREADS")
-    if override:
-        try:
-            return max(1, int(override))
-        except ValueError:
-            pass
-    return max(1, min(os.cpu_count() or 4, 8))
+    """Thread count for the BLAS/OMP pools inside a kernel. Sized to the CPU
+    *allocation* (Slurm/cgroup/affinity), not the host core count, capped at 8 so
+    a fat box doesn't oversubscribe (64+ OMP threads on small matrices is slower,
+    not faster, and collides with DataLoader workers). On a node allocated 1 CPU
+    out of 56 this returns 1 — without it OpenBLAS spawns 56 threads and dies on
+    the per-user process limit. Override with ``ABA_KERNEL_THREADS``."""
+    from core.exec.cpu import default_thread_cap
+    return default_thread_cap()
 
 
 def _kernel_env(lang: str, cwd: str) -> dict:
@@ -302,8 +297,8 @@ def _kernel_env(lang: str, cwd: str) -> dict:
     # kernels.
     env["ABA_PYTHON"] = sys.executable
     nthreads = str(_kernel_threads())
-    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
-                "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
         env[var] = nthreads
     if lang == "r":
         tenv = tools_env()
