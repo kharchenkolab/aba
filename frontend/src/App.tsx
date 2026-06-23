@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUrlState } from './useUrlState'
 import { useResetOnChange } from './hooks/useResetOnChange'
+import { useUnpinConfirm } from './lib/useUnpinConfirm'
 import './App.css'
 import Rail from './platform/Rail'
 import ProjectTree from './bio/ProjectTree'
@@ -677,31 +678,40 @@ export default function App() {
     createClaim(stmt, [resultId])
   }
 
+  // Unpin confirmation lives in a shared hook so the chat FigurePin
+  // gets the same UX as the Run-view tile: confirm if the wrapping
+  // Result has other meaningful members, blocking info dialog when
+  // this is the only one. The hook owns the POST + dialog state.
+  const { requestUnpin, dialog: unpinDialog } = useUnpinConfirm(entities, refresh)
+
   // Pin/unpin a chat figure. Under the unified model (misc/entity_pin_redesign.md),
   // Pin creates a Result wrapping the evidence (and lands on the shelf by virtue
-  // of being a Result); Unpin runs the inverse branching (delete vs archive vs
-  // remove-member) via /api/entities/{id}/unpin.
+  // of being a Result); Unpin routes through the confirm hook above.
   const pinEntity = (id: string, pin: boolean) => {
-    const path = pin ? 'pin' : 'unpin'
-    fetch(`/api/entities/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
+    if (!pin) {
+      // The figure's title is the best label we have on hand; the hook
+      // falls back to "this figure" if it can't find an entity.
+      const ent = entities.find(e => e.id === id)
+      requestUnpin(id, ent?.title || '')
+      return
+    }
+    fetch(`/api/entities/${encodeURIComponent(id)}/pin`, { method: 'POST' })
       .then(() => refresh())
       .catch(() => {})
-    // User-initiated pin/unpin reveals the right rail — the result they're
-    // pinning lands there, so they want to see it. (AI-driven pinning, e.g.
-    // auto_interpret's caption write-back, goes through a different code path
-    // and intentionally does NOT call this — see the right-rail effect above.)
-    // User-initiated pin/unpin is intentional — clear the sticky and reveal.
-    if (pin) {
-      userCollapsedRef.current = false; _setRightCollapsedRaw(false)
-      // The live path for the autogen title/caption is auto_interpret's
-      // caption-ready broadcast on /api/notifications → refresh(). But a
-      // single SSE event has no replay: if it's missed (EventSource mid-
-      // reconnect, a --reload worker restart, a slow-client queue drop) the
-      // UI sits on the placeholder until a manual reload. A few bounded
-      // refreshes cover that gap (auto_interpret typically lands in ~6s);
-      // refresh() is idempotent so overlapping with the broadcast is free.
-      ;[3000, 7000, 12000].forEach(ms => window.setTimeout(() => refresh(), ms))
-    }
+    // User-initiated pin reveals the right rail — the Result they're
+    // pinning lands there, so they want to see it. (AI-driven pinning,
+    // e.g. auto_interpret's caption write-back, goes through a different
+    // code path and intentionally does NOT call this — see the
+    // right-rail effect above.)
+    userCollapsedRef.current = false; _setRightCollapsedRaw(false)
+    // The live path for the autogen title/caption is auto_interpret's
+    // caption-ready broadcast on /api/notifications → refresh(). But a
+    // single SSE event has no replay: if it's missed (EventSource mid-
+    // reconnect, a --reload worker restart, a slow-client queue drop) the
+    // UI sits on the placeholder until a manual reload. A few bounded
+    // refreshes cover that gap (auto_interpret typically lands in ~6s);
+    // refresh() is idempotent so overlapping with the broadcast is free.
+    ;[3000, 7000, 12000].forEach(ms => window.setTimeout(() => refresh(), ms))
   }
   // Keep any (non-entity) message as a snapshot note, keyed by content.
   const keepMessage = (key: string, text: string, image_urls: string[]) => {
@@ -1021,6 +1031,7 @@ export default function App() {
           />
         </div>
       )}
+      {unpinDialog}
     </div>
   )
 }
