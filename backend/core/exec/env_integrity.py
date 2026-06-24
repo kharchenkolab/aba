@@ -44,8 +44,13 @@ def verify_python_imports(
         return True, ""
     exe = python_exe or sys.executable
     if extra_paths is None:
-        from core.exec.materialize import pylib_paths
-        extra_paths = [str(p) for p in pylib_paths()]
+        # Mirror run_python's sys.path: shared overlay THEN the current project's
+        # overlay (env_refactor.md P1), so verify sees exactly what a run_python
+        # cell would import.
+        from core.exec.materialize import pylib_paths, project_pylib_paths
+        from core import projects
+        extra_paths = ([str(p) for p in pylib_paths()]
+                       + [str(p) for p in project_pylib_paths(projects.current())])
     # append (not prepend) so the base wins, exactly like the run_python preamble
     appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
     names_lit = ", ".join(repr(n) for n in names)
