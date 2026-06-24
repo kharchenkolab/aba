@@ -88,6 +88,8 @@ from .discovery import (    # noqa: F401, E402
     _overlay_has_import,
     inspect_package,
     inspect_env,
+    make_isolated_env,
+    run_in_isolated_env,
     ensure_capability,
     propose_capability_tool,
     fetch_url,
