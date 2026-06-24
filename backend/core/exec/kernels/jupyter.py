@@ -236,8 +236,10 @@ def _setup_code(cwd: str) -> str:
     # shadow-break the compiled stack, and one project can't pollute another.
     from core import projects as _projects
     _pid = _projects.current()
-    _proj = list(project_pylib_paths(_pid))
-    pylib_appends = "".join(f"_sys.path.insert(0, {str(p)!r})\n" for p in reversed(_proj))
+    # §11.4: the project overlay is prepended via PYTHONPATH at kernel launch (see
+    # JupyterKernelSession.__init__), so it wins even over packages jupyter imports
+    # at boot — no in-cell sys.path manipulation needed.
+    pylib_appends = ""
     # Ad-hoc-install containment (env_refactor.md P5, pulled forward): point any
     # bare `pip install` the agent runs in a cell at the project overlay +
     # base-constraints via PIP_PREFIX / PIP_CONSTRAINT — so a reflexive
@@ -394,7 +396,19 @@ class JupyterKernelSession:
         else:
             kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
-        self._km.start_kernel(cwd=str(cwd), env=_kernel_env(lang, cwd))
+        kenv = _kernel_env(lang, cwd)
+        # §11.4: the default python kernel gets the project overlay on PYTHONPATH so
+        # it's prepended at interpreter STARTUP — before jupyter imports anything —
+        # so a project's overridden package version wins even over a base package
+        # the kernel itself imports. (Isolated env kernels are standalone; R N/A.)
+        if lang != "r" and not env_name:
+            from core.exec.materialize import project_pylib_paths
+            from core import projects as _pj
+            _ov = [str(p) for p in project_pylib_paths(_pj.current())]
+            if _ov:
+                kenv["PYTHONPATH"] = os.pathsep.join(
+                    _ov + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
+        self._km.start_kernel(cwd=str(cwd), env=kenv)
         self._kc = self._km.client()
         self._kc.start_channels()
         self._kc.wait_for_ready(timeout=60)
