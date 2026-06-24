@@ -133,3 +133,74 @@ def remove_env(name: str) -> bool:
         shutil.rmtree(d, ignore_errors=True)
         return True
     return False
+
+
+# ── R isolated environments (env_refactor.md P3) ─────────────────────────────
+# R has no separate interpreter to isolate (one R, many library dirs), so an
+# "isolated R env" is a standalone library dir installed into + run with that
+# dir FIRST on .libPaths(). NOTE: R's *per-project* lib is already prepended to
+# .libPaths() (libpaths_expr → project wins over base), so a project ALREADY
+# overrides base package versions — the case-(i) escape hatch Python needed a
+# venv for. These isolated R libs are for case-(ii)/symmetry: a fully separate,
+# project-independent lib for a one-off conflicting install.
+
+def r_env_lib(name: str) -> Path:
+    return _isolated_root() / f"r-{name}"
+
+
+def r_create_env(name: str) -> dict:
+    lib = r_env_lib(name)
+    created = not lib.exists()
+    lib.mkdir(parents=True, exist_ok=True)
+    return {"name": name, "lib": str(lib), "created": created,
+            "engine": "r-libdir", "language": "r"}
+
+
+def r_run_in(name: str, code: str, *, timeout_s: int = 600) -> dict:
+    """Run R code with the isolated lib FIRST on .libPaths() (so its packages
+    win), then the shared base. Returns {ok, stdout, stderr}."""
+    lib = r_env_lib(name)
+    if not lib.exists():
+        return {"ok": False, "stdout": "", "stderr": f"isolated R env {name!r} does not exist"}
+    from core.exec.r import _run_rscript
+    expr = f".libPaths(c({str(lib)!r}, .libPaths()))\n{code}"
+    proc = _run_rscript(expr, timeout_s)
+    return {"ok": proc.returncode == 0,
+            "stdout": (getattr(proc, "stdout", "") or "")[-4000:],
+            "stderr": (getattr(proc, "stderr", "") or "")[-2000:]}
+
+
+def r_install_into(name: str, packages: Sequence[str], *, timeout_s: int = 1800,
+                   verify: bool = True) -> dict:
+    """Install R packages into the isolated lib (binary via PPM where available).
+    The isolated lib is the install target AND first on .libPaths(), so shared
+    deps resolve from the base but the named packages live isolated. Returns
+    {name, ok, installed, error, verified}."""
+    lib = r_env_lib(name)
+    lib.mkdir(parents=True, exist_ok=True)
+    from core.exec.r import _run_rscript, cran_repo
+    pkgs = "c(" + ", ".join(repr(p) for p in packages) + ")"
+    expr = (f".libPaths(c({str(lib)!r}, .libPaths()))\n"
+            f"install.packages({pkgs}, lib={str(lib)!r}, repos={cran_repo()!r})")
+    proc = _run_rscript(expr, timeout_s)
+    ok = proc.returncode == 0
+    out: dict = {"name": name, "ok": ok, "installed": list(packages),
+                 "error": None if ok else
+                 ((getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "")[-1400:]),
+                 "verified": None}
+    if ok and verify:
+        v = r_run_in(name, f"ok <- all(vapply({pkgs}, requireNamespace, logical(1), "
+                           f"quietly=TRUE)); cat(if (ok) 'ABA_VERIFY_OK' else 'ABA_VERIFY_FAIL')")
+        out["verified"] = "ABA_VERIFY_OK" in (v.get("stdout") or "")
+        if not out["verified"]:
+            out["ok"] = False
+            out["error"] = "installed but library() verification failed:\n" + (v.get("stderr") or "")[-600:]
+    return out
+
+
+def remove_r_env(name: str) -> bool:
+    lib = r_env_lib(name)
+    if lib.exists():
+        shutil.rmtree(lib, ignore_errors=True)
+        return True
+    return False

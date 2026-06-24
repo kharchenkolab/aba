@@ -111,6 +111,17 @@ def test_ensure_capability_auto_isolates_on_conflict(monkeypatch):
     assert r["isolated_env"] == "cap-tflike" and "run_in_isolated_env" in r["note"]
 
 
+def test_make_r_env_and_run_via_tools(iso_root):
+    """P3: the agent tools are language-aware — an R isolated env + run."""
+    from core.exec.materialize import tools_env
+    if not (tools_env() / "bin" / "Rscript").exists():
+        pytest.skip("R runtime not provisioned on this box")
+    r = make_isolated_env({"name": "rtool", "language": "r"})
+    assert r["status"] == "ok" and r["language"] == "r" and r["engine"] == "r-libdir"
+    run = run_in_isolated_env({"name": "rtool", "language": "r", "code": "cat('R_RUN_OK')"})
+    assert run["status"] == "ok" and run["language"] == "r" and "R_RUN_OK" in run["stdout"]
+
+
 def test_ensure_capability_non_conflict_stays_error(monkeypatch):
     """A non-conflict materialize failure must NOT auto-isolate."""
     import core.catalog as cat
