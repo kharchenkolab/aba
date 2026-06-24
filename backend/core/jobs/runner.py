@@ -228,6 +228,64 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     return True
 
 
+async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
+                        effective_pid: str) -> None:
+    """Shared completion path for a finished background job — used by BOTH the
+    in-process worker (_run_one) and the Slurm poll loop. Maps the result to a
+    status, persists the run log, registers artifacts (on_job_complete hook), and
+    fires the continuation so the agent's plan resumes. ``lookup_pid`` is the DB
+    project (where the row lives); ``effective_pid`` is where the work ran."""
+    job_id = job["id"]
+    params = job.get("params") or {}
+    code = params.get("code", "")
+    kind = job.get("kind") or "run_python"
+    focus_entity_id = job.get("focus_entity_id")
+
+    if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
+        update_job(job_id, project_id=lookup_pid, status="cancelled", finished_at=_utcnow())
+        return
+    if "error" in result_obj:
+        update_job(job_id, project_id=lookup_pid, status="failed",
+                   error=result_obj["error"][:1000],
+                   log_tail=result_obj["error"][:1500], finished_at=_utcnow())
+        await _continue_after_failure(job_id, lookup_pid, effective_pid)
+        return
+    stdout = result_obj.get("stdout", "")
+    stderr = result_obj.get("stderr", "")
+    log_tail = (stdout[-1500:] + ("\n" + stderr[-500:] if stderr else "")).strip()
+    try:
+        _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
+    except Exception:  # noqa: BLE001
+        pass
+    if result_obj.get("returncode") != 0:
+        update_job(job_id, project_id=lookup_pid, status="failed",
+                   error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
+                   log_tail=log_tail, finished_at=_utcnow())
+        await _continue_after_failure(job_id, lookup_pid, effective_pid)
+        return
+    dispatch("on_job_complete", {
+        "tool_name": kind,
+        "tool_input": {"code": code},
+        "result_obj": result_obj,
+        "focus_entity_id": focus_entity_id,
+        "analysis_ctx": {"analysis_id": params.get("run_id"), "turn_index": 0},
+        "thread_id": params.get("thread_id"),
+        "project_id": effective_pid,
+        "job_id": job_id,
+        "new_entities": [],
+    })
+    update_job(job_id, project_id=lookup_pid, status="done", log_tail=log_tail,
+               finished_at=_utcnow())
+    try:
+        from core.jobs.continuation import enqueue_continuation
+        fresh = get_job(job_id, project_id=lookup_pid) or {}
+        result = await enqueue_continuation(fresh, str(effective_pid))
+        if result.get("state") != "skipped":
+            print(f"[jobs.continuation] job={job_id} → {result}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("continuation", job_id, e)
+
+
 async def _run_one(job_id: str, project_id: str | None = None) -> None:
     job = get_job(job_id, project_id=project_id)
     if not job:
@@ -272,71 +330,7 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
                                         timeout_s=timeout_s, cancel_token=token),
             )
 
-        if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
-            update_job(job_id, project_id=project_id, status="cancelled", finished_at=_utcnow())
-            return
-
-        if "error" in result_obj:
-            update_job(job_id, project_id=project_id, status="failed",
-                       error=result_obj["error"][:1000],
-                       log_tail=result_obj["error"][:1500], finished_at=_utcnow())
-            await _continue_after_failure(job_id, project_id, effective_pid)
-            return
-
-        stdout = result_obj.get("stdout", "")
-        stderr = result_obj.get("stderr", "")
-        log_tail = (stdout[-1500:] + ("\n" + stderr[-500:] if stderr else "")).strip()
-        # Fix #2 (2026-06-08): always persist stdout+stderr to <job_dir>/run.log
-        # so the agent can read what the job actually did without needing to
-        # re-run with explicit subprocess redirection. The job_dir is the
-        # work dir created by run_python_code; it returns it as `cwd` in
-        # result_obj. Best-effort; never blocks the runner.
-        try:
-            _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
-        except Exception:  # noqa: BLE001
-            pass
-        if result_obj.get("returncode") != 0:
-            try:
-                _write_job_run_log(result_obj, stdout, stderr, job_id, effective_pid)
-            except Exception:  # noqa: BLE001
-                pass
-            update_job(job_id, project_id=project_id, status="failed",
-                       error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
-                       log_tail=log_tail, finished_at=_utcnow())
-            await _continue_after_failure(job_id, project_id, effective_pid)
-            return
-
-        # Register artifacts via the on_job_complete hook (bio handler). Carry
-        # the originating thread + Run (captured at submit) so the job's outputs
-        # attach to that Run instead of orphaning under a stray "Background
-        # analysis" — analysis_id pins it directly; thread_id is the fallback.
-        dispatch("on_job_complete", {
-            "tool_name": kind,
-            "tool_input": {"code": code},
-            "result_obj": result_obj,
-            "focus_entity_id": focus_entity_id,
-            "analysis_ctx": {"analysis_id": params.get("run_id"), "turn_index": 0},
-            "thread_id": params.get("thread_id"),
-            "project_id": effective_pid,
-            "job_id": job_id,
-            "new_entities": [],
-        })
-        update_job(job_id, project_id=project_id, status="done", log_tail=log_tail,
-                   finished_at=_utcnow())
-        # Phase C — auto-continuation (#296). After the dispatch above has
-        # registered artifacts, re-enter the Guide turn loop on the
-        # originating thread so the planned downstream steps actually run
-        # (instead of leaving the agent's turn ended at the deferred-result
-        # boundary). Refresh the job row so the continuation sees the
-        # final status / log_tail we just wrote.
-        try:
-            from core.jobs.continuation import enqueue_continuation
-            fresh = get_job(job_id, project_id=project_id) or {}
-            result = await enqueue_continuation(fresh, str(effective_pid))
-            if result.get("state") != "skipped":
-                print(f"[jobs.continuation] job={job_id} → {result}", flush=True)
-        except Exception as e:  # noqa: BLE001
-            _record_worker_failure("continuation", job_id, e)
+        await _finalize_job(job, result_obj, project_id, str(effective_pid))
     except Exception as e:  # noqa: BLE001
         # Surface the failure into the job row + the worker-failure log,
         # instead of silently swallowing it.
@@ -484,6 +478,68 @@ def worker_status() -> dict:
     }
 
 
+_SLURM_POLL_S = 8.0
+
+
+def _active_slurm_jobs() -> list[dict]:
+    """All queued/running jobs (across project DBs) that were submitted to Slurm —
+    the rows the poll loop must watch. Each carries ``project_id`` (the DB it lives
+    in) so _finalize_job updates the right project."""
+    from core.config import PROJECTS_DIR
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    out: list[dict] = []
+    if not PROJECTS_DIR.exists():
+        return out
+    for proj_dir in sorted(PROJECTS_DIR.iterdir()):
+        db_file = proj_dir / "project.db"
+        if not proj_dir.is_dir() or not db_file.exists() or proj_dir.name.startswith("_"):
+            continue
+        try:
+            c = sqlite3.connect(db_file)
+            c.row_factory = sqlite3.Row
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+                c.close()
+                continue
+            for r in c.execute("SELECT * FROM jobs WHERE status IN ('queued','running')").fetchall():
+                job = _row_to_job(r)
+                if (job.get("params") or {}).get("submitter") == "slurm":
+                    job["project_id"] = proj_dir.name
+                    out.append(job)
+            c.close()
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _slurm_poll_loop() -> None:
+    """Watch Slurm-submitted jobs for completion (the shared-FS ``done`` sentinel)
+    and reflect RUNNING in the UI. Runs only when ABA_BATCH_SUBMITTER=slurm; the
+    local _worker still handles any local jobs. Completion routes through the
+    SHARED _finalize_job (artifacts + continuation), exactly like a local job."""
+    from core.jobs.submitter import get_submitter, submitter_name
+    if submitter_name() != "slurm":
+        return
+    sub = get_submitter()
+    print("[jobs.slurm] poll loop started", flush=True)
+    while True:
+        try:
+            for job in _active_slurm_jobs():
+                pid = job.get("project_id")
+                result = sub.poll(job)
+                if result is not None:
+                    await _finalize_job(job, result, pid, str(pid or "default"))
+                elif job.get("status") == "queued":
+                    # Flip to running once Slurm starts it (UI only; squeue is
+                    # called only for not-yet-running rows, bounding the cost).
+                    if (sub.info(job) or {}).get("state") == "RUNNING":
+                        update_job(job["id"], project_id=pid, status="running",
+                                   started_at=_utcnow())
+        except Exception as e:  # noqa: BLE001
+            _record_worker_failure("slurm-poll", None, e)
+        await asyncio.sleep(_SLURM_POLL_S)
+
+
 def start_worker() -> None:
     """Launch the worker task once, from FastAPI startup.
 
@@ -502,3 +558,8 @@ def start_worker() -> None:
         _record_worker_failure("reconcile_jobs", None, e)
     _WORKER_STARTED = True
     asyncio.get_event_loop().create_task(_worker())
+    # On a Slurm deployment, also watch sbatch'd jobs for their completion
+    # sentinel (the local worker only handles in-process jobs).
+    from core.jobs.submitter import submitter_name
+    if submitter_name() == "slurm":
+        asyncio.get_event_loop().create_task(_slurm_poll_loop())
