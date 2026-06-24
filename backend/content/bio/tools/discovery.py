@@ -116,6 +116,51 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "language": "python", **st}
 
 
+def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
+    """Create/refresh an ISOLATED Python environment you OWN and install packages
+    into it with FULL version control. USE THIS when a package conflicts with the
+    base (a different numpy, tensorflow, an ABI-incompatible wheel) or you need to
+    resolve a dependency conflict your own way — the shared base is never touched,
+    so any mess is contained to this env. Run code in it with run_in_isolated_env.
+    Returns {status, name, engine, installed, verified, error}."""
+    from core.exec import isolated_env as iso
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "note": "make_isolated_env needs a `name`."}
+    packages = list(input_.get("packages") or [])
+    try:
+        info = iso.create_env(name)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": name, "note": f"could not create env: {e}"}
+    if not packages:
+        return {"status": "ok", "name": name, "engine": info["engine"],
+                "note": f"Isolated env {name!r} ready ({info['engine']}); install packages "
+                        f"or run code with run_in_isolated_env."}
+    res = iso.install_into(name, packages, verify_imports=input_.get("verify_imports"))
+    if not res["ok"]:
+        return {"status": "error", "name": name, "engine": info["engine"],
+                "installed": packages, "error": res.get("error"),
+                "note": "Isolated env created, but the install failed — see error."}
+    return {"status": "ok", "name": name, "engine": info["engine"],
+            "installed": res["installed"], "verified": res.get("verified"),
+            "note": f"Isolated env {name!r} ready ({info['engine']}); run code in it with "
+                    f"run_in_isolated_env(name={name!r}, code=...)."}
+
+
+def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
+    """Run Python code inside an isolated env created by make_isolated_env — your
+    sandbox for conflict resolution / troubleshooting. Returns {status, stdout,
+    stderr}."""
+    from core.exec import isolated_env as iso
+    name = (input_.get("name") or "").strip()
+    code = input_.get("code") or ""
+    if not name or not code:
+        return {"status": "error", "note": "run_in_isolated_env needs `name` and `code`."}
+    r = iso.run_in(name, code, timeout_s=int(input_.get("timeout_s") or 600))
+    return {"status": "ok" if r["ok"] else "error", "name": name,
+            "stdout": r["stdout"], "stderr": r["stderr"]}
+
+
 def search_skills_tool(input_: dict) -> dict:
     """Intent search over the skill (recipe) library. The system prompt only
     surfaces a relevant slice of skills; this finds the rest by free-text

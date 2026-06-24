@@ -203,6 +203,30 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
+    def make_isolated_env(name: str,
+                          packages: list[str] | None = None,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Create/refresh an ISOLATED Python env you OWN and install `packages`
+        into it with full version control. Use when a package conflicts with the
+        base (a different numpy, tensorflow, an ABI-incompatible wheel) or you
+        need to resolve a dependency conflict your own way — the shared base is
+        never touched, so any mess is contained. Run code in it with
+        run_in_isolated_env. (Engine: uv if available, else venv.)"""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import make_isolated_env as _impl
+        return _impl({"name": name, "packages": packages or []}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
+    def run_in_isolated_env(name: str, code: str,
+                            aba_ctx_id: str | None = None) -> dict:
+        """Run Python `code` inside an isolated env created by make_isolated_env
+        — your sandbox for conflict resolution / troubleshooting. Returns
+        {status, stdout, stderr}."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import run_in_isolated_env as _impl
+        return _impl({"name": name, "code": code}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def ensure_capability(name: str,
                           source: str | None = None,
                           package: str | None = None,
