@@ -229,13 +229,15 @@ def _setup_code(cwd: str) -> str:
     composing a `df.to_csv(...)` line. See `_harvest_helpers_py` below.
     """
     data_dir, _ = _project_data_artifacts()
-    # sys.path order (env_refactor.md P1): base .venv (interpreter) → shared
-    # install-wide overlay → THIS project's overlay (appended last, so a
-    # project's own package wins for itself but can't pollute other projects).
+    # sys.path (§11.4): base .venv (immutable) → THIS project's overlay PREPENDED,
+    # so the project's own package version WINS over the base (R-parity). The
+    # shared install-wide overlay is gone (folded into the base); numpy/the ABI
+    # core stay pinned via the anchor constraint, so a project override can't
+    # shadow-break the compiled stack, and one project can't pollute another.
     from core import projects as _projects
     _pid = _projects.current()
-    _pylib = list(pylib_paths()) + list(project_pylib_paths(_pid))
-    pylib_appends = "".join(f"_sys.path.append({str(p)!r})\n" for p in _pylib)
+    _proj = list(project_pylib_paths(_pid))
+    pylib_appends = "".join(f"_sys.path.insert(0, {str(p)!r})\n" for p in reversed(_proj))
     # Ad-hoc-install containment (env_refactor.md P5, pulled forward): point any
     # bare `pip install` the agent runs in a cell at the project overlay +
     # base-constraints via PIP_PREFIX / PIP_CONSTRAINT — so a reflexive
@@ -244,9 +246,9 @@ def _setup_code(cwd: str) -> str:
     # every invocation style, so no fragile interception. (R is already
     # contained: its preamble puts the project lib first on .libPaths().)
     from core.exec.materialize import project_pylib_dir, PYLIB_DIR
-    from core.exec.env_integrity import ensure_base_constraints
+    from core.exec.env_integrity import abi_anchor_constraints
     _pip_prefix = project_pylib_dir(_pid) if _pid else PYLIB_DIR
-    _cons = ensure_base_constraints()
+    _cons = abi_anchor_constraints()   # §11.4: ad-hoc pip overrides allowed; numpy pinned
     pip_guard = f"_os.environ['PIP_PREFIX'] = {str(_pip_prefix)!r}\n"
     if _cons:
         pip_guard += f"_os.environ['PIP_CONSTRAINT'] = {str(_cons)!r}\n"
