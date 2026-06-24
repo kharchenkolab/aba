@@ -166,6 +166,18 @@ async def open_and_consume_stream(
                                            tool_calls_this_turn=[])
                     return
                 final_msg = await stream.get_final_message()
+            # Default-on per-call usage line. Answers "is caching working?"
+            # from a single grep without a SQLite dive into runs.usage_blob.
+            # The verbose [direct-timing] block below still requires
+            # ABA_DEBUG_TIMING for ms-level breakdown.
+            _u = getattr(final_msg, "usage", None)
+            _in = (getattr(_u, "input_tokens", 0) or 0) if _u else 0
+            _out = (getattr(_u, "output_tokens", 0) or 0) if _u else 0
+            _cr = (getattr(_u, "cache_read_input_tokens", 0) or 0) if _u else 0
+            _cw = (getattr(_u, "cache_creation_input_tokens", 0) or 0) if _u else 0
+            print(f"[llm-done] model={model} "
+                  f"in={_in}t out={_out}t cache_read={_cr}t cache_write={_cw}t",
+                  flush=True)
             # Per-call timing breakdown — symmetric to llm_runtime_openai
             # so multi-runtime sessions are equally diagnosable. Gated by
             # ABA_DEBUG_TIMING.
@@ -174,11 +186,6 @@ async def open_and_consume_stream(
                 _create_ms = (_t_create_done - _t_create_begin) * 1000
                 _ttft_ms = ((_t_first_event or _t_stream_done) - _t_create_done) * 1000
                 _gen_ms  = (_t_stream_done - (_t_first_event or _t_create_done)) * 1000
-                _u = getattr(final_msg, "usage", None)
-                _in = (getattr(_u, "input_tokens", 0) or 0) if _u else 0
-                _out = (getattr(_u, "output_tokens", 0) or 0) if _u else 0
-                _cr = (getattr(_u, "cache_read_input_tokens", 0) or 0) if _u else 0
-                _cw = (getattr(_u, "cache_creation_input_tokens", 0) or 0) if _u else 0
                 print(f"[direct-timing] create={_create_ms:.0f}ms "
                       f"TTFT={_ttft_ms:.0f}ms gen={_gen_ms:.0f}ms "
                       f"events={_n_events} in={_in}t out={_out}t "
