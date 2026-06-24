@@ -138,7 +138,7 @@ CAPABILITY_APPROVAL = os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
 # Persistent kernels (kernels.md): conservative defaults — lazy start, short
 # idle TTL, small per-user cap with LRU eviction.
 KERNEL_ENABLED = os.environ.get("ABA_KERNEL_ENABLED", "1") not in ("0", "false", "")
-KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "900"))   # 15 min
+KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "3600"))  # 1 h (was 15 min — too eager; state-bearing kernels are expensive to rebuild)
 KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user
 
 # ── History compaction + tool-output cap ────────────────────────────────────

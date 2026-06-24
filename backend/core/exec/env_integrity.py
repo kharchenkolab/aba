@@ -417,6 +417,146 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     return {"python": py, "r": r, "project_id": project_id}
 
 
+def _base_site_dir() -> Path:
+    import sysconfig
+    return Path(sysconfig.get_path("purelib"))
+
+
+# Known-harmless pip-check noise (optional extras that are intentionally absent).
+_PIPCHECK_IGNORE = ("tensorboard", "scvi-tools")
+_MISSING_RE = re.compile(r"requires (\S+?),? which is not installed", re.I)
+
+# The lazy workflow imports a plain `import scanpy` SKIPS — the ones that bit the
+# customer at sc.pp.neighbors (pandas→dateutil→six, numba/pynndescent/umap).
+_DEEP_IMPORTS = ["pandas", "dateutil", "six", "sklearn", "numba", "pynndescent", "umap", "scipy.sparse"]
+
+
+def base_health(*, deep: bool = True, python_exe: Optional[str] = None) -> dict:
+    """Is the base .venv's dependency CLOSURE intact? `pip check` catches missing
+    transitive deps (the `six` case `import scanpy` hides); ``deep`` also actually
+    imports the lazy workflow deps (sc.pp.neighbors' import tree). Returns
+    ``{ok, problems:[...], missing:[...]}`` — the read layer for self-heal +
+    error surfacing."""
+    exe = python_exe or sys.executable
+    problems: list[str] = []
+    try:
+        proc = subprocess.run([exe, "-m", "pip", "check"], capture_output=True, text=True, timeout=60)
+        for ln in ((proc.stdout or "") + (proc.stderr or "")).splitlines():
+            low = ln.lower().strip()
+            if not low or any(g in low for g in _PIPCHECK_IGNORE):
+                continue
+            if "not installed" in low or "has requirement" in low:
+                problems.append(ln.strip())
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"pip check failed: {e}")
+    if deep:
+        script = "import " + ", ".join(_DEEP_IMPORTS) + "\nprint('ABA_DEEP_OK')"
+        try:
+            p2 = subprocess.run([exe, "-c", script], capture_output=True, text=True, timeout=120)
+            if "ABA_DEEP_OK" not in (p2.stdout or ""):
+                problems.append("deep import failed: " + ((p2.stderr or p2.stdout or "").strip())[-300:])
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"deep import check failed: {e}")
+    missing = sorted({m.group(1) for p in problems for m in [_MISSING_RE.search(p)] if m})
+    return {"ok": not problems, "problems": problems, "missing": missing}
+
+
+def set_base_writable(writable: bool) -> bool:
+    """Flip the base site-packages writable/read-only (env_refactor.md immutable
+    base). Read-only is the steady state — nothing should mutate the base at
+    runtime; repair/rebuild flips it writable briefly. Best-effort."""
+    site = _base_site_dir()
+    if not site.exists():
+        return False
+    mode = "u+w" if writable else "a-w"
+    try:
+        subprocess.run(["chmod", "-R", mode, str(site)], capture_output=True, timeout=120)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def repair_base(*, python_exe: Optional[str] = None) -> dict:
+    """Self-heal a broken base: reinstall the missing closure FROM THE CANONICAL
+    LOCK (so versions stay consistent). Flips the read-only base writable for the
+    repair, then re-locks it. Returns ``{repaired, installed, error}``."""
+    health = base_health()
+    if health["ok"]:
+        return {"repaired": False, "reason": "healthy"}
+    exe = python_exe or sys.executable
+    lock = ensure_base_constraints()
+    # Reinstall the named-missing deps from the lock; if pip-check couldn't name
+    # them (deep-import failure), reinstall the lock's full closure (idempotent —
+    # only missing/broken packages actually re-download).
+    targets = health["missing"]
+    was_writable = set_base_writable(True)
+    try:
+        cmd = [exe, "-m", "pip", "install", "--no-input"]
+        if lock:
+            cmd += ["-c", str(lock)]
+        if targets:
+            cmd += targets
+        elif lock:
+            cmd += ["-r", str(lock)]   # whole closure from the lock
+        else:
+            return {"repaired": False, "error": "broken but no lock + no named missing deps"}
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        ok = proc.returncode == 0
+    finally:
+        set_base_writable(False)   # restore read-only steady state
+    after = base_health()
+    return {"repaired": after["ok"], "installed": targets or "lock-closure",
+            "still_broken": after["problems"] if not after["ok"] else [],
+            "error": None if ok else (proc.stderr or proc.stdout or "")[-800:]}
+
+
+_BASE_HEALTH_TS = 0.0
+
+
+def ensure_base_healthy(*, throttle_s: int = 300) -> dict:
+    """Throttled check-and-repair, for the kernel-spawn / startup path. Skips the
+    (subprocess) check if one ran within ``throttle_s``. Returns the health/repair
+    summary, or ``{skipped:True}``."""
+    global _BASE_HEALTH_TS
+    import time as _t
+    now = _t.monotonic()
+    if now - _BASE_HEALTH_TS < throttle_s:
+        return {"skipped": True}
+    _BASE_HEALTH_TS = now
+    h = base_health(deep=False)   # fast pip-check; catches the missing-dep (six) case
+    if h["ok"]:
+        return {"ok": True}
+    return {"ok": False, "repair": repair_base(), "was": h["problems"]}
+
+
+# Surface patterns: a run failing this way is *likely* an env break, not user code.
+_ENV_FAIL_RE = re.compile(
+    r"numpy\.core\.multiarray failed to import|failed to import|"
+    r"ModuleNotFoundError|cannot import name|undefined symbol|"
+    r"DLL load failed|partially initialized module|circular import", re.I)
+
+
+def env_root_cause(stderr: str, *, repair: bool = True) -> Optional[dict]:
+    """Translate a cryptic import/ABI traceback into the BASE root cause — the
+    "what surfaces is the first thing that fails" fix. Returns None for ordinary
+    code errors (base intact) so normal failures aren't touched; otherwise a
+    surfaced note + (optionally) the result of an auto-repair. The deep call is
+    gated by the regex, so it only runs on import-shaped failures."""
+    if not stderr or not _ENV_FAIL_RE.search(stderr):
+        return None
+    h = base_health(deep=False)
+    if h["ok"]:
+        return None   # base closure intact — it's the user's own missing import
+    note = ("The base environment is broken (not your code): "
+            + "; ".join(h["problems"][:3]))
+    rep = repair_base() if repair else {"repaired": False, "reason": "repair disabled"}
+    if rep.get("repaired"):
+        note += f". Auto-repaired ({rep.get('installed')}) — re-run the cell."
+    else:
+        note += ". Auto-repair did not fully succeed; the environment needs attention."
+    return {"note": note, "base_problems": h["problems"], "repair": rep}
+
+
 def verify_r_library(libname: str, project_id: Optional[str] = None) -> tuple[bool, str]:
     """R analog of verify_python_imports: does ``library(libname)`` actually
     load (in the project's .libPaths + the shared base)? Wraps the existing

@@ -167,6 +167,39 @@ def test_env_layers_structure():
     assert d["r"]["layers"] and d["r"]["layers"][0]["tier"] == "base"
 
 
+# ── base self-heal + error surfacing (fix 1 + surfacing) ─────────────────────
+def test_base_health_shape():
+    from core.exec.env_integrity import base_health
+    h = base_health(deep=False)   # fast pip-check; read-only
+    assert set(("ok", "problems", "missing")) <= set(h)
+    assert isinstance(h["problems"], list) and isinstance(h["missing"], list)
+
+
+def test_missing_dep_parser():
+    from core.exec.env_integrity import _MISSING_RE
+    m = _MISSING_RE.search("pandas 2.3.3 requires six, which is not installed.")
+    assert m and m.group(1) == "six"
+
+
+def test_env_root_cause_ignores_plain_code_errors():
+    """A normal code error (not import-shaped) must pass through untouched —
+    we don't want to diagnose the base on every ValueError."""
+    from core.exec.env_integrity import env_root_cause
+    assert env_root_cause("ValueError: bad input", repair=False) is None
+    assert env_root_cause("", repair=False) is None
+
+
+def test_env_root_cause_none_when_base_healthy():
+    """Import-shaped stderr but an intact base = the user's own missing import,
+    not an env break — leave it alone (return None), don't claim the base broke."""
+    from core.exec.env_integrity import env_root_cause, base_health
+    if not base_health(deep=False)["ok"]:
+        import pytest as _pt
+        _pt.skip("base currently unhealthy on this box")
+    assert env_root_cause("ModuleNotFoundError: No module named 'totallymadeup_xyz'",
+                          repair=False) is None
+
+
 # ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
 def test_python_package_status_good():
     from core.exec.env_integrity import python_package_status

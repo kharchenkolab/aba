@@ -182,6 +182,22 @@ async def startup():
         _reap_orphan_kernels()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
+    # Base self-heal + immutability (env_refactor.md): the base .venv is the
+    # shared foundation every kernel runs from. Repair a broken dependency
+    # closure FROM THE LOCK (the recurring `six`-vanishes corruption), then make
+    # the base read-only so nothing can silently mutate it again.
+    try:
+        from core.exec.env_integrity import base_health, repair_base, set_base_writable
+        h = base_health(deep=True)
+        if not h["ok"]:
+            rep = repair_base()
+            print(f"[startup] base was broken {h['problems'][:3]} -> repair: {rep}")
+        else:
+            print("[startup] base health: ok")
+        if set_base_writable(False):
+            print("[startup] base set read-only (immutable foundation)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] base self-heal failed (non-fatal): {e}")
     # Capture the asyncio loop so worker-thread producers
     # (auto_interpret, background jobs) can push events to the
     # /api/notifications SSE channel.
