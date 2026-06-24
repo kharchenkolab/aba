@@ -385,19 +385,20 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     import os
     import sysconfig
     from core.exec import isolated_env as iso
-    from core.exec.materialize import (PYLIB_DIR, pylib_paths, project_pylib_dir,
-                                       project_pylib_paths, tools_env, _site_paths)
+    from core.exec.materialize import (project_pylib_dir, project_pylib_paths,
+                                       tools_env, _site_paths)
     if project_id is None:
         from core import projects
         project_id = projects.current()
 
-    # ── Python ──
+    # ── Python ── §11.4: just two tiers now — the immutable base (the install-wide
+    # foundation; the old shared overlay was folded into it) + THIS project's
+    # overlay, prepended so its versions win. The shared overlay is off the run
+    # path and never written, so it's no longer a tier.
     base_site = sysconfig.get_path("purelib")
     py_layers = [
-        {"tier": "base", "scope": "installation", "delivery": "baked", "mutable": False,
+        {"tier": "base (immutable)", "scope": "installation", "delivery": "baked", "mutable": False,
          "path": base_site, "packages": _py_packages([base_site])},
-        {"tier": "shared overlay", "scope": "installation", "delivery": "on-demand", "mutable": True,
-         "path": str(PYLIB_DIR), "packages": _py_packages([str(p) for p in pylib_paths()])},
     ]
     if project_id:
         py_layers.append(
