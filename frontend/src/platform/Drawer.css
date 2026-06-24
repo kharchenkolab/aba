@@ -229,3 +229,35 @@
 .jobs__pre--code { /* dark style is now the default — kept as a class for future overrides */ }
 .jobs__pre--err  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; max-height: 160px; }
 .jobs__error { display: flex; flex-direction: column; gap: 3px; }
+
+/* ---------- Env tab (layered Python + R envs) ---------- */
+.env-tab { display: flex; flex-direction: column; gap: 6px; }
+.env-tab__head { display: flex; align-items: center; gap: 6px; position: sticky; top: 0;
+  background: var(--bg); padding-bottom: 4px; z-index: 1; }
+.env-tab__reload { border: 1px solid var(--border); background: var(--bg); color: var(--text-4);
+  cursor: pointer; border-radius: 5px; font-size: 13px; line-height: 1; padding: 3px 7px; }
+.env-tab__reload:hover { background: var(--tree-active-bg); color: var(--text-2); }
+.env-tab__msg { color: var(--text-4); font-size: 12px; padding: 8px 2px; font-style: italic; }
+.env-tab__msg--err { color: #c0392b; font-style: normal; }
+.env-lock { font-size: 10.5px; font-family: var(--mono); color: var(--text-4); margin: 1px 0 5px; }
+.env-layer { border-top: 1px solid var(--border); }
+.env-layer--dim { opacity: 0.4; }
+.env-layer__head { display: flex; align-items: center; gap: 6px; padding: 5px 2px;
+  cursor: pointer; font-size: 12px; color: var(--text-2); }
+.env-layer__head:hover { background: var(--tree-active-bg); }
+.env-layer__caret { width: 10px; color: var(--text-4); flex: 0 0 auto; }
+.env-layer__tier { font-weight: 600; color: var(--text); }
+.env-layer__count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums;
+  font-family: var(--mono); font-size: 11px; }
+.env-badge { font-size: 9.5px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase;
+  letter-spacing: 0.3px; background: var(--tree-active-bg); color: var(--text-4); }
+.env-badge--mut { background: rgba(200,140,0,0.16); color: #b8860b; }
+.env-badge--imm { background: rgba(40,100,150,0.16); color: #3a78a8; }
+.env-layer__pkgs { display: flex; flex-direction: column; max-height: 320px; overflow: auto;
+  padding: 2px 0 6px 16px; }
+.env-pkg { display: flex; justify-content: space-between; gap: 10px; font-size: 11px;
+  padding: 1px 5px; font-family: var(--mono); }
+.env-pkg:nth-child(even) { background: var(--tree-active-bg); }
+.env-pkg__name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.env-pkg__ver { color: var(--text-4); flex: 0 0 auto; }
+.env-pkg--none { color: var(--text-4); font-style: italic; }

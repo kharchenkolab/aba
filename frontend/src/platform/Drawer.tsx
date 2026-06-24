@@ -15,7 +15,7 @@ import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
 import SearchInput from '../components/SearchInput'
 import './Drawer.css'
 
-type Tab = 'console' | 'jobs' | 'context'
+type Tab = 'console' | 'jobs' | 'context' | 'env'
 
 interface Props {
   manifest: ManifestSnapshot | null
@@ -32,9 +32,11 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('aba.drawer.tab') as Tab) || 'console')
   useEffect(() => { localStorage.setItem('aba.drawer.tab', tab) }, [tab])
 
-  const tabs: Tab[] = ['console', 'context', 'jobs']
+  const tabs: Tab[] = ['console', 'context', 'env', 'jobs']
   const label = (t: Tab) =>
-    t === 'console' ? 'Console' : t === 'jobs' ? `Jobs${jobs.length ? ` (${jobs.length})` : ''}` : 'Context'
+    t === 'console' ? 'Console'
+      : t === 'jobs' ? `Jobs${jobs.length ? ` (${jobs.length})` : ''}`
+      : t === 'env' ? 'Env' : 'Context'
 
   return (
     <aside className="drawer">
@@ -52,6 +54,7 @@ export default function Drawer({ manifest, focusEntityId, threadId, eventLog = [
       <div className="drawer__body">
         {tab === 'context' && <ContextTab manifest={manifest} focusEntityId={focusEntityId} threadId={threadId} />}
         {tab === 'console' && <ConsoleTab log={eventLog} />}
+        {tab === 'env' && <EnvTab />}
         {tab === 'jobs' && <JobsTab jobs={jobs} />}
       </div>
     </aside>
@@ -634,5 +637,108 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <div className="drawer__section-title">{title}</div>
       <div className="drawer__section-body">{children}</div>
     </section>
+  )
+}
+
+// ---------- Env tab (layered Python + R environments, searchable) ----------
+type EnvPkg = { name: string; version: string }
+type EnvLayer = {
+  tier: string; scope: string; mutable: boolean; delivery?: string
+  path: string; name?: string; project_id?: string; packages: EnvPkg[]
+}
+type EnvData = {
+  python: { engine: string; layers: EnvLayer[]; lock: { path: string | null; pins: number; canonical: boolean } }
+  r: { engine: string; layers: EnvLayer[] }
+  project_id: string | null
+}
+
+function EnvTab() {
+  const [data, setData] = useState<EnvData | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [q, setQ] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  const reload = async () => {
+    setLoading(true); setErr(null)
+    try {
+      let pid: string | null = null
+      try { const c = await fetch('/api/projects/current'); if (c.ok) pid = (await c.json()).current } catch { /* ignore */ }
+      const r = await fetch('/api/env' + (pid ? `?project_id=${encodeURIComponent(pid)}` : ''))
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setData(await r.json())
+    } catch (e: any) { setErr(String(e?.message ?? e)) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { void reload() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="env-tab">
+      <div className="env-tab__head">
+        <SearchInput value={q} onChange={setQ} ariaLabel="Search packages"
+                     placeholder="Search packages across all layers…" />
+        <button className="env-tab__reload" onClick={() => void reload()} title="Reload">↻</button>
+      </div>
+      {loading && <div className="env-tab__msg">Loading environment…</div>}
+      {err && <div className="env-tab__msg env-tab__msg--err">Couldn’t load env: {err}</div>}
+      {data && (
+        <>
+          <EnvStack title="Python" engine={data.python.engine} layers={data.python.layers}
+                    lock={data.python.lock} query={q} />
+          <EnvStack title="R" engine={data.r.engine} layers={data.r.layers} query={q} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function EnvStack({ title, engine, layers, lock, query }: {
+  title: string; engine: string; layers: EnvLayer[]
+  lock?: { pins: number; canonical: boolean }; query: string
+}) {
+  const total = layers.reduce((n, L) => n + L.packages.length, 0)
+  return (
+    <Section title={`${title} · ${engine} · ${total} pkgs`}>
+      {lock && <div className="env-lock">base lock: {lock.pins} pins{lock.canonical ? ' · canonical' : ''}</div>}
+      {layers.map((L, i) => <EnvLayerRow key={`${L.tier}-${L.name ?? i}`} layer={L} query={query.trim().toLowerCase()} />)}
+    </Section>
+  )
+}
+
+function EnvLayerRow({ layer, query }: { layer: EnvLayer; query: string }) {
+  const [open, setOpen] = useState(false)
+  const matches = query
+    ? layer.packages.filter(p => p.name.toLowerCase().includes(query) || p.version.toLowerCase().includes(query))
+    : layer.packages
+  const searching = query.length > 0
+  const expanded = searching ? matches.length > 0 : open
+  const dim = searching && matches.length === 0
+  const head = `${layer.tier}${layer.name ? `: ${layer.name}` : ''}`
+  return (
+    <div className={`env-layer${dim ? ' env-layer--dim' : ''}`}>
+      <div className="env-layer__head" onClick={() => { if (!searching) setOpen(o => !o) }}
+           title={layer.path} role="button">
+        <span className="env-layer__caret">{expanded ? '▾' : '▸'}</span>
+        <span className="env-layer__tier">{head}</span>
+        <span className={`env-badge env-badge--${layer.mutable ? 'mut' : 'imm'}`}>
+          {layer.mutable ? 'mutable' : 'baked'}
+        </span>
+        <span className="env-badge">{layer.scope}</span>
+        <span className="env-layer__count">
+          {searching ? `${matches.length} / ${layer.packages.length}` : `${layer.packages.length}`}
+        </span>
+      </div>
+      {expanded && (
+        <div className="env-layer__pkgs">
+          {matches.length === 0
+            ? <div className="env-pkg env-pkg--none">(no packages)</div>
+            : matches.map(p => (
+                <div key={p.name} className="env-pkg">
+                  <span className="env-pkg__name">{p.name}</span>
+                  <span className="env-pkg__ver">{p.version}</span>
+                </div>
+              ))}
+        </div>
+      )}
+    </div>
   )
 }
