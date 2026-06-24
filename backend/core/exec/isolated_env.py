@@ -152,6 +152,7 @@ def remove_env(name: str) -> bool:
     if existed:
         shutil.rmtree(d, ignore_errors=True)
     env_spec_path(name).unlink(missing_ok=True)   # §11.6: drop the spec too (full removal)
+    env_used_marker(name).unlink(missing_ok=True)
     return existed
 
 
@@ -228,8 +229,10 @@ def load_env_spec(name: str):
 
 def ensure_env_built(name: str, *, timeout_s: int = 1800) -> bool:
     """True iff the built env exists — rebuilding it from its lock if a GC reclaimed
-    the bytes (§11.6 lazy rebuild). Fast no-op when the env is already on disk."""
+    the bytes (§11.6 lazy rebuild). Fast no-op when the env is already on disk.
+    Touches the use marker so GC sees the env as recently used."""
     if env_python(name).exists():
+        touch_env(name)
         return True
     spec = load_env_spec(name)
     if not spec or spec.get("language") != "python":
@@ -239,7 +242,51 @@ def ensure_env_built(name: str, *, timeout_s: int = 1800) -> bool:
     if pkgs:
         subprocess.run([str(env_python(name)), "-m", "pip", "install", "-q", *pkgs],
                        capture_output=True, text=True, timeout=timeout_s)
-    return env_python(name).exists()
+    if env_python(name).exists():
+        touch_env(name)
+        return True
+    return False
+
+
+# ── lazy GC (§11.6): reclaim the built bytes of idle, rebuildable envs; the spec
+#    stays so the next use rebuilds from the lock transparently. ──
+def env_used_marker(name: str) -> Path:
+    return _isolated_root() / "_specs" / f"{name}.used"
+
+
+def touch_env(name: str) -> None:
+    m = env_used_marker(name)
+    m.parent.mkdir(parents=True, exist_ok=True)
+    m.write_text("")            # mtime = now
+
+
+def env_idle_seconds(name: str):
+    import time
+    m = env_used_marker(name)
+    ref = m if m.exists() else (env_dir(name) if env_dir(name).exists() else None)
+    if ref is None:
+        return None
+    try:
+        return time.time() - ref.stat().st_mtime
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def gc_isolated_envs(*, max_idle_s: int = 30 * 86400, dry_run: bool = False) -> list[str]:
+    """Reclaim the built bytes of python envs idle past ``max_idle_s`` that HAVE a
+    spec (so they rebuild on next use). Returns the reclaimed names. The spec +
+    use-marker are kept; only the heavy venv dir is removed."""
+    reclaimed: list[str] = []
+    for name in list_envs():                     # built python envs only
+        idle = env_idle_seconds(name)
+        if idle is None or idle <= max_idle_s:
+            continue
+        if not load_env_spec(name):              # no spec → not rebuildable → keep
+            continue
+        if not dry_run:
+            shutil.rmtree(env_dir(name), ignore_errors=True)
+        reclaimed.append(name)
+    return reclaimed
 
 
 # ── R isolated environments (env_refactor.md P3) ─────────────────────────────

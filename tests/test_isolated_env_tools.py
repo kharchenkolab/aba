@@ -205,6 +205,37 @@ def test_remove_env_drops_spec(iso_root):
     assert not iso.env_spec_path("specD").exists()
 
 
+# ── §11 Increment 6: lazy GC of idle built envs ──────────────────────────────
+def test_gc_reclaims_idle_rebuildable_env(iso_root):
+    import os, time
+    from core.exec import isolated_env as iso
+    iso.create_env("gc1"); iso.capture_env_spec("gc1", packages=[]); iso.touch_env("gc1")
+    old = time.time() - 40 * 86400
+    os.utime(iso.env_used_marker("gc1"), (old, old))      # look long-idle
+    reclaimed = iso.gc_isolated_envs(max_idle_s=30 * 86400)
+    assert "gc1" in reclaimed
+    assert not iso.env_python("gc1").exists()              # built bytes reclaimed
+    assert iso.load_env_spec("gc1") is not None            # spec kept
+    assert iso.ensure_env_built("gc1") is True             # rebuilds from spec
+
+
+def test_gc_skips_recent_env(iso_root):
+    from core.exec import isolated_env as iso
+    iso.create_env("gc2"); iso.capture_env_spec("gc2", packages=[]); iso.touch_env("gc2")
+    assert "gc2" not in iso.gc_isolated_envs(max_idle_s=30 * 86400)
+    assert iso.env_python("gc2").exists()
+
+
+def test_gc_skips_env_without_spec(iso_root):
+    import os, time
+    from core.exec import isolated_env as iso
+    iso.create_env("gc3"); iso.touch_env("gc3")           # no spec captured
+    old = time.time() - 40 * 86400
+    os.utime(iso.env_used_marker("gc3"), (old, old))
+    assert "gc3" not in iso.gc_isolated_envs(max_idle_s=30 * 86400)   # not rebuildable → keep
+    assert iso.env_python("gc3").exists()
+
+
 # ── §11 Increment 3: active env pointer + set_active_env ─────────────────────
 def test_active_env_storage_roundtrip(iso_root):
     from core.exec import isolated_env as iso

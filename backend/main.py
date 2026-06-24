@@ -198,6 +198,16 @@ async def startup():
             print("[startup] base set read-only (immutable foundation)")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] base self-heal failed (non-fatal): {e}")
+    # §11.6 lazy GC: reclaim the built bytes of long-idle isolated envs (their
+    # spec/lock stays, so next use rebuilds transparently). Cheap; only touches
+    # envs idle past the threshold.
+    try:
+        from core.exec.isolated_env import gc_isolated_envs
+        gc = gc_isolated_envs()
+        if gc:
+            print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] isolated-env GC failed (non-fatal): {e}")
     # Capture the asyncio loop so worker-thread producers
     # (auto_interpret, background jobs) can push events to the
     # /api/notifications SSE channel.
