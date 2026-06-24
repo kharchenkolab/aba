@@ -44,12 +44,38 @@ from datetime import datetime, timezone
 from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.graph.jobs import create_job, get_job, update_job
 from core.hooks.dispatcher import dispatch
+from core.jobs.submitter import get_submitter
 
 
 _QUEUE: "asyncio.Queue[tuple[str, str | None]]" = asyncio.Queue()
 _RUNNING: dict[str, subprocess.Popen] = {}
 _CANCELLED: set[str] = set()
 _WORKER_STARTED = False
+
+
+class LocalSubmitter:
+    """The default BatchSubmitter (ondemand.md P6): run the job in THIS process'
+    async worker — today's behavior, exactly. submit() enqueues; the worker owns
+    the lifecycle (so poll() returns None); cancel() fires the per-job CancelToken
+    so the shared exec core killpg's the whole group."""
+    name = "local"
+
+    def submit(self, job: dict) -> None:
+        pid = (job.get("params") or {}).get("project_id")
+        _QUEUE.put_nowait((job["id"], pid))
+
+    def cancel(self, job: dict) -> None:
+        _CANCELLED.add(job["id"])
+        from core.runtime import cancellation
+        tok = cancellation.get(job["id"])
+        if tok is not None:
+            tok.cancel("user cancelled job")
+
+    def poll(self, job: dict):
+        return None  # the in-process worker drives status; nothing to poll
+
+    def info(self, job: dict) -> dict:
+        return {"submitter": "local"}
 
 # Liveness / observability for /api/jobs/worker. Updated on every loop
 # iteration of _worker(); a stale heartbeat means the worker hung or
@@ -159,7 +185,7 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                 "thread_id": thread_id, "run_id": run_id},
         project_id=project_id,
     )
-    _QUEUE.put_nowait((job_id, project_id))
+    get_submitter().submit(job)
     return job
 
 
@@ -182,7 +208,7 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                 "thread_id": thread_id, "run_id": run_id},
         project_id=project_id,
     )
-    _QUEUE.put_nowait((job_id, project_id))
+    get_submitter().submit(job)
     return job
 
 
@@ -195,11 +221,9 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
         return False
     if job["status"] in ("done", "failed", "cancelled"):
         return False
-    _CANCELLED.add(job_id)
-    from core.runtime import cancellation
-    tok = cancellation.get(job_id)
-    if tok is not None:
-        tok.cancel("user cancelled job")
+    # The active submitter stops the actual execution — CancelToken+killpg
+    # locally, `scancel <id>` on Slurm.
+    get_submitter().cancel(job)
     update_job(job_id, project_id=project_id, status="cancelled", finished_at=_utcnow())
     return True
 
