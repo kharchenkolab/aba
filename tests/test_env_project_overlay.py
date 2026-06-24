@@ -80,10 +80,24 @@ def test_preamble_appends_project_overlay(monkeypatch):
     assert code.index(str(m.PYLIB_DIR)) < code.index(str(m.project_pylib_dir("prjPRE")))
 
 
-def test_preamble_execs_and_imports_project_pkg(tmp_path, monkeypatch):
-    """Integration: run the EXACT preamble string a kernel execs and confirm a
-    package in the project overlay is importable — validates the live run_python
-    path end-to-end (preamble assembly + sys.path + import)."""
+def test_preamble_sets_pip_guard(monkeypatch):
+    """Ad-hoc-install containment: the kernel preamble points a bare `pip
+    install` at the project overlay (not the shared base) via PIP_PREFIX."""
+    from core.exec.kernels import jupyter
+    from core import projects
+    monkeypatch.setattr(projects, "current", lambda: "prjPIP")
+    code = jupyter._setup_code("/tmp")
+    assert "PIP_PREFIX" in code
+    assert str(m.project_pylib_dir("prjPIP")) in code  # ad-hoc pip → project overlay
+    # and it must NOT point at the base .venv (the corruption path)
+    import sys as _sys
+    assert str(Path(_sys.executable).parent.parent) not in code.split("PIP_PREFIX")[1].split("\n")[0]
+
+
+def test_preamble_execs_with_pip_guard_and_imports_project_pkg(tmp_path, monkeypatch):
+    """Integration: run the EXACT preamble string a kernel execs — confirm a
+    project-overlay package imports AND PIP_PREFIX is set to the project
+    overlay (so a reflexive `pip install` lands contained, not in the base)."""
     import subprocess
     from core.exec.kernels import jupyter
     from core import projects
@@ -93,8 +107,24 @@ def test_preamble_execs_and_imports_project_pkg(tmp_path, monkeypatch):
     sp.mkdir(parents=True)
     (sp / "abalive.py").write_text("OK = 1\n")
     preamble = jupyter._setup_code(str(tmp_path))   # the literal string a kernel runs
-    script = preamble + "\nimport abalive\nprint('LIVE_IMPORT_OK')\n"
+    script = (preamble + "\nimport abalive\nimport os as _o\n"
+              "print('PIP_PREFIX=' + _o.environ.get('PIP_PREFIX',''))\n"
+              "print('LIVE_IMPORT_OK')\n")
     proc = subprocess.run([sys.executable, "-c", script],
                           capture_output=True, text=True, timeout=60)
     assert "LIVE_IMPORT_OK" in (proc.stdout or ""), \
         f"preamble failed to put the project overlay on sys.path:\n{(proc.stderr or '')[-600:]}"
+    assert f"PIP_PREFIX={m.project_pylib_dir('prjLIVE')}" in proc.stdout, \
+        f"ad-hoc pip not pointed at the project overlay:\n{proc.stdout}"
+
+
+def test_r_libpaths_puts_project_lib_first():
+    """R symmetry to the Python PIP_PREFIX guard: install.packages() lands in the
+    project lib (not the base) because libpaths_expr PREPENDS the project lib to
+    .libPaths(), so .libPaths()[1] is the project lib."""
+    from core.exec.r import libpaths_expr, project_r_lib
+    proj = str(project_r_lib("prjR"))
+    expr = libpaths_expr("prjR")
+    assert expr.startswith(f".libPaths(c({proj!r}"), "project lib must be first in .libPaths()"
+    assert ".libPaths()" in expr, "the base libs must remain after the project lib"
+    assert libpaths_expr(None) == "", "no project → no .libPaths override"

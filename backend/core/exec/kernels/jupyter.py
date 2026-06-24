@@ -202,11 +202,27 @@ def _setup_code(cwd: str) -> str:
     # install-wide overlay → THIS project's overlay (appended last, so a
     # project's own package wins for itself but can't pollute other projects).
     from core import projects as _projects
-    _pylib = list(pylib_paths()) + list(project_pylib_paths(_projects.current()))
+    _pid = _projects.current()
+    _pylib = list(pylib_paths()) + list(project_pylib_paths(_pid))
     pylib_appends = "".join(f"_sys.path.append({str(p)!r})\n" for p in _pylib)
+    # Ad-hoc-install containment (env_refactor.md P5, pulled forward): point any
+    # bare `pip install` the agent runs in a cell at the project overlay +
+    # base-constraints via PIP_PREFIX / PIP_CONSTRAINT — so a reflexive
+    # `!pip install foo` (or subprocess pip) lands CONTAINED + CONSTRAINED
+    # instead of mutating the shared base .venv. pip honors these env vars for
+    # every invocation style, so no fragile interception. (R is already
+    # contained: its preamble puts the project lib first on .libPaths().)
+    from core.exec.materialize import project_pylib_dir, PYLIB_DIR
+    from core.exec.env_integrity import ensure_base_constraints
+    _pip_prefix = project_pylib_dir(_pid) if _pid else PYLIB_DIR
+    _cons = ensure_base_constraints()
+    pip_guard = f"_os.environ['PIP_PREFIX'] = {str(_pip_prefix)!r}\n"
+    if _cons:
+        pip_guard += f"_os.environ['PIP_CONSTRAINT'] = {str(_cons)!r}\n"
     return (
         "import sys as _sys, os as _os\n"
         f"{pylib_appends}"
+        f"{pip_guard}"
         f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(data_dir)!r}\n"
