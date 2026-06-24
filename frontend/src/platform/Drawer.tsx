@@ -455,12 +455,58 @@ interface JobDetail {
   kind: string
   title: string
   status: string
-  params: { code?: string; thread_id?: string | null; project_id?: string | null; run_id?: string | null; timeout_s?: number } | null
+  params: { code?: string; thread_id?: string | null; project_id?: string | null; run_id?: string | null; timeout_s?: number;
+            submitter?: string; slurm_id?: string;
+            resources?: { partition?: string; cores?: number; mem_gb?: number; walltime_h?: number; gpu?: boolean } } | null
   log_tail: string | null
   error: string | null
   created_at: string | null
   started_at: string | null
   finished_at: string | null
+}
+
+/** HPC session card — where the ABA process itself runs: a Slurm node/cores/
+ *  walltime when on a cluster, else the local CPU picture. Polls /api/hpc/session
+ *  so the user always sees their compute context at the top of the Jobs tab. */
+interface HpcSession {
+  submitter: string; on_slurm: boolean; cores: number; thread_cap?: number
+  slurm_job_id?: string; node?: string; time_left?: string; partition?: string
+  alloc_cores?: string; alloc_mem?: string; elapsed?: string
+}
+export function HpcSessionCard() {
+  const [s, setS] = useState<HpcSession | null>(null)
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const r = await fetch('/api/hpc/session')
+        if (r.ok && alive) setS(await r.json() as HpcSession)
+      } catch (_) { /* ignore */ }
+    }
+    load()
+    const h = window.setInterval(load, 15000)
+    return () => { alive = false; window.clearInterval(h) }
+  }, [])
+  if (!s) return null
+  return (
+    <div className={`hpc-session${s.on_slurm ? ' hpc-session--slurm' : ''}`}>
+      <div className="hpc-session__head">
+        <span className="hpc-session__badge">{s.on_slurm ? 'HPC · Slurm' : 'Local'}</span>
+        <span className="hpc-session__where">
+          {s.on_slurm
+            ? <>node <code className="jobs__mono">{s.node || '—'}</code>{s.partition ? ` · ${s.partition}` : ''}</>
+            : <>this machine</>}
+        </span>
+      </div>
+      <div className="hpc-session__stats">
+        <span>{(s.on_slurm && s.alloc_cores) ? s.alloc_cores : s.cores} cores</span>
+        {s.thread_cap != null && <span>{s.thread_cap} BLAS threads</span>}
+        {s.on_slurm && s.time_left && <span>{s.time_left} left</span>}
+        {s.on_slurm && s.alloc_mem && <span>{s.alloc_mem} mem</span>}
+        {s.on_slurm && s.slurm_job_id && <span>job {s.slurm_job_id}</span>}
+      </div>
+    </div>
+  )
 }
 
 function JobsTab({ jobs }: { jobs: JobInfo[] }) {
@@ -510,12 +556,13 @@ function JobsTab({ jobs }: { jobs: JobInfo[] }) {
     })
   }
 
-  if (jobs.length === 0) {
-    return <div className="drawer__empty">No background jobs. Long pipelines (run_python background) appear here.</div>
-  }
   const sorted = [...jobs].sort((a, b) => b.t - a.t)
   return (
     <div className="jobs">
+      <HpcSessionCard />
+      {jobs.length === 0 && (
+        <div className="drawer__empty">No background jobs. Long pipelines (run_python background) appear here.</div>
+      )}
       {sorted.map(j => {
         const open = j.id === expandedId
         const d = details[j.id]
@@ -532,6 +579,44 @@ function JobsTab({ jobs }: { jobs: JobInfo[] }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** HPC details for a Slurm-submitted job: the resource request (from the row)
+ *  plus live scheduler state (state/node/elapsed) polled from /api/jobs/{id}/hpc
+ *  while the job runs. */
+function HpcJobBlock({ job, params }: { job: JobInfo; params: NonNullable<JobDetail['params']> }) {
+  const [live, setLive] = useState<{ state?: string; node?: string; elapsed?: string } | null>(null)
+  const running = job.status === 'queued' || job.status === 'running'
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/hpc`)
+        if (r.ok && alive) setLive(await r.json())
+      } catch (_) { /* ignore */ }
+    }
+    load()
+    if (!running) return () => { alive = false }
+    const h = window.setInterval(load, 5000)
+    return () => { alive = false; window.clearInterval(h) }
+  }, [job.id, running])
+  const res = params.resources
+  return (
+    <div className="jobs__hpc">
+      <div className="jobs__detail-label">HPC · Slurm</div>
+      <div className="jobs__detail-meta">
+        {params.slurm_id && <span>job <code className="jobs__mono">{params.slurm_id}</code></span>}
+        {live?.state && <span>state <strong>{live.state}</strong></span>}
+        {live?.node && <span>node <code className="jobs__mono">{live.node}</code></span>}
+        {live?.elapsed && <span>elapsed {live.elapsed}</span>}
+        {res?.partition && <span>partition {res.partition}</span>}
+        {res?.cores != null && <span>{res.cores} cores</span>}
+        {res?.mem_gb != null && <span>{res.mem_gb}G mem</span>}
+        {res?.walltime_h != null && <span>{res.walltime_h}h walltime</span>}
+        {res?.gpu && <span>GPU</span>}
+      </div>
     </div>
   )
 }
@@ -570,6 +655,7 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
         {detail.started_at && <span title={detail.started_at}>started {fmtTimeStr(detail.started_at)}</span>}
         {detail.finished_at && <span title={detail.finished_at}>finished {fmtTimeStr(detail.finished_at)}</span>}
       </div>
+      {detail.params?.submitter === 'slurm' && <HpcJobBlock job={job} params={detail.params} />}
       {err && (
         <div className="jobs__error">
           <div className="jobs__detail-label">error</div>
