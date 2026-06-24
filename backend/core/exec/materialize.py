@@ -108,6 +108,16 @@ def tools_env() -> Path:
     return TOOLS_ENV
 
 
+def _is_base_write_conflict(pip_output: str) -> bool:
+    """True iff a `pip --prefix` install failed because it tried to MODIFY the
+    read-only immutable base (uninstall/recompile a base package) — the signal to
+    retry self-contained with --ignore-installed (§11.4 override path)."""
+    low = (pip_output or "").lower()
+    return (("permission denied" in low and ("site-packages" in low or ".venv" in low))
+            or "cannot uninstall" in low
+            or "consider using the `--user`" in low)
+
+
 def _has_legacy_target_layout() -> bool:
     """Detect a pylib dir written by the old ``pip install --target`` codepath.
 
@@ -223,9 +233,20 @@ class MaterializingExecutor:
                   "installing UNCONSTRAINED (numpy-drift guard off)", flush=True)
         _where = "project overlay" if target != PYLIB_DIR else "shared overlay"
         progress.emit(f"pip: installing {', '.join(packages)} into the {_where}…", phase="pip")
-        cmd = [sys.executable, "-m", "pip", "install",
-               "--prefix", str(target), *_cflag, *packages]
-        proc = run_cancellable(cmd, timeout_s=900, cancel_token=cancel_token)
+        base_cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target), *_cflag]
+        proc = run_cancellable([*base_cmd, *packages], timeout_s=900, cancel_token=cancel_token)
+        # §11.4: `pip --prefix` reuses base deps (fast) but UNINSTALLS the base copy
+        # when a requested version differs — which the read-only base blocks. When
+        # that happens for a project overlay, retry SELF-CONTAINED (--ignore-installed):
+        # the override + its subtree land in the overlay, base untouched. numpy stays
+        # anchor-pinned, so the result is ABI-safe. (Common new-package installs never
+        # hit this branch — they install cleanly on the first, fast pass.)
+        out = (proc.stderr or "") + (proc.stdout or "")
+        if proc.returncode != 0 and prefix is not None and _is_base_write_conflict(out):
+            progress.emit("pip: base is immutable — installing the override self-contained "
+                          "into the project overlay…", phase="pip")
+            proc = run_cancellable([*base_cmd, "--ignore-installed", *packages],
+                                   timeout_s=900, cancel_token=cancel_token)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"pip install into overlay failed for {list(packages)}:\n"

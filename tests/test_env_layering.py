@@ -41,6 +41,40 @@ def test_materialize_routes_all_installs_to_project_overlay(tmp_path, monkeypatc
         assert seen["prefix"] == mat.project_pylib_dir("prjX"), scope   # never PYLIB_DIR
 
 
+def test_is_base_write_conflict():
+    from core.exec.materialize import _is_base_write_conflict
+    assert _is_base_write_conflict(
+        "ERROR: [Errno 13] Permission denied: '/x/.venv/lib/python3.12/site-packages/six.pyc'")
+    assert _is_base_write_conflict("Cannot uninstall 'numpy'. It is a distutils installed project.")
+    assert not _is_base_write_conflict("ERROR: ResolutionImpossible: conflicting deps")
+    assert not _is_base_write_conflict("Could not fetch URL https://pypi.org")
+
+
+def test_pip_install_retries_self_contained_on_base_conflict(tmp_path, monkeypatch):
+    """§11.4 override path: when --prefix is blocked from touching the immutable
+    base, the install retries with --ignore-installed (self-contained overlay)."""
+    import types
+    from core.exec import materialize as mat
+    from core.exec import env_integrity as ei
+    monkeypatch.setattr(mat, "ENVS_DIR", tmp_path / "envs")
+    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "anchor.txt")
+    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "base.txt")
+    calls = []
+
+    def fake_run(cmd, **k):
+        calls.append([str(c) for c in cmd])
+        if "--ignore-installed" not in cmd:                # first pass: base-write blocked
+            return types.SimpleNamespace(returncode=1, stdout="", stderr=(
+                "ERROR: [Errno 13] Permission denied: "
+                "'/x/.venv/lib/python3.12/site-packages/foo'"))
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")  # retry: ok
+    monkeypatch.setattr("core.exec.proc.run_cancellable", fake_run)
+    ex = mat.MaterializingExecutor()
+    ex._pip_install(["foo==2.0"], prefix=mat.project_pylib_dir("prjX"))   # must NOT raise
+    assert len(calls) == 2
+    assert "--ignore-installed" not in calls[0] and "--ignore-installed" in calls[1]
+
+
 def test_pip_install_uses_anchor_for_project_overlay(tmp_path, monkeypatch):
     """A project-overlay install constrains with the ABI anchor, not the full
     base freeze (so the project can override ordinary versions)."""
