@@ -93,6 +93,54 @@ def test_constraints_block_conflicting_install(tmp_path):
     assert proc.returncode != 0, f"constraint should have blocked the downgrade:\n{out[:600]}"
 
 
+# ── P6: lazy-from-lock (canonical lock + materialize-from-lock) ──────────────
+def test_canonical_lock_path(tmp_path, monkeypatch):
+    from core.exec.env_integrity import canonical_lock_path
+    monkeypatch.delenv("ABA_BASE_LOCK", raising=False)
+    assert canonical_lock_path() is None
+    lock = tmp_path / "canon.txt"
+    lock.write_text("numpy==2.4.6\n")
+    monkeypatch.setenv("ABA_BASE_LOCK", str(lock))
+    assert canonical_lock_path() == lock
+
+
+def test_ensure_base_constraints_prefers_canonical(tmp_path, monkeypatch):
+    from core.exec import env_integrity as ei
+    canon = tmp_path / "canon.txt"
+    canon.write_text("numpy==2.4.6\nscanpy==1.12.1\n")
+    monkeypatch.setenv("ABA_BASE_LOCK", str(canon))
+    assert ei.ensure_base_constraints() == canon   # shipped canonical wins
+
+
+def test_write_base_lock(tmp_path):
+    from core.exec.env_integrity import write_base_lock
+    out = write_base_lock(tmp_path / "lock.txt")
+    assert out is not None and out.exists()
+    lines = out.read_text().splitlines()
+    assert any(ln.lower().startswith("numpy==") for ln in lines)
+
+
+def test_materialize_from_lock_pins_version(tmp_path, monkeypatch):
+    """Lazy-from-lock: a lock pinning `six` to an OLD version → materialize
+    installs THAT version, not latest. Proves a minimal install grows to the
+    canonical versions."""
+    import glob
+    from core.exec import env_integrity as ei
+    lock = tmp_path / "lock.txt"
+    lock.write_text("six==1.16.0\n")
+    monkeypatch.setenv("ABA_BASE_LOCK", str(lock))
+    prefix = tmp_path / "pfx"
+    res = ei.materialize_from_lock(["six"], prefix=prefix, timeout_s=300)
+    if not res["ok"] and any(s in str(res.get("error", "")) for s in
+                             ("Could not fetch", "Temporary failure", "Network",
+                              "Failed to establish")):
+        pytest.skip("no network for the materialize")
+    assert res["ok"], res["error"]
+    assert res["lock"] == str(lock)
+    dist = glob.glob(str(prefix) + "/lib/python*/site-packages/six-*.dist-info")
+    assert any("six-1.16.0" in d for d in dist), f"expected six 1.16.0 from the lock, got {dist}"
+
+
 # ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
 def test_python_package_status_good():
     from core.exec.env_integrity import python_package_status
