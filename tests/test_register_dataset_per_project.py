@@ -98,6 +98,26 @@ def test_relative_path_resolves_against_per_project_data_dir():
         f"resolved {res.get('artifact_path')!r}, expected {folder}")
 
 
+# ─── friction-fix A: the plan-time orientation carries the canonical path ──
+def test_orientation_surfaces_registered_dataset_canonical_subdir():
+    """Fix A: the workspace orientation injected into the present_plan result must
+    carry the registered dataset's FULL canonical path INCLUDING any subdir — so
+    the agent uses it verbatim on its first run_python instead of guessing
+    DATA_DIR/<file> (the pagoda2/prj_0b82b3aa 'mistake-first' pattern)."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble, _run_scratch_cwd
+    from content.bio.lifecycle.runs import active_run_id
+    sub = _PROJECT_DATA_DIR / "geo_sub_orient"
+    sub.mkdir()
+    (sub / "S1_matrix.mtx.gz").write_bytes(b"x")
+    ctx = _new_ctx()
+    assert register_dataset_tool({"path": "geo_sub_orient", "title": "GEO sub"}, ctx)["status"] == "ok"
+    tid = str(ctx["thread_id"])
+    orient = _prior_run_files_preamble(_PID, tid, current_run_id=active_run_id(tid),
+                                       cwd=_run_scratch_cwd(_PID, tid))
+    assert "geo_sub_orient" in orient, f"orientation must carry the subdir path:\n{orient}"
+    assert "canonical paths" in orient.lower()
+
+
 # ─── (2) error message must reference the per-project DATA_DIR ──────────
 def test_error_message_points_at_per_project_dir():
     """When NOTHING resolves, any DATA_DIR hint in the response must be the

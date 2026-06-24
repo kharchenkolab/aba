@@ -789,11 +789,34 @@ async def stream_response(
                         "focus_entity_id": focus_entity_id,
                         "plan_entity_id": plan_eid,
                     })
+                    # The Run (and its cwd) just opened above. Compute the workspace
+                    # orientation NOW — canonical dataset paths + cwd — and attach it
+                    # to the result, so the agent has it BEFORE its first run_python
+                    # on resume, instead of guessing the path, erroring, and only
+                    # THEN seeing the orientation prepended to that run's output.
+                    _orient = ""
+                    try:
+                        from content.bio.tools.run_exec import (_prior_run_files_preamble,
+                                                                _run_scratch_cwd)
+                        from content.bio.lifecycle.runs import active_run_id
+                        from core import projects as _projects
+                        _pid = _projects.current()
+                        _orient = _prior_run_files_preamble(
+                            str(_pid), str(store_tid),
+                            current_run_id=active_run_id(str(store_tid)),
+                            cwd=_run_scratch_cwd(str(_pid), str(store_tid)))
+                    except Exception:  # noqa: BLE001 — orientation is best-effort
+                        _orient = ""
+                    _note = ("Plan shown to the user with Go/Adjust controls. "
+                             "Wait for their decision before executing.")
+                    if _orient:
+                        _note += ("\n\nWhen you resume, your first run_python runs in the "
+                                  "new Run's working dir — use these canonical paths verbatim "
+                                  "(do NOT guess the directory):\n" + _orient)
                     return {
                         "status": "presented",
                         "plan_entity_id": plan_eid,
-                        "note": "Plan shown to the user with Go/Adjust controls. "
-                                "Wait for their decision before executing.",
+                        "note": _note,
                         "concerns": [c.to_dict() for c in plan.concerns],
                         "_runtime_halt_after": "plan",
                         "_emit_sse_post": {"type": "plan",
