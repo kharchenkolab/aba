@@ -646,6 +646,14 @@ function ToolLine({ block, result, currentRunId }: {
     const parts: string[] = []
     if (typeof r.stdout === 'string' && r.stdout) parts.push(r.stdout)
     if (typeof r.stderr === 'string' && r.stderr) parts.push('--- stderr ---\n' + r.stderr)
+    // Structured-tool errors (e.g. ensure_capability) carry `note` + `diagnostic`
+    // instead of stdout/stderr — surface them so a failed chip has something to
+    // expand (otherwise the user sees "✗ error" with no way to read what broke).
+    if (!parts.length && hasError) {
+      if (typeof r.note === 'string' && r.note) parts.push(r.note)
+      if (typeof r.diagnostic === 'string' && r.diagnostic)
+        parts.push('--- diagnostic ---\n' + r.diagnostic)
+    }
     return parts.join('\n')
   })()
   const liveOut: string = (() => {
