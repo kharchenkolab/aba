@@ -200,7 +200,10 @@ def materialize_from_lock(packages: Sequence[str], *, prefix=None,
         target.mkdir(parents=True, exist_ok=True)
     except Exception:  # noqa: BLE001
         pass
-    cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target)]
+    # --ignore-installed: install the exact lock versions INTO the prefix without
+    # uninstalling/recompiling the (now read-only, immutable) base copies — its job
+    # is to fill a minimal install's overlay from the lock, independent of base.
+    cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target), "--ignore-installed"]
     if lock:
         cmd += ["-c", str(lock)]
     cmd += list(packages)
