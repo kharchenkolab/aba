@@ -117,48 +117,58 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
-    """Create/refresh an ISOLATED Python environment you OWN and install packages
-    into it with FULL version control. USE THIS when a package conflicts with the
-    base (a different numpy, tensorflow, an ABI-incompatible wheel) or you need to
-    resolve a dependency conflict your own way — the shared base is never touched,
-    so any mess is contained to this env. Run code in it with run_in_isolated_env.
-    Returns {status, name, engine, installed, verified, error}."""
+    """Create/refresh an ISOLATED environment you OWN (Python venv, or — with
+    language='r' — a standalone R library) and install packages into it with FULL
+    version control. USE THIS when a package conflicts with the base (a different
+    numpy, tensorflow, an ABI-incompatible wheel) or you need to resolve a
+    dependency conflict your own way — the shared base is never touched. Run code
+    in it with run_in_isolated_env. (Note for R: a *project* R install already
+    overrides the base via .libPaths, so reach for this only for a fully
+    project-independent / one-off conflicting lib.) Returns {status, name,
+    language, engine, installed, verified, error}."""
     from core.exec import isolated_env as iso
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "make_isolated_env needs a `name`."}
+    is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
+    label = "R" if is_r else "Python"
+    lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
     try:
-        info = iso.create_env(name)
+        info = iso.r_create_env(name) if is_r else iso.create_env(name)
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
+    engine = info["engine"]
     if not packages:
-        return {"status": "ok", "name": name, "engine": info["engine"],
-                "note": f"Isolated env {name!r} ready ({info['engine']}); install packages "
-                        f"or run code with run_in_isolated_env."}
-    res = iso.install_into(name, packages, verify_imports=input_.get("verify_imports"))
+        return {"status": "ok", "name": name, "language": lang, "engine": engine,
+                "note": f"Isolated {label} env {name!r} ready ({engine}); install packages "
+                        f"or run code with run_in_isolated_env(name={name!r}, language={lang!r}, …)."}
+    res = (iso.r_install_into(name, packages) if is_r
+           else iso.install_into(name, packages, verify_imports=input_.get("verify_imports")))
     if not res["ok"]:
-        return {"status": "error", "name": name, "engine": info["engine"],
+        return {"status": "error", "name": name, "language": lang, "engine": engine,
                 "installed": packages, "error": res.get("error"),
                 "note": "Isolated env created, but the install failed — see error."}
-    return {"status": "ok", "name": name, "engine": info["engine"],
+    return {"status": "ok", "name": name, "language": lang, "engine": engine,
             "installed": res["installed"], "verified": res.get("verified"),
-            "note": f"Isolated env {name!r} ready ({info['engine']}); run code in it with "
-                    f"run_in_isolated_env(name={name!r}, code=...)."}
+            "note": f"Isolated {label} env {name!r} ready ({engine}); run code in it with "
+                    f"run_in_isolated_env(name={name!r}, language={lang!r}, code=…)."}
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
-    """Run Python code inside an isolated env created by make_isolated_env — your
-    sandbox for conflict resolution / troubleshooting. Returns {status, stdout,
-    stderr}."""
+    """Run code inside an isolated env created by make_isolated_env — your sandbox
+    for conflict resolution / troubleshooting. `language` = python (default) | r.
+    Returns {status, language, stdout, stderr}."""
     from core.exec import isolated_env as iso
     name = (input_.get("name") or "").strip()
     code = input_.get("code") or ""
     if not name or not code:
         return {"status": "error", "note": "run_in_isolated_env needs `name` and `code`."}
-    r = iso.run_in(name, code, timeout_s=int(input_.get("timeout_s") or 600))
+    is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
+    ts = int(input_.get("timeout_s") or 600)
+    r = iso.r_run_in(name, code, timeout_s=ts) if is_r else iso.run_in(name, code, timeout_s=ts)
     return {"status": "ok" if r["ok"] else "error", "name": name,
-            "stdout": r["stdout"], "stderr": r["stderr"]}
+            "language": "r" if is_r else "python", "stdout": r["stdout"], "stderr": r["stderr"]}
 
 
 def _is_constraint_conflict(msg: str) -> bool:

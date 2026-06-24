@@ -73,3 +73,38 @@ def test_isolated_resolves_numpy_conflict(iso_root):
 def test_run_in_missing_env_is_graceful(iso_root):
     r = iso.run_in("nope", "print(1)")
     assert r["ok"] is False and "does not exist" in r["stderr"]
+
+
+# ── R isolated tier (P3) — separate .libPaths lib + run R against it ──────────
+@pytest.fixture
+def r_avail():
+    from core.exec.materialize import tools_env
+    if not (tools_env() / "bin" / "Rscript").exists():
+        pytest.skip("R runtime not provisioned on this box")
+
+
+def test_r_create_run_remove(iso_root, r_avail):
+    info = iso.r_create_env("re1")
+    assert info["language"] == "r" and info["created"] is True
+    assert Path(info["lib"]).exists()
+    r = iso.r_run_in("re1", "cat('RVER='); cat(R.version$major)")
+    assert r["ok"] and "RVER=" in r["stdout"]
+    assert iso.remove_r_env("re1")
+
+
+def test_r_run_missing_env_is_graceful(iso_root, r_avail):
+    r = iso.r_run_in("ghostr", "cat(1)")
+    assert r["ok"] is False and "does not exist" in r["stderr"]
+
+
+def test_r_install_into_isolated_lib(iso_root, r_avail):
+    res = iso.r_install_into("re2", ["jsonlite"], timeout_s=600, verify=True)
+    if not res["ok"] and any(s in str(res.get("error", "")) for s in
+                             ("cannot open URL", "Could not resolve", "Timeout",
+                              "unable to access", "Network")):
+        pytest.skip("no network for the R install")
+    assert res["ok"], res["error"]
+    assert res["verified"] is True
+    # it loads from the isolated lib
+    r = iso.r_run_in("re2", "library(jsonlite); cat('JSON_OK')")
+    assert r["ok"] and "JSON_OK" in r["stdout"]
