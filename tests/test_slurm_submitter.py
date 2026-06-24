@@ -257,3 +257,21 @@ def test_session_allocation_slurm(slurm, monkeypatch):
     sa = session_allocation()
     assert sa["on_slurm"] and sa["slurm_job_id"] == "999"
     assert sa["node"] == "node09" and sa["time_left"] == "2:00:00" and sa["partition"] == "short"
+
+
+def test_reconcile_spares_slurm_jobs():
+    """A Slurm job runs on the cluster and survives an ABA restart; reconcile must
+    NOT reap its running row (a local running row IS reaped as a zombie)."""
+    from core.jobs.runner import reconcile_jobs
+    from core.graph.jobs import create_job, update_job, get_job
+    pid = projects.create_project("slurm-reconcile")["id"]
+    create_job(job_id="job_slurmrun", kind="run_python", title="t", focus_entity_id=None,
+               params={"code": "x", "project_id": pid, "submitter": "slurm", "slurm_id": "77"},
+               project_id=pid)
+    update_job("job_slurmrun", project_id=pid, status="running")
+    create_job(job_id="job_localrun", kind="run_python", title="t", focus_entity_id=None,
+               params={"code": "x", "project_id": pid}, project_id=pid)
+    update_job("job_localrun", project_id=pid, status="running")
+    reconcile_jobs()
+    assert get_job("job_slurmrun", project_id=pid)["status"] == "running"   # spared
+    assert get_job("job_localrun", project_id=pid)["status"] == "failed"    # reaped

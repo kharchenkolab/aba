@@ -94,6 +94,19 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_slurm_params(params_text) -> bool:
+    """True if a job row's params JSON marks it Slurm-submitted. Such jobs run
+    independently on the cluster and survive an ABA restart, so reconcile must
+    NOT reap (running) or re-enqueue (queued) them — the poll loop re-adopts
+    them via the shared-FS sentinel."""
+    if not params_text:
+        return False
+    try:
+        return (json.loads(params_text) or {}).get("submitter") == "slurm"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _write_job_run_log(result_obj: dict, stdout: str, stderr: str,
                        job_id: str, project_id: str) -> None:
     """Persist combined stdout + stderr to <job_dir>/run.log so a later
@@ -430,20 +443,25 @@ def reconcile_jobs() -> dict:
                 c.close()
                 continue
             n_projects += 1
-            # 1. Reap orphan running rows.
+            # 1. Reap orphan running rows — EXCEPT Slurm jobs, which keep running
+            #    on the cluster across an ABA restart (the poll loop re-adopts them).
             now = _utcnow()
-            cur = c.execute(
-                "UPDATE jobs SET status='failed', "
-                "error=COALESCE(error,'') || ? , "
-                "finished_at=? WHERE status='running'",
-                (reap_note, now),
-            )
-            reaped += cur.rowcount
+            running = c.execute("SELECT id, params FROM jobs WHERE status='running'").fetchall()
+            reap_ids = [r["id"] for r in running if not _is_slurm_params(r["params"])]
+            for jid in reap_ids:
+                c.execute("UPDATE jobs SET status='failed', error=COALESCE(error,'') || ?, "
+                          "finished_at=? WHERE id=?", (reap_note, now, jid))
+            reaped += len(reap_ids)
             # 2. Collect queued rows for re-enqueue.
+            # Re-enqueue queued rows to the LOCAL worker — but NOT Slurm jobs:
+            # they were already sbatch'd, so re-enqueuing would double-run them
+            # locally. The poll loop watches them instead.
             rows = c.execute(
-                "SELECT id, created_at FROM jobs WHERE status='queued' ORDER BY created_at"
+                "SELECT id, created_at, params FROM jobs WHERE status='queued' ORDER BY created_at"
             ).fetchall()
             for r in rows:
+                if _is_slurm_params(r["params"]):
+                    continue
                 requeued.append((r["created_at"], r["id"], pid))
             c.commit()
             c.close()
