@@ -222,3 +222,20 @@ def test_poll_loop_finalizes_to_done(slurm):
     assert result is not None
     _run_async(_finalize_job(j, result, j["project_id"], j["project_id"]))
     assert get_job(job["id"], project_id=pid)["status"] == "done"
+
+
+def test_estimate_threads_into_resources(slurm, monkeypatch):
+    """submit_python_job(estimate=...) → params → SlurmSubmitter → sbatch flags."""
+    from core.jobs.runner import submit_python_job
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    args_file = Path(tempfile.mktemp())
+    monkeypatch.setenv("FAKE_ARGS_FILE", str(args_file))
+    monkeypatch.setenv("FAKE_SBATCH_SENTINEL", "0")
+    monkeypatch.setenv("ABA_HPC_CONFIG", str(_write_cfg()))
+    pid = projects.create_project("slurm-estimate")["id"]
+    projects.set_current(pid)
+    job = submit_python_job("print(1)", "t", None, project_id=pid,
+                            estimate={"cores": 8, "mem_gb": 32, "runtime_min": 300})
+    assert get_job(job["id"], project_id=pid)["params"]["estimate"]["cores"] == 8
+    args = args_file.read_text()
+    assert "--cpus-per-task=8" in args and "--partition=long" in args

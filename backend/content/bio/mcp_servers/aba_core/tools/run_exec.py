@@ -39,6 +39,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                    timeout_s: int | None = None,
                    background: bool = False,
                    estimated_runtime_min: float | None = None,
+                   est_cores: int | None = None,
+                   est_mem_gb: int | None = None,
+                   est_gpu: bool = False,
                    fresh: bool = False,
                    title: str | None = None,
                    env: str | None = None,
@@ -47,7 +50,10 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         across calls within a thread (interactive kernel); pass
         fresh=true for a one-shot subprocess. Pass background=true (or
         let the router decide based on estimated_runtime_min) for
-        deferred long-runs.
+        deferred long-runs. On an HPC deployment a backgrounded run
+        becomes a Slurm job — optionally size it with est_cores /
+        est_mem_gb / est_gpu (mapped to a partition/QoS by the
+        deployment); these are ignored when not on a cluster.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
@@ -79,6 +85,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                 "code": code, "timeout_s": timeout_s,
                 "background": background,
                 "estimated_runtime_min": estimated_runtime_min,
+                "est_cores": est_cores, "est_mem_gb": est_mem_gb, "est_gpu": est_gpu,
                 "fresh": fresh, "title": title, "env": env,
             }, ctx)
 
@@ -87,6 +94,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               timeout_s: int | None = None,
               background: bool = False,
               estimated_runtime_min: float | None = None,
+              est_cores: int | None = None,
+              est_mem_gb: int | None = None,
+              est_gpu: bool = False,
               title: str | None = None,
               env: str | None = None,
               aba_ctx_id: str | None = None) -> dict:
@@ -133,4 +143,6 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
             return _impl({"code": code, "timeout_s": timeout_s,
                           "background": background,
                           "estimated_runtime_min": estimated_runtime_min,
+                          "est_cores": est_cores, "est_mem_gb": est_mem_gb,
+                          "est_gpu": est_gpu,
                           "title": title, "env": env}, ctx)
