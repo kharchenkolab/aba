@@ -130,6 +130,10 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "make_isolated_env needs a `name`."}
+    if iso.is_reserved_name(name):
+        return {"status": "error", "name": name,
+                "note": f"'{name}' is reserved (default/base/shared/project) — it denotes "
+                        "the normal environment, not an isolated one. Pick another name."}
     is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
@@ -140,9 +144,10 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
     engine = info["engine"]
     if not packages:
+        _run = "run_r" if is_r else "run_python"
         return {"status": "ok", "name": name, "language": lang, "engine": engine,
                 "note": f"Isolated {label} env {name!r} ready ({engine}); install packages "
-                        f"or run code with run_in_isolated_env(name={name!r}, language={lang!r}, …)."}
+                        f"or run code in it with {_run}(env={name!r}, code=…)."}
     res = (iso.r_install_into(name, packages) if is_r
            else iso.install_into(name, packages, verify_imports=input_.get("verify_imports")))
     if not res["ok"]:

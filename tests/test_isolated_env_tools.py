@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import content.bio  # noqa: E402,F401
 import core.exec.materialize as mat  # noqa: E402
-from content.bio.tools import make_isolated_env, run_in_isolated_env  # noqa: E402
+from content.bio.tools import make_isolated_env, run_in_isolated_env, run_python  # noqa: E402
 
 pytestmark = pytest.mark.bio
 
@@ -109,6 +109,51 @@ def test_ensure_capability_auto_isolates_on_conflict(monkeypatch):
     r = d.ensure_capability({"name": "tflike"})
     assert r["status"] == "ready_isolated", r
     assert r["isolated_env"] == "cap-tflike" and "run_in_isolated_env" in r["note"]
+
+
+# ── §11 Increment 1: env= on run_python + reserved names ─────────────────────
+def test_is_default_env_resolution():
+    from content.bio.tools.run_exec import _is_default_env
+    for v in (None, "", "default", "DEFAULT", "base", "shared", "project"):
+        assert _is_default_env(v) is True, v
+    for v in ("scrna", "legacy_tf", "myenv"):
+        assert _is_default_env(v) is False, v
+
+
+def test_make_isolated_env_rejects_reserved(iso_root):
+    for n in ("default", "base", "shared", "project"):
+        r = make_isolated_env({"name": n})
+        assert r["status"] == "error" and "reserved" in r["note"].lower(), n
+
+
+def test_create_env_rejects_reserved(iso_root):
+    from core.exec import isolated_env as iso
+    with pytest.raises(ValueError):
+        iso.create_env("default")
+    with pytest.raises(ValueError):
+        iso.r_create_env("base")
+
+
+def test_run_python_env_missing_is_helpful(iso_root, monkeypatch):
+    from core import projects
+    monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
+    r = run_python({"code": "print(1)", "env": "ghost"})
+    assert r["status"] == "error" and "make_isolated_env" in r["note"]
+
+
+def test_run_python_env_executes_in_isolated(iso_root, monkeypatch):
+    from core import projects
+    monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
+    assert make_isolated_env({"name": "envrun"})["status"] == "ok"
+    r = run_python({"code": "print('ENV_RUN_OK')", "env": "envrun"})
+    assert r["status"] == "ok" and "ENV_RUN_OK" in r["stdout"] and r["env"] == "envrun"
+
+
+def test_run_python_default_does_not_route_isolated(monkeypatch):
+    """env=None / 'default' must NOT hit the isolated path — it stays the served
+    stack. We assert the dispatch helper agrees (the kernel path needs a backend)."""
+    from content.bio.tools.run_exec import _is_default_env
+    assert _is_default_env(None) and _is_default_env("default")
 
 
 def test_make_r_env_and_run_via_tools(iso_root):

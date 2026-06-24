@@ -41,12 +41,18 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                    estimated_runtime_min: float | None = None,
                    fresh: bool = False,
                    title: str | None = None,
+                   env: str | None = None,
                    aba_ctx_id: str | None = None) -> dict:
         """Run Python in the project's scratch workspace. State persists
         across calls within a thread (interactive kernel); pass
         fresh=true for a one-shot subprocess. Pass background=true (or
         let the router decide based on estimated_runtime_min) for
         deferred long-runs.
+
+        ENVIRONMENT: omit `env` (or `env='default'`) for the project's
+        normal environment. Pass `env='name'` to run inside an isolated
+        environment you created with `make_isolated_env(name='name')` —
+        used when a package conflicts with the base.
 
         INSTALLING PACKAGES: to use a library that isn't already in the
         sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,
@@ -73,7 +79,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                 "code": code, "timeout_s": timeout_s,
                 "background": background,
                 "estimated_runtime_min": estimated_runtime_min,
-                "fresh": fresh, "title": title,
+                "fresh": fresh, "title": title, "env": env,
             }, ctx)
 
     @mcp.tool()
@@ -82,11 +88,17 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               background: bool = False,
               estimated_runtime_min: float | None = None,
               title: str | None = None,
+              env: str | None = None,
               aba_ctx_id: str | None = None) -> dict:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand
         files off (CSV/Parquet/RDS). For Bioconductor / DESeq2 /
         edgeR / limma / Seurat work.
+
+        ENVIRONMENT: omit `env` for the project's normal R library
+        (which already overrides the base). Pass `env='name'` only for a
+        fully isolated R library you made with
+        `make_isolated_env(name='name', language='r')`.
 
         INSTALLING PACKAGES: to use an R package that isn't loaded, call
         `ensure_capability(name)` FIRST — NEVER `install.packages()`,
@@ -121,4 +133,4 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
             return _impl({"code": code, "timeout_s": timeout_s,
                           "background": background,
                           "estimated_runtime_min": estimated_runtime_min,
-                          "title": title}, ctx)
+                          "title": title, "env": env}, ctx)

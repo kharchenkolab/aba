@@ -212,25 +212,15 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         control. Use when a package conflicts with the base (a different numpy,
         tensorflow, an ABI-incompatible wheel) or you need to resolve a
         dependency conflict your own way — the shared base is never touched, so
-        any mess is contained. Run code in it with run_in_isolated_env. (Python
-        engine: uv if available, else venv. For R: a *project* install already
-        overrides the base via .libPaths — use this only for a fully
-        project-independent / one-off conflicting lib.)"""
+        any mess is contained. Run code in it with `run_python(env='name', …)`
+        (or `run_r(env='name', …)` for R). (Python engine: uv if available, else
+        venv. For R: a *project* install already overrides the base via
+        .libPaths — use this only for a fully project-independent / one-off
+        conflicting lib.)"""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import make_isolated_env as _impl
         return _impl({"name": name, "packages": packages or [], "language": language},
                      peek_ctx(aba_ctx_id))
-
-    @mcp.tool()
-    def run_in_isolated_env(name: str, code: str,
-                            language: Literal["python", "r"] = "python",
-                            aba_ctx_id: str | None = None) -> dict:
-        """Run `code` inside an isolated env created by make_isolated_env — your
-        sandbox for conflict resolution / troubleshooting. `language` = python
-        (default) | r. Returns {status, stdout, stderr}."""
-        from core.runtime.tool_ctx import peek_ctx
-        from content.bio.tools import run_in_isolated_env as _impl
-        return _impl({"name": name, "code": code, "language": language}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def ensure_capability(name: str,
