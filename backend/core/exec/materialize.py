@@ -158,13 +158,12 @@ class MaterializingExecutor:
                        python=sys.executable, env_overlay=self._tools_overlay())
 
         if prov.pip:
-            # Route by scope (env_refactor.md P1): a project/user-scoped on-demand
-            # install goes into that project's OWN overlay (contained — can't
-            # pollute other projects); installation/system-scoped stays in the
-            # shared overlay. run_python appends shared THEN project to sys.path.
-            _prefix = None
-            if project_id and (str(scope).startswith("project") or str(scope).startswith("user")):
-                _prefix = project_pylib_dir(str(project_id))
+            # §11.4: ALL runtime installs go to the project's OWN overlay — the only
+            # session-writable layer. Nothing writes to the shared overlay anymore
+            # (it's folded into the immutable base); install-wide additions happen
+            # via a deliberate base rebuild from the lock, not a runtime write to a
+            # layer everyone reads. (No project context → legacy shared, rare.)
+            _prefix = project_pylib_dir(str(project_id)) if project_id else None
             self._pip_install(prov.pip, cancel_token=cancel_token, prefix=_prefix)
             return self._base_env()
 
@@ -211,12 +210,13 @@ class MaterializingExecutor:
         target.mkdir(parents=True, exist_ok=True)
         from core.runtime import progress
         from core.exec.proc import run_cancellable
-        from core.exec.env_integrity import ensure_base_constraints
-        # Constrain against the install-wide base so this install can't move
-        # numpy / scipy or pull an incompatible-ABI wheel — it satisfies the pin
-        # or pip fails loudly (vs silently corrupting the shared env). Best-
-        # effort: if the lock can't be produced, install unconstrained + warn.
-        _constraints = ensure_base_constraints()
+        from core.exec.env_integrity import ensure_base_constraints, abi_anchor_constraints
+        # §11.4: a project overlay (the writable layer) constrains only the ABI
+        # ANCHOR (numpy) — so a project can OVERRIDE ordinary package versions but a
+        # bad override that needs a different numpy fails the resolve instead of
+        # shadow-breaking the compiled stack. The legacy shared path (no prefix)
+        # keeps the full base freeze. Best-effort: unconstrained + warn if absent.
+        _constraints = abi_anchor_constraints() if prefix is not None else ensure_base_constraints()
         _cflag = ["-c", str(_constraints)] if _constraints else []
         if not _constraints:
             print("[materialize] WARNING: base-constraints unavailable; "

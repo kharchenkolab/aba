@@ -15,7 +15,8 @@ from typing import Optional
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.data.workspace import scratch_dir
-from core.exec import MaterializingExecutor, Provisioning, pylib_paths
+from core.exec import MaterializingExecutor, Provisioning
+from core.exec.materialize import project_pylib_paths
 
 
 def run_python_code(
@@ -38,10 +39,12 @@ def run_python_code(
     # wins and the overlay only supplies what's missing. DATA_DIR is per-
     # project (post 2026-05-31 reorg).
     from core.config import current_project_id, project_data_dir
-    _data_dir = project_data_dir(current_project_id())
+    _pid = current_project_id()
+    _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    for _p in pylib_paths():
-        lines.append(f"_sys.path.append({str(_p)!r})")
+    # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
+    for _p in reversed(list(project_pylib_paths(_pid))):
+        lines.append(f"_sys.path.insert(0, {str(_p)!r})")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
 
     ex = MaterializingExecutor()

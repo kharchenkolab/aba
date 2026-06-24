@@ -83,6 +83,35 @@ def base_constraints_path() -> Path:
     return Path(ENVS_DIR) / "base-constraints.txt"
 
 
+# §11.4 — the ABI anchor: the cross-cutting compiled-stack packages a project
+# overlay must NOT override (numpy's 1.x↔2.x ABI break is the one that bit us).
+# Pinning JUST these (not the full base freeze) lets a project override ordinary
+# package versions while the compiled foundation stays coherent.
+_ABI_ANCHOR = ("numpy",)
+
+
+def abi_anchor_path() -> Path:
+    from core.exec.materialize import ENVS_DIR
+    return Path(ENVS_DIR) / "abi-anchor.txt"
+
+
+def abi_anchor_constraints(*, force: bool = False) -> Optional[Path]:
+    """Small constraint pinning only the ABI-anchor packages (numpy) to their base
+    versions — used for project-overlay installs so an override can't shadow-break
+    the compiled stack (§11.4). Falls back to None if numpy can't be read."""
+    out = abi_anchor_path()
+    if out.exists() and not force:
+        return out
+    base = ensure_base_constraints()
+    pins = [ln.strip() for ln in (base.read_text().splitlines() if base and base.exists() else [])
+            if ln.split("==")[0].strip().lower() in _ABI_ANCHOR]
+    if not pins:
+        return None
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(pins) + "\n")
+    return out
+
+
 _PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
 
 
