@@ -61,13 +61,18 @@ _env_specs_ready: set = set()
 def _ensure_env_python_kernelspec(env_name: str) -> str:
     """Register a kernelspec whose interpreter is the ISOLATED env's python (so a
     kernel launched from it sees that env's packages, standalone — §11.3).
-    Installs ipykernel into the env on first use. Idempotent. Returns spec name."""
+    Installs ipykernel into the env on first use. Idempotent. Returns spec name.
+    The spec name includes the project id so two projects' same-named envs can't
+    cross-wire to the wrong python (§11.6 project-scoped)."""
+    import re as _re
     import subprocess
     from core.exec import isolated_env as iso
-    py = iso.env_python(env_name)
+    from core import projects
+    pid = projects.current() or "_none"
+    py = iso.env_python(env_name)          # resolves project-scoped (current project)
     if not py.exists():
         raise RuntimeError(f"isolated env {env_name!r} does not exist")
-    spec_name = f"aba-env-{env_name}"
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-env-{pid}-{env_name}".lower())
     if spec_name in _env_specs_ready:
         return spec_name
     # ipykernel must live IN the env (the kernel runs as the env's python).
