@@ -223,6 +223,18 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                      peek_ctx(aba_ctx_id))
 
     @mcp.tool()
+    def set_active_env(name: str, aba_ctx_id: str | None = None) -> dict:
+        """Set the project's ACTIVE python environment — after this, a bare
+        `run_python` (no `env=`) runs in `name` until you change it. Pass
+        name='default' to switch back to the project's normal environment. Use
+        when most of your work will happen in one isolated env (created with
+        make_isolated_env), so you don't repeat `env=` on every call. (Python
+        only — R's per-project library already overrides the base.)"""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import set_active_env as _impl
+        return _impl({"name": name}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def ensure_capability(name: str,
                           source: str | None = None,
                           package: str | None = None,

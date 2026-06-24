@@ -176,6 +176,29 @@ def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
             "language": "r" if is_r else "python", "stdout": r["stdout"], "stderr": r["stderr"]}
 
 
+def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
+    """§11.2 — set the project's ACTIVE python env; bare run_python uses it until
+    changed. name='default' resets to the normal served stack. (Python only — R's
+    per-project lib already overrides the base, so run_r has no active pointer.)"""
+    from core.exec import isolated_env as iso
+    from core import projects
+    name = (input_.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "note": "set_active_env needs a `name` (or 'default')."}
+    pid = projects.current()
+    if name.lower() != "default" and name not in iso.list_envs():
+        return {"status": "error", "name": name,
+                "note": f"No isolated python env '{name}'. Create it with make_isolated_env, "
+                        "or pass 'default' to use the normal environment."}
+    iso.set_active_env(pid, name, "python")
+    if name.lower() == "default":
+        return {"status": "ok", "active_python_env": "default",
+                "note": "Bare run_python now uses the default served stack."}
+    return {"status": "ok", "active_python_env": name,
+            "note": f"Bare run_python now runs in '{name}'. Use env='default' for a one-off "
+                    f"in the normal stack, or set_active_env('default') to switch back."}
+
+
 def _is_constraint_conflict(msg: str) -> bool:
     """Does a pip failure look like UNSAT-against-the-base (a version/constraint
     conflict the pinned base forbids), vs a transient/typo/network error?

@@ -154,6 +154,41 @@ def remove_env(name: str) -> bool:
     return False
 
 
+# ── active env pointer (§11.2) — per-project, per-language. Bare run_python /
+#    run_r (env=None) follow it; it defaults to "default" (the served stack). ──
+def _active_env_file(project_id: str) -> Path:
+    from core.config import PROJECTS_DIR
+    return Path(PROJECTS_DIR) / str(project_id) / "active_envs.json"
+
+
+def get_active_env(project_id, lang: str = "python") -> str:
+    if not project_id:
+        return "default"
+    f = _active_env_file(project_id)
+    if not f.exists():
+        return "default"
+    try:
+        import json
+        return (json.loads(f.read_text()) or {}).get(lang) or "default"
+    except Exception:  # noqa: BLE001
+        return "default"
+
+
+def set_active_env(project_id: str, name: str, lang: str = "python") -> dict:
+    import json
+    f = _active_env_file(project_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if f.exists():
+        try:
+            data = json.loads(f.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            data = {}
+    data[lang] = name
+    f.write_text(json.dumps(data))
+    return {"lang": lang, "active": name}
+
+
 # ── R isolated environments (env_refactor.md P3) ─────────────────────────────
 # R has no separate interpreter to isolate (one R, many library dirs), so an
 # "isolated R env" is a standalone library dir installed into + run with that

@@ -584,7 +584,12 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # same interactive kernel path below, just a distinct scope-key + the env's
     # python (so state persists + plots harvest, unlike the old one-shot). Default/
     # reserved → the normal served stack. Kernel disabled → stateless fallback.
+    # §11.2: env=None follows the project's active python env; an explicit value
+    # (including 'default') overrides it.
     env = input_.get("env")
+    if env is None:
+        from core.exec.isolated_env import get_active_env
+        env = get_active_env(project_id, "python")
     env_name = None if _is_default_env(env) else env.strip()
     if env_name:
         from core.exec import isolated_env as iso

@@ -90,6 +90,7 @@ from .discovery import (    # noqa: F401, E402
     inspect_env,
     make_isolated_env,
     run_in_isolated_env,
+    set_active_env,
     ensure_capability,
     propose_capability_tool,
     fetch_url,
