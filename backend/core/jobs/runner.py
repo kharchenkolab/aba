@@ -169,7 +169,8 @@ def _record_worker_failure(where: str, job_id: str | None, exc: BaseException) -
 
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                       timeout_s: int = 300, project_id: str | None = None,
-                      thread_id: str | None = None, run_id: str | None = None) -> dict:
+                      thread_id: str | None = None, run_id: str | None = None,
+                      estimate: dict | None = None) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
     workspace even if the active project changes before the worker picks it up.
@@ -182,7 +183,7 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         title=title or "Background analysis",
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
-                "thread_id": thread_id, "run_id": run_id},
+                "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},
         project_id=project_id,
     )
     get_submitter().submit(job)
@@ -191,7 +192,8 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
 
 def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                  timeout_s: int = 600, project_id: str | None = None,
-                 thread_id: str | None = None, run_id: str | None = None) -> dict:
+                 thread_id: str | None = None, run_id: str | None = None,
+                 estimate: dict | None = None) -> dict:
     """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
     the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
     against the project's tools-env R + project library, captures stdout/stderr,
@@ -205,7 +207,7 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         title=title or "Background R analysis",
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
-                "thread_id": thread_id, "run_id": run_id},
+                "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},
         project_id=project_id,
     )
     get_submitter().submit(job)
