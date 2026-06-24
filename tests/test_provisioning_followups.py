@@ -45,6 +45,21 @@ def test_diagnose_install_existing_patterns_still_work():
     assert (diagnose_install("/usr/bin/ld: cannot find -lglpk").get("missing_lib")) == "glpk"
 
 
+def test_diagnose_install_banner_does_not_drown_real_error():
+    """The pagoda2 regression: R prints `using C++ compiler:` for every file in a
+    big build; that banner used to fill the window (last-8 matches) and hide the
+    real failure. The diagnostic must surface the error, NOT the banner."""
+    from core.exec.r import diagnose_install
+    banner = "using C++ compiler: 'x86_64-conda-linux-gnu-c++ (conda-forge gcc 14.3.0) 14.3.0'\n"
+    log = (banner * 30
+           + "ERROR: compilation failed for package 'hdf5r'\n"
+           + "Warning: installation of package 'hdf5r' had non-zero exit status\n"
+           + banner * 30)
+    lines = diagnose_install(log)["lines"]
+    assert "hdf5r" in lines and "non-zero exit status" in lines, lines
+    assert "using C++ compiler" not in lines, "the benign compiler banner must not appear"
+
+
 # ── #6c: a swallowed (exit-0) install failure is surfaced as FAILED ──────────
 def test_output_failure_lines_catches_swallowed_install():
     from core.jobs.continuation import _output_failure_lines

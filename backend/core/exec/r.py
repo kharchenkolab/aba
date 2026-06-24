@@ -152,6 +152,9 @@ def r_has_package(pkg: str, project_id: Optional[str] = None, timeout_s: int = 6
 
 # Patterns that tell the agent (and the user) what actually went wrong, so a
 # failed install is actionable rather than an opaque traceback.
+# Strong FAILURE signals only. NOT "using C++ compiler" — that's R's benign
+# per-file compile banner (printed dozens of times in a big build); keeping it
+# drowned the real error (`hdf5r had non-zero exit status`) out of the window.
 _ERR_MARKERS = (
     "there is no package called",
     "is not available",
@@ -159,11 +162,13 @@ _ERR_MARKERS = (
     "dependenc",
     "cannot open shared object file",
     "unable to load shared object",
-    "No such file or directory",
+    "no such file or directory",
     "cannot find -l",
     "configuration failed",
-    "C++ compiler",
     "compilation failed",
+    "error:",            # "ERROR: …", "fatal error: hdf5.h: …", C/C++ compile errors
+    "undefined reference",
+    "installation of package",   # "installation of package 'X' had non-zero exit status"
 )
 # A missing *system* library — the case that may need conda (userspace) or, if
 # root-only, the user. Capture the lib name where we can.
@@ -183,9 +188,19 @@ def diagnose_install(text: str) -> dict:
     """Pull the actionable lines out of an R install/build log, and flag a
     likely missing system library. Returns {lines, missing_lib?}."""
     text = text or ""
-    keep = [ln.strip() for ln in text.splitlines()
-            if any(m.lower() in ln.lower() for m in _ERR_MARKERS)]
-    out: dict = {"lines": "\n".join(keep[-8:])[:800]}
+    # Dedup (compile logs repeat the same error many times) so a handful of REAL
+    # failure lines aren't pushed out of the window by repeats; keep the tail
+    # (the failure summary — "ERROR: …", "had non-zero exit status").
+    seen: set = set()
+    uniq: list[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s and any(m in s.lower() for m in _ERR_MARKERS):
+            key = s.lower()
+            if key not in seen:
+                seen.add(key)
+                uniq.append(s)
+    out: dict = {"lines": "\n".join(uniq[-12:])[:1000]}
     m = _SYSLIB_RE.search(text)
     if m:
         out["missing_lib"] = next((g for g in m.groups() if g), None)
