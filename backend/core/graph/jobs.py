@@ -65,10 +65,12 @@ def list_jobs(limit: int = 50, project_id: Optional[str] = None,
 
 
 def update_job(job_id: str, project_id: Optional[str] = None, **fields) -> None:
-    allowed = {"status", "log_tail", "error", "started_at", "finished_at"}
+    allowed = {"status", "log_tail", "error", "started_at", "finished_at", "params"}
     sets, args = [], []
     for k, v in fields.items():
         if k in allowed:
+            if k == "params" and not isinstance(v, str):
+                v = json.dumps(v)        # the params column is JSON (slurm_id etc.)
             sets.append(f"{k} = ?"); args.append(v)
     if not sets:
         return
