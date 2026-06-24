@@ -359,6 +359,16 @@ def projects_current():
     return {"current": projects.current()}
 
 
+@app.get("/api/env")
+def api_env(project_id: str | None = None):
+    """The layered Python + R environments with their packages — backs the
+    (i)-drawer Env tab. Python via dist-info scan (fast); R via one Rscript
+    (~2s). Read-only."""
+    from core import projects
+    from core.exec.env_integrity import env_layers
+    return env_layers(project_id or projects.current())
+
+
 @app.post("/api/projects")
 def projects_create(req: ProjectRequest):
     from core import projects

@@ -291,6 +291,132 @@ def env_overview(project_id: Optional[str] = None) -> dict:
     }
 
 
+def _py_packages(site_dirs: Sequence) -> list[dict]:
+    """`{name, version}` for every distribution in the given site-packages
+    dir(s), deduped, sorted — by reading dist-info (no subprocess)."""
+    import importlib.metadata as md
+    out: dict = {}
+    for d in site_dirs:
+        p = Path(d)
+        if not p.exists():
+            continue
+        try:
+            dists = list(md.distributions(path=[str(p)]))
+        except Exception:  # noqa: BLE001
+            continue
+        for dist in dists:
+            try:
+                name = dist.metadata["Name"]
+                ver = dist.version
+            except Exception:  # noqa: BLE001
+                continue
+            if name:
+                out[name.lower()] = {"name": name, "version": ver}
+    return sorted(out.values(), key=lambda x: x["name"].lower())
+
+
+def _r_packages_by_lib(lib_paths: Sequence) -> dict:
+    """One Rscript: installed.packages() grouped by LibPath, with the given libs
+    prepended to .libPaths(). Returns {realpath(lib): [{name,version}]}."""
+    import os
+    paths = [str(p) for p in lib_paths if p]
+    if not paths:
+        return {}
+    libs_r = "c(" + ", ".join(repr(p) for p in paths) + ")"
+    expr = (f"libs <- {libs_r}; .libPaths(c(libs, .libPaths())); "
+            f"ip <- installed.packages(); "
+            f"if (nrow(ip)>0) for (i in seq_len(nrow(ip))) "
+            f"cat('PKG\\t', ip[i,'LibPath'], '\\t', ip[i,'Package'], '\\t', ip[i,'Version'], '\\n', sep='')")
+    try:
+        from core.exec.r import _run_rscript
+        proc = _run_rscript(expr, timeout_s=120)
+    except Exception:  # noqa: BLE001
+        return {}
+    by: dict = {}
+    for ln in (getattr(proc, "stdout", "") or "").splitlines():
+        if not ln.startswith("PKG\t"):
+            continue
+        parts = ln.split("\t")
+        if len(parts) >= 4:
+            try:
+                lp = os.path.realpath(parts[1].strip())
+            except Exception:  # noqa: BLE001
+                lp = parts[1].strip()
+            by.setdefault(lp, []).append({"name": parts[2].strip(), "version": parts[3].strip()})
+    return by
+
+
+def env_layers(project_id: Optional[str] = None) -> dict:
+    """The layered Python + R environments with their packages — the data behind
+    the (i) drawer's Env tab. Python via dist-info scan (fast); R via one
+    Rscript. Each layer: {tier, scope, delivery, mutable, path, packages}."""
+    import os
+    import sysconfig
+    from core.exec import isolated_env as iso
+    from core.exec.materialize import (PYLIB_DIR, pylib_paths, project_pylib_dir,
+                                       project_pylib_paths, tools_env, _site_paths)
+    if project_id is None:
+        from core import projects
+        project_id = projects.current()
+
+    # ── Python ──
+    base_site = sysconfig.get_path("purelib")
+    py_layers = [
+        {"tier": "base", "scope": "installation", "delivery": "baked", "mutable": False,
+         "path": base_site, "packages": _py_packages([base_site])},
+        {"tier": "shared overlay", "scope": "installation", "delivery": "on-demand", "mutable": True,
+         "path": str(PYLIB_DIR), "packages": _py_packages([str(p) for p in pylib_paths()])},
+    ]
+    if project_id:
+        py_layers.append(
+            {"tier": "project overlay", "scope": "project", "project_id": project_id,
+             "delivery": "on-demand", "mutable": True, "path": str(project_pylib_dir(project_id)),
+             "packages": _py_packages([str(p) for p in project_pylib_paths(project_id)])})
+    for name in iso.list_envs():
+        py_layers.append(
+            {"tier": "isolated", "scope": "capability", "delivery": "on-demand", "mutable": True,
+             "name": name, "path": str(iso.env_dir(name)),
+             "packages": _py_packages(_site_paths(iso.env_dir(name)))})
+    lock = ensure_base_constraints()
+    py = {"engine": "pip + venv", "layers": py_layers,
+          "lock": {"path": str(lock) if lock else None,
+                   "pins": len(lock.read_text().splitlines()) if lock and lock.exists() else 0,
+                   "canonical": canonical_lock_path() is not None}}
+
+    # ── R ──
+    r_base_lib = tools_env() / "lib" / "R" / "library"
+    r_proj_lib = None
+    iso_r = []
+    try:
+        from core.exec.r import project_r_lib
+        if project_id:
+            r_proj_lib = project_r_lib(project_id)
+    except Exception:  # noqa: BLE001
+        pass
+    iso_root = iso._isolated_root()
+    if iso_root.exists():
+        iso_r = sorted(p for p in iso_root.iterdir() if p.is_dir() and p.name.startswith("r-"))
+    all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else []) + iso_r
+    by = _r_packages_by_lib(all_r_libs)
+
+    def _pkgs_for(lib):
+        return by.get(os.path.realpath(str(lib)), []) if lib else []
+
+    r_layers = [{"tier": "base", "scope": "installation", "delivery": "conda", "mutable": False,
+                 "path": str(r_base_lib), "packages": _pkgs_for(r_base_lib)}]
+    if r_proj_lib:
+        r_layers.append({"tier": "project lib", "scope": "project", "project_id": project_id,
+                         "delivery": "on-demand", "mutable": True, "path": str(r_proj_lib),
+                         "packages": _pkgs_for(r_proj_lib)})
+    for d in iso_r:
+        r_layers.append({"tier": "isolated", "scope": "capability", "delivery": "on-demand",
+                         "mutable": True, "name": d.name[2:], "path": str(d),
+                         "packages": _pkgs_for(d)})
+    r = {"engine": "install.packages + per-project libs + conda base", "layers": r_layers}
+
+    return {"python": py, "r": r, "project_id": project_id}
+
+
 def verify_r_library(libname: str, project_id: Optional[str] = None) -> tuple[bool, str]:
     """R analog of verify_python_imports: does ``library(libname)`` actually
     load (in the project's .libPaths + the shared base)? Wraps the existing

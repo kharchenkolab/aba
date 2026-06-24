@@ -141,6 +141,32 @@ def test_materialize_from_lock_pins_version(tmp_path, monkeypatch):
     assert any("six-1.16.0" in d for d in dist), f"expected six 1.16.0 from the lock, got {dist}"
 
 
+# ── env_layers (the (i)-drawer Env-tab data) ─────────────────────────────────
+def test_py_packages_enumerates_base():
+    import sysconfig
+    from core.exec.env_integrity import _py_packages
+    pkgs = _py_packages([sysconfig.get_path("purelib")])
+    names = {p["name"].lower() for p in pkgs}
+    assert "numpy" in names and all("version" in p and "name" in p for p in pkgs)
+    # sorted, deduped
+    assert [p["name"].lower() for p in pkgs] == sorted(p["name"].lower() for p in pkgs)
+
+
+def test_env_layers_structure():
+    from core.exec.env_integrity import env_layers
+    d = env_layers("prjX")
+    assert set(("python", "r", "project_id")) <= set(d)
+    # python: base + shared overlay always; layers carry the expected fields
+    tiers = [L["tier"] for L in d["python"]["layers"]]
+    assert "base" in tiers and "shared overlay" in tiers
+    base = next(L for L in d["python"]["layers"] if L["tier"] == "base")
+    assert base["mutable"] is False and len(base["packages"]) > 0
+    assert {"tier", "scope", "mutable", "path", "packages"} <= set(base)
+    assert d["python"]["lock"]["pins"] >= 0
+    # r structure present (packages populated only if R is provisioned)
+    assert d["r"]["layers"] and d["r"]["layers"][0]["tier"] == "base"
+
+
 # ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
 def test_python_package_status_good():
     from core.exec.env_integrity import python_package_status
