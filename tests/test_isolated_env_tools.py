@@ -23,6 +23,8 @@ pytestmark = pytest.mark.bio
 @pytest.fixture
 def iso_root(tmp_path, monkeypatch):
     monkeypatch.setattr(mat, "ENVS_DIR", tmp_path / "envs")
+    import core.config as _cfg
+    monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")  # active_envs.json
     return tmp_path
 
 
@@ -158,6 +160,45 @@ def test_run_python_default_does_not_route_isolated(monkeypatch):
     stack. We assert the dispatch helper agrees (the kernel path needs a backend)."""
     from content.bio.tools.run_exec import _is_default_env
     assert _is_default_env(None) and _is_default_env("default")
+
+
+# ── §11 Increment 3: active env pointer + set_active_env ─────────────────────
+def test_active_env_storage_roundtrip(iso_root):
+    from core.exec import isolated_env as iso
+    assert iso.get_active_env("prjA", "python") == "default"
+    iso.set_active_env("prjA", "myenv", "python")
+    assert iso.get_active_env("prjA", "python") == "myenv"
+    iso.set_active_env("prjA", "default", "python")
+    assert iso.get_active_env("prjA", "python") == "default"
+    # per-language + per-project isolation
+    assert iso.get_active_env("prjB", "python") == "default"
+
+
+def test_set_active_env_tool_validates(iso_root, monkeypatch):
+    from core import projects
+    from content.bio.tools import set_active_env
+    monkeypatch.setattr(projects, "current", lambda: "prjA", raising=False)
+    assert set_active_env({"name": "nope"})["status"] == "error"      # non-existent
+    assert set_active_env({"name": "default"})["status"] == "ok"      # reset always ok
+    make_isolated_env({"name": "act1"})
+    r = set_active_env({"name": "act1"})
+    assert r["status"] == "ok" and r["active_python_env"] == "act1"
+
+
+def test_run_python_follows_active_pointer(iso_root, monkeypatch):
+    import core.config as _cfg
+    from core import projects
+    from content.bio.tools import set_active_env
+    monkeypatch.setattr(projects, "current", lambda: "prjA", raising=False)
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)               # stateless fallback
+    make_isolated_env({"name": "act2"})
+    set_active_env({"name": "act2"})
+    # bare run_python (no env) -> the active env
+    r = run_python({"code": "print('VIA_ACTIVE')"})
+    assert r.get("env") == "act2" and "VIA_ACTIVE" in r.get("stdout", "")
+    # explicit env='default' overrides the active pointer (served stack, not act2)
+    r2 = run_python({"code": "print(1)", "env": "default"})
+    assert r2.get("env") is None
 
 
 def test_make_r_env_and_run_via_tools(iso_root):
