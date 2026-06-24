@@ -161,6 +161,44 @@ def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
             "stdout": r["stdout"], "stderr": r["stderr"]}
 
 
+def _is_constraint_conflict(msg: str) -> bool:
+    """Does a pip failure look like UNSAT-against-the-base (a version/constraint
+    conflict the pinned base forbids), vs a transient/typo/network error?
+    Conservative — only the clear pip resolver-conflict signals, so we never
+    mis-route a fat-fingered package name into isolation."""
+    m = (msg or "").lower()
+    return any(s in m for s in (
+        "resolutionimpossible",
+        "conflicting dependencies",
+        "the conflict is caused by",
+    ))
+
+
+def _auto_isolate(name: str, pip_specs: list[str], cap: dict) -> dict:
+    """UNSAT against the base → install into an ISOLATED env the agent owns
+    (base untouched). The capability is NOT importable in run_python; the agent
+    runs its code via run_in_isolated_env."""
+    from core.exec import isolated_env as iso
+    env_name = f"cap-{name}"
+    imp = cap.get("import_name")
+    try:
+        iso.create_env(env_name)
+        res = iso.install_into(env_name, pip_specs, verify_imports=[imp] if imp else None)
+    except Exception as ie:  # noqa: BLE001
+        return {"status": "error", "name": name,
+                "note": f"conflicts with the base, and the isolated-env fallback failed: {ie}"}
+    if not res["ok"]:
+        return {"status": "error", "name": name, "isolated_env": env_name,
+                "note": "conflicts with the base AND the isolated install also failed — see error.",
+                "error": res.get("error")}
+    return {"status": "ready_isolated", "name": name, "isolated_env": env_name,
+            "installed": res["installed"], "verified": res.get("verified"),
+            "note": (f"{name} conflicts with the base environment, so it was installed in an "
+                     f"ISOLATED env {env_name!r} (the shared base was left untouched). It is NOT "
+                     f"importable in run_python — run its code with "
+                     f"run_in_isolated_env(name={env_name!r}, code=...).")}
+
+
 def search_skills_tool(input_: dict) -> dict:
     """Intent search over the skill (recipe) library. The system prompt only
     surfaces a relevant slice of skills; this finds the rest by free-text
@@ -671,6 +709,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                 scope=str(cap.get("scope", "system")),
                 cancel_token=_ct, project_id=_projects.current())
         except Exception as e:  # noqa: BLE001
+            # Solve-driven placement (env_refactor.md): if the constrained install
+            # is UNSAT against the pinned base (the package needs versions the
+            # base forbids — the tensorflow/numpy-1.x case), DON'T fail or corrupt
+            # the base — auto-route to an ISOLATED env the agent can use.
+            if _is_constraint_conflict(str(e)):
+                return _auto_isolate(name, list(prov["pip"]), cap)
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
         # Authoritatively resolve the import name (seed override → auto-detect),
         # so the agent never guesses `import <pipname>` and thrashes.
