@@ -156,11 +156,12 @@ def test_env_layers_structure():
     from core.exec.env_integrity import env_layers
     d = env_layers("prjX")
     assert set(("python", "r", "project_id")) <= set(d)
-    # python: base + shared overlay always; layers carry the expected fields
+    # §11.4: just the immutable base + this project's overlay — no shared tier.
     tiers = [L["tier"] for L in d["python"]["layers"]]
-    assert "base" in tiers and "shared overlay" in tiers
-    base = next(L for L in d["python"]["layers"] if L["tier"] == "base")
+    assert "shared overlay" not in tiers
+    base = next(L for L in d["python"]["layers"] if L["tier"].startswith("base"))
     assert base["mutable"] is False and len(base["packages"]) > 0
+    assert "project overlay" in tiers
     assert {"tier", "scope", "mutable", "path", "packages"} <= set(base)
     assert d["python"]["lock"]["pins"] >= 0
     # r structure present (packages populated only if R is provisioned)
