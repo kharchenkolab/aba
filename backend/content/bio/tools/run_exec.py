@@ -533,6 +533,30 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
         return None
 
 
+def _is_default_env(env) -> bool:
+    """env_refactor.md §11.2 — None/'' and the reserved names all mean the
+    project's normal served stack; any other name is a named isolated env."""
+    from core.exec.isolated_env import RESERVED_ENV_NAMES
+    return (env or "").strip().lower() in ("", *RESERVED_ENV_NAMES)
+
+
+def _run_in_named_env(env: str, code: str, lang: str, timeout_s: int) -> dict:
+    """run_python/run_r(env=<name>) → the named isolated env. Increment 1 routes to
+    the existing one-shot mechanism (stateless); increment 2 (§11.3) replaces this
+    with a persistent per-env Jupyter kernel that keeps state + harvests plots."""
+    from core.exec import isolated_env as iso
+    env = env.strip()
+    r = iso.r_run_in(env, code, timeout_s=timeout_s) if lang == "r" \
+        else iso.run_in(env, code, timeout_s=timeout_s)
+    if not r.get("ok") and "does not exist" in (r.get("stderr") or ""):
+        return {"status": "error", "env": env, "language": lang, "stderr": r["stderr"],
+                "note": f"No isolated env '{env}'. Create it with make_isolated_env("
+                        f"name='{env}'" + (", language='r'" if lang == "r" else "") + ")."}
+    return {"status": "ok" if r.get("ok") else "error", "env": env, "language": lang,
+            "stdout": r.get("stdout", ""), "stderr": r.get("stderr", ""),
+            "execution_mode": "isolated"}
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -555,6 +579,11 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
+
+    # §11.2: env=<named isolated env> routes out of the served-stack path.
+    env = input_.get("env")
+    if not _is_default_env(env):
+        return _run_in_named_env(env, code, "python", timeout_s)
 
     # Lane selection (kernels.md §7): background > fresh > interactive.
     # - background: stateless job, deferred result the guide loop resumes from.
@@ -721,6 +750,11 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     cancel_token = (ctx or {}).get("cancel_token")
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
+
+    # §11.2: env=<named isolated R env> routes out of the served-stack path.
+    env = input_.get("env")
+    if not _is_default_env(env):
+        return _run_in_named_env(env, code, "r", timeout_s)
 
     # Background / long-runtime → job queue. Mirror run_python's routing.
     override = "background" if input_.get("background") else None

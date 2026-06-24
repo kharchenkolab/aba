@@ -21,6 +21,24 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 
+# env_refactor.md §11.2 — reserved env names. These denote the project's normal
+# served stack (`env="default"`) or the layer vocabulary; an isolated env may not
+# take one, so `run_python(env=…)` can unambiguously tell "the default stack" from
+# "a named isolated env".
+RESERVED_ENV_NAMES = frozenset({"default", "base", "shared", "project"})
+
+
+def is_reserved_name(name: str) -> bool:
+    return (name or "").strip().lower() in RESERVED_ENV_NAMES
+
+
+def _check_name(name: str) -> None:
+    if is_reserved_name(name):
+        raise ValueError(
+            f"'{name}' is a reserved env name (default/base/shared/project) — it "
+            "denotes the normal served stack, not an isolated env. Pick another name.")
+
+
 def _isolated_root() -> Path:
     from core.exec.materialize import ENVS_DIR
     return Path(ENVS_DIR) / "isolated"
@@ -54,6 +72,7 @@ def create_env(name: str, *, with_base_site_packages: bool = False,
     (fast), else stdlib venv. ``with_base_site_packages`` shares the base's
     packages (use only for the *additive* case — a conflict needs its own copy,
     so leave it False). Returns {name, python, engine, created}."""
+    _check_name(name)
     d = env_dir(name)
     if env_python(name).exists():
         return {"name": name, "python": str(env_python(name)), "created": False, "engine": "existing"}
@@ -149,6 +168,7 @@ def r_env_lib(name: str) -> Path:
 
 
 def r_create_env(name: str) -> dict:
+    _check_name(name)
     lib = r_env_lib(name)
     created = not lib.exists()
     lib.mkdir(parents=True, exist_ok=True)
