@@ -54,6 +54,68 @@ def inspect_package(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "name": name, "language": lang, "report": report[:4000]}
 
 
+def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
+    """Diagnose the runtime ENVIRONMENT for troubleshooting (the agent's read
+    layer for env problems). Differs from inspect_package (which learns an
+    *importable* package's API): this tells you whether/why something loads.
+
+    With `name`: does it load (real import / library()), its version, WHICH tier
+    owns it (base | shared-overlay | project-overlay/-lib), and the error if it's
+    present-but-broken (ABI mismatch / partial install — the tensorflow case).
+    Without `name`: an overview of the tiers + base-lock state. `language` =
+    python (default) | r."""
+    name = (input_.get("name") or "").strip()
+    lang = (input_.get("language") or "python").strip().lower()
+    is_r = lang in ("r", "rlang")
+    from core import projects
+    pid = projects.current()
+
+    if not name:
+        from core.exec.env_integrity import env_overview
+        ov = env_overview(pid)
+        if is_r:
+            from core.exec.r import project_r_lib
+            ov["r_project_lib"] = str(project_r_lib(pid)) if pid else None
+        return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
+                "tiers": ov}
+
+    if is_r:
+        # Direct Rscript (like r_has_package) so it works without a kernel ctx
+        # and respects the project's .libPaths(). requireNamespace = real load;
+        # packageVersion + find.package give version/tier.
+        from core.exec.r import _run_rscript, project_r_lib, libpaths_expr
+        _lib = libpaths_expr(pid)
+        expr = ((_lib + "; " if _lib else "")
+                + f"ok <- requireNamespace({name!r}, quietly=TRUE); "
+                + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
+                + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
+                + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
+        try:
+            proc = _run_rscript(expr, timeout_s=120)
+            out = (getattr(proc, "stdout", "") or "")
+            err = (getattr(proc, "stderr", "") or "")
+        except Exception as e:  # noqa: BLE001
+            return {"status": "error", "name": name, "language": "r",
+                    "loads": False, "error": str(e)[:400]}
+
+        def _pick(key):
+            for ln in out.splitlines():
+                if ln.startswith(key):
+                    return ln[len(key):].strip()
+            return None
+        loads = (_pick("ABA_LOADS=") == "TRUE")
+        loc = _pick("ABA_LOC=")
+        tier = ("project-lib" if (loc and pid and str(project_r_lib(pid)) in loc) else
+                ("base" if loads else "unknown"))
+        return {"status": "ok", "name": name, "language": "r", "loads": loads,
+                "version": _pick("ABA_VER="), "location": loc, "tier": tier,
+                "error": None if loads else (err or out)[-600:]}
+
+    from core.exec.env_integrity import python_package_status
+    st = python_package_status(name, project_id=pid)
+    return {"status": "ok", "language": "python", **st}
+
+
 def search_skills_tool(input_: dict) -> dict:
     """Intent search over the skill (recipe) library. The system prompt only
     surfaces a relevant slice of skills; this finds the rest by free-text

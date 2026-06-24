@@ -93,6 +93,37 @@ def test_constraints_block_conflicting_install(tmp_path):
     assert proc.returncode != 0, f"constraint should have blocked the downgrade:\n{out[:600]}"
 
 
+# ── env diagnostics (the agent's read layer for troubleshooting) ─────────────
+def test_python_package_status_good():
+    from core.exec.env_integrity import python_package_status
+    st = python_package_status("json", extra_paths=[])
+    assert st["loads"] is True and st["error"] is None
+    assert st["version"] is not None or st["location"] is not None
+
+
+def test_python_package_status_missing():
+    from core.exec.env_integrity import python_package_status
+    st = python_package_status("no_such_pkg_zzz", extra_paths=[])
+    assert st["loads"] is False and st["error"]
+
+
+def test_python_package_status_present_but_broken(tmp_path):
+    from core.exec.env_integrity import python_package_status
+    pkg = tmp_path / "abadbg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("raise ImportError('numpy.core.multiarray failed to import')\n")
+    st = python_package_status("abadbg", extra_paths=[str(tmp_path)])
+    assert st["loads"] is False and "multiarray" in st["error"]
+
+
+def test_env_overview_shape():
+    from core.exec.env_integrity import env_overview
+    ov = env_overview("prjX")
+    assert {"python", "shared_overlay", "project_overlay", "base_lock"} <= set(ov)
+    assert ov["project_overlay"]["project_id"] == "prjX"
+    assert "pylib_proj" in (ov["project_overlay"]["dir"] or "")
+
+
 # ── R (wrapper logic; real Rscript load is exercised in the R-scenario test) ──
 def test_verify_r_library_wraps_r_has_package(monkeypatch):
     import core.exec.r as r

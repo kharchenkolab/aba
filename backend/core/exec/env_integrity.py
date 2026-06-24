@@ -119,6 +119,112 @@ def ensure_base_constraints(*, force: bool = False,
     return path
 
 
+def _tier_of(location: Optional[str], project_id: Optional[str]) -> str:
+    """Classify where a loaded module's file lives: base | shared-overlay |
+    project-overlay | unknown — so the agent knows which tier owns it."""
+    if not location:
+        return "unknown"
+    loc = str(location)
+    from core.exec.materialize import pylib_paths, project_pylib_paths
+    for p in project_pylib_paths(project_id):
+        if loc.startswith(str(p)):
+            return "project-overlay"
+    for p in pylib_paths():
+        if loc.startswith(str(p)):
+            return "shared-overlay"
+    return "base"
+
+
+def python_package_status(name: str, *, project_id: Optional[str] = None,
+                          extra_paths: Optional[Sequence[str]] = None,
+                          timeout_s: int = 120) -> dict:
+    """Diagnose one Python package on the runtime path (base + overlays):
+    ``{name, loads, version, location, tier, error}``. ``loads=False`` with a
+    populated ``error`` is the present-but-broken case (ABI mismatch / partial
+    install) — the troubleshooting signal the agent needs."""
+    out: dict = {"name": name, "loads": False, "version": None,
+                 "location": None, "tier": "unknown", "error": None}
+    if not name:
+        out["error"] = "no name"
+        return out
+    if project_id is None:
+        from core import projects
+        project_id = projects.current()
+    if extra_paths is None:
+        from core.exec.materialize import pylib_paths, project_pylib_paths
+        extra_paths = ([str(p) for p in pylib_paths()]
+                       + [str(p) for p in project_pylib_paths(project_id)])
+    appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
+    script = (
+        "import sys, json, importlib\n"
+        "import importlib.metadata as _md\n"
+        f"{appends}"
+        f"o = {{'name': {name!r}}}\n"
+        "try:\n"
+        f"    m = importlib.import_module({name!r})\n"
+        "    o['loads'] = True\n"
+        "    o['location'] = getattr(m, '__file__', None)\n"
+        "    try:\n"
+        f"        o['version'] = _md.version({name!r})\n"
+        "    except Exception:\n"
+        "        o['version'] = getattr(m, '__version__', None)\n"
+        "except Exception:\n"
+        "    import traceback\n"
+        "    o['loads'] = False\n"
+        "    o['error'] = traceback.format_exc()[-1000:]\n"
+        "print('ABA_JSON=' + json.dumps(o))\n"
+    )
+    try:
+        proc = subprocess.run([sys.executable, "-c", script],
+                              capture_output=True, text=True, timeout=timeout_s)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"could not run diagnostic: {e}"
+        return out
+    import json as _json
+    for ln in (proc.stdout or "").splitlines():
+        if ln.startswith("ABA_JSON="):
+            try:
+                out.update(_json.loads(ln[len("ABA_JSON="):]))
+            except Exception:  # noqa: BLE001
+                pass
+            break
+    out["tier"] = _tier_of(out.get("location"), project_id)
+    return out
+
+
+def env_overview(project_id: Optional[str] = None) -> dict:
+    """A map of the Python tiers + their state — the no-package 'where am I'
+    view: base interpreter, shared overlay, this project's overlay, and whether
+    the base lock exists."""
+    from core.exec.materialize import (PYLIB_DIR, pylib_paths,
+                                       project_pylib_dir, project_pylib_paths)
+    if project_id is None:
+        from core import projects
+        project_id = projects.current()
+
+    def _populated(paths) -> bool:
+        for p in paths:
+            try:
+                if Path(p).exists() and any(Path(p).iterdir()):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
+    return {
+        "python": sys.executable,
+        "shared_overlay": {"dir": str(PYLIB_DIR),
+                           "populated": _populated(pylib_paths())},
+        "project_overlay": {
+            "project_id": project_id,
+            "dir": str(project_pylib_dir(project_id)) if project_id else None,
+            "populated": _populated(project_pylib_paths(project_id)),
+        },
+        "base_lock": {"path": str(base_constraints_path()),
+                      "exists": base_constraints_path().exists()},
+    }
+
+
 def verify_r_library(libname: str, project_id: Optional[str] = None) -> tuple[bool, str]:
     """R analog of verify_python_imports: does ``library(libname)`` actually
     load (in the project's .libPaths + the shared base)? Wraps the existing

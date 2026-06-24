@@ -87,6 +87,7 @@ from .discovery import (    # noqa: F401, E402
     _detect_import_name,
     _overlay_has_import,
     inspect_package,
+    inspect_env,
     ensure_capability,
     propose_capability_tool,
     fetch_url,

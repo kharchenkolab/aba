@@ -187,6 +187,22 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                      peek_ctx(aba_ctx_id))
 
     @mcp.tool()
+    def inspect_env(name: str | None = None,
+                    language: Literal["python", "r"] = "python",
+                    aba_ctx_id: str | None = None) -> dict:
+        """Diagnose the runtime ENVIRONMENT (the read layer for env trouble) —
+        unlike inspect_package (which learns an *importable* package's API),
+        this tells you whether/why something loads. With `name`: does it load
+        (real import / library()), its version, which tier owns it (base /
+        shared-overlay / project-overlay), and the error if it's
+        present-but-broken (ABI mismatch / partial install). Without `name`: an
+        overview of the env tiers + base-lock state. Use it to troubleshoot a
+        failed install or a package that 'is there' but won't import."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import inspect_env as _impl
+        return _impl({"name": name, "language": language}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def ensure_capability(name: str,
                           source: str | None = None,
                           package: str | None = None,
