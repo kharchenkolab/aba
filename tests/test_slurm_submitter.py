@@ -34,6 +34,19 @@ from core.graph.jobs import create_job, get_job              # noqa: E402
 
 projects.init()
 
+
+def _run_async(coro):
+    """Run a coroutine with a valid current loop even if a prior async test
+    closed the global one (py3.12 get_event_loop quirk)."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
 _FAKE_SBATCH = r'''#!/usr/bin/env python3
 import sys, os, json
 from pathlib import Path
@@ -207,6 +220,5 @@ def test_poll_loop_finalizes_to_done(slurm):
     j = actives[0]
     result = get_submitter().poll(j)
     assert result is not None
-    asyncio.get_event_loop().run_until_complete(
-        _finalize_job(j, result, j["project_id"], j["project_id"]))
+    _run_async(_finalize_job(j, result, j["project_id"], j["project_id"]))
     assert get_job(job["id"], project_id=pid)["status"] == "done"
