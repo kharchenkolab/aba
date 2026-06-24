@@ -580,10 +580,20 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
-    # §11.2: env=<named isolated env> routes out of the served-stack path.
+    # §11.3: env=<named isolated env> runs in THAT env's persistent kernel — the
+    # same interactive kernel path below, just a distinct scope-key + the env's
+    # python (so state persists + plots harvest, unlike the old one-shot). Default/
+    # reserved → the normal served stack. Kernel disabled → stateless fallback.
     env = input_.get("env")
-    if not _is_default_env(env):
-        return _run_in_named_env(env, code, "python", timeout_s)
+    env_name = None if _is_default_env(env) else env.strip()
+    if env_name:
+        from core.exec import isolated_env as iso
+        if not iso.env_python(env_name).exists():
+            return {"status": "error", "env": env_name,
+                    "note": f"No isolated env '{env_name}'. Create it with "
+                            f"make_isolated_env(name='{env_name}')."}
+        if not KERNEL_ENABLED:   # kernels off → stateless one-shot fallback
+            return _run_in_named_env(env_name, code, "python", timeout_s)
 
     # Lane selection (kernels.md §7): background > fresh > interactive.
     # - background: stateless job, deferred result the guide loop resumes from.
@@ -594,7 +604,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
-    if choice.location == "background":
+    if choice.location == "background" and not env_name:
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
@@ -610,7 +620,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
 
     # Interactive persistent kernel — the default. State persists across calls
     # within this thread, so the agent reuses loaded data / fitted models.
-    if KERNEL_ENABLED and not input_.get("fresh"):
+    if KERNEL_ENABLED and (env_name or not input_.get("fresh")):
         try:
             from datetime import datetime as _dt, timezone as _tz
             from core.exec.kernels import get_pool
@@ -620,8 +630,13 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             cwd = _run_scratch_cwd(str(project_id), str(thread_id))
             start_ts = _time.time()
             started_iso = _dt.now(_tz.utc).isoformat()
-            sess = get_pool().get_or_start(str(thread_id), "python",
-                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+            # §11.3: an isolated env gets its own persistent kernel (distinct
+            # scope-key + the env's python); the shared thread scratch cwd is
+            # reused so files hand off to/from the default kernel.
+            scope_key = str(thread_id) if not env_name else f"{thread_id}::env::{env_name}"
+            sess = get_pool().get_or_start(scope_key, "python",
+                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
+                                           env_name=env_name)
             _ensure_kernel_cwd(sess, "python", cwd)
             res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
@@ -637,6 +652,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
                    "returncode": res.returncode, "plots": plots, "tables": tables,
                    "files": files, "execution_mode": "session"}
+            if env_name:
+                out["env"] = env_name
             # Stage 1 exec record — written after harvest so produced[] is
             # populated. Best-effort: failure here is logged, never blocks
             # the user-visible result. exec_id surfaces in `out` so the

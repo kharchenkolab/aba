@@ -142,8 +142,12 @@ def test_run_python_env_missing_is_helpful(iso_root, monkeypatch):
 
 
 def test_run_python_env_executes_in_isolated(iso_root, monkeypatch):
+    """Stateless-fallback path (KERNEL_ENABLED off) — deterministic + no kernel
+    spawn. The stateful per-env kernel is covered by the integration/live tests."""
+    import core.config as _cfg
     from core import projects
     monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)
     assert make_isolated_env({"name": "envrun"})["status"] == "ok"
     r = run_python({"code": "print('ENV_RUN_OK')", "env": "envrun"})
     assert r["status"] == "ok" and "ENV_RUN_OK" in r["stdout"] and r["env"] == "envrun"

@@ -20,7 +20,7 @@ class KernelPool:
         self._ttl = idle_ttl
         self._reaper_started = False
 
-    def get_or_start(self, scope_key: str, lang: str, *, cwd: str):
+    def get_or_start(self, scope_key: str, lang: str, *, cwd: str, env_name: str | None = None):
         from core.exec.kernels.jupyter import JupyterKernelSession
         with self._lock:
             self._start_reaper()
@@ -35,7 +35,7 @@ class KernelPool:
             while len(self._sessions) >= self._max:
                 lru = min(self._sessions, key=lambda k: self._sessions[k].last_used)
                 self._sessions.pop(lru).shutdown()
-            s = JupyterKernelSession(scope_key, lang, cwd=cwd)
+            s = JupyterKernelSession(scope_key, lang, cwd=cwd, env_name=env_name)
             self._sessions[key] = s
             return s
 

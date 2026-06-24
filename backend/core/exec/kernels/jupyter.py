@@ -55,6 +55,37 @@ def _ensure_python_kernelspec() -> str:
     return _SPEC_NAME
 
 
+_env_specs_ready: set = set()
+
+
+def _ensure_env_python_kernelspec(env_name: str) -> str:
+    """Register a kernelspec whose interpreter is the ISOLATED env's python (so a
+    kernel launched from it sees that env's packages, standalone — §11.3).
+    Installs ipykernel into the env on first use. Idempotent. Returns spec name."""
+    import subprocess
+    from core.exec import isolated_env as iso
+    py = iso.env_python(env_name)
+    if not py.exists():
+        raise RuntimeError(f"isolated env {env_name!r} does not exist")
+    spec_name = f"aba-env-{env_name}"
+    if spec_name in _env_specs_ready:
+        return spec_name
+    # ipykernel must live IN the env (the kernel runs as the env's python).
+    if subprocess.run([str(py), "-c", "import ipykernel"],
+                      capture_output=True).returncode != 0:
+        ins = subprocess.run([str(py), "-m", "pip", "install", "-q", "ipykernel"],
+                             capture_output=True, text=True, timeout=600)
+        if ins.returncode != 0:
+            raise RuntimeError(f"could not install ipykernel into env {env_name!r}: "
+                               f"{(ins.stderr or ins.stdout or '')[-400:]}")
+    subprocess.run(
+        [str(py), "-m", "ipykernel", "install", "--user",
+         "--name", spec_name, "--display-name", f"ABA env {env_name}"],
+        capture_output=True, text=True, timeout=120)
+    _env_specs_ready.add(spec_name)
+    return spec_name
+
+
 def _r_spec_points_into(spec_name: str, tenv: Path) -> bool:
     """True iff kernelspec `spec_name` exists and its R binary (argv[0]) is a real
     file inside our tools env. Guards against a stale/foreign spec that points at a
@@ -231,6 +262,22 @@ def _setup_code(cwd: str) -> str:
     )
 
 
+def _env_setup_code(cwd: str) -> str:
+    """First cell for an ISOLATED-env kernel (§11.3). Unlike `_setup_code`, it does
+    NOT append the shared/project overlays or set PIP_PREFIX — the env is
+    standalone (its own site-packages; a bare `pip install` lands in the env). Just
+    DATA_DIR / WORK_DIR / headless mpl / the tools-env PATH + harvest helpers."""
+    data_dir, _ = _project_data_artifacts()
+    return (
+        "import sys as _sys, os as _os\n"
+        f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
+        "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
+        f"DATA_DIR = {str(data_dir)!r}\n"
+        f"WORK_DIR = {str(cwd)!r}\n"
+        + _harvest_helpers_py()
+    )
+
+
 def _harvest_helpers_py() -> str:
     """Python `harvest_table()` helper, injected at kernel startup.
 
@@ -329,16 +376,19 @@ def _kernel_env(lang: str, cwd: str) -> dict:
 
 
 class JupyterKernelSession:
-    def __init__(self, scope_key: str, lang: str, *, cwd: str):
+    def __init__(self, scope_key: str, lang: str, *, cwd: str, env_name: str | None = None):
         from jupyter_client import KernelManager
         self.scope_key = scope_key
         self.lang = lang
+        self.env_name = env_name
         self.last_used = time.time()
         self.alive = False
         self._cancel_grace_s = _CANCEL_GRACE_S
         Path(cwd).mkdir(parents=True, exist_ok=True)
         if lang == "r":
             kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
+        elif env_name:  # §11.3 isolated-env kernel: the env's python, standalone setup
+            kernel_name, setup, setup_to = _ensure_env_python_kernelspec(env_name), _env_setup_code(cwd), 60
         else:
             kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
