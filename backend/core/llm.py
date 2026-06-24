@@ -94,22 +94,39 @@ class _RealStream:
         if tools:
             tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
         messages = [{"role": m["role"], "content": m["content"]} for m in self._history]
-        # Debug: persist the EXACT, replayable ("callable") request — raw system
-        # string, raw tool schemas, and the real messages (valid API format, with
-        # tool_results — unlike the distilled turn-context .md). Set ABA_RAW_REQUEST_DIR
-        # to enable; one file per API call. Load it and pass straight to
-        # client.messages.create(**payload) to replay/modify the real failure prompt.
-        # Default: /tmp/aba_llm_sent. Set to "off" or "0" to disable.
+        # Cache_control on the last message's last block — the third (of
+        # three) caching breakpoint. Done BEFORE the dump so the persisted
+        # payload reflects what the API actually sees (was previously
+        # written without this marker, which made the dump misleading
+        # about caching behavior).
+        if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \
+                and isinstance(messages[-1]["content"][-1], dict):
+            c = messages[-1]["content"]
+            messages[-1] = {**messages[-1],
+                            "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
+        # max_tokens caps a single assistant turn's output. 4096 was too tight:
+        # when the agent emits a tool_use with large `code` content (e.g.
+        # writing a multi-KB markdown recipe via run_python), the stream cuts
+        # off mid-input, the SDK can't parse the partial JSON, and the tool_use
+        # ends up with empty input — silent fail downstream (verified live
+        # 2026-06-01, prj_8d699668 thr_97a96441). Env override so it's tunable.
+        max_tok = int(os.environ.get("ABA_MAX_TOKENS", "16000"))
+        # Debug: persist the EXACT, replayable ("callable") request — the
+        # structured system (list with cache_control on the stable prefix),
+        # tools (cache_control on the last), and messages (cache_control on
+        # the last block). Same kwargs the stream call below receives, so
+        # `json.load(open(f)); client.messages.create(**payload)` reproduces
+        # the request — including its caching behavior — byte-for-byte. Set
+        # ABA_RAW_REQUEST_DIR to redirect; default /tmp/aba_llm_sent; "off"
+        # / "0" / "" disables.
         import os as _os, hashlib as _hashlib, time as _time
         import json as _json
         _rawdir = _os.environ.get("ABA_RAW_REQUEST_DIR", "/tmp/aba_llm_sent")
         if _rawdir and _rawdir.lower() not in ("off", "0", "false", ""):
             try:
                 _os.makedirs(_rawdir, exist_ok=True)
-                _payload = {"model": self._model, "max_tokens": 4096,
-                            "system": (self._system + ("\n\n" + self._dynamic_system
-                                                       if self._dynamic_system else "")),
-                            "tools": self._tools, "messages": messages}
+                _payload = {"model": self._model, "max_tokens": max_tok,
+                            "system": system, "tools": tools, "messages": messages}
                 _ts = int(_time.time() * 1000)
                 _fn = _os.path.join(_rawdir, f"req_{_ts}.json")
                 with open(_fn, "w") as _f:
@@ -133,18 +150,6 @@ class _RealStream:
                       flush=True)
             except Exception:  # noqa: BLE001 — debug dump must never break a turn
                 pass
-        if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \
-                and isinstance(messages[-1]["content"][-1], dict):
-            c = messages[-1]["content"]
-            messages[-1] = {**messages[-1],
-                            "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
-        # max_tokens caps a single assistant turn's output. 4096 was too tight:
-        # when the agent emits a tool_use with large `code` content (e.g.
-        # writing a multi-KB markdown recipe via run_python), the stream cuts
-        # off mid-input, the SDK can't parse the partial JSON, and the tool_use
-        # ends up with empty input — silent fail downstream (verified live
-        # 2026-06-01, prj_8d699668 thr_97a96441). Env override so it's tunable.
-        max_tok = int(os.environ.get("ABA_MAX_TOKENS", "16000"))
         self._cm = self._client.messages.stream(
             model=self._model, max_tokens=max_tok, system=system, tools=tools, messages=messages,
         )
