@@ -45,32 +45,17 @@ def _isolated_root() -> Path:
 
 
 def _proj_root(project_id=None) -> Path:
-    """A project's own isolated envs (§11.6 project-scoped — the default)."""
+    """A project's own isolated envs (§11.6 project-scoped). Isolated envs are
+    PURELY per-project — the install-wide foundation is the (immutable) base, so
+    there's no separate shared isolated tier. Two projects' same-named envs are
+    physically distinct dirs and never collide."""
     from core import projects
     pid = project_id or projects.current() or "_none"
     return _isolated_root() / "proj" / str(pid)
 
 
-def _shared_root() -> Path:
-    """Restricted install-wide envs, shared across projects (resolution fallback)."""
-    return _isolated_root() / "shared"
-
-
-def _resolve_root(name: str, project_id=None) -> Path:
-    """The dir CONTAINING this env — the project's own env if present, else a shared
-    install-wide env if THAT is present, else the project root (creation target).
-    So a project NEVER collides with another project's same-named env."""
-    proot = _proj_root(project_id)
-    if (proot / name).exists() or (proot / f"r-{name}").exists():
-        return proot
-    sroot = _shared_root()
-    if (sroot / name).exists() or (sroot / f"r-{name}").exists():
-        return sroot
-    return proot
-
-
 def env_dir(name: str, project_id=None) -> Path:
-    return _resolve_root(name, project_id) / str(name)
+    return _proj_root(project_id) / str(name)
 
 
 def env_python(name: str, project_id=None) -> Path:
@@ -166,14 +151,11 @@ def run_in(name: str, code: str, *, timeout_s: int = 600) -> dict:
 
 
 def list_envs(project_id=None) -> list[str]:
-    """The current project's own python envs + the shared install-wide ones."""
-    out = set()
-    for root in (_proj_root(project_id), _shared_root()):
-        if root.exists():
-            for p in root.iterdir():
-                if (p / "bin" / "python").exists():
-                    out.add(p.name)
-    return sorted(out)
+    """The project's own python envs."""
+    root = _proj_root(project_id)
+    if not root.exists():
+        return []
+    return sorted(p.name for p in root.iterdir() if (p / "bin" / "python").exists())
 
 
 def remove_env(name: str, project_id=None) -> bool:
@@ -226,7 +208,7 @@ def set_active_env(project_id: str, name: str, lang: str = "python") -> dict:
 # ── per-env spec + lock (§11.6) — persists OUTSIDE the built env dir so it
 #    survives GC; lets a reclaimed env rebuild reproducibly on next use. ──
 def env_spec_path(name: str, project_id=None) -> Path:
-    return _resolve_root(name, project_id) / "_specs" / f"{name}.json"
+    return _proj_root(project_id) / "_specs" / f"{name}.json"
 
 
 def capture_env_spec(name: str, *, language: str = "python", packages=None) -> dict:
@@ -283,7 +265,7 @@ def ensure_env_built(name: str, *, timeout_s: int = 1800) -> bool:
 # ── lazy GC (§11.6): reclaim the built bytes of idle, rebuildable envs; the spec
 #    stays so the next use rebuilds from the lock transparently. ──
 def env_used_marker(name: str, project_id=None) -> Path:
-    return _resolve_root(name, project_id) / "_specs" / f"{name}.used"
+    return _proj_root(project_id) / "_specs" / f"{name}.used"
 
 
 def touch_env(name: str) -> None:
@@ -314,8 +296,6 @@ def gc_isolated_envs(*, max_idle_s: int = 30 * 86400, dry_run: bool = False) -> 
     roots: list[Path] = []
     if (isr / "proj").exists():
         roots += [d for d in (isr / "proj").iterdir() if d.is_dir()]
-    if (isr / "shared").exists():
-        roots.append(isr / "shared")
     for root in roots:
         for p in root.iterdir():
             if not (p / "bin" / "python").exists():
@@ -346,7 +326,7 @@ def gc_isolated_envs(*, max_idle_s: int = 30 * 86400, dry_run: bool = False) -> 
 # project-independent lib for a one-off conflicting install.
 
 def r_env_lib(name: str, project_id=None) -> Path:
-    return _resolve_root(name, project_id) / f"r-{name}"
+    return _proj_root(project_id) / f"r-{name}"
 
 
 def r_create_env(name: str) -> dict:

@@ -176,18 +176,6 @@ def test_envs_are_project_scoped_no_collision(iso_root, monkeypatch):
     assert iso.env_python("dup", "projA").exists()                  # A's is untouched
 
 
-def test_shared_env_is_resolution_fallback(iso_root, monkeypatch):
-    from core.exec import isolated_env as iso
-    from core import projects
-    binp = iso._shared_root() / "tool" / "bin"
-    binp.mkdir(parents=True); (binp / "python").write_text("")      # a restricted install-wide env
-    monkeypatch.setattr(projects, "current", lambda: "anyproj", raising=False)
-    assert str(iso.env_dir("tool")).replace("\\", "/").endswith("shared/tool")  # resolves to shared
-    assert "tool" in iso.list_envs()
-    iso.create_env("tool")                                          # project's own shadows shared
-    assert "proj/anyproj/tool" in str(iso.env_dir("tool")).replace("\\", "/")
-
-
 # ── §11 Increment 4: per-env spec/lock + rebuild ─────────────────────────────
 def test_env_spec_capture_and_load(iso_root):
     from core.exec import isolated_env as iso

@@ -425,9 +425,9 @@ def env_layers(project_id: Optional[str] = None) -> dict:
             r_proj_lib = project_r_lib(project_id)
     except Exception:  # noqa: BLE001
         pass
-    for root in (iso._proj_root(project_id), iso._shared_root()):
-        if root.exists():
-            iso_r += sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("r-"))
+    _proot = iso._proj_root(project_id)
+    if _proot.exists():
+        iso_r += sorted(p for p in _proot.iterdir() if p.is_dir() and p.name.startswith("r-"))
     all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else []) + iso_r
     by = _r_packages_by_lib(all_r_libs)
 
