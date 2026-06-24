@@ -404,11 +404,11 @@ def env_layers(project_id: Optional[str] = None) -> dict:
             {"tier": "project overlay", "scope": "project", "project_id": project_id,
              "delivery": "on-demand", "mutable": True, "path": str(project_pylib_dir(project_id)),
              "packages": _py_packages([str(p) for p in project_pylib_paths(project_id)])})
-    for name in iso.list_envs():
+    for name in iso.list_envs(project_id):
         py_layers.append(
             {"tier": "isolated", "scope": "capability", "delivery": "on-demand", "mutable": True,
-             "name": name, "path": str(iso.env_dir(name)),
-             "packages": _py_packages(_site_paths(iso.env_dir(name)))})
+             "name": name, "path": str(iso.env_dir(name, project_id)),
+             "packages": _py_packages(_site_paths(iso.env_dir(name, project_id)))})
     lock = ensure_base_constraints()
     py = {"engine": "pip + venv", "layers": py_layers,
           "lock": {"path": str(lock) if lock else None,
@@ -425,9 +425,9 @@ def env_layers(project_id: Optional[str] = None) -> dict:
             r_proj_lib = project_r_lib(project_id)
     except Exception:  # noqa: BLE001
         pass
-    iso_root = iso._isolated_root()
-    if iso_root.exists():
-        iso_r = sorted(p for p in iso_root.iterdir() if p.is_dir() and p.name.startswith("r-"))
+    for root in (iso._proj_root(project_id), iso._shared_root()):
+        if root.exists():
+            iso_r += sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("r-"))
     all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else []) + iso_r
     by = _r_packages_by_lib(all_r_libs)
 
