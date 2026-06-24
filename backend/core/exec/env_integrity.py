@@ -83,22 +83,12 @@ def base_constraints_path() -> Path:
     return Path(ENVS_DIR) / "base-constraints.txt"
 
 
-def ensure_base_constraints(*, force: bool = False,
-                            python_exe: Optional[str] = None) -> Optional[Path]:
-    """Generate (cached) a pip **constraints** file pinning the install-wide base
-    so an overlay install can't move numpy / scipy / etc. or pull an
-    incompatible-ABI wheel — it must satisfy the pin or fail loudly. The pin is
-    ``pip freeze`` of the base interpreter, filtered to clean ``name==version``
-    lines (drops editable / URL / VCS entries that are invalid as constraints).
+_PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
 
-    Returns the path, or ``None`` if it couldn't be produced — in which case the
-    caller falls back to an unconstrained install with a logged warning (the
-    guard is best-effort; never block a real install on constraint generation).
-    Re-lock the base by calling with ``force=True`` after a deliberate base
-    change (the env_refactor.md "re-solve + re-lock" operation)."""
-    path = base_constraints_path()
-    if path.exists() and not force:
-        return path
+
+def _freeze_pins(python_exe: Optional[str] = None) -> Optional[list[str]]:
+    """`pip freeze` of an interpreter → clean ``name==version`` lines (drops
+    editable/URL/VCS entries that are invalid as constraints). None on failure."""
     exe = python_exe or sys.executable
     try:
         proc = subprocess.run([exe, "-m", "pip", "freeze"],
@@ -107,8 +97,40 @@ def ensure_base_constraints(*, force: bool = False,
         return None
     if proc.returncode != 0:
         return None
-    pin = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
-    lines = [ln for ln in (proc.stdout or "").splitlines() if pin.match(ln)]
+    lines = [ln for ln in (proc.stdout or "").splitlines() if _PIN_RE.match(ln)]
+    return lines or None
+
+
+def canonical_lock_path() -> Optional[Path]:
+    """A shipped/committed **canonical** base lock (the FULL intended scientific
+    stack, pinned), if configured via ``$ABA_BASE_LOCK``. Preferred over the
+    live-generated freeze so that on a MINIMAL install, on-demand installs still
+    pin to the canonical versions (env_refactor.md P6, lazy-from-lock). None if
+    not configured / missing."""
+    import os
+    p = os.environ.get("ABA_BASE_LOCK")
+    return Path(p) if (p and Path(p).exists()) else None
+
+
+def ensure_base_constraints(*, force: bool = False,
+                            python_exe: Optional[str] = None) -> Optional[Path]:
+    """The constraints file pinning the install-wide base so an overlay install
+    can't move numpy / scipy or pull an incompatible-ABI wheel — it must satisfy
+    the pin or fail loudly.
+
+    Resolution order (P6): a shipped **canonical lock** (`$ABA_BASE_LOCK`) wins —
+    so a minimal/lazy install pins to the full intended base; else the cached
+    freeze; else generate one from the live base. Returns the path or ``None``
+    (caller falls back to unconstrained + a logged warning — best-effort; never
+    block a real install on lock generation). ``force=True`` re-locks from the
+    live base (the "re-solve + re-lock" op)."""
+    canon = canonical_lock_path()
+    if canon is not None:
+        return canon
+    path = base_constraints_path()
+    if path.exists() and not force:
+        return path
+    lines = _freeze_pins(python_exe)
     if not lines:
         return None
     try:
@@ -117,6 +139,50 @@ def ensure_base_constraints(*, force: bool = False,
     except Exception:  # noqa: BLE001
         return None
     return path
+
+
+def write_base_lock(out_path, *, python_exe: Optional[str] = None) -> Optional[Path]:
+    """Produce a **canonical** base lock by freezing the COMPLETE base — run on a
+    fully-provisioned box, ship/commit the result, and point ``$ABA_BASE_LOCK``
+    at it on minimal installs so they materialize the stack from the lock
+    (env_refactor.md P6). Returns the path written, or None."""
+    lines = _freeze_pins(python_exe)
+    if not lines:
+        return None
+    out = Path(out_path)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    return out
+
+
+def materialize_from_lock(packages: Sequence[str], *, prefix=None,
+                          timeout_s: int = 1800) -> dict:
+    """Install ``packages`` PINNED to the base lock — lazy base-fill / pre-warm
+    for a minimal install (env_refactor.md P6). Defaults to the shared
+    install-wide overlay; constrained so versions match the canonical lock.
+    Returns {ok, installed, lock, error}."""
+    lock = ensure_base_constraints()
+    from core.exec.materialize import PYLIB_DIR
+    target = Path(prefix) if prefix is not None else PYLIB_DIR
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target)]
+    if lock:
+        cmd += ["-c", str(lock)]
+    cmd += list(packages)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "installed": list(packages), "lock": str(lock) if lock else None,
+                "error": f"materialize timed out after {timeout_s}s"}
+    ok = proc.returncode == 0
+    return {"ok": ok, "installed": list(packages), "lock": str(lock) if lock else None,
+            "error": None if ok else (proc.stderr or proc.stdout or "")[-1200:]}
 
 
 def _tier_of(location: Optional[str], project_id: Optional[str]) -> str:
