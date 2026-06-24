@@ -1430,6 +1430,25 @@ def jobs_get(job_id: str):
     return j
 
 
+@app.get("/api/jobs/{job_id}/hpc")
+def jobs_hpc(job_id: str):
+    """Live scheduler info for a Slurm-submitted job (state/node/elapsed/cores) —
+    the (i) Jobs tab fetches this for a running HPC job. Empty for local jobs."""
+    j = get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id} not found")
+    from core.exec.hpc_session import job_hpc_info
+    return job_hpc_info(j)
+
+
+@app.get("/api/hpc/session")
+def hpc_session():
+    """The ABA process' own compute allocation (Slurm node/cores/walltime, or the
+    local CPU picture) for the (i) drawer's HPC session card."""
+    from core.exec.hpc_session import session_allocation
+    return session_allocation()
+
+
 @app.post("/api/jobs/{job_id}/cancel")
 def jobs_cancel(job_id: str, _pid: str = Depends(require_project)):
     ok = cancel_job(job_id)

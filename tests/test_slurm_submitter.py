@@ -239,3 +239,21 @@ def test_estimate_threads_into_resources(slurm, monkeypatch):
     assert get_job(job["id"], project_id=pid)["params"]["estimate"]["cores"] == 8
     args = args_file.read_text()
     assert "--cpus-per-task=8" in args and "--partition=long" in args
+
+
+def test_session_allocation_local(monkeypatch):
+    from core.exec.hpc_session import session_allocation
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_JOBID", raising=False)
+    monkeypatch.setenv("ABA_BATCH_SUBMITTER", "local")
+    sa = session_allocation()
+    assert sa["on_slurm"] is False and sa["cores"] > 0 and sa["submitter"] == "local"
+
+
+def test_session_allocation_slurm(slurm, monkeypatch):
+    from core.exec.hpc_session import session_allocation
+    monkeypatch.setenv("SLURM_JOB_ID", "999")
+    monkeypatch.setenv("FAKE_SQUEUE_LINE", "node09|2:00:00|short|4|8G|0:30")
+    sa = session_allocation()
+    assert sa["on_slurm"] and sa["slurm_job_id"] == "999"
+    assert sa["node"] == "node09" and sa["time_left"] == "2:00:00" and sa["partition"] == "short"
