@@ -593,7 +593,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     env_name = None if _is_default_env(env) else env.strip()
     if env_name:
         from core.exec import isolated_env as iso
-        if not iso.env_python(env_name).exists():
+        # §11.6: a reclaimed env rebuilds from its lock here, transparently.
+        if not iso.ensure_env_built(env_name):
             return {"status": "error", "env": env_name,
                     "note": f"No isolated env '{env_name}'. Create it with "
                             f"make_isolated_env(name='{env_name}')."}

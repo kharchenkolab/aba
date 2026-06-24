@@ -148,10 +148,11 @@ def list_envs() -> list[str]:
 
 def remove_env(name: str) -> bool:
     d = env_dir(name)
-    if d.exists():
+    existed = d.exists()
+    if existed:
         shutil.rmtree(d, ignore_errors=True)
-        return True
-    return False
+    env_spec_path(name).unlink(missing_ok=True)   # §11.6: drop the spec too (full removal)
+    return existed
 
 
 # ── active env pointer (§11.2) — per-project, per-language. Bare run_python /
@@ -187,6 +188,58 @@ def set_active_env(project_id: str, name: str, lang: str = "python") -> dict:
     data[lang] = name
     f.write_text(json.dumps(data))
     return {"lang": lang, "active": name}
+
+
+# ── per-env spec + lock (§11.6) — persists OUTSIDE the built env dir so it
+#    survives GC; lets a reclaimed env rebuild reproducibly on next use. ──
+def env_spec_path(name: str) -> Path:
+    return _isolated_root() / "_specs" / f"{name}.json"
+
+
+def capture_env_spec(name: str, *, language: str = "python", packages=None) -> dict:
+    """Snapshot an env to a persistent spec: the requested packages + (Python) a
+    pip-freeze lock for pinned, reproducible rebuild."""
+    import json
+    spec = {"name": name, "language": language, "packages": list(packages or [])}
+    if language == "python":
+        py = env_python(name)
+        if py.exists():
+            fr = subprocess.run([str(py), "-m", "pip", "freeze", "--local"],
+                                capture_output=True, text=True, timeout=120)
+            if fr.returncode == 0:
+                spec["lock"] = [ln.strip() for ln in fr.stdout.splitlines()
+                                if "==" in ln and not ln.startswith("-e")]
+    p = env_spec_path(name)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(spec))
+    return spec
+
+
+def load_env_spec(name: str):
+    import json
+    p = env_spec_path(name)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def ensure_env_built(name: str, *, timeout_s: int = 1800) -> bool:
+    """True iff the built env exists — rebuilding it from its lock if a GC reclaimed
+    the bytes (§11.6 lazy rebuild). Fast no-op when the env is already on disk."""
+    if env_python(name).exists():
+        return True
+    spec = load_env_spec(name)
+    if not spec or spec.get("language") != "python":
+        return False
+    create_env(name)
+    pkgs = spec.get("lock") or spec.get("packages") or []
+    if pkgs:
+        subprocess.run([str(env_python(name)), "-m", "pip", "install", "-q", *pkgs],
+                       capture_output=True, text=True, timeout=timeout_s)
+    return env_python(name).exists()
 
 
 # ── R isolated environments (env_refactor.md P3) ─────────────────────────────

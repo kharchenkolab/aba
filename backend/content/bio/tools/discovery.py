@@ -144,6 +144,7 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
     engine = info["engine"]
     if not packages:
+        iso.capture_env_spec(name, language=lang, packages=[])   # §11.6 spec/lock
         _run = "run_r" if is_r else "run_python"
         return {"status": "ok", "name": name, "language": lang, "engine": engine,
                 "note": f"Isolated {label} env {name!r} ready ({engine}); install packages "
@@ -154,10 +155,12 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "name": name, "language": lang, "engine": engine,
                 "installed": packages, "error": res.get("error"),
                 "note": "Isolated env created, but the install failed — see error."}
+    iso.capture_env_spec(name, language=lang, packages=packages)   # §11.6 spec/lock
+    _run = "run_r" if is_r else "run_python"
     return {"status": "ok", "name": name, "language": lang, "engine": engine,
             "installed": res["installed"], "verified": res.get("verified"),
             "note": f"Isolated {label} env {name!r} ready ({engine}); run code in it with "
-                    f"run_in_isolated_env(name={name!r}, language={lang!r}, code=…)."}
+                    f"{_run}(env={name!r}, code=…)."}
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:

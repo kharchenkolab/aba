@@ -162,6 +162,49 @@ def test_run_python_default_does_not_route_isolated(monkeypatch):
     assert _is_default_env(None) and _is_default_env("default")
 
 
+# ── §11 Increment 4: per-env spec/lock + rebuild ─────────────────────────────
+def test_env_spec_capture_and_load(iso_root):
+    from core.exec import isolated_env as iso
+    iso.create_env("specA")
+    iso.capture_env_spec("specA", language="python", packages=["x"])
+    spec = iso.load_env_spec("specA")
+    assert spec and spec["name"] == "specA" and spec["language"] == "python"
+    assert spec["packages"] == ["x"] and "lock" in spec  # pip-freeze of the fresh venv
+
+
+def test_ensure_env_built_noop_when_present(iso_root):
+    from core.exec import isolated_env as iso
+    iso.create_env("specB"); iso.capture_env_spec("specB", packages=[])
+    assert iso.ensure_env_built("specB") is True   # already on disk → fast no-op
+
+
+def test_ensure_env_built_rebuilds_from_lock(iso_root):
+    import shutil, subprocess
+    from core.exec import isolated_env as iso
+    r = make_isolated_env({"name": "specC", "packages": ["six==1.16.0"]})
+    if r["status"] != "ok" and any(s in str(r.get("error", "")) for s in
+                                   ("Could not fetch", "Temporary failure", "Network",
+                                    "Failed to establish")):
+        pytest.skip("no network for the rebuild")
+    assert r["status"] == "ok"
+    spec = iso.load_env_spec("specC")
+    assert any("six==1.16.0" in l for l in (spec.get("lock") or [])), spec
+    shutil.rmtree(iso.env_dir("specC"))            # simulate GC of the built bytes
+    assert not iso.env_python("specC").exists()
+    assert iso.ensure_env_built("specC") is True   # rebuilt from the lock
+    chk = subprocess.run([str(iso.env_python("specC")), "-c",
+                          "import six; print(six.__version__)"], capture_output=True, text=True)
+    assert "1.16.0" in chk.stdout                  # pinned version restored
+
+
+def test_remove_env_drops_spec(iso_root):
+    from core.exec import isolated_env as iso
+    iso.create_env("specD"); iso.capture_env_spec("specD", packages=[])
+    assert iso.env_spec_path("specD").exists()
+    iso.remove_env("specD")
+    assert not iso.env_spec_path("specD").exists()
+
+
 # ── §11 Increment 3: active env pointer + set_active_env ─────────────────────
 def test_active_env_storage_roundtrip(iso_root):
     from core.exec import isolated_env as iso
