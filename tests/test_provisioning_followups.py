@@ -60,6 +60,23 @@ def test_diagnose_install_banner_does_not_drown_real_error():
     assert "using C++ compiler" not in lines, "the benign compiler banner must not appear"
 
 
+def test_diagnose_install_captures_lazy_loading_cause():
+    """The real pagoda2-devel failure: R prints the actionable cause (a dependency
+    VERSION MISMATCH) on the indented line AFTER 'Error in loadNamespace(…) :',
+    which matches no marker. The diagnostic must carry that WHY, not just the
+    generic 'lazy loading failed' symptom the agent was left with."""
+    from core.exec.r import diagnose_install
+    log = ("** byte-compile and prepare package for lazy loading\n"
+           "Error in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]) : \n"
+           "  namespace ‘sccore’ 1.0.7 is being loaded, but >= 1.1.0 is required\n"
+           "Calls: <Anonymous> ... loadNamespace -> namespaceImport -> loadNamespace\n"
+           "Execution halted\n"
+           "ERROR: lazy loading failed for package ‘pagoda2’\n"
+           "Warning: installation of package ‘pagoda2’ had non-zero exit status\n")
+    lines = diagnose_install(log)["lines"]
+    assert "sccore" in lines and "1.1.0" in lines and "required" in lines.lower(), lines
+
+
 # ── #6c: a swallowed (exit-0) install failure is surfaced as FAILED ──────────
 def test_output_failure_lines_catches_swallowed_install():
     from core.jobs.continuation import _output_failure_lines

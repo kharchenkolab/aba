@@ -188,19 +188,35 @@ def diagnose_install(text: str) -> dict:
     """Pull the actionable lines out of an R install/build log, and flag a
     likely missing system library. Returns {lines, missing_lib?}."""
     text = text or ""
-    # Dedup (compile logs repeat the same error many times) so a handful of REAL
-    # failure lines aren't pushed out of the window by repeats; keep the tail
-    # (the failure summary — "ERROR: …", "had non-zero exit status").
+    lines = text.splitlines()
+    keep: list[str] = []
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if not s:
+            continue
+        low = s.lower()
+        if low.startswith("error") or any(m in low for m in _ERR_MARKERS):
+            keep.append(s)
+            # R prints the actionable CAUSE on the indented line(s) right AFTER an
+            # error HEADER (a line ending in ':', e.g. "Error in loadNamespace(…) :")
+            # — like "namespace 'sccore' 1.0.7 is being loaded, but >= 1.1.0 is
+            # required". Those match no marker, so grab the continuation or the WHY
+            # is lost. Only after a header (':') so we don't slurp trailing banner.
+            if s.endswith(":"):
+                for j in range(i + 1, min(i + 3, len(lines))):
+                    d = lines[j].strip()
+                    if not d or d.lower().startswith(("error", "calls:", "execution halted",
+                                                      "*", "warning", "in addition")):
+                        break
+                    keep.append(d)
+    # Dedup (compile logs repeat lines) so the few REAL lines survive; keep the tail.
     seen: set = set()
     uniq: list[str] = []
-    for ln in text.splitlines():
-        s = ln.strip()
-        if s and any(m in s.lower() for m in _ERR_MARKERS):
-            key = s.lower()
-            if key not in seen:
-                seen.add(key)
-                uniq.append(s)
-    out: dict = {"lines": "\n".join(uniq[-12:])[:1000]}
+    for ln in keep:
+        if ln.lower() not in seen:
+            seen.add(ln.lower())
+            uniq.append(ln)
+    out: dict = {"lines": "\n".join(uniq[-16:])[:1200]}
     m = _SYSLIB_RE.search(text)
     if m:
         out["missing_lib"] = next((g for g in m.groups() if g), None)
