@@ -69,17 +69,39 @@ def pylib_dir() -> Path:
     return PYLIB_DIR
 
 
-def pylib_paths() -> list[Path]:
-    """Site-packages dirs the runtime should append to sys.path so the overlay's
-    packages are importable. Two entries (purelib + platlib) on systems where
-    they differ (some Linuxes split lib / lib64); usually one on macOS/Windows.
-    Computed from sysconfig against the running interpreter — matches the layout
-    `pip install --prefix=PYLIB_DIR` actually writes."""
-    purelib = sysconfig.get_path(
-        "purelib", vars={"base": str(PYLIB_DIR), "platbase": str(PYLIB_DIR)})
-    platlib = sysconfig.get_path(
-        "platlib", vars={"base": str(PYLIB_DIR), "platbase": str(PYLIB_DIR)})
+def _site_paths(prefix: Path) -> list[Path]:
+    """Site-packages dir(s) under a pip ``--prefix`` root, computed from sysconfig
+    against the running interpreter — matches the layout `pip install
+    --prefix=<prefix>` actually writes. Two entries (purelib + platlib) where a
+    distro splits lib / lib64; usually one."""
+    purelib = sysconfig.get_path("purelib", vars={"base": str(prefix), "platbase": str(prefix)})
+    platlib = sysconfig.get_path("platlib", vars={"base": str(prefix), "platbase": str(prefix)})
     return list({Path(purelib), Path(platlib)})   # dedupe; usually equal
+
+
+def pylib_paths() -> list[Path]:
+    """Site-packages dir(s) of the install-wide shared overlay — appended to
+    sys.path so its packages are importable in run_python."""
+    return _site_paths(PYLIB_DIR)
+
+
+# Per-project Python overlays (env_refactor.md P1) — the Python analog of R's
+# r_libs/prj_<id>. Each holds only a project's own on-demand additions; the
+# install-wide base + shared pylib stay shared. Appended LAST on sys.path so a
+# project's package wins for itself but cannot pollute other projects.
+PROJECT_PYLIB_ROOT = ENVS_DIR / "pylib_proj"
+
+
+def project_pylib_dir(project_id: str) -> Path:
+    """pip ``--prefix`` root for one project's overlay."""
+    return PROJECT_PYLIB_ROOT / str(project_id)
+
+
+def project_pylib_paths(project_id: Optional[str]) -> list[Path]:
+    """Site-packages dir(s) of a project's overlay (empty list if no project)."""
+    if not project_id:
+        return []
+    return _site_paths(project_pylib_dir(project_id))
 
 
 def tools_env() -> Path:
@@ -120,7 +142,8 @@ class MaterializingExecutor:
         return Env(id="base-venv", kind="venv", python=sys.executable,
                    env_overlay=self._tools_overlay())
 
-    def materialize(self, prov: Provisioning, scope: str = "system", *, cancel_token=None) -> Env:
+    def materialize(self, prov: Provisioning, scope: str = "system", *,
+                    cancel_token=None, project_id: Optional[str] = None) -> Env:
         if prov is None or prov.is_base():
             return self._base_env()
 
@@ -135,9 +158,14 @@ class MaterializingExecutor:
                        python=sys.executable, env_overlay=self._tools_overlay())
 
         if prov.pip:
-            self._pip_install(prov.pip, cancel_token=cancel_token)
-            # Return the base venv: run_python appends the pylib overlay to
-            # sys.path itself, so one interpreter sees both .venv and overlay.
+            # Route by scope (env_refactor.md P1): a project/user-scoped on-demand
+            # install goes into that project's OWN overlay (contained — can't
+            # pollute other projects); installation/system-scoped stays in the
+            # shared overlay. run_python appends shared THEN project to sys.path.
+            _prefix = None
+            if project_id and (str(scope).startswith("project") or str(scope).startswith("user")):
+                _prefix = project_pylib_dir(str(project_id))
+            self._pip_install(prov.pip, cancel_token=cancel_token, prefix=_prefix)
             return self._base_env()
 
         return self._base_env()
@@ -162,21 +190,25 @@ class MaterializingExecutor:
         run_micromamba([verb, "-y", "-p", str(TOOLS_ENV),
                         "-c", channel, "-c", "conda-forge", spec], cancel_token=cancel_token)
 
-    def _pip_install(self, packages: Sequence[str], *, cancel_token=None) -> None:
-        """pip install the packages into the shared overlay. Idempotent enough:
-        pip is fast on already-satisfied targets. Uses the .venv's pip but
-        installs INTO the overlay dir, leaving the .venv untouched.
+    def _pip_install(self, packages: Sequence[str], *, cancel_token=None,
+                     prefix: Optional[Path] = None) -> None:
+        """pip install the packages into a ``--prefix`` overlay — the shared
+        install-wide overlay by default, or a project's own overlay when
+        ``prefix`` is given (env_refactor.md P1). Uses the .venv's pip but
+        installs INTO the overlay, leaving the .venv untouched.
 
         Uses ``--prefix`` (not ``--target``) so pip checks the running
         interpreter's sys.path and SKIPS any dep already in the .venv —
         avoiding the duplicate-numpy/pandas problem with --target."""
-        # One-time migration: the old --target layout dumps packages at the
-        # top of PYLIB_DIR; --prefix puts them under lib/. Mixing the two
-        # means imports randomly hit whichever the runtime added first. Wipe
-        # the old layout on the first --prefix install to start clean.
-        if _has_legacy_target_layout():
+        target = Path(prefix) if prefix is not None else PYLIB_DIR
+        # One-time migration: the old --target layout dumps packages at the top
+        # of the SHARED overlay; --prefix puts them under lib/. Mixing the two
+        # means imports randomly hit whichever the runtime added first. Wipe the
+        # old layout on the first --prefix install. (Project overlays are new —
+        # they never carry the legacy layout, so only check the shared one.)
+        if target == PYLIB_DIR and _has_legacy_target_layout():
             shutil.rmtree(PYLIB_DIR, ignore_errors=True)
-        PYLIB_DIR.mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
         from core.runtime import progress
         from core.exec.proc import run_cancellable
         from core.exec.env_integrity import ensure_base_constraints
@@ -189,9 +221,10 @@ class MaterializingExecutor:
         if not _constraints:
             print("[materialize] WARNING: base-constraints unavailable; "
                   "installing UNCONSTRAINED (numpy-drift guard off)", flush=True)
-        progress.emit(f"pip: installing {', '.join(packages)} into the overlay…", phase="pip")
+        _where = "project overlay" if target != PYLIB_DIR else "shared overlay"
+        progress.emit(f"pip: installing {', '.join(packages)} into the {_where}…", phase="pip")
         cmd = [sys.executable, "-m", "pip", "install",
-               "--prefix", str(PYLIB_DIR), *_cflag, *packages]
+               "--prefix", str(target), *_cflag, *packages]
         proc = run_cancellable(cmd, timeout_s=900, cancel_token=cancel_token)
         if proc.returncode != 0:
             raise RuntimeError(

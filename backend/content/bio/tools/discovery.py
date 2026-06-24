@@ -558,7 +558,11 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                         "note": f"Already available; `import {_imp0}` works in run_python."}
         from core.exec import MaterializingExecutor, Provisioning
         try:
-            MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)
+            from core import projects as _projects
+            MaterializingExecutor().materialize(
+                Provisioning(pip=list(prov["pip"])),
+                scope=str(cap.get("scope", "system")),
+                cancel_token=_ct, project_id=_projects.current())
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
         # Authoritatively resolve the import name (seed override → auto-detect),
