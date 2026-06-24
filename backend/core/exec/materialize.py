@@ -179,9 +179,19 @@ class MaterializingExecutor:
         PYLIB_DIR.mkdir(parents=True, exist_ok=True)
         from core.runtime import progress
         from core.exec.proc import run_cancellable
+        from core.exec.env_integrity import ensure_base_constraints
+        # Constrain against the install-wide base so this install can't move
+        # numpy / scipy or pull an incompatible-ABI wheel — it satisfies the pin
+        # or pip fails loudly (vs silently corrupting the shared env). Best-
+        # effort: if the lock can't be produced, install unconstrained + warn.
+        _constraints = ensure_base_constraints()
+        _cflag = ["-c", str(_constraints)] if _constraints else []
+        if not _constraints:
+            print("[materialize] WARNING: base-constraints unavailable; "
+                  "installing UNCONSTRAINED (numpy-drift guard off)", flush=True)
         progress.emit(f"pip: installing {', '.join(packages)} into the overlay…", phase="pip")
         cmd = [sys.executable, "-m", "pip", "install",
-               "--prefix", str(PYLIB_DIR), *packages]
+               "--prefix", str(PYLIB_DIR), *_cflag, *packages]
         proc = run_cancellable(cmd, timeout_s=900, cancel_token=cancel_token)
         if proc.returncode != 0:
             raise RuntimeError(
