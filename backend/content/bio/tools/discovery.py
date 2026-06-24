@@ -544,15 +544,18 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         #   • overlay  — a prior session already materialized it (e.g. scvi-tools).
         # Skipping avoids a `pip --target` that re-resolves + re-fetches the whole
         # dependency tree of a heavy package every fresh session.
-        import importlib.util as _ilu
+        # Already importable? Decide by a REAL import on the runtime path (base +
+        # overlay), not PathFinder.find_spec — a present-but-unloadable package
+        # (wrong-numpy ABI, partial install, missing system lib) HAS a spec but
+        # explodes on import (the tensorflow incident). verify, don't presume.
+        from core.exec.env_integrity import verify_python_imports
         _imp0 = cap.get("import_name")
         if _imp0:
-            _in_base = _ilu.find_spec(_imp0) is not None
-            if _in_base or _overlay_has_import(_imp0):
-                _where = "base environment" if _in_base else "materialized overlay"
+            _ok, _ = verify_python_imports([_imp0])
+            if _ok:
                 return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
-                        "note": f"Already available ({_where}); `import {_imp0}` works in run_python."}
+                        "note": f"Already available; `import {_imp0}` works in run_python."}
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(pip=list(prov["pip"])), cancel_token=_ct)
@@ -561,6 +564,16 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # Authoritatively resolve the import name (seed override → auto-detect),
         # so the agent never guesses `import <pipname>` and thrashes.
         imp = cap.get("import_name") or _detect_import_name(list(prov["pip"]))
+        # Verify the install actually LOADS before claiming ready — no more
+        # "ready"-lies for ABI-broken / partial installs.
+        if imp:
+            _ok, _detail = verify_python_imports([imp])
+            if not _ok:
+                return {"status": "error", "name": name, "import_name": imp,
+                        "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "
+                                 f"mismatch (built against a different numpy), a partial install, "
+                                 f"or a missing system library. NOT marking ready."),
+                        "detail": _detail}
         note = "Installed into the materialized-library overlay; importable from run_python now."
         if imp:
             note += f" Import it with `import {imp}`."
