@@ -44,12 +44,37 @@ def _isolated_root() -> Path:
     return Path(ENVS_DIR) / "isolated"
 
 
-def env_dir(name: str) -> Path:
-    return _isolated_root() / str(name)
+def _proj_root(project_id=None) -> Path:
+    """A project's own isolated envs (§11.6 project-scoped — the default)."""
+    from core import projects
+    pid = project_id or projects.current() or "_none"
+    return _isolated_root() / "proj" / str(pid)
 
 
-def env_python(name: str) -> Path:
-    return env_dir(name) / "bin" / "python"
+def _shared_root() -> Path:
+    """Restricted install-wide envs, shared across projects (resolution fallback)."""
+    return _isolated_root() / "shared"
+
+
+def _resolve_root(name: str, project_id=None) -> Path:
+    """The dir CONTAINING this env — the project's own env if present, else a shared
+    install-wide env if THAT is present, else the project root (creation target).
+    So a project NEVER collides with another project's same-named env."""
+    proot = _proj_root(project_id)
+    if (proot / name).exists() or (proot / f"r-{name}").exists():
+        return proot
+    sroot = _shared_root()
+    if (sroot / name).exists() or (sroot / f"r-{name}").exists():
+        return sroot
+    return proot
+
+
+def env_dir(name: str, project_id=None) -> Path:
+    return _resolve_root(name, project_id) / str(name)
+
+
+def env_python(name: str, project_id=None) -> Path:
+    return env_dir(name, project_id) / "bin" / "python"
 
 
 def uv_path() -> Optional[str]:
@@ -73,9 +98,10 @@ def create_env(name: str, *, with_base_site_packages: bool = False,
     packages (use only for the *additive* case — a conflict needs its own copy,
     so leave it False). Returns {name, python, engine, created}."""
     _check_name(name)
-    d = env_dir(name)
-    if env_python(name).exists():
-        return {"name": name, "python": str(env_python(name)), "created": False, "engine": "existing"}
+    d = _proj_root() / str(name)          # always the PROJECT's own env (never shared)
+    py = d / "bin" / "python"
+    if py.exists():
+        return {"name": name, "python": str(py), "created": False, "engine": "existing"}
     d.parent.mkdir(parents=True, exist_ok=True)
     uv = uv_path()
     if uv:
@@ -139,20 +165,26 @@ def run_in(name: str, code: str, *, timeout_s: int = 600) -> dict:
             "stderr": (proc.stderr or "")[-2000:]}
 
 
-def list_envs() -> list[str]:
-    root = _isolated_root()
-    if not root.exists():
-        return []
-    return sorted(p.name for p in root.iterdir() if (p / "bin" / "python").exists())
+def list_envs(project_id=None) -> list[str]:
+    """The current project's own python envs + the shared install-wide ones."""
+    out = set()
+    for root in (_proj_root(project_id), _shared_root()):
+        if root.exists():
+            for p in root.iterdir():
+                if (p / "bin" / "python").exists():
+                    out.add(p.name)
+    return sorted(out)
 
 
-def remove_env(name: str) -> bool:
-    d = env_dir(name)
+def remove_env(name: str, project_id=None) -> bool:
+    # Only removes the PROJECT's own env (a project can't delete a shared one).
+    proot = _proj_root(project_id)
+    d = proot / name
     existed = d.exists()
     if existed:
         shutil.rmtree(d, ignore_errors=True)
-    env_spec_path(name).unlink(missing_ok=True)   # §11.6: drop the spec too (full removal)
-    env_used_marker(name).unlink(missing_ok=True)
+    (proot / "_specs" / f"{name}.json").unlink(missing_ok=True)   # §11.6: drop spec too
+    (proot / "_specs" / f"{name}.used").unlink(missing_ok=True)
     return existed
 
 
@@ -193,8 +225,8 @@ def set_active_env(project_id: str, name: str, lang: str = "python") -> dict:
 
 # ── per-env spec + lock (§11.6) — persists OUTSIDE the built env dir so it
 #    survives GC; lets a reclaimed env rebuild reproducibly on next use. ──
-def env_spec_path(name: str) -> Path:
-    return _isolated_root() / "_specs" / f"{name}.json"
+def env_spec_path(name: str, project_id=None) -> Path:
+    return _resolve_root(name, project_id) / "_specs" / f"{name}.json"
 
 
 def capture_env_spec(name: str, *, language: str = "python", packages=None) -> dict:
@@ -250,8 +282,8 @@ def ensure_env_built(name: str, *, timeout_s: int = 1800) -> bool:
 
 # ── lazy GC (§11.6): reclaim the built bytes of idle, rebuildable envs; the spec
 #    stays so the next use rebuilds from the lock transparently. ──
-def env_used_marker(name: str) -> Path:
-    return _isolated_root() / "_specs" / f"{name}.used"
+def env_used_marker(name: str, project_id=None) -> Path:
+    return _resolve_root(name, project_id) / "_specs" / f"{name}.used"
 
 
 def touch_env(name: str) -> None:
@@ -274,18 +306,33 @@ def env_idle_seconds(name: str):
 
 def gc_isolated_envs(*, max_idle_s: int = 30 * 86400, dry_run: bool = False) -> list[str]:
     """Reclaim the built bytes of python envs idle past ``max_idle_s`` that HAVE a
-    spec (so they rebuild on next use). Returns the reclaimed names. The spec +
-    use-marker are kept; only the heavy venv dir is removed."""
+    spec (so they rebuild on next use), across ALL project roots + the shared root.
+    The spec + use-marker are kept; only the heavy venv dir is removed."""
+    import time
     reclaimed: list[str] = []
-    for name in list_envs():                     # built python envs only
-        idle = env_idle_seconds(name)
-        if idle is None or idle <= max_idle_s:
-            continue
-        if not load_env_spec(name):              # no spec → not rebuildable → keep
-            continue
-        if not dry_run:
-            shutil.rmtree(env_dir(name), ignore_errors=True)
-        reclaimed.append(name)
+    isr = _isolated_root()
+    roots: list[Path] = []
+    if (isr / "proj").exists():
+        roots += [d for d in (isr / "proj").iterdir() if d.is_dir()]
+    if (isr / "shared").exists():
+        roots.append(isr / "shared")
+    for root in roots:
+        for p in root.iterdir():
+            if not (p / "bin" / "python").exists():
+                continue
+            if not (root / "_specs" / f"{p.name}.json").exists():   # not rebuildable → keep
+                continue
+            used = root / "_specs" / f"{p.name}.used"
+            ref = used if used.exists() else p
+            try:
+                idle = time.time() - ref.stat().st_mtime
+            except Exception:  # noqa: BLE001
+                continue
+            if idle <= max_idle_s:
+                continue
+            if not dry_run:
+                shutil.rmtree(p, ignore_errors=True)
+            reclaimed.append(p.name)
     return reclaimed
 
 
@@ -298,13 +345,13 @@ def gc_isolated_envs(*, max_idle_s: int = 30 * 86400, dry_run: bool = False) -> 
 # venv for. These isolated R libs are for case-(ii)/symmetry: a fully separate,
 # project-independent lib for a one-off conflicting install.
 
-def r_env_lib(name: str) -> Path:
-    return _isolated_root() / f"r-{name}"
+def r_env_lib(name: str, project_id=None) -> Path:
+    return _resolve_root(name, project_id) / f"r-{name}"
 
 
 def r_create_env(name: str) -> dict:
     _check_name(name)
-    lib = r_env_lib(name)
+    lib = _proj_root() / f"r-{name}"      # always the PROJECT's own R lib
     created = not lib.exists()
     lib.mkdir(parents=True, exist_ok=True)
     return {"name": name, "lib": str(lib), "created": created,

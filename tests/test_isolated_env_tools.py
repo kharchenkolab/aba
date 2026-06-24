@@ -162,6 +162,32 @@ def test_run_python_default_does_not_route_isolated(monkeypatch):
     assert _is_default_env(None) and _is_default_env("default")
 
 
+# ── §11.6 Point 2: project-scoped envs (no cross-project collision) ──────────
+def test_envs_are_project_scoped_no_collision(iso_root, monkeypatch):
+    from core.exec import isolated_env as iso
+    from core import projects
+    monkeypatch.setattr(projects, "current", lambda: "projA", raising=False)
+    iso.create_env("dup"); pa = iso.env_python("dup")
+    monkeypatch.setattr(projects, "current", lambda: "projB", raising=False)
+    iso.create_env("dup"); pb = iso.env_python("dup")
+    assert pa != pb and "projA" in str(pa) and "projB" in str(pb)   # distinct physical envs
+    iso.remove_env("dup")                                            # B removes its own
+    assert not iso.env_python("dup", "projB").exists()
+    assert iso.env_python("dup", "projA").exists()                  # A's is untouched
+
+
+def test_shared_env_is_resolution_fallback(iso_root, monkeypatch):
+    from core.exec import isolated_env as iso
+    from core import projects
+    binp = iso._shared_root() / "tool" / "bin"
+    binp.mkdir(parents=True); (binp / "python").write_text("")      # a restricted install-wide env
+    monkeypatch.setattr(projects, "current", lambda: "anyproj", raising=False)
+    assert str(iso.env_dir("tool")).replace("\\", "/").endswith("shared/tool")  # resolves to shared
+    assert "tool" in iso.list_envs()
+    iso.create_env("tool")                                          # project's own shadows shared
+    assert "proj/anyproj/tool" in str(iso.env_dir("tool")).replace("\\", "/")
+
+
 # ── §11 Increment 4: per-env spec/lock + rebuild ─────────────────────────────
 def test_env_spec_capture_and_load(iso_root):
     from core.exec import isolated_env as iso
