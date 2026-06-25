@@ -65,7 +65,7 @@ def resolve_resources(estimate: Optional[dict] = None, cfg: Optional[dict] = Non
     d = cfg.get("defaults") or _DEFAULTS
     gpu = bool(estimate.get("gpu"))
     cores = max(1, int(estimate.get("cores") or d.get("cores", 1)))
-    mem_gb = max(1, int(estimate.get("mem_gb") or d.get("mem_gb", 4)))
+    mem_gb = max(0, int(estimate.get("mem_gb") or d.get("mem_gb", 4)))   # 0 → omit --mem
     rt_min = float(estimate.get("runtime_min") or 0)
     walltime_h = max(1, math.ceil(rt_min / 60.0)) if rt_min > 0 else int(d.get("walltime_h", 4))
 

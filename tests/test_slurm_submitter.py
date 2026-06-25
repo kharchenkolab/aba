@@ -275,3 +275,21 @@ def test_reconcile_spares_slurm_jobs():
     reconcile_jobs()
     assert get_job("job_slurmrun", project_id=pid)["status"] == "running"   # spared
     assert get_job("job_localrun", project_id=pid)["status"] == "failed"    # reaped
+
+
+def test_submit_omits_mem_when_zero(slurm, monkeypatch):
+    """mem_gb:0 → NO --mem flag (let the scheduler default; some nodes reject even
+    --mem=1G when RealMemory < 1024MB). Real dev-cluster lesson."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    args_file = Path(tempfile.mktemp())
+    monkeypatch.setenv("FAKE_ARGS_FILE", str(args_file))
+    cfg = Path(tempfile.mktemp(suffix=".yaml"))
+    cfg.write_text("partitions:\n"
+                   "  - {name: normal, max_cores: 1, max_mem_gb: 0, max_walltime_h: 1, gpu: false}\n"
+                   "defaults: {partition: normal, cores: 1, mem_gb: 0, walltime_h: 1}\n")
+    monkeypatch.setenv("ABA_HPC_CONFIG", str(cfg))
+    pid = projects.create_project("slurm-nomem")["id"]
+    SlurmSubmitter().submit(_mk_job(pid))
+    args = args_file.read_text()
+    assert "--mem=" not in args, args
+    assert "--cpus-per-task=1" in args and "--partition=normal" in args

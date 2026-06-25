@@ -71,8 +71,9 @@ class SlurmSubmitter:
                f"--job-name=aba-{job['id']}",
                f"--output={log_path}", f"--error={err_path}", f"--chdir={run_dir}",
                f"--cpus-per-task={res['cores']}",
-               f"--mem={res['mem_gb']}G",
                f"--time={res['walltime_h'] * 60}"]          # minutes
+        if int(res.get("mem_gb") or 0) > 0:                 # 0 → let the scheduler default
+            cmd.append(f"--mem={res['mem_gb']}G")
         if res.get("partition"):
             cmd.append(f"--partition={res['partition']}")
         if res.get("qos"):
@@ -98,25 +99,65 @@ class SlurmSubmitter:
         params = job.get("params") or {}
         run_dir = Path(params.get("run_dir") or self._run_dir(job))
         done = run_dir / "done"
-        if done.exists():
-            try:
-                rc = int((done.read_text().strip() or "1"))
-            except ValueError:
-                rc = 1
-            rp = run_dir / "result.json"
-            if rp.exists():
-                try:
-                    return json.loads(rp.read_text())
-                except Exception:  # noqa: BLE001
-                    pass
-            return ({"returncode": 0, "stdout": "", "stderr": ""} if rc == 0
-                    else {"error": f"slurm job exited {rc}", "returncode": rc})
+        result = self._result_from_sentinel(run_dir)
+        if result is not None:                      # the sentinel is AUTHORITATIVE
+            return result
         sid = params.get("slurm_id")
-        if sid:
-            st = self._sacct_state(sid)
-            if st in _SACCT_TERMINAL_FAIL:
-                return {"error": f"slurm job {st} (no result written)", "returncode": 1}
+        if not sid:
+            return None
+        # No sentinel yet. The job is still going if squeue (the LIVE state) lists
+        # it — do NOT consult sacct here: sacct can return a STALE/historical
+        # record for a reused job id (a dev cluster whose counter reset), which
+        # would wrongly fail a job that's about to run. Also grace the brief
+        # submit→scheduler window so a not-yet-queued job isn't mistaken for dead.
+        if self._in_squeue(sid) or self._too_young(job):
+            return None
+        # Gone from squeue and past the grace: re-check the sentinel (it may have
+        # just landed on the shared FS), then treat an sacct FAIL as a real death.
+        result = self._result_from_sentinel(run_dir)
+        if result is not None:
+            return result
+        st = self._sacct_state(sid)
+        if st in _SACCT_TERMINAL_FAIL:
+            return {"error": f"slurm job {st} (no result written)", "returncode": 1}
         return None
+
+    def _result_from_sentinel(self, run_dir: Path) -> Optional[dict]:
+        done = run_dir / "done"
+        if not done.exists():
+            return None
+        try:
+            rc = int((done.read_text().strip() or "1"))
+        except ValueError:
+            rc = 1
+        rp = run_dir / "result.json"
+        if rp.exists():
+            try:
+                return json.loads(rp.read_text())
+            except Exception:  # noqa: BLE001
+                pass
+        return ({"returncode": 0, "stdout": "", "stderr": ""} if rc == 0
+                else {"error": f"slurm job exited {rc}", "returncode": rc})
+
+    def _in_squeue(self, slurm_id) -> bool:
+        """True iff squeue still lists the job (pending/running/completing) — the
+        live 'is it active' truth, immune to sacct's historical records."""
+        p = _run(["squeue", "-j", str(slurm_id), "-h", "-o", "%T"], timeout=15)
+        return bool((p.stdout or "").strip())
+
+    @staticmethod
+    def _too_young(job: dict, grace_s: float = 30.0) -> bool:
+        """True while the job is within the post-submit settling window (it may
+        not have hit squeue yet), so we don't prematurely trust sacct."""
+        from datetime import datetime, timezone
+        ts = job.get("created_at")
+        if not ts:
+            return False
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+            return age < grace_s
+        except Exception:  # noqa: BLE001
+            return False
 
     def cancel(self, job: dict) -> None:
         sid = (job.get("params") or {}).get("slurm_id")
