@@ -38,7 +38,9 @@ Path(_RT + "/hpc.yaml").write_text(
 
 from core import projects                                              # noqa: E402
 from core.graph.jobs import get_job                                    # noqa: E402
-from core.jobs.runner import submit_python_job, _finalize_job, cancel_job  # noqa: E402
+from core.graph.jobs import update_job                                  # noqa: E402
+from core.jobs.runner import (submit_python_job, _finalize_job, cancel_job,  # noqa: E402
+                              _slurm_poll_loop, reconcile_jobs)
 from core.jobs.slurm_submitter import SlurmSubmitter                   # noqa: E402
 
 projects.init()
@@ -166,8 +168,66 @@ def s5_error():
           f"error={(j.get('error') or '')[:60]!r}")
 
 
+# ── Scenario 6: the PRODUCTION poll loop finalizes a job autonomously ────────
+def s6_poll_loop_autonomy():
+    pid = projects.create_project("s6")["id"]; projects.set_current(pid)
+    job = submit_python_job("print('via-poll-loop')", "s6 loop", None,
+                            project_id=pid, estimate={"runtime_min": 2})
+
+    async def _run():
+        task = asyncio.ensure_future(_slurm_poll_loop())
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if get_job(job["id"], project_id=pid)["status"] in ("done", "failed", "cancelled"):
+                break
+            await asyncio.sleep(2)
+        task.cancel()
+        try:
+            await task
+        except BaseException:  # noqa: BLE001
+            pass
+    _loop().run_until_complete(_run())
+    st = get_job(job["id"], project_id=pid)["status"]
+    check("s6.poll_loop_finalized", st == "done", f"status={st} (autonomous _slurm_poll_loop)")
+
+
+# ── Scenario 7: session-allocation card reports the real Slurm allocation ────
+def s7_session_allocation():
+    from core.exec.hpc_session import session_allocation
+    pid = projects.create_project("s7")["id"]; projects.set_current(pid)
+    job = submit_python_job("import time; time.sleep(15)", "s7 sleeper", None,
+                            project_id=pid, estimate={"runtime_min": 2})
+    _wait_running(job["id"], pid, timeout=60)
+    sid = get_job(job["id"], project_id=pid)["params"]["slurm_id"]
+    os.environ["SLURM_JOB_ID"] = str(sid)
+    try:
+        sa = session_allocation()
+    finally:
+        os.environ.pop("SLURM_JOB_ID", None)
+    check("s7.on_slurm", sa.get("on_slurm") is True, f"sa={sa}")
+    check("s7.node_partition", bool(sa.get("node")) and sa.get("partition") == "normal",
+          f"node={sa.get('node')} partition={sa.get('partition')}")
+    _drive_to_terminal(job["id"], pid)
+
+
+# ── Scenario 8: a running Slurm job survives an ABA restart (reconcile) ───────
+def s8_restart_readoption():
+    pid = projects.create_project("s8")["id"]; projects.set_current(pid)
+    job = submit_python_job("import time; time.sleep(20); print('survivor')", "s8 survivor",
+                            None, project_id=pid, estimate={"runtime_min": 2})
+    _wait_running(job["id"], pid, timeout=60)
+    update_job(job["id"], project_id=pid, status="running")
+    reconcile_jobs()                       # simulate ABA restart sweep
+    j = get_job(job["id"], project_id=pid)
+    check("s8.survived_restart", j["status"] == "running",
+          f"status={j['status']} (real Slurm job NOT reaped)")
+    st = _drive_to_terminal(job["id"], pid)
+    check("s8.readopted_to_done", st == "done", f"status={st} (poll loop re-adopted it)")
+
+
 def main() -> int:
-    for fn in (s1_submit_result, s2_resource_flags, s3_monitoring, s4_cancellation, s5_error):
+    for fn in (s1_submit_result, s2_resource_flags, s3_monitoring, s4_cancellation, s5_error,
+               s6_poll_loop_autonomy, s7_session_allocation, s8_restart_readoption):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
