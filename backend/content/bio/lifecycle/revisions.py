@@ -727,3 +727,87 @@ def reproduce_from_exec(entity_id: str, *,
         "warnings": warnings,
         "error": err,
     }
+
+
+# ── Provenance Phase 4/5 (provenance.md): rare escape hatches ───────────────
+def diff_env(entity_id: str) -> dict:
+    """Phase 4: which packages changed between the env that made `entity_id` and
+    the CURRENT env. Read-only — the "why is this different?" tool."""
+    import sys
+    from core.exec.fingerprint import package_versions_for_interpreter
+    ent = get_entity(entity_id)
+    if not ent:
+        raise ValueError(f"entity {entity_id} not found")
+    rec = exec_records.get(ent.get("exec_id")) if ent.get("exec_id") else None
+    then = (rec or {}).get("package_versions") or {}
+    lang = (rec or {}).get("language") or _resolve_language(ent)
+    if lang == "r":
+        from core.exec.r import _rscript
+        now = package_versions_for_interpreter(str(_rscript()), "r")
+    else:
+        now = package_versions_for_interpreter(sys.executable, "python")
+    now.pop("__lang_version__", None)
+    added = {k: now[k] for k in now if k not in then}
+    removed = {k: then[k] for k in then if k not in now}
+    changed = {k: {"then": then[k], "now": now[k]}
+               for k in then if k in now and then[k] != now[k]}
+    n = len(added) + len(removed) + len(changed)
+    return {"entity_id": entity_id, "language": lang, "added": added,
+            "removed": removed, "changed": changed, "n_changed": n,
+            "note": ("env unchanged since the original run" if n == 0 else
+                     f"{len(changed)} changed, {len(added)} added, {len(removed)} removed")}
+
+
+def rebuild_env(entity_id: str, *, only: Optional[list] = None,
+                name: Optional[str] = None) -> dict:
+    """Phase 4 (rare): reconstruct a throwaway isolated env pinned to the versions
+    the entity was made with — optionally ONLY a `only` subset, to bisect a
+    discrepancy gradually. Run code in it via run_python(env=<returned name>)."""
+    ent = get_entity(entity_id)
+    rec = exec_records.get(ent.get("exec_id")) if ent and ent.get("exec_id") else None
+    pkg = (rec or {}).get("package_versions") or {}
+    if not pkg:
+        raise ValueError("no recorded package versions to rebuild from")
+    if (rec or {}).get("language") == "r":
+        raise ValueError("R env rebuild not yet supported (R envs are libdirs)")
+    want = set(only) if only else None
+    specs = [f"{k}=={v}" for k, v in pkg.items() if v and (want is None or k in want)]
+    from core.exec import isolated_env as iso
+    envname = name or f"repro_{str(entity_id)[:8]}"
+    iso.create_env(envname)
+    res = iso.install_into(envname, specs)
+    return {"env": envname, "installed": len(specs), "ok": bool(res.get("ok", True)),
+            "use": f"run_python(env='{envname}')",
+            "note": "full rebuild can be slow / conflict — pass `only` to bisect a few packages"}
+
+
+def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
+    """Phase 5 (on demand, policy): a portable reproduction bundle — exec record +
+    code + pinned requirements + README — sufficient to reproduce in a fresh env.
+    Inputs-by-hash is a later refinement (provenance.md §3.2)."""
+    import json as _json
+    from pathlib import Path
+    from core.config import ARTIFACTS_DIR
+    ent = get_entity(entity_id)
+    rec = exec_records.get(ent.get("exec_id")) if ent and ent.get("exec_id") else None
+    if not rec:
+        raise ValueError("entity has no exec record to export")
+    bdir = Path(dest) if dest else (Path(ARTIFACTS_DIR) / "bundles" / str(entity_id))
+    bdir.mkdir(parents=True, exist_ok=True)
+    lang = rec.get("language") or "python"
+    code = rec.get("code") or ""
+    pkg = rec.get("package_versions") or {}
+    (bdir / "exec_record.json").write_text(_json.dumps(rec, indent=2, default=str))
+    (bdir / ("script.R" if lang == "r" else "script.py")).write_text(code)
+    if lang != "r":
+        (bdir / "requirements.txt").write_text(
+            "\n".join(f"{k}=={v}" for k, v in sorted(pkg.items()) if v) + "\n")
+    (bdir / "README.md").write_text(
+        f"# Reproduction bundle — {entity_id}\n\n"
+        f"- `script.{'R' if lang == 'r' else 'py'}` — the producing code\n"
+        + ("- `requirements.txt` — the pinned environment\n" if lang != "r" else "")
+        + f"- `exec_record.json` — full provenance "
+        f"(seed={rec.get('seed')}, env_fingerprint={rec.get('env_fingerprint')})\n\n"
+        f"Reproduce: build an env from requirements.txt, then run the script.\n")
+    return {"bundle_dir": str(bdir), "files": sorted(p.name for p in bdir.iterdir()),
+            "language": lang, "n_packages": len(pkg)}
