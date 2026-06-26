@@ -112,10 +112,23 @@ def _db_file(pid: str) -> Path:
     return project_db_path(pid)
 
 
+# Cache project entity counts by (db path, mtime). list_projects() needs counts
+# for EVERY project (the project page), which otherwise opens N SQLite DBs per
+# call — the dominant cost at 200+ projects. A project's DB mtime only bumps on
+# real activity, so an idle project's counts are reused without opening its DB.
+_counts_cache: dict[str, tuple[float, dict]] = {}
+
+
 def _counts(path) -> dict:
     p = Path(path)
-    if not p.exists():
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
         return {}
+    key = str(p)
+    cached = _counts_cache.get(key)
+    if cached is not None and cached[0] == mt:
+        return cached[1]
     try:
         c = sqlite3.connect(p)
         c.row_factory = sqlite3.Row
@@ -124,9 +137,11 @@ def _counts(path) -> dict:
             "AND status != 'archived' AND type != 'workspace' GROUP BY type"
         ).fetchall()
         c.close()
-        return {r["type"]: r["n"] for r in rows}
+        counts = {r["type"]: r["n"] for r in rows}
     except Exception:
-        return {}
+        counts = {}
+    _counts_cache[key] = (mt, counts)
+    return counts
 
 
 def _park_scratch() -> None:
