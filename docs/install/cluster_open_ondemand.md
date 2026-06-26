@@ -244,6 +244,32 @@ The single file describing this deployment. Key bits for the dev stack:
 
 ---
 
+## 3b. Background jobs — in-process vs Slurm
+
+An OOD session **is** a Slurm job on a compute node, holding the cores the launch
+form allocated (Light = 1, Heavy = 10). When the agent backgrounds a long run
+(`run_python(background=True)`, or a run it estimates as long), ABA can place that
+work two ways, selected by **`ABA_BATCH_SUBMITTER`** (exported in
+`template/script.sh.erb`):
+
+| `ABA_BATCH_SUBMITTER` | Where the background job runs | Notes |
+|---|---|---|
+| `local` *(default)* | In-process on the **same** allocated node, using its cores | Simplest. The job ends if the session ends. Good when Heavy already gives enough cores. |
+| `slurm` | ABA `sbatch`'s each background job as a **separate** Slurm job | The job gets its own partition/cores/walltime and **survives** the session ending or restarting. Needs nested submission (the session job submits further jobs — allowed on most clusters) and a shared-filesystem runtime dir (used for completion signaling, already true under OOD). |
+
+To enable Slurm offload, the app's `template/script.sh.erb` exports:
+
+```bash
+export ABA_BATCH_SUBMITTER=slurm
+export ABA_HPC_CONFIG=/cluster/aba/hpc.yaml   # partitions / QoS / defaults (or bundle `hpc:` settings)
+```
+
+The agent's estimate (`est_cores` / `est_mem_gb` / `est_gpu`, plus an estimated
+runtime) is mapped against the partitions in `hpc.yaml`. **The `hpc.yaml` schema
+and the resource model are identical to the personal install** — see
+[cluster_personal.md](cluster_personal.md). Submitted jobs, their live Slurm
+state, and the session's own allocation appear in the **(i) → Jobs** tab.
+
 ## 4. Deploy the app + live-test through OOD
 
 ### Deploy / redeploy the app to the dashboard
