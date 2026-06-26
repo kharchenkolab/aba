@@ -265,13 +265,15 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
         from core import projects as _projects
         pkg = result_obj.get("package_versions") or {}
         langver = result_obj.get("language_version") or ""
+        # Match the interactive produced[] shape — pin_artifact needs the `url`.
         produced: list[dict] = []
         for grp, knd in (("plots", "figure"), ("tables", "table"), ("files", "file")):
             for i, a in enumerate(result_obj.get(grp) or []):
-                row = {"kind": knd, "idx": i}
-                if isinstance(a, dict) and a.get("original_name"):
-                    row["name"] = a["original_name"]
-                produced.append(row)
+                if isinstance(a, dict):
+                    produced.append({"kind": knd, "idx": i, "url": a.get("url"),
+                                     "name": a.get("original_name") or a.get("name")})
+                else:
+                    produced.append({"kind": knd, "idx": i})
         inputs: list[dict] = []
         if job.get("focus_entity_id"):
             inputs.append({"ref": job["focus_entity_id"], "kind": "entity"})
