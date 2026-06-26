@@ -56,6 +56,7 @@ def _make_figure_with_exec(thread_id: str = "thr_s3",
     eid = entities.create_entity(
         entity_type="figure", title="Pin test figure",
         exec_id=ex_id, artifact_kind="figure", artifact_idx=0,
+        artifact_path=str(cwd / "fig.png"),
     )
     return eid, ex_id
 

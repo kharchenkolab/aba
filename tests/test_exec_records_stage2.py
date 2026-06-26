@@ -63,6 +63,7 @@ def test_create_entity_with_new_fields():
         exec_id="exec_test_001",
         artifact_kind="figure",
         artifact_idx=2,
+        artifact_path="/tmp/test-fig.png",
     )
     rec = entities.get_entity(eid)
     check("entity created", rec is not None)
@@ -113,6 +114,7 @@ def test_lookup_code_for_entity_via_exec():
         exec_id=ex_id,
         artifact_kind="figure",
         artifact_idx=0,
+        artifact_path="/tmp/helper.png",
         # NOTE: deliberately NOT setting producing_code — the helper should
         # find the code via the exec record.
     )

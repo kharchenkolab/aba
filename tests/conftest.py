@@ -26,6 +26,35 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _isolated_module_db(tmp_path_factory):
+    """Give each test MODULE its own fresh, initialized SQLite DB.
+
+    Many tests are script-style: they configure their DB via `ABA_DB_PATH` at
+    module-import time, expecting to be the first thing imported. Under pytest,
+    this conftest imports `content.bio` first (for pack registration), which
+    freezes `core.graph._schema.DB_PATH` to a default pointing at a nonexistent
+    dir — so those tests hit "unable to open database file". Re-pointing the
+    process-global DB to a fresh per-module file (matching the one-DB-per-script
+    model) makes them pass under pytest too. Tests that bind a project override
+    this via a context-var (`projects.bind`), so they are unaffected."""
+    try:
+        from core.graph import _schema
+    except Exception:  # backend not importable yet
+        yield
+        return
+    db = tmp_path_factory.mktemp("aba_module_db") / "test.db"
+    _schema.set_db_path(db)
+    try:
+        _schema.init_db()
+    except Exception:
+        pass
+    yield
+
+
 def _register_bio_pack_once() -> None:
     """Idempotent: registering the same pack twice is a no-op; trying
     to register a DIFFERENT pack raises (test would have to clear
@@ -49,3 +78,23 @@ def _register_bio_pack_once() -> None:
 
 
 _register_bio_pack_once()
+
+
+# Point the process-global DB at a valid, writable test DB at conftest LOAD time,
+# so script-style modules that do DB work at IMPORT time (`init_db()` /
+# create_entity at module scope) don't hit "unable to open database file" before
+# the per-module fixture runs. The fixture re-points to a fresh per-module DB for
+# actual test isolation; this is just the import-time floor.
+def _seed_valid_global_db() -> None:
+    try:
+        import os
+        import tempfile
+        from core.graph import _schema
+        _schema.set_db_path(os.path.join(
+            tempfile.mkdtemp(prefix="aba_conftest_db_"), "conftest.db"))
+        _schema.init_db()
+    except Exception:
+        pass
+
+
+_seed_valid_global_db()
