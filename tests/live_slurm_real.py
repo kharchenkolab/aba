@@ -225,9 +225,29 @@ def s8_restart_readoption():
     check("s8.readopted_to_done", st == "done", f"status={st} (poll loop re-adopted it)")
 
 
+# ── Scenario 9: a backgrounded job in an ISOLATED env runs IN it on the node ─
+def s9_isolated_env():
+    import subprocess as _sp
+    from core.exec import isolated_env as iso
+    pid = projects.create_project("s9")["id"]; projects.set_current(pid)
+    # Stand-in isolated env on the shared FS (a real make_isolated_env needs uv+min).
+    envdir = iso.env_dir("isoenv", pid)
+    envdir.parent.mkdir(parents=True, exist_ok=True)
+    _sp.run([sys.executable, "-m", "venv", str(envdir)], check=True, capture_output=True)
+    job = submit_python_job("import sys; print('PFX', sys.prefix)", "s9 isolated-env",
+                            None, project_id=pid, env="isoenv", estimate={"runtime_min": 2})
+    after = get_job(job["id"], project_id=pid)
+    check("s9.env_in_params", after["params"].get("env") == "isoenv")
+    st = _drive_to_terminal(job["id"], pid)
+    j = get_job(job["id"], project_id=pid)
+    check("s9.ran_in_env_on_node", st == "done" and str(envdir) in (j.get("log_tail") or ""),
+          f"status={st} log_tail={(j.get('log_tail') or '')[:90]!r}")
+
+
 def main() -> int:
     for fn in (s1_submit_result, s2_resource_flags, s3_monitoring, s4_cancellation, s5_error,
-               s6_poll_loop_autonomy, s7_session_allocation, s8_restart_readoption):
+               s6_poll_loop_autonomy, s7_session_allocation, s8_restart_readoption,
+               s9_isolated_env):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
