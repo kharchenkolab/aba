@@ -136,6 +136,35 @@ def package_versions_for_session(sess, lang: str,
         return {}
 
 
+def package_versions_for_interpreter(interp: str, lang: str,
+                                     *, r_preamble: str = "", timeout_s: int = 30) -> dict:
+    """Snapshot {package: version, "__lang_version__": …} by running the probe
+    through an interpreter PATH (subprocess) — the background/Slurm analog of
+    package_versions_for_session, which needs a live kernel. ``interp`` is the
+    python the run used (the venv/overlay or an isolated env's python) or an
+    Rscript. For R, ``r_preamble`` (the run's `.libPaths(...)` lines) makes the
+    snapshot reflect the SAME libraries the run saw (e.g. an isolated R env).
+    Returns {} on any failure (never blocks the run / the exec record)."""
+    import subprocess
+    try:
+        if lang == "r":
+            probe = (r_preamble + "\n" + _R_PROBE) if r_preamble else _R_PROBE
+            cmd = [interp, "--vanilla", "-e", probe]
+        else:
+            cmd = [interp, "-c", _PY_PROBE]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        text = (res.stdout or "") + "\n" + (res.stderr or "")
+        if "__ABA_PKG_BEGIN__" not in text:
+            return {}
+        chunk = text.split("__ABA_PKG_BEGIN__", 1)[1].split("__ABA_PKG_END__", 1)[0]
+        line = chunk.strip().splitlines()
+        data = json.loads(line[0]) if line else {}
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        _log.warning("package_versions_for_interpreter(%s) failed: %s", lang, e)
+        return {}
+
+
 def invalidate_package_versions(sess) -> None:
     """Called by r_install / pip-install paths so the NEXT package_versions
     capture re-probes immediately rather than waiting on the TTL.

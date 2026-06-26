@@ -245,6 +245,69 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     return True
 
 
+def _write_exec_record_for_job(job: dict, result_obj: dict,
+                               lookup_pid: str | None, effective_pid: str) -> None:
+    """Provenance (provenance.md Phase 1): a backgrounded/Slurm job writes the
+    SAME exec record an interactive run does — code + env descriptor + produced +
+    inputs + seed + kind — so its artifacts are revisable/reproducible. Injects
+    `exec_id` into result_obj; _on_post_tool_register_artifacts then attaches it.
+    Best-effort — never blocks completion."""
+    try:
+        params = job.get("params") or {}
+        code = params.get("code", "")
+        kind = job.get("kind") or "run_python"
+        lang = "r" if kind == "run_r" else "python"
+        cwd = result_obj.get("cwd")
+        if not cwd:
+            return
+        from core.graph import exec_records as _er
+        from core.exec.fingerprint import code_hash, env_fingerprint
+        from core import projects as _projects
+        pkg = result_obj.get("package_versions") or {}
+        langver = result_obj.get("language_version") or ""
+        produced: list[dict] = []
+        for grp, knd in (("plots", "figure"), ("tables", "table"), ("files", "file")):
+            for i, a in enumerate(result_obj.get(grp) or []):
+                row = {"kind": knd, "idx": i}
+                if isinstance(a, dict) and a.get("original_name"):
+                    row["name"] = a["original_name"]
+                produced.append(row)
+        inputs: list[dict] = []
+        if job.get("focus_entity_id"):
+            inputs.append({"ref": job["focus_entity_id"], "kind": "entity"})
+        with _projects.bind(str(lookup_pid or effective_pid)):
+            eid = _er.create(
+                thread_id=str(params.get("thread_id") or "default"),
+                run_id=params.get("run_id"),
+                tool_use_id=None,
+                tool_name=kind,
+                status="ok",
+                code=code,
+                code_hash=code_hash(code),
+                started_at=job.get("started_at") or _utcnow(),
+                completed_at=_utcnow(),
+                cwd=cwd,
+                payload={
+                    "executor": f"background:{lang}",
+                    "kind": "script",
+                    "language": lang,
+                    "language_version": langver,
+                    "package_versions": pkg,
+                    "env_fingerprint": env_fingerprint(langver, pkg),
+                    "seed": result_obj.get("seed"),
+                    "inputs": inputs,
+                    "produced": produced,
+                    "stdout_tail": (result_obj.get("stdout") or "")[-2000:],
+                    "stderr_tail": (result_obj.get("stderr") or "")[-2000:],
+                    "exit_code": result_obj.get("returncode"),
+                },
+            )
+        if eid:
+            result_obj["exec_id"] = eid
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("exec_record", job.get("id"), e)
+
+
 async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
                         effective_pid: str) -> None:
     """Shared completion path for a finished background job — used by BOTH the
@@ -280,6 +343,9 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
                    log_tail=log_tail, finished_at=_utcnow())
         await _continue_after_failure(job_id, lookup_pid, effective_pid)
         return
+    # Provenance: stamp the exec record + inject exec_id BEFORE registration, so
+    # the produced artifacts attach to it (revisable like an interactive run).
+    _write_exec_record_for_job(job, result_obj, lookup_pid, effective_pid)
     dispatch("on_job_complete", {
         "tool_name": kind,
         "tool_input": {"code": code},
