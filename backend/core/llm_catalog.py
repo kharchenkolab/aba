@@ -13,7 +13,7 @@ from __future__ import annotations
 _FALLBACK: list[dict] = [
     {"label": "Haiku", "model": "claude-haiku-4-5-20251001", "spec": "grounded_guide"},
     {"label": "Sonnet", "model": "claude-sonnet-4-6", "spec": "grounded_guide"},
-    {"label": "Opus", "model": "claude-opus-4-8", "spec": "grounded_guide"},
+    {"label": "Opus", "model": "claude-opus-4-7", "spec": "grounded_guide"},
 ]
 
 
