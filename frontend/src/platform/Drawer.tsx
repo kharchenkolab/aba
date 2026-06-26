@@ -510,7 +510,10 @@ export function HpcSessionCard() {
   )
 }
 
-function JobsTab({ jobs }: { jobs: JobInfo[] }) {
+// Display order for the status filter pills (active states first).
+const JOB_STATUS_ORDER = ['running', 'queued', 'done', 'failed', 'cancelled']
+
+export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   // Single-open accordion: at most one job row is expanded at a time. Click
   // the same row to collapse, a different one to switch. The detail panel
   // sits inline directly below its row (no modal — keeps the (i) drawer's
@@ -522,6 +525,9 @@ function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   // don't re-hit the network.
   const [details, setDetails] = useState<Record<string, JobDetail>>({})
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({})
+  // Status pill filter (null = all) + free-text filter (for longer lists).
+  const [statusFilter, setStatusFilter] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
 
   // Re-fetch the detail panel for a running job each poll tick so log_tail
   // updates while the agent watches. Done in the same place that pulls it
@@ -558,13 +564,49 @@ function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   }
 
   const sorted = [...jobs].sort((a, b) => b.t - a.t)
+  // Status counts → filter pills; show the row only when >1 status is present
+  // (a single-status list needs no filter). A text filter appears for longer lists.
+  const counts: Record<string, number> = {}
+  for (const j of jobs) counts[j.status] = (counts[j.status] || 0) + 1
+  const present = JOB_STATUS_ORDER.filter(s => counts[s])
+  const showPills = present.length > 1
+  const showSearch = jobs.length > 3
+  // Auto-recover the filter if its status drains away (e.g. a running job ends).
+  const filter = (statusFilter && counts[statusFilter]) ? statusFilter : null
+  const q = query.trim().toLowerCase()
+  const list = sorted.filter(j =>
+    (!filter || j.status === filter) &&
+    (!q || (j.title || '').toLowerCase().includes(q) || j.id.toLowerCase().includes(q)))
   return (
     <div className="jobs">
       <HpcSessionCard />
       {jobs.length === 0 && (
         <div className="drawer__empty">No background jobs. Long pipelines (run_python background) appear here.</div>
       )}
-      {sorted.map(j => {
+      {showPills && (
+        <div className="jobs__pills" role="tablist" aria-label="Filter jobs by status">
+          <button type="button" role="tab" aria-selected={filter === null}
+                  className={`jobs__pill${filter === null ? ' jobs__pill--active' : ''}`}
+                  onClick={() => setStatusFilter(null)}>
+            All <span className="jobs__pill-n">{jobs.length}</span>
+          </button>
+          {present.map(s => (
+            <button key={s} type="button" role="tab" aria-selected={filter === s}
+                    className={`jobs__pill jobs__pill--${s}${filter === s ? ' jobs__pill--active' : ''}`}
+                    onClick={() => setStatusFilter(prev => (prev === s ? null : s))}>
+              {s} <span className="jobs__pill-n">{counts[s]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {showSearch && (
+        <input type="text" className="jobs__search" placeholder="Filter jobs by title…"
+               value={query} onChange={e => setQuery(e.target.value)} />
+      )}
+      {jobs.length > 0 && list.length === 0 && (
+        <div className="drawer__empty">No jobs match.</div>
+      )}
+      {list.map(j => {
         const open = j.id === expandedId
         const d = details[j.id]
         return (
