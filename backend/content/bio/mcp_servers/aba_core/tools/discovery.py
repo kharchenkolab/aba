@@ -239,6 +239,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                           source: str | None = None,
                           package: str | None = None,
                           ref: str | None = None,
+                          min_version: str | None = None,
+                          force: bool = False,
                           aba_ctx_id: str | None = None) -> dict:
         """Install / make-ready a named capability (PyPI, conda,
         bioconda, MCP server, …). Long-running for installs — uses
@@ -247,13 +249,21 @@ def register_discovery_tools(mcp: FastMCP) -> None:
 
         R-package per-install override (no re-cataloguing): pass
         source='github', package='owner/repo', ref='<branch/tag>' to
-        install a catalogued R package from a dev branch for THIS install."""
+        install a catalogued R package from a dev branch for THIS install.
+
+        UPGRADING an R package: pass min_version='1.1.0' (and/or force=True)
+        so a present-but-stale package is actually reinstalled rather than
+        reported "already available". The result carries the installed
+        `version`; on a dependency-version failure it carries `requires`
+        ({package, min_version}) telling you exactly what to upgrade."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import ensure_capability as _impl
         _in: dict = {"name": name}
         if source:  _in["source"] = source
         if package: _in["package"] = package
         if ref:     _in["ref"] = ref
+        if min_version: _in["min_version"] = min_version
+        if force:   _in["force"] = True
         with in_tool_ctx(aba_ctx_id) as ctx:
             return _impl(_in, ctx)
 

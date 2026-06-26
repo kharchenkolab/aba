@@ -150,6 +150,87 @@ def r_has_package(pkg: str, project_id: Optional[str] = None, timeout_s: int = 6
         return False
 
 
+def _version_tuple(v: str):
+    import re as _re
+    return tuple(int(x) for x in _re.findall(r"\d+", v or ""))
+
+
+def version_ge(installed: Optional[str], required: str) -> bool:
+    """installed >= required, comparing numeric components (R-style "1.0.7" vs
+    "1.1.0"). Unknown `installed` (None) → False (treat as needs-install)."""
+    if not installed:
+        return False
+    return _version_tuple(installed) >= _version_tuple(required)
+
+
+def r_package_version(pkg: str, project_id: Optional[str] = None,
+                      timeout_s: int = 60) -> Optional[str]:
+    """Installed version of `pkg` on the (project + base) library paths, or None
+    if absent. Lets ensure_capability be version-aware, not presence-only."""
+    if not _CRAN_RE.match(pkg or "") or not r_runtime_ready():
+        return None
+    import re as _re
+    setlib = libpaths_expr(project_id)
+    pre = (setlib + "; ") if setlib else ""
+    expr = (f'{pre}v <- tryCatch(as.character(utils::packageVersion({pkg!r})), '
+            f'error=function(e) ""); cat("ABA_VER=", v, "\\n", sep="")')
+    try:
+        out = _run_rscript(expr, timeout_s)
+        m = _re.search(r"ABA_VER=(\S+)", out.stdout or "")
+        return m.group(1) if (m and m.group(1)) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_VER_REQ_RES = None
+
+
+def parse_version_requirement(text: str) -> Optional[dict]:
+    """Extract an unmet R version requirement from an install/load log so a
+    failure is actionable. Handles e.g.
+      • packageVersion("sccore") >= "1.1.0" is not TRUE
+      • namespace 'sccore' 1.0.7 is already loaded, but >= 1.1.0 is required
+      • package 'sccore' 1.0.7 was found, but >= 1.1.0 is required
+    Returns {"package", "min_version"} or None."""
+    global _VER_REQ_RES
+    if not text:
+        return None
+    import re as _re
+    if _VER_REQ_RES is None:
+        Q = "['‘’\"]"            # straight + curly quotes
+        _VER_REQ_RES = [
+            _re.compile(rf'packageVersion\(\s*{Q}([\w.]+){Q}\s*\)\s*>=\s*{Q}([\d.]+){Q}\s+is not TRUE'),
+            _re.compile(rf'namespace {Q}([\w.]+){Q}\s+[\d.]+\s+is already loaded,\s*but\s*>=\s*([\d.]+)\s+is required'),
+            _re.compile(rf'package {Q}([\w.]+){Q}\s+[\d.]+\s+(?:was found|is loaded),?\s*but\s*>=\s*([\d.]+)\s+is required'),
+            _re.compile(rf'{Q}([\w.]+){Q}\s*>=\s*{Q}?([\d.]+){Q}?\s+is not TRUE'),
+        ]
+    for rx in _VER_REQ_RES:
+        m = rx.search(text)
+        if m:
+            return {"package": m.group(1), "min_version": m.group(2)}
+    return None
+
+
+def r_unload_namespace(pkg: str, thread_id: Optional[str]) -> bool:
+    """Best-effort: unload `pkg` from the thread's running R kernel so a freshly
+    reinstalled version loads on the next library() WITHOUT a full restart (the R
+    analog of the pip cache-invalidation hook). False if no live R session.
+    NB unloadNamespace fails when another LOADED namespace imports pkg — then the
+    caller falls back to restart_kernel."""
+    if not thread_id:
+        return False
+    try:
+        from core.exec.kernels import get_pool
+        sess = get_pool().peek(str(thread_id), "r")
+        if sess is None:
+            return False
+        sess.execute(f'if (isNamespaceLoaded({pkg!r})) '
+                     f'try(unloadNamespace({pkg!r}), silent=TRUE)', timeout_s=30)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # Patterns that tell the agent (and the user) what actually went wrong, so a
 # failed install is actionable rather than an opaque traceback.
 # Strong FAILURE signals only. NOT "using C++ compiler" — that's R's benign
@@ -273,7 +354,8 @@ def install_bioconductor_conda(package: str, library: str, *, project_id: Option
 
 
 def r_install(source: str, package: str, *, project_id: str, library: Optional[str] = None,
-              ref: Optional[str] = None, timeout_s: int = 1800, cancel_token=None) -> dict:
+              ref: Optional[str] = None, force: bool = False,
+              timeout_s: int = 1800, cancel_token=None) -> dict:
     """Native install (CRAN / Bioconductor / GitHub) into the project R library,
     then **verify it loads**. For CRAN/Bioc, a binary that installs but won't
     load under conda R (or an install that fails) triggers one automatic
@@ -323,7 +405,8 @@ def r_install(source: str, package: str, *, project_id: str, library: Optional[s
     from core.runtime import progress
 
     def _attempt(force_source: bool):
-        expr = install_command(source, package, lib=str(lib), ref=ref, force_source=force_source)
+        expr = install_command(source, package, lib=str(lib), ref=ref,
+                               force_source=force_source, force=force)
         proc = _run_rscript(expr, timeout_s, cancel_token=cancel_token)
         loaded = proc.returncode == 0 and r_has_package(libname, project_id=project_id)
         return proc, loaded
@@ -491,7 +574,8 @@ def validate_install(source: str, package: str, ref: Optional[str]) -> Optional[
 
 
 def install_command(source: str, package: str, *, lib: str, ref: Optional[str] = None,
-                    repos: Optional[str] = None, force_source: bool = False) -> str:
+                    repos: Optional[str] = None, force_source: bool = False,
+                    force: bool = False) -> str:
     """Pure builder: the R expression to install `package` from `source` into
     `lib` (project library), prepended ahead of the base on .libPaths(). CRAN/
     Bioc installs set the PPM User-Agent so binaries are served when available
@@ -504,7 +588,12 @@ def install_command(source: str, package: str, *, lib: str, ref: Optional[str] =
     n = build_jobs()
     if source == "github":
         spec = f"{package}@{ref}" if ref else package
-        return f'{setlib}{par}remotes::install_github({spec!r}, lib={libq}, upgrade="never")'
+        # force=TRUE + upgrade="always" so an UPGRADE actually reinstalls instead
+        # of install_github skipping an already-present (but stale) package.
+        upgrade = "always" if force else "never"
+        force_arg = ", force=TRUE" if force else ""
+        return (f'{setlib}{par}remotes::install_github({spec!r}, lib={libq}, '
+                f'upgrade={upgrade!r}{force_arg})')
     ua = _ppm_ua_expr()
     typ = ', type="source"' if force_source else ''
     if source == "bioconductor":
