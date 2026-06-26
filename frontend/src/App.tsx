@@ -746,6 +746,14 @@ export default function App() {
     setProjectSection(section)
     if (treeCollapsed) setTreeCollapsed(false)
   }
+  // Rail tab click: clicking the ALREADY-ACTIVE tab toggles the left column
+  // (minimize ⇄ show); clicking a different tab navigates to it + reveals it.
+  // Kept separate from openProjectSection so programmatic openers (e.g. Browse
+  // files) always reveal rather than toggle.
+  const onProjectTab = (section: ProjectSection) => {
+    if (section === projectSection) setTreeCollapsed(c => !c)
+    else openProjectSection(section)
+  }
 
   const chatPane = (compact: boolean) => (
     <ChatPane
@@ -861,7 +869,7 @@ export default function App() {
         projectTitle={projectName}
         sectionCounts={sectionCountsByName}
         activeSection={projectSection}
-        onProjectSection={openProjectSection}
+        onProjectSection={onProjectTab}
       />
       {treeCollapsed ? <div /> : (
         <ProjectTree
