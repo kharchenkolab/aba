@@ -201,9 +201,58 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         plots, tables, files, _warns = harvest_artifacts(op)
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
     from core.exec.output_cap import snip_middle
+    cmd_str = " ".join(cmd)
+    # Provenance (provenance.md Phase 3): a kind:workflow exec record — engine +
+    # the reproducible command + params + produced. The pipeline+revision pin the
+    # workflow (re-running `nextflow run <pipeline> -r <rev>` reproduces it);
+    # per-process container digests are a refinement (needs `-with-trace` parsing).
+    exec_id = None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from core.graph import exec_records as _er
+        from core.exec.fingerprint import code_hash as _ch
+        produced = []
+        for _grp, _knd in ((plots, "figure"), (tables, "table"), (files, "file")):
+            for _i, _a in enumerate(_grp or []):
+                if isinstance(_a, dict):
+                    produced.append({"kind": _knd, "idx": _i, "url": _a.get("url"),
+                                     "name": _a.get("original_name") or _a.get("name")})
+                else:
+                    produced.append({"kind": _knd, "idx": _i})
+        _now = _dt.now(_tz.utc).isoformat()
+        nf_ver = ""
+        try:
+            import re as _re
+            _vr = ex.exec(env, ["nextflow", "-version"], cwd=str(scratch), timeout_s=30)
+            _m = _re.search(r"version\s+([0-9][0-9.]*)", (getattr(_vr, "stdout", "") or "")
+                            + (getattr(_vr, "stderr", "") or ""))
+            nf_ver = _m.group(1) if _m else ""
+        except Exception:  # noqa: BLE001
+            nf_ver = ""
+        exec_id = _er.create(
+            thread_id=str((ctx or {}).get("thread_id") or "default"),
+            run_id=(ctx or {}).get("run_id"),
+            tool_use_id=(ctx or {}).get("tool_use_id"),
+            tool_name="run_nextflow",
+            status="ok" if res.returncode == 0 else "error",
+            code=cmd_str, code_hash=_ch(cmd_str),
+            started_at=_now, completed_at=_now, cwd=str(scratch),
+            payload={
+                "kind": "workflow",
+                "engine": {"name": "nextflow", "version": nf_ver},
+                "params": {"pipeline": pipeline, "revision": revision,
+                           "profile": profile, "params": params},
+                "produced": produced,
+                "outputs": out_files[:50],
+                "stdout_tail": snip_middle(res.stdout or ""),
+                "stderr_tail": snip_middle(res.stderr or ""),
+                "exit_code": res.returncode,
+            })
+    except Exception as _e:  # noqa: BLE001 — never block the user-visible result
+        pass
     return {
         "status": "ok" if res.returncode == 0 else "error",
-        "command": " ".join(cmd),
+        "command": cmd_str,
         "returncode": res.returncode,
         "stdout": snip_middle(res.stdout or ""),
         "stderr": snip_middle(res.stderr or ""),
@@ -213,6 +262,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         "tables": tables,
         "files": files,
         "execution_mode": "stateless",
+        "exec_id": exec_id,
     }
 
 

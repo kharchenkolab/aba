@@ -200,3 +200,26 @@ def test_provenance_phase4_5_diff_and_export():
     b = export_bundle(fid)
     files = set(b["files"])
     assert {"script.py", "requirements.txt", "exec_record.json", "README.md"} <= files, b
+
+
+def test_provenance_phase3_envelope_generalizes():
+    """Phase 3 foundation: the exec-record envelope holds non-script producers
+    uniformly (kind: cli/workflow + engine + params + container env). Full
+    Nextflow ingestion is gated on a real producer + the #5 schema sign-off."""
+    import tempfile
+    from core.graph import exec_records as er
+    pid = projects.create_project("prov-env3")["id"]; projects.set_current(pid)
+    cwd = tempfile.mkdtemp()
+    eid = er.create(thread_id="t", run_id=None, tool_use_id=None, tool_name="run_cli",
+                    status="ok", code="samtools sort -o out.bam in.bam",
+                    started_at="2026-06-26T00:00:00+00:00", cwd=cwd,
+                    payload={"kind": "cli",
+                             "engine": {"name": "samtools", "version": "1.20"},
+                             "params": {"threads": 4},
+                             "env": "sha256:deadbeef",  # a container digest, in the workflow case
+                             "inputs": [{"ref": "in.bam", "kind": "file", "fp": "in.bam|1024|123"}],
+                             "produced": [{"kind": "file", "idx": 0, "name": "out.bam"}]})
+    rec = er.get(eid)
+    assert rec["kind"] == "cli" and rec["engine"]["name"] == "samtools"
+    assert rec["params"]["threads"] == 4 and rec["inputs"][0]["ref"] == "in.bam"
+    assert rec["produced"][0]["name"] == "out.bam"
