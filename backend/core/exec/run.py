@@ -121,6 +121,7 @@ def run_r_code(
     run_id: Optional[str] = None,
     timeout_s: int = 600,
     cancel_token=None,
+    env: Optional[str] = None,
 ) -> dict:
     """Background R execution — mirrors run_python_code's return shape so the
     existing on_job_complete hook + artifact harvester work unchanged.
@@ -150,9 +151,19 @@ def run_r_code(
 
     # R preamble — kept short. The agent's own script.R follows verbatim.
     preamble_lines = []
-    lib_expr = libpaths_expr(str(project_id))
-    if lib_expr:
-        preamble_lines.append(lib_expr)
+    if env:
+        # §11: isolated R env — its lib dir FIRST on .libPaths(), then the base
+        # (standalone, NOT the project lib), matching iso.r_run_in. The libdir is
+        # project-scoped on the shared FS, so a Slurm compute node sees it.
+        from core.exec import isolated_env as iso
+        lib = iso.r_env_lib(env, str(project_id))
+        if not lib.exists():
+            return {"error": f"isolated R env {env!r} is not available (project {project_id})."}
+        preamble_lines.append(f'.libPaths(c({str(lib)!r}, .libPaths()))')
+    else:
+        lib_expr = libpaths_expr(str(project_id))
+        if lib_expr:
+            preamble_lines.append(lib_expr)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble = "\n".join(preamble_lines)
     (scratch / "script.R").write_text(preamble + "\n" + code)

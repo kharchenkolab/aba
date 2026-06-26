@@ -782,12 +782,12 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     thread_id = (ctx or {}).get("thread_id") or "default"
 
-    # §11.2: env=<named isolated R env> routes out of the served-stack path.
+    # §11.2: env=<named isolated R env>. Route FIRST so a backgrounded run+env
+    # goes to a queued/Slurm job that runs IN that env (its lib first on
+    # .libPaths()) — not short-circuited to the synchronous one-shot.
     env = input_.get("env")
-    if not _is_default_env(env):
-        return _run_in_named_env(env, code, "r", timeout_s)
+    env_name = None if _is_default_env(env) else env.strip()
 
-    # Background / long-runtime → job queue. Mirror run_python's routing.
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
@@ -800,13 +800,17 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                            focus_entity_id=(ctx or {}).get("focus_entity_id"),
                            timeout_s=timeout_s, project_id=str(project_id),
                            thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                           estimate=est)
+                           estimate=est, env=env_name)
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
             "note": f"Submitted as background R job {job['id']} ({choice.rationale}). "
                     f"Script will run via Rscript; figures register on completion.",
         }
+
+    # Synchronous isolated R env (not backgrounded) — the one-shot in the env.
+    if env_name:
+        return _run_in_named_env(env_name, code, "r", timeout_s)
 
     # Synchronous kernel path (default).
     if not KERNEL_ENABLED:

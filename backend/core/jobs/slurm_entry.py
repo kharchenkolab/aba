@@ -19,9 +19,9 @@ def main() -> int:
     from core.exec.run import run_python_code, run_r_code
     kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
               timeout_s=int(spec.get("timeout_s") or 600))
-    if spec.get("kind") == "run_r":
-        result = run_r_code(spec["code"], **kw)
-    else:                                    # isolated env (if any) runs standalone
+    if spec.get("kind") == "run_r":          # isolated R env = its lib first on .libPaths()
+        result = run_r_code(spec["code"], env=spec.get("env"), **kw)
+    else:                                    # isolated python env = its own python, standalone
         result = run_python_code(spec["code"], env=spec.get("env"), **kw)
     with open(spec["result_path"], "w") as f:
         json.dump(result, f, default=str)
