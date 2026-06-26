@@ -783,8 +783,9 @@ def rebuild_env(entity_id: str, *, only: Optional[list] = None,
 
 def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
     """Phase 5 (on demand, policy): a portable reproduction bundle — exec record +
-    code + pinned requirements + README — sufficient to reproduce in a fresh env.
-    Inputs-by-hash is a later refinement (provenance.md §3.2)."""
+    code + pinned requirements + inputs-by-identity/hash + README — sufficient to
+    reproduce in a fresh env. Inputs are *referenced* (id + hash), never copied —
+    genomic files are large (provenance.md §3.2)."""
     import json as _json
     from pathlib import Path
     from core.config import ARTIFACTS_DIR
@@ -802,12 +803,36 @@ def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
     if lang != "r":
         (bdir / "requirements.txt").write_text(
             "\n".join(f"{k}=={v}" for k, v in sorted(pkg.items()) if v) + "\n")
+    # inputs manifest — by identity + hash where available. Resolve entity refs
+    # to a content hash/fingerprint so a reproducer can verify they hold the same
+    # inputs without us shipping the bytes.
+    inputs = []
+    for inp in (rec.get("inputs") or []):
+        item = dict(inp) if isinstance(inp, dict) else {"ref": inp}
+        if item.get("kind") == "entity" and item.get("ref"):
+            try:
+                e = get_entity(item["ref"])
+                if e:
+                    item["title"] = e.get("title")
+                    item["entity_type"] = e.get("type")
+                    md = e.get("metadata") or {}
+                    for k in ("content_hash", "sha256", "fingerprint", "hash", "checksum"):
+                        if md.get(k):
+                            item["hash"] = md[k]
+                            break
+            except Exception:  # noqa: BLE001
+                pass
+        inputs.append(item)
+    (bdir / "inputs.json").write_text(_json.dumps(inputs, indent=2, default=str))
     (bdir / "README.md").write_text(
         f"# Reproduction bundle — {entity_id}\n\n"
         f"- `script.{'R' if lang == 'r' else 'py'}` — the producing code\n"
         + ("- `requirements.txt` — the pinned environment\n" if lang != "r" else "")
+        + f"- `inputs.json` — the run's inputs, by identity + hash ({len(inputs)} item(s); "
+        f"referenced, not copied)\n"
         + f"- `exec_record.json` — full provenance "
         f"(seed={rec.get('seed')}, env_fingerprint={rec.get('env_fingerprint')})\n\n"
-        f"Reproduce: build an env from requirements.txt, then run the script.\n")
+        f"Reproduce: build an env from requirements.txt, confirm the `inputs.json` "
+        f"items are present, then run the script.\n")
     return {"bundle_dir": str(bdir), "files": sorted(p.name for p in bdir.iterdir()),
             "language": lang, "n_packages": len(pkg)}

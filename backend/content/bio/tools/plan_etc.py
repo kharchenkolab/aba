@@ -124,6 +124,30 @@ def _nextflow_env_blocker(pipeline: str, profile: Optional[str]) -> Optional[dic
     return None
 
 
+def _parse_nextflow_containers(trace_path) -> list[str]:
+    """Unique container images from a nextflow `-with-trace` TSV (the `container`
+    column) — the per-process env for workflow provenance. [] on any miss."""
+    from pathlib import Path as _P
+    try:
+        lines = _P(trace_path).read_text().splitlines()
+        if not lines:
+            return []
+        header = lines[0].split("\t")
+        if "container" not in header:
+            return []
+        ci = header.index("container")
+        seen: list[str] = []
+        for ln in lines[1:]:
+            parts = ln.split("\t")
+            if len(parts) > ci:
+                c = parts[ci].strip()
+                if c and c not in ("-", "") and c not in seen:
+                    seen.append(c)
+        return seen
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
                       params: dict | None = None, extra_args=None) -> list[str]:
     """Build the `nextflow run …` argv. Pure function — unit-tested separately."""
@@ -184,8 +208,10 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     from core.runtime import progress
     progress.emit(f"nextflow: launching {pipeline}"
                   + (f" (-profile {profile})" if profile else "") + "…", phase="nextflow")
+    _trace = Path(scratch) / "aba_nf_trace.txt"
     cmd = _nextflow_command(pipeline, revision=revision, profile=profile,
-                            outdir=outdir, params=params)
+                            outdir=outdir, params=params,
+                            extra_args=["-with-trace", str(_trace)])  # provenance: per-process containers
     res = ex.exec(env, cmd, cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s)
     if res.timed_out:
         return {"status": "error",
@@ -240,6 +266,9 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
             payload={
                 "kind": "workflow",
                 "engine": {"name": "nextflow", "version": nf_ver},
+                # env (provenance.md §6 workflow case): the per-process container
+                # images Nextflow actually used — the reproducible engine env.
+                "env": {"per_process_images": _parse_nextflow_containers(_trace)},
                 "params": {"pipeline": pipeline, "revision": revision,
                            "profile": profile, "params": params},
                 "produced": produced,
