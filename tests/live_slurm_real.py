@@ -39,8 +39,8 @@ Path(_RT + "/hpc.yaml").write_text(
 from core import projects                                              # noqa: E402
 from core.graph.jobs import get_job                                    # noqa: E402
 from core.graph.jobs import update_job                                  # noqa: E402
-from core.jobs.runner import (submit_python_job, _finalize_job, cancel_job,  # noqa: E402
-                              _slurm_poll_loop, reconcile_jobs)
+from core.jobs.runner import (submit_python_job, submit_r_job, _finalize_job,  # noqa: E402
+                              cancel_job, _slurm_poll_loop, reconcile_jobs)
 from core.jobs.slurm_submitter import SlurmSubmitter                   # noqa: E402
 
 projects.init()
@@ -244,10 +244,25 @@ def s9_isolated_env():
           f"status={st} log_tail={(j.get('log_tail') or '')[:90]!r}")
 
 
+# ── Scenario 10: a backgrounded R job in an ISOLATED R env (lib first) ───────
+def s10_isolated_r_env():
+    from core.exec import isolated_env as iso
+    pid = projects.create_project("s10")["id"]; projects.set_current(pid)
+    lib = iso.r_env_lib("renv", pid); lib.mkdir(parents=True, exist_ok=True)
+    job = submit_r_job("cat('LIB1:', .libPaths()[1], '\\n')", "s10 r-env", None,
+                       project_id=pid, env="renv", estimate={"runtime_min": 2})
+    after = get_job(job["id"], project_id=pid)
+    check("s10.env_in_params", after["params"].get("env") == "renv")
+    st = _drive_to_terminal(job["id"], pid, timeout=180)
+    j = get_job(job["id"], project_id=pid)
+    check("s10.ran_in_r_env_on_node", st == "done" and str(lib) in (j.get("log_tail") or ""),
+          f"status={st} log_tail={(j.get('log_tail') or '')[:100]!r}")
+
+
 def main() -> int:
     for fn in (s1_submit_result, s2_resource_flags, s3_monitoring, s4_cancellation, s5_error,
                s6_poll_loop_autonomy, s7_session_allocation, s8_restart_readoption,
-               s9_isolated_env):
+               s9_isolated_env, s10_isolated_r_env):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
