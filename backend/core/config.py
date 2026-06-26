@@ -18,21 +18,85 @@ load_dotenv(BASE_DIR.parent / ".env")
 #   - future multi-tenant work just adds an `{ABA_RUNTIME_DIR}/tenants/<tid>/` layer
 # Individual sub-paths (DATA_DIR, WORK_DIR, …) each have their own env-var override,
 # so a test/eval harness can repoint a single tier without moving everything.
-RUNTIME_DIR = Path(os.getenv("ABA_RUNTIME_DIR", "/workspace/aba-runtime")).resolve()
+class _LazyDir(os.PathLike):
+    """A Path-like whose value is re-resolved from the environment on EVERY use.
+
+    Lets `from core.config import RUNTIME_DIR` stay live: the bound name is this
+    proxy, and each operation (`/`, str/os.fspath, .mkdir, .exists, …) resolves
+    the CURRENT env value. So a test harness (or a runtime swap) that sets
+    ABA_RUNTIME_DIR *after* this module was imported is honored, instead of the
+    value being frozen at import time. `/` returns a plain Path (the common case);
+    module-level derived constants that must also stay lazy wrap their own
+    `_LazyDir(lambda: BASE / "sub")`.
+    """
+    __slots__ = ("_resolver",)
+
+    def __init__(self, resolver):
+        self._resolver = resolver
+
+    def _p(self):
+        return self._resolver()
+
+    def __fspath__(self):
+        return str(self._resolver())
+
+    def __str__(self):
+        return str(self._resolver())
+
+    def __repr__(self):
+        return f"LazyDir({self._resolver()!r})"
+
+    def __truediv__(self, other):
+        return self._resolver() / other
+
+    def __rtruediv__(self, other):
+        return other / self._resolver()
+
+    def __eq__(self, other):
+        try:
+            return os.fspath(self) == os.fspath(other)
+        except TypeError:
+            return NotImplemented
+
+    def __hash__(self):
+        return hash(str(self._resolver()))
+
+    def __reduce__(self):
+        # Pickle as the resolved Path — serialization wants the current value.
+        return (Path, (str(self._resolver()),))
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._resolver(), name)
+
+
+def _resolve_runtime_dir() -> Path:
+    return Path(os.getenv("ABA_RUNTIME_DIR", "/workspace/aba-runtime")).resolve()
+
+
+def _resolve_under_runtime(env_key: str, *parts: str) -> Path:
+    """Honor a per-tier env override, else derive under the (live) runtime dir."""
+    v = os.getenv(env_key)
+    base = Path(v) if v else _resolve_runtime_dir().joinpath(*parts)
+    return base.resolve()
+
+
+RUNTIME_DIR = _LazyDir(_resolve_runtime_dir)
 
 # Legacy workspace-level dirs (pre-2026-05-31-reorg). Post-reorg these point at
 # the per-project equivalents of `_workspace` (the no-project-active fallback),
 # so files don't strand at the runtime root. New code goes through
 # project_{data,artifacts,work}_dir(pid) instead; these are kept as the fallback
 # for callers without a project context (background jobs, materialize helpers).
-DATA_DIR = Path(os.getenv("DATA_DIR", RUNTIME_DIR / "projects" / "_workspace" / "data")).resolve()
-ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", RUNTIME_DIR / "projects" / "_workspace" / "artifacts")).resolve()
-WORK_DIR = Path(os.getenv("ABA_WORK_DIR", RUNTIME_DIR / "projects" / "_workspace" / "work")).resolve()
+DATA_DIR = _LazyDir(lambda: _resolve_under_runtime("DATA_DIR", "projects", "_workspace", "data"))
+ARTIFACTS_DIR = _LazyDir(lambda: _resolve_under_runtime("ARTIFACTS_DIR", "projects", "_workspace", "artifacts"))
+WORK_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_WORK_DIR", "projects", "_workspace", "work"))
 # ENVS_DIR is the materialized-tools area (capabilities.md / capdat_impl.md P1):
 # wipeable as a whole (rm -rf → repopulates on demand), kept OUT of the system
 # .venv so the backend's env stays pristine. Holds the pylib overlay (one
 # shared pip --target dir for Python libs) and conda envs for CLI tools.
-ENVS_DIR = Path(os.getenv("ABA_ENVS_DIR", RUNTIME_DIR / "envs")).resolve()
+ENVS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_ENVS_DIR", "envs"))
 # Kernelspecs hardcode the interpreter's absolute path, so they must live and die
 # with the env they point at. Scope ABA's Jupyter data dir under ENVS_DIR (not the
 # user's global ~/.local/share/jupyter): prod stays self-consistent, and tests —
@@ -43,7 +107,7 @@ os.environ["JUPYTER_DATA_DIR"] = str(ENVS_DIR / "jupyter")
 # REFS_DIR is the content-addressed reference store (data.md §4.3): shared,
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
-REFS_DIR = Path(os.getenv("ABA_REFS_DIR", RUNTIME_DIR / "refs")).resolve()
+REFS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_REFS_DIR", "refs"))
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Module-load snapshot, kept as the "baseline" — process-startup default + the
@@ -190,7 +254,7 @@ REFS_DIR.mkdir(parents=True, exist_ok=True)
 # directory you can back up, export, or delete atomically. Workspace-level
 # fallback dirs (the legacy DATA_DIR etc.) are kept for the "no project active"
 # case (background jobs without context, the workspace registry, scratch DBs).
-PROJECTS_DIR = Path(os.environ.get("ABA_PROJECTS_DIR") or (RUNTIME_DIR / "projects")).resolve()
+PROJECTS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_PROJECTS_DIR", "projects"))
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 

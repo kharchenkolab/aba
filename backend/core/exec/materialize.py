@@ -30,11 +30,11 @@ import sysconfig
 from pathlib import Path
 from typing import Optional, Sequence
 
-from core.config import ENVS_DIR
+from core.config import ENVS_DIR, _LazyDir
 from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
 
-PYLIB_DIR = ENVS_DIR / "pylib"          # shared pip --prefix overlay (per-group growth)
+PYLIB_DIR = _LazyDir(lambda: ENVS_DIR / "pylib")          # shared pip --prefix overlay (per-group growth)
 
 
 def _resolve_tools_env() -> Path:
@@ -89,7 +89,7 @@ def pylib_paths() -> list[Path]:
 # r_libs/prj_<id>. Each holds only a project's own on-demand additions; the
 # install-wide base + shared pylib stay shared. Appended LAST on sys.path so a
 # project's package wins for itself but cannot pollute other projects.
-PROJECT_PYLIB_ROOT = ENVS_DIR / "pylib_proj"
+PROJECT_PYLIB_ROOT = _LazyDir(lambda: ENVS_DIR / "pylib_proj")
 
 
 def project_pylib_dir(project_id: str) -> Path:

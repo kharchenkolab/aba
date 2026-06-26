@@ -19,11 +19,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from core.config import ENVS_DIR
+from core.config import ENVS_DIR, _LazyDir
 from core.exec.materialize import tools_env
 
 # Per-project R libraries — wipeable, under the materialized-tools area.
-R_LIBS_ROOT = ENVS_DIR / "r_libs"
+R_LIBS_ROOT = _LazyDir(lambda: ENVS_DIR / "r_libs")
 
 # Minimum conda runtime to run R + install from any source (CRAN source compiles
 # need the toolchain; GitHub needs remotes; Bioconductor needs BiocManager).
