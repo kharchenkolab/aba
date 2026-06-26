@@ -872,29 +872,62 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # Rcpp*/xml2) as binaries, so GitHub/CRAN installs find them on
         # .libPaths() instead of source-compiling. Heavy frameworks stay on-demand.
         rexec.ensure_r_runtime()
-        if rexec.r_has_package(libname, project_id=pid):
+        # Version-aware presence check (was presence-only — the sccore-upgrade
+        # trap): a min-version requirement, an explicit force, or an install
+        # override (ref/source/package — "I want THIS build") all mean "already
+        # installed" is NOT enough, so reinstall instead of short-circuiting to
+        # "ready" while leaving a stale version.
+        min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
+        force = bool(input_.get("force"))
+        override = any(input_.get(_k) for _k in ("ref", "source", "package"))
+        installed_ver = rexec.r_package_version(libname, project_id=pid)
+        satisfied = installed_ver is not None and (
+            not min_version or rexec.version_ge(installed_ver, min_version))
+        if satisfied and not force and not override:
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname,
-                    "note": f"Already available — library({libname}) works in run_r."}
+                    "library": libname, "version": installed_ver,
+                    "note": f"Already available — library({libname}) {installed_ver} works in run_r."}
+        # (Re)install. force=TRUE so install_github replaces an already-present-but-
+        # stale build; required whenever we're upgrading or honoring an override.
+        do_force = force or override or (installed_ver is not None and min_version is not None)
         res = rexec.r_install(_src, _pkg, project_id=pid, library=libname,
-                              ref=rp.get("ref"), cancel_token=_ct)
+                              ref=rp.get("ref"), force=do_force, cancel_token=_ct)
         if res.get("status") == "ready":
-            if res.get("via") == "conda":
-                note = (f"Installed as a Bioconductor binary into the shared R environment; "
-                        f"use library({libname}) in run_r.")
+            new_ver = rexec.r_package_version(libname, project_id=pid) or res.get("version")
+            # If the OLD version is loaded in the running R kernel it can't be
+            # swapped in place — unload it so the next library() loads the new one
+            # (falls back to restart_kernel if another loaded namespace pins it).
+            unloaded = rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
+            if res.get("source") == "conda" or res.get("via") == "conda":
+                where = "into the shared R environment (Bioconductor binary)"
             else:
-                via = " (recompiled from source)" if res.get("source_fallback") else ""
-                note = f"Installed into the project R library{via}; use library({libname}) in run_r."
+                where = "into the project R library" + (
+                    " (recompiled from source)" if res.get("source_fallback") else "")
+            note = (f"Installed {libname}{(' ' + new_ver) if new_ver else ''} {where}; "
+                    f"use library({libname}) in run_r.")
+            if not unloaded and installed_ver and new_ver and installed_ver != new_ver:
+                note += (" A prior load may be cached in the R session — restart_kernel "
+                         "so the new version takes effect.")
             return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "note": note}
-        # Surface the actionable diagnostic (incl. missing-system-lib hint) so the
-        # agent can self-correct (conda-install a dep + retry) or ask the user.
+                    "library": libname, "version": new_ver, "note": note}
+        # Error → surface the actionable diagnostic (missing-system-lib hint) AND,
+        # crucially, any unmet VERSION requirement so the agent upgrades the dep in
+        # ONE step instead of inferring the whole dance.
         out = {"status": "error", "name": cap.get("name"), "archetype": "r_package",
                "note": res.get("note") or "R install failed."}
         if res.get("missing_lib"):
             out["missing_lib"] = res["missing_lib"]
         if res.get("diagnostic"):
             out["diagnostic"] = res["diagnostic"]
+        req = rexec.parse_version_requirement(
+            (res.get("note") or "") + "\n" + str(res.get("diagnostic") or ""))
+        if req:
+            out["requires"] = req
+            out["note"] = (f"{out['note']} — needs {req['package']} >= {req['min_version']}. "
+                           f"Upgrade it first: ensure_capability(name={req['package']!r}, "
+                           f"min_version={req['min_version']!r}, force=true), then retry. "
+                           f"(The reinstall unloads the stale namespace; if another loaded "
+                           f"package pins it, restart_kernel.)")
         return out
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
