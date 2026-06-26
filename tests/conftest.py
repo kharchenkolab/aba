@@ -30,17 +30,33 @@ import pytest
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _isolated_module_db(tmp_path_factory):
-    """Give each test MODULE its own fresh, initialized SQLite DB.
+def _isolated_module_db(request, tmp_path_factory):
+    """Give each test MODULE its own fresh, initialized runtime + SQLite DB.
 
-    Many tests are script-style: they configure their DB via `ABA_DB_PATH` at
-    module-import time, expecting to be the first thing imported. Under pytest,
-    this conftest imports `content.bio` first (for pack registration), which
-    freezes `core.graph._schema.DB_PATH` to a default pointing at a nonexistent
-    dir — so those tests hit "unable to open database file". Re-pointing the
-    process-global DB to a fresh per-module file (matching the one-DB-per-script
-    model) makes them pass under pytest too. Tests that bind a project override
-    this via a context-var (`projects.bind`), so they are unaffected."""
+    Many tests are script-style: they configure the runtime via `os.environ`
+    (`ABA_RUNTIME_DIR`, `ABA_DB_PATH`, …) at module-import time, expecting to be
+    the first thing imported. Under pytest this conftest imports `content.bio`
+    first (for pack registration), and all test modules are imported during
+    collection — so the global env ends up as the *last* module's, and each
+    module's own captured `_tmp` (e.g. `PROOT = _tmp/'projects'`) diverges from
+    it. Two-part fix, working WITH lazy core.config (which resolves dirs from the
+    live env):
+      1. Re-pin this module's runtime dirs from its `_tmp` so lazy config
+         resolves the same paths the module captured at import.
+      2. Re-point the process-global DB to a fresh per-module file (the
+         one-DB-per-script model). Project-binding tests override via a
+         context-var (`projects.bind`), so they're unaffected."""
+    import os
+    tmp = getattr(request.module, "_tmp", None)
+    if tmp:
+        tmp = str(tmp)
+        os.environ["ABA_RUNTIME_DIR"] = tmp
+        os.environ["ABA_PROJECTS_DIR"] = os.path.join(tmp, "projects")
+        os.environ["ARTIFACTS_DIR"] = os.path.join(tmp, "artifacts")
+        os.environ["DATA_DIR"] = os.path.join(tmp, "data")
+        os.environ["ABA_WORK_DIR"] = os.path.join(tmp, "work")
+        os.environ["ABA_ENVS_DIR"] = os.path.join(tmp, "envs")
+        os.environ["ABA_REFS_DIR"] = os.path.join(tmp, "refs")
     try:
         from core.graph import _schema
     except Exception:  # backend not importable yet

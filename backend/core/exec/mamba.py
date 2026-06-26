@@ -16,10 +16,10 @@ import urllib.request
 from pathlib import Path
 from typing import Sequence
 
-from core.config import ENVS_DIR
+from core.config import ENVS_DIR, _LazyDir
 
-MAMBA_BIN = ENVS_DIR / "bin" / "micromamba"
-MAMBA_ROOT = ENVS_DIR / "mamba_root"
+MAMBA_BIN = _LazyDir(lambda: ENVS_DIR / "bin" / "micromamba")
+MAMBA_ROOT = _LazyDir(lambda: ENVS_DIR / "mamba_root")
 
 
 def _mamba_platform() -> str:
