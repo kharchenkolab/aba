@@ -754,6 +754,7 @@ export default function App() {
       loading={chatLoading}
       streamMsg={streamMsg}
       onSend={(text: string) => streaming ? enqueue(text) : sendMessage(text)}
+      onOpenData={() => openProjectSection('data')}
       focusedEntity={focused}
       annotation={annotation}
       onClearAnnotation={clearAnnotation}
