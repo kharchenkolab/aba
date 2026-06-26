@@ -148,3 +148,55 @@ def test_background_run_writes_exec_record():
     assert rec.get("seed") == 0
     assert isinstance(rec.get("package_versions"), dict)
     assert any(p.get("kind") for p in (rec.get("produced") or [])), "produced recorded"
+
+
+def test_background_provenance_is_sufficient_to_reproduce():
+    """Memory-wipe simulation: given ONLY the exec record a background job wrote
+    (no conversation context), the captured code reproduces the figure."""
+    from core.exec.run import run_python_code
+    from core.jobs.runner import _write_exec_record_for_job
+    from core.graph import exec_records as er
+    pid = projects.create_project("prov-recover")["id"]; projects.set_current(pid)
+    plot_code = ("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt\n"
+                 "plt.scatter(range(10), [x*x for x in range(10)]); plt.title('Original')\n"
+                 "plt.savefig('plot.png')")
+    res = run_python_code(plot_code, project_id=pid, run_id="r1", timeout_s=120)
+    assert res.get("returncode") == 0, res
+    assert res.get("plots"), "a figure should be produced"
+    job = {"id": "j1", "kind": "run_python", "focus_entity_id": None,
+           "params": {"code": plot_code, "thread_id": "t1", "run_id": "r1", "project_id": pid}}
+    _write_exec_record_for_job(job, res, pid, pid)
+    # ── memory wipe: keep ONLY the exec_id; recover everything from the record ──
+    rec = er.get(res["exec_id"])
+    recovered_code = rec.get("code")
+    assert recovered_code and "plt.scatter" in recovered_code, "code recoverable from provenance"
+    res2 = run_python_code(recovered_code, project_id=pid, run_id="r2", timeout_s=120)
+    assert res2.get("returncode") == 0 and res2.get("plots"), \
+        "reproduction from provenance alone should re-create the figure"
+
+
+def test_provenance_phase4_5_diff_and_export():
+    """Phase 4/5: diff_env reports env delta; export_bundle writes a portable
+    reproduction bundle. Uses a background exec record + a pinned figure entity."""
+    import sys as _sys
+    from core.exec.run import run_python_code
+    from core.jobs.runner import _write_exec_record_for_job
+    from content.bio.lifecycle.artifacts import pin_artifact
+    from content.bio.lifecycle.revisions import diff_env, export_bundle
+    pid = projects.create_project("prov-45")["id"]; projects.set_current(pid)
+    code = ("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt\n"
+            "plt.plot([0,1,2],[0,1,4]); plt.title('P45'); plt.savefig('p.png')")
+    res = run_python_code(code, project_id=pid, run_id="r45", timeout_s=120)
+    assert res.get("returncode") == 0 and res.get("plots")
+    job = {"id": "j45", "kind": "run_python", "focus_entity_id": None,
+           "params": {"code": code, "thread_id": "t1", "run_id": "r45", "project_id": pid}}
+    _write_exec_record_for_job(job, res, pid, pid)
+    out = pin_artifact(res["exec_id"], "figure", 0, title="P45")
+    fid = out["entity_id"]
+    # diff_env: env unchanged (same env back-to-back) → n_changed 0
+    d = diff_env(fid)
+    assert "n_changed" in d and d["n_changed"] == 0, d
+    # export_bundle: a portable dir with the code + requirements + record
+    b = export_bundle(fid)
+    files = set(b["files"])
+    assert {"script.py", "requirements.txt", "exec_record.json", "README.md"} <= files, b

@@ -137,6 +137,45 @@ def register_revision_tools(mcp: FastMCP) -> None:
             return {"error": str(e)}
 
     @mcp.tool()
+    def diff_env(entity_id: str, aba_ctx_id: str | None = None) -> dict:
+        """Show which packages CHANGED between the environment that produced this
+        figure/table and the CURRENT environment. Read-only. USE THIS when a
+        reproduction unexpectedly differs and you need to understand WHY (which
+        dependency drifted). Returns {added, removed, changed, n_changed, note}."""
+        from content.bio.lifecycle.revisions import diff_env as _diff
+        try:
+            return _diff(entity_id)
+        except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def rebuild_env(entity_id: str, only: list | None = None,
+                    aba_ctx_id: str | None = None) -> dict:
+        """RARE escape hatch: reconstruct a throwaway isolated env pinned to the
+        package versions this figure was originally made with, to investigate a
+        reproduction discrepancy. Pass `only=[pkg,...]` to rebuild just a few
+        packages (bisect a drift gradually — a full rebuild is slow and may
+        conflict), then run code via run_python(env=<the returned name>). Use ONLY
+        when chasing a real difference; the default is always the current env."""
+        from content.bio.lifecycle.revisions import rebuild_env as _rebuild
+        try:
+            return _rebuild(entity_id, only=only)
+        except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def export_reproduction_bundle(entity_id: str, aba_ctx_id: str | None = None) -> dict:
+        """Write a portable reproduction bundle for this figure/table — the
+        producing code, a pinned requirements lock, and the full provenance record
+        — to a directory. USE THIS when the user needs to reproduce 'for the
+        record' (a journal/policy requirement). Returns {bundle_dir, files}."""
+        from content.bio.lifecycle.revisions import export_bundle as _export
+        try:
+            return _export(entity_id)
+        except ValueError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
     def list_revisions(entity_id: str,
                        aba_ctx_id: str | None = None) -> dict:
         """List the full revision chain for a figure/table with
