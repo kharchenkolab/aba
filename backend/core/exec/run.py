@@ -66,10 +66,17 @@ def run_python_code(
         # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
         for _p in reversed(list(project_pylib_paths(_pid))):
             lines.append(f"_sys.path.insert(0, {str(_p)!r})")
+    # Provenance (provenance.md §3.3): seed the stateless run so a zero-delta
+    # re-run is bit-stable; the seed is recorded in the exec record. Guarded —
+    # numpy is optional and the user's own seed (if any) overrides this.
+    _seed = 0
+    lines.append(f"import random as _aba_rnd; _aba_rnd.seed({_seed})")
+    lines.append(f"try:\n    import numpy as _aba_np; _aba_np.random.seed({_seed})\nexcept Exception: pass")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
 
     ex = MaterializingExecutor()
     menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
+    used_interp = interp or menv.python or sys.executable
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
@@ -84,7 +91,7 @@ def run_python_code(
         "MPLBACKEND": "Agg",
     }
     result = ex.exec(
-        menv, [interp or menv.python or sys.executable, str(scratch / "script.py")],
+        menv, [used_interp, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars,
     )
@@ -98,6 +105,12 @@ def run_python_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch)
     from core.exec.output_cap import snip_middle
+    # Provenance (provenance.md §3.1): snapshot the env DESCRIPTOR through the
+    # interpreter that ran — the background/Slurm analog of the kernel-session
+    # probe. Cheap (~0.1s), best-effort, never fails the run.
+    from core.exec.fingerprint import package_versions_for_interpreter
+    _pkg = package_versions_for_interpreter(used_interp, "python")
+    _langver = _pkg.pop("__lang_version__", "") if isinstance(_pkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),
         "stderr": snip_middle(result.stderr or ""),
@@ -108,6 +121,11 @@ def run_python_code(
         # Self-contained one-shot script — its producing_code reproduces it alone.
         "execution_mode": "stateless",
         "cwd": str(scratch),
+        # Provenance fields consumed by _finalize_job → exec record.
+        "language": "python",
+        "language_version": _langver,
+        "package_versions": _pkg,
+        "seed": _seed,
     }
     if warns:
         out["figure_warnings"] = warns
@@ -150,7 +168,7 @@ def run_r_code(
         return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
 
     # R preamble — kept short. The agent's own script.R follows verbatim.
-    preamble_lines = []
+    lib_lines: list[str] = []
     if env:
         # §11: isolated R env — its lib dir FIRST on .libPaths(), then the base
         # (standalone, NOT the project lib), matching iso.r_run_in. The libdir is
@@ -159,12 +177,14 @@ def run_r_code(
         lib = iso.r_env_lib(env, str(project_id))
         if not lib.exists():
             return {"error": f"isolated R env {env!r} is not available (project {project_id})."}
-        preamble_lines.append(f'.libPaths(c({str(lib)!r}, .libPaths()))')
+        lib_lines.append(f'.libPaths(c({str(lib)!r}, .libPaths()))')
     else:
         lib_expr = libpaths_expr(str(project_id))
         if lib_expr:
-            preamble_lines.append(lib_expr)
+            lib_lines.append(lib_expr)
+    preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
+    preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run
     preamble = "\n".join(preamble_lines)
     (scratch / "script.R").write_text(preamble + "\n" + code)
 
@@ -191,6 +211,11 @@ def run_r_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch)
     from core.exec.output_cap import snip_middle
+    # Provenance: snapshot the R env with the SAME .libPaths() the run used.
+    from core.exec.fingerprint import package_versions_for_interpreter
+    _rpkg = package_versions_for_interpreter(str(rscript), "r",
+                                             r_preamble="\n".join(lib_lines))
+    _rver = _rpkg.pop("__lang_version__", "") if isinstance(_rpkg, dict) else ""
     out = {
         "stdout": snip_middle(result.stdout or ""),
         "stderr": snip_middle(result.stderr or ""),
@@ -201,6 +226,10 @@ def run_r_code(
         # Self-contained one-shot script.R — its producing_code reproduces it alone.
         "execution_mode": "stateless_r",
         "cwd": str(scratch),
+        "language": "r",
+        "language_version": _rver,
+        "package_versions": _rpkg,
+        "seed": 0,
     }
     if warns:
         out["figure_warnings"] = warns

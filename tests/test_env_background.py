@@ -121,3 +121,30 @@ def test_run_r_code_missing_env_errors(monkeypatch):
     monkeypatch.setattr(rmod, "_rscript", lambda: fake)
     r = run_r_code("cat(1)", project_id=pid, env="nope", timeout_s=20)
     assert "error" in r and "not available" in r["error"], r
+
+
+# ── Provenance Phase 1: background runs write an exec record ─────────────────
+def test_background_run_writes_exec_record():
+    """A background-style run gets a full exec record (code + env descriptor +
+    produced + seed + kind) so its artifacts become revisable/reproducible."""
+    from core.exec.run import run_python_code
+    from core.jobs.runner import _write_exec_record_for_job
+    from core.graph import exec_records as er
+    pid = projects.create_project("prov-bg")["id"]; projects.set_current(pid)
+    code = "print('hi'); open('out.csv','w').write('a,b\\n1,2\\n')"
+    res = run_python_code(code, project_id=pid, run_id="r-prov", timeout_s=60)
+    assert res.get("returncode") == 0, res
+    # the executor surfaced the env descriptor + seed for the record
+    assert "package_versions" in res and res.get("seed") == 0 and res.get("language") == "python"
+    job = {"id": "job_prov", "kind": "run_python", "focus_entity_id": None,
+           "params": {"code": code, "thread_id": "t1", "run_id": "r-prov", "project_id": pid}}
+    _write_exec_record_for_job(job, res, pid, pid)
+    eid = res.get("exec_id")
+    assert eid, "exec_id should be injected into the result"
+    rec = er.get(eid)
+    assert rec is not None
+    assert "open('out.csv'" in (rec.get("code") or "")
+    assert rec.get("language") == "python" and rec.get("kind") == "script"
+    assert rec.get("seed") == 0
+    assert isinstance(rec.get("package_versions"), dict)
+    assert any(p.get("kind") for p in (rec.get("produced") or [])), "produced recorded"
