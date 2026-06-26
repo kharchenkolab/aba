@@ -25,6 +25,17 @@ _BACKEND = os.path.normpath(os.path.join(_HERE, "..", "backend"))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
+# Force the test session onto a throwaway runtime so a sourced .env's
+# ABA_RUNTIME_DIR can't make test runs create projects / scribe-mirrors under the
+# OPERATOR's live runtime — the source of hundreds of junk projects polluting the
+# live instance. With lazy core.config this takes effect on every dir access; the
+# per-module fixture re-pins from each script-style module's own _tmp on top.
+import tempfile  # noqa: E402
+os.environ["ABA_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="aba_test_runtime_")
+for _k in ("ABA_PROJECTS_DIR", "DATA_DIR", "ARTIFACTS_DIR", "ABA_WORK_DIR",
+           "ABA_ENVS_DIR", "ABA_REFS_DIR"):
+    os.environ.pop(_k, None)
+
 
 import pytest
 
