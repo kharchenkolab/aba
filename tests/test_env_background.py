@@ -27,7 +27,7 @@ pytestmark = pytest.mark.platform
 from core import projects                                    # noqa: E402
 from core.graph.jobs import get_job                          # noqa: E402
 from core.jobs.runner import submit_python_job               # noqa: E402
-from core.exec.run import run_python_code                    # noqa: E402
+from core.exec.run import run_python_code, run_r_code         # noqa: E402
 from core.exec import isolated_env as iso                    # noqa: E402
 
 projects.init()
@@ -83,3 +83,41 @@ def test_default_run_unaffected():
     projects.set_current(pid)
     r = run_python_code("print('hello-default')", project_id=pid, timeout_s=30)
     assert r.get("returncode") == 0 and "hello-default" in (r.get("stdout") or "")
+
+
+# ── R isolated env (its lib FIRST on .libPaths(), standalone) ────────────────
+def test_submit_r_carries_env():
+    from core.jobs.runner import submit_r_job
+    pid = projects.create_project("envbg-rsubmit")["id"]
+    job = submit_r_job("cat(1)", "t", None, project_id=pid, env="renv")
+    assert get_job(job["id"], project_id=pid)["params"]["env"] == "renv"
+
+
+def test_run_r_code_isolated_env_preamble(monkeypatch):
+    """run_r_code(env=) prepends the isolated R lib to .libPaths() (standalone) —
+    mocks Rscript+executor so it runs without a provisioned R."""
+    pid = projects.create_project("envbg-rpre")["id"]; projects.set_current(pid)
+    lib = iso.r_env_lib("renv", pid); lib.mkdir(parents=True, exist_ok=True)
+    import core.exec.run as runmod, core.exec.r as rmod
+    fake = Path(tempfile.mktemp() + "_rscript"); fake.write_text("x")
+    monkeypatch.setattr(rmod, "_rscript", lambda: fake)
+    captured = {}
+    class _Res:
+        timed_out = False; cancelled = False; returncode = 0; stdout = ""; stderr = ""
+    def _exec(self, env, argv, **kw):
+        captured["script"] = Path(argv[-1]).read_text(); return _Res()
+    monkeypatch.setattr(runmod.MaterializingExecutor, "materialize",
+                        lambda self, prov: type("E", (), {"python": None})())
+    monkeypatch.setattr(runmod.MaterializingExecutor, "exec", _exec)
+    run_r_code("cat('hi')", project_id=pid, env="renv", timeout_s=30)
+    s = captured.get("script", "")
+    assert str(lib) in s and ".libPaths(c(" in s, s
+
+
+def test_run_r_code_missing_env_errors(monkeypatch):
+    pid = projects.create_project("envbg-rmiss")["id"]; projects.set_current(pid)
+    import core.exec.r as rmod
+    fake = Path(tempfile.mktemp() + "_rs"); fake.write_text("x")
+    monkeypatch.setattr(rmod, "_rscript", lambda: fake)
+    r = run_r_code("cat(1)", project_id=pid, env="nope", timeout_s=20)
+    assert "error" in r and "not available" in r["error"], r

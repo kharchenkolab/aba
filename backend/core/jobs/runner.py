@@ -338,7 +338,8 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
             result_obj = await loop.run_in_executor(
                 None,
                 lambda: run_r_code(code, project_id=str(effective_pid), run_id=job_id,
-                                   timeout_s=timeout_s, cancel_token=token),
+                                   timeout_s=timeout_s, cancel_token=token,
+                                   env=params.get("env")),
             )
         else:
             result_obj = await loop.run_in_executor(
