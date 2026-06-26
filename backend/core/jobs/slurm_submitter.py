@@ -54,7 +54,7 @@ class SlurmSubmitter:
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             "run_id": job["id"], "timeout_s": int(params.get("timeout_s") or 600),
-            "result_path": str(result_path),
+            "result_path": str(result_path), "env": params.get("env"),
         }))
         job_sh = run_dir / "job.sh"
         job_sh.write_text(

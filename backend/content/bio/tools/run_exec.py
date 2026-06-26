@@ -610,19 +610,21 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
-    if choice.location == "background" and not env_name:
+    if choice.location == "background":
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
         # HPC sizing (ondemand.md P6): carry the agent's estimate so a Slurm
         # deployment can pick a partition/QoS + cpus/mem/walltime. Harmless to the
-        # local submitter (it ignores it).
+        # local submitter (it ignores it). `env_name` (an isolated env, already
+        # ensure_env_built above) is carried so the job runs IN that env — the
+        # background executor / slurm_entry activate it (standalone, its own python).
         est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
                "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
                                 focus_entity_id=(ctx or {}).get("focus_entity_id"),
                                 timeout_s=timeout_s, project_id=str(project_id),
                                 thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                                estimate=est)
+                                estimate=est, env=env_name)
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",

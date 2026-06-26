@@ -26,6 +26,7 @@ def run_python_code(
     run_id: Optional[str] = None,
     timeout_s: int = 90,
     cancel_token=None,
+    env: Optional[str] = None,
 ) -> dict:
     """Run `code` in the project's scratch workspace and return the run_python
     result shape ({stdout, stderr, returncode, plots, tables} | {error} |
@@ -35,20 +36,40 @@ def run_python_code(
     run_id = run_id or uuid.uuid4().hex
     scratch = scratch_dir(str(project_id), str(run_id))
 
-    # Preamble: DATA_DIR prepended; the pylib overlay APPENDED so the .venv
-    # wins and the overlay only supplies what's missing. DATA_DIR is per-
-    # project (post 2026-05-31 reorg).
+    # §11: an ISOLATED env (run_python(env=…, background=True)) runs STANDALONE —
+    # its OWN python, no project overlay — matching the interactive isolated-env
+    # kernel. bind the project so ensure_env_built / env_python resolve THIS
+    # project's env (the background worker doesn't pin a project, and a Slurm node
+    # shares the FS + lock so it can use or rebuild the env).
+    interp: Optional[str] = None
+    if env:
+        from core.exec import isolated_env as iso
+        from core import projects as _projects
+        try:
+            with _projects.bind(str(project_id)):
+                iso.ensure_env_built(env)       # rebuild from lock if a GC reclaimed it
+        except Exception:  # noqa: BLE001
+            pass
+        py = iso.env_python(env, str(project_id))
+        if not py.exists():
+            return {"error": f"isolated env {env!r} is not available (project {project_id})."}
+        interp = str(py)
+
+    # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
+    # appended (the .venv wins, overlay fills gaps). An isolated env is
+    # standalone — skip the overlay so its own site-packages are authoritative.
     from core.config import current_project_id, project_data_dir
-    _pid = current_project_id()
+    _pid = str(project_id) if env else current_project_id()
     _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
-    for _p in reversed(list(project_pylib_paths(_pid))):
-        lines.append(f"_sys.path.insert(0, {str(_p)!r})")
+    if not env:
+        # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
+        for _p in reversed(list(project_pylib_paths(_pid))):
+            lines.append(f"_sys.path.insert(0, {str(_p)!r})")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
 
     ex = MaterializingExecutor()
-    env = ex.materialize(Provisioning())          # base venv + tools-env PATH overlay
+    menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
@@ -63,7 +84,7 @@ def run_python_code(
         "MPLBACKEND": "Agg",
     }
     result = ex.exec(
-        env, [env.python or sys.executable, str(scratch / "script.py")],
+        menv, [interp or menv.python or sys.executable, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars,
     )
