@@ -321,50 +321,60 @@ async def shutdown():
     any survivors FAILED on next boot, so we don't leak Turn rows."""
     import asyncio
     from core.runtime import turn_sink, cancellation
+
+    def _kill_owned_kernels():
+        # SIGKILL all owned kernel subprocesses. atexit doesn't fire on SIGTERM,
+        # and a signal-handler-in-worker is unreliable; the FastAPI shutdown
+        # lifecycle IS invoked on uvicorn graceful exits, so we shoot the kernels
+        # here. Prevents the orphan/zombie accumulation PK observed.
+        try:
+            from core.exec.kernels import get_pool
+            import os, signal
+            pids = get_pool().owned_kernel_pids()
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if pids:
+                print(f"[shutdown] SIGKILLed {len(pids)} owned kernel subprocess(es)")
+        except Exception as e:  # noqa: BLE001
+            print(f"[shutdown] kernel cleanup failed (non-fatal): {e}")
+
     rids = turn_sink.active_ids()
-    if not rids:
-        return
-    print(f"[shutdown] cancelling {len(rids)} in-flight Turn task(s): {rids}")
     # 1. Fire cancel tokens — co-operative shutdown if the loop is at an
     #    iteration boundary or inside a cancellable tool.
-    for rid in rids:
-        tok = cancellation.get(rid)
-        if tok is not None:
-            try: tok.cancel(reason="backend shutdown")
-            except Exception: pass    # noqa: BLE001
-    # 2. Give them a short grace period to land.
-    tasks = [s._task for s in (turn_sink.get(rid) for rid in rids)
-             if s is not None and s._task is not None and not s._task.done()]
-    if tasks:
-        try:
-            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True),
-                                   timeout=3.0)
-        except asyncio.TimeoutError:
-            print(f"[shutdown] {sum(1 for t in tasks if not t.done())} task(s) "
-                  f"didn't honor cancel — forcing task.cancel()")
-            # 3. Hard cancel — the next startup's reaper will tidy the DB.
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-    # 4. SIGKILL all owned kernel subprocesses. atexit-only doesn't fire on
-    #    SIGTERM (the reload/supervised exit path); signal-handler-in-worker
-    #    is unreliable under multiprocessing.spawn. The FastAPI shutdown
-    #    lifecycle, by contrast, IS invoked on uvicorn graceful exits — so
-    #    that's where we shoot the kernels. Prevents the orphan accumulation
-    #    PK observed (~15 GB resident, ~10 zombies, 2026-06-03).
-    try:
-        from core.exec.kernels import get_pool
-        import os, signal
-        pids = get_pool().owned_kernel_pids()
-        for pid in pids:
+    if rids:
+        print(f"[shutdown] cancelling {len(rids)} in-flight Turn task(s): {rids}")
+        for rid in rids:
+            tok = cancellation.get(rid)
+            if tok is not None:
+                try: tok.cancel(reason="backend shutdown")
+                except Exception: pass    # noqa: BLE001
+    # 2. Kill kernels BEFORE awaiting the tasks. A turn wedged in a kernel exec
+    #    (run_in_executor — uninterruptible from Python; the cancel token only
+    #    lands at iteration boundaries) unblocks ONLY when its kernel dies. Killing
+    #    kernels first lets the exec's kernel_dead watchdog fail-fast so the task
+    #    can actually finish in the grace window — otherwise the await below hangs
+    #    forever and uvicorn never exits (the orphaned, spinning-worker incident).
+    #    Always reap, even with no active turns, so idle kernels don't leak.
+    _kill_owned_kernels()
+    # 3. Give the tasks a short grace to land now that their kernels are gone.
+    if rids:
+        tasks = [s._task for s in (turn_sink.get(rid) for rid in rids)
+                 if s is not None and s._task is not None and not s._task.done()]
+        if tasks:
             try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        if pids:
-            print(f"[shutdown] SIGKILLed {len(pids)} owned kernel subprocess(es)")
-    except Exception as e:  # noqa: BLE001
-        print(f"[shutdown] kernel cleanup failed (non-fatal): {e}")
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True),
+                                       timeout=3.0)
+            except asyncio.TimeoutError:
+                print(f"[shutdown] {sum(1 for t in tasks if not t.done())} task(s) "
+                      f"didn't honor cancel — forcing task.cancel()")
+                # 4. Hard cancel — the next startup's reaper will tidy the DB.
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+    _kill_owned_kernels()   # 5. belt + braces — reap any kernel started since
 
 
 # ---------- Projects ----------

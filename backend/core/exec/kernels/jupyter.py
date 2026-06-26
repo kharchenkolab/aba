@@ -529,6 +529,7 @@ class JupyterKernelSession:
         # heeds it); we escalate to a hard kill below if it doesn't.
         unregister = cancel_token.register(self.interrupt) if cancel_token is not None else None
         cancelled = False
+        kernel_died = False
         worker.start()
         try:
             while worker.is_alive():
@@ -540,6 +541,14 @@ class JupyterKernelSession:
                 if cancel_token is not None and getattr(cancel_token, "cancelled", False):
                     cancelled = True
                     break
+                # Watchdog: a kernel that died / was killed mid-run leaves the
+                # worker blocked on a reply that never arrives — stop instead of
+                # hanging (or spinning on its dead channels) forever. This is the
+                # orphaned-uvicorn incident: a dead R kernel + a turn that never
+                # returned, pegging CPU and wedging the chat (and the shutdown).
+                if self.kernel_dead():
+                    kernel_died = True
+                    break
         finally:
             if unregister is not None:
                 unregister()
@@ -549,6 +558,23 @@ class JupyterKernelSession:
                 coalescer.flush(reason="final")
             except Exception:  # noqa: BLE001
                 pass
+
+        if kernel_died:
+            # The kernel process exited mid-run — the session is unusable. Reap it
+            # (closes the dead channels so the daemon worker unblocks) and drop it
+            # so the pool spawns a fresh kernel next call. Fail the turn with an
+            # actionable message instead of a silent hang/spin.
+            print(f"[kernel] {self.kernel_pid()} died mid-exec — failing turn + "
+                  f"resetting session", flush=True)
+            self.shutdown()
+            self.alive = False
+            self.touch()
+            msg = (err_tb or "".join(stderr)).strip() or (
+                "The compute kernel process died mid-execution (it was killed, "
+                "crashed, or ran out of memory). The session has been reset — "
+                "rerun the cell.")
+            return ExecResult(returncode=1, stdout="".join(stdout), stderr=msg,
+                              cancelled=False, timed_out=False)
 
         if cancelled:
             # SIGINT already fired via the token. Give the cell a short grace to
@@ -619,14 +645,51 @@ class JupyterKernelSession:
         except Exception:  # noqa: BLE001
             pass
 
-    def kernel_pid(self) -> Optional[int]:
-        """The OS pid of the kernel subprocess, or None if unknown.
-        Read from KernelManager's Popen (jupyter_client stores it as `.kernel`
-        — old API — or `.provisioner.proc` — newer)."""
+    def _kernel_proc(self):
+        """The kernel subprocess Popen across jupyter_client versions: old API
+        `km.kernel`, newer `km.provisioner.process` (8.x) / `.proc`. Returns None
+        if not resolvable (then callers fall back to the pid)."""
         try:
             km = self._km
-            proc = getattr(km, "kernel", None) or getattr(
-                getattr(km, "provisioner", None), "proc", None)
-            return getattr(proc, "pid", None)
+            prov = getattr(km, "provisioner", None)
+            return (getattr(km, "kernel", None)
+                    or getattr(prov, "process", None)
+                    or getattr(prov, "proc", None))
         except Exception:  # noqa: BLE001
             return None
+
+    def kernel_pid(self) -> Optional[int]:
+        """The OS pid of the kernel subprocess, or None if unknown. NB: prior to
+        this fix the accessor missed jupyter_client 8.x's `provisioner.process`/
+        `.pid`, so this returned None and owned_kernel_pids()/shutdown could never
+        find kernels to reap — a root cause of the orphan/zombie pileup."""
+        pid = getattr(self._kernel_proc(), "pid", None)
+        if pid:
+            return pid
+        try:  # provisioner may expose the pid even when the Popen isn't reachable
+            return getattr(getattr(self._km, "provisioner", None), "pid", None)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def kernel_dead(self) -> bool:
+        """True if the kernel PROCESS has exited. Cheap (Popen.poll() or
+        os.kill(pid,0) — no zmq heartbeat) — the exec watchdog uses it to stop
+        waiting on a kernel that died/was killed mid-run instead of hanging (or
+        spinning on its dead channels) forever. poll() also reaps the zombie."""
+        proc = self._kernel_proc()
+        if proc is not None:
+            try:
+                return proc.poll() is not None
+            except Exception:  # noqa: BLE001
+                pass
+        pid = self.kernel_pid()
+        if pid is None:
+            return False                      # unknown — don't falsely report dead
+        try:
+            import os as _os
+            _os.kill(pid, 0)
+            return False                      # alive
+        except ProcessLookupError:
+            return True                       # gone
+        except Exception:  # noqa: BLE001
+            return False                      # exists but no signal perm → alive
