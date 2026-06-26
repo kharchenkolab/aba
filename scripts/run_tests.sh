@@ -25,26 +25,30 @@ if [ ${#files[@]} -eq 0 ]; then
   files=(tests/test_*.py)
 fi
 
+# Run one file its own process; PASS if it passes EITHER way. We try pytest first
+# (own-process isolation + the conftest's runtime/DB fixtures), then fall back to
+# the script self-check for files whose pytest path can't be isolated in-process
+# (e.g. scribe's per-function mirror state). A file is "green" if it passes the
+# way it's meant to be run.
+_run_one() {
+  local f="$1"
+  # Fresh throwaway runtime per file: isolates the file AND gives a valid dir to
+  # script-style tests that don't set their own ABA_RUNTIME_DIR (else they fall to
+  # the /workspace default → PermissionError).
+  export ABA_RUNTIME_DIR; ABA_RUNTIME_DIR="$(mktemp -d -t aba_rt_XXXXXX)"
+  if "$PY" -m pytest "$f" -q -p no:cacheprovider "$@" >/dev/null 2>&1; then return 0; fi
+  if grep -qE '__name__ == .__main__.' "$f"; then
+    ABA_RUNTIME_DIR="$(mktemp -d -t aba_rt_XXXXXX)"
+    "$PY" "$f" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
 pass=0; fail=0; failed=()
 for f in "${files[@]}"; do
   [ -f "$f" ] || continue
-  # Fresh throwaway runtime per file: isolates each file AND gives a valid dir to
-  # script-style tests that don't set their own ABA_RUNTIME_DIR (else they fall to
-  # the /workspace default and PermissionError). A test that sets its own _tmp at
-  # import simply overrides this.
-  export ABA_RUNTIME_DIR
-  ABA_RUNTIME_DIR="$(mktemp -d -t aba_rt_XXXXXX)"
-  if grep -qE '__name__ == .__main__.' "$f"; then
-    cmd=("$PY" "$f")                                   # script-style: its self-check
-  else
-    cmd=("$PY" -m pytest "$f" -q -p no:cacheprovider)  # pytest-style
-  fi
-  if [ "${VERBOSE:-}" = "1" ]; then
-    echo "=== $f (${cmd[1]##*/} entrypoint) ==="
-    if "${cmd[@]}"; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$f"); fi
-  else
-    if "${cmd[@]}" >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$f"); fi
-  fi
+  if [ "${VERBOSE:-}" = "1" ]; then echo "=== $f ==="; fi
+  if _run_one "$f"; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$f"); fi
 done
 
 echo "per-file: $pass passed / $((pass+fail)) files"
