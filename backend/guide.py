@@ -305,10 +305,8 @@ async def stream_response(
     # extraction into Agent.run() is deferred; for now the spec is
     # consulted for model + role only, while the loop body stays here.
     from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
-    from core.config import current_model_for_primary
-    # Resolution precedence is encoded in resolve_spec_for_turn():
-    #   request_override → thread.metadata.spec → ABA_PRIMARY_SPEC env →
-    #   "guide" default
+    from core.config import current_model_for_project, current_project_id
+    from core.llm_catalog import spec_for_model
     # Look up the thread's pinned spec only if a real thread id was
     # passed; "default" is a sentinel the chat handler may not have
     # materialized yet, and we don't want to introduce side effects
@@ -320,21 +318,28 @@ async def stream_response(
             thread_spec = get_thread_spec(thread_id)
         except Exception:                                    # noqa: BLE001
             thread_spec = None
+    # Resolve the primary MODEL first, PER PROJECT, at the turn boundary (not
+    # import time) so the Settings model selector takes effect on the next turn
+    # without a backend restart. Precedence: env override > the project's
+    # selected model > config.env > bundle default_model > snapshot. See
+    # core.config.current_model_for_project.
+    _pid = current_project_id()
+    guide_model = current_model_for_project(_pid)
+    # The SPEC follows the chosen model via the install-wide catalog
+    # (llm_catalog), unless a request/thread override pins it. Precedence:
+    #   request_override → thread.metadata.spec → catalog[model].spec →
+    #   bundle primary_spec → "guide".
     spec_name = resolve_spec_for_turn(
-        request_override=spec_override, thread_spec=thread_spec)
+        request_override=spec_override, thread_spec=thread_spec,
+        project_default=spec_for_model(guide_model))
     spec = get_agent_spec(spec_name)
     if spec is None and spec_name != "guide":
         print(f"[guide] WARNING: spec={spec_name!r} "
               f"is not registered; falling back to 'guide'", flush=True)
         spec_name = "guide"
         spec = get_agent_spec(spec_name)
-    # Resolve the primary model AT THE TURN BOUNDARY (not import time) so
-    # the tray / Control-page model selector takes effect on the next turn
-    # without a backend restart. Precedence: live env vars > config.env >
-    # spec.model (YAML default) > module MODEL constant. See
-    # core.config.current_model_for_primary for the full chain.
-    guide_model = current_model_for_primary(
-        default=(spec.model if spec else None))
+    if not guide_model and spec:
+        guide_model = spec.model
 
     # Turn checkpointing (Pass E): create a Turn row at the start; update
     # state through transitions; mark DONE/FAILED at the end. Lets resume-

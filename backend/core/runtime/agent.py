@@ -241,7 +241,8 @@ def resolve_primary_spec_name() -> str:
 
 
 def resolve_spec_for_turn(*, request_override: Optional[str] = None,
-                          thread_spec: Optional[str] = None) -> str:
+                          thread_spec: Optional[str] = None,
+                          project_default: Optional[str] = None) -> str:
     """Pick the primary spec for ONE turn.
 
     Precedence (highest → lowest):
@@ -250,14 +251,17 @@ def resolve_spec_for_turn(*, request_override: Optional[str] = None,
       2. thread_spec        — thread.metadata.spec, pinned at thread
                               creation or via a later /thread settings
                               edit
-      3. resolve_primary_spec_name() — env var ABA_PRIMARY_SPEC, or
-                              the "guide" default
+      3. project_default    — the spec the project's selected MODEL runs on
+                              (llm_catalog.spec_for_model); the model is the
+                              user-facing per-project knob, the spec follows
+      4. resolve_primary_spec_name() — env var ABA_PRIMARY_SPEC, bundle
+                              primary_spec, or the "guide" default
 
     Empty strings and whitespace are treated as "unset", so a UI that
     clears its dropdown to `""` falls through correctly. Returns a
     name — callers do get_agent_spec(name) and handle the None case.
     """
-    for candidate in (request_override, thread_spec):
+    for candidate in (request_override, thread_spec, project_default):
         if candidate and candidate.strip():
             return candidate.strip()
     return resolve_primary_spec_name()

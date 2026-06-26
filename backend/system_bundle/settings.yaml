@@ -17,3 +17,20 @@ advisor_model: claude-haiku-4-5-20251001
 # spec files. ABA_PRIMARY_SPEC env still takes precedence for one-off
 # operator overrides per core.runtime.agent.resolve_primary_spec_name.
 primary_spec: grounded_guide
+
+# Model catalog for the in-app model selector (Settings → LLM). Each entry maps
+# a user-facing model to the agent spec it runs on. The user picks a MODEL
+# per-project; the spec follows from this table. Anthropic models all run on
+# grounded_guide today; a future local model can carry its own spec (e.g.
+# lean_qwen_guide) by adding a row here. Institution/lab/user bundles can extend
+# this list (settings.yaml lists extend across scopes).
+llm_models:
+  - label: Haiku
+    model: claude-haiku-4-5-20251001
+    spec: grounded_guide
+  - label: Sonnet
+    model: claude-sonnet-4-6
+    spec: grounded_guide
+  - label: Opus
+    model: claude-opus-4-8
+    spec: grounded_guide

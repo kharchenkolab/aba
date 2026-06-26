@@ -1108,6 +1108,42 @@ def specs_primary_list():
     return {"specs": items, "default": active}
 
 
+class LlmSelectRequest(BaseModel):
+    model: str
+
+
+def _llm_current(pid: str) -> dict:
+    from core.llm_catalog import spec_for_model, label_for_model
+    from core.config import current_model_for_project
+    from core import projects
+    m = current_model_for_project(pid)
+    return {"model": m, "spec": spec_for_model(m), "label": label_for_model(m),
+            "pinned": bool(projects.project_model(pid))}
+
+
+@app.get("/api/settings/llm")
+def settings_llm_get(_pid: str = Depends(require_project)):
+    """Model selector for the CURRENT project (Settings → LLM): the install-wide
+    catalog (model→spec, from system_bundle/settings.yaml) plus what's active now.
+    The user picks a model; the agent spec follows from the catalog."""
+    from core.llm_catalog import llm_models
+    return {"options": llm_models(), "current": _llm_current(_pid)}
+
+
+@app.post("/api/settings/llm")
+def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)):
+    """Pin a model on the current project. Empty string clears the pin (revert to
+    the global/bundle default). Validated against the catalog; takes effect on the
+    next turn (resolution is live)."""
+    from core.llm_catalog import is_known_model
+    from core import projects
+    model = (req.model or "").strip()
+    if model and not is_known_model(model):
+        raise HTTPException(400, f"unknown model: {model!r}")
+    projects.set_project_model(_pid, model)
+    return {"ok": True, "current": _llm_current(_pid)}
+
+
 @app.post("/api/threads")
 def threads_create(req: ThreadRequest):
     from core.graph.threads import create_thread

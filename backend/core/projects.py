@@ -331,6 +331,35 @@ def rename_project(pid: str, name: str) -> None:
     _emit_project_meta(pid)
 
 
+def project_model(pid: str) -> str:
+    """The per-project LLM model the user selected (Settings → LLM), or "" if
+    none. Stored on the registry entry; the chat loop resolves it via
+    config.current_model_for_project(). SINGLE mode has no registry → "" (falls
+    through to the global/bundle default)."""
+    if SINGLE or not pid:
+        return ""
+    for p in _load():
+        if p.get("id") == pid:
+            return (p.get("model") or "").strip()
+    return ""
+
+
+def set_project_model(pid: str, model: str) -> None:
+    """Pin (or clear, if `model` is falsy) the project's LLM model on its
+    registry entry. Takes effect on the next turn (resolution is live)."""
+    if SINGLE:
+        return
+    with _locked_registry() as reg:
+        for p in reg:
+            if p["id"] == pid:
+                if (model or "").strip():
+                    p["model"] = model.strip()
+                else:
+                    p.pop("model", None)
+                break
+    _emit_project_meta(pid)
+
+
 def delete_project(pid: str) -> None:
     if SINGLE:
         return
