@@ -261,3 +261,27 @@ def test_nextflow_container_trace_parse():
     assert _parse_nextflow_containers(p) == [
         "quay.io/biocontainers/fastqc:0.12.1", "quay.io/biocontainers/multiqc:1.21"]
     assert _parse_nextflow_containers(Path("/nonexistent")) == []
+
+
+def test_env_manifest_dedup_roundtrip():
+    """provenance.md §3.1: package_versions is stored once content-addressed and
+    re-inflated on read — the sidecar stays slim, callers still see the versions."""
+    import json, tempfile
+    from pathlib import Path
+    from core.graph import exec_records as er
+    from core.exec.fingerprint import env_fingerprint
+    from core.exec.env_manifest import load as manifest_load
+    pid = projects.create_project("prov-dedup")["id"]; projects.set_current(pid)
+    pkg = {"numpy": "1.26.0", "pandas": "2.2.0", "scipy": "1.13.0"}
+    fp = env_fingerprint("3.12.0", pkg)
+    eid = er.create(thread_id="t", run_id=None, tool_use_id=None, tool_name="run_python",
+                    status="ok", code="x=1", started_at="2026-06-26T00:00:00+00:00",
+                    cwd=tempfile.mkdtemp(),
+                    payload={"language": "python", "language_version": "3.12.0",
+                             "package_versions": pkg, "env_fingerprint": fp})
+    rec = er.get(eid)
+    raw = json.loads(Path(rec["record_path"]).read_text())
+    assert "package_versions" not in raw, "sidecar should be deduped (no inline pkg list)"
+    assert raw.get("env_fingerprint") == fp
+    assert rec.get("package_versions") == pkg, "get() re-inflates package_versions"
+    assert manifest_load(fp).get("package_versions") == pkg, "shared manifest stored once"
