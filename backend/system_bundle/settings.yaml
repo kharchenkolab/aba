@@ -32,5 +32,5 @@ llm_models:
     model: claude-sonnet-4-6
     spec: grounded_guide
   - label: Opus
-    model: claude-opus-4-8
+    model: claude-opus-4-7
     spec: grounded_guide
