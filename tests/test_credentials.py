@@ -43,3 +43,30 @@ def test_credentials_status_set_key_and_oauth(tmp_path, monkeypatch):
     # switching back to an API key clears the OAuth creds
     st = credentials.set_api_key("sk-ant-" + "c" * 30)
     assert st["mode"] == "apikey" and "CLAUDE_CODE_OAUTH_TOKEN" not in credentials.read()
+
+
+def test_set_credential_detect_check_save(tmp_path, monkeypatch):
+    """Unified entry: detect API-key vs OAuth, verify (mocked) before persisting."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL"):
+        monkeypatch.delenv(k, raising=False)
+    from core import credentials
+    # bad format → rejected BEFORE any API call or write
+    with pytest.raises(ValueError):
+        credentials.set_credential("garbage")
+    assert not (tmp_path / "config.env").exists()
+    # mock the Anthropic verification so no real call happens
+    seen = []
+    monkeypatch.setattr(credentials, "_test_credential",
+                        lambda kind, cred: (seen.append(kind) or (True, None)))
+    st = credentials.set_credential("sk-ant-" + "a" * 30)
+    assert seen[-1] == "apikey" and st["mode"] == "apikey" and st["has_api_key"] and st["valid"]
+    st = credentials.set_credential("sk-ant-oat" + "b" * 30)         # OAuth detected first
+    assert seen[-1] == "oauth" and st["mode"] == "oauth_cc" and st["has_oauth"]
+    # a credential Anthropic rejects → ValueError, nothing persisted
+    monkeypatch.setattr(credentials, "_test_credential",
+                        lambda kind, cred: (False, "rejected by Anthropic"))
+    with pytest.raises(ValueError, match="rejected"):
+        credentials.set_credential("sk-ant-" + "c" * 30)
+    # still the previous (oauth) creds — the rejected one wasn't written
+    assert credentials.read().get("ABA_LLM_CREDENTIAL") == "oauth_cc"

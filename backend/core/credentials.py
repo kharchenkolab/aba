@@ -99,6 +99,8 @@ def status() -> dict:
               or cfg.get("CLAUDE_CODE_OAUTH_TOKEN") or "")
     # Use the SAME resolver a turn uses (oauth.json → CLAUDE_CODE_OAUTH_TOKEN →
     # ~/.claude/.credentials.json) so status matches reality, not just our keys.
+    # _oauth_bearer() returns None for an expired-with-no-refresh token, so
+    # oauth_active already means "present AND usable".
     oauth_active = False
     expires_at = None
     source = None
@@ -113,17 +115,37 @@ def status() -> dict:
             source = "pasted_token"
         elif oauth_active:
             source = "claude_cli"          # ~/.claude/.credentials.json
+            expires_at = _claude_cli_expiry()
     except Exception:  # noqa: BLE001
         oauth_active = bool(pasted)
         source = "pasted_token" if pasted else None
+    has_api_key = bool(api_key)
     return {
         "mode": mode,
-        "has_api_key": bool(api_key),
+        "has_api_key": has_api_key,
         "key_suffix": api_key[-4:] if api_key else None,
         "has_oauth": oauth_active,
         "oauth_source": source,
         "oauth_expires_at": expires_at,
+        # The UI shows status+Change when valid, and the input field immediately
+        # when not. An API key is "valid" if present (it's verified on save);
+        # OAuth validity already factors in expiry via _oauth_bearer.
+        "valid": has_api_key or oauth_active,
     }
+
+
+def _claude_cli_expiry():
+    """expiresAt (→ unix seconds) from ~/.claude/.credentials.json, or None."""
+    import json
+    p = os.path.expanduser("~/.claude/.credentials.json")
+    try:
+        oa = (json.load(open(p)).get("claudeAiOauth") or {})
+        e = oa.get("expiresAt")
+        if isinstance(e, (int, float)):
+            return int(e / 1000)            # stored as ms
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def set_api_key(key: str) -> dict:
@@ -157,3 +179,52 @@ def set_oauth_token(token: str) -> dict:
     os.environ["ABA_LLM_CREDENTIAL"] = "oauth_cc"
     _clear_llm_client_cache()
     return status()
+
+
+def _detect_kind(cred: str) -> str | None:
+    """'oauth' for sk-ant-oat…, 'apikey' for sk-ant-…, else None. OAuth tokens
+    also start with sk-ant-, so the oat prefix must be checked first."""
+    if _OAUTH_TOKEN_RE.match(cred):
+        return "oauth"
+    if _API_KEY_RE.match(cred):
+        return "apikey"
+    return None
+
+
+def _test_credential(kind: str, cred: str) -> tuple[bool, str | None]:
+    """Make a 1-token Haiku call to confirm Anthropic accepts the credential
+    BEFORE we persist. (True, None) on success; (False, message) otherwise."""
+    import anthropic
+    try:
+        from core.llm import _httpx_sync_client
+        http = _httpx_sync_client()
+    except Exception:  # noqa: BLE001
+        http = None
+    kw = {"http_client": http} if http is not None else {}
+    try:
+        client = (anthropic.Anthropic(auth_token=cred, **kw) if kind == "oauth"
+                  else anthropic.Anthropic(api_key=cred, **kw))
+        client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=1,
+                               messages=[{"role": "user", "content": "hi"}])
+        return True, None
+    except anthropic.AuthenticationError:
+        return False, "Anthropic rejected the credential — authentication failed."
+    except anthropic.PermissionDeniedError:
+        return False, "Anthropic denied this credential — permission denied."
+    except Exception as e:  # noqa: BLE001
+        return False, f"Could not verify the credential ({type(e).__name__})."
+
+
+def set_credential(cred: str) -> dict:
+    """Single entry point for Settings → Model account: detect whether it's an API
+    key or a pasted OAuth token, VERIFY it against Anthropic, then persist + go
+    live. Raises ValueError (→ HTTP 400) on bad format or rejection — nothing is
+    written unless the credential actually works."""
+    cred = (cred or "").strip()
+    kind = _detect_kind(cred)
+    if kind is None:
+        raise ValueError("That doesn't look like an Anthropic API key (expected sk-ant-…).")
+    ok, err = _test_credential(kind, cred)
+    if not ok:
+        raise ValueError(err or "The credential was rejected.")
+    return set_oauth_token(cred) if kind == "oauth" else set_api_key(cred)

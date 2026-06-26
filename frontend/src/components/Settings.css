@@ -163,3 +163,16 @@
 .cred-row button { padding: 8px 16px; border: 1px solid #2563eb; background: #2563eb; color: #fff;
   border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; }
 .cred-row button:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Model account: status row + change/cancel ─────────────────────────── */
+.cred-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.cred-status__dot { font-size: 10px; line-height: 1; }
+.cred-status__dot.is-ok { color: #16a34a; }
+.cred-status__dot.is-bad { color: #dc2626; }
+.cred-status__text { font-size: 14px; color: #334155; }
+.cred-status__change { margin-left: auto; padding: 5px 12px; border: 1px solid #cbd5e1;
+  background: #fff; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px; color: #334155; }
+.cred-status__change:hover { background: #f8fafc; border-color: #94a3b8; }
+.cred-cancel { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #475569;
+  border-radius: 6px; cursor: pointer; font: inherit; }
+.cred-cancel:hover { background: #f8fafc; }
