@@ -488,14 +488,15 @@ export function HpcSessionCard() {
     return () => { alive = false; window.clearInterval(h) }
   }, [])
   if (!s) return null
+  const slurm = s.on_slurm || s.submitter === 'slurm'
   return (
-    <div className={`hpc-session${s.on_slurm ? ' hpc-session--slurm' : ''}`}>
+    <div className={`hpc-session${slurm ? ' hpc-session--slurm' : ''}`}>
       <div className="hpc-session__head">
-        <span className="hpc-session__badge">{s.on_slurm ? 'HPC · Slurm' : 'Local'}</span>
+        <span className="hpc-session__badge">{s.on_slurm ? 'HPC · Slurm' : (s.submitter === 'slurm' ? 'Slurm' : 'Local')}</span>
         <span className="hpc-session__where">
           {s.on_slurm
             ? <>node <code className="jobs__mono">{s.node || '—'}</code>{s.partition ? ` · ${s.partition}` : ''}</>
-            : <>this machine</>}
+            : (s.submitter === 'slurm' ? <>jobs submit to the Slurm cluster</> : <>this machine</>)}
         </span>
       </div>
       <div className="hpc-session__stats">
