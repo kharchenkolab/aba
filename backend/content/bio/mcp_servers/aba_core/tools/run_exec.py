@@ -58,7 +58,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
         environment you created with `make_isolated_env(name='name')` —
-        used when a package conflicts with the base.
+        used when a package conflicts with the base. `env` combines with
+        `background=True`: a long job runs IN that env (its own python),
+        as a Slurm job on a compute node when on a cluster.
 
         INSTALLING PACKAGES: to use a library that isn't already in the
         sandbox, call `ensure_capability(name)` FIRST — NEVER `pip install`,
