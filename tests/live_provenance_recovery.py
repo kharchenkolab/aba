@@ -115,10 +115,26 @@ def main() -> int:
     n_runs_after = len(_q(pid, "SELECT exec_id FROM execution_records"))
     new_runs = n_runs_after - n_runs_before
     print(f"used provenance tool: {used_prov} | new exec records: {new_runs}")
-    if used_prov or new_runs >= 1:
-        print("PASS: fresh agent recovered the backgrounded figure from its provenance.")
+    if not (used_prov or new_runs >= 1):
+        print(f"FAIL: fresh agent did not reproduce (calls={[c[0] for c in calls]}).")
+        return 1
+    print("PASS [reproduce]: fresh agent recovered the backgrounded figure from provenance.")
+
+    # ── Scenario 2: REVISE (the primary verb) — another fresh thread ────────
+    tid_c = _fresh_thread(pid, "revise")
+    print(f"threadC={tid_c} (fresh — revise OrigFig)")
+    runs_b = len(_q(pid, "SELECT exec_id FROM execution_records"))
+    calls2, _t2, _h2, _r2, _e2 = _consume_chat_sse(
+        pid, tid_c,
+        "Revise the figure 'OrigFig': change its title to 'Revised Title', keeping "
+        "everything else the same.", max_turns=6)
+    print("revise tool calls:", [c[0] for c in calls2])
+    used_rev = any(c[0] == "make_revision" for c in calls2)
+    runs_a = len(_q(pid, "SELECT exec_id FROM execution_records"))
+    if used_rev or runs_a > runs_b:
+        print("PASS [revise]: fresh agent revised the backgrounded figure from provenance.")
         return 0
-    print(f"FAIL: fresh agent did not reproduce (calls={[c[0] for c in calls]}).")
+    print(f"FAIL: revise did not happen (calls={[c[0] for c in calls2]}).")
     return 1
 
 
