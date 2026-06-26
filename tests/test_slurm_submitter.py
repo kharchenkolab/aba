@@ -110,12 +110,12 @@ def slurm(monkeypatch):
     return bindir
 
 
-def _mk_job(pid: str, code="print('x')", kind="run_python", estimate=None) -> dict:
+def _mk_job(pid: str, code="print('x')", kind="run_python", estimate=None, env=None) -> dict:
     import uuid
     jid = f"job_{uuid.uuid4().hex[:10]}"
     return create_job(job_id=jid, kind=kind, title="t", focus_entity_id=None,
                       params={"code": code, "timeout_s": 60, "project_id": pid,
-                              "estimate": estimate or {}}, project_id=pid)
+                              "estimate": estimate or {}, "env": env}, project_id=pid)
 
 
 def test_submit_stores_slurm_id(slurm):
@@ -293,3 +293,15 @@ def test_submit_omits_mem_when_zero(slurm, monkeypatch):
     args = args_file.read_text()
     assert "--mem=" not in args, args
     assert "--cpus-per-task=1" in args and "--partition=normal" in args
+
+
+def test_submit_spec_carries_env(slurm):
+    """The isolated-env name reaches the compute node via the job spec, so
+    slurm_entry can activate it (run_python(env=…, background=True))."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-env")["id"]
+    job = _mk_job(pid, env="myenv")
+    SlurmSubmitter().submit(job)
+    rd = get_job(job["id"], project_id=pid)["params"]["run_dir"]
+    spec = json.loads((Path(rd) / "job_spec.json").read_text())
+    assert spec["env"] == "myenv"

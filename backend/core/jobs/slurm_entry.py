@@ -17,9 +17,12 @@ def main() -> int:
     with open(sys.argv[1]) as f:
         spec = json.load(f)
     from core.exec.run import run_python_code, run_r_code
-    fn = run_r_code if (spec.get("kind") == "run_r") else run_python_code
-    result = fn(spec["code"], project_id=spec["project_id"], run_id=spec["run_id"],
-                timeout_s=int(spec.get("timeout_s") or 600))
+    kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
+              timeout_s=int(spec.get("timeout_s") or 600))
+    if spec.get("kind") == "run_r":
+        result = run_r_code(spec["code"], **kw)
+    else:                                    # isolated env (if any) runs standalone
+        result = run_python_code(spec["code"], env=spec.get("env"), **kw)
     with open(spec["result_path"], "w") as f:
         json.dump(result, f, default=str)
     rc = result.get("returncode")
