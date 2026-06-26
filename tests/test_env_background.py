@@ -223,3 +223,24 @@ def test_provenance_phase3_envelope_generalizes():
     assert rec["kind"] == "cli" and rec["engine"]["name"] == "samtools"
     assert rec["params"]["threads"] == 4 and rec["inputs"][0]["ref"] == "in.bam"
     assert rec["produced"][0]["name"] == "out.bam"
+
+
+def test_background_figure_is_revisable():
+    """Revision-first primary verb works for a BACKGROUND figure: make_revision
+    re-runs modified code from its exec record, producing a linked revision."""
+    from core.exec.run import run_python_code
+    from core.jobs.runner import _write_exec_record_for_job
+    from content.bio.lifecycle.artifacts import pin_artifact
+    from content.bio.lifecycle.revisions import make_revision
+    pid = projects.create_project("prov-revise")["id"]; projects.set_current(pid)
+    code = ("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt\n"
+            "plt.plot([0,1,2],[0,1,4]); plt.title('Original'); plt.savefig('p.png')")
+    res = run_python_code(code, project_id=pid, run_id="rv", timeout_s=120)
+    assert res.get("returncode") == 0 and res.get("plots")
+    job = {"id": "jrv", "kind": "run_python", "focus_entity_id": None,
+           "params": {"code": code, "thread_id": "t1", "run_id": "rv", "project_id": pid}}
+    _write_exec_record_for_job(job, res, pid, pid)
+    fid = pin_artifact(res["exec_id"], "figure", 0, title="Original")["entity_id"]
+    rev = make_revision(fid, code.replace("'Original'", "'Revised'"), thread_id="t1")
+    assert not rev.get("error"), rev
+    assert rev.get("exec_id"), f"revision should have a new exec record: {rev}"
