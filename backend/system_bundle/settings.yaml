@@ -25,12 +25,12 @@ primary_spec: grounded_guide
 # lean_qwen_guide) by adding a row here. Institution/lab/user bundles can extend
 # this list (settings.yaml lists extend across scopes).
 llm_models:
-  - label: Haiku
-    model: claude-haiku-4-5-20251001
+  - label: Opus
+    model: claude-opus-4-7
     spec: grounded_guide
   - label: Sonnet
     model: claude-sonnet-4-6
     spec: grounded_guide
-  - label: Opus
-    model: claude-opus-4-7
+  - label: Haiku
+    model: claude-haiku-4-5-20251001
     spec: grounded_guide
