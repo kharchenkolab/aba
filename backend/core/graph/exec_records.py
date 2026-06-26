@@ -108,6 +108,19 @@ def create(
             if k not in body:
                 body[k] = v
 
+    # Dedup the env manifest (provenance.md §3.1): the package list is identical
+    # across the many runs sharing an env. Store it once content-addressed by
+    # env_fingerprint and drop it from the inline body; get() re-inflates it
+    # transparently. If the store write fails, keep it inline (no data lost).
+    if body.get("package_versions") and body.get("env_fingerprint"):
+        try:
+            from core.exec.env_manifest import store as _store_manifest
+            if _store_manifest(body["env_fingerprint"], body["package_versions"],
+                               body.get("language_version", "")):
+                body.pop("package_versions", None)
+        except Exception:  # noqa: BLE001
+            pass
+
     rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(json.dumps(body, indent=2, default=str), encoding="utf-8")
 
@@ -204,6 +217,17 @@ def get(exec_id: str) -> Optional[dict]:
     except (OSError, json.JSONDecodeError) as e:
         _log.warning("exec_records.get: sidecar unreadable for %s at %s: %s",
                      exec_id, r["record_path"], e)
+    # Re-inflate a deduped env manifest (provenance.md §3.1): records written
+    # after the dedup keep only env_fingerprint inline — resolve the package
+    # versions back so callers see them transparently.
+    if out.get("env_fingerprint") and not out.get("package_versions"):
+        try:
+            from core.exec.env_manifest import load as _load_manifest
+            m = _load_manifest(out["env_fingerprint"])
+            if m.get("package_versions"):
+                out["package_versions"] = m["package_versions"]
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 
