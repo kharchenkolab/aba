@@ -199,7 +199,7 @@ def test_provenance_phase4_5_diff_and_export():
     # export_bundle: a portable dir with the code + requirements + record
     b = export_bundle(fid)
     files = set(b["files"])
-    assert {"script.py", "requirements.txt", "exec_record.json", "README.md"} <= files, b
+    assert {"script.py", "requirements.txt", "exec_record.json", "inputs.json", "README.md"} <= files, b
 
 
 def test_provenance_phase3_envelope_generalizes():
@@ -244,3 +244,20 @@ def test_background_figure_is_revisable():
     rev = make_revision(fid, code.replace("'Original'", "'Revised'"), thread_id="t1")
     assert not rev.get("error"), rev
     assert rev.get("exec_id"), f"revision should have a new exec record: {rev}"
+
+
+def test_nextflow_container_trace_parse():
+    """Phase 3 container env: _parse_nextflow_containers extracts the unique
+    container images Nextflow used from a `-with-trace` TSV."""
+    import tempfile
+    from pathlib import Path
+    from content.bio.tools.plan_etc import _parse_nextflow_containers
+    trace = ("task_id\thash\tname\tstatus\tcontainer\n"
+             "1\tab/cd\tFASTQC\tCOMPLETED\tquay.io/biocontainers/fastqc:0.12.1\n"
+             "2\tef/gh\tMULTIQC\tCOMPLETED\tquay.io/biocontainers/multiqc:1.21\n"
+             "3\tij/kl\tFASTQC2\tCOMPLETED\tquay.io/biocontainers/fastqc:0.12.1\n"
+             "4\tmn/op\tNOIMG\tCOMPLETED\t-\n")
+    p = Path(tempfile.mktemp()); p.write_text(trace)
+    assert _parse_nextflow_containers(p) == [
+        "quay.io/biocontainers/fastqc:0.12.1", "quay.io/biocontainers/multiqc:1.21"]
+    assert _parse_nextflow_containers(Path("/nonexistent")) == []
