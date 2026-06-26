@@ -1,8 +1,9 @@
 /**
- * Settings — per-project assistant configuration + account.
+ * Settings — per-project model + the LLM account credential.
  *  - Model: which LLM this project's assistant runs on (spec follows from the
  *    install-wide catalog). Applies to the current project, live next turn.
- *  - Account: LLM credential status, replace API key, paste Claude.ai OAuth token.
+ *  - Model account: credential status; one field accepts an API key OR a pasted
+ *    Claude.ai OAuth token, verified against Anthropic before saving.
  */
 import { useCallback, useEffect, useState } from 'react'
 import './Settings.css'
@@ -18,9 +19,24 @@ interface CredStatus {
   has_oauth: boolean
   oauth_source: string | null
   oauth_expires_at: number | null
+  valid: boolean
 }
 
 interface Props { onClose: () => void }
+
+function credStatusLine(c: CredStatus): string {
+  if (c.mode === 'apikey') {
+    return c.has_api_key ? `Anthropic API key ••••${c.key_suffix}` : 'No credential set'
+  }
+  if (!c.has_oauth) return 'Sign-in expired'
+  const src = c.oauth_source === 'pasted_token' ? 'Claude.ai token (pasted)'
+    : c.oauth_source === 'refreshable_store' ? 'Claude.ai sign-in'
+      : 'Claude.ai sign-in'
+  const exp = c.oauth_expires_at
+    ? ` · expires ${new Date(c.oauth_expires_at * 1000).toLocaleString()}`
+    : ''
+  return `${src}${exp}`
+}
 
 export default function Settings({ onClose }: Props) {
   const [llm, setLlm] = useState<LlmState | null>(null)
@@ -28,20 +44,22 @@ export default function Settings({ onClose }: Props) {
   const [err, setErr] = useState<string | null>(null)
 
   const [cred, setCred] = useState<CredStatus | null>(null)
-  const [apiKey, setApiKey] = useState('')
-  const [oauthTok, setOauthTok] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [credInput, setCredInput] = useState('')
   const [credBusy, setCredBusy] = useState(false)
   const [credMsg, setCredMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const loadLlm = useCallback(async () => {
     try {
       const r = await fetch('/api/settings/llm')
-      if (r.ok) setLlm(await r.json())
-      else setErr('Could not load model settings.')
+      if (r.ok) setLlm(await r.json()); else setErr('Could not load model settings.')
     } catch { setErr('Could not load model settings.') }
   }, [])
   const loadCred = useCallback(async () => {
-    try { const r = await fetch('/api/settings/credential'); if (r.ok) setCred(await r.json()) } catch { /* ignore */ }
+    try {
+      const r = await fetch('/api/settings/credential')
+      if (r.ok) { const d: CredStatus = await r.json(); setCred(d); setEditing(!d.valid) }
+    } catch { /* ignore */ }
   }, [])
   useEffect(() => { loadLlm(); loadCred() }, [loadLlm, loadCred])
 
@@ -58,17 +76,18 @@ export default function Settings({ onClose }: Props) {
     } catch { setErr('Could not change the model.') } finally { setSaving(false) }
   }
 
-  async function saveCred(path: string, body: object, okText: string) {
-    if (credBusy) return
+  async function saveCred() {
+    const credential = credInput.trim()
+    if (!credential || credBusy) return
     setCredBusy(true); setCredMsg(null)
     try {
-      const r = await fetch(path, {
+      const r = await fetch('/api/settings/credential', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ credential }),
       })
       if (r.ok) {
-        setCred(await r.json()); setApiKey(''); setOauthTok('')
-        setCredMsg({ ok: true, text: okText })
+        setCred(await r.json()); setCredInput(''); setEditing(false)
+        setCredMsg({ ok: true, text: 'Verified and saved.' })
       } else {
         const d = await r.json().catch(() => ({} as { detail?: string }))
         setCredMsg({ ok: false, text: d.detail || 'Could not save the credential.' })
@@ -76,12 +95,6 @@ export default function Settings({ onClose }: Props) {
     } catch { setCredMsg({ ok: false, text: 'Could not save the credential.' }) }
     finally { setCredBusy(false) }
   }
-
-  const credLine = !cred ? '' : cred.mode === 'apikey'
-    ? (cred.has_api_key ? `Using an Anthropic API key (••••${cred.key_suffix}).` : 'No credential set.')
-    : `Using Claude.ai sign-in (${cred.mode})`
-      + (cred.oauth_expires_at ? `, expires ${new Date(cred.oauth_expires_at * 1000).toLocaleString()}` : '')
-      + '.'
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -121,36 +134,49 @@ export default function Settings({ onClose }: Props) {
         </section>
 
         <section className="settings__section">
-          <h3 className="settings__section-title">Account</h3>
-          <p className="settings__hint">{credLine || 'Loading…'}</p>
+          <h3 className="settings__section-title">Model account</h3>
+          {!cred ? (
+            <div className="settings__empty">Loading…</div>
+          ) : !editing ? (
+            <div className="cred-status">
+              <span className={`cred-status__dot ${cred.valid ? 'is-ok' : 'is-bad'}`} aria-hidden>●</span>
+              <span className="cred-status__text">{credStatusLine(cred)}</span>
+              <button className="cred-status__change"
+                onClick={() => { setCredMsg(null); setEditing(true) }}>Change</button>
+            </div>
+          ) : (
+            <>
+              {!cred.valid && (
+                <p className="settings__hint">
+                  No valid credential — enter your Anthropic API key to continue.
+                </p>
+              )}
+              <div className="cred-row">
+                <input
+                  type="password" placeholder="Enter API key (sk-ant-…)" autoComplete="off"
+                  value={credInput} disabled={credBusy}
+                  onChange={e => setCredInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveCred() }}
+                />
+                <button disabled={credBusy || !credInput.trim()} onClick={saveCred}>
+                  {credBusy ? 'Checking…' : 'Save'}
+                </button>
+                {cred.valid && !credBusy && (
+                  <button className="cred-cancel"
+                    onClick={() => { setEditing(false); setCredInput(''); setCredMsg(null) }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              <span className="cred-field__hint">
+                An Anthropic API key, or a Claude.ai OAuth token from <code>claude setup-token</code>.
+                It's verified with Anthropic before saving.
+              </span>
+            </>
+          )}
           {credMsg && (
             <div className={credMsg.ok ? 'settings__note' : 'settings__error'}>{credMsg.text}</div>
           )}
-          <label className="cred-field">
-            <span className="cred-field__label">Anthropic API key</span>
-            <div className="cred-row">
-              <input type="password" placeholder="sk-ant-…" autoComplete="off" value={apiKey}
-                onChange={e => setApiKey(e.target.value)} />
-              <button disabled={credBusy || !apiKey.trim()}
-                onClick={() => saveCred('/api/settings/credential/apikey', { key: apiKey.trim() }, 'API key updated.')}>
-                Save
-              </button>
-            </div>
-          </label>
-          <label className="cred-field">
-            <span className="cred-field__label">Claude.ai OAuth token</span>
-            <div className="cred-row">
-              <input type="password" placeholder="sk-ant-oat…" autoComplete="off" value={oauthTok}
-                onChange={e => setOauthTok(e.target.value)} />
-              <button disabled={credBusy || !oauthTok.trim()}
-                onClick={() => saveCred('/api/settings/credential/oauth', { token: oauthTok.trim() }, 'Signed in with Claude.ai.')}>
-                Save
-              </button>
-            </div>
-            <span className="cred-field__hint">
-              Paste a token from <code>claude setup-token</code>. The browser sign-in flow lives in the desktop app.
-            </span>
-          </label>
         </section>
       </div>
     </div>

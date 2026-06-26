@@ -1144,40 +1144,28 @@ def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)
     return {"ok": True, "current": _llm_current(_pid)}
 
 
-class ApiKeyRequest(BaseModel):
-    key: str
-
-
-class OAuthTokenRequest(BaseModel):
-    token: str
+class CredentialRequest(BaseModel):
+    credential: str
 
 
 @app.get("/api/settings/credential")
 def settings_credential_get():
-    """LLM credential status for Settings → Account. Never echoes the secret —
-    only the mode, a 4-char key suffix, and OAuth expiry (if refreshable)."""
+    """LLM credential status for Settings → Model account. Never echoes the secret
+    — only the mode, a 4-char key suffix, OAuth expiry, and a `valid` flag the UI
+    uses to decide between showing status+Change and showing the input."""
     from core import credentials
     return credentials.status()
 
 
-@app.post("/api/settings/credential/apikey")
-def settings_credential_apikey(req: ApiKeyRequest):
-    """Replace the Anthropic API key (persisted to ~/.aba/config.env + live next
-    turn). Switches the credential mode to apikey."""
+@app.post("/api/settings/credential")
+def settings_credential_set(req: CredentialRequest):
+    """One field for both: auto-detects an API key vs a pasted Claude.ai OAuth
+    token, VERIFIES it against Anthropic (a 1-token call), then persists +
+    goes live. HTTP 400 (with a message) on bad format or rejection — nothing is
+    written unless the credential actually works."""
     from core import credentials
     try:
-        return credentials.set_api_key(req.key)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/settings/credential/oauth")
-def settings_credential_oauth(req: OAuthTokenRequest):
-    """Set a pasted Claude.ai OAuth token (persisted + live). Switches to
-    oauth_cc. The browser 'Sign in' flow stays a helper/CLI concern."""
-    from core import credentials
-    try:
-        return credentials.set_oauth_token(req.token)
+        return credentials.set_credential(req.credential)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
