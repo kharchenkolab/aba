@@ -180,6 +180,14 @@ def _credential_mode() -> str:
     return os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower()
 
 
+def _current_api_key() -> str:
+    """The Anthropic API key, read LIVE from the env (falling back to the
+    import-time snapshot). Reading live — not the frozen `API_KEY` import — lets
+    Settings → Account swap the key without a backend restart (core.credentials
+    updates os.environ + clears the client cache)."""
+    return os.environ.get("ANTHROPIC_API_KEY") or API_KEY or ""
+
+
 def _wants_cc_marker() -> bool:
     """True iff we must prepend the Claude Code marker as the first system
     block — needed only on oauth_cc mode (OAuth bearer + non-Haiku models)."""
@@ -393,11 +401,11 @@ def _llm_client():
                 "Claude Code OAuth token is missing or expired. "
                 "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
                 "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
-    key = ("apikey", API_KEY or "")
+    key = ("apikey", _current_api_key())
     cli = _ASYNC_CLIENT_CACHE.get(key)
     if cli is None:
         cli = anthropic.AsyncAnthropic(
-            api_key=API_KEY, http_client=_httpx_async_client())
+            api_key=_current_api_key(), http_client=_httpx_async_client())
         _ASYNC_CLIENT_CACHE[key] = cli
     return cli
 
@@ -427,11 +435,11 @@ def sync_anthropic_client():
                 "Claude Code OAuth token is missing or expired. "
                 "Run `claude` (any quick command) to refresh ~/.claude/.credentials.json, "
                 "or set $CLAUDE_CODE_OAUTH_TOKEN. Server bounce not required.")
-    key = ("apikey", API_KEY or "")
+    key = ("apikey", _current_api_key())
     cli = _SYNC_CLIENT_CACHE.get(key)
     if cli is None:
         cli = anthropic.Anthropic(
-            api_key=API_KEY, http_client=_httpx_sync_client())
+            api_key=_current_api_key(), http_client=_httpx_sync_client())
         _SYNC_CLIENT_CACHE[key] = cli
     return cli
 

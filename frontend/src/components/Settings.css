@@ -150,3 +150,16 @@
 .model-row__label { font-weight: 600; color: #0f172a; }
 .model-row__id { margin-left: auto; font-size: 12px; color: #64748b;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ── Account section (credentials) ─────────────────────────────────────── */
+.settings__note { color: #047857; font-size: 13px; margin: 6px 0; }
+.cred-field { display: block; margin-top: 12px; }
+.cred-field__label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 4px; }
+.cred-field__hint { display: block; font-size: 12px; color: #94a3b8; margin-top: 4px; }
+.cred-field__hint code { background: #f1f5f9; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+.cred-row { display: flex; gap: 8px; }
+.cred-row input { flex: 1; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+.cred-row input:focus { outline: none; border-color: #2563eb; }
+.cred-row button { padding: 8px 16px; border: 1px solid #2563eb; background: #2563eb; color: #fff;
+  border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; }
+.cred-row button:disabled { opacity: 0.5; cursor: default; }
