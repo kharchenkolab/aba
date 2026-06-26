@@ -158,6 +158,35 @@ def current_model_for_primary(default: str = "") -> str:
     return default or MODEL
 
 
+def current_model_for_project(pid: str | None, default: str = "") -> str:
+    """Resolve the primary chat model, PER PROJECT (the user-facing knob).
+
+    Precedence (live, re-evaluated every turn):
+        1. ABA_PRIMARY_MODEL  in-process env  (the TARGETED operator override —
+                                              a deliberate one-off, outranks all)
+        2. the project's selected model       (Settings → LLM; on the registry)
+        3. the global chain via current_model_for_primary():
+           ABA_MODEL env → ~/.aba/config.env → bundle default_model → caller
+           default → snapshot
+
+    Note ABA_MODEL is intentionally BELOW the project: it's the deployment
+    DEFAULT (set in .env / config.env), which a per-project selection is meant to
+    override. Only the explicit ABA_PRIMARY_MODEL beats a per-project choice.
+    `pid=None` collapses to the global resolution (back-compat)."""
+    targeted = (os.environ.get("ABA_PRIMARY_MODEL") or "").strip()
+    if targeted:
+        return targeted
+    if pid:
+        try:
+            from core.projects import project_model
+            pm = (project_model(pid) or "").strip()
+            if pm:
+                return pm
+        except Exception:  # noqa: BLE001 — never let a registry read break a turn
+            pass
+    return current_model_for_primary(default=default)
+
+
 def _read_setting_from_bundle(key: str) -> str:
     """Return a string-valued setting from the active EffectiveBundle, or
     "" on any failure (bundle not loadable, key absent, non-string value).

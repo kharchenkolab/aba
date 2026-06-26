@@ -1,71 +1,44 @@
 /**
- * Settings — pending context-policy suggestions surfaced by the adaptive
- * loop (§3.6). Reviewer can Approve (appends to the per-type policy file
- * that the context service concatenates) or Reject.
+ * Settings — per-project assistant configuration.
+ *  - Model: which LLM this project's assistant runs on (the agent spec follows
+ *    from the install-wide catalog). Applies to the current project, live next turn.
+ *  - Account: API key / sign-in (added next).
  */
 import { useCallback, useEffect, useState } from 'react'
 import './Settings.css'
 
-interface Suggestion {
-  id: number
-  session_id: string | null
-  entity_type: string | null
-  trigger: string
-  suggestion: string
-  status: string
-  created_at: string
-}
+interface ModelOption { label: string; model: string; spec: string | null }
+interface LlmCurrent { model: string; spec: string | null; label: string | null; pinned: boolean }
+interface LlmState { options: ModelOption[]; current: LlmCurrent }
 
-interface EventRow {
-  id: number
-  kind: string
-  entity_id: string | null
-  title: string | null
-  detail: Record<string, unknown> | null
-  ts: string
-}
-
-interface Props {
-  onClose: () => void
-}
-
-const EVENT_LABEL: Record<string, string> = {
-  entity_created: 'created',
-  scenario_created: 'scenario',
-  advisor_note: 'advisor note',
-  suggestion_logged: 'context suggestion',
-}
+interface Props { onClose: () => void }
 
 export default function Settings({ onClose }: Props) {
-  const [tab, setTab] = useState<'suggestions' | 'activity'>('suggestions')
-  const [pending, setPending] = useState<Suggestion[]>([])
-  const [events, setEvents] = useState<EventRow[]>([])
+  const [llm, setLlm] = useState<LlmState | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => {
+  const loadLlm = useCallback(async () => {
     try {
-      const r = await fetch('/api/context-suggestions?status=pending')
-      if (r.ok) setPending(await r.json())
-      const e = await fetch('/api/events?limit=100')
-      if (e.ok) setEvents(await e.json())
-    } catch { /* ignore */ }
+      const r = await fetch('/api/settings/llm')
+      if (r.ok) setLlm(await r.json())
+      else setErr('Could not load model settings.')
+    } catch { setErr('Could not load model settings.') }
   }, [])
+  useEffect(() => { loadLlm() }, [loadLlm])
 
-  useEffect(() => { refresh() }, [refresh])
-
-  async function act(id: number, action: 'approve' | 'reject') {
-    await fetch(`/api/context-suggestions/${id}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
-    })
-    refresh()
-  }
-
-  async function rejectAll() {
-    if (pending.length === 0) return
-    if (!window.confirm(`Reject all ${pending.length} pending suggestion${pending.length === 1 ? '' : 's'}?`)) return
-    await fetch('/api/context-suggestions/reject-all', { method: 'POST' })
-    refresh()
+  async function pickModel(model: string) {
+    if (saving || !llm || model === llm.current.model) return
+    setSaving(true); setErr(null)
+    try {
+      const r = await fetch('/api/settings/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      if (r.ok) { const d = await r.json(); setLlm(s => (s ? { ...s, current: d.current } : s)) }
+      else setErr('Could not change the model.')
+    } catch { setErr('Could not change the model.') } finally { setSaving(false) }
   }
 
   return (
@@ -75,85 +48,40 @@ export default function Settings({ onClose }: Props) {
           <h2>Settings</h2>
           <button onClick={onClose} className="settings__close" title="Close">×</button>
         </div>
-        <div className="settings__tabs">
-          <button
-            className={`settings__tab ${tab === 'suggestions' ? 'is-active' : ''}`}
-            onClick={() => setTab('suggestions')}
-          >
-            Context suggestions{pending.length > 0 ? ` (${pending.length})` : ''}
-          </button>
-          <button
-            className={`settings__tab ${tab === 'activity' ? 'is-active' : ''}`}
-            onClick={() => setTab('activity')}
-          >
-            Activity
-          </button>
-        </div>
 
-        {tab === 'suggestions' && (
-          <>
-            <p className="settings__hint">
-              After complex sessions, Guide reflects on what context would have helped.
-              Approve to append to the per-entity-type policy injected into future
-              system prompts. Reject to discard. Suggestions older than 14 days
-              auto-stale; review them sooner if you want to keep them.
-            </p>
-            {pending.length === 0 ? (
-              <div className="settings__empty">No pending suggestions.</div>
-            ) : (
-              <div className="settings__list">
-                {pending.length > 1 && (
-                  <div className="settings__bulkbar">
-                    <button onClick={rejectAll} className="settings__bulk-reject">
-                      Reject all ({pending.length})
-                    </button>
-                  </div>
-                )}
-                {pending.map(s => (
-                  <div key={s.id} className="suggestion">
-                    <div className="suggestion__head">
-                      <span className="suggestion__type">{s.entity_type ?? 'workspace'}</span>
-                      <span className="suggestion__trigger">{s.trigger}</span>
-                      <span className="suggestion__date">{new Date(s.created_at).toLocaleString()}</span>
-                    </div>
-                    <p className="suggestion__text">{s.suggestion}</p>
-                    <div className="suggestion__actions">
-                      <button onClick={() => act(s.id, 'reject')} className="suggestion__reject">Reject</button>
-                      <button onClick={() => act(s.id, 'approve')} className="suggestion__approve">Approve</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+        <section className="settings__section">
+          <h3 className="settings__section-title">Model</h3>
+          <p className="settings__hint">
+            The model this project's assistant uses. It applies to the current project
+            and takes effect on your next message.
+          </p>
+          {err && <div className="settings__error">{err}</div>}
+          {!llm ? (
+            <div className="settings__empty">Loading…</div>
+          ) : (
+            <div className="model-list" role="radiogroup" aria-label="Model">
+              {llm.options.map(o => {
+                const active = o.model === llm.current.model
+                return (
+                  <button
+                    key={o.model}
+                    role="radio"
+                    aria-checked={active}
+                    className={`model-row ${active ? 'is-active' : ''}`}
+                    disabled={saving}
+                    onClick={() => pickModel(o.model)}
+                  >
+                    <span className="model-row__radio" aria-hidden>{active ? '●' : '○'}</span>
+                    <span className="model-row__label">{o.label}</span>
+                    <span className="model-row__id">{o.model}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </section>
 
-        {tab === 'activity' && (
-          <>
-            <p className="settings__hint">
-              An append-only log of everything that's happened in the project.
-            </p>
-            {events.length === 0 ? (
-              <div className="settings__empty">No activity yet.</div>
-            ) : (
-              <div className="settings__list">
-                {events.map(ev => (
-                  <div key={ev.id} className="event">
-                    <span className="event__kind">{EVENT_LABEL[ev.kind] ?? ev.kind}</span>
-                    {ev.detail?.type != null && (
-                      <span className="event__etype">{String(ev.detail.type)}</span>
-                    )}
-                    {ev.detail?.advisor != null && (
-                      <span className="event__etype">{String(ev.detail.advisor)}</span>
-                    )}
-                    <span className="event__title">{ev.title ?? ev.entity_id ?? ''}</span>
-                    <span className="event__date">{new Date(ev.ts).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+        {/* Account section (API key / sign-in) is added next. */}
       </div>
     </div>
   )

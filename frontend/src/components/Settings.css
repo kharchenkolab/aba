@@ -133,3 +133,20 @@
   color: var(--red, #b91c1c);
   border-color: var(--red-border, #fecaca);
 }
+
+/* ── Settings sections (model selector, account) ───────────────────────── */
+.settings__section { padding: 16px 20px; border-top: 1px solid #e2e8f0; }
+.settings__section:first-of-type { border-top: none; }
+.settings__section-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: #0f172a; }
+.settings__error { color: #b91c1c; font-size: 13px; margin: 6px 0; }
+.model-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.model-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: pointer;
+  text-align: left; font: inherit; }
+.model-row:hover:not(:disabled) { border-color: #94a3b8; background: #f8fafc; }
+.model-row.is-active { border-color: #2563eb; background: #eff6ff; }
+.model-row:disabled { opacity: 0.6; cursor: default; }
+.model-row__radio { color: #2563eb; font-size: 13px; width: 14px; text-align: center; }
+.model-row__label { font-weight: 600; color: #0f172a; }
+.model-row__id { margin-left: auto; font-size: 12px; color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
