@@ -18,6 +18,8 @@ interface Props {
   loading?: boolean
   streamMsg: DisplayMessage | null
   onSend: (text: string) => void
+  /** Open the Data tab — the empty-project welcome's "create a dataset" action. */
+  onOpenData?: () => void
   focusedEntity: Entity | null
   annotation?: { image: string; note: string } | null
   onClearAnnotation?: () => void
@@ -111,6 +113,7 @@ export default function ChatPane({
   onSteer,
   threadId,
   currentRunId,
+  onOpenData,
 }: Props) {
   const [clarifyDraft, setClarifyDraft] = useState('')
   useEffect(() => { if (!pendingClarification) setClarifyDraft('') }, [pendingClarification])
@@ -245,6 +248,10 @@ export default function ChatPane({
   }, [onSend])
 
   const all = streamMsg ? [...messages, streamMsg] : messages
+  // Empty project (no entities, sitting on the workspace root) → show a Welcome
+  // with two get-started actions instead of the bare "Ask Guide about your data".
+  const isEmptyProject = (!entities || entities.length === 0)
+    && (!focusedEntity || focusedEntity.type === 'workspace')
   // basename → {url, kind} map for inline filename mentions in agent prose.
   // Walk every tool_result and pick the LAST-SEEN entry per basename (later
   // messages win on collision — most recent run's output wins). Covers
@@ -322,13 +329,39 @@ export default function ChatPane({
         <div className="chat-main">
           <div className="chat-scroll" ref={scrollRef}>
             {all.length === 0 && !loading && (
-              <div className="chat-empty">
-                <p>
-                  {focusedEntity && focusedEntity.type !== 'workspace'
-                    ? `Ask Guide about this ${(type_label_for(focusedEntity.type) ?? focusedEntity.type).toLowerCase()}.`
-                    : 'Ask Guide about your data.'}
-                </p>
-              </div>
+              isEmptyProject ? (
+                <div className="chat-empty chat-welcome">
+                  <p className="chat-welcome__hi">Welcome — let's get started.</p>
+                  <p className="chat-welcome__sub">Bring in some data, or just ask Guide a question.</p>
+                  <div className="chat-welcome__actions">
+                    {onOpenData && (
+                      <button className="chat-welcome__action" onClick={onOpenData}>
+                        <span className="chat-welcome__icon" aria-hidden>＋</span>
+                        <span className="chat-welcome__body">
+                          <b>Create a dataset</b>
+                          <span className="chat-welcome__hint">in the Data tab</span>
+                        </span>
+                      </button>
+                    )}
+                    <button className="chat-welcome__action" disabled={streaming}
+                      onClick={() => sendAndPin('Show samples for GEO study GSE192391')}>
+                      <span className="chat-welcome__icon" aria-hidden>✦</span>
+                      <span className="chat-welcome__body">
+                        <b>Ask a question</b>
+                        <span className="chat-welcome__hint">e.g. “Show samples for GEO study GSE192391”</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="chat-empty">
+                  <p>
+                    {focusedEntity && focusedEntity.type !== 'workspace'
+                      ? `Ask Guide about this ${(type_label_for(focusedEntity.type) ?? focusedEntity.type).toLowerCase()}.`
+                      : 'Ask Guide about your data.'}
+                  </p>
+                </div>
+              )
             )}
             {all.map((m, i) => {
               const Message = message_renderer()
