@@ -1,9 +1,25 @@
 # ABA Apptainer image (T9)
 
-Self-contained ABA image so a compute node runs ABA from one artifact instead of
-the bind-mounted host venv. **v1 = self-contained** (bakes the working conda venv
-+ backend + prefix-built frontend dist). The *slim image + mounted shared conda
-env* variant (per `misc/ondemand.md` P7) is the follow-up.
+Self-contained ABA image so a compute node runs ABA from one artifact. Built by
+`install/sif/build.sh` in two profiles, with the recipe pack **baked in** (system
+scope) either way:
+
+- `--profile fat` — bakes conda venv + R base + backend + frontend + recipes (one artifact).
+- `--profile slim` — bakes backend + frontend + recipes; venv + R base mounted at run.
+
+## Build (`install/sif/build.sh`)
+```sh
+export APPTAINER=…/apptainer-env/bin/apptainer APPTAINER_TMPDIR=…/apptainer-tmp
+export MICROMAMBA=…/bin/micromamba              # fat only — builds the env from install/core
+ABA_RECIPES_SRC=/path/to/aba-recipe-pack \
+  ./install/sif/build.sh --profile slim         # or fat;  --stage-only to inspect the .def
+```
+Recipes bake to `/opt/aba/system_bundle` (`ABA_SYSTEM_BUNDLE`); institution / lab /
+user bundles layer on top from `site.yaml` at run time (no rebuild). The env specs
+come from `install/core/{environment,r-environment}.yml` — one source of truth with
+the mac/linux installers. The runtime is **per-user** (`<state_dir>/envs`, the global
++ project growth over the shared base); the shared base is the image (fat) or a
+config-pointed mount (slim). The manual recipe below is the background it automates.
 
 ## Toolchain (this box has no system apptainer)
 Bootstrapped rootless apptainer via micromamba (unprivileged user namespaces are
