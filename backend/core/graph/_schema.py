@@ -200,6 +200,13 @@ def init_db():
             ("exec_id",       "ALTER TABLE entities ADD COLUMN exec_id TEXT"),
             ("artifact_kind", "ALTER TABLE entities ADD COLUMN artifact_kind TEXT"),
             ("artifact_idx",  "ALTER TABLE entities ADD COLUMN artifact_idx INTEGER"),
+            # Phase 2 (modularity_audit2 §Phase 2): a typed `derivation` (how the
+            # entity came to be — exec | derived_from | imported | manual | legacy,
+            # stored as JSON) and `actor` (who — agent:<run_id> | human:<uid> |
+            # system | legacy). Descriptive provenance/attribution; the reproduction
+            # engine keys off exec_id, not these.
+            ("derivation",   "ALTER TABLE entities ADD COLUMN derivation TEXT"),
+            ("actor",        "ALTER TABLE entities ADD COLUMN actor TEXT"),
         ):
             if not _column_exists(c, "entities", col):
                 c.execute(ddl)
