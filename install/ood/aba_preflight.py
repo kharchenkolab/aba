@@ -177,6 +177,15 @@ def main():
             lines.append(f"export ABA_GROUP={shq(group)}")
         lines.append(f"export ABA_RUNTIME_DIR={shq(state_dir)}")
         lines.append(f"export ABA_ENVS_DIR={shq(envs_dir)}")
+        # image: if site.yaml configures a SIF, the node launches FROM it; for a
+        # slim image, base_dir/tools_dir are the shared base mounts it expects.
+        img = site.get("image") or {}
+        if img.get("sif"):
+            lines.append(f"export ABA_SIF={shq(ex(img['sif']))}")
+        if img.get("base_dir"):
+            lines.append(f"export ABA_BASE_DIR={shq(ex(img['base_dir']))}")
+        if img.get("tools_dir"):
+            lines.append(f"export ABA_TOOLS_DIR={shq(ex(img['tools_dir']))}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file

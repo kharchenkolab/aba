@@ -6,6 +6,14 @@ site:
   install_id: "vbc-dev"
   docs_url: "https://example.org/aba/docs"
 
+# How the backend runs on a node. Omit `image` to bind-mount the repo+venv (dev /
+# direct nodes). With a SIF the node launches from the image; base_dir/tools_dir
+# are the shared conda + R base mounts a SLIM image needs (omit them for fat).
+image:
+  sif: /cluster/aba/aba.sif
+  # base_dir:  /cluster/aba/base          # slim only — mounted at /opt/aba-venv
+  # tools_dir: /cluster/aba/base/tools    # slim only — mounted at /opt/aba-envs/tools
+
 scopes:
   # Recipes are now BAKED into the SIF as the system scope (ABA_SYSTEM_BUNDLE).
   # This institution bundle is OPTIONAL — site-wide recipe/policy additions the
