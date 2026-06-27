@@ -648,9 +648,13 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # scope-key + the env's python); the shared thread scratch cwd is
             # reused so files hand off to/from the default kernel.
             scope_key = str(thread_id) if not env_name else f"{thread_id}::env::{env_name}"
-            sess = get_pool().get_or_start(scope_key, "python",
-                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
-                                           env_name=env_name)
+            from core.exec.kernels import KernelCapacityError
+            try:
+                sess = get_pool().get_or_start(scope_key, "python",
+                                               cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")),
+                                               env_name=env_name)
+            except KernelCapacityError as _cap:
+                return {"error": str(_cap), "at_capacity": True}
             _ensure_kernel_cwd(sess, "python", cwd)
             res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
@@ -825,8 +829,12 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         cwd = _run_scratch_cwd(str(project_id), str(thread_id))
         start_ts = _time.time()
         started_iso = _dt.now(_tz.utc).isoformat()
-        sess = get_pool().get_or_start(str(thread_id), "r",
-                                       cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+        from core.exec.kernels import KernelCapacityError
+        try:
+            sess = get_pool().get_or_start(str(thread_id), "r",
+                                           cwd=str(scratch_dir(str(project_id), f"thread-{thread_id}")))
+        except KernelCapacityError as _cap:
+            return {"error": str(_cap), "at_capacity": True}
         _ensure_kernel_cwd(sess, "r", cwd)
         res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001

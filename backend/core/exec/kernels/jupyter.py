@@ -530,6 +530,7 @@ class JupyterKernelSession:
         unregister = cancel_token.register(self.interrupt) if cancel_token is not None else None
         cancelled = False
         kernel_died = False
+        self.busy = True            # protect this session from LRU eviction while it runs
         worker.start()
         try:
             while worker.is_alive():
@@ -538,6 +539,7 @@ class JupyterKernelSession:
                 # neither the 10KB byte cap nor the in-hook 1s check fired
                 # (e.g. a single 2KB print every 4s).
                 coalescer.maybe_flush()
+                self.touch()        # keep last_used fresh so a long run isn't seen as LRU
                 if cancel_token is not None and getattr(cancel_token, "cancelled", False):
                     cancelled = True
                     break
@@ -550,6 +552,7 @@ class JupyterKernelSession:
                     kernel_died = True
                     break
         finally:
+            self.busy = False       # execution done — now eligible for eviction again
             if unregister is not None:
                 unregister()
             # Final flush — emit any pending tail bytes accumulated since the
