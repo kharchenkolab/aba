@@ -1392,10 +1392,13 @@ async def upload(file: UploadFile = File(...), _pid: str = Depends(require_proje
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     size = dest.stat().st_size
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset",
         title=dest.name,
         artifact_path=str(dest),
+        derivation=imported(file.filename or dest.name),   # Phase 2B
+        actor=human_actor(),
         metadata={"size_bytes": size, "original_name": file.filename},
     )
     # The "data added" reaction (Guide orientation) is driven by the frontend via
@@ -1465,10 +1468,13 @@ async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)
     except urllib.error.URLError as e:
         raise HTTPException(400, f"download failed: {e}")
 
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset",
         title=req.title or dest.name,
         artifact_path=str(dest),
+        derivation=imported(req.url),   # Phase 2B
+        actor=human_actor(),
         metadata={
             "size_bytes": dest.stat().st_size,
             "source_url": req.url,
