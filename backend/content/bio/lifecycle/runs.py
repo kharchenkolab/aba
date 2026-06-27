@@ -119,10 +119,12 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     md: dict = {"thread_id": thread_id, "run_state": "open", "origin": "internal"}
     if plan_entity_id:
         md["plan_entity_id"] = plan_entity_id
+    from core.graph.derivation import manual
     rid = create_entity(
         entity_type="analysis",
         title=(title or "Analysis run").strip()[:120],
         parent_entity_id=focus_entity_id or WORKSPACE_ID,
+        derivation=manual(),   # Phase 2B: a Run is opened, not derived (actor from ambient)
         metadata=md,
     )
     try:

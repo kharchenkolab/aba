@@ -74,10 +74,12 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
     # `ambient`: this is the catch-all analysis for ad-hoc, pre-plan work — it
     # exists only to parent stray outputs, so it's HIDDEN from the Runs UI (a
     # named Run comes from open_run / an approved plan). Still structurally real.
+    from core.graph.derivation import manual, SYSTEM_ACTOR
     aid = create_entity(
         entity_type="analysis",
         title=title,
         parent_entity_id=parent,
+        derivation=manual(), actor=SYSTEM_ACTOR,   # Phase 2B: ambient/system run
         metadata={"thread_id": thread_id, "run_state": "open", "origin": "internal",
                   "ambient": True} if thread_id else {"ambient": True},
     )

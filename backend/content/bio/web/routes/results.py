@@ -61,8 +61,12 @@ def create_result(req: CreateResultRequest, _pid: str = Depends(require_project)
     """Create a Result (an observation). Usually seeded with one cell; grows
     deliberately via add-member. Results are on the shelf by virtue of being
     Results — no explicit pinned flag needed."""
+    from core.graph.derivation import derived_from, manual, human_actor
+    _refs = [m.ref for m in req.members if getattr(m, "ref", None)]
     eid = create_entity(
         entity_type="result", title=req.title,
+        derivation=derived_from(_refs) if _refs else manual(),   # Phase 2B
+        actor=human_actor(),
         metadata={"thread_id": req.thread_id, "origin": req.origin,
                   "interpretation": req.interpretation,
                   "interpretation_origin": "user",

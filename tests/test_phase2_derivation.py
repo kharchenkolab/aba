@@ -96,3 +96,9 @@ def test_agent_actor_for_exec(monkeypatch):
     assert D.agent_actor_for_exec("missing") is None      # exec not found
     monkeypatch.setattr(ER, "get", lambda eid: {"run_id": None})
     assert D.agent_actor_for_exec("anything") is None     # exec has no run_id
+
+
+def test_create_thread_manual_derivation():
+    from core.graph.threads import create_thread
+    tid = create_thread("My investigation", "the question")
+    assert get_entity(tid)["derivation"] == {"kind": "manual"}   # a thread is a container

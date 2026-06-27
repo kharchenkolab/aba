@@ -42,9 +42,11 @@ class NarrativeRequest(BaseModel):
 
 @router.post("/api/narratives")
 def create_narrative(req: NarrativeRequest, _pid: str = Depends(require_project)):
+    from core.graph.derivation import manual, human_actor
     eid = create_entity(
         entity_type="narrative",
         title=req.title or "Untitled section",
+        derivation=manual(), actor=human_actor(),   # Phase 2B
         metadata={"text": req.text},
     )
     return get_entity(eid)
