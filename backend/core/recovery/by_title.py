@@ -171,7 +171,7 @@ class LinkSpec:
 
 # Entity types whose canonical storage is an artifact file we can link to
 # by extension. Figure/table/cell all share the artifacts-by-title/ dir.
-_ARTIFACT_ENTITY_TYPES = ("figure", "table", "cell")
+_ARTIFACT_ENTITY_TYPES = ("figure", "table", "cell")  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
 
 
 def _strip_to_project_relative(absolute_path: str) -> Optional[str]:
@@ -265,7 +265,7 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     # S-3 — analysis (Run): work_dir at projects/<pid>/work/<run_id>/.
     # `run_id` == entity.id by convention (see scratch_dir in
     # core.data.workspace). Symlink to a directory.
-    if etype == "analysis":
+    if etype == "analysis":  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
         if not eid:
             return None
         return LinkSpec(
@@ -278,7 +278,7 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     # S-2 — dataset: artifact_path is absolute, somewhere under this
     # project's tree (work/, data/, …) or, occasionally, an external
     # /refs/ accession we don't link in v1.
-    if etype == "dataset":
+    if etype == "dataset":  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
         artifact_path = row.get("artifact_path")
         if not artifact_path:
             return None
