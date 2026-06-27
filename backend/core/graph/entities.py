@@ -60,6 +60,14 @@ def create_entity(
     if warnings:
         raise ValueError("entity_types: " + "; ".join(warnings))
     eid = entity_id or gen_entity_id(prefix=entity_type[:3])
+    # Honor the type's declared initial status (status_model.initial) instead of
+    # hardcoding 'active' — e.g. thread->'open', claim->'preliminary'.
+    try:
+        from core.entity_types.registry import get_type
+        _spec = get_type(entity_type)
+        init_status = _spec.initial_status() if _spec else "active"
+    except Exception:  # noqa: BLE001
+        init_status = "active"
     now = _utcnow()
     with _conn() as c:
         c.execute(
@@ -68,9 +76,9 @@ def create_entity(
                 producing_params, parent_entity_id, scenario_of, metadata,
                 exec_id, artifact_kind, artifact_idx,
                 created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                eid, entity_type, title, artifact_path,
+                eid, entity_type, title, init_status, artifact_path,
                 json.dumps(producing_params) if producing_params else None,
                 parent_entity_id, scenario_of,
                 json.dumps(metadata) if metadata else None,
@@ -86,7 +94,7 @@ def create_entity(
         kind = "scenario_created" if scenario_of else "entity_created"
         log_event(kind, entity_id=eid, title=title, detail={"type": entity_type})
     _emit_upsert(eid, {
-        "id": eid, "type": entity_type, "title": title, "status": "active",
+        "id": eid, "type": entity_type, "title": title, "status": init_status,
         "artifact_path": artifact_path,
         "producing_params": producing_params,
         "parent_entity_id": parent_entity_id,

@@ -374,7 +374,7 @@ def _behavior_block(_tools: list[dict]) -> str:
     # through every block's render(tools) signature.
     current_mode = _MODE.get("full")
     if current_mode in ("lean", "lean_small") or _is_nonneg():
-        body = _prompt("behavior_slim.md")
+        body = _bundle_rule_text("behavior_slim.md")  # bundle-sourced so lab/institution can override lean behavior too
     else:
         body = _bundle_rule_text("behavior.md")   # full behavior, bundle-sourced
     return body
