@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 
-# test file lives at: install/mac/helper/tests/<this>.py — parents[4] = repo root.
+# test file lives at: install/core/helper/tests/<this>.py — parents[4] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SETUP_CMD = REPO_ROOT / "install/mac/setup.command"
 BUILD_DIR = REPO_ROOT / "install/mac/build"
@@ -34,13 +34,13 @@ def test_setup_command_targets_aba_home_space_free():
 
 def test_setup_command_clones_repo_and_installs_helper_from_it():
     # Repo-clone rollout: setup.command clones the repo (URL overridable for
-    # SSH/private) and installs the helper from install/mac/helper inside it —
+    # SSH/private) and installs the helper from install/core/helper inside it —
     # no separate helper tarball / release needed.
     body = SETUP_CMD.read_text()
     assert "git clone" in body
     assert "kharchenkolab/aba" in body
     assert 'ABA_REPO_URL' in body and 'ABA_RECIPES_URL' in body  # overridable
-    assert "install/mac/helper" in body
+    assert "install/core/helper" in body
 
 
 def test_setup_command_installs_launchagent_via_helper():

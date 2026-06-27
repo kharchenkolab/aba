@@ -90,7 +90,7 @@ if [[ ! -x "$HELPER_DIR/venv/bin/python" ]]; then
   "$PY" -m venv "$HELPER_DIR/venv"
 fi
 "$HELPER_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$HELPER_DIR/venv/bin/pip" install --quiet "$REPO_DIR/aba/install/mac/helper"
+"$HELPER_DIR/venv/bin/pip" install --quiet "$REPO_DIR/aba/install/core/helper"
 
 # Render + load the LaunchAgent so the helper auto-starts on login — and
 # starts it now (RunAtLoad). The plist is a template needing path

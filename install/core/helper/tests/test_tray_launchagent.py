@@ -1,6 +1,6 @@
 """Tier-0-tray LaunchAgent: auto-starts the ABA.app at user login.
 
-Mirrors install/mac/helper/tests/test_launchagent.py's structure (the
+Mirrors install/core/helper/tests/test_launchagent.py's structure (the
 helper LaunchAgent's tests). Same idempotency + plist-shape expectations,
 distinct label, distinct target.
 """
