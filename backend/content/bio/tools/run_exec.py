@@ -609,7 +609,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # agent's estimated_runtime_min so a defensive timeout doesn't mis-background.
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
-    choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
+    est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
+           "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
+    from core.exec.compute_env import compute_env
+    choice = LocalRouter().route(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
@@ -794,12 +797,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
 
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
-    choice = LocalRouter().route(estimate={"runtime_min": est_min}, override=override)
+    est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
+           "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
+    from core.exec.compute_env import compute_env
+    choice = LocalRouter().route(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_r_job
         from content.bio.lifecycle.runs import active_run_id
-        est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
-               "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
         job = submit_r_job(code, title=input_.get("title") or "Background R analysis",
                            focus_entity_id=(ctx or {}).get("focus_entity_id"),
                            timeout_s=timeout_s, project_id=str(project_id),

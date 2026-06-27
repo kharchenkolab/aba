@@ -87,10 +87,25 @@ def slurm_time_to_min(s: Optional[str]) -> Optional[float]:
     return int(a) + int(b) / 60.0          # MM:SS
 
 
-def compute_env() -> dict:
-    """The current compute picture for routing + planning. Always describes the
-    local node; on a cluster (or wherever Slurm is reachable) adds the live
-    partition landscape, with the deployment-config catalog as the fallback."""
+_CACHE: dict = {"ts": 0.0, "env": None}
+
+
+def compute_env(ttl: float = 20.0) -> dict:
+    """The current compute picture for routing + planning. Cached for `ttl`
+    seconds (sinfo/squeue run at most once per window) so the router can call it
+    on every run_python/run_r without re-querying the scheduler each cell. Pass
+    ttl=0 for a fresh read (describe_compute does, since the agent wants current
+    load). Local mode never touches Slurm, so it's cheap regardless."""
+    import time
+    now = time.time()
+    if ttl and _CACHE["env"] is not None and (now - _CACHE["ts"]) < ttl:
+        return _CACHE["env"]
+    env = _build_compute_env()
+    _CACHE.update(ts=now, env=env)
+    return env
+
+
+def _build_compute_env() -> dict:
     from core.exec.cpu import effective_cpu_count
     from core.exec.hpc_session import session_allocation
     from core.jobs.submitter import submitter_name
