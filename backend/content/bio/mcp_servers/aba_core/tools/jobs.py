@@ -121,7 +121,7 @@ def register_jobs_tools(mcp: FastMCP) -> None:
         (live|config) + `user_access`. `summary` is a one-line digest.
         """
         from core.exec.compute_env import compute_env
-        e = compute_env()
+        e = compute_env(ttl=0)          # agent wants the current load, not a cached read
         gpu = f" / {e['node_gpus']} GPU" if e.get("node_gpus") else " / no GPU"
         local = f"this node {e['node_cores']} cores / {e['node_mem_gb']} GB{gpu}"
         wt = e.get("walltime_remaining_min")
