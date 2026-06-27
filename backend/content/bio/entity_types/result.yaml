@@ -65,3 +65,6 @@ advisors:
   on_create: []
   on_pin: [skeptic]
   on_status_change: {}
+
+capabilities:
+  sidebar: count

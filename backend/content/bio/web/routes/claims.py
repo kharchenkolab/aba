@@ -91,8 +91,10 @@ class StatusRequest(BaseModel):
 def claim_create(req: ClaimRequest, _pid: str = Depends(require_project)):
     tid = _resolve_thread(req.thread_id)
     stmt = req.statement.strip() or "Untitled claim"
+    from core.graph.derivation import derived_from, manual
     cid = create_entity(
         entity_type="claim", title=stmt[:80],
+        derivation=derived_from(list(req.evidence_ids)) if req.evidence_ids else manual(),   # Phase 2C
         metadata={"statement": stmt, "negative": req.negative,
                   "evidence_ids": list(req.evidence_ids), "caveats": [], "alternatives": [],
                   "confidence": "preliminary", "thread_id": tid,

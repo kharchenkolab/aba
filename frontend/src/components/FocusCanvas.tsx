@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
+import { getEntityProvenance } from '../lib/api'   // P3.4a: typed API client seam
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
@@ -169,7 +170,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
         )}
       </div>
 
-      {!compact && entity.type !== 'analysis' && entity.type !== 'result' && <ProvenancePanel entity={entity} onFocus={onFocus} />}
+      {!compact && <ProvenancePanel entity={entity} onFocus={onFocus} />}
 
       {promote?.kind === 'figure-to-claim' && (
         <PromoteDialog
@@ -503,24 +504,63 @@ function HistoryDrawer({
 
 interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }
 
+function fmtActor(a?: string | null): string {
+  if (!a) return ''
+  if (a === 'system') return 'the system'
+  if (a === 'legacy') return 'unrecorded'
+  if (a.startsWith('human:')) return 'you'        // single-user: human:local; real uid arrives with identity
+  if (a.startsWith('agent:')) return 'an agent'
+  return a
+}
+
+function fmtDerivation(d?: Entity['derivation']): string {
+  if (!d) return ''
+  const n = d.sources?.length ?? 0
+  switch (d.kind) {
+    case 'exec': return 'computed'
+    case 'derived_from': return `derived from ${n} source${n === 1 ? '' : 's'}`
+    case 'imported': return d.source ? `imported (${d.source})` : 'imported'
+    case 'manual': return 'created here'
+    case 'legacy': return 'origin unrecorded'
+    default: return d.kind
+  }
+}
+
+function fmtProvDate(iso?: string | null): string {
+  if (!iso) return ''
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
+  catch { return iso }
+}
+
+interface ProvData {
+  upstream: ProvNode[]
+  downstream: ProvNode[]
+  promotion?: { by?: string | null; at?: string | null; from?: string[] | null } | null
+}
+
 function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: string) => void }) {
-  const [data, setData] = useState<{ upstream: ProvNode[]; downstream: ProvNode[] } | null>(null)
+  const [data, setData] = useState<ProvData | null>(null)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
     setData(null)
     if (entity.type === 'workspace') return
     let cancelled = false
-    fetch(`/api/entities/${encodeURIComponent(entity.id)}/provenance`)
-      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+    getEntityProvenance(entity.id)
       .then(d => { if (!cancelled) setData(d) })
       .catch(() => {})
     return () => { cancelled = true }
   }, [entity.id, entity.type])
 
+  if (entity.type === 'workspace') return null   // the root isn't a provenance-bearing entity
+
   const up = data?.upstream ?? []
   const down = data?.downstream ?? []
-  if (up.length === 0 && down.length === 0) return null
+  const promotion = data?.promotion
+  const originText = fmtDerivation(entity.derivation)
+  const actorText = fmtActor(entity.actor)
+  // Show the panel when there's a graph OR any attribution to display.
+  if (up.length === 0 && down.length === 0 && !originText && !actorText) return null
 
   return (
     <div className={`prov ${open ? 'prov--open' : ''}`}>
@@ -534,7 +574,21 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
         </span>
       </button>
       {open && (
-        <div className="prov__cols">
+        <>
+          {(originText || actorText) && (
+            <div style={{ padding: '2px 8px 6px', fontSize: 12, opacity: 0.72 }}>
+              {originText}{originText && actorText ? ' · ' : ''}{actorText && `by ${actorText}`}
+            </div>
+          )}
+          {promotion && (
+            <div style={{ padding: '2px 8px 6px', fontSize: 12, opacity: 0.72 }}>
+              Promoted{promotion.by ? ` by ${fmtActor(promotion.by)}` : ''}
+              {promotion.from && promotion.from.length
+                ? ` from ${promotion.from.length} source${promotion.from.length === 1 ? '' : 's'}` : ''}
+              {promotion.at ? ` on ${fmtProvDate(promotion.at)}` : ''}
+            </div>
+          )}
+          <div className="prov__cols">
           <div className="prov__col">
             <div className="prov__col-head">Made from</div>
             {up.length === 0 && <div className="prov__empty">— nothing upstream</div>}
@@ -558,6 +612,7 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
             ))}
           </div>
         </div>
+        </>
       )}
     </div>
   )

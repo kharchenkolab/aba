@@ -109,3 +109,17 @@ def neighborhood(entity_id: str, *, max_depth: int = 3) -> dict:
         "upstream": _dedupe_titles(upstream(entity_id, max_depth=max_depth)),
         "downstream": _dedupe_titles(downstream(entity_id, max_depth=max_depth)),
     }
+
+
+def promotion_record(entity):
+    """The promotion *act* for a derived_from entity — who / when / from — surfaced
+    from its derivation + actor + created_at (Phase 2E), so a result/finding can
+    read "promoted by <by> from <from> on <at>". None for non-derived entities."""
+    deriv = (entity or {}).get("derivation") or {}
+    if deriv.get("kind") != "derived_from":
+        return None
+    return {
+        "by": entity.get("actor"),
+        "at": entity.get("created_at"),
+        "from": deriv.get("sources") or [],
+    }

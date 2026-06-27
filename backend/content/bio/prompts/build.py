@@ -270,7 +270,7 @@ def _system_policy_block(_tools: list[dict]) -> str:
 _NAMED_RULES = frozenset({
     "figures.md", "data_orientation.md", "highlighting.md", "recipes.md",
     "plan_first.md", "nonnegotiables.md", "behavior.md", "behavior_slim.md",
-    "sandbox_libs.md", "scenarios.md", "identity.md",
+    "sandbox_libs.md", "scenarios.md", "identity.md", "promotion.md",
 })
 
 
@@ -374,7 +374,7 @@ def _behavior_block(_tools: list[dict]) -> str:
     # through every block's render(tools) signature.
     current_mode = _MODE.get("full")
     if current_mode in ("lean", "lean_small") or _is_nonneg():
-        body = _prompt("behavior_slim.md")
+        body = _bundle_rule_text("behavior_slim.md")  # bundle-sourced so lab/institution can override lean behavior too
     else:
         body = _bundle_rule_text("behavior.md")   # full behavior, bundle-sourced
     return body
@@ -653,6 +653,7 @@ _BLOCKS: tuple[_Block, ...] = (
     # the user EXPLICITLY asks for a variant"), so no replacement block is
     # needed. Highlighting still renders on focused-figure turns below.
     _Block("behavior",     None,                   None,             _behavior_block),
+    _Block("promotion",    frozenset({"primary"}), None,             _rule("promotion.md")),
     _Block("highlighting", frozenset({"primary"}), None,             _rule("highlighting.md"),
            gate=_highlight_relevant),
     _Block("conventions",  None,                   None,             _conventions),

@@ -59,19 +59,17 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/projects/{pid}/verify-recovery", "POST"): "explicit pid in path — recovery tooling",
     ("/api/projects/{pid}/materialize", "POST"): "explicit pid in path — admin tool",
     # Server-wide admin / global ops — not project-scoped.
+    ("/api/settings/credential", "POST"): "server-wide credential — not project-scoped",
     ("/api/admin/backfill-tool-result-thread", "POST"): "global migration script",
     ("/api/admin/purge_orphan_fills", "POST"): "global cleanup",
     ("/api/skills/reload", "POST"): "global skill catalog reload",
     ("/api/run-probe", "POST"): "diagnostic probe — no project ctx",
-    ("/api/upload-url", "POST"): "pre-flight URL signing — no project mutation",
     # Body-sourced pid (handler calls _require_project_context(req.project_id) internally).
     # These don't carry the Depends signature but DO pin — call out one-by-one.
     ("/api/chat", "POST"): "body-sourced pid via _require_project_context(req.project_id)",
     ("/api/turns/{run_id}/resume", "POST"): "body-sourced pid",
     ("/api/turns/{run_id}/tool_result/{tool_use_id}", "POST"): "body-sourced pid",
     ("/api/turns/{run_id}/cancel", "POST"): "body-sourced pid",
-    ("/api/threads", "POST"): "body-sourced pid",
-    ("/api/upload", "POST"): "body-sourced pid (FormData)",
     ("/api/files/promote", "POST"): "body-sourced pid",
     ("/api/files/ai-summary", "POST"): "body-sourced pid",
 }

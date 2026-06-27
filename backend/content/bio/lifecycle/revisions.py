@@ -219,6 +219,7 @@ def make_revision(
     from core.exec.previews import ensure_preview
     preview_url = ensure_preview(art_url) if art_url else None
     derived_title = (title or parent.get("title") or "Revision").strip()[:120]
+    from core.graph.derivation import agent_actor_for_exec
     new_eid = create_entity(
         entity_type=kind,
         title=derived_title,
@@ -234,6 +235,7 @@ def make_revision(
         exec_id=new_exec_id,
         artifact_kind=kind,
         artifact_idx=0,
+        actor=agent_actor_for_exec(new_exec_id),   # Phase 2B: agent run that re-ran
     )
     # The edge that makes navigation work: new --wasRevisionOf--> old.
     # figure_history walks this in both directions.

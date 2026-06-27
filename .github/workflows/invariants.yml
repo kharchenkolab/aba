@@ -1,0 +1,36 @@
+name: invariants
+# Platform-modularity invariants (misc/modularity2.md §8 "columns") — enforced in
+# CI so the cross-cut seams can't rot silently (misc/modularity_audit2.md, Phase 1).
+on:
+  push:
+    branches: [main, modularity2]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend seams + purity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: seam + platform purity (dep-free)
+        run: bash scripts/check_invariants.sh   # check_seam.sh + check_platform_purity.py (stdlib-only)
+      - name: access-gate — no ungated entity mutation
+        run: |
+          pip install pytest
+          python -m pytest tests/test_project_pinning_coverage.py -q
+
+  frontend:
+    name: frontend platform purity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: frontend
+      - run: npx vitest run src/platform/__platform_imports.test.ts
+        working-directory: frontend

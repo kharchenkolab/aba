@@ -17,6 +17,30 @@ _log = logging.getLogger(__name__)
 HIDDEN_TYPES = ("capability", "reference")
 
 
+_warned_unbound = False
+
+
+def _warn_if_unbound(entity_type: str) -> None:
+    """Follow-on 3: surface a likely misroute — an entity created with NO bound
+    project lands in the `_workspace` fallback. Once per process, non-breaking
+    (the real gate is the access-gate CI invariant / require_project). No-op in
+    SINGLE mode, where projects.current() is never None."""
+    global _warned_unbound
+    if _warned_unbound:
+        return
+    try:
+        from core import projects
+        if projects.current() is None:
+            _warned_unbound = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "create_entity(%s) with no bound project — writing to the _workspace "
+                "fallback; a caller likely forgot to bind a project (access-gate).",
+                entity_type)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def create_entity(
     *,
     entity_type: str,
@@ -36,6 +60,12 @@ def create_entity(
     exec_id: Optional[str] = None,
     artifact_kind: Optional[str] = None,
     artifact_idx: Optional[int] = None,
+    # Phase 2 (modularity_audit2 §Phase 2): typed provenance. `derivation` is a
+    # core.graph.derivation constructor result (exec/derived_from/imported/manual/
+    # legacy) as a dict; `actor` is agent:<run_id> | human:<uid> | system | legacy.
+    # Optional during the migration window (2A); enforced at the seam in 2C.
+    derivation: Optional[dict] = None,
+    actor: Optional[str] = None,
 ) -> str:
     # WU-2 (post-Phase-4.5): schema validation is now HARD-REJECT, not
     # warning-only. p10 confirmed every add_edge call site is declared
@@ -60,6 +90,26 @@ def create_entity(
     if warnings:
         raise ValueError("entity_types: " + "; ".join(warnings))
     eid = entity_id or gen_entity_id(prefix=entity_type[:3])
+    # Honor the type's declared initial status (status_model.initial) instead of
+    # hardcoding 'active' — e.g. thread->'open', claim->'preliminary'.
+    try:
+        from core.entity_types.registry import get_type
+        _spec = get_type(entity_type)
+        init_status = _spec.initial_status() if _spec else "active"
+    except Exception:  # noqa: BLE001
+        init_status = "active"
+    # Phase 2: auto-derive `exec` when an exec_id is supplied, so every exec-born
+    # path (figures/tables/cells/revisions/materialize) gets its derivation for
+    # free; container/import callers pass derived_from/imported/manual explicitly.
+    if derivation is None and exec_id:
+        from core.graph.derivation import exec_derivation
+        derivation = exec_derivation(exec_id)
+    # Phase 2B: default the actor from the ambient context (set at the HTTP /
+    # turn boundary) when the caller doesn't pass one explicitly.
+    if actor is None:
+        from core.runtime.actor import current_actor
+        actor = current_actor()
+    _warn_if_unbound(entity_type)
     now = _utcnow()
     with _conn() as c:
         c.execute(
@@ -67,14 +117,16 @@ def create_entity(
                (id, type, title, status, artifact_path,
                 producing_params, parent_entity_id, scenario_of, metadata,
                 exec_id, artifact_kind, artifact_idx,
+                derivation, actor,
                 created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                eid, entity_type, title, artifact_path,
+                eid, entity_type, title, init_status, artifact_path,
                 json.dumps(producing_params) if producing_params else None,
                 parent_entity_id, scenario_of,
                 json.dumps(metadata) if metadata else None,
                 exec_id, artifact_kind, artifact_idx,
+                json.dumps(derivation) if derivation else None, actor,
                 now, now,
             ),
         )
@@ -86,7 +138,7 @@ def create_entity(
         kind = "scenario_created" if scenario_of else "entity_created"
         log_event(kind, entity_id=eid, title=title, detail={"type": entity_type})
     _emit_upsert(eid, {
-        "id": eid, "type": entity_type, "title": title, "status": "active",
+        "id": eid, "type": entity_type, "title": title, "status": init_status,
         "artifact_path": artifact_path,
         "producing_params": producing_params,
         "parent_entity_id": parent_entity_id,
@@ -95,6 +147,8 @@ def create_entity(
         "exec_id": exec_id,
         "artifact_kind": artifact_kind,
         "artifact_idx": artifact_idx,
+        "derivation": derivation,
+        "actor": actor,
         "created_at": now, "updated_at": now,
     })
     return eid
@@ -125,6 +179,8 @@ def _row_to_entity(r) -> dict:
         "exec_id": _opt("exec_id"),
         "artifact_kind": _opt("artifact_kind"),
         "artifact_idx": _opt("artifact_idx"),
+        "derivation": json.loads(_opt("derivation")) if _opt("derivation") else None,
+        "actor": _opt("actor"),
         "deleted_at": r["deleted_at"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
@@ -190,6 +246,90 @@ def count_entities(
         q += " AND lower(title) LIKE ?"; args.append(f"%{title_query.lower()}%")
     with _conn() as c:
         return c.execute(q, args).fetchone()["n"]
+
+
+# --- Typed read API (modularity_audit2 §Phase 3.1) -------------------------
+# So callers query the store by PREDICATE instead of reaching for raw `_conn` +
+# SQL. `_conn` is forbidden outside `core/graph/` (tests/check_store_port.py).
+_ORDER_COLS = {"created_at": "created_at", "updated_at": "updated_at",
+               "pinned": "pinned DESC, created_at"}
+
+
+def find_entities(
+    *,
+    type: Optional[str] = None,                 # noqa: A002 — public predicate name
+    type_in: Optional[list] = None,
+    status: Optional[str] = None,
+    status_not: Optional[str] = None,
+    include_archived: bool = True,
+    not_deleted: bool = False,
+    parent_entity_id: Optional[str] = None,
+    scenario_of: Optional[str] = None,
+    exec_id: Optional[str] = None,
+    artifact_kind: Optional[str] = None,
+    artifact_idx: Optional[int] = None,
+    title: Optional[str] = None,
+    title_query: Optional[str] = None,
+    text_query: Optional[str] = None,
+    metadata_contains: Optional[dict] = None,
+    exclude_workspace: bool = False,
+    order_by: str = "created_at",
+    descending: bool = False,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict]:
+    """Find entities by predicate. The store's typed read surface — callers use
+    this (or get_entity / count_entities) instead of raw SQL on the entities table.
+    `metadata_contains` ANDs JSON1 key==value checks; `text_query` matches title OR
+    notes; `order_by` is one of created_at|updated_at|pinned."""
+    q = "SELECT * FROM entities WHERE 1=1"
+    args: list = []
+    if exclude_workspace:
+        q += " AND id != 'workspace'"
+    if type is not None:
+        q += " AND type = ?"; args.append(type)
+    if type_in is not None:
+        ts = list(type_in)
+        q += " AND type IN (%s)" % ",".join("?" * len(ts)); args.extend(ts)
+    if status is not None:
+        q += " AND status = ?"; args.append(status)
+    if status_not is not None:
+        q += " AND status != ?"; args.append(status_not)
+    if not include_archived:
+        q += " AND status != 'archived'"
+    if not_deleted:
+        q += " AND deleted_at IS NULL"
+    if parent_entity_id is not None:
+        q += " AND parent_entity_id = ?"; args.append(parent_entity_id)
+    if scenario_of is not None:
+        q += " AND scenario_of = ?"; args.append(scenario_of)
+    if exec_id is not None:
+        q += " AND exec_id = ?"; args.append(exec_id)
+    if artifact_kind is not None:
+        q += " AND artifact_kind = ?"; args.append(artifact_kind)
+    if artifact_idx is not None:
+        q += " AND artifact_idx = ?"; args.append(artifact_idx)
+    if title is not None:
+        q += " AND title = ?"; args.append(title)
+    if title_query:
+        q += " AND lower(title) LIKE ?"; args.append(f"%{title_query.lower()}%")
+    if text_query:
+        q += " AND (lower(title) LIKE ? OR lower(COALESCE(notes,'')) LIKE ?)"
+        p = f"%{text_query.lower()}%"; args.extend([p, p])
+    if metadata_contains:
+        for k, v in metadata_contains.items():
+            q += " AND json_extract(metadata, ?) = ?"; args.extend([f"$.{k}", v])
+    col = _ORDER_COLS.get(order_by, "created_at")
+    q += f" ORDER BY {col}{' DESC' if descending and order_by != 'pinned' else ''}"
+    if limit is not None:
+        q += " LIMIT ? OFFSET ?"; args.extend([int(limit), int(offset)])
+    with _conn() as c:
+        return [_row_to_entity(r) for r in c.execute(q, args).fetchall()]
+
+
+def exists_entity(**predicates) -> bool:
+    """True iff at least one entity matches the predicates (limit-1 find)."""
+    return bool(find_entities(limit=1, **predicates))
 
 
 def update_entity(entity_id: str, **fields) -> Optional[dict]:

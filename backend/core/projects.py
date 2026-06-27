@@ -239,6 +239,16 @@ def ensure_opened(pid: str) -> None:
             reap_stale_turns()
         except Exception:  # noqa: BLE001
             pass
+    # Phase 2 (modularity_audit2 §2D): backfill typed derivations for
+    # pre-provenance entities so old results show their origin when the scientist
+    # returns. Here (not set_current): this runs inside `with bind(pid)`, so
+    # _conn() is the project's DB, and once per pid per process (the _opened_pids
+    # guard above). Idempotent + guarded — must never block the open.
+    try:
+        from core.graph.derivation_backfill import backfill_derivations
+        backfill_derivations()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @contextlib.contextmanager

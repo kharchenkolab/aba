@@ -1181,7 +1181,7 @@ def settings_credential_set(req: CredentialRequest):
 
 
 @app.post("/api/threads")
-def threads_create(req: ThreadRequest):
+def threads_create(req: ThreadRequest, _pid: str = Depends(require_project)):
     from core.graph.threads import create_thread
     tid = create_thread(req.title, req.question, spec=req.spec)
     # A user-typed question is user-owned — keep the Guide from silently
@@ -1380,7 +1380,7 @@ def entities_edges(entity_id: str):
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), _pid: str = Depends(require_project)):
     """Drop an uploaded file into the active project's data dir + register as a
     'dataset' entity."""
     if not file.filename:
@@ -1392,10 +1392,13 @@ async def upload(file: UploadFile = File(...)):
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     size = dest.stat().st_size
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset",
         title=dest.name,
         artifact_path=str(dest),
+        derivation=imported(file.filename or dest.name),   # Phase 2B
+        actor=human_actor(),
         metadata={"size_bytes": size, "original_name": file.filename},
     )
     # The "data added" reaction (Guide orientation) is driven by the frontend via
@@ -1425,7 +1428,7 @@ class URLUploadRequest(BaseModel):
 
 
 @app.post("/api/upload-url")
-async def upload_url(req: URLUploadRequest):
+async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)):
     """
     Download a file from a URL into DATA_DIR and register a dataset entity.
 
@@ -1465,10 +1468,13 @@ async def upload_url(req: URLUploadRequest):
     except urllib.error.URLError as e:
         raise HTTPException(400, f"download failed: {e}")
 
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset",
         title=req.title or dest.name,
         artifact_path=str(dest),
+        derivation=imported(req.url),   # Phase 2B
+        actor=human_actor(),
         metadata={
             "size_bytes": dest.stat().st_size,
             "source_url": req.url,

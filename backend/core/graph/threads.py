@@ -23,8 +23,10 @@ def create_thread(title: str, question: str = "",
     md: dict = {"question": question, "open_questions": [], "lifecycle": "open"}
     if spec:
         md["spec"] = spec
+    from core.graph.derivation import manual
     return create_entity(
         entity_type="thread", title=title or "Untitled investigation",  # noqa: seam
+        derivation=manual(),   # Phase 2B (actor from ambient: human via route / agent via turn)
         metadata=md,
     )
 
@@ -78,8 +80,10 @@ def get_or_create_default_thread() -> str:
     tid = find_default_thread()
     if tid:
         return tid
+    from core.graph.derivation import manual, SYSTEM_ACTOR
     tid = create_entity(
         entity_type="thread", title="Main thread",  # noqa: seam
+        derivation=manual(), actor=SYSTEM_ACTOR,   # Phase 2B: system-created default
         metadata={"question": "", "open_questions": [], "lifecycle": "open", "is_default": True},
     )
     with _conn() as c:

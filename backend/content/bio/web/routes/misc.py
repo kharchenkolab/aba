@@ -187,8 +187,10 @@ def sample_project(_pid: str = Depends(require_project)):
         raise HTTPException(500, "sample data missing")
     dest = _unique_path(project_data_dir(current_project_id()) / "sample_cells.csv")
     shutil.copyfile(src, dest)
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset", title=dest.name, artifact_path=str(dest),
+        derivation=imported("sample:cells.csv"), actor=human_actor(),   # Phase 2B
         metadata={"size_bytes": dest.stat().st_size, "sample": True},
     )
     return get_entity(eid)
