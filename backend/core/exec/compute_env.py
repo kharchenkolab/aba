@@ -87,6 +87,37 @@ def slurm_time_to_min(s: Optional[str]) -> Optional[float]:
     return int(a) + int(b) / 60.0          # MM:SS
 
 
+def context_line() -> str:
+    """A compact per-turn line for the agent's dynamic system block: the compute
+    mode + this node's capacity, and ON A CLUSTER the live Slurm landscape (the
+    auto-surfaced planning cue — cheap, so it rides every turn; describe_compute
+    gives full detail on demand). Empty string on any error (never break a turn)."""
+    try:
+        e = compute_env()                                # 20s-cached
+        gpu = f", {e['node_gpus']} GPU" if e.get("node_gpus") else ""
+        line = (f"Compute environment: {e.get('mode', 'local')} — this node "
+                f"{e.get('node_cores')} cores / {e.get('node_mem_gb')} GB{gpu}")
+        wt = e.get("walltime_remaining_min")
+        if wt is not None:
+            line += f", ~{round(wt / 60, 1)}h walltime left"
+        parts = e.get("partitions") or []
+        if parts:
+            line += ". Slurm available — partitions: " + "; ".join(
+                f"{p['partition']} (<={p.get('cpus_per_node', '?')}c/node"
+                + (",GPU" if p.get("gpu") else "")
+                + f", {p.get('wait', '?')})" for p in parts[:6])
+            line += (". For a heavy / parallel / GPU / long step, weigh Slurm vs local "
+                     "(call describe_compute); a background/Slurm job is a FRESH process — "
+                     "load inputs from disk, don't rely on kernel state.")
+        else:
+            line += (". Long cells run interactively (raise timeout_s if needed); use "
+                     "background=True only to parallelize independent jobs or when the user "
+                     "asks — it's a fresh process with no kernel state.")
+        return line
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 _CACHE: dict = {"ts": 0.0, "env": None}
 
 
