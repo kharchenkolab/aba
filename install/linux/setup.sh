@@ -14,6 +14,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export ABA_HOME="${ABA_HOME:-$HOME/.aba}"
 HELPER="$ABA_HOME/helper"
+PYBOOT="${ABA_PYTHON:-python3}"   # python used to make the helper venv (override if the system one lacks venv)
 
 HEADLESS=0; PROFILE="local"; RUNTIME_DIR=""; API_KEY=""; EXTRA=()
 while [ $# -gt 0 ]; do
@@ -34,13 +35,16 @@ echo "   profile: $PROFILE (headless=$HEADLESS)"
 
 # --- prerequisites (classical, actionable; the no-agent path) ---
 miss=""
-for t in git curl python3; do command -v "$t" >/dev/null 2>&1 || miss="$miss $t"; done
-python3 -c 'import venv' 2>/dev/null || miss="$miss python3-venv"
+for t in git curl; do command -v "$t" >/dev/null 2>&1 || miss="$miss $t"; done
+command -v "$PYBOOT" >/dev/null 2>&1 || miss="$miss python3"
+# venv needs ensurepip (the python3-venv package on Debian/Ubuntu); test it.
+"$PYBOOT" -c 'import ensurepip' 2>/dev/null || miss="$miss python3-venv"
 if [ -n "$miss" ]; then
   echo "MISSING:$miss"
-  echo "  Install it, then re-run:"
+  echo "  Install the package(s) above, then re-run:"
   echo "    Debian/Ubuntu: sudo apt install git curl python3-venv"
   echo "    Fedora/RHEL:   sudo dnf install git curl python3"
+  echo "  (or set ABA_PYTHON to a python3 that already has venv+pip, e.g. a conda python)"
   exit 1
 fi
 
@@ -51,8 +55,8 @@ echo "   aba source: local checkout ($ABA_REPO_SRC)"
 # --- installer helper venv (runs the shared playbook) ---
 mkdir -p "$ABA_HOME"
 if [ ! -x "$HELPER/venv/bin/python" ]; then
-  echo "-- creating installer helper venv --"
-  python3 -m venv "$HELPER/venv"
+  echo "-- creating installer helper venv ($PYBOOT) --"
+  "$PYBOOT" -m venv "$HELPER/venv"
   "$HELPER/venv/bin/pip" install -q --upgrade pip >/dev/null
 fi
 "$HELPER/venv/bin/pip" install -q "$REPO_ROOT/install/core/helper" >/dev/null

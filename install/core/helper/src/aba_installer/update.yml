@@ -18,7 +18,7 @@ steps:
     title: Update aba
     why: Pull the latest backend + frontend code.
     commands:
-      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
+      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
     timeout_seconds: 60
 
   - id: pull-recipes
