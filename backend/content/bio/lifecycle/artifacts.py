@@ -44,15 +44,10 @@ def _existing_entity_for_artifact(exec_id: str, kind: str, idx: int) -> Optional
     The exec_id + artifact_kind + artifact_idx triple is unique per
     artifact, so at most one entity should match. If multiple rows
     match (a bug elsewhere), the newest wins."""
-    with _conn() as c:
-        r = c.execute(
-            "SELECT id FROM entities "
-            "WHERE exec_id = ? AND artifact_kind = ? AND artifact_idx = ? "
-            "AND status != 'archived' "
-            "ORDER BY created_at DESC LIMIT 1",
-            (exec_id, kind, idx),
-        ).fetchone()
-    return get_entity(r["id"]) if r else None
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
+    rows = find_entities(exec_id=exec_id, artifact_kind=kind, artifact_idx=idx,
+                         status_not="archived", descending=True, limit=1)
+    return rows[0] if rows else None
 
 
 def materialize_entity_from_artifact(

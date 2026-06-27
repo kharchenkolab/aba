@@ -67,12 +67,8 @@ def agent_actor_for_thread(thread_id: Optional[str]) -> Optional[str]:
 
 
 def _has_children(run_id: str) -> bool:
-    with _conn() as c:
-        r = c.execute(
-            "SELECT 1 FROM entities WHERE parent_entity_id = ? AND status != 'archived' LIMIT 1",
-            (run_id,),
-        ).fetchone()
-    return r is not None
+    from core.graph.entities import exists_entity   # P3.1: store read API, not raw SQL
+    return exists_entity(parent_entity_id=run_id, status_not="archived")
 
 
 def run_output_dir(project_id: str, run_id: str) -> "Path":

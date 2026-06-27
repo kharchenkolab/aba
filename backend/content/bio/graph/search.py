@@ -54,13 +54,7 @@ def search(q: str, limit: int = 25) -> dict:
 def find_kept_note(source_key: str) -> Optional[str]:
     """Return the id of an active kept-note snapshot for this message key.
     Bio because 'note' is a bio entity type."""
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT id, metadata FROM entities WHERE type='note' "
-            "AND status='active' AND deleted_at IS NULL"
-        ).fetchall()
-    for r in rows:
-        m = json.loads(r["metadata"]) if r["metadata"] else {}
-        if m.get("source_key") == source_key:
-            return r["id"]
-    return None
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
+    rows = find_entities(type="note", status="active", not_deleted=True,
+                         metadata_contains={"source_key": source_key})
+    return rows[0]["id"] if rows else None

@@ -28,16 +28,11 @@ def backfill_primary_evidence_id() -> int:
     skipped, so the cost on a clean DB is one query.
 
     Returns the count of Results updated."""
-    from core.graph._schema import _conn
-    import json as _json
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
     updated = 0
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT id, metadata FROM entities "
-            "WHERE type = 'result' AND status = 'active'",
-        ).fetchall()
+    rows = find_entities(type="result", status="active")
     for r in rows:
-        md = _json.loads(r["metadata"] or "{}")
+        md = r["metadata"] or {}
         if md.get("primary_evidence_id"):
             continue
         # Pick the first `includes` edge whose source is THIS Result
