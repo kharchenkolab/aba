@@ -102,3 +102,17 @@ def test_create_thread_manual_derivation():
     from core.graph.threads import create_thread
     tid = create_thread("My investigation", "the question")
     assert get_entity(tid)["derivation"] == {"kind": "manual"}   # a thread is a container
+
+
+def test_from_lineage():
+    from core.graph.derivation import from_lineage, imported
+    assert from_lineage({"wasDerivedFrom": ["a", "b"]}, imported("x")) == {"kind": "derived_from", "sources": ["a", "b"]}
+    assert from_lineage({"wasDerivedFrom": "single"}, imported("x")) == {"kind": "derived_from", "sources": ["single"]}
+    assert from_lineage(None, imported("x")) == {"kind": "imported", "source": "x"}
+    assert from_lineage({"supports": ["c"]}, imported("x")) == {"kind": "imported", "source": "x"}  # non-derivation rel
+
+
+def test_register_artifact_no_lineage_is_imported():
+    from core.data.store import register
+    eid = register("/tmp/y.csv", kind="dataset")
+    assert get_entity(eid)["derivation"] == {"kind": "imported", "source": "y.csv"}

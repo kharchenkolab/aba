@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import json
 
-# Edges that mean "this entity came from <target>" (outgoing from the entity).
-# Deliberately excludes relationship edges that are not derivation (supports,
-# includes, used) — a bare entity with only those stays `legacy`, not invented.
-_DERIVATION_EDGES = ("wasDerivedFrom", "wasGeneratedBy", "produced_by",
-                     "wasRevisionOf", "variantOf")
+# Edges that mean "this entity came from <target>" — the canonical set lives in
+# core.graph.derivation, shared with the store seams. A bare entity (no exec, no
+# such edge) stays `legacy`, never invented.
+from core.graph.derivation import DERIVATION_EDGES as _DERIVATION_EDGES
 
 
 def backfill_derivations() -> int:

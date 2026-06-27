@@ -25,6 +25,13 @@ from typing import Optional
 
 VALID_KINDS = frozenset({"exec", "derived_from", "imported", "manual", "legacy"})
 
+# Edge rel types that mean "this entity came from <target>" — used to infer a
+# `derived_from` from a lineage dict (the generic store seams) or the entity graph
+# (the 2D backfill). Deliberately excludes relationship edges that aren't
+# derivation (supports, includes, used).
+DERIVATION_EDGES = ("wasDerivedFrom", "wasGeneratedBy", "produced_by",
+                    "wasRevisionOf", "variantOf")
+
 
 def exec_derivation(exec_id: str) -> dict:
     return {"kind": "exec", "exec_id": exec_id}
@@ -61,6 +68,17 @@ def human_actor(uid: str = "local") -> str:
 def is_valid(derivation: Optional[dict]) -> bool:
     """A derivation is valid iff it carries a recognized `kind`."""
     return bool(derivation) and derivation.get("kind") in VALID_KINDS
+
+
+def from_lineage(lineage: Optional[dict], fallback: dict) -> dict:
+    """Derive a `derived_from` from the derivation-type rels in a lineage dict
+    ({rel: targets, ...}); else `fallback`. For the generic store seams that take
+    a lineage map and otherwise have no derivation."""
+    ids: list[str] = []
+    for rel, targets in (lineage or {}).items():
+        if rel in DERIVATION_EDGES:
+            ids.extend([targets] if isinstance(targets, str) else list(targets))
+    return derived_from(ids) if ids else fallback
 
 
 def agent_actor_for_exec(exec_id: Optional[str]) -> Optional[str]:

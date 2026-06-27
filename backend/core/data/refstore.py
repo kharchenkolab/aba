@@ -109,13 +109,18 @@ def register_reference(
 
     meta = {"scope": scope, "sha": sha, "organism": organism,
             "role": role, "assembly": assembly, "source": source}
+    from core.graph.derivation import derived_from as _mk_derived, imported, SYSTEM_ACTOR
+    _ref_targets = [derived_from] if isinstance(derived_from, str) else (derived_from or [])
     eid = create_entity(
         entity_type=REFERENCE,
         title=title or f"{organism or 'ref'}:{role or src.name}",
         artifact_path=str(artifact),
+        # Phase 2B: derived_from the given targets, else imported (a loaded reference).
+        derivation=(_mk_derived(list(_ref_targets)) if _ref_targets else imported(source or "reference")),
+        actor=SYSTEM_ACTOR,
         metadata=meta,
     )
-    for target in ([derived_from] if isinstance(derived_from, str) else (derived_from or [])):
+    for target in _ref_targets:
         add_edge(eid, target, "wasDerivedFrom")
     return eid
 
