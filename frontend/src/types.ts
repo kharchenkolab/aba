@@ -323,6 +323,9 @@ export interface Entity {
   exec_id: string | null
   artifact_kind: string | null
   artifact_idx: number | null
+  // Phase 2 (provenance): how this entity came to be + who made it.
+  derivation: { kind: string; sources?: string[]; exec_id?: string; source?: string } | null
+  actor: string | null
   deleted_at: string | null
   created_at: string
   updated_at: string
