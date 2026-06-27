@@ -17,6 +17,30 @@ _log = logging.getLogger(__name__)
 HIDDEN_TYPES = ("capability", "reference")
 
 
+_warned_unbound = False
+
+
+def _warn_if_unbound(entity_type: str) -> None:
+    """Follow-on 3: surface a likely misroute — an entity created with NO bound
+    project lands in the `_workspace` fallback. Once per process, non-breaking
+    (the real gate is the access-gate CI invariant / require_project). No-op in
+    SINGLE mode, where projects.current() is never None."""
+    global _warned_unbound
+    if _warned_unbound:
+        return
+    try:
+        from core import projects
+        if projects.current() is None:
+            _warned_unbound = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "create_entity(%s) with no bound project — writing to the _workspace "
+                "fallback; a caller likely forgot to bind a project (access-gate).",
+                entity_type)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def create_entity(
     *,
     entity_type: str,
@@ -85,6 +109,7 @@ def create_entity(
     if actor is None:
         from core.runtime.actor import current_actor
         actor = current_actor()
+    _warn_if_unbound(entity_type)
     now = _utcnow()
     with _conn() as c:
         c.execute(

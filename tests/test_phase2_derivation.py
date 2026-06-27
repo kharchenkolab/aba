@@ -116,3 +116,27 @@ def test_register_artifact_no_lineage_is_imported():
     from core.data.store import register
     eid = register("/tmp/y.csv", kind="dataset")
     assert get_entity(eid)["derivation"] == {"kind": "imported", "source": "y.csv"}
+
+
+def test_warns_once_on_unbound_create(caplog, monkeypatch):
+    import core.projects as P
+    import core.graph.entities as E
+    from core.graph.derivation import manual
+    E._warned_unbound = False                          # reset the once-per-process dedupe
+    monkeypatch.setattr(P, "current", lambda: None)     # simulate truly-unbound
+    with caplog.at_level("WARNING"):
+        create_entity(entity_type="narrative", title="unbound1", derivation=manual())
+        create_entity(entity_type="narrative", title="unbound2", derivation=manual())
+    warns = [r for r in caplog.records if "no bound project" in r.getMessage()]
+    assert len(warns) == 1                              # once per process, not per call
+
+
+def test_no_warn_when_bound(caplog, monkeypatch):
+    import core.projects as P
+    import core.graph.entities as E
+    from core.graph.derivation import manual
+    E._warned_unbound = False
+    monkeypatch.setattr(P, "current", lambda: "proj1")  # bound
+    with caplog.at_level("WARNING"):
+        create_entity(entity_type="narrative", title="bound1", derivation=manual())
+    assert not [r for r in caplog.records if "no bound project" in r.getMessage()]
