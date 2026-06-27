@@ -36,6 +36,12 @@ def create_entity(
     exec_id: Optional[str] = None,
     artifact_kind: Optional[str] = None,
     artifact_idx: Optional[int] = None,
+    # Phase 2 (modularity_audit2 §Phase 2): typed provenance. `derivation` is a
+    # core.graph.derivation constructor result (exec/derived_from/imported/manual/
+    # legacy) as a dict; `actor` is agent:<run_id> | human:<uid> | system | legacy.
+    # Optional during the migration window (2A); enforced at the seam in 2C.
+    derivation: Optional[dict] = None,
+    actor: Optional[str] = None,
 ) -> str:
     # WU-2 (post-Phase-4.5): schema validation is now HARD-REJECT, not
     # warning-only. p10 confirmed every add_edge call site is declared
@@ -68,6 +74,12 @@ def create_entity(
         init_status = _spec.initial_status() if _spec else "active"
     except Exception:  # noqa: BLE001
         init_status = "active"
+    # Phase 2: auto-derive `exec` when an exec_id is supplied, so every exec-born
+    # path (figures/tables/cells/revisions/materialize) gets its derivation for
+    # free; container/import callers pass derived_from/imported/manual explicitly.
+    if derivation is None and exec_id:
+        from core.graph.derivation import exec_derivation
+        derivation = exec_derivation(exec_id)
     now = _utcnow()
     with _conn() as c:
         c.execute(
@@ -75,14 +87,16 @@ def create_entity(
                (id, type, title, status, artifact_path,
                 producing_params, parent_entity_id, scenario_of, metadata,
                 exec_id, artifact_kind, artifact_idx,
+                derivation, actor,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 eid, entity_type, title, init_status, artifact_path,
                 json.dumps(producing_params) if producing_params else None,
                 parent_entity_id, scenario_of,
                 json.dumps(metadata) if metadata else None,
                 exec_id, artifact_kind, artifact_idx,
+                json.dumps(derivation) if derivation else None, actor,
                 now, now,
             ),
         )
@@ -103,6 +117,8 @@ def create_entity(
         "exec_id": exec_id,
         "artifact_kind": artifact_kind,
         "artifact_idx": artifact_idx,
+        "derivation": derivation,
+        "actor": actor,
         "created_at": now, "updated_at": now,
     })
     return eid
@@ -133,6 +149,8 @@ def _row_to_entity(r) -> dict:
         "exec_id": _opt("exec_id"),
         "artifact_kind": _opt("artifact_kind"),
         "artifact_idx": _opt("artifact_idx"),
+        "derivation": json.loads(_opt("derivation")) if _opt("derivation") else None,
+        "actor": _opt("actor"),
         "deleted_at": r["deleted_at"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
