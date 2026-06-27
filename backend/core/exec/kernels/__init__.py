@@ -7,6 +7,6 @@ jupyter_client impl now; the KernelSession interface is transport-agnostic so a
 remote (gateway/E2B) impl drops in later.
 """
 from core.exec.kernels.base import KernelSession
-from core.exec.kernels.pool import KernelPool, get_pool
+from core.exec.kernels.pool import KernelPool, get_pool, KernelCapacityError
 
-__all__ = ["KernelSession", "KernelPool", "get_pool"]
+__all__ = ["KernelSession", "KernelPool", "get_pool", "KernelCapacityError"]

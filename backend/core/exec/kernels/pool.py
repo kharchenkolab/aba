@@ -9,14 +9,22 @@ import threading
 import time
 from typing import Optional
 
-from core.config import KERNEL_IDLE_TTL_S, KERNEL_MAX_LIVE
+from core.config import KERNEL_IDLE_TTL_S, KERNEL_MAX_LIVE, KERNEL_HARD_MAX
+
+
+class KernelCapacityError(RuntimeError):
+    """Raised when a new kernel is needed but every live kernel is BUSY and the
+    hard cap is reached — we refuse rather than evict a kernel mid-execution
+    (which would destroy another thread's running analysis)."""
 
 
 class KernelPool:
-    def __init__(self, max_live: int = KERNEL_MAX_LIVE, idle_ttl: int = KERNEL_IDLE_TTL_S):
+    def __init__(self, max_live: int = KERNEL_MAX_LIVE, idle_ttl: int = KERNEL_IDLE_TTL_S,
+                 hard_max: int = KERNEL_HARD_MAX):
         self._lock = threading.RLock()
         self._sessions: dict[tuple[str, str], object] = {}
         self._max = max_live
+        self._hard_max = max(hard_max, max_live)   # never below the soft cap
         self._ttl = idle_ttl
         self._reaper_started = False
 
@@ -31,10 +39,22 @@ class KernelPool:
                 return s
             if s is not None:
                 self._sessions.pop(key, None)        # dead handle — drop
-            # Per-user cap: evict least-recently-used until there's room.
+            # Per-user soft cap: evict the least-recently-used IDLE session to make
+            # room. NEVER evict a BUSY one — shutting a kernel down mid-execution
+            # destroys the running analysis (the cross-thread stall). When every
+            # over-cap session is busy, allow a bounded burst above the soft cap;
+            # only refuse past the hard cap.
             while len(self._sessions) >= self._max:
-                lru = min(self._sessions, key=lambda k: self._sessions[k].last_used)
+                idle = [k for k, v in self._sessions.items() if not getattr(v, "busy", False)]
+                if not idle:
+                    break                                    # all busy — don't kill work
+                lru = min(idle, key=lambda k: self._sessions[k].last_used)
                 self._sessions.pop(lru).shutdown()
+            if len(self._sessions) >= self._hard_max:
+                raise KernelCapacityError(
+                    f"Compute at capacity: {len(self._sessions)} kernels live and all busy "
+                    f"(hard cap {self._hard_max}). Wait for a running analysis to finish, or "
+                    f"stop one, before starting another.")
             s = JupyterKernelSession(scope_key, lang, cwd=cwd, env_name=env_name)
             self._sessions[key] = s
             return s

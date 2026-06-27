@@ -232,7 +232,11 @@ CAPABILITY_APPROVAL = os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
 # idle TTL, small per-user cap with LRU eviction.
 KERNEL_ENABLED = os.environ.get("ABA_KERNEL_ENABLED", "1") not in ("0", "false", "")
 KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "3600"))  # 1 h (was 15 min — too eager; state-bearing kernels are expensive to rebuild)
-KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user
+KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user — SOFT cap (evict idle LRU)
+# Absolute ceiling. The soft cap only evicts IDLE kernels; when all live kernels
+# are busy we allow a bounded burst above the soft cap rather than kill running
+# work, refusing only past this hard cap. Keep it modest on shared systems.
+KERNEL_HARD_MAX = int(os.environ.get("ABA_KERNEL_HARD_MAX", str(KERNEL_MAX_LIVE + 3)))
 
 # ── History compaction + tool-output cap ────────────────────────────────────
 # Two layers (misc/history_compaction_redesign.md):
