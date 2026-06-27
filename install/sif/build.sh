@@ -81,20 +81,15 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "%environment"
   echo "    export ABA_SYSTEM_BUNDLE=/opt/aba/system_bundle"
   echo "    export ABA_FRONTEND_DIST=\${ABA_FRONTEND_DIST:-/opt/aba/frontend-dist}"
-  if [ "$PROFILE" = "fat" ]; then
-    echo "    export PATH=/opt/aba-venv/bin:\$PATH"
-    echo "    export ABA_TOOLS_DIR=\${ABA_TOOLS_DIR:-/opt/aba-envs/tools}"
-  fi
+  # /opt/aba-venv + /opt/aba-envs/tools are BAKED (fat) or BIND-MOUNTED (slim) —
+  # same paths either way, so the runscript + env don't branch on the profile.
+  echo "    export PATH=/opt/aba-venv/bin:\$PATH"
+  echo "    export ABA_TOOLS_DIR=\${ABA_TOOLS_DIR:-/opt/aba-envs/tools}"
   echo ""
   echo "%runscript"
   echo "    export HOME=\"\${ABA_RUNTIME_DIR:-/tmp/aba}/.home\"; mkdir -p \"\$HOME\""
   echo "    cd /opt/aba/backend"
-  if [ "$PROFILE" = "fat" ]; then
-    echo "    exec /opt/aba-venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port \"\${ABA_PORT:-8000}\""
-  else
-    # slim: python comes from the venv mounted at run time (on PATH via the bind)
-    echo "    exec python -m uvicorn main:app --host 0.0.0.0 --port \"\${ABA_PORT:-8000}\""
-  fi
+  echo "    exec /opt/aba-venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port \"\${ABA_PORT:-8000}\""
   echo ""
   echo "%labels"
   echo "    org.aba.role ondemand-backend"
