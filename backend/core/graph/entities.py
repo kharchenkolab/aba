@@ -248,6 +248,90 @@ def count_entities(
         return c.execute(q, args).fetchone()["n"]
 
 
+# --- Typed read API (modularity_audit2 §Phase 3.1) -------------------------
+# So callers query the store by PREDICATE instead of reaching for raw `_conn` +
+# SQL. `_conn` is forbidden outside `core/graph/` (tests/check_store_port.py).
+_ORDER_COLS = {"created_at": "created_at", "updated_at": "updated_at",
+               "pinned": "pinned DESC, created_at"}
+
+
+def find_entities(
+    *,
+    type: Optional[str] = None,                 # noqa: A002 — public predicate name
+    type_in: Optional[list] = None,
+    status: Optional[str] = None,
+    status_not: Optional[str] = None,
+    include_archived: bool = True,
+    not_deleted: bool = False,
+    parent_entity_id: Optional[str] = None,
+    scenario_of: Optional[str] = None,
+    exec_id: Optional[str] = None,
+    artifact_kind: Optional[str] = None,
+    artifact_idx: Optional[int] = None,
+    title: Optional[str] = None,
+    title_query: Optional[str] = None,
+    text_query: Optional[str] = None,
+    metadata_contains: Optional[dict] = None,
+    exclude_workspace: bool = False,
+    order_by: str = "created_at",
+    descending: bool = False,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict]:
+    """Find entities by predicate. The store's typed read surface — callers use
+    this (or get_entity / count_entities) instead of raw SQL on the entities table.
+    `metadata_contains` ANDs JSON1 key==value checks; `text_query` matches title OR
+    notes; `order_by` is one of created_at|updated_at|pinned."""
+    q = "SELECT * FROM entities WHERE 1=1"
+    args: list = []
+    if exclude_workspace:
+        q += " AND id != 'workspace'"
+    if type is not None:
+        q += " AND type = ?"; args.append(type)
+    if type_in is not None:
+        ts = list(type_in)
+        q += " AND type IN (%s)" % ",".join("?" * len(ts)); args.extend(ts)
+    if status is not None:
+        q += " AND status = ?"; args.append(status)
+    if status_not is not None:
+        q += " AND status != ?"; args.append(status_not)
+    if not include_archived:
+        q += " AND status != 'archived'"
+    if not_deleted:
+        q += " AND deleted_at IS NULL"
+    if parent_entity_id is not None:
+        q += " AND parent_entity_id = ?"; args.append(parent_entity_id)
+    if scenario_of is not None:
+        q += " AND scenario_of = ?"; args.append(scenario_of)
+    if exec_id is not None:
+        q += " AND exec_id = ?"; args.append(exec_id)
+    if artifact_kind is not None:
+        q += " AND artifact_kind = ?"; args.append(artifact_kind)
+    if artifact_idx is not None:
+        q += " AND artifact_idx = ?"; args.append(artifact_idx)
+    if title is not None:
+        q += " AND title = ?"; args.append(title)
+    if title_query:
+        q += " AND lower(title) LIKE ?"; args.append(f"%{title_query.lower()}%")
+    if text_query:
+        q += " AND (lower(title) LIKE ? OR lower(COALESCE(notes,'')) LIKE ?)"
+        p = f"%{text_query.lower()}%"; args.extend([p, p])
+    if metadata_contains:
+        for k, v in metadata_contains.items():
+            q += " AND json_extract(metadata, ?) = ?"; args.extend([f"$.{k}", v])
+    col = _ORDER_COLS.get(order_by, "created_at")
+    q += f" ORDER BY {col}{' DESC' if descending and order_by != 'pinned' else ''}"
+    if limit is not None:
+        q += " LIMIT ? OFFSET ?"; args.extend([int(limit), int(offset)])
+    with _conn() as c:
+        return [_row_to_entity(r) for r in c.execute(q, args).fetchall()]
+
+
+def exists_entity(**predicates) -> bool:
+    """True iff at least one entity matches the predicates (limit-1 find)."""
+    return bool(find_entities(limit=1, **predicates))
+
+
 def update_entity(entity_id: str, **fields) -> Optional[dict]:
     """Partial update. Accepted fields: title, notes, tags, pinned, status,
     metadata, artifact_path. Other keys silently ignored."""
