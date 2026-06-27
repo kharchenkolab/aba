@@ -41,3 +41,16 @@ def test_parse_assoc():
     assert sl.parse_assoc("") == []
     rows = sl.parse_assoc("kharchenko|normal|normal,high\n")
     assert rows[0]["account"] == "kharchenko" and "high" in rows[0]["qos"]
+
+
+def test_context_line(monkeypatch):
+    import core.exec.compute_env as ce
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: {
+        "mode": "slurm", "node_cores": 8, "node_mem_gb": 32, "node_gpus": 0,
+        "partitions": [{"partition": "gpu", "cpus_per_node": 32, "gpu": True, "wait": "likely quick"}]})
+    line = ce.context_line()
+    assert "slurm" in line and "8 cores / 32 GB" in line and "GPU" in line and "FRESH process" in line
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: {
+        "mode": "local", "node_cores": 4, "node_mem_gb": 16, "node_gpus": 0})
+    l2 = ce.context_line()
+    assert "local" in l2 and "background=True only" in l2 and "partitions" not in l2

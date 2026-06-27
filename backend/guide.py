@@ -588,6 +588,16 @@ async def stream_response(
     # transport layer — the stable prefix (cache_control: ephemeral) plus the
     # uncached dynamic tail (the BM25 recipes slice). Per-turn intent changes
     # only invalidate the small tail, not the 26K stable prefix.
+    # Auto-surface the compute environment (mode + node capacity + live Slurm
+    # landscape) into the per-turn dynamic block, so the agent plans placement
+    # with current facts. Cheap (20s-cached); empty on a bare local box error.
+    try:
+        from core.exec.compute_env import context_line as _compute_line
+        _cl = _compute_line()
+        if _cl:
+            dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
+    except Exception:  # noqa: BLE001
+        pass
     system = sidebar_text + focus_text + thread_text + stable_sys
     # The user-message reminder injection (the 'reminder-only catalog' variant)
     # is OFF by default after the 2026-06-02 Haiku+Sonnet study showed both
