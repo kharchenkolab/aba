@@ -62,3 +62,26 @@ def test_create_without_derivation_is_none_for_now():
     eid = create_entity(entity_type="narrative", title="n2")
     assert get_entity(eid)["derivation"] is None
     assert get_entity(eid)["actor"] is None
+
+
+def test_actor_mechanism():
+    from core.runtime.actor import acting_as, current_actor
+    assert current_actor() is None
+    with acting_as("human:local"):
+        assert current_actor() == "human:local"
+        with acting_as("agent:r9"):          # nests + restores
+            assert current_actor() == "agent:r9"
+        assert current_actor() == "human:local"
+    assert current_actor() is None
+
+
+def test_create_entity_defaults_actor_from_ambient():
+    from core.runtime.actor import acting_as
+    with acting_as("human:local"):
+        eid = create_entity(entity_type="narrative", title="amb1")
+    assert get_entity(eid)["actor"] == "human:local"        # ambient default
+    eid2 = create_entity(entity_type="narrative", title="amb2")
+    assert get_entity(eid2)["actor"] is None                # no ambient -> None
+    with acting_as("human:local"):
+        eid3 = create_entity(entity_type="narrative", title="amb3", actor="agent:r1")
+    assert get_entity(eid3)["actor"] == "agent:r1"          # explicit wins

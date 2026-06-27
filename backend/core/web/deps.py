@@ -57,8 +57,17 @@ def require_project(
     project_id: str | None = Query(default=None),
     x_project_id: str | None = Header(default=None, alias="X-Project-Id"),
 ) -> str:
-    """FastAPI dependency: pin the project per-request. Returns the pid."""
-    return _pin_or_412(project_id or x_project_id)
+    """FastAPI dependency: pin the project per-request. Returns the pid. Also sets
+    the ambient actor to human:local — a direct call to a gated HTTP route is a
+    human action (the agent acts via the turn loop / MCP tools, not these)."""
+    pid = _pin_or_412(project_id or x_project_id)
+    try:
+        from core.runtime.actor import set_actor
+        from core.graph.derivation import human_actor
+        set_actor(human_actor())
+    except Exception:  # noqa: BLE001 — actor attribution must never break a request
+        pass
+    return pid
 
 
 __all__ = ["require_project", "_pin_or_412"]
