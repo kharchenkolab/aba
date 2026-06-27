@@ -40,6 +40,21 @@ const LITERAL_BASELINE = new Set([
   'platform/ChatPane.tsx',
 ])
 
+// Files with inline `/api/` fetch as of P3.4a. Burn down into lib/api.ts typed
+// helpers. NEW platform/components code must route through lib/api.ts, not here.
+const FETCH_BASELINE = new Set([
+  'components/AdvisorStrip.tsx',
+  'components/FocusCanvas.tsx',
+  'components/Proposals.tsx',
+  'components/SearchModal.tsx',
+  'components/Settings.tsx',
+  'components/SpecPicker.tsx',
+  'components/ThreadHeader.tsx',
+  'platform/Drawer.tsx',
+  'platform/Rail.tsx',
+  'platform/UploadDrop.tsx',
+])
+
 
 function _allTsFilesUnder(dir: string): string[] {
   const out: string[] = []
@@ -102,6 +117,27 @@ describe('platform purity', () => {
         violations.map(v => '  ' + v).join('\n') + '\n\n' +
         'The shell must read the registry / focus-view contract, not name bio ' +
         'types. (Grandfathered files are in LITERAL_BASELINE; do not add new ones.)'
+      )
+    }
+  })
+
+  it('no NEW inline /api/ fetch in platform/ or components/ — use lib/api.ts (ratchet)', () => {
+    const files = [..._allTsFilesUnder(PLATFORM_DIR), ..._allTsFilesUnder(COMPONENTS_DIR)]
+    const violations: string[] = []
+    for (const f of files) {
+      const rel = _srcRel(f)
+      if (FETCH_BASELINE.has(rel)) continue
+      const src = readFileSync(f, 'utf-8')
+      if (/\bfetch\s*\(/.test(src) && src.includes('/api/')) {
+        violations.push(rel)
+      }
+    }
+    if (violations.length) {
+      throw new Error(
+        'inline /api/ fetch in non-baseline platform/components files:\n' +
+        violations.map(v => '  ' + v).join('\n') + '\n\n' +
+        'Route backend calls through src/lib/api.ts (apiGet/apiPost/... or a typed ' +
+        'helper), not inline fetch. (Grandfathered files are in FETCH_BASELINE.)'
       )
     }
   })

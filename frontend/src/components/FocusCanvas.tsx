@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
+import { getEntityProvenance } from '../lib/api'   // P3.4a: typed API client seam
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
@@ -545,8 +546,7 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
     setData(null)
     if (entity.type === 'workspace') return
     let cancelled = false
-    fetch(`/api/entities/${encodeURIComponent(entity.id)}/provenance`)
-      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+    getEntityProvenance(entity.id)
       .then(d => { if (!cancelled) setData(d) })
       .catch(() => {})
     return () => { cancelled = true }
