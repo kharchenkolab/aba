@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Iterable, Optional
 
+from core.entity_types import registry  # P3.3: by-title link layout is a registry capability
+
 
 # ─── slug ────────────────────────────────────────────────────────────────
 _INVALID_CHARS = re.compile(r"[^A-Za-z0-9._\- ]+")
@@ -169,9 +171,8 @@ class LinkSpec:
     fallback_id: str = ""
 
 
-# Entity types whose canonical storage is an artifact file we can link to
-# by extension. Figure/table/cell all share the artifacts-by-title/ dir.
-_ARTIFACT_ENTITY_TYPES = ("figure", "table", "cell")  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
+# (P3.3) "artifact_file" by-title storage is a registry capability now, not a
+# hardcoded type tuple — see registry.by_title_storage().
 
 
 def _strip_to_project_relative(absolute_path: str) -> Optional[str]:
@@ -235,7 +236,7 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     title = row.get("title") or ""
     eid = row.get("id") or ""
 
-    if etype in _ARTIFACT_ENTITY_TYPES:
+    if registry.by_title_storage(etype) == "artifact_file":
         artifact_path = row.get("artifact_path")
         if not artifact_path:
             return None
@@ -265,7 +266,7 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     # S-3 — analysis (Run): work_dir at projects/<pid>/work/<run_id>/.
     # `run_id` == entity.id by convention (see scratch_dir in
     # core.data.workspace). Symlink to a directory.
-    if etype == "analysis":  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
+    if registry.by_title_storage(etype) == "run_dir":
         if not eid:
             return None
         return LinkSpec(
@@ -278,7 +279,7 @@ def compute_entity_link(row: dict) -> Optional[LinkSpec]:
     # S-2 — dataset: artifact_path is absolute, somewhere under this
     # project's tree (work/, data/, …) or, occasionally, an external
     # /refs/ accession we don't link in v1.
-    if etype == "dataset":  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
+    if registry.by_title_storage(etype) == "data_path":
         artifact_path = row.get("artifact_path")
         if not artifact_path:
             return None

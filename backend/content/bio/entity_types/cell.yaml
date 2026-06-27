@@ -63,3 +63,7 @@ advisors:
   on_create: []
   on_pin: [skeptic]
   on_status_change: {}
+
+capabilities:
+  is_artifact: true
+  by_title_storage: artifact_file

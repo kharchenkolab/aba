@@ -55,12 +55,20 @@ class EntityTypeSpec:
     # thread's lifecycle). Not engine-enforced today.
     confidence_model: Optional[dict] = None
     lifecycle_model: Optional[dict] = None
+    # Declarative capability flags (is_artifact, is_run, artifact_group,
+    # by_title_storage, …) so core/platform queries the registry instead of
+    # naming bio types by literal (modularity_audit2 §Phase 3.3).
+    capabilities: dict = field(default_factory=dict)
 
     def status_states(self) -> list[str]:
         return list(self.status_model.get("states") or [])
 
     def initial_status(self) -> str:
         return self.status_model.get("initial") or "active"
+
+    def cap(self, name: str, default=None):
+        """A declarative capability flag value (see `capabilities`)."""
+        return self.capabilities.get(name, default)
 
 
 _TYPES: dict[str, EntityTypeSpec] = {}
@@ -91,6 +99,7 @@ def _coerce(raw: dict, source: Path) -> EntityTypeSpec:
                           if "confidence_model" in raw else None),
         lifecycle_model=(dict(raw["lifecycle_model"])
                          if "lifecycle_model" in raw else None),
+        capabilities=dict(raw.get("capabilities") or {}),
     )
 
 
@@ -136,6 +145,26 @@ def types_in_category(category: str) -> set[str]:
     Empty set for an unknown category. Stable across calls (the registry
     is populated at startup)."""
     return {t.name for t in _TYPES.values() if t.category == category}
+
+
+def types_with(cap: str, value=True) -> set[str]:
+    """Type names whose capability `cap` equals `value` (default True) — so
+    core/platform queries the registry instead of naming bio types (P3.3)."""
+    return {t.name for t in _TYPES.values() if t.capabilities.get(cap) == value}
+
+
+def artifact_groups() -> dict:
+    """{output-group -> type name} for the types declaring an `artifact_group`
+    capability (e.g. plots->figure, tables->table)."""
+    return {t.capabilities["artifact_group"]: t.name
+            for t in _TYPES.values() if t.capabilities.get("artifact_group")}
+
+
+def by_title_storage(name: str) -> Optional[str]:
+    """The by-title link layout for a type (artifact_file | run_dir | data_path),
+    or None."""
+    t = _TYPES.get(name)
+    return t.capabilities.get("by_title_storage") if t else None
 
 
 def is_hidden(name: str) -> bool:
