@@ -32,6 +32,22 @@ growth), over a **shared read-only base** (baked into a fat image, or mounted fr
 shared storage for a slim image). The base is the only env artifact shared across a
 lab.
 
+## What you'll customize
+
+Most of a deployment is just these knobs — everything else is generic. The recipe
+and policy content comes from the **`aba-recipe-pack`** repo (baked into the image)
+plus whatever you add at the institution and lab layers, so you tune the agent's
+behavior without touching code.
+
+| What | Where | Set by | Takes effect |
+|---|---|---|---|
+| **Deployment config** — scope paths, credential chain, image, job offload | `/cluster/aba/site.yaml` (§3) | platform admin | next launch |
+| **Site-wide recipes / policy** | `/cluster/aba/installation/` — institution bundle | platform admin | next launch |
+| **Slurm queues** for background-job offload | `/cluster/aba/hpc.yaml` + `jobs:` in `site.yaml` (§3) | platform admin | next launch |
+| **A lab's recipes / rules** | `/groups/<lab>/aba/bundle/` (§5) | lab admin | next launch |
+| **Baked recipes / code / base packages** | the SIF (§1) | platform admin | **rebuild** |
+| **Launch form** — instance sizes, GPU, group list | `install/ood/aba/form.yml.erb` + `submit.yml.erb` (§4) | platform admin | redeploy app |
+
 ## 1. Build the image
 
 `install/sif/build.sh` builds from the same `install/core` specs as the other
@@ -76,6 +92,9 @@ the image, and the auto-create policy.
 image:
   sif: /cluster/aba/aba.sif
   # base_dir:  /cluster/aba/base          # slim only
+jobs:                                     # background-job offload (omit → in-process on the session node)
+  submitter: slurm
+  hpc_config: /cluster/aba/hpc.yaml
 scopes:
   institution: { bundle_path: /cluster/aba/installation }   # optional, over the baked pack
   group:
@@ -91,6 +110,15 @@ credentials:
   user_key_path:  /groups/{group}/aba/users/{user}/.aba/credentials.json   # 0700
   group_key_path: /groups/{group}/aba/.credentials.json                    # optional lab-shared key
 ```
+
+**Slurm queues** (`jobs.hpc_config`): generate a starting `hpc.yaml` on a
+submit-capable node with `python -m aba_installer.cli hpc-config --out
+/cluster/aba/hpc.yaml`, then add your QOS / account and tighten walltime — schema
+in [cluster_personal.md](cluster_personal.md).
+
+**Credentials:** the `order` chain is tried top to bottom. Drop a lab-shared key at
+`group_key_path` (mode 0600) so a whole lab can launch without each user pasting
+one; otherwise users paste a key on the form.
 
 ## 4. Deploy the OOD app
 

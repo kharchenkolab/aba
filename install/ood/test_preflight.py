@@ -40,3 +40,20 @@ credentials: {{order: [], on_missing: demo_mode}}
     assert env["ABA_ENVS_DIR"].endswith("/aba/users/alice/envs"), env["ABA_ENVS_DIR"]
     assert "/.envs" not in env["ABA_ENVS_DIR"]
     assert (tmp_path / "groups/lab1/aba/users/alice/envs").is_dir()
+
+
+def test_image_and_jobs_emitted(tmp_path, monkeypatch):
+    g = tmp_path / "groups"
+    site = f"""
+site: {{name: test}}
+image: {{sif: /cluster/aba/aba.sif}}
+jobs:  {{submitter: slurm, hpc_config: /cluster/aba/hpc.yaml}}
+scopes:
+  group: {{enabled: true, root_path: "{g}/{{group}}/aba", auto_create_skeleton: true}}
+  user:  {{state_dir: "{g}/{{group}}/aba/users/{{user}}"}}
+credentials: {{order: [], on_missing: demo_mode}}
+"""
+    env = _run(tmp_path, monkeypatch, site)
+    assert env["ABA_SIF"] == "/cluster/aba/aba.sif"
+    assert env["ABA_BATCH_SUBMITTER"] == "slurm"
+    assert env["ABA_HPC_CONFIG"] == "/cluster/aba/hpc.yaml"

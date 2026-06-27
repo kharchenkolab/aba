@@ -186,6 +186,14 @@ def main():
             lines.append(f"export ABA_BASE_DIR={shq(ex(img['base_dir']))}")
         if img.get("tools_dir"):
             lines.append(f"export ABA_TOOLS_DIR={shq(ex(img['tools_dir']))}")
+        # background-job offload: site.yaml jobs.submitter (local|slurm) +
+        # jobs.hpc_config (partition/QOS catalog). Lets backgrounded work sbatch
+        # its own Slurm job instead of running in-process on the session node.
+        jobs = site.get("jobs") or {}
+        if jobs.get("submitter"):
+            lines.append(f"export ABA_BATCH_SUBMITTER={shq(jobs['submitter'])}")
+        if jobs.get("hpc_config"):
+            lines.append(f"export ABA_HPC_CONFIG={shq(ex(jobs['hpc_config']))}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file
