@@ -311,9 +311,13 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # silently drop it here; agents shouldn't notice. The dataset's code
     # provenance, when meaningful, is reachable via the producing exec
     # record (the agent passes `exec_id` for that, not free-form code).
+    from core.graph.derivation import imported
+    from content.bio.lifecycle.runs import agent_actor_for_thread
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
+        derivation=imported(input_.get("source") or "external"),   # Phase 2B
+        actor=agent_actor_for_thread(_ctx_thread(ctx)),            # Phase 2B
         metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
                   "by_reference": not adopted, "ref_path": abspath,
                   "summary": summary, "source": input_.get("source", ""),
@@ -552,8 +556,12 @@ def create_claim_tool(input_: dict, ctx: dict | None = None) -> dict:
     from core.graph.edges import add_edge
     evidence = list(input_.get("evidence_ids") or [])
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    from core.graph.derivation import derived_from, manual
+    from content.bio.lifecycle.runs import agent_actor_for_thread
     cid = create_entity(
         entity_type="claim", title=stmt[:80],
+        derivation=derived_from(evidence) if evidence else manual(),   # Phase 2B
+        actor=agent_actor_for_thread(_ctx_thread(ctx)),                # Phase 2B
         metadata={"statement": stmt, "negative": bool(input_.get("negative")),
                   "evidence_ids": evidence, "caveats": [], "alternatives": [],
                   "confidence": "preliminary", "thread_id": _ctx_thread(ctx),
