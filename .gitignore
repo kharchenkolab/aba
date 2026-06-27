@@ -43,3 +43,6 @@ eval/audits/vendor/
 
 # Local-only research/working notes (not project-track material)
 misc/acquisition_research/
+
+# setuptools build dir from `pip install install/core/helper`
+install/core/helper/build/
