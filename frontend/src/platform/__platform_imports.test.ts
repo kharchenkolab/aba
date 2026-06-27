@@ -7,18 +7,38 @@
  * at startup (App.tsx → import './bio'); the platform reads those
  * registries by name and never references a bio module directly.
  *
- * Mirrors the backend's tests/check_platform_purity.py + the
- * pytest-discovered tests/test_platform_test_imports.py.
+ * P3.4b (modularity_audit2): also ratchet bio TYPE LITERALS in
+ * platform/ + components/ — the components/ shell bucket was unguarded
+ * and the import check missed string literals (entity.type === 'figure').
+ * Existing files are grandfathered (cleaned in 3.4c's per-type focus-view
+ * contract); NEW files must not add bio type literals.
+ *
+ * Mirrors the backend's tests/check_platform_purity.py + check_seam.sh.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
-// Resolve relative to the .ts file's path on disk. Plain
-// `new URL('.', import.meta.url).pathname` returns a vite-mapped
-// virtual path; fileURLToPath translates back to the real fs path.
 const PLATFORM_DIR = dirname(fileURLToPath(import.meta.url))
+const COMPONENTS_DIR = join(PLATFORM_DIR, '..', 'components')
+
+// Bio entity-type names — string literals of these in the platform/components
+// shell mean domain coupling (the shell should read the registry/contract).
+const BIO_TYPES = ['figure', 'table', 'cell', 'plan', 'dataset', 'analysis',
+  'result', 'finding', 'claim', 'narrative', 'thread']
+
+// Files grandfathered with bio type literals as of P3.4b. Burn down in 3.4c
+// (per-type chrome → the registry-projected focus-view contract). NEW files
+// must NOT be added here — add the contract instead.
+const LITERAL_BASELINE = new Set([
+  'components/FocusCanvas.tsx',
+  'components/highlightTools.ts',
+  'components/icons.tsx',
+  'components/ResultList.tsx',
+  'components/TracePanel.tsx',
+  'platform/ChatPane.tsx',
+])
 
 
 function _allTsFilesUnder(dir: string): string[] {
@@ -36,13 +56,17 @@ function _allTsFilesUnder(dir: string): string[] {
 }
 
 
+function _srcRel(f: string): string {
+  const i = f.indexOf('/src/')
+  return i >= 0 ? f.slice(i + 5) : f
+}
+
+
 describe('platform purity', () => {
   it('no src/platform/ file imports from src/bio/', () => {
     const files = _allTsFilesUnder(PLATFORM_DIR)
     expect(files.length).toBeGreaterThan(0)   // sanity: tree wasn't empty
     const violations: string[] = []
-    // Match both `from '../bio/...'` and `from 'src/bio/...'` and `from './bio/...'`
-    // — sample any path-segment whose components include `bio`.
     const re = /from\s+['"][^'"]*\bbio\b[^'"]*['"]/g
     for (const f of files) {
       const src = readFileSync(f, 'utf-8')
@@ -57,6 +81,27 @@ describe('platform purity', () => {
         violations.map(v => '  ' + v).join('\n') + '\n\n' +
         'Bio components are registered into lib/ registries at startup; ' +
         'platform reads via lib/ lookups, never via direct bio imports.'
+      )
+    }
+  })
+
+  it('no NEW bio type literals in platform/ or components/ (ratchet)', () => {
+    const files = [..._allTsFilesUnder(PLATFORM_DIR), ..._allTsFilesUnder(COMPONENTS_DIR)]
+    const litRe = new RegExp(`['"](${BIO_TYPES.join('|')})['"]`)
+    const violations: string[] = []
+    for (const f of files) {
+      const rel = _srcRel(f)
+      if (LITERAL_BASELINE.has(rel)) continue   // grandfathered (3.4c burns these down)
+      if (litRe.test(readFileSync(f, 'utf-8'))) {
+        violations.push(rel)
+      }
+    }
+    if (violations.length) {
+      throw new Error(
+        'bio type literals in non-baseline platform/components files:\n' +
+        violations.map(v => '  ' + v).join('\n') + '\n\n' +
+        'The shell must read the registry / focus-view contract, not name bio ' +
+        'types. (Grandfathered files are in LITERAL_BASELINE; do not add new ones.)'
       )
     }
   })
