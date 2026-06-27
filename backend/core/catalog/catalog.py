@@ -75,7 +75,9 @@ def register_capability(spec: dict) -> str:
     meta = dict(spec)
     meta.setdefault("scope", "system")
     meta.setdefault("status", "published")
-    return create_entity(entity_type=CAPABILITY, title=name, metadata=meta)
+    from core.graph.derivation import imported, SYSTEM_ACTOR
+    return create_entity(entity_type=CAPABILITY, title=name, metadata=meta,
+                         derivation=imported("catalog"), actor=SYSTEM_ACTOR)   # Phase 2B
 
 
 def _approval_mode() -> str:
