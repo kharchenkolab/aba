@@ -248,9 +248,14 @@ export default function ChatPane({
   }, [onSend])
 
   const all = streamMsg ? [...messages, streamMsg] : messages
-  // Empty project (no entities, sitting on the workspace root) → show a Welcome
-  // with two get-started actions instead of the bare "Ask Guide about your data".
-  const isEmptyProject = (!entities || entities.length === 0)
+  // Empty project (no user content yet, sitting on the workspace root) → show a
+  // Welcome with two get-started actions instead of the bare "Ask Guide about
+  // your data". NB: a fresh project is NOT entities.length===0 — it always carries
+  // the capability catalog (~48), a default thread, and an analysis. "Empty" means
+  // no data/results: no datasets, claims, results, or figures.
+  const isEmptyProject = !(entities || []).some(
+    e => e.type === 'dataset' || e.type === 'data' || e.type === 'claim'
+      || e.type === 'result' || e.type === 'figure')
     && (!focusedEntity || focusedEntity.type === 'workspace')
   // basename → {url, kind} map for inline filename mentions in agent prose.
   // Walk every tool_result and pick the LAST-SEEN entry per basename (later
