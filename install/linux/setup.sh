@@ -3,6 +3,8 @@
 #   git clone git@github.com:kharchenkolab/aba.git
 #   cd aba && ./install/linux/setup.sh                       # desktop: helper UI + browser
 #   ./install/linux/setup.sh --headless                      # server / login node: no browser
+#   ./install/linux/setup.sh --install-dir /opt/aba          # put the WHOLE install elsewhere (default ~/.aba)
+#   ./install/linux/setup.sh --runtime-dir /data/$USER/aba   # just projects/data on a bigger disk
 #   ./install/linux/setup.sh --cluster-personal --runtime-dir /shared/$USER/aba   # Slurm offload
 #
 # The aba repo is private for now (ssh+key); this installs FROM the checkout it
@@ -12,21 +14,25 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-export ABA_HOME="${ABA_HOME:-$HOME/.aba}"
-HELPER="$ABA_HOME/installer"     # helper venv + state (same path as the Mac installer, for a uniform launcher)
 PYBOOT="${ABA_PYTHON:-python3}"   # python used to make the helper venv (override if the system one lacks venv)
 
-HEADLESS=0; PROFILE="local"; RUNTIME_DIR=""; API_KEY=""; EXTRA=()
+HEADLESS=0; PROFILE="local"; RUNTIME_DIR=""; INSTALL_DIR=""; API_KEY=""; EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --headless)                  HEADLESS=1 ;;
     --cluster-personal|--slurm)  PROFILE="cluster-personal"; HEADLESS=1 ;;
+    --install-dir)               INSTALL_DIR="${2:?--install-dir needs a path}"; shift ;;
     --runtime-dir)               RUNTIME_DIR="${2:?--runtime-dir needs a path}"; shift ;;
     --api-key)                   API_KEY="${2:?--api-key needs a value}"; shift ;;
-    -h|--help)                   sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help)                   sed -n '2,14p' "$0"; exit 0 ;;
     *)                           EXTRA+=("$1") ;;
   esac; shift
 done
+
+# The WHOLE install (env, helper, launcher, recipes) lives under ABA_HOME.
+# Precedence: --install-dir, then an exported ABA_HOME, then ~/.aba.
+export ABA_HOME="${INSTALL_DIR:-${ABA_HOME:-$HOME/.aba}}"
+HELPER="$ABA_HOME/installer"     # helper venv + state (same path as the Mac installer, for a uniform launcher)
 
 echo "== ABA Linux installer =="
 echo "   repo:    $REPO_ROOT"
@@ -70,6 +76,17 @@ if [ -n "$API_KEY" ]; then
   echo "   credential: API key written to config.env"
 fi
 
+# --- runtime location (optional; default $ABA_HOME/runtime) ---
+# Holds projects, data, results, and the per-user envs — the part that grows.
+# Point it at a bigger/faster disk while the base env stays under $ABA_HOME.
+# Applies to ANY profile; cluster-personal additionally REQUIRES it (and it must
+# be on the shared filesystem). Persisted to config.env so the launcher uses it.
+if [ -n "$RUNTIME_DIR" ]; then
+  mkdir -p "$RUNTIME_DIR"; export ABA_RUNTIME_DIR="$RUNTIME_DIR"
+  write_cfg ABA_RUNTIME_DIR "$RUNTIME_DIR"
+  echo "   runtime: $RUNTIME_DIR"
+fi
+
 # --- cluster-personal profile: Slurm offload + shared-FS runtime + hpc.yaml ---
 if [ "$PROFILE" = "cluster-personal" ]; then
   if [ -z "$RUNTIME_DIR" ]; then
@@ -77,9 +94,7 @@ if [ "$PROFILE" = "cluster-personal" ]; then
     echo "       (Slurm compute nodes must be able to read the project/runtime files)."
     exit 1
   fi
-  mkdir -p "$RUNTIME_DIR"; export ABA_RUNTIME_DIR="$RUNTIME_DIR"
   write_cfg ABA_BATCH_SUBMITTER slurm
-  write_cfg ABA_RUNTIME_DIR "$RUNTIME_DIR"
   echo "-- cluster-personal: ABA_BATCH_SUBMITTER=slurm, runtime=$RUNTIME_DIR --"
   if command -v sinfo >/dev/null 2>&1; then
     "$PY" -m aba_installer.cli hpc-config --out "$ABA_HOME/hpc.yaml" || true

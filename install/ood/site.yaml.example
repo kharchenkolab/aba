@@ -14,6 +14,15 @@ image:
   # base_dir:  /cluster/aba/base          # slim only — mounted at /opt/aba-venv
   # tools_dir: /cluster/aba/base/tools    # slim only — mounted at /opt/aba-envs/tools
 
+# Background-job offload. submitter=slurm lets the agent sbatch long runs as their
+# OWN Slurm jobs (own resources, survive the session); hpc_config maps the agent's
+# size estimate to your partitions/QOS (same schema as cluster_personal.md §"Tune
+# your cluster's queues"). Omit this section to keep background work in-process on
+# the session's allocated node.
+jobs:
+  submitter: slurm
+  hpc_config: /cluster/aba/hpc.yaml
+
 scopes:
   # Recipes are now BAKED into the SIF as the system scope (ABA_SYSTEM_BUNDLE).
   # This institution bundle is OPTIONAL — site-wide recipe/policy additions the

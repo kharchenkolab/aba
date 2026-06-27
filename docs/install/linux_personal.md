@@ -39,6 +39,23 @@ under `~/.aba` and adds an `aba` launcher.
 > **No `python3-venv`?** The installer will say so. Install the package, or point
 > it at any venv-capable python: `ABA_PYTHON=/path/to/python ./install/linux/setup.sh`.
 
+### Where your data lives
+
+By default everything is under `~/.aba`. The *runtime* — your projects, data,
+results, and per-user environments (the part that grows) — can go on a bigger or
+faster disk while the base environment stays in `~/.aba`:
+
+```bash
+./install/linux/setup.sh --runtime-dir /data/$USER/aba
+```
+
+Choose this at install time. To relocate the *entire* install (the environment
+**and** the data) instead, use `--install-dir /opt/aba` (default `~/.aba`):
+
+```bash
+./install/linux/setup.sh --install-dir /opt/aba
+```
+
 ## Sign in
 
 ```bash
