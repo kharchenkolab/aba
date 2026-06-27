@@ -109,9 +109,11 @@ def run_register_dataset(rid: str, req: RegisterDatasetRequest, _pid: str = Depe
     # required field; by_reference + ref_path metadata makes the
     # semantics explicit (we don't host a local copy).
     ref_path = req.path or ""
+    from core.graph.derivation import derived_from, human_actor
     eid = create_entity(
         entity_type="dataset", title=req.label or "dataset",
         artifact_path=ref_path or None,
+        derivation=derived_from([rid]), actor=human_actor(),   # Phase 2B: produced by the run
         metadata={"thread_id": tid, "origin": "external", "by_reference": True,
                   "ref_path": ref_path, "size_label": req.size,
                   "summary": req.summary, "source_run": rid})

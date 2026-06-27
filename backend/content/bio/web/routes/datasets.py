@@ -93,8 +93,10 @@ async def datasets_create(req: dict | None = None, _pid: str = Depends(require_p
     safe = Path(raw).name.strip() or "New dataset"
     bundle = _unique_dir_path(project_data_dir(current_project_id()) / safe)
     bundle.mkdir(parents=True, exist_ok=True)
+    from core.graph.derivation import manual, human_actor
     eid = create_entity(
         entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        derivation=manual(), actor=human_actor(),   # Phase 2B: hand-created empty dataset
         metadata={"size_bytes": 0, "file_count": 0, "layout": "directory",
                   "layout_hint": "", "original_name": raw},
     )
@@ -168,8 +170,10 @@ async def upload_folder(
         update_entity(append_to, metadata=meta)
         return get_entity(append_to)
 
+    from core.graph.derivation import imported, human_actor
     eid = create_entity(
         entity_type="dataset", title=bundle.name, artifact_path=str(bundle),
+        derivation=imported(folder_name), actor=human_actor(),   # Phase 2B
         metadata={"size_bytes": total_bytes, "file_count": file_count,
                   "layout": "directory", "layout_hint": hint,
                   "original_name": folder_name},
