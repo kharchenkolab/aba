@@ -61,3 +61,18 @@ def human_actor(uid: str = "local") -> str:
 def is_valid(derivation: Optional[dict]) -> bool:
     """A derivation is valid iff it carries a recognized `kind`."""
     return bool(derivation) and derivation.get("kind") in VALID_KINDS
+
+
+def agent_actor_for_exec(exec_id: Optional[str]) -> Optional[str]:
+    """`agent:<run_id>` resolved from an exec record's run_id, or None — for the
+    exec-born create sites (figures/tables/cells/variants/revisions) that run on
+    the gateway thread, where the ambient actor contextvar can't reach."""
+    if not exec_id:
+        return None
+    try:
+        from core.graph.exec_records import get as _get_exec
+        rec = _get_exec(exec_id)
+        rid = (rec or {}).get("run_id")
+        return agent_actor(rid) if rid else None
+    except Exception:  # noqa: BLE001 — actor attribution is best-effort
+        return None

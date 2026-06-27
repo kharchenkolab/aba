@@ -85,3 +85,14 @@ def test_create_entity_defaults_actor_from_ambient():
     with acting_as("human:local"):
         eid3 = create_entity(entity_type="narrative", title="amb3", actor="agent:r1")
     assert get_entity(eid3)["actor"] == "agent:r1"          # explicit wins
+
+
+def test_agent_actor_for_exec(monkeypatch):
+    from core.graph import derivation as D
+    import core.graph.exec_records as ER
+    monkeypatch.setattr(ER, "get", lambda eid: {"run_id": "run77"} if eid == "x" else None)
+    assert D.agent_actor_for_exec("x") == "agent:run77"
+    assert D.agent_actor_for_exec(None) is None          # no exec_id
+    assert D.agent_actor_for_exec("missing") is None      # exec not found
+    monkeypatch.setattr(ER, "get", lambda eid: {"run_id": None})
+    assert D.agent_actor_for_exec("anything") is None     # exec has no run_id
