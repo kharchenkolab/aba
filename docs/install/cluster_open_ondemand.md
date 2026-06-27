@@ -43,7 +43,7 @@ behavior without touching code.
 |---|---|---|---|
 | **Deployment config** — scope paths, credential chain, image, job offload | `/cluster/aba/site.yaml` (§3) | platform admin | next launch |
 | **Site-wide recipes / policy** | `/cluster/aba/installation/` — institution bundle | platform admin | next launch |
-| **Slurm queues** for background-job offload | `/cluster/aba/hpc.yaml` + `jobs:` in `site.yaml` (§3) | platform admin | next launch |
+| **Slurm queues** (optional — auto-detected from `sinfo`) | `/cluster/aba/hpc.yaml` + `jobs:` in `site.yaml` (§3) | platform admin | next launch |
 | **A lab's recipes / rules** | `/groups/<lab>/aba/bundle/` (§5) | lab admin | next launch |
 | **Baked recipes / code / base packages** | the SIF (§1) | platform admin | **rebuild** |
 | **Launch form** — instance sizes, GPU, group list | `install/ood/aba/form.yml.erb` + `submit.yml.erb` (§4) | platform admin | redeploy app |
@@ -111,10 +111,12 @@ credentials:
   group_key_path: /groups/{group}/aba/.credentials.json                    # optional lab-shared key
 ```
 
-**Slurm queues** (`jobs.hpc_config`): generate a starting `hpc.yaml` on a
-submit-capable node with `python -m aba_installer.cli hpc-config --out
-/cluster/aba/hpc.yaml`, then add your QOS / account and tighten walltime — schema
-in [cluster_personal.md](cluster_personal.md).
+**Slurm queues** (`jobs.hpc_config`) — **optional**: without it ABA auto-detects
+partitions from live `sinfo` (the default partition for CPU jobs, a fitting one for
+GPU/large). Configure it only to add an **account / QOS** your cluster requires, or
+to override — generate a starting file on a submit node with `python -m
+aba_installer.cli hpc-config --out /cluster/aba/hpc.yaml` (schema:
+[cluster_personal.md](cluster_personal.md)).
 
 **Credentials:** the `order` chain is tried top to bottom. Drop a lab-shared key at
 `group_key_path` (mode 0600) so a whole lab can launch without each user pasting

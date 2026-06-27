@@ -2,9 +2,12 @@
 
 The agent provides an ESTIMATE (runtime_min + optional cores/mem/gpu hints); the
 DEPLOYMENT describes available partitions/QoS/limits/defaults; this maps the two
-into a concrete Slurm request. We do NOT query live ``sinfo`` — a VBC cluster
-(ABA on a real node) could look it up directly, but the general case can't, so
-the bundle/site config is the source of truth.
+into a concrete Slurm request. A configured catalog (``$ABA_HPC_CONFIG`` or the
+bundle ``hpc:`` settings) is the source of truth; when NONE is configured, ABA
+auto-detects partitions from live ``sinfo`` (default partition first) so an
+unconfigured cluster still routes GPU / large jobs to real partitions. Skipping
+config is fine for ordinary CPU jobs (the default partition is used); configure a
+catalog only to add account / QoS or to override the detected partitions.
 
 Config shape::
 
@@ -27,6 +30,32 @@ _DEFAULTS = {"cores": 1, "mem_gb": 4, "walltime_h": 4}
 _BIG = 1 << 30
 
 
+def _live_partitions() -> list:
+    """Adapt live ``sinfo`` (slurm_live) into the partition-catalog shape, the
+    cluster's default partition FIRST — so an unconfigured cluster still routes
+    GPU / large jobs to real partitions (general jobs land on the default via the
+    'first that fits' pick). Empty when Slurm isn't reachable."""
+    try:
+        import re
+        from core.jobs.slurm_live import default_partition, partitions_live
+        dp = default_partition()
+        out = []
+        for p in partitions_live():
+            m = re.match(r"(?:(\d+)-)?(\d+):", p.get("max_walltime") or "")
+            wh = (int(m.group(1) or 0) * 24 + int(m.group(2))) if m else _BIG
+            out.append({
+                "name": p["partition"],
+                "max_cores": int(p.get("cpus_per_node") or 0) or _BIG,
+                "max_mem_gb": int(p.get("mem_gb_per_node") or 0) or _BIG,
+                "max_walltime_h": wh,
+                "gpu": bool(p.get("gpu")),
+            })
+        out.sort(key=lambda q: q["name"] != dp)          # default partition first
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def hpc_config() -> dict:
     """Deployment HPC config. Precedence: ``$ABA_HPC_CONFIG`` YAML (operator /
     tests) → ``EffectiveBundle.settings['hpc']`` (composes system→inst→lab→user)
@@ -46,6 +75,8 @@ def hpc_config() -> dict:
         except Exception:  # noqa: BLE001
             cfg = {}
     cfg.setdefault("partitions", [])
+    if not cfg["partitions"]:
+        cfg["partitions"] = _live_partitions()       # auto-detect when nothing is configured
     d = dict(_DEFAULTS)
     d.update(cfg.get("defaults") or {})
     cfg["defaults"] = d
