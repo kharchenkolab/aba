@@ -54,3 +54,15 @@ def backfill_derivations() -> int:
             n += 1
         c.commit()
     return n
+
+
+def derivation_coverage_violations(*, backfill: bool = True) -> list:
+    """Entities still missing a derivation, after an optional backfill — the 2C
+    invariant: this list is empty (every entity has a typed derivation, via
+    thread-at-creation for new ones + backfill for the legacy/long tail)."""
+    from core.graph._schema import _conn
+    if backfill:
+        backfill_derivations()
+    with _conn() as c:
+        return [(r["id"], r["type"]) for r in c.execute(
+            "SELECT id, type FROM entities WHERE derivation IS NULL").fetchall()]

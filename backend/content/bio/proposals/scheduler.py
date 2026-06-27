@@ -390,8 +390,12 @@ def _create_claim(payload: dict, tid: str) -> str:
     now = datetime.now(timezone.utc).isoformat()
     stmt = (payload.get("statement") or "Untitled claim").strip()
     ev = list(payload.get("evidence_ids") or [])
+    from core.graph.derivation import derived_from, manual
+    from content.bio.lifecycle.runs import agent_actor_for_thread
     cid = create_entity(
         entity_type="claim", title=stmt[:80],
+        derivation=derived_from(ev) if ev else manual(),   # Phase 2C
+        actor=agent_actor_for_thread(tid),
         metadata={"statement": stmt, "negative": False,
                   "evidence_ids": ev, "caveats": [], "alternatives": [],
                   "confidence": "preliminary", "thread_id": tid,
