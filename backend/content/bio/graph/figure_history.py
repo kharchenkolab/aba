@@ -17,13 +17,10 @@ def find_active_figure_by_title(title: str) -> Optional[dict]:
     """Most-recent active figure with this exact title (for version chains).
     Note: title-based auto-supersession was disabled in commit c99594a;
     this helper is kept for explicit-lookup callers only."""
-    with _conn() as c:
-        r = c.execute(
-            "SELECT * FROM entities WHERE type='figure' AND title=? "
-            "AND status='active' ORDER BY created_at DESC LIMIT 1",
-            (title,),
-        ).fetchone()
-        return _row_to_entity(r) if r else None
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
+    rows = find_entities(type="figure", title=title, status="active",
+                         descending=True, limit=1)
+    return rows[0] if rows else None
 
 
 def figure_history(entity_id: str, *,
