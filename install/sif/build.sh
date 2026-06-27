@@ -53,6 +53,17 @@ if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$SB/skills/recipes/"; e
 if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$SB/catalog/"; fi
 echo "   recipes baked: $(find "$SB/skills/recipes" -name '*.md' 2>/dev/null | wc -l | tr -d ' ') files, $(ls "$SB/catalog"/*.yaml 2>/dev/null | wc -l | tr -d ' ') catalog"
 
+# ── runtime-install essentials the debian:12-slim base omits (no %post needed) ──
+# CA certs: without them every runtime https download (pip/PyPI, micromamba, CRAN/
+# Bioconductor) fails with CERTIFICATE_VERIFY_FAILED. micromamba: the agent needs
+# it to materialize conda/CLI tools into the per-user growth env at run time.
+for c in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+  [ -f "$c" ] && { cp "$c" "$STAGE/ca-certificates.crt"; break; }
+done
+[ -f "$STAGE/ca-certificates.crt" ] && echo "   CA certs baked" || echo "WARNING: no host CA bundle found to bake"
+MM_BIN="${MICROMAMBA:-$(command -v micromamba 2>/dev/null || true)}"
+if [ -x "$MM_BIN" ]; then mkdir -p "$STAGE/bin"; cp "$MM_BIN" "$STAGE/bin/micromamba"; echo "   micromamba baked"; else echo "NOTE: no micromamba to bake (runtime conda installs unavailable)"; fi
+
 # ── fat: build the conda venv + R tools base from install/core specs ──
 if [ "$PROFILE" = "fat" ]; then
   MM="${MICROMAMBA:-micromamba}"
@@ -75,6 +86,8 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    $STAGE/backend /opt/aba/backend"
   echo "    $STAGE/frontend-dist /opt/aba/frontend-dist"
   echo "    $STAGE/system_bundle /opt/aba/system_bundle"
+  [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
+  [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
   echo ""
@@ -83,8 +96,11 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    export ABA_FRONTEND_DIST=\${ABA_FRONTEND_DIST:-/opt/aba/frontend-dist}"
   # /opt/aba-venv + /opt/aba-envs/tools are BAKED (fat) or BIND-MOUNTED (slim) —
   # same paths either way, so the runscript + env don't branch on the profile.
-  echo "    export PATH=/opt/aba-venv/bin:\$PATH"
+  # /opt/aba/bin carries the baked micromamba (runtime conda/CLI materialization).
+  echo "    export PATH=/opt/aba/bin:/opt/aba-venv/bin:\$PATH"
   echo "    export ABA_TOOLS_DIR=\${ABA_TOOLS_DIR:-/opt/aba-envs/tools}"
+  echo "    export SSL_CERT_FILE=\${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+  echo "    export REQUESTS_CA_BUNDLE=\${REQUESTS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
   echo ""
   echo "%runscript"
   echo "    export HOME=\"\${ABA_RUNTIME_DIR:-/tmp/aba}/.home\"; mkdir -p \"\$HOME\""
