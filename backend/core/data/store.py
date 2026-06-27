@@ -76,6 +76,7 @@ def register(
     entity row. Callers that have an exec_id available should set it
     via update_entity(eid, exec_id=...) after registration.
     """
+    from core.graph.derivation import from_lineage, imported
     meta = {"scope": scope}
     eid = create_entity(
         entity_type=kind,
@@ -83,6 +84,8 @@ def register(
         artifact_path=str(path),
         producing_params=producing_params,
         parent_entity_id=parent_entity_id,
+        # Phase 2B: derived_from the lineage targets, else imported (registered file).
+        derivation=from_lineage(lineage, imported(os.path.basename(str(path)) or kind)),
         metadata=meta,
     )
     for rel, targets in (lineage or {}).items():
