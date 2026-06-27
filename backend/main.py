@@ -1181,7 +1181,7 @@ def settings_credential_set(req: CredentialRequest):
 
 
 @app.post("/api/threads")
-def threads_create(req: ThreadRequest):
+def threads_create(req: ThreadRequest, _pid: str = Depends(require_project)):
     from core.graph.threads import create_thread
     tid = create_thread(req.title, req.question, spec=req.spec)
     # A user-typed question is user-owned — keep the Guide from silently
@@ -1380,7 +1380,7 @@ def entities_edges(entity_id: str):
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), _pid: str = Depends(require_project)):
     """Drop an uploaded file into the active project's data dir + register as a
     'dataset' entity."""
     if not file.filename:
@@ -1425,7 +1425,7 @@ class URLUploadRequest(BaseModel):
 
 
 @app.post("/api/upload-url")
-async def upload_url(req: URLUploadRequest):
+async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)):
     """
     Download a file from a URL into DATA_DIR and register a dataset entity.
 
