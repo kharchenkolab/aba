@@ -129,6 +129,7 @@ def materialize_entity_from_artifact(
     # leaves preview_path null, the panel shows a broken thumb but the
     # download still works.
     from core.exec.previews import ensure_preview
+    from core.graph.derivation import agent_actor
     preview_url = ensure_preview(artifact_url) if artifact_url else None
     eid = create_entity(
         entity_type=entity_type,
@@ -144,6 +145,9 @@ def materialize_entity_from_artifact(
         exec_id=exec_id,
         artifact_kind=kind,
         artifact_idx=idx,
+        # Phase 2B: the agent run that produced the exec. The ambient contextvar
+        # can't reach this (gateway thread), but the exec record carries run_id.
+        actor=agent_actor(rec["run_id"]) if rec.get("run_id") else None,
     )
     # PROV-O edges: artifact wasGeneratedBy the Run that produced its exec.
     # Mirrors what registry.register_artifacts_from_tool_result writes
