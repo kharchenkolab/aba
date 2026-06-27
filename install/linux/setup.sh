@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export ABA_HOME="${ABA_HOME:-$HOME/.aba}"
-HELPER="$ABA_HOME/helper"
+HELPER="$ABA_HOME/installer"     # helper venv + state (same path as the Mac installer, for a uniform launcher)
 PYBOOT="${ABA_PYTHON:-python3}"   # python used to make the helper venv (override if the system one lacks venv)
 
 HEADLESS=0; PROFILE="local"; RUNTIME_DIR=""; API_KEY=""; EXTRA=()
@@ -96,7 +96,7 @@ if [ "$HEADLESS" = 1 ]; then
   exec "$PY" -m aba_installer.cli install ${EXTRA[@]+"${EXTRA[@]}"}
 else
   echo "-- starting installer helper (browser UI) --"
-  ABA_HOME="$ABA_HOME" nohup "$HELPER/venv/bin/aba-installer" >"$ABA_HOME/helper/helper.log" 2>&1 &
+  ABA_HOME="$ABA_HOME" nohup "$HELPER/venv/bin/aba-installer" >"$HELPER/helper.log" 2>&1 &
   sleep 2
   PORT="$(cat "$ABA_HOME/installer/port.txt" 2>/dev/null || echo 8765)"
   URL="http://127.0.0.1:$PORT"

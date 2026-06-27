@@ -104,11 +104,13 @@ def test_default_context_resolves_under_aba_home(tmp_aba_home):
 
 def test_rendered_launcher_has_known_subcommands():
     """The launcher's case statement must cover the actions we exposed in
-    the Control UI: up / stop / status / logs / update / uninstall."""
+    the Control UI: up / stop / status / logs / update / doctor / uninstall."""
     ctx = LauncherContext(
         aba_home=Path("/x"), aba_runtime_dir=Path("/x/runtime"),
         aba_env=Path("/x/env"), aba_repo=Path("/x/repo"),
     )
     out = render(ctx)
-    for action in ("up)", "stop)", "status)", "logs)", "update)", "uninstall)"):
+    for action in ("up)", "stop)", "status)", "logs)", "uninstall)"):
         assert action in out, f"launcher missing subcommand: {action}"
+    # update + doctor share one case → the headless CLI (works browserless).
+    assert "update|doctor)" in out, "launcher missing the update/doctor subcommand"
