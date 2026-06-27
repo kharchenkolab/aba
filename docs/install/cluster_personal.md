@@ -71,10 +71,14 @@ installs an `aba` launcher under `~/.aba`.
 > - **Credentials without a key:** run `aba auth` — it prints a URL you approve in any
 >   browser, then paste the code back.
 
-## Tune your cluster's queues (`hpc.yaml`)
+## Tune your cluster's queues (`hpc.yaml`) — optional
 
-The installer generated `~/.aba/hpc.yaml` from `sinfo`. **Review it** — `sinfo` only
-exposes partition sizes, so add your QOS / account and tighten walltime caps:
+**You can skip this.** With no `hpc.yaml`, ABA auto-detects your partitions from
+live `sinfo`: ordinary CPU jobs use your **default partition**, and GPU / large
+jobs route to a partition that fits. Configure a catalog only to **add an account
+or QOS your cluster requires** (those can't be guessed), or to override the
+detected partitions. The installer already wrote a starting `~/.aba/hpc.yaml` from
+`sinfo` if it could — edit it (add QOS / account, tighten walltime):
 
 ```yaml
 hpc:

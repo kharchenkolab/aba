@@ -95,6 +95,18 @@ def partitions_live() -> list[dict]:
     return parse_partitions(out) if out is not None else []
 
 
+def default_partition() -> Optional[str]:
+    """The cluster's DEFAULT partition (the one `sinfo` marks with `*` in %P),
+    or None if it can't be determined."""
+    out = _run(["sinfo", "-h", "-o", "%P"])
+    if not out:
+        return None
+    for tok in out.split():
+        if tok.endswith("*"):
+            return tok.rstrip("*")
+    return None
+
+
 def queue_depth() -> dict:
     out = _run(["squeue", "-h", "-o", "%P|%t"])
     return parse_queue(out) if out is not None else {}
