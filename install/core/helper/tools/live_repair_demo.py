@@ -13,7 +13,7 @@ it NEVER touches your real ~/.claude (verified before/after). It needs:
   • a CLAUDE_CODE_OAUTH_TOKEN (read from ~/.aba/config.env if not in the env).
 
 Run:
-    python install/mac/helper/tools/live_repair_demo.py
+    python install/core/helper/tools/live_repair_demo.py
 """
 from __future__ import annotations
 import os

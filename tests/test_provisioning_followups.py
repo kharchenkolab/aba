@@ -22,7 +22,7 @@ pytestmark = pytest.mark.bio
 
 # ── #7: hdf5r baked into the R base build spec ───────────────────────────────
 def test_hdf5r_in_r_base_spec():
-    yml = (ROOT / "install/mac/r-environment.yml").read_text()
+    yml = (ROOT / "install/core/r-environment.yml").read_text()
     assert "r-hdf5r" in yml, "r-hdf5r should be baked into the R base (conda R is global-only)"
 
 

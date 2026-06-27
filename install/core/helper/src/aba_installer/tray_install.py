@@ -35,7 +35,7 @@ def _bundle_template() -> Path:
         if cand.exists():
             return cand
     # Editable install: this file is in
-    # install/mac/helper/src/aba_installer/tray_install.py
+    # install/core/helper/src/aba_installer/tray_install.py
     # → walk up 5 to the repo root, then drill into install/mac/tray/ABA.app
     here = Path(__file__).resolve()
     for parents in (here.parents[5] if len(here.parents) >= 6 else None,

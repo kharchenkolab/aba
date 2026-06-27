@@ -73,10 +73,10 @@ compute nodes can use them:
 
 ```bash
 # Python runtime (the "venv": Python 3.12 + Node 20 + the bio stack)
-mamba env create -p "$ABA_BASE/runtime/.venv" -f aba/install/mac/environment.yml
+mamba env create -p "$ABA_BASE/runtime/.venv" -f aba/install/core/environment.yml
 
 # R / command-line tools base (R + Seurat/Bioconductor + IRkernel)
-mamba env create -p "$ABA_BASE/runtime/envs/tools" -f aba/install/mac/r-environment.yml
+mamba env create -p "$ABA_BASE/runtime/envs/tools" -f aba/install/core/r-environment.yml
 ```
 
 (The files live under `install/mac/` for historical reasons — they are plain

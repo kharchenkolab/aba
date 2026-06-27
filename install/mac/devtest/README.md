@@ -28,7 +28,7 @@ what get installed and tested.
 ```sh
 # one-time: a venv with the helper installed (kept under ~/aba, not the repo)
 python3 -m venv ~/aba/.venv-installer
-~/aba/.venv-installer/bin/pip install -e install/mac/helper
+~/aba/.venv-installer/bin/pip install -e install/core/helper
 
 PY=~/aba/.venv-installer/bin/python
 

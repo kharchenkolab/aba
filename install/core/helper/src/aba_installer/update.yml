@@ -52,7 +52,7 @@ steps:
       # branches — every update tried to fetch from raw.github while the
       # repos were private, failing with curl exit 56. The local-clone
       # branch makes the env-refresh idempotent and offline-friendly.
-      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/mac/environment.yml" ]; then cp "$REPO_DIR/aba/install/mac/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/environment.yml}"; fi'
+      - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/core/environment.yml" ]; then cp "$REPO_DIR/aba/install/core/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment.yml}"; fi'
       - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
 
