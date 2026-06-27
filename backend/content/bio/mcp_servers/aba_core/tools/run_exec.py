@@ -48,12 +48,24 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                    aba_ctx_id: str | None = None) -> dict:
         """Run Python in the project's scratch workspace. State persists
         across calls within a thread (interactive kernel); pass
-        fresh=true for a one-shot subprocess. Pass background=true (or
-        let the router decide based on estimated_runtime_min) for
-        deferred long-runs. On an HPC deployment a backgrounded run
-        becomes a Slurm job — optionally size it with est_cores /
-        est_mem_gb / est_gpu (mapped to a partition/QoS by the
-        deployment); these are ignored when not on a cluster.
+        fresh=true for a one-shot subprocess.
+
+        WHERE IT RUNS (see the per-turn "Compute environment:" line /
+        `describe_compute`, and the `compute-placement` knowhow):
+        - Default: the interactive kernel — state persists. A LONG cell is
+          fine here; just raise `timeout_s`. Do NOT background to avoid a
+          timeout.
+        - `background=True`: runs ASYNC in a FRESH process — it has NONE of
+          your interactive objects, so it must load its inputs from disk and
+          write outputs to disk (the `object 'panel' not found` trap). On a
+          LOCAL deployment use this only when the user asks or to fan out
+          several independent jobs. On a SLURM deployment a background run is
+          an `sbatch` job — use it when the step needs more cores/mem/GPU than
+          this node has, might exceed the session's remaining walltime, or
+          would be meaningfully faster on Slurm; size it with est_cores /
+          est_mem_gb / est_gpu / estimated_runtime_min (mapped to a
+          partition/QoS; ignored off-cluster). `estimated_runtime_min` is a
+          sizing/ walltime hint, NOT an auto-background trigger.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
@@ -120,11 +132,17 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         binary. (For a public database — GEO, SRA, ENA — `ensure_capability`
         the maintained package, e.g. GEOquery, rather than hand-rolling.)
 
-        Pass `background=True` (or `estimated_runtime_min` above the
-        router threshold, ~5 min) for long Seurat integrations / DESeq2
-        sweeps / etc. — those run as queued Rscript jobs that don't
-        block the thread, with artifacts harvested + the plan
-        continuation re-firing on completion. Do NOT shell out to
+        WHERE IT RUNS (same rules as run_python; see the per-turn "Compute
+        environment:" line / `describe_compute` / the `compute-placement`
+        knowhow): default is the interactive R kernel (state persists; a LONG
+        cell is fine — raise `timeout_s`, don't background to dodge a timeout).
+        `background=True` runs as a queued Rscript job in a FRESH process — it
+        loads its inputs from disk and writes outputs to disk (no interactive
+        objects), with artifacts harvested + the plan continuation re-firing on
+        completion. On LOCAL use it only when the user asks or to fan out
+        independent jobs; on SLURM use it when the step needs more cores/mem/GPU
+        than this node has or might exceed the remaining walltime, sized with
+        est_cores/est_mem_gb/est_gpu/estimated_runtime_min. Do NOT shell out to
         Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
         background=True IS the supported path for long R work.
 

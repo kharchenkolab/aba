@@ -193,9 +193,20 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     if status == "failed":
         err = (job.get("error") or "").strip().splitlines()
         err_one = err[0][:200] if err else "(no detail)"
+        # A background/Slurm job runs in a FRESH process — if it failed on a
+        # name/object the interactive session had, that's the cause: it must
+        # load its inputs from disk, not rely on kernel state.
+        hint = ""
+        _e = (job.get("error") or "").lower()
+        if ("not found" in _e or "not defined" in _e or "no such" in _e
+                or "cannot open the connection" in _e):
+            hint = ("\n\nNOTE: background/Slurm jobs run in a FRESH process with "
+                    "none of the interactive kernel's objects. Reload inputs FROM "
+                    "DISK inside the job body (don't reference variables from earlier "
+                    "interactive cells).")
         return (
             f"[continuation: background job `{job_id}` ({title}) FAILED]\n\n"
-            f"Error: {err_one}\n\n"
+            f"Error: {err_one}{hint}\n\n"
             f"The background job you submitted failed. Look at the error, "
             f"decide whether to retry / fix / give up, and either continue "
             f"the plan or summarize what went wrong. Don't silently move on."
