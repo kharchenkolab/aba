@@ -80,6 +80,11 @@ def create_entity(
     if derivation is None and exec_id:
         from core.graph.derivation import exec_derivation
         derivation = exec_derivation(exec_id)
+    # Phase 2B: default the actor from the ambient context (set at the HTTP /
+    # turn boundary) when the caller doesn't pass one explicitly.
+    if actor is None:
+        from core.runtime.actor import current_actor
+        actor = current_actor()
     now = _utcnow()
     with _conn() as c:
         c.execute(
