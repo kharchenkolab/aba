@@ -159,32 +159,12 @@ def _host_capabilities() -> Optional[set[str]]:
 
 
 def _host_tools() -> Optional[set[str]]:
-    """Enumerate the host's tool catalog. TOOL_SCHEMAS is only populated once
-    the MCP gateway boots; we fall back to scanning aba_core's per-cluster
-    modules so the report stays meaningful even without a live agent."""
-    names: set[str] = set()
-    try:
-        from content.bio.tools import TOOL_SCHEMAS   # noqa: PLC0415
-        names.update(t["name"] for t in TOOL_SCHEMAS if isinstance(t, dict) and t.get("name"))
-    except Exception:
-        pass
-    # Fall back / augment by inspecting aba_core's tool modules — every
-    # @mcp.tool() declaration corresponds to one agent-visible tool.
-    try:
-        from pathlib import Path as _P
-        tools_dir = _P(__file__).resolve().parents[2] / "content/bio/mcp_servers/aba_core/tools"
-        import re
-        for f in tools_dir.glob("*.py"):
-            for line in f.read_text().splitlines():
-                m = re.match(r"\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line)
-                if m and not m.group(1).startswith("_"):
-                    names.add(m.group(1))
-    except Exception:
-        pass
-    # The workhorse run_python / run_r live elsewhere — add them by name so the
-    # report doesn't false-positive when we can't see the live catalog.
-    names.update({"run_python", "run_r"})
-    return names or None
+    """Enumerate the host's tool catalog via the content-registered
+    "host_tool_names" service (bio knows its own tool layout: the live MCP
+    catalog if booted, else a scan of aba_core's modules, plus run_*); None if no
+    pack is registered. Inverted off a direct content import to hold the seam."""
+    from core.services import call_service
+    return call_service("host_tool_names", default=None)
 
 
 # ─── artifact reachability ──────────────────────────────────────────────────

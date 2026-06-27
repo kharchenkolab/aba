@@ -18,6 +18,7 @@ from . import capabilities   # noqa: F401  — registers the capability seed pro
 from .files import layout    # noqa: F401  — registers per-type display_path computers
 from . import viewers        # noqa: F401  — loads file-viewer registry
 from . import prompts        # noqa: F401  — registers named prompts (e.g. thread_summary)
+from . import services       # noqa: F401  — registers content services (language_sniffer, host_tool_names)
 
 # Wire on_project_open hook for bio's display-path backfill (Phase C.4).
 from core.hooks.dispatcher import register as _register_hook

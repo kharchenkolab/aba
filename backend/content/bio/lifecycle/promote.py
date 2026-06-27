@@ -28,16 +28,11 @@ def backfill_primary_evidence_id() -> int:
     skipped, so the cost on a clean DB is one query.
 
     Returns the count of Results updated."""
-    from core.graph._schema import _conn
-    import json as _json
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
     updated = 0
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT id, metadata FROM entities "
-            "WHERE type = 'result' AND status = 'active'",
-        ).fetchall()
+    rows = find_entities(type="result", status="active")
     for r in rows:
-        md = _json.loads(r["metadata"] or "{}")
+        md = r["metadata"] or {}
         if md.get("primary_evidence_id"):
             continue
         # Pick the first `includes` edge whose source is THIS Result
@@ -135,10 +130,12 @@ def pin_evidence(
             md = dict(payload.get("metadata") or {})
             md.setdefault("thread_id", thread_id)
             md.setdefault("origin", origin)
+            from core.graph.derivation import derived_from, manual
             evidence_id = create_entity(
                 entity_type=evidence_kind,
                 title=payload.get("title") or evidence_kind,
                 artifact_path=payload.get("artifact_path"),
+                derivation=derived_from([parent_run_id]) if parent_run_id else manual(),  # Phase 2C
                 metadata=md,
             )
             if parent_run_id:
@@ -202,10 +199,12 @@ def pin_evidence(
     # adding/removing/reordering members. Drives the unpin "user-never-
     # invested" semantics — if False at unpin time, we archive the auto-
     # generated wrapper; if True, we preserve the user's work.
+    from core.graph.derivation import derived_from, manual
     rid = create_entity(
         entity_type="result",
         title=auto_title,
         parent_entity_id=(get_entity(evidence_id) or {}).get("parent_entity_id") if evidence_id else None,
+        derivation=derived_from([evidence_id]) if evidence_id else manual(),   # Phase 2C
         metadata={
             "thread_id": thread_id,
             "origin": origin,
@@ -670,11 +669,13 @@ def promote_figure_to_result(
         raise ValueError(f"can only promote figures (got {fig['type']})")
 
     auto_title = title or interpretation.strip().split("\n")[0][:80] or fig["title"]
+    from core.graph.derivation import derived_from
     rid = create_entity(
         entity_type="result",
         title=auto_title,
         parent_entity_id=fig.get("parent_entity_id"),
         metadata={"interpretation": interpretation, "evidence_figure": figure_id},
+        derivation=derived_from([figure_id]),   # Phase 2B: lineage at creation (no backfill lag)
     )
     add_edge(rid, figure_id, "supports", {"direction": "result-supported-by-figure"})
     add_edge(rid, figure_id, "wasDerivedFrom")
@@ -696,10 +697,12 @@ def promote_results_to_finding(
         raise ValueError("all sources must be result entities")
 
     auto_title = title or text.strip().split("\n")[0][:80]
+    from core.graph.derivation import derived_from
     fid = create_entity(
         entity_type="finding",
         title=auto_title,
         metadata={"text": text, "supporting_results": result_ids},
+        derivation=derived_from(result_ids),   # Phase 2B: lineage at creation (no backfill lag)
     )
     for rid in result_ids:
         add_edge(fid, rid, "supports", {"direction": "finding-supported-by-result"})
@@ -754,9 +757,11 @@ def create_finding_from_draft(
     a finding can be crystallized straight from chat before promotion.
     """
     evidence_ids = evidence_ids or []
+    from core.graph.derivation import derived_from, manual
     fid = create_entity(
         entity_type="finding",
         title=(title.strip()[:120] or "Untitled finding"),
+        derivation=derived_from(evidence_ids) if evidence_ids else manual(),   # Phase 2C
         metadata={
             "text": summary, "summary": summary,
             "supporting_results": evidence_ids,

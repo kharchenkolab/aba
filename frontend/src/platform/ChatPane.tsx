@@ -63,10 +63,13 @@ interface Props {
   onRespondApproval?: (action: 'approve' | 'approve_session' | 'reject') => void
   /** Stop the current turn (cancel + kill any running work). */
   onStop?: () => void
-  /** Currently-queued message (set when user hits Enter while streaming). */
-  queuedMessage?: string | null
-  /** Drop the queued message without sending. */
+  /** Queued follow-ups (set when user hits Enter while streaming). Drains one
+   *  per completed turn. */
+  queuedMessages?: string[]
+  /** Drop ALL queued messages (Clear all). */
   onDropQueue?: () => void
+  /** Drop a single queued message by position (per-chip ✕). */
+  onDropQueueAt?: (index: number) => void
   /** Steer — cancel current turn AND send `text` as the replacement. */
   onSteer?: (text: string) => void
   /** Current thread id — used to persist the composer draft per thread. */
@@ -108,8 +111,9 @@ export default function ChatPane({
   pendingApproval,
   onRespondApproval,
   onStop,
-  queuedMessage,
+  queuedMessages,
   onDropQueue,
+  onDropQueueAt,
   onSteer,
   threadId,
   currentRunId,
@@ -502,23 +506,40 @@ export default function ChatPane({
                 committed a follow-up while the agent is still
                 responding. Cancel drops it; "Send now" fires Steer
                 (cancel + send) so the queue runs immediately. */}
-            {queuedMessage && (
-              <div className="queue-chip">
-                <span className="queue-chip__label">Queued:</span>
-                <span className="queue-chip__text">{queuedMessage}</span>
-                <div className="queue-chip__actions">
-                  {streaming && onSteer && (
-                    <button className="queue-chip__send" onClick={() => onSteer(queuedMessage)}
-                            title="Stop the current turn and send this now">
-                      Send now
-                    </button>
-                  )}
-                  {onDropQueue && (
-                    <button className="queue-chip__cancel" onClick={onDropQueue} title="Drop the queued message">
-                      Cancel
-                    </button>
-                  )}
-                </div>
+            {queuedMessages && queuedMessages.length > 0 && (
+              <div className="queue-chips" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {queuedMessages.map((msg, i) => (
+                  <div className="queue-chip" key={i}>
+                    <span className="queue-chip__label">
+                      {queuedMessages.length > 1 ? `Queued ${i + 1}:` : 'Queued:'}
+                    </span>
+                    <span className="queue-chip__text">{msg}</span>
+                    <div className="queue-chip__actions">
+                      {/* "Send now" only on the head — steer interrupts the
+                          current turn to send the NEXT message immediately. */}
+                      {streaming && onSteer && i === 0 && (
+                        <button className="queue-chip__send"
+                                onClick={() => { onDropQueueAt?.(0); onSteer(msg) }}
+                                title="Stop the current turn and send this now">
+                          Send now
+                        </button>
+                      )}
+                      {onDropQueueAt && (
+                        <button className="queue-chip__cancel" onClick={() => onDropQueueAt(i)}
+                                title="Drop this queued message">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {queuedMessages.length > 1 && onDropQueue && (
+                  <button className="queue-chips__clear" onClick={onDropQueue}
+                          title="Drop all queued messages"
+                          style={{ alignSelf: 'flex-start', fontSize: '0.8em', opacity: 0.7 }}>
+                    Clear all ({queuedMessages.length})
+                  </button>
+                )}
               </div>
             )}
             <Composer

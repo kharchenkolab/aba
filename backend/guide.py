@@ -787,10 +787,14 @@ async def stream_response(
                     from core.graph.entities import create_entity
                     _inp = tool_input if isinstance(tool_input, dict) else {}
                     plan = validate_plan(normalize_plan(_inp))
+                    from core.graph.derivation import manual
+                    from content.bio.lifecycle.runs import agent_actor_for_thread
                     plan_eid = create_entity(
                         entity_type="plan",
                         title=plan.title or "Plan",
                         parent_entity_id=focus_entity_id,
+                        derivation=manual(),   # Phase 2B
+                        actor=agent_actor_for_thread(store_tid),
                         metadata={
                             "thread_id": store_tid,
                             "plan": plan.to_dict(),

@@ -287,12 +287,15 @@ export function useChat(
   // Queue-while-streaming: user can type + commit a follow-up while the
   // agent is responding. Auto-flushes when the current turn ends (done
   // OR cancelled via Steer). Stop drops the queue.
-  const [queuedMessage, setQueuedMessage] = useState<string | null>(null)
-  // Mirror of queuedMessage in a ref. The in-flight stream's done/cancelled
-  // handlers capture `queuedMessage` from the closure at TURN START (when it was
-  // null), so reading the state there is stale — that's why "Send now" / auto-flush
-  // dropped a message queued mid-turn. The ref always holds the latest queue.
-  const queuedMessageRef = useRef<string | null>(null)
+  // A LIST (not one slot) so the user can queue several follow-ups: enqueue
+  // appends, and the queue drains one message per completed turn. (Single-slot
+  // before — a 2nd enqueue silently bumped the 1st.)
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([])
+  // Mirror of queuedMessages in a ref. The in-flight stream's done/cancelled
+  // handlers capture state from the closure at TURN START (when it was empty),
+  // so reading the state there is stale — that's why auto-flush dropped a
+  // message queued mid-turn. The ref always holds the latest queue.
+  const queuedMessagesRef = useRef<string[]>([])
   // A flag distinguishing Steer (cancel → flush queue) from Stop
   // (cancel → drop queue). Set by steer(); read in the 'cancelled'
   // handler; cleared either way.
@@ -721,8 +724,8 @@ export function useChat(
               // send the queued message now. Plain Stop path: drop the
               // queue. The distinction is the steerFlushRef flag set
               // by steer() before it fires cancel.
-              if (steerFlushRef.current && queuedMessageRef.current) {
-                const q = queuedMessageRef.current
+              if (steerFlushRef.current && queuedMessagesRef.current.length) {
+                const [q, ...rest] = queuedMessagesRef.current
                 steerFlushRef.current = false
                 // Don't clear the ref until the flush actually runs — if
                 // setTimeout never fires (tab throttle, unmount), the
@@ -734,14 +737,14 @@ export function useChat(
                     console.warn('[useChat] steer auto-flush: flushSendRef null; queue preserved')
                     return
                   }
-                  queuedMessageRef.current = null
-                  setQueuedMessage(null)
+                  queuedMessagesRef.current = rest
+                  setQueuedMessages(rest)
                   flush(q)
                 }, 0)
               } else {
                 steerFlushRef.current = false
-                queuedMessageRef.current = null
-                setQueuedMessage(null)
+                queuedMessagesRef.current = []
+                setQueuedMessages([])
               }
               return 'terminal'
             } else if (ev.type === 'entity_registered') {
@@ -764,16 +767,16 @@ export function useChat(
               // ever landed in chat. The clear-before-schedule pattern
               // had no recovery path; this fix preserves the queue on
               // any failure path.
-              if (queuedMessageRef.current) {
-                const q = queuedMessageRef.current
+              if (queuedMessagesRef.current.length) {
+                const [q, ...rest] = queuedMessagesRef.current
                 setTimeout(() => {
                   const flush = flushSendRef.current
                   if (!flush) {
                     console.warn('[useChat] auto-flush: flushSendRef null; queue preserved')
                     return
                   }
-                  queuedMessageRef.current = null
-                  setQueuedMessage(null)
+                  queuedMessagesRef.current = rest
+                  setQueuedMessages(rest)
                   flush(q)
                 }, 0)
               }
@@ -928,11 +931,19 @@ export function useChat(
   // turn ends (done) OR when the user Steers (cancel+flush).
   const enqueue = useCallback((text: string) => {
     const t = text.trim()
-    if (!t) { setQueuedMessage(null); queuedMessageRef.current = null; return }
-    setQueuedMessage(t); queuedMessageRef.current = t
+    if (!t) return                          // empty Enter is a no-op, not a clear
+    const next = [...queuedMessagesRef.current, t]   // APPEND — don't bump the prior
+    queuedMessagesRef.current = next; setQueuedMessages(next)
   }, [])
 
-  const dropQueue = useCallback(() => { setQueuedMessage(null); queuedMessageRef.current = null }, [])
+  // Drop ALL queued messages (e.g. on Stop).
+  const dropQueue = useCallback(() => { queuedMessagesRef.current = []; setQueuedMessages([]) }, [])
+
+  // Drop a single queued message by position (the per-chip ✕).
+  const dropQueueAt = useCallback((index: number) => {
+    const next = queuedMessagesRef.current.filter((_, i) => i !== index)
+    queuedMessagesRef.current = next; setQueuedMessages(next)
+  }, [])
 
   // Steer: cancel the current turn AND send `text` once cancelled
   // commits. Sets the flush flag so the cancelled-handler knows this
@@ -948,7 +959,10 @@ export function useChat(
       return
     }
     steerFlushRef.current = true
-    setQueuedMessage(t); queuedMessageRef.current = t
+    // Prepend: steer sends `t` immediately (cancel → flush head), leaving any
+    // already-queued messages to follow.
+    const next = [t, ...queuedMessagesRef.current]
+    queuedMessagesRef.current = next; setQueuedMessages(next)
     try {
       await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {
         method: 'POST',
@@ -974,7 +988,7 @@ export function useChat(
     pendingClarification, answerClarification,
     pendingApproval, respondApproval,
     stopTurn,
-    queuedMessage, enqueue, dropQueue, steer,
+    queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
     eventLog, jobs,
     // #334 Phase 2 — passed to <Message> → <ToolStep> so an orphan tool_start
     // (cancelled run, completed-but-tab-refreshed) can rehydrate its live

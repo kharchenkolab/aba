@@ -106,7 +106,7 @@ def live_log_event(run_id, obj: dict, dtbuf: list) -> None:
         if t == "tool_start":
             out.append(f"🔧 {obj.get('name')}  {_j.dumps(obj.get('input') or {}, default=str)[:220]}")
         elif t == "tool_result":
-            out.append(f"   ✓ {_j.dumps(obj.get('result') or {}, default=str)[:220]}")
+            out.append(f"   ✓ {_j.dumps(obj.get('result') or {}, default=str)[:220]}")  # noqa: seam — false positive: tool-result dict key, not the entity type
         elif t == "tool_progress":
             out.append(f"   ⏳ {str(obj.get('message'))[:160]}")
         elif t == "plan":

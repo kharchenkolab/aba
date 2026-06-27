@@ -57,13 +57,18 @@ def active_run_id(thread_id: str) -> Optional[str]:
     return None
 
 
+def agent_actor_for_thread(thread_id: Optional[str]) -> Optional[str]:
+    """agent:<run_id> for the open run on a thread — the actor for an agent-tool
+    create on the gateway thread, where the ambient actor contextvar can't reach
+    (modularity_audit2 §2B). None if no open run."""
+    from core.graph.derivation import agent_actor
+    rid = active_run_id(thread_id) if thread_id else None
+    return agent_actor(rid) if rid else None
+
+
 def _has_children(run_id: str) -> bool:
-    with _conn() as c:
-        r = c.execute(
-            "SELECT 1 FROM entities WHERE parent_entity_id = ? AND status != 'archived' LIMIT 1",
-            (run_id,),
-        ).fetchone()
-    return r is not None
+    from core.graph.entities import exists_entity   # P3.1: store read API, not raw SQL
+    return exists_entity(parent_entity_id=run_id, status_not="archived")
 
 
 def run_output_dir(project_id: str, run_id: str) -> "Path":
@@ -110,10 +115,12 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     md: dict = {"thread_id": thread_id, "run_state": "open", "origin": "internal"}
     if plan_entity_id:
         md["plan_entity_id"] = plan_entity_id
+    from core.graph.derivation import manual
     rid = create_entity(
         entity_type="analysis",
         title=(title or "Analysis run").strip()[:120],
         parent_entity_id=focus_entity_id or WORKSPACE_ID,
+        derivation=manual(),   # Phase 2B: a Run is opened, not derived (actor from ambient)
         metadata=md,
     )
     try:

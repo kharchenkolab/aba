@@ -448,14 +448,12 @@ def backfill_legacy_producing_code(*, dry_run: bool = False) -> dict:
             continue
 
         try:
-            # Sniff language from the code itself, deferring to the
-            # scenarios._detect_language heuristic (R signals beat python
-            # signals; default to python on tie).
-            try:
-                from content.bio.lifecycle.scenarios import _detect_language
-                lang = _detect_language(code)
-            except Exception:  # noqa: BLE001 — never block backfill on the sniffer
-                lang = "python"
+            # Sniff language from the code itself via the content-registered
+            # "language_sniffer" service (R signals beat python; default python
+            # on tie / when no pack is registered). Inverted off a direct bio
+            # import to keep the platform/content seam (check_seam.sh).
+            from core.services import call_service
+            lang = call_service("language_sniffer", code, default="python")
             tool_name = "run_r" if lang == "r" else "run_python"
 
             # Pull thread_id off entity metadata if present so the row is

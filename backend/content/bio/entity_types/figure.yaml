@@ -80,3 +80,8 @@ advisors:
   # Result — pin is the moment the user signals "this matters."
   on_pin: [skeptic]
   on_status_change: {}
+
+capabilities:
+  is_artifact: true
+  artifact_group: plots
+  by_title_storage: artifact_file

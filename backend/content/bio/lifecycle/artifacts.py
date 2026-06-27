@@ -44,15 +44,10 @@ def _existing_entity_for_artifact(exec_id: str, kind: str, idx: int) -> Optional
     The exec_id + artifact_kind + artifact_idx triple is unique per
     artifact, so at most one entity should match. If multiple rows
     match (a bug elsewhere), the newest wins."""
-    with _conn() as c:
-        r = c.execute(
-            "SELECT id FROM entities "
-            "WHERE exec_id = ? AND artifact_kind = ? AND artifact_idx = ? "
-            "AND status != 'archived' "
-            "ORDER BY created_at DESC LIMIT 1",
-            (exec_id, kind, idx),
-        ).fetchone()
-    return get_entity(r["id"]) if r else None
+    from core.graph.entities import find_entities   # P3.1: store read API, not raw SQL
+    rows = find_entities(exec_id=exec_id, artifact_kind=kind, artifact_idx=idx,
+                         status_not="archived", descending=True, limit=1)
+    return rows[0] if rows else None
 
 
 def materialize_entity_from_artifact(
@@ -129,6 +124,7 @@ def materialize_entity_from_artifact(
     # leaves preview_path null, the panel shows a broken thumb but the
     # download still works.
     from core.exec.previews import ensure_preview
+    from core.graph.derivation import agent_actor
     preview_url = ensure_preview(artifact_url) if artifact_url else None
     eid = create_entity(
         entity_type=entity_type,
@@ -144,6 +140,9 @@ def materialize_entity_from_artifact(
         exec_id=exec_id,
         artifact_kind=kind,
         artifact_idx=idx,
+        # Phase 2B: the agent run that produced the exec. The ambient contextvar
+        # can't reach this (gateway thread), but the exec record carries run_id.
+        actor=agent_actor(rec["run_id"]) if rec.get("run_id") else None,
     )
     # PROV-O edges: artifact wasGeneratedBy the Run that produced its exec.
     # Mirrors what registry.register_artifacts_from_tool_result writes

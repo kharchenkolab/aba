@@ -61,8 +61,12 @@ def create_result(req: CreateResultRequest, _pid: str = Depends(require_project)
     """Create a Result (an observation). Usually seeded with one cell; grows
     deliberately via add-member. Results are on the shelf by virtue of being
     Results — no explicit pinned flag needed."""
+    from core.graph.derivation import derived_from, manual, human_actor
+    _refs = [m.ref for m in req.members if getattr(m, "ref", None)]
     eid = create_entity(
         entity_type="result", title=req.title,
+        derivation=derived_from(_refs) if _refs else manual(),   # Phase 2B
+        actor=human_actor(),
         metadata={"thread_id": req.thread_id, "origin": req.origin,
                   "interpretation": req.interpretation,
                   "interpretation_origin": "user",
@@ -200,8 +204,10 @@ def entities_provenance(entity_id: str):
     """Upstream/downstream neighborhood for the canvas Provenance panel."""
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    from core.graph.provenance import neighborhood
-    return neighborhood(entity_id)
+    from core.graph.provenance import neighborhood, promotion_record
+    out = neighborhood(entity_id)
+    out["promotion"] = promotion_record(get_entity(entity_id))   # Phase 2E: who/when/from
+    return out
 
 
 @router.get("/api/entities/{entity_id}/suggest-interpretation")

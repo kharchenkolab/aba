@@ -66,3 +66,7 @@ advisors:
   # content/bio/advisors/handlers.py.
   on_status_change:
     completed: [methodologist]
+
+capabilities:
+  is_run: true
+  by_title_storage: run_dir

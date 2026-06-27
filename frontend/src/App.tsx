@@ -407,7 +407,7 @@ export default function App() {
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
           pendingClarification, answerClarification,
           pendingApproval, respondApproval, stopTurn,
-          queuedMessage, enqueue, dropQueue, steer,
+          queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
           eventLog, jobs, currentRunId } = useChat(
     focusedId, refresh, annotation, `${projectKey}:${chatReload}`, threadId, url.pid ?? undefined,
   )
@@ -796,8 +796,9 @@ export default function App() {
       pendingApproval={pendingApproval}
       onRespondApproval={respondApproval}
       onStop={stopTurn}
-      queuedMessage={queuedMessage}
+      queuedMessages={queuedMessages}
       onDropQueue={dropQueue}
+      onDropQueueAt={dropQueueAt}
       onSteer={steer}
       threadId={currentThread?.id ?? threadId}
       currentRunId={currentRunId}
