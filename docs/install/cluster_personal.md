@@ -5,8 +5,8 @@ on, launched by hand, so that long analyses run as **Slurm jobs** on compute nod
 — off your login session, on the resources you ask for, and surviving a restart.
 
 If your cluster offers ABA through **Open OnDemand** instead, use
-[cluster_open_ondemand.md](cluster_open_ondemand.md) — that's the managed,
-click-to-launch path. This guide is the do-it-yourself alternative.
+[cluster_open_ondemand.md](cluster_open_ondemand.md) — the managed, click-to-launch
+path. This is the do-it-yourself alternative.
 
 ---
 
@@ -24,127 +24,62 @@ Slurm job for it.
                                         └──────── reads results ◀─────────────┘
 ```
 
-Two things make the Slurm path work, and both are about a **shared filesystem**:
+The Slurm path rests on **one rule** — everything ABA touches must live on a
+**shared filesystem** the compute nodes can see:
 
-1. ABA runs where it can call `sbatch` (a login node, or inside an interactive
-   allocation) and where it can see the **same filesystem the compute nodes see**.
-2. ABA's runtime directory (its environments + each job's working dir) lives on
-   that shared filesystem, so a job running on a compute node can hand its results
-   back. ABA detects completion by watching for a sentinel file the job writes —
-   no callbacks, no open ports.
+> Install ABA (its home *and* its runtime) on `home`, `scratch`, or a project space
+> that's visible from both your launch node and the compute nodes. Local `/tmp`
+> will not work. A job stuck `running` forever, or *"isolated env … not available"*,
+> almost always means something landed on a non-shared path.
 
-> **The one rule:** install ABA (code, environments, runtime) on a filesystem that
-> is visible from both your launch node and the compute nodes — your `home`,
-> `scratch`, or a project space. Local `/tmp` will not work for Slurm jobs.
+A job hands results back by writing to that shared filesystem; ABA detects
+completion by watching for a sentinel file — no callbacks, no open ports.
 
----
+## What you'll need
 
-## Prerequisites
-
-- An account on the cluster and SSH access.
-- The **Slurm client** on your launch node — `sbatch`, `squeue`, `sacct`,
-  `scancel`. (Login nodes have it; check with `which sbatch`.)
+- An account on the cluster with SSH access.
+- The **Slurm client** on your launch node — `which sbatch` should succeed.
 - A **shared filesystem** reachable from the launch node and the compute nodes.
-- **conda / mamba** (Miniforge). Many clusters provide it as a module
-  (`module load miniforge`); otherwise install Miniforge into your home once.
-- An **Anthropic API key** (simplest on a cluster), or a Claude Code OAuth token.
+- `git`, `curl`, and Python 3 with `venv` (the installer builds everything else —
+  you do **not** need to load a conda module).
+- An **Anthropic API key** (simplest on a cluster) or a Claude.ai subscription.
 
-Pick one shared-filesystem directory to hold everything, e.g.:
+## Install
 
-```bash
-export ABA_BASE=/scratch/$USER/aba      # <-- a SHARED path; adjust to your cluster
-mkdir -p "$ABA_BASE"
-```
-
----
-
-## 1. Get the code
+Run the Linux installer with the **`--cluster-personal`** profile, pointing the
+runtime at a shared path. Your home directory is usually shared on a cluster, so the
+default install location (`~/.aba`) is fine; if your home is *not* shared, also set
+`ABA_HOME` to a shared path (see the note).
 
 ```bash
-cd "$ABA_BASE"
-git clone https://github.com/kharchenkolab/aba.git
-git clone https://github.com/kharchenkolab/aba-recipe-pack.git
+git clone git@github.com:kharchenkolab/aba.git && cd aba
+./install/linux/setup.sh --cluster-personal \
+    --runtime-dir /scratch/$USER/aba \      # a SHARED path — adjust to your cluster
+    --api-key sk-ant-…                       # or omit and run `aba auth` afterwards
 ```
 
-## 2. Create the environments
+This builds the self-contained environment (Python + R + the bio stack), imports
+the recipe library, builds the UI, and configures Slurm offload — it sets
+`ABA_BATCH_SUBMITTER=slurm`, puts the runtime on your shared path, and **probes
+`sinfo` to write a starting `~/.aba/hpc.yaml`** describing your partitions. It
+installs an `aba` launcher under `~/.aba`.
 
-ABA uses two conda environments, both placed under your shared `ABA_BASE` so the
-compute nodes can use them:
+> - **Home not shared?** Add `ABA_HOME=/scratch/$USER/aba-home` before the command so
+>   the environment itself is on the shared filesystem too.
+> - **No `python3-venv`?** Install it, or pass `ABA_PYTHON=/path/to/python` (e.g. a
+>   conda python) before the command.
+> - **Credentials without a key:** run `aba auth` — it prints a URL you approve in any
+>   browser, then paste the code back.
 
-```bash
-# Python runtime (the "venv": Python 3.12 + Node 20 + the bio stack)
-mamba env create -p "$ABA_BASE/runtime/.venv" -f aba/install/core/environment.yml
+## Tune your cluster's queues (`hpc.yaml`)
 
-# R / command-line tools base (R + Seurat/Bioconductor + IRkernel)
-mamba env create -p "$ABA_BASE/runtime/envs/tools" -f aba/install/core/r-environment.yml
-```
-
-(The files live under `install/mac/` for historical reasons — they are plain
-conda specs and build on Linux.)
-
-## 3. Build the web UI
-
-The Python env includes Node, so use its `npx`:
-
-```bash
-cd "$ABA_BASE/aba/frontend"
-"$ABA_BASE/runtime/.venv/bin/npm" ci
-"$ABA_BASE/runtime/.venv/bin/npx" vite build      # → frontend/dist
-cd "$ABA_BASE"
-```
-
-## 4. Import the recipe pack
-
-The recipe pack gives the agent curated bioinformatics recipes **and** the
-capability catalog (so it provisions packages cleanly instead of guessing). An
-install without it works but is noticeably weaker. Make an installation-scope
-bundle and point ABA at it:
-
-```bash
-mkdir -p "$ABA_BASE/installation/skills/recipes" "$ABA_BASE/installation/catalog"
-cp -r aba-recipe-pack/recipes/*        "$ABA_BASE/installation/skills/recipes/"
-cp -r aba-recipe-pack/catalog/*        "$ABA_BASE/installation/catalog/"
-```
-
-You'll point `ABA_INSTITUTION_BUNDLE` at `$ABA_BASE/installation` in the next step.
-
-## 5. Configure (`.env`)
-
-Create `aba/.env` (the backend reads it on startup):
-
-```bash
-cat > "$ABA_BASE/aba/.env" <<EOF
-# ── Model + credential ───────────────────────────────────────────────
-ABA_MODEL=claude-haiku-4-5-20251001
-ABA_LLM_CREDENTIAL=apikey
-ANTHROPIC_API_KEY=sk-ant-...                 # your key
-
-# ── Runtime (MUST be on the shared filesystem) ───────────────────────
-ABA_RUNTIME_DIR=$ABA_BASE/runtime
-ABA_ENVS_DIR=$ABA_BASE/runtime/envs
-ABA_TOOLS_DIR=$ABA_BASE/runtime/envs/tools
-ABA_FRONTEND_DIST=$ABA_BASE/aba/frontend/dist
-ABA_INSTITUTION_BUNDLE=$ABA_BASE/installation
-
-# ── Send background jobs to Slurm ────────────────────────────────────
-ABA_BATCH_SUBMITTER=slurm
-ABA_HPC_CONFIG=$ABA_BASE/hpc.yaml
-EOF
-```
-
-To use an OAuth token instead of an API key, set `ABA_LLM_CREDENTIAL=oauth_cc` and
-make `~/.claude/.credentials.json` available (or export `CLAUDE_CODE_OAUTH_TOKEN`).
-
-## 6. Describe your cluster's queues (`hpc.yaml`)
-
-ABA maps the agent's resource estimate onto **your** partitions. Create
-`$ABA_BASE/hpc.yaml` describing what's available — match your cluster's real
-partition names and limits (`sinfo` shows them):
+The installer generated `~/.aba/hpc.yaml` from `sinfo`. **Review it** — `sinfo` only
+exposes partition sizes, so add your QOS / account and tighten walltime caps:
 
 ```yaml
 hpc:
   partitions:
-    # name = your real Slurm partition; limits cap what ABA will request
+    # name = your real Slurm partition; the limits cap what ABA will request
     - {name: short, max_cores: 16,  max_mem_gb: 64,  max_walltime_h: 4,  gpu: false}
     - {name: long,  max_cores: 64,  max_mem_gb: 512, max_walltime_h: 72, gpu: false}
     - {name: gpu,   max_cores: 16,  max_mem_gb: 128, max_walltime_h: 24, gpu: true}
@@ -153,107 +88,71 @@ hpc:
   defaults: {partition: short, cores: 1, mem_gb: 4, walltime_h: 4}
 ```
 
-How ABA uses it: from the agent's estimate (runtime, and optional cores/memory/GPU
-hints) it picks the **first partition that fits**, else the largest, and clamps the
-request to that partition's ceilings. A job needing GPU goes to a `gpu: true`
-partition. If a request needs no specific memory, set `mem_gb: 0` (in defaults or
-the estimate) and ABA omits `--mem`, letting the scheduler use its default. ABA
-never queries the cluster live — this file is the source of truth.
+From the agent's estimate (runtime, and optional cores / memory / GPU hints) ABA
+picks the **first partition that fits**, else the largest, and clamps the request to
+that partition's ceilings; GPU work goes to a `gpu: true` partition. Set `mem_gb: 0`
+to omit `--mem` and let the scheduler use its default. (`sacctmgr show assoc
+user=$USER` lists your valid accounts/QOS.)
 
-## 7. Launch
+## Launch and reach it
 
-**Where to run it.** ABA itself is light (it orchestrates and submits jobs), so a
-**login node** is usually fine. If your cluster discourages long-running processes
-on login nodes, start an interactive allocation first and run ABA there:
+ABA is light, so a **login node** is usually fine. If your cluster discourages
+long-running processes there, start an interactive allocation first and launch ABA
+inside it (`salloc --time=8:00:00 --cpus-per-task=2`).
 
 ```bash
-salloc --time=8:00:00 --cpus-per-task=2     # adjust to your cluster
+aba up                 # start ABA (uses the config the installer wrote)
+aba status             # confirm it's running
 ```
 
-**Start the server** (from the launch node):
+Reach it from your laptop with an SSH tunnel, then open **http://localhost:8000**:
 
 ```bash
-cd "$ABA_BASE/aba"
-set -a; source .env; set +a
-cd backend
-"$ABA_BASE/runtime/.venv/bin/uvicorn" main:app --host 127.0.0.1 --port 8000
-```
-
-**Reach it from your laptop** with an SSH tunnel. If ABA is on a login node:
-
-```bash
-ssh -L 8000:localhost:8000 you@cluster.example.edu
-# then open http://localhost:8000
-```
-
-If ABA is on an allocated compute node `<node>`, tunnel through the login node:
-
-```bash
-ssh -L 8000:<node>:8000 you@cluster.example.edu
+ssh -L 8000:localhost:8000 you@cluster.example.edu          # ABA on a login node
+ssh -L 8000:<node>:8000   you@cluster.example.edu          # ABA on compute <node>
 ```
 
 (`squeue -u $USER` or the `salloc` output tells you `<node>`.)
 
-## 8. Verify Slurm offload
+## Verify Slurm offload
 
-In the chat, ask for a backgrounded job, e.g.:
+In the chat, ask for a backgrounded job:
 
 > *"Use run_python with background=True to sleep 60 seconds and print done."*
 
-Then confirm it reached Slurm:
-
-```bash
-squeue -u $USER          # you should see a job named  aba-job_xxxx
-```
-
-In the UI, open **(i) → Jobs**: the card shows you're in **Slurm** mode, each job
-shows its live state / node / resources, and the job moves PENDING → RUNNING →
-done. (Plain, short `run_python` calls run interactively in-process and won't
-appear in `squeue` — only **backgrounded** work is submitted to Slurm.)
-
----
+Then confirm it reached Slurm with `squeue -u $USER` (you'll see `aba-job_xxxx`). In
+the UI, **(i) → Jobs** shows you're in **Slurm** mode and each job's live state /
+node / resources. Plain short calls run interactively in-process and won't appear in
+`squeue` — only **backgrounded** work is submitted.
 
 ## What runs where
 
 | Call | Where it runs |
 |---|---|
 | `run_python` / `run_r` (default, short) | In-process on the ABA node (interactive kernel) |
-| `run_python(background=True)`, or a run estimated as long | **Slurm job** on a compute node |
-| `run_python(env='myenv', background=True)` | Slurm job that runs **inside** your isolated env `myenv` (its own python; for R, its lib first on `.libPaths()`) |
-
-Resource hints the agent can pass to size a job: `est_cores`, `est_mem_gb`,
-`est_gpu` (plus an estimated runtime → walltime). They're mapped through
-`hpc.yaml` as described in §6.
+| `run_python(background=True)` / a step that needs more than this node has | **Slurm job** on a compute node |
+| `run_python(env='myenv', background=True)` | Slurm job **inside** your isolated env `myenv` |
 
 ## Durability across restarts
 
 Background **Slurm** jobs survive ABA restarting: the job keeps running on the
 cluster, and on restart ABA re-adopts queued/running jobs and picks up any that
-finished while it was down (it reads the results from the shared filesystem). A
-**completed** job is always visible — it's a saved record. The exception is the
-*default in-process* lane: a short interactive run that was mid-flight when ABA
-stopped cannot be recovered. So: anything that must outlive your session should be
-**backgrounded** (which, here, means Slurm).
-
-## Requirements recap (if Slurm jobs misbehave, check these first)
-
-1. **Shared filesystem** — `ABA_RUNTIME_DIR`, `ABA_ENVS_DIR`, and the cloned repo
-   must all be on a path the compute nodes can see. This is the usual culprit:
-   *"isolated env … is not available on this node"* or a job stuck `running`
-   forever means the node can't see the runtime.
-2. **Slurm client on the launch node** — `which sbatch` must succeed where ABA runs.
-3. **Compatible compute nodes** — the conda environments are built once and used by
-   the nodes over the shared filesystem; this works when the nodes share the OS /
-   glibc with the build host (the normal case on a homogeneous cluster).
+finished while it was down. Completed jobs are always visible (a saved record). Only
+the *default in-process* lane can't be recovered mid-flight — so anything that must
+outlive your session should be **backgrounded** (which, here, means Slurm).
 
 ## Troubleshooting
 
-- **Job rejected: "Memory specification can not be satisfied"** — a partition's
-  real memory is below what you requested. Lower `max_mem_gb` in `hpc.yaml`, or set
-  `mem_gb: 0` to omit `--mem`.
-- **Jobs sit in `PENDING (Resources)`** — the cluster/partition is busy; they'll
-  start when nodes free up. Nothing to fix.
-- **R job: "Rscript not provisioned"** — run any small R command once
-  (interactively) to provision the R base under `ABA_ENVS_DIR`, then retry.
-- **Wrong partition/account** — `hpc.yaml` must use your cluster's real partition
-  names; `sinfo` and `sacctmgr show assoc user=$USER` show valid values.
+Run **`aba doctor`** first — on a cluster it also checks `sinfo` reachability and
+that `ABA_BATCH_SUBMITTER=slurm`. Common issues:
+
+- **Job stuck `running`, or "isolated env … not available"** — something is on a
+  non-shared path. Confirm the runtime *and* `~/.aba` are on the shared filesystem.
+- **"Memory specification can not be satisfied"** — a partition's real memory is
+  below the request. Lower `max_mem_gb` in `hpc.yaml`, or set `mem_gb: 0`.
+- **Jobs sit in `PENDING (Resources)`** — the cluster is busy; they'll start when
+  nodes free up. Nothing to fix.
+- **R job: "Rscript not provisioned"** — run any small R command once interactively
+  to build the R base under the runtime, then retry.
+- **Wrong partition/account** — `hpc.yaml` must use your cluster's real names;
+  `sinfo` and `sacctmgr show assoc user=$USER` show valid values.
