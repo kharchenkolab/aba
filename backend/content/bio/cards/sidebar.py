@@ -80,15 +80,14 @@ def render_bio_project_sidebar(thread_id: Optional[str] = None) -> str:
         if len(threads) > 12:
             parts.append(f"  (… {len(threads) - 12} more)")
 
-    # Curation counts — Results / Claims / Findings are the user's
-    # judgments. Cheap one-liner; the agent can look them up by name.
-    n_results = count_entities(type_filter="result", include_archived=False)
-    n_claims = count_entities(type_filter="claim", include_archived=False)
-    n_findings = count_entities(type_filter="finding", include_archived=False)
-    if n_results or n_claims or n_findings:
-        parts.append(
-            f"Curated entities: results={n_results}  claims={n_claims}  findings={n_findings}"
-        )
+    # Curation counts — the user's judgments. Registry-driven (P3.3): any type
+    # declaring `capabilities.sidebar: count` appears here, so adding a curation
+    # type to the cross-thread snapshot is local. Cheap one-liners.
+    from core.entity_types import registry
+    _counts = [(t, count_entities(type_filter=t, include_archived=False))
+               for t in sorted(registry.types_with("sidebar", "count"))]
+    if any(n for _, n in _counts):
+        parts.append("Curated entities: " + "  ".join(f"{t}s={n}" for t, n in _counts))
 
     parts.append("[/PROJECT]")
     # Collected nothing → don't emit a useless wrapper. The agent

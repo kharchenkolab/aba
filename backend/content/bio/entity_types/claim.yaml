@@ -76,3 +76,6 @@ advisors:
     # The Methodologist auto-fires on confidence transitions in
     # content/bio/advisors/handlers.py. Wired here for documentation.
     archived: []
+
+capabilities:
+  sidebar: count

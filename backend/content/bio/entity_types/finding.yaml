@@ -51,3 +51,6 @@ advisors:
   on_create: []
   on_pin: []
   on_status_change: {}
+
+capabilities:
+  sidebar: count
