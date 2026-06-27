@@ -225,6 +225,85 @@ def _persist_oauth_store(data: dict) -> None:
         pass
 
 
+# ─── headless OAuth (paste-URL, like `claude setup-token`) ──────────────────
+# For type-2/3 installs with no local browser: print an authorize URL, the user
+# opens it on ANY browser (their laptop), approves, and pastes back the code
+# Claude shows. Uses the code-display redirect so no localhost callback is
+# needed. Reuses the same client + _exchange_code as the browser flow.
+_OAUTH_MANUAL_REDIRECT = "https://console.anthropic.com/oauth/code/callback"
+
+
+def build_headless_authorize_url() -> dict:
+    """Return {authorize_url, state, verifier, redirect_uri} for the manual
+    flow. The user opens authorize_url, approves, and copies the code Claude
+    shows (format: code#state)."""
+    verifier, challenge = _pkce_pair()
+    state = secrets.token_urlsafe(24)
+    params = {
+        "code": "true",
+        "client_id": _OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": _OAUTH_MANUAL_REDIRECT,
+        "scope": _OAUTH_SCOPES,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+    }
+    return {"authorize_url": _OAUTH_AUTHORIZE_URL + "?" + urllib.parse.urlencode(params),
+            "state": state, "verifier": verifier, "redirect_uri": _OAUTH_MANUAL_REDIRECT}
+
+
+def _parse_pasted_code(pasted: str, fallback_state: str) -> tuple[str, str]:
+    """Accept whatever the user copies — a bare code, 'code#state', or the full
+    redirect URL — and return (code, state)."""
+    pasted = (pasted or "").strip()
+    if pasted.startswith("http"):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query)
+        return q.get("code", [""])[0].strip(), (q.get("state", [fallback_state])[0] or fallback_state).strip()
+    if "#" in pasted:
+        code, state = pasted.split("#", 1)
+        return code.strip(), (state.strip() or fallback_state)
+    return pasted, fallback_state
+
+
+def complete_headless_oauth(pasted: str, *, state: str, verifier: str,
+                            redirect_uri: str) -> dict:
+    """Exchange the pasted authorization code for tokens and persist them
+    (config.env + refreshable oauth.json). Raises RuntimeError on any problem."""
+    code, pasted_state = _parse_pasted_code(pasted, state)
+    if not code:
+        raise RuntimeError("no authorization code found in what you pasted")
+    if pasted_state and pasted_state != state:
+        raise RuntimeError("state mismatch — restart the sign-in")
+    data = _exchange_code(code, state, verifier, redirect_uri)
+    _persist_oauth_token(data["access_token"])
+    _persist_oauth_store(data)
+    return data
+
+
+# CLI-friendly persisters (no FastAPI/HTTPException — raise RuntimeError).
+def persist_api_key(key: str) -> None:
+    key = (key or "").strip()
+    if not _ANTHROPIC_KEY_PATTERN.match(key):
+        raise RuntimeError("that doesn't look like an Anthropic API key (sk-ant-…)")
+    entries = _read_config_env()
+    entries["ANTHROPIC_API_KEY"] = key
+    entries["ANTHROPIC_AUTH_FLOW"] = "api_key"
+    entries.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    entries.pop("ABA_LLM_CREDENTIAL", None)
+    entries.setdefault("ABA_RUNTIME_DIR", str(runtime_dir()))
+    entries.setdefault("ABA_HOME", str(aba_home()))
+    _write_config_env(entries)
+
+
+def persist_setup_token(token: str) -> None:
+    token = (token or "").strip()
+    if not _OAUTH_TOKEN_PATTERN.match(token):
+        raise RuntimeError("that doesn't look like a Claude Code OAuth token "
+                           "(sk-ant-oat…). Run `claude setup-token` and paste its output.")
+    _persist_oauth_token(token)
+
+
 @router.post("/oauth")
 def set_oauth(payload: OAuthTokenIn) -> dict:
     """Persist a pasted Claude Code OAuth token (the manual fallback to the

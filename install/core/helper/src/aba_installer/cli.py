@@ -169,6 +169,51 @@ def gen_hpc_config(out_path: str | None = None) -> int:
     return 0
 
 
+def auth_cmd(api_key: str | None = None, token: str | None = None) -> int:
+    """Set a credential headlessly: --api-key, --token (a `claude setup-token`
+    value), or — with neither — the interactive paste-URL 'Sign in with Claude'
+    flow (print a URL, the user approves on any browser and pastes the code)."""
+    _ensure_aba_home()
+    from aba_installer import auth
+    if api_key:
+        try:
+            auth.persist_api_key(api_key)
+            print("✓ API key saved to config.env")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            print(f"✗ {e}")
+            return 1
+    if token:
+        try:
+            auth.persist_setup_token(token)
+            print("✓ Claude Code OAuth token saved to config.env")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            print(f"✗ {e}")
+            return 1
+    info = auth.build_headless_authorize_url()
+    print("\nSign in with Claude (subscription) — headless:\n")
+    print("  1. Open this URL in any browser (e.g. on your laptop):\n")
+    print("     " + info["authorize_url"] + "\n")
+    print("  2. Approve access. Claude shows a code — copy it.\n")
+    try:
+        pasted = input("  Paste the code (or the whole redirect URL): ").strip()
+    except EOFError:
+        print("✗ no input — run in an interactive terminal, or use "
+              "`aba auth --token sk-ant-oat…` / `--api-key sk-ant-…`")
+        return 1
+    try:
+        auth.complete_headless_oauth(pasted, state=info["state"],
+                                     verifier=info["verifier"], redirect_uri=info["redirect_uri"])
+    except Exception as e:  # noqa: BLE001
+        print(f"\n✗ sign-in failed: {e}\n"
+              "  Fallback: run `claude setup-token` locally, then "
+              "`aba auth --token sk-ant-oat…`")
+        return 1
+    print("\n✓ signed in — subscription credentials written to config.env")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="aba-install", description="Headless ABA installer")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -180,9 +225,14 @@ def main(argv=None) -> int:
     sub.add_parser("doctor", help="diagnose an existing install")
     ph = sub.add_parser("hpc-config", help="probe sinfo -> write a starting hpc.yaml")
     ph.add_argument("--out", help="output path (default $ABA_HOME/hpc.yaml)")
+    pa = sub.add_parser("auth", help="set a credential (OAuth sign-in / --token / --api-key)")
+    pa.add_argument("--api-key", help="Anthropic API key (sk-ant-…)")
+    pa.add_argument("--token", help="Claude Code OAuth token from `claude setup-token` (sk-ant-oat…)")
     a = p.parse_args(argv)
     if a.cmd == "hpc-config":
         return gen_hpc_config(a.out)
+    if a.cmd == "auth":
+        return auth_cmd(a.api_key, a.token)
     if a.cmd == "install":
         only = a.only.split(",") if a.only else None
         skip = a.skip.split(",") if a.skip else None
