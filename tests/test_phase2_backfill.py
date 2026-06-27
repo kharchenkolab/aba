@@ -90,3 +90,15 @@ def test_backfill_fires_on_multi_mode_open(tmp_path):
     ''')
     r = subprocess.run([_sys.executable, "-c", script], capture_output=True, text=True)
     assert "WIRING_OK" in r.stdout, r.stdout + r.stderr
+
+
+def test_derivation_coverage_invariant():
+    from core.graph.entities import create_entity
+    from core.graph.derivation import manual
+    from core.graph.derivation_backfill import derivation_coverage_violations
+    create_entity(entity_type="narrative", title="cov1", derivation=manual())          # threaded
+    create_entity(entity_type="figure", title="cov2", artifact_path="/tmp/c.png", exec_id="exC")  # exec auto
+    with _conn() as c:                                                                   # raw legacy NULL
+        c.execute("INSERT INTO entities (id,type,title,status,created_at,updated_at)"
+                  " VALUES ('cov_raw','narrative','x','active','t','t')"); c.commit()
+    assert derivation_coverage_violations() == []   # backfill covers it -> no entity left NULL

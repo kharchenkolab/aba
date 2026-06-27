@@ -135,10 +135,12 @@ def pin_evidence(
             md = dict(payload.get("metadata") or {})
             md.setdefault("thread_id", thread_id)
             md.setdefault("origin", origin)
+            from core.graph.derivation import derived_from, manual
             evidence_id = create_entity(
                 entity_type=evidence_kind,
                 title=payload.get("title") or evidence_kind,
                 artifact_path=payload.get("artifact_path"),
+                derivation=derived_from([parent_run_id]) if parent_run_id else manual(),  # Phase 2C
                 metadata=md,
             )
             if parent_run_id:
@@ -202,10 +204,12 @@ def pin_evidence(
     # adding/removing/reordering members. Drives the unpin "user-never-
     # invested" semantics — if False at unpin time, we archive the auto-
     # generated wrapper; if True, we preserve the user's work.
+    from core.graph.derivation import derived_from, manual
     rid = create_entity(
         entity_type="result",
         title=auto_title,
         parent_entity_id=(get_entity(evidence_id) or {}).get("parent_entity_id") if evidence_id else None,
+        derivation=derived_from([evidence_id]) if evidence_id else manual(),   # Phase 2C
         metadata={
             "thread_id": thread_id,
             "origin": origin,
@@ -758,9 +762,11 @@ def create_finding_from_draft(
     a finding can be crystallized straight from chat before promotion.
     """
     evidence_ids = evidence_ids or []
+    from core.graph.derivation import derived_from, manual
     fid = create_entity(
         entity_type="finding",
         title=(title.strip()[:120] or "Untitled finding"),
+        derivation=derived_from(evidence_ids) if evidence_ids else manual(),   # Phase 2C
         metadata={
             "text": summary, "summary": summary,
             "supporting_results": evidence_ids,
