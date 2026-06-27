@@ -96,6 +96,7 @@ def create_cell_from_exec(
         # `wall_time_s` etc. are reachable via the exec record; we don't
         # duplicate them here. preview_text is the only denormalization.
     }
+    from core.graph.derivation import agent_actor_for_exec
     eid = create_entity(
         entity_type="cell",
         title=derived_title,
@@ -104,6 +105,7 @@ def create_cell_from_exec(
         exec_id=exec_id,
         artifact_kind="cell",
         artifact_idx=0,
+        actor=agent_actor_for_exec(exec_id),   # Phase 2B: agent run that produced the cell
     )
     # Edge: cell wasGeneratedBy the Run that owns this exec. Match the
     # figure/table pattern — registry.py writes the same edge when it

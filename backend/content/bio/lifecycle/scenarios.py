@@ -192,6 +192,7 @@ def create_scenario_variant(
     # Post-cutover: code lives in the exec record; no producing_code on
     # new entities.
     _exec_id_ptr = result.get("exec_id")
+    from core.graph.derivation import agent_actor_for_exec
     eid = create_entity(
         entity_type="figure",
         title=derived_title[:120],
@@ -205,6 +206,7 @@ def create_scenario_variant(
         exec_id=_exec_id_ptr,
         artifact_kind="figure" if _exec_id_ptr else None,
         artifact_idx=0 if _exec_id_ptr else None,
+        actor=agent_actor_for_exec(_exec_id_ptr),   # Phase 2B: agent run that produced the variant
     )
     add_edge(eid, baseline_id, "variantOf", {"description": description})
     return get_entity(eid)  # type: ignore[return-value]
