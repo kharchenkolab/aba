@@ -670,11 +670,13 @@ def promote_figure_to_result(
         raise ValueError(f"can only promote figures (got {fig['type']})")
 
     auto_title = title or interpretation.strip().split("\n")[0][:80] or fig["title"]
+    from core.graph.derivation import derived_from
     rid = create_entity(
         entity_type="result",
         title=auto_title,
         parent_entity_id=fig.get("parent_entity_id"),
         metadata={"interpretation": interpretation, "evidence_figure": figure_id},
+        derivation=derived_from([figure_id]),   # Phase 2B: lineage at creation (no backfill lag)
     )
     add_edge(rid, figure_id, "supports", {"direction": "result-supported-by-figure"})
     add_edge(rid, figure_id, "wasDerivedFrom")
@@ -696,10 +698,12 @@ def promote_results_to_finding(
         raise ValueError("all sources must be result entities")
 
     auto_title = title or text.strip().split("\n")[0][:80]
+    from core.graph.derivation import derived_from
     fid = create_entity(
         entity_type="finding",
         title=auto_title,
         metadata={"text": text, "supporting_results": result_ids},
+        derivation=derived_from(result_ids),   # Phase 2B: lineage at creation (no backfill lag)
     )
     for rid in result_ids:
         add_edge(fid, rid, "supports", {"direction": "finding-supported-by-result"})
