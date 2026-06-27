@@ -196,11 +196,13 @@ class Executor:
 
     # ─── internals ─────────────────────────────────────────────────────────
     def _materialize_env(self) -> dict[str, str]:
-        """Render the playbook's env_vars (which may reference $HOME, etc.)
-        on top of the inherited environment."""
+        """Render the playbook's env_vars (which may reference $HOME, etc.) on top
+        of the inherited environment. env_vars are DEFAULTS — an exported value
+        (e.g. a custom ABA_HOME for a non-default install location, or a test
+        sandbox) wins, so they don't clobber the caller's choice."""
         env = dict(self._base_env)
         for k, raw in self.playbook.env_vars.items():
-            env[k] = os.path.expandvars(raw)
+            env.setdefault(k, os.path.expandvars(raw))
         return env
 
     def _run_one(self, cmd: str, *, env: dict[str, str], timeout: int,

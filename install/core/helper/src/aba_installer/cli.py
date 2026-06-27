@@ -124,6 +124,51 @@ def doctor() -> int:
     return 0 if fails == 0 else 1
 
 
+def gen_hpc_config(out_path: str | None = None) -> int:
+    """Probe `sinfo` and write a starting hpc.yaml partition catalog (cluster-
+    personal profile). The live router tolerates a stale/edited file, so this is
+    a convenience: a good default the user refines (QOS/account/walltime). Returns
+    0 on success, 1 when Slurm isn't reachable."""
+    import re
+    import yaml
+    from aba_installer import paths
+    out = Path(out_path or (Path(paths.aba_home()) / "hpc.yaml"))
+    if not shutil.which("sinfo"):
+        print("sinfo not found — skipping hpc.yaml (the router falls back to live "
+              "queries or a hand-written config).")
+        return 1
+    res = subprocess.run(["sinfo", "-h", "-o", "%R|%c|%m|%l|%G"],
+                         capture_output=True, text=True, timeout=10)
+    parts: dict[str, dict] = {}
+    for line in (res.stdout or "").splitlines():
+        f = (line.split("|") + [""] * 5)[:5]
+        name, cpn, mpn, tl, gres = (x.strip() for x in f)
+        if not name:
+            continue
+        p = parts.setdefault(name, {"name": name, "max_cores": 0, "max_mem_gb": 0,
+                                    "max_walltime_h": 24, "gpu": False})
+        if cpn.isdigit():
+            p["max_cores"] = max(p["max_cores"], int(cpn))
+        m = re.match(r"(\d+)", mpn)
+        if m:
+            p["max_mem_gb"] = max(p["max_mem_gb"], round(int(m.group(1)) / 1024))
+        d = re.match(r"(?:(\d+)-)?(\d+):", tl)               # D-HH:.. or HH:..
+        if d:
+            p["max_walltime_h"] = max(p["max_walltime_h"], int(d.group(1) or 0) * 24 + int(d.group(2)))
+        if gres and "gpu" in gres.lower():
+            p["gpu"] = True
+    if not parts:
+        print("sinfo returned no partitions — leaving hpc.yaml unwritten.")
+        return 1
+    cfg = {"hpc": {"partitions": list(parts.values()), "qos": [],
+                   "defaults": {"partition": next(iter(parts)), "cores": 1,
+                                "mem_gb": 4, "walltime_h": 4}}}
+    out.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    print(f"wrote {out} with {len(parts)} partition(s): {', '.join(parts)} "
+          f"— edit it to set QOS / account / walltime caps.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="aba-install", description="Headless ABA installer")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -133,7 +178,11 @@ def main(argv=None) -> int:
     pi.add_argument("--skip", help="comma-separated step ids to skip")
     sub.add_parser("update", help="pull latest code + recipes, refresh env, rebuild UI")
     sub.add_parser("doctor", help="diagnose an existing install")
+    ph = sub.add_parser("hpc-config", help="probe sinfo -> write a starting hpc.yaml")
+    ph.add_argument("--out", help="output path (default $ABA_HOME/hpc.yaml)")
     a = p.parse_args(argv)
+    if a.cmd == "hpc-config":
+        return gen_hpc_config(a.out)
     if a.cmd == "install":
         only = a.only.split(",") if a.only else None
         skip = a.skip.split(",") if a.skip else None
