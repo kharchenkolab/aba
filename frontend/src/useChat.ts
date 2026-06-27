@@ -345,6 +345,7 @@ export function useChat(
   // any events emitted while we were away.
   const loadMessages = useCallback(async () => {
     const myGen = genRef.current
+    let hist: DisplayMessage[] | null = null
     try {
       // project_id pinned per-request — without it the backend races with
       // /api/projects/{pid}/open and may read from the prior project's DB,
@@ -355,32 +356,39 @@ export function useChat(
       const raw = (await r.json()) as RawMsg[]
       // Skip the overwrite if a send started AFTER this fetch was
       // launched — the optimistic user bubble is the source of truth
-      // until the SSE finalizes it. (Race fix, 2026-06-12: see
-      // sendMessage for the matching synchronous streamingRef flip.)
+      // until the SSE finalizes it. (Race fix, 2026-06-12.)
       if (r.ok && genRef.current === myGen && !streamingRef.current) {
-        setMessages(collapseHistory(raw))
+        hist = collapseHistory(raw)
       }
     } catch { /* ignore */ }
-    finally { if (genRef.current === myGen) setLoading(false) }
-    if (streamingRef.current) return    // already streaming via our own POST
+    if (streamingRef.current) { if (genRef.current === myGen) setLoading(false); return }
+    // C-1: probe for an in-flight Turn BEFORE committing history. If one is
+    // live, drop its already-persisted output (everything AFTER the last user
+    // message) from the static log and RE-STREAM it from since=0 — so
+    // revisiting a thread mid-turn shows that cell live (Running + Stop)
+    // exactly as if you'd stayed, instead of a static 'done' message PLUS a
+    // spurious empty active cell (the reattach-on-revisit bug). since=0 is
+    // safe: the SSE generator replays the full turn from the turn_events JSONL.
+    let active: { run_id?: string } | null = null
     try {
       const ar = await fetch(`/api/threads/${encodeURIComponent(threadId)}/active-turn${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)
-      if (!ar.ok || genRef.current !== myGen) return
-      const row = await ar.json()
-      if (!row || !row.run_id || genRef.current !== myGen) return
-      // Real reattach — open the sink stream for this Turn. Use the
-      // persisted seq ONLY if it was for THIS run_id; otherwise start
-      // from 0 (replay the in-memory tail). runStreamRef is set just
-      // below to avoid a temporal dead zone (runStream uses
-      // loadMessages indirectly).
-      const since = (lastRunIdRef.current === row.run_id) ? lastSeqRef.current : 0
-      if (since === 0) {
-        // Stale persisted entry — reset so the new run can update it.
-        lastSeqRef.current = 0
-        lastRunIdRef.current = row.run_id
-      }
-      runStreamRef.current?.({ reattachRunId: row.run_id, since })
+      if (ar.ok && genRef.current === myGen) active = await ar.json()
     } catch { /* probe is best-effort */ }
+    if (genRef.current !== myGen) return
+    if (hist) {
+      if (active && active.run_id) {
+        const lastUser = hist.map(m => m.role).lastIndexOf('user')
+        setMessages(lastUser >= 0 ? hist.slice(0, lastUser + 1) : [])
+      } else {
+        setMessages(hist)
+      }
+    }
+    setLoading(false)
+    if (active && active.run_id) {
+      lastSeqRef.current = 0
+      lastRunIdRef.current = active.run_id
+      runStreamRef.current?.({ reattachRunId: active.run_id, since: 0 })
+    }
     // deps MUST include projectId — without it, the closure captures whatever
     // projectId was at first mount (often undefined briefly, or stale from a
     // prior project), and the &project_id=... pin is wrong → backend reads
