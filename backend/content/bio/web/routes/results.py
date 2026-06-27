@@ -204,8 +204,10 @@ def entities_provenance(entity_id: str):
     """Upstream/downstream neighborhood for the canvas Provenance panel."""
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    from core.graph.provenance import neighborhood
-    return neighborhood(entity_id)
+    from core.graph.provenance import neighborhood, promotion_record
+    out = neighborhood(entity_id)
+    out["promotion"] = promotion_record(get_entity(entity_id))   # Phase 2E: who/when/from
+    return out
 
 
 @router.get("/api/entities/{entity_id}/suggest-interpretation")
