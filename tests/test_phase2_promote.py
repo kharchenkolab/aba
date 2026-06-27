@@ -46,3 +46,21 @@ def test_promote_results_to_finding_lineage():
     f = get_entity(fid)
     assert f["derivation"] == {"kind": "derived_from", "sources": [r1, r2]}
     assert f["actor"] == "human:local"
+
+
+def test_promotion_record_from_promoted_result():
+    from core.graph.provenance import promotion_record
+    fig = create_entity(entity_type="figure", title="f", artifact_path="/tmp/f.png", exec_id="e1")
+    with acting_as("human:local"):
+        rid = promote_figure_to_result(fig, "interp")
+    rec = promotion_record(get_entity(rid))
+    assert rec["by"] == "human:local"        # who
+    assert rec["from"] == [fig]              # from
+    assert rec["at"]                         # when (timestamp)
+
+
+def test_promotion_record_none_for_non_derived():
+    from core.graph.provenance import promotion_record
+    assert promotion_record({"derivation": {"kind": "manual"}}) is None
+    assert promotion_record({"derivation": {"kind": "exec", "exec_id": "x"}}) is None
+    assert promotion_record(None) is None
