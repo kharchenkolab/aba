@@ -63,3 +63,23 @@ def test_title_exact_descending_limit():
     f2 = _mk("p_fig", "samename", artifact_path="/tmp/2.png")
     got = find_entities(type="p_fig", title="samename", descending=True, limit=1)
     assert len(got) == 1 and got[0]["id"] == f2   # newest first
+
+
+def test_store_swap_bio_reads_decoupled(monkeypatch):
+    """§8 swap-readiness: bio read sites go through the store API (find_entities /
+    exists_entity), NOT raw SQL — so swapping the store impl wouldn't touch bio.
+    Proven by swapping find_entities with an in-memory implementation and showing a
+    bio read site (search.find_kept_note) works against it."""
+    import core.graph.entities as E
+    _mem = [{"id": "n1", "type": "note", "metadata": {"source_key": "sk1"}}]
+
+    def _mem_find(**pred):
+        rows = [r for r in _mem if pred.get("type") in (None, r["type"])]
+        mc = pred.get("metadata_contains") or {}
+        rows = [r for r in rows if all((r.get("metadata") or {}).get(k) == v for k, v in mc.items())]
+        return rows[:pred["limit"]] if pred.get("limit") else rows
+
+    monkeypatch.setattr(E, "find_entities", _mem_find)
+    from content.bio.graph.search import find_kept_note
+    assert find_kept_note("sk1") == "n1"     # bio read served by the in-memory store
+    assert find_kept_note("nope") is None

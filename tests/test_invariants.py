@@ -25,6 +25,11 @@ def test_derivation_invariant():
     r = _run(sys.executable, "tests/check_derivation.py")
     assert r.returncode == 0, r.stdout + r.stderr
 
+
+def test_store_port_invariant():
+    r = _run(sys.executable, "tests/check_store_port.py")
+    assert r.returncode == 0, r.stdout + r.stderr
+
 # The access-gate invariant (no ungated entity mutation) lives in its own,
 # more-thorough test: tests/test_project_pinning_coverage.py (all mutating
 # routes + bio routes + an exemption table). Not duplicated here.
