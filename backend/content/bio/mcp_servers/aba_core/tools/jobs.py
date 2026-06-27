@@ -94,6 +94,48 @@ def register_jobs_tools(mcp: FastMCP) -> None:
     """Register the background-job introspection / control tools on `mcp`."""
 
     @mcp.tool()
+    def describe_compute() -> dict:
+        """Describe the compute environment so you can plan WHERE a step runs.
+        Call this before a heavy / parallel / GPU / long step — especially on a
+        cluster — to see this node's capacity and, when Slurm is available, the
+        live partitions you could submit to and how busy they are.
+
+        How to decide:
+        - LOCAL (mode=local): run interactively — kernel state persists, and a
+          long cell is fine with a higher `timeout_s`. Only set `background=True`
+          when the USER asks, or to queue several independent jobs in parallel.
+          Don't background just to "avoid a timeout".
+        - SLURM (mode=slurm): send a step to Slurm (run_python/run_r with
+          `background=True` + `est_cores`/`est_mem_gb`/`est_gpu`/
+          `estimated_runtime_min`) when it needs MORE cores/mem/GPU than this node
+          has, or might approach the allocation's remaining walltime, or would be
+          meaningfully faster AND that speedup beats the partition's queue wait
+          (read the `wait` label). Otherwise run interactively.
+        - ALWAYS: a background/Slurm job is a FRESH process with NONE of your
+          interactive objects — load inputs from disk, write outputs to disk.
+
+        Returns: `mode`, `node_cores`/`node_mem_gb`/`node_gpus`,
+        `walltime_remaining_min` (null = unbounded), and on a cluster
+        `partitions` (each with `cpus_per_node`, `mem_gb_per_node`, `gpu`,
+        `nodes_idle`, `max_walltime`, `wait`) + `partitions_source`
+        (live|config) + `user_access`. `summary` is a one-line digest.
+        """
+        from core.exec.compute_env import compute_env
+        e = compute_env()
+        gpu = f" / {e['node_gpus']} GPU" if e.get("node_gpus") else " / no GPU"
+        local = f"this node {e['node_cores']} cores / {e['node_mem_gb']} GB{gpu}"
+        wt = e.get("walltime_remaining_min")
+        if wt is not None:
+            local += f" · ~{round(wt / 60, 1)}h walltime left"
+        e["summary"] = f"Mode: {e['mode']}. {local}."
+        if e.get("partitions"):
+            e["summary"] += f" Slurm partitions ({e.get('partitions_source')}): " + "; ".join(
+                f"{p['partition']} (≤{p.get('cpus_per_node', '?')} cores/node"
+                + (", GPU" if p.get("gpu") else "")
+                + f", {p.get('wait', '?')})" for p in e["partitions"])
+        return e
+
+    @mcp.tool()
     def get_job_status(job_id: str | None = None,
                        aba_ctx_id: str | None = None) -> dict:
         """Inspect a background job (read-only). Returns the current status,
