@@ -65,3 +65,6 @@ advisors:
   # for types that opt into this. Used today by dataset (Explorer
   # surfaces what's in it) and narrative (Stylist reviews the prose).
   on_focus_auto: true
+
+capabilities:
+  by_title_storage: data_path

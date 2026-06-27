@@ -267,7 +267,10 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
         langver = result_obj.get("language_version") or ""
         # Match the interactive produced[] shape — pin_artifact needs the `url`.
         produced: list[dict] = []
-        for grp, knd in (("plots", "figure"), ("tables", "table"), ("files", "file")):  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
+        from core.entity_types import registry
+        _groups = list(registry.artifact_groups().items())   # plots->figure, tables->table
+        _groups.append(("files", "file"))                    # generic file artifacts (no registered type)
+        for grp, knd in _groups:
             for i, a in enumerate(result_obj.get(grp) or []):
                 if isinstance(a, dict):
                     produced.append({"kind": knd, "idx": i, "url": a.get("url"),

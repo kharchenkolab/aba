@@ -110,13 +110,15 @@ def _count_artifacts_registered(job: dict, project_id: str | None) -> int:
         db = project_db_path(project_id)
         if not db.exists():
             return 0
+        from core.entity_types import registry
+        _wtypes = sorted(registry.types_with("is_artifact") | registry.types_with("is_run"))
         c = sqlite3.connect(db)
         try:
             n = c.execute(
                 "SELECT COUNT(*) FROM entities "
                 "WHERE created_at >= ? AND id != 'workspace' "
-                "AND type IN ('figure','table','cell','analysis')",  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
-                (started,),
+                f"AND type IN ({','.join('?' * len(_wtypes))})",
+                (started, *_wtypes),
             ).fetchone()[0]
         finally:
             c.close()
