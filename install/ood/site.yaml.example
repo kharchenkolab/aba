@@ -7,17 +7,23 @@ site:
   docs_url: "https://example.org/aba/docs"
 
 scopes:
+  # Recipes are now BAKED into the SIF as the system scope (ABA_SYSTEM_BUNDLE).
+  # This institution bundle is OPTIONAL — site-wide recipe/policy additions the
+  # admin changes WITHOUT rebuilding the image; omit it to use only the baked pack.
   institution:
-    bundle_path: /cluster/aba/installation   # installation bundle: imported recipe pack + site policy
+    bundle_path: /cluster/aba/installation   # optional, layered over the baked pack
   group:
     enabled: true
     root_path: /groups/{group}/aba     # ABA's area inside the group share
-    bundle_subdir: .bundle             # dot-named group bundle (our convention)
+    bundle_subdir: bundle              # the lab bundle (recipes/rules) — layers over system+institution
     auto_create_skeleton: true
     skeleton_template: /cluster/aba/group-skeleton
   user:
-    home_dir: "{home}/.aba"
-    state_dir: /groups/{group}/aba/{user}   # projects/runs/db — persists
+    # VBC: everything per-user UNDER the group. state_dir = the user's runtime
+    # (projects/runs/db); envs default to <state_dir>/envs (per-user global +
+    # project growth over the shared base). Non-group installs point at {home}.
+    state_dir: /groups/{group}/aba/users/{user}
+    # envs_dir: /groups/{group}/aba/users/{user}/envs   # default: <state_dir>/envs
 
 group_resolution:
   source: ood_form
@@ -30,7 +36,7 @@ credentials:
   # (~/.claude/.credentials.json). Falls back to a saved key, the lab-shared
   # key, then a form paste (which auto-detects sk-ant-oat OAuth vs sk-ant-api).
   order: [user_oauth, user_saved, group_shared, user_form_paste]
-  user_key_path: /groups/{group}/aba/{user}/credentials.json
+  user_key_path: /groups/{group}/aba/users/{user}/.aba/credentials.json   # per-user, 0700 (umask 077)
   group_key_path: /groups/{group}/aba/.credentials.json     # lab-shared key (apikey or oauth)
   on_missing: prompt_at_launch
 

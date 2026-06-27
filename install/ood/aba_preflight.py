@@ -114,7 +114,10 @@ def main():
 
     # ---- user scope ----
     state_dir = Path(ex(ucfg.get("state_dir") or f"{home}/.aba/state"))
-    envs_dir = (group_root / ".envs") if group_root else (state_dir / "envs")
+    # Envs are PER-USER (the global + project growth over the shared read-only
+    # base) — rooted under the user's own runtime, NOT a lab-shared group/.envs.
+    # Configurable via user.envs_dir; defaults to <state_dir>/envs.
+    envs_dir = Path(ex(ucfg["envs_dir"])) if ucfg.get("envs_dir") else (state_dir / "envs")
     if not blocked:
         state_dir.mkdir(parents=True, exist_ok=True)
         envs_dir.mkdir(parents=True, exist_ok=True)
