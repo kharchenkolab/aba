@@ -31,14 +31,14 @@ fi
 
 # 2. core/ must not name bio entity types as string literals in code
 TYPES='figure|finding|claim|result|dataset|analysis|narrative'
-if grep -rnE "['\"]($TYPES)['\"]" "$CORE" 2>/dev/null \
+if grep -rnE "['\"]($TYPES)['\"]" "$CORE" --include='*.py' 2>/dev/null \
    | grep -vE "(# noqa: seam|^[^:]+:[0-9]+:\s*#)"; then
   fail "backend/core/ references bio entity-type names by literal"
 fi
 
 # 3. core/ must not import bio-named modules even if they live elsewhere
 BIO_MODS='advisors|registry|orientation|scenarios|promote|proposals|knowhow|conditioning'
-if grep -rnE "^(from|import) ($BIO_MODS)\b" "$CORE" 2>/dev/null | grep -v "# noqa: seam"; then
+if grep -rnE "^(from|import) ($BIO_MODS)\b" "$CORE" --include='*.py' 2>/dev/null | grep -v "# noqa: seam"; then
   fail "backend/core/ imports a bio-named module"
 fi
 

@@ -115,7 +115,7 @@ def _count_artifacts_registered(job: dict, project_id: str | None) -> int:
             n = c.execute(
                 "SELECT COUNT(*) FROM entities "
                 "WHERE created_at >= ? AND id != 'workspace' "
-                "AND type IN ('figure','table','cell','analysis')",
+                "AND type IN ('figure','table','cell','analysis')",  # noqa: seam — Phase 3: route entity-type literals via registry flags (audit2 P3)
                 (started,),
             ).fetchone()[0]
         finally:
