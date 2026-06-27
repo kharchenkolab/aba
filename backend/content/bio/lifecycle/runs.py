@@ -57,6 +57,15 @@ def active_run_id(thread_id: str) -> Optional[str]:
     return None
 
 
+def agent_actor_for_thread(thread_id: Optional[str]) -> Optional[str]:
+    """agent:<run_id> for the open run on a thread — the actor for an agent-tool
+    create on the gateway thread, where the ambient actor contextvar can't reach
+    (modularity_audit2 §2B). None if no open run."""
+    from core.graph.derivation import agent_actor
+    rid = active_run_id(thread_id) if thread_id else None
+    return agent_actor(rid) if rid else None
+
+
 def _has_children(run_id: str) -> bool:
     with _conn() as c:
         r = c.execute(
