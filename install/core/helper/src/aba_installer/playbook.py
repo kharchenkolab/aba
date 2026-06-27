@@ -34,6 +34,7 @@ class Step:
     why: str
     commands: list[str]
     timeout_seconds: int = 300
+    remediation: str = ""        # shown to the user when the step fails (no-agent robustness)
 
     @classmethod
     def from_dict(cls, d: dict, *, default_timeout: int = 300) -> "Step":
@@ -46,6 +47,7 @@ class Step:
             why=str(d.get("why", "")).strip(),
             commands=[str(c) for c in cmds],
             timeout_seconds=int(d.get("timeout_seconds", default_timeout)),
+            remediation=str(d.get("remediation", "")).strip(),
         )
 
 
@@ -163,6 +165,9 @@ class Executor:
         result.finished_at = time.monotonic()
         self._on_event("step_end", {
             "step_id": step.id, "ok": result.ok, "error": result.error,
+            # Surface the fix-it text on failure (the no-agent robustness path:
+            # Linux/OOD have no Tier-0 agent, so a clear remediation is the help).
+            "remediation": step.remediation if not result.ok else "",
         })
         return result
 

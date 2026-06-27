@@ -25,22 +25,33 @@ env_vars:
 steps:
   - id: preflight
     title: Pre-flight system check
-    why: Confirm macOS version + arch + free disk before doing anything.
+    why: Confirm the OS, arch, required tools (git/curl), and free disk before doing anything.
     commands:
-      - "uname -m"
-      - "sw_vers -productVersion"
-      - "df -h $HOME | tail -1"
-      - "xcode-select -p 2>/dev/null || true"
+      - 'command -v git  >/dev/null 2>&1 || { echo "MISSING: git";  exit 1; }'
+      - 'command -v curl >/dev/null 2>&1 || { echo "MISSING: curl"; exit 1; }'
+      - 'case "$(uname -s)" in Darwin) sw_vers -productVersion 2>/dev/null; xcode-select -p >/dev/null 2>&1 || { echo "MISSING: Xcode Command Line Tools"; exit 1; };; Linux) sh -c ". /etc/os-release 2>/dev/null; echo \"OS: ${PRETTY_NAME:-Linux}\""; { command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; } || echo "NOTE: no C compiler (cc/gcc) — only needed if a package source-builds";; esac'
+      - 'echo "arch: $(uname -m)"; df -h "$HOME" | tail -1'
     timeout_seconds: 30
+    remediation: |
+      A prerequisite is missing (see "MISSING:" above). Install it, then re-run:
+        • git / curl  → your package manager (Debian/Ubuntu: sudo apt install git curl;
+          Fedora/RHEL: sudo dnf install git curl; macOS: brew install git).
+        • macOS Xcode Command Line Tools → xcode-select --install.
 
   - id: install-micromamba
     title: Install micromamba
     why: Manages the isolated Python + R environment. ~20 MB binary, no admin needed.
     commands:
       - 'mkdir -p "$ABA_HOME/bin"'
-      - 'if [ -x "$ABA_HOME/bin/micromamba" ]; then echo "micromamba already installed"; else curl -fsSL "https://micro.mamba.pm/api/micromamba/osx-$(uname -m)/latest" | tar -xj -C "$ABA_HOME" bin/micromamba; fi'
+      # OS/arch-aware platform (the one micromamba seam): osx-<arch> on macOS,
+      # linux-64 / linux-aarch64 on Linux. Override with ABA_MAMBA_PLATFORM.
+      - 'PLATFORM="${ABA_MAMBA_PLATFORM:-$(case "$(uname -s)/$(uname -m)" in Darwin/*) echo "osx-$(uname -m)";; Linux/aarch64|Linux/arm64) echo "linux-aarch64";; Linux/*) echo "linux-64";; *) echo "linux-64";; esac)}"; if [ -x "$ABA_HOME/bin/micromamba" ]; then echo "micromamba already installed"; else echo "platform: $PLATFORM"; curl -fsSL "https://micro.mamba.pm/api/micromamba/$PLATFORM/latest" | tar -xj -C "$ABA_HOME" bin/micromamba; fi'
       - '"$ABA_HOME/bin/micromamba" --version'
     timeout_seconds: 120
+    remediation: |
+      micromamba download/extract failed. Check network access to micro.mamba.pm;
+      if arch detection was wrong, set ABA_MAMBA_PLATFORM (linux-64 /
+      linux-aarch64 / osx-arm64 / osx-64), then re-run.
 
   - id: create-env
     title: Create the conda environment
@@ -59,6 +70,11 @@ steps:
       # broken env, leaving "uvicorn: No such file or directory" at start.
       - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; "$ABA_HOME/bin/micromamba" create -y -v -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
+    remediation: |
+      The conda solve/build failed — usually a network/channel hiccup or low
+      disk. The env auto-rebuilds on the next run (the package cache makes that
+      fast). Check ~10-12 GB free in $HOME and that conda-forge/bioconda are
+      reachable, then re-run.
 
   - id: clone-repos
     title: Clone aba + aba-recipe-pack
@@ -68,6 +84,11 @@ steps:
       - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .git --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
       - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
     timeout_seconds: 120
+    remediation: |
+      git clone failed — most often a private-repo access issue. Use SSH:
+      ABA_REPO_URL=git@github.com:kharchenkolab/aba.git (+ ABA_RECIPES_URL for the
+      pack), or install from a local checkout offline with ABA_REPO_SRC=/path/to/aba
+      (and ABA_RECIPES_SRC=/path/to/aba-recipe-pack), then re-run.
 
   - id: import-recipes
     title: Import the recipe pack
@@ -114,6 +135,10 @@ steps:
       # dev (`vite`) skips it too, so the built app matches the dev app.
       - 'cd "$REPO_DIR/aba/frontend" && PATH="$ENV_DIR/bin:$PATH" ./node_modules/.bin/vite build'
     timeout_seconds: 600
+    remediation: |
+      The frontend build failed — it needs Node 20+, which ships inside the conda
+      env, so this usually means create-env didn't finish. Confirm
+      "$ENV_DIR/bin/node --version" is >= 20 (re-run create-env if not), then retry.
 
   - id: install-launcher
     title: Install the aba launcher
@@ -140,3 +165,7 @@ steps:
       - '"$ABA_HOME/bin/aba" stop || true'
       - '"$ABA_HOME/bin/aba" up'
     timeout_seconds: 60
+    remediation: |
+      The backend didn't come up. Check the log under $ABA_HOME/logs/, confirm a
+      credential is set in $ABA_HOME/config.env, and run `aba doctor` for a full
+      diagnosis of the install.
