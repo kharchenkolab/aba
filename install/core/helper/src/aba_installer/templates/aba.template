@@ -66,17 +66,17 @@ case "${1:-up}" in
   logs)
     tail -f "$ABA_HOME/logs/backend.log"
     ;;
-  update)
-    # Hand off to the installer helper's update flow. The helper UI surfaces
-    # the same operation via /api/update with live progress.
-    echo "Running update via the installer helper…"
-    curl -fsSL -X POST "http://127.0.0.1:$(cat "$ABA_HOME/installer/port.txt" 2>/dev/null || echo 8765)/api/update" || {
-      echo "(helper not running — start the ABA Control panel and click Update)"
+  update|doctor)
+    # CLI path — pull latest / diagnose via the headless installer. Works on a
+    # server with no browser (the old open/curl were mac-only). The mac tray's
+    # Update button still uses the helper's /api/update for live UI.
+    HELPER_PY="$ABA_HOME/installer/venv/bin/python"
+    if [ -x "$HELPER_PY" ]; then
+      exec "$HELPER_PY" -m aba_installer.cli "$1"
+    else
+      echo "installer helper not found at $HELPER_PY — re-run the installer to restore it"
       exit 1
-    }
-    ;;
-  doctor)
-    open "http://127.0.0.1:$(cat "$ABA_HOME/installer/port.txt" 2>/dev/null || echo 8765)/help"
+    fi
     ;;
   uninstall)
     "$0" stop
@@ -93,9 +93,9 @@ usage: aba <command>
   stop       Stop ABA
   status     Is it running?
   logs       Tail the backend log
-  update     Pull the latest code + recipes (delegates to the installer helper)
-  doctor     Open the installer helper's Help page in your browser
-  uninstall  Remove ABA from this Mac
+  update     Pull the latest code + recipes, refresh env, rebuild the UI
+  doctor     Diagnose this install (env, frontend, recipes, credential, Slurm)
+  uninstall  Remove ABA from this machine
 EOF
     exit 2
     ;;
