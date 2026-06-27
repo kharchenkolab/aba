@@ -26,3 +26,18 @@ def test_capability_flags():
     assert R.by_title_storage("analysis") == "run_dir"
     assert R.by_title_storage("dataset") == "data_path"
     assert R.by_title_storage("claim") is None
+
+
+def test_sidebar_count_capability():
+    assert R.types_with("sidebar", "count") == {"result", "claim", "finding"}
+
+
+def test_sidebar_renders_registry_counts():
+    from core.graph._schema import init_db
+    init_db()
+    from core.graph.entities import create_entity
+    from core.graph.derivation import manual
+    from content.bio.cards.sidebar import render_bio_project_sidebar
+    create_entity(entity_type="result", title="r1", derivation=manual())
+    out = render_bio_project_sidebar()
+    assert "results=1" in out
