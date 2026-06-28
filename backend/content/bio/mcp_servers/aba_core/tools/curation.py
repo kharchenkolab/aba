@@ -200,3 +200,23 @@ def register_curation_tools(mcp: FastMCP) -> None:
              "all": all},
             peek_ctx(aba_ctx_id),
         )
+
+    @mcp.tool()
+    def fetch_reference(provider: str,
+                        organism: str | None = None,
+                        assembly: str | None = None,
+                        role: str | None = None,
+                        accession: str | None = None,
+                        aba_ctx_id: str | None = None) -> dict:
+        """Fetch a reference / pre-built index from a known provider
+        (aws-indexes, ncbi, …) and register it with a re-runnable spec. For
+        reference DATA (assemblies, annotations, indices) — distinct from
+        lookup_sra_runinfo (sequencing reads). Prefer a pre-built index over
+        building one. find_reference first to avoid re-fetching."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import fetch_reference_tool
+        return fetch_reference_tool(
+            {"provider": provider, "organism": organism, "assembly": assembly,
+             "role": role, "accession": accession},
+            peek_ctx(aba_ctx_id),
+        )

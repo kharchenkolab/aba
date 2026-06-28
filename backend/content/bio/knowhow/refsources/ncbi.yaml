@@ -1,0 +1,18 @@
+# NCBI Datasets — genome assemblies + annotation by accession.
+# https://www.ncbi.nlm.nih.gov/datasets/
+# kind: template → parametric resolution from an accession (no fixed asset
+# list). The executor returns the resolved `datasets` invocation; in Phase 0
+# the agent runs it via run_python (the CLI isn't auto-run), then registers
+# the result with the recorded re-runnable spec.
+provider: ncbi
+description: NCBI Datasets genome/annotation download by assembly accession.
+kind: template
+homepage: https://www.ncbi.nlm.nih.gov/datasets/
+command: "datasets download genome accession {accession} --include {include} --filename {filename}"
+unpack: zip
+roles:
+  genome: {include: genome}
+  gtf: {include: gtf}
+  gff: {include: gff3}
+  cds: {include: cds}
+  protein: {include: protein}

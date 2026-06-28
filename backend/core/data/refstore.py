@@ -170,6 +170,7 @@ def register_reference(
     title: Optional[str] = None,
     version: Optional[str] = None,
     mode: str = "copy",
+    acquisition: Optional[dict] = None,
 ) -> str:
     """Register a reference + write its descriptor + human `catalog/` entry
     (misc/refs.md §3). Returns the reference id — the existing one on a dedup
@@ -256,7 +257,8 @@ def register_reference(
         "identity": identity,
         "organism": organism, "assembly": assembly, "role": role,
         "structural_path": sp, "title": derived_title,
-        "acquisition": {"mode": ("linked" if not owned else "imported"), "source": source},
+        "acquisition": acquisition or {"mode": ("linked" if not owned else "imported"),
+                                       "source": source},
         "derivation": ({"kind": "derived_from", "sources": list(_ref_targets)}
                        if _ref_targets else {"kind": "imported", "source": source}),
         "scope": scope, "artifact_path": str(artifact),
