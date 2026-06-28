@@ -30,18 +30,22 @@ import json
 _UI_ONLY_BLOCK_TYPES = {"attachments"}
 
 
+def strip_ui_blocks(content):
+    """Drop UI-only content blocks (e.g. the `attachments` chip block) from a
+    message's content. They exist purely for the web UI and the Anthropic SDK
+    rejects unknown block types — so this MUST run at every history→API boundary
+    (see core/llm.py)."""
+    if not isinstance(content, list):
+        return content
+    return [b for b in content
+            if not (isinstance(b, dict) and b.get("type") in _UI_ONLY_BLOCK_TYPES)]
+
+
 def api_messages(history: list) -> list:
     """Strip our internal-bookkeeping fields + UI-only content blocks from
     history rows down to the bare {role, content} shape the Anthropic SDK
     accepts."""
-    out = []
-    for m in history:
-        content = m["content"]
-        if isinstance(content, list):
-            content = [b for b in content
-                       if not (isinstance(b, dict) and b.get("type") in _UI_ONLY_BLOCK_TYPES)]
-        out.append({"role": m["role"], "content": content})
-    return out
+    return [{"role": m["role"], "content": strip_ui_blocks(m["content"])} for m in history]
 
 
 def is_interrupted_fill(block: dict) -> bool:
