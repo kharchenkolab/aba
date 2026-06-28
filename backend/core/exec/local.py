@@ -57,11 +57,21 @@ class LocalSubprocessExecutor:
         if env_vars:
             proc_env.update({str(k): str(v) for k, v in env_vars.items()})
 
+        # Guard: an empty interpreter/executable or cwd reaching Popen surfaces as
+        # the cryptic `PermissionError: [Errno 13] Permission denied: ''` (hit on a
+        # background job, 2026-06-28, prj_0590c5d8 job_06e38348d2). Fail with a
+        # DIAGNOSABLE error naming exactly what was empty + the run context, so a
+        # recurrence is actionable instead of a mystery.
+        _cmd = list(command)
+        if not _cmd or not str(_cmd[0]).strip():
+            raise ValueError(f"exec: empty interpreter/executable in command={_cmd!r} (cwd={cwd!r})")
+        if not str(cwd).strip():
+            raise ValueError(f"exec: empty cwd for command={_cmd!r}")
         # start_new_session=True puts the child in its own process group so a
         # cancel kills the whole group (forked numpy/matplotlib helpers too),
         # not just the parent pid.
         proc = subprocess.Popen(
-            list(command),
+            _cmd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env=proc_env, cwd=str(cwd),
             start_new_session=True,
