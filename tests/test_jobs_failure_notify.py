@@ -96,8 +96,24 @@ def test_issue_a_empty_interp_guard():
         check("empty cwd → ValueError", False, repr(e))
 
 
+def test_sys_executable_recovery():
+    print("Root cause: ensure_sys_executable() recovers an empty sys.executable")
+    from core.exec.env_integrity import ensure_sys_executable
+    _orig = sys.executable
+    try:
+        sys.executable = ""  # simulate the bare-argv[0] execve launch
+        got = ensure_sys_executable()
+        check("recovers a real interpreter path", bool(got) and os.path.exists(got), repr(got))
+        check("patches sys.executable process-wide", sys.executable == got and bool(sys.executable))
+    finally:
+        if not sys.executable:
+            sys.executable = _orig
+    check("idempotent when already set", ensure_sys_executable() == sys.executable and bool(sys.executable))
+
+
 def main() -> int:
     init_db()
+    test_sys_executable_recovery()
     test_issue_b_worker_crash_notifies()
     test_issue_a_empty_interp_guard()
     print()
