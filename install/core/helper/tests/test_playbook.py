@@ -93,6 +93,11 @@ def test_import_recipes_maps_pack_into_installation_scope(tmp_path, monkeypatch)
     (pack / "recipes" / "biomni-derived" / "database" / "fetch.md").write_text("# b\n")
     (pack / "catalog").mkdir(parents=True)
     (pack / "catalog" / "python_bio.yaml").write_text("capabilities: []\n")
+    # knowhow/ (incl. refsources/ — the fetch_reference provider catalog the
+    # bundle loader composes) must also map into the installation scope.
+    (pack / "knowhow" / "refsources").mkdir(parents=True)
+    (pack / "knowhow" / "refsources" / "ensembl.yaml").write_text("provider: ensembl\nkind: manifest\n")
+    (pack / "knowhow" / "scrna-analysis.md").write_text("# knowhow\n")
 
     res = Executor(pb).run_step(step)
     assert res.ok, res.error
@@ -101,6 +106,9 @@ def test_import_recipes_maps_pack_into_installation_scope(tmp_path, monkeypatch)
     assert (inst / "skills" / "recipes" / "genomics" / "scrna.md").exists()
     assert (inst / "skills" / "recipes" / "biomni-derived" / "database" / "fetch.md").exists()
     assert (inst / "catalog" / "python_bio.yaml").exists()
+    # refsources provider catalog + cross-linked knowhow docs mapped through
+    assert (inst / "knowhow" / "refsources" / "ensembl.yaml").exists()
+    assert (inst / "knowhow" / "scrna-analysis.md").exists()
 
 
 def test_step_lookup(tmp_path):
