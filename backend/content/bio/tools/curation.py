@@ -40,7 +40,8 @@ def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
         eid = _reg(path, organism=input_.get("organism"), role=input_.get("role"),
                    source=input_.get("source"), assembly=input_.get("assembly"),
                    derived_from=input_.get("derived_from"),
-                   version=input_.get("version"), mode=input_.get("mode", "copy"))
+                   version=input_.get("version"), mode=input_.get("mode", "copy"),
+                   scope=input_.get("scope") or "institution")
     except Exception as e:  # noqa: BLE001
         return {"error": f"register failed: {e}"}
     d = get_reference(eid) or {}
