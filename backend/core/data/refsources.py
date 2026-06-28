@@ -75,12 +75,25 @@ def resolve_asset(
     kind = m.get("kind", "manifest")
 
     if kind == "manifest":
+        # Match normalized facets (refs.md) so the agent's natural inputs hit:
+        # role/assembly fold case+separators; organism also accepts aliases AND a
+        # substring match ('phiX174' ⊃ 'phix'; 'drosophila' ⊂ 'drosophila_melanogaster').
+        # The assembly accession is the strong key; organism is fuzzy.
+        from core.data.refstore import _norm_organism, _norm_facet
+        nq_role, nq_org, nq_asm = _norm_facet(role), _norm_organism(organism), _norm_facet(assembly)
+
+        def _org_ok(av):
+            if not nq_org:
+                return True
+            na = _norm_organism(av)
+            return bool(na) and (na == nq_org or na in nq_org or nq_org in na)
+
         for a in m.get("assets") or []:
-            if role and a.get("role") != role:
+            if nq_role and _norm_facet(a.get("role")) != nq_role:
                 continue
-            if organism and a.get("organism") != organism:
+            if not _org_ok(a.get("organism")):
                 continue
-            if assembly and a.get("assembly") != assembly:
+            if nq_asm and _norm_facet(a.get("assembly")) != nq_asm:
                 continue
             return {"provider": provider, "kind": "manifest",
                     "url": a.get("url"), "unpack": a.get("unpack"),
