@@ -33,6 +33,16 @@ loop is **resolve-or-acquire**; always check before fetching or building.
    pin the run-lock** before a run reads the reference, so the run records
    exactly which version it used.
 
+**Scopes are install-dependent — check before you promise a tier.** A single-user
+install has only **project** + **personal** (here `personal` *is* the shared store,
+reusable across all the user's projects); **group**/**institution** exist only on a
+cluster/OOD deployment. `register_reference` and `promote_reference` return
+`available_scopes` — use it: only promote to a tier that's actually there, and
+report the scope from the result, not your assumption. A `promote` to an
+unconfigured tier returns `status:"noop"` (it did NOT move) — say so honestly; on
+single-user, `personal` already gives cross-project reuse, so there's usually
+nothing to promote.
+
 **Conventions:** `role` is a controlled vocab — `genome`, `transcriptome`,
 `gtf`, `gff`, `fai_index`, `star_index`, `salmon_index`, `bowtie2_index`, … (see
 `knowhow/refs/NAMING.md`). `describe_reference` inspects facets + lineage;
