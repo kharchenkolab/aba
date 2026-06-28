@@ -519,12 +519,12 @@ async def stream_response(
     # Same lifecycle as annotation_image: leads the turn, gone on later turns.
     if attachments and history:
         from core.runtime.attachments import build_injection
-        note, image_blocks = build_injection(attachments, allow_vision=not FAKE_SESSION)
-        history = list(history)
-        last = dict(history[-1])
-        content = list(last["content"])
-        lead = ([{"type": "text", "text": note}] if note else []) + image_blocks
-        history[-1] = {**last, "content": [*lead, *content]}
+        note = build_injection(attachments)
+        if note:
+            history = list(history)
+            last = dict(history[-1])
+            history[-1] = {**last,
+                           "content": [{"type": "text", "text": note}, *list(last["content"])]}
 
     # Capability set for this turn (disabled tools are neither offered nor
     # advertised). A3: also pass through the spec's tool_allowlist so the

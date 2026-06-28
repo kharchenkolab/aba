@@ -94,28 +94,22 @@ def ui_item(a: dict) -> dict:
     return {k: a.get(k) for k in ("name", "kind", "is_image", "size_bytes", "url")}
 
 
-def build_injection(attachments: Optional[list[dict]],
-                    *, allow_vision: bool = True) -> tuple[Optional[str], list[dict]]:
-    """Build the EPHEMERAL agent context for the arriving turn: a context note
-    (text) + vision blocks for images. Not persisted — rehydrated from the param
-    only on the turn the attachment arrives, exactly like annotation_image.
-
-    Returns (note_text, image_blocks). image_blocks is empty when allow_vision is
-    False (e.g. fake/no-vision mode)."""
+def build_injection(attachments: Optional[list[dict]]) -> Optional[str]:
+    """The EPHEMERAL agent NOTICE for the arriving turn: text only, telling the
+    agent which files were attached and where, so IT decides per file + the
+    user's intent how to use each. Files do NOT auto-enter the model context — a
+    data file may only ever be read by a pipeline; the agent pulls a file's
+    *content* into context explicitly (a tool) when it actually needs to read or
+    view it. Not persisted; rehydrated from the param only on the arriving turn
+    (mirrors annotation_image's lifecycle). Returns the notice (or None)."""
     if not attachments:
-        return None, []
-    lines = ["The user attached the following file(s) with this message. They are "
-             "scratch uploads in the project data dir — inspect them with "
-             "inspect_upload / read_file at the paths below, and register one as a "
-             "dataset only if the user asks. Images are shown in the chat:"]
-    image_blocks: list[dict] = []
+        return None
+    lines = ["The user attached the following file(s) with this message — scratch "
+             "uploads on disk. They do NOT auto-enter your context; decide per file "
+             "+ what I'm asking how to use each: inspect_upload to sniff an unknown "
+             "file; read_file / run_python to read or process it; view_file to "
+             "actually SEE an image or read a PDF; register_dataset only if I ask."]
     for a in attachments:
-        path, name = a.get("path"), a.get("name")
-        size = a.get("size_bytes")
-        lines.append(f"  - {name} ({a.get('kind')}, {size} bytes) at {path}"
-                     + (" [image — shown above]" if a.get("is_image") else ""))
-        if allow_vision and a.get("is_image") and path:
-            blk = _image_vision_block(path)
-            if blk:
-                image_blocks.append(blk)
-    return "\n".join(lines), image_blocks
+        lines.append(f"  - {a.get('name')} ({a.get('kind')}, {a.get('size_bytes')} bytes) "
+                     f"at {a.get('path')}")
+    return "\n".join(lines)
