@@ -93,12 +93,13 @@ class _RealStream:
         tools = [{k: v for k, v in t.items() if k not in _INTERNAL_KEYS} for t in (self._tools or [])]
         if tools:
             tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
-        # Drop UI-only blocks (e.g. the `attachments` chip block) at THIS single
-        # history→API boundary — they're persisted in message content for the web
-        # UI but the Anthropic SDK rejects unknown block types.
-        from core.runtime.history_prep import strip_ui_blocks
-        messages = [{"role": m["role"], "content": strip_ui_blocks(m["content"])}
-                    for m in self._history]
+        # THE single history→API transform: {role, content} with UI-only blocks
+        # (e.g. the `attachments` chip block) stripped. Anything that reaches the
+        # Anthropic SDK passes through here, so the validity guard test
+        # (tests/test_chat_attachments) asserts api_messages' output against the
+        # allow-list — that's the regression that would have caught the live 400.
+        from core.runtime.history_prep import api_messages
+        messages = api_messages(self._history)
         # Cache_control on the last message's last block — the third (of
         # three) caching breakpoint. Done BEFORE the dump so the persisted
         # payload reflects what the API actually sees (was previously

@@ -80,26 +80,37 @@ def main() -> int:
     check("attachments block removed; text kept",
           out == [{"role": "user", "content": [{"type": "text", "text": "look at this"}]}], str(out))
 
-    print("build_injection: ephemeral context note + vision only for images")
-    note, imgs = build_injection([ref])
-    check("note names the file + its absolute path", "report.csv" in note and ref["path"] in note, note[:120])
-    check("non-image → no vision block", imgs == [])
+    print("build_injection is NOTICE-ONLY — files do NOT auto-enter the model context")
+    note = build_injection([ref])
+    check("notice is a plain string naming the file + its path",
+          isinstance(note, str) and "report.csv" in note and ref["path"] in note, str(note)[:120])
+    check("no attachments → no notice", build_injection([]) is None)
+    img_ref = {"name": "shot.png", "path": "/x/shot.png", "kind": "image",
+               "is_image": True, "size_bytes": 9, "url": "/x"}
+    note_img = build_injection([img_ref])
+    check("an IMAGE attachment is STILL notice-only (no vision auto-inject)",
+          isinstance(note_img, str) and "shot.png" in note_img and "image" not in str(type(note_img)).lower()
+          and "base64" not in note_img)
 
-    try:
-        from PIL import Image
-        png = attachments_root(PID, "thr_1") / "shot.png"
-        Image.new("RGB", (8, 8), (255, 0, 0)).save(png)
-        iref = {"name": "shot.png", "path": str(png), "kind": "image",
-                "is_image": True, "size_bytes": png.stat().st_size, "url": "/x"}
-        note_i, imgs_i = build_injection([iref], allow_vision=True)
-        check("image → 1 Anthropic vision block",
-              len(imgs_i) == 1 and imgs_i[0].get("type") == "image"
-              and imgs_i[0].get("source", {}).get("type") == "base64", str(imgs_i)[:120])
-        check("image note flags it as shown in chat", "shown above" in note_i)
-        _, imgs_off = build_injection([iref], allow_vision=False)
-        check("allow_vision=False → no vision block even for an image", imgs_off == [])
-    except ImportError:
-        print("  [skip] PIL unavailable — vision-block assertions skipped")
+    print("API-VALIDITY GUARD: api_messages output is ENTIRELY Anthropic-allowed blocks")
+    from core.runtime.history_prep import ALLOWED_API_BLOCK_TYPES
+    history = [  # every block type we persist — INCLUDING the UI-only attachments block (the live 400)
+        {"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "attachments", "items": [item]},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "x"}}]},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "ok"},
+            {"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r"}]},
+    ]
+    sent = {b["type"] for m in api_messages(history)
+            for b in (m["content"] if isinstance(m["content"], list) else []) if isinstance(b, dict)}
+    check("NO attachments block survives to the API (the regression that would've caught the bug)",
+          "attachments" not in sent, str(sent))
+    check("EVERY block sent is an Anthropic-allowed type", not (sent - ALLOWED_API_BLOCK_TYPES),
+          f"disallowed leaked: {sent - ALLOWED_API_BLOCK_TYPES}")
+    check("legit blocks preserved", {"text", "image", "tool_use", "tool_result"} <= sent, str(sent))
 
     print()
     if _failures:
