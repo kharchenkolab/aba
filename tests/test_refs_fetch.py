@@ -18,11 +18,14 @@ os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 os.environ["ABA_REFS_DIR"] = str(Path(_tmp) / "refs")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
-# Test/override refsources dir (loader puts it FIRST, then the built-in seed,
-# so the built-in aws-indexes/ncbi manifests are also visible).
+# refsources are composed by the bundle (system seed → institution → …); this
+# override dir is the operator/test escape hatch applied on top. Isolate the
+# institution scope so the test sees ONLY the system seed + this dir — hermetic
+# regardless of any recipe pack imported on the dev box.
 _RS = Path(_tmp) / "refsources"
 _RS.mkdir(parents=True, exist_ok=True)
 os.environ["ABA_REFSOURCES_DIR"] = str(_RS)
+os.environ["ABA_INSTITUTION_BUNDLE"] = str(Path(_tmp) / "no_institution")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                       # noqa: E402
@@ -52,6 +55,22 @@ def check(label, cond, detail=""):
     "    version: NC_001422.1\n"
     "    url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     "?db=nuccore&id=NC_001422.1&rettype=fasta&retmode=text\n"
+)
+
+# A kind:local provider — a pre-existing on-cluster reference store (a real file,
+# no download). fetch_reference should adopt it in place via a link.
+_LOCAL = Path(_tmp) / "cluster_store" / "GRCh38" / "genome.fa"
+_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+_LOCAL.write_text(">chr1\nACGTACGTACGT\n")
+(_RS / "cluster-local.yaml").write_text(
+    "provider: cluster-local\n"
+    "kind: local\n"
+    "assets:\n"
+    "  - role: genome\n"
+    "    organism: homo_sapiens\n"
+    "    assembly: GRCh38\n"
+    "    version: site-mirror\n"
+    f"    path: {_LOCAL}\n"
 )
 
 
@@ -84,11 +103,27 @@ def main() -> int:
     except ValueError:
         check("unknown provider raises", True)
 
+    print("resolution: local provider → filesystem path (pre-existing cluster store)")
+    lo = resolve_asset("cluster-local", organism="human", assembly="GRCh38", role="genome")
+    check("local → path (kind=local, no url/command)",
+          lo.get("kind") == "local" and lo.get("path") == str(_LOCAL)
+          and not lo.get("url") and not lo.get("command"), str(lo))
+
     print("executor: template provider returns a runnable command (not auto-run)")
     m = fetch_reference_tool({"provider": "ncbi", "role": "gtf", "accession": "GCF_000001405.40"})
     check("ncbi fetch → manual + command + version",
           m.get("status") == "manual" and "datasets download" in (m.get("command") or "")
           and m.get("version") == "GCF_000001405.40", str(m)[:160])
+
+    print("executor: local provider ADOPTS the on-cluster file in place (link, no copy)")
+    fl = fetch_reference_tool({"provider": "cluster-local", "organism": "human",
+                               "assembly": "GRCh38", "role": "genome"})
+    check("local fetch → registered as a LINK (owned=false)",
+          fl.get("status") == "ok" and fl.get("owned") is False, str(fl)[:160])
+    if fl.get("status") == "ok":
+        d = get_reference(fl["reference_id"]) or {}
+        check("linked local ref points at the cluster path (no copy made)",
+              (d.get("artifact_path") or "") == str(_LOCAL), d.get("artifact_path"))
 
     print("executor: URL provider fetches + registers end-to-end (light network)")
     r = fetch_reference_tool({"provider": "test-phix", "organism": "phix174",

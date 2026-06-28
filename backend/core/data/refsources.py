@@ -12,10 +12,16 @@ Two manifest kinds:
   - `template`  — parametric resolution from an accession (a CLI/URL template).
                   Used by NCBI Datasets / Ensembl-FTP-style providers.
 
-Search path (first match wins, so overrides layer cleanly):
-  1. $ABA_REFSOURCES_DIR              — operator / test override
-  2. <built-in seed in the repo>      — content/bio/knowhow/refsources/
-  (3. installation-scope refsources/  — wired in Phase 1 with the recipe pack)
+Discovery + layering (production): the provider catalog is a first-class BUNDLE
+category. The loader composes each scope's `knowhow/refsources/*.yaml` into
+`EffectiveBundle.refsources` — override by provider name, narrowest scope wins,
+exactly like `catalog` (see core/bundle/loader._compose_refsources). So the
+layering is:
+  system seed (system_bundle/knowhow/refsources/)
+    → recipe pack / institution overlay (extends + overrides providers)
+    → group → project
+  + $ABA_REFSOURCES_DIR — operator/test escape hatch, applied on top here.
+This module does NO scope layering of its own — it consumes the composed map.
 """
 from __future__ import annotations
 import os
@@ -24,33 +30,66 @@ from typing import Optional
 
 import yaml
 
-# refsources.py is at backend/core/data/ → parents[2] is backend/.
-_BUILTIN = (Path(__file__).resolve().parents[2]
-            / "content" / "bio" / "knowhow" / "refsources")
-
-
-def _search_dirs() -> list[Path]:
-    dirs: list[Path] = []
+def _env_override_providers() -> dict[str, dict]:
+    """Operator escape hatch: ``$ABA_REFSOURCES_DIR`` overrides/extends any
+    provider ad-hoc, without touching the scope chain. A provider declared here
+    wins over the composed bundle (used by tests + one-off operator overrides)."""
+    out: dict[str, dict] = {}
     env = os.environ.get("ABA_REFSOURCES_DIR")
-    if env:
-        dirs.append(Path(env))
-    dirs.append(_BUILTIN)
-    return [d for d in dirs if d.is_dir()]
+    if not env:
+        return out
+    d = Path(env)
+    if not d.is_dir():
+        return out
+    for f in sorted(d.glob("*.yaml")):
+        try:
+            m = yaml.safe_load(f.read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        name = m.get("provider")
+        if name:
+            out[name] = m
+    return out
 
 
 def load_providers() -> dict[str, dict]:
-    """All provider manifests, keyed by `provider`. Earlier search dirs win."""
-    out: dict[str, dict] = {}
-    for d in _search_dirs():
-        for f in sorted(d.glob("*.yaml")):
-            try:
-                m = yaml.safe_load(f.read_text()) or {}
-            except (OSError, yaml.YAMLError):
-                continue
-            name = m.get("provider")
-            if name and name not in out:
-                out[name] = m
+    """All provider manifests, keyed by ``provider``.
+
+    The scope-layered catalog is composed ONCE by the bundle loader
+    (``EffectiveBundle.refsources`` — system seed → recipe pack → institution
+    → …, override-by-provider-name, narrowest wins). This consumer just reads
+    that map and applies the ``$ABA_REFSOURCES_DIR`` operator override on top.
+    No layering logic lives here — see core/bundle/loader._compose_refsources."""
+    from core.bundle.active import get_bundle
+    out = dict(get_bundle().refsources)
+    out.update(_env_override_providers())          # operator override wins
     return out
+
+
+def _match_facet_asset(assets, role, organism, assembly):
+    """First asset matching normalized facets (refs.md): role/assembly fold
+    case+separators; organism also accepts aliases AND a substring match
+    ('phiX174' ⊃ 'phix'; 'drosophila' ⊂ 'drosophila_melanogaster'); the assembly
+    accession is the strong key, organism is fuzzy. None if no match. Shared by
+    the `manifest` (url) and `local` (path) kinds."""
+    from core.data.refstore import _norm_organism, _norm_facet
+    nq_role, nq_org, nq_asm = _norm_facet(role), _norm_organism(organism), _norm_facet(assembly)
+
+    def _org_ok(av):
+        if not nq_org:
+            return True
+        na = _norm_organism(av)
+        return bool(na) and (na == nq_org or na in nq_org or nq_org in na)
+
+    for a in assets or []:
+        if nq_role and _norm_facet(a.get("role")) != nq_role:
+            continue
+        if not _org_ok(a.get("organism")):
+            continue
+        if nq_asm and _norm_facet(a.get("assembly")) != nq_asm:
+            continue
+        return a
+    return None
 
 
 def resolve_asset(
@@ -64,9 +103,10 @@ def resolve_asset(
 ) -> dict:
     """Resolve a request to a concrete asset for `provider`.
 
-    Returns a dict with EITHER `url` (fetchable now) OR `command` (a CLI the
-    agent runs), plus `unpack`/`version`/facets. Raises ValueError on an unknown
-    provider, an unsupported role, or no matching asset."""
+    Returns a dict with `url` (fetchable now), `command` (a CLI the agent runs),
+    or `path` (a pre-existing on-cluster file → adopt via link), plus
+    `unpack`/`version`/facets. Raises ValueError on an unknown provider, an
+    unsupported role, or no matching asset."""
     provs = load_providers()
     m = provs.get(provider)
     if not m:
@@ -75,32 +115,29 @@ def resolve_asset(
     kind = m.get("kind", "manifest")
 
     if kind == "manifest":
-        # Match normalized facets (refs.md) so the agent's natural inputs hit:
-        # role/assembly fold case+separators; organism also accepts aliases AND a
-        # substring match ('phiX174' ⊃ 'phix'; 'drosophila' ⊂ 'drosophila_melanogaster').
-        # The assembly accession is the strong key; organism is fuzzy.
-        from core.data.refstore import _norm_organism, _norm_facet
-        nq_role, nq_org, nq_asm = _norm_facet(role), _norm_organism(organism), _norm_facet(assembly)
-
-        def _org_ok(av):
-            if not nq_org:
-                return True
-            na = _norm_organism(av)
-            return bool(na) and (na == nq_org or na in nq_org or nq_org in na)
-
-        for a in m.get("assets") or []:
-            if nq_role and _norm_facet(a.get("role")) != nq_role:
-                continue
-            if not _org_ok(a.get("organism")):
-                continue
-            if nq_asm and _norm_facet(a.get("assembly")) != nq_asm:
-                continue
+        a = _match_facet_asset(m.get("assets"), role, organism, assembly)
+        if a:
             return {"provider": provider, "kind": "manifest",
                     "url": a.get("url"), "unpack": a.get("unpack"),
                     "version": a.get("version"), "role": a.get("role"),
                     "organism": a.get("organism"), "assembly": a.get("assembly")}
         raise ValueError(
             f"{provider}: no asset for role={role} organism={organism} "
+            f"assembly={assembly}")
+
+    if kind == "local":
+        # Pre-existing on-cluster reference store (refs.md §5.1): assets carry a
+        # filesystem `path` instead of a url, so fetch_reference adopts it in
+        # place (register mode=link) — no download, no copy. Lets an institution
+        # overlay expose a site's mirrored references as first-class providers.
+        a = _match_facet_asset(m.get("assets"), role, organism, assembly)
+        if a:
+            return {"provider": provider, "kind": "local",
+                    "path": a.get("path"), "version": a.get("version"),
+                    "role": a.get("role"), "organism": a.get("organism"),
+                    "assembly": a.get("assembly")}
+        raise ValueError(
+            f"{provider}: no local asset for role={role} organism={organism} "
             f"assembly={assembly}")
 
     if kind == "template":

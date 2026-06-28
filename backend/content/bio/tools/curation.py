@@ -274,6 +274,29 @@ def fetch_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
                 "structural_path": d.get("structural_path"), "source": provider,
                 "note": "Fetched + registered (re-runnable spec recorded)."}
 
+    # Local asset (kind: local) → adopt the pre-existing on-cluster file in
+    # place via a link (no download, no copy).
+    if asset.get("path"):
+        from pathlib import Path as _Path
+        if not _Path(asset["path"]).exists():
+            return {"error": f"local provider path does not exist: {asset['path']}",
+                    "path": asset["path"]}
+        spec = {"mode": "local", "provider": provider, "path": asset["path"],
+                "version": asset.get("version")}
+        try:
+            eid = register_reference(
+                asset["path"], organism=asset.get("organism") or input_.get("organism"),
+                assembly=asset.get("assembly") or input_.get("assembly"),
+                role=asset.get("role") or input_.get("role"),
+                source=provider, version=asset.get("version"), acquisition=spec,
+                mode="link", scope=input_.get("scope") or "group")
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"register failed: {e}"}
+        d = get_reference(eid) or {}
+        return {"status": "ok", "reference_id": eid, "owned": d.get("owned"),
+                "structural_path": d.get("structural_path"), "source": provider,
+                "note": "Adopted pre-existing on-cluster reference in place (linked, no copy)."}
+
     # Template/CLI asset → hand the agent the command to run (Phase 0: not auto-run).
     if asset.get("command"):
         return {"status": "manual", "provider": provider,

@@ -95,12 +95,14 @@ steps:
     why: |
       Map the cloned recipe pack into the installation-scope bundle the backend
       actually reads ($ABA_HOME/installation): recipes/<domain>/ →
-      skills/recipes/<domain>/ and catalog/*.yaml → catalog/. Without this the
+      skills/recipes/<domain>/, catalog/*.yaml → catalog/, and knowhow/ →
+      knowhow/ (the docs recipes cross-link to AND knowhow/refsources/ — the
+      fetch_reference provider catalog the loader composes). Without this the
       pack sits on disk unused and the agent sees only the ~9 system skills.
       Idempotent + always re-copied (it's kilobytes), so an update refreshes it.
     commands:
-      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi'
-      - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files into $ABA_HOME/installation"'
+      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog" "$INST/knowhow"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi; if [ -d "$PACK/knowhow" ]; then cp -R "$PACK/knowhow/." "$INST/knowhow/"; fi'
+      - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files + $(ls "$ABA_HOME/installation/knowhow/refsources"/*.yaml 2>/dev/null | wc -l | tr -d " ") refsource providers into $ABA_HOME/installation"'
     timeout_seconds: 60
 
   - id: create-r-tools-env
