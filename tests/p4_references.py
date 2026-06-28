@@ -27,7 +27,8 @@ from core.graph._schema import init_db                       # noqa: E402
 from core.data import DataHandle, resolve, get_reference      # noqa: E402
 import content.bio  # noqa: E402,F401
 from content.bio.tools import (                              # noqa: E402
-    register_reference_tool, find_reference_tool, fetch_url, lookup_sra_runinfo,
+    register_reference_tool, find_reference_tool, describe_reference_tool,
+    fetch_url, lookup_sra_runinfo,
 )
 
 _failures: list[str] = []
@@ -81,6 +82,14 @@ def main() -> int:
     check("catalog data resolves to the owned bytes under objects/",
           data_link.exists() and (refs_dir / "objects") in data_link.resolve().parents,
           str(data_link.resolve()) if data_link.exists() else "broken link")
+
+    print("describe_reference (facets + lineage + acquisition)")
+    desc = describe_reference_tool({"reference_id": r2["reference_id"]})
+    check("describe → facets + derived_from lineage",
+          desc.get("found") and desc.get("role") == "fai_index"
+          and (desc.get("derivation") or {}).get("kind") == "derived_from"
+          and r1["reference_id"] in ((desc.get("derivation") or {}).get("sources") or []),
+          str(desc)[:160])
 
     print("linked (external) reference — adopt in place, no copy (refs.md §4)")
     ext = Path(_tmp) / "preexisting_cluster_ref"

@@ -65,6 +65,35 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"found": bool(r), "reference": r}
 
 
+def describe_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Inspect a stored reference: facets, content identity, lineage,
+    structural path, and acquisition provenance (how it was obtained)."""
+    ref_id = input_.get("reference_id")
+    if not ref_id:
+        return {"error": "reference_id is required"}
+    from core.data import get_reference
+    d = get_reference(ref_id)
+    if d:
+        return {"found": True, "reference_id": d.get("id"), "title": d.get("title"),
+                "organism": d.get("organism"), "assembly": d.get("assembly"),
+                "role": d.get("role"), "structural_path": d.get("structural_path"),
+                "owned": d.get("owned"), "sha": (d.get("identity") or {}).get("sha"),
+                "identity": d.get("identity"), "acquisition": d.get("acquisition"),
+                "derivation": d.get("derivation"), "scope": d.get("scope"),
+                "artifact_path": d.get("artifact_path")}
+    # Legacy reference without a descriptor → fall back to the entity.
+    from core.graph.entities import get_entity
+    e = get_entity(ref_id)
+    if not e:
+        return {"found": False, "error": f"unknown reference {ref_id}"}
+    meta = e.get("metadata") or {}
+    return {"found": True, "reference_id": ref_id, "title": e.get("title"),
+            "organism": meta.get("organism"), "assembly": meta.get("assembly"),
+            "role": meta.get("role"), "structural_path": meta.get("structural_path"),
+            "sha": meta.get("sha"), "artifact_path": e.get("artifact_path"),
+            "legacy": True}
+
+
 def resolve_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Resolve a stored reference to a local path for use in a run and pin the
     run-lock (a schema-legal `run --used--> reference` edge + the content-sha

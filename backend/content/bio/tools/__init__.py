@@ -129,6 +129,7 @@ from .curation import (    # noqa: F401, E402
     find_reference_tool,
     fetch_reference_tool,
     resolve_reference_tool,
+    describe_reference_tool,
     _within,
     _scratch_bases,
     _hardlink_tree,
