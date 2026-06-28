@@ -483,6 +483,33 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
           <span>{b.text}</span>
         </div>,
       )
+    } else if (b.type === 'attachments') {
+      // User-attached files (paperclip / paste), persisted on the user
+      // message. A row of chips; images render an inline thumbnail that
+      // opens to the lightbox (reusing ZoomableImg), non-images a file chip.
+      if (b.items.length === 0) continue
+      out.push(
+        <div key={i} className="msg-attachments">
+          {b.items.map((it, j) => (
+            it.is_image ? (
+              <div key={j} className="msg-attachment msg-attachment--image" title={it.name}>
+                <ZoomableImg src={it.url} alt={it.name} />
+                <span className="msg-attachment__name">{it.name}</span>
+              </div>
+            ) : (
+              <a key={j} className="msg-attachment msg-attachment--file"
+                 href={it.url} target="_blank" rel="noreferrer" title={it.name}>
+                <svg className="msg-attachment__icon" width="15" height="15" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+                  <path d="M6 3h9l5 5v13H6z" /><path d="M14 3v6h6" />
+                </svg>
+                <span className="msg-attachment__name">{it.name}</span>
+                <span className="msg-attachment__kind">{it.kind}</span>
+              </a>
+            )
+          ))}
+        </div>,
+      )
     } else if (b.type === 'image') {
       // Title from the registered figure/table entity, if any. (Highlight + pin
       // now live in the per-message toolbar and act on the whole cell.)

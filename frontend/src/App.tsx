@@ -33,7 +33,7 @@ import {
 import { useProposals, ProposalCard, UndoToast } from './components/Proposals'
 import { useChat } from './useChat'
 import { useEntities } from './useEntities'
-import type { Entity } from './types'
+import type { Entity, Attachment } from './types'
 
 const TREE_DEFAULT = 240
 const TREE_MIN = 150
@@ -761,7 +761,8 @@ export default function App() {
       streaming={streaming}
       loading={chatLoading}
       streamMsg={streamMsg}
-      onSend={(text: string) => streaming ? enqueue(text) : sendMessage(text)}
+      onSend={(text: string, attachments?: Attachment[]) =>
+        streaming ? enqueue(text, attachments) : sendMessage(text, null, attachments)}
       onOpenData={() => openProjectSection('data')}
       focusedEntity={focused}
       annotation={annotation}
@@ -801,6 +802,7 @@ export default function App() {
       onDropQueueAt={dropQueueAt}
       onSteer={steer}
       threadId={currentThread?.id ?? threadId}
+      projectId={url.pid ?? undefined}
       currentRunId={currentRunId}
     />
   )
