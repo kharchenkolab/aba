@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo } from './types'
+import type { DisplayMessage, Block, SSEEvent, ManifestSnapshot, PendingClarification, PendingApproval, LogEntry, JobInfo, Attachment } from './types'
 import { getActiveMember } from './bio/activeMemberRef'
 // W2-#4 phase 2: the SSE reader loop lives in a small reusable helper.
 // Pulls ~50 LOC out of runStream and makes the terminal-event / premature-
@@ -23,6 +23,12 @@ function blocksFromContent(content: Record<string, unknown>[]): Block[] {
   for (const block of content) {
     if (block.type === 'text') {
       blocks.push({ type: 'text', text: block.text as string })
+    } else if (block.type === 'attachments') {
+      // UI-only block persisted by guide.py on a user message (chat
+      // attachments). Carry it through so the chip row / image thumbnails
+      // rehydrate on history load.
+      blocks.push({ type: 'attachments',
+                    items: (block.items as import('./types').Attachment[]) ?? [] })
     } else if (block.type === 'tool_use') {
       if (block.name === 'present_plan') {
         const inp = (block.input ?? {}) as { title?: string; steps?: unknown; rationale?: string }
@@ -152,6 +158,22 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
 }
 
 interface Annotation { image: string; note: string }
+
+/** A queued follow-up (type-while-streaming). Carries its own attachments so
+ *  files queued mid-turn survive to the flush — the composer's local
+ *  attachment state is cleared on send and can't be relied on later. */
+export interface QueuedMessage { text: string; attachments?: Attachment[] }
+
+/** Blocks for the optimistic user bubble: the typed text (if any) plus an
+ *  attachments chip row. Mirrors the persisted user-message shape so the
+ *  bubble looks identical before AND after the SSE/history round-trip.
+ *  Attachment-only sends (empty text) skip the empty text block. */
+function optimisticUserBlocks(text: string, attachments?: Attachment[]): Block[] {
+  const blocks: Block[] = []
+  if (text) blocks.push({ type: 'text', text })
+  if (attachments?.length) blocks.push({ type: 'attachments', items: attachments })
+  return blocks
+}
 
 // Observability Console: map an SSE event to a log entry (or null to skip —
 // `delta` is the chat text, not worth logging). `level` gates it in the
@@ -290,12 +312,15 @@ export function useChat(
   // A LIST (not one slot) so the user can queue several follow-ups: enqueue
   // appends, and the queue drains one message per completed turn. (Single-slot
   // before — a 2nd enqueue silently bumped the 1st.)
-  const [queuedMessages, setQueuedMessages] = useState<string[]>([])
+  // Each item carries its own attachments so a follow-up queued mid-turn keeps
+  // its files when it flushes (the queue can outlive the composer's local
+  // attachment state).
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
   // Mirror of queuedMessages in a ref. The in-flight stream's done/cancelled
   // handlers capture state from the closure at TURN START (when it was empty),
   // so reading the state there is stale — that's why auto-flush dropped a
   // message queued mid-turn. The ref always holds the latest queue.
-  const queuedMessagesRef = useRef<string[]>([])
+  const queuedMessagesRef = useRef<QueuedMessage[]>([])
   // A flag distinguishing Steer (cancel → flush queue) from Stop
   // (cancel → drop queue). Set by steer(); read in the 'cancelled'
   // handler; cleared either way.
@@ -308,7 +333,7 @@ export function useChat(
   // so sendMessage's `if (streaming) return` guard — whose stale `streaming`
   // closure still reads true at the setTimeout(0) instant — would silently drop
   // the queued message (chip clears, nothing sends). This bypasses that guard.
-  const flushSendRef = useRef<((text: string) => void) | null>(null)
+  const flushSendRef = useRef<((m: QueuedMessage) => void) | null>(null)
   const onERRef = useRef(onEntityRegistered)
   onERRef.current = onEntityRegistered
   const annotationRef = useRef(annotation)
@@ -402,7 +427,7 @@ export function useChat(
   }, [threadId, projectId])
   // Ref-shadow of runStream so loadMessages can call it without a TDZ
   // (runStream is declared after loadMessages and depends on it).
-  const runStreamRef = useRef<((opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => Promise<void>) | null>(null)
+  const runStreamRef = useRef<((opts: { text?: string; retry?: boolean; annotation?: Annotation | null; attachments?: Attachment[]; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => Promise<void>) | null>(null)
 
   // On a project switch (reloadKey) or thread switch (threadId): reset
   // SYNCHRONOUSLY (before paint) so the chat pane never shows the previous
@@ -435,7 +460,7 @@ export function useChat(
   //    /api/turns/{runId}/resume, which inherits thread+focus from the
   //    prior turn and drives a fresh Turn forward.
   const runStream = useCallback(
-    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => {
+    async (opts: { text?: string; retry?: boolean; annotation?: Annotation | null; attachments?: Attachment[]; resumeRunId?: string; approvalAction?: 'approve' | 'approve_session' | 'reject'; reattachRunId?: string; since?: number }) => {
       const myGen = genRef.current
       const ac = new AbortController()
       abortRef.current = ac
@@ -498,6 +523,10 @@ export function useChat(
                 thread_id: threadId,
                 ...(projectId ? { project_id: projectId } : {}),
                 ...(annot ? { annotation_image: annot.image, annotation_note: annot.note } : {}),
+                // Chat attachments (paperclip / paste). Refs from POST
+                // /api/attach; the backend persists a UI `attachments` block on
+                // the user message + ephemerally shows images to the agent.
+                ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
               }),
             })
         // Reattach mode: we already know the run_id; set it now so Stop
@@ -846,7 +875,7 @@ export function useChat(
   useEffect(() => { runStreamRef.current = runStream }, [runStream])
 
   const sendMessage = useCallback(
-    async (text: string, annotation?: Annotation | null) => {
+    async (text: string, annotation?: Annotation | null, attachments?: Attachment[]) => {
       if (streaming) return
       // Set streamingRef SYNCHRONOUSLY (the state-driven effect at line
       // 202 runs after React renders, leaving a window where an
@@ -858,9 +887,10 @@ export function useChat(
       // response overwrites the just-added user message. PK
       streamingRef.current = true
       setMessages(prev => [...prev, {
-        id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }],
+        id: `u-${Date.now()}`, role: 'user',
+        blocks: optimisticUserBlocks(text, attachments),
       }])
-      await runStream({ text, annotation })
+      await runStream({ text, annotation, attachments })
     },
     [streaming, runStream],
   )
@@ -868,12 +898,13 @@ export function useChat(
   // code inside the SSE handler (set up via closure on an older render)
   // can dispatch the queued message correctly.
   sendMessageRef.current = (text: string) => sendMessage(text)
-  flushSendRef.current = (text: string) => {
+  flushSendRef.current = (m: QueuedMessage) => {
     // Same sync-streamingRef flip as sendMessage — the auto-flush
     // can fire in the same tick as a project-switch'd loadMessages.
     streamingRef.current = true
-    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }] }])
-    runStream({ text })
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user',
+                                    blocks: optimisticUserBlocks(m.text, m.attachments) }])
+    runStream({ text: m.text, attachments: m.attachments })
   }
 
   // Re-run the last turn after a failure. Completed steps (assistant turns +
@@ -929,10 +960,10 @@ export function useChat(
 
   // Enqueue: type-while-streaming. Will auto-flush when the current
   // turn ends (done) OR when the user Steers (cancel+flush).
-  const enqueue = useCallback((text: string) => {
+  const enqueue = useCallback((text: string, attachments?: Attachment[]) => {
     const t = text.trim()
-    if (!t) return                          // empty Enter is a no-op, not a clear
-    const next = [...queuedMessagesRef.current, t]   // APPEND — don't bump the prior
+    if (!t && !attachments?.length) return  // empty Enter is a no-op, not a clear
+    const next = [...queuedMessagesRef.current, { text: t, attachments }]   // APPEND — don't bump the prior
     queuedMessagesRef.current = next; setQueuedMessages(next)
   }, [])
 
@@ -949,19 +980,19 @@ export function useChat(
   // commits. Sets the flush flag so the cancelled-handler knows this
   // wasn't a plain Stop. If text is empty, no-op (the user can hit
   // Stop alone if that's what they want).
-  const steer = useCallback(async (text: string) => {
+  const steer = useCallback(async (text: string, attachments?: Attachment[]) => {
     const t = text.trim()
-    if (!t) return
+    if (!t && !attachments?.length) return
     const rid = currentRunIdRef.current
     if (!rid) {
       // Nothing in flight — just send directly.
-      await sendMessage(t)
+      await sendMessage(t, null, attachments)
       return
     }
     steerFlushRef.current = true
     // Prepend: steer sends `t` immediately (cancel → flush head), leaving any
     // already-queued messages to follow.
-    const next = [t, ...queuedMessagesRef.current]
+    const next = [{ text: t, attachments }, ...queuedMessagesRef.current]
     queuedMessagesRef.current = next; setQueuedMessages(next)
     try {
       await fetch(`/api/turns/${encodeURIComponent(rid)}/cancel`, {

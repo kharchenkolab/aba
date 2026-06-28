@@ -6,8 +6,8 @@
 
 .composer__box {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   background: var(--bg);
   border: 1.5px solid var(--panel-bd);
   border-radius: var(--r);
@@ -16,6 +16,99 @@
 }
 .composer__box:focus-within { border-color: var(--accent); }
 .composer__box--disabled { opacity: 0.6; }
+
+/* The input row: paperclip, textarea, then the stop/send buttons. Carries the
+   flex-row layout the box itself used to own (before the chip row landed). */
+.composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* Attachment chips, shown above the input row. */
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+.composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--panel-bd);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  font-size: 12px;
+  color: var(--text);
+}
+.composer__chip--error { border-color: var(--red, #dc2626); }
+.composer__chip-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.composer__chip-icon { font-size: 15px; line-height: 1; flex-shrink: 0; }
+.composer__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__chip-err {
+  flex-shrink: 0;
+  color: var(--red, #dc2626);
+  font-weight: 700;
+}
+/* Small inline spinner while a chip's upload is in flight. */
+.composer__chip-spinner {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: composer__chip-spin 0.7s linear infinite;
+}
+@keyframes composer__chip-spin { to { transform: rotate(360deg); } }
+.composer__chip-x {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.composer__chip-x:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+
+/* Paperclip attach button — sits to the left of the textarea, sized + muted
+   like the in-box affordances. Brightens to the accent on hover. */
+.composer__attach {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-3);
+  border-radius: 7px;
+  transition: color 0.15s, background 0.15s;
+}
+.composer__attach:hover { color: var(--accent); background: color-mix(in srgb, var(--text) 6%, transparent); }
 
 .composer__input {
   flex: 1;
