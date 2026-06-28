@@ -24,8 +24,7 @@ os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                       # noqa: E402
-from core.graph.provenance import upstream                   # noqa: E402
-from core.data import DataHandle, resolve                    # noqa: E402
+from core.data import DataHandle, resolve, get_reference      # noqa: E402
 import content.bio  # noqa: E402,F401
 from content.bio.tools import (                              # noqa: E402
     register_reference_tool, find_reference_tool, fetch_url, lookup_sra_runinfo,
@@ -63,8 +62,25 @@ def main() -> int:
                                   "derived_from": r1["reference_id"]})
     check("derived reference registered", r2.get("status") == "ok"
           and r2.get("reference_id") != r1.get("reference_id"), str(r2))
-    up = {n["id"] for n in upstream(r2["reference_id"])}
-    check("lineage edge: index wasDerivedFrom transcriptome", r1["reference_id"] in up)
+    # Lineage now lives in the descriptor (the `reference` type forbids
+    # out-edges, so the old wasDerivedFrom-edge path errored at validation).
+    d2 = get_reference(r2["reference_id"]) or {}
+    deriv = d2.get("derivation") or {}
+    check("lineage in descriptor: index derived_from transcriptome",
+          deriv.get("kind") == "derived_from" and r1["reference_id"] in (deriv.get("sources") or []),
+          str(deriv))
+
+    print("descriptor + human catalog (refs.md §3)")
+    d1 = get_reference(r1["reference_id"]) or {}
+    check("descriptor records owned + content-sha identity",
+          d1.get("owned") is True and (d1.get("identity") or {}).get("sha") == r1.get("sha"))
+    check("descriptor has a structural_path", bool(d1.get("structural_path")), str(d1.get("structural_path")))
+    cat_node = refs_dir / "catalog" / d1["structural_path"]
+    data_link = cat_node / "data"
+    check("catalog node + data symlink exist", data_link.is_symlink(), str(cat_node))
+    check("catalog data resolves to the owned bytes under objects/",
+          data_link.exists() and (refs_dir / "objects") in data_link.resolve().parents,
+          str(data_link.resolve()) if data_link.exists() else "broken link")
 
     print("find_reference + resolve")
     f1 = find_reference_tool({"organism": "phage_x", "role": "transcriptome"})
