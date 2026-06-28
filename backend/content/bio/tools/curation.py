@@ -28,31 +28,59 @@ from .ctx_read import _ctx_thread
 from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
 
 
+def _infer_scope(input_: dict, ctx: dict | None) -> str:
+    """Default-by-signal placement (refs.md §3.3): an explicit scope always
+    wins; a linked cluster path → group (shared data is lab-reusable); a freshly
+    built/derived artifact registered while a run is open → project; otherwise
+    personal. promotion moves it wider later if reuse appears."""
+    if input_.get("scope"):
+        return input_["scope"]
+    if input_.get("mode") == "link":
+        return "group"
+    tid = (ctx or {}).get("thread_id")
+    if tid:
+        try:
+            from content.bio.lifecycle.runs import active_run_id
+            if active_run_id(tid):
+                return "project"
+        except Exception:  # noqa: BLE001
+            pass
+    return "personal"
+
+
 def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Keep a file/dir as a reusable reference. mode='copy' (default) owns the
     bytes (content-addressed); mode='link' adopts a pre-existing path in place
-    (no copy) — for large cluster reference stores."""
+    (no copy) — for large cluster reference stores. Scope defaults by signal
+    (see _infer_scope); pass scope explicitly to override."""
     path = input_.get("path")
     if not path:
         return {"error": "path is required"}
     from core.data import register_reference as _reg, get_reference
+    requested = input_.get("scope")
+    scope = _infer_scope(input_, ctx)
     try:
         eid = _reg(path, organism=input_.get("organism"), role=input_.get("role"),
                    source=input_.get("source"), assembly=input_.get("assembly"),
                    derived_from=input_.get("derived_from"),
                    version=input_.get("version"), mode=input_.get("mode", "copy"),
-                   scope=input_.get("scope") or "institution")
+                   scope=scope)
     except Exception as e:  # noqa: BLE001
         return {"error": f"register failed: {e}"}
     d = get_reference(eid) or {}
     ident = d.get("identity") or {}
     owned = d.get("owned", True)
-    return {"status": "ok", "reference_id": eid, "sha": ident.get("sha"),
-            "owned": owned, "organism": d.get("organism"), "role": d.get("role"),
-            "structural_path": d.get("structural_path"),
+    actual = d.get("scope")
+    resp = {"status": "ok", "reference_id": eid, "sha": ident.get("sha"),
+            "owned": owned, "scope": actual, "organism": d.get("organism"),
+            "role": d.get("role"), "structural_path": d.get("structural_path"),
             "artifact_path": d.get("artifact_path"),
             "note": ("Owned content-addressed copy (deduplicated)." if owned
                      else "Linked in place — no copy.") + " Reuse via find_reference."}
+    if requested and actual and actual != requested:
+        resp["warning"] = (f"no write access to the {requested!r} tier; stored at "
+                           f"{actual!r} — ask a curator to promote it")
+    return resp
 
 
 def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -227,7 +255,8 @@ def fetch_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
                 path, organism=asset.get("organism") or input_.get("organism"),
                 assembly=asset.get("assembly") or input_.get("assembly"),
                 role=asset.get("role") or input_.get("role"),
-                source=provider, version=asset.get("version"), acquisition=spec)
+                source=provider, version=asset.get("version"), acquisition=spec,
+                scope=input_.get("scope") or "group")  # fetched standard refs → lab-shared
         except Exception as e:  # noqa: BLE001
             return {"error": f"register failed: {e}"}
         d = get_reference(eid) or {}
