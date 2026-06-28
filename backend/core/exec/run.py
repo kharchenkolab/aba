@@ -76,7 +76,10 @@ def run_python_code(
 
     ex = MaterializingExecutor()
     menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
-    used_interp = interp or menv.python or sys.executable
+    # Harden: never let an empty/blank interpreter slip through to Popen (the
+    # `Permission denied: ''` class). Coerce + strip each candidate, fall back to
+    # this process's own interpreter as the last resort.
+    used_interp = str(interp or menv.python or sys.executable or "").strip() or sys.executable
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
