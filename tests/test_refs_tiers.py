@@ -40,6 +40,7 @@ from core.data.refstore import _tier_roots                   # noqa: E402
 import content.bio  # noqa: E402,F401
 from content.bio.tools import (                              # noqa: E402
     register_reference_tool, find_reference_tool, resolve_reference_tool,
+    promote_reference_tool,
 )
 
 _failures: list[str] = []
@@ -107,6 +108,21 @@ def main() -> int:
           (inst_root / "registry" / f"{ri['reference_id']}.json").exists())
     check("layered find sees both tiers (group genome + institution gtf)",
           len(find_reference_tool({"organism": "fly", "all": True}).get("references", [])) >= 2)
+
+    print("promote_reference moves a ref up a tier (group → institution)")
+    prom = promote_reference_tool({"reference_id": rid, "scope": "institution"})
+    check("promote → ok + moved", prom.get("status") == "ok" and prom.get("moved") is True, str(prom)[:140])
+    check("descriptor now in the institution registry",
+          (inst_root / "registry" / f"{rid}.json").exists())
+    check("descriptor removed from the group registry",
+          not (GROUP_ROOT / "registry" / f"{rid}.json").exists())
+    check("bytes copied into the institution objects pool",
+          bool(prom.get("artifact_path")) and (inst_root / "objects") in Path(prom["artifact_path"]).parents,
+          str(prom.get("artifact_path")))
+    pf = find_reference_tool({"organism": "fly", "role": "genome"})
+    check("find still locates it, now at institution scope",
+          pf.get("found") and pf["reference"]["id"] == rid
+          and pf["reference"].get("scope") == "institution", str(pf)[:140])
 
     print()
     if _failures:

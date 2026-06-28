@@ -242,6 +242,17 @@ def register_curation_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def promote_reference(reference_id: str, scope: str,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Promote a reference up a tier (scope = project|group|institution) so
+        it's shared more widely — e.g. a project reference that proves reusable
+        lab-wide. Institution is curator-only (permission-gated)."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import promote_reference_tool
+        return promote_reference_tool({"reference_id": reference_id, "scope": scope},
+                                      peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def describe_reference(reference_id: str,
                            aba_ctx_id: str | None = None) -> dict:
         """Inspect a stored reference: facets, content identity, lineage,

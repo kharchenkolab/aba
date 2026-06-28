@@ -66,6 +66,22 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"found": bool(r), "reference": r}
 
 
+def promote_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Promote a reference up a tier (project → group → institution) so it's
+    shared more widely — e.g. when a project reference proves reusable lab-wide.
+    Gated in practice by write access to the destination tier (institution is
+    curator-only). `scope` is the destination tier."""
+    ref_id = input_.get("reference_id")
+    to = input_.get("scope") or input_.get("to_scope")
+    if not ref_id or not to:
+        return {"error": "reference_id and scope (destination tier) are required"}
+    from core.data import promote_reference
+    try:
+        return {"status": "ok", **promote_reference(ref_id, to)}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"promote failed: {e}"}
+
+
 def describe_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     """Inspect a stored reference: facets, content identity, lineage,
     structural path, and acquisition provenance (how it was obtained)."""
