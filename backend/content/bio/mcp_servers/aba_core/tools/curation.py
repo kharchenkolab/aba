@@ -220,3 +220,21 @@ def register_curation_tools(mcp: FastMCP) -> None:
              "role": role, "accession": accession},
             peek_ctx(aba_ctx_id),
         )
+
+    @mcp.tool()
+    def resolve_reference(reference_id: str | None = None,
+                          organism: str | None = None,
+                          role: str | None = None,
+                          assembly: str | None = None,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Resolve a stored reference (by id or organism/role/assembly) to a
+        local path for use in the current run, and pin the run-lock so the run
+        records exactly which reference version it used. Call before reading a
+        reference in run_python/run_r."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import resolve_reference_tool
+        return resolve_reference_tool(
+            {"reference_id": reference_id, "organism": organism,
+             "role": role, "assembly": assembly},
+            peek_ctx(aba_ctx_id),
+        )

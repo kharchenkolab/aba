@@ -65,6 +65,55 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"found": bool(r), "reference": r}
 
 
+def resolve_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Resolve a stored reference to a local path for use in a run and pin the
+    run-lock (a schema-legal `run --used--> reference` edge + the content-sha
+    version lock), so the run records exactly which reference version it
+    consumed (refs.md §9). Local tier: the store path IS the local path —
+    nothing to stage; the actual staging (mount/download) is the seam that
+    activates for object-store / remote tiers. Resolve by `reference_id` or by
+    organism/role/assembly facets."""
+    from core.data import get_reference, find_reference
+    ref_id = input_.get("reference_id")
+    if not ref_id:
+        r = find_reference(organism=input_.get("organism"), role=input_.get("role"),
+                           assembly=input_.get("assembly"))
+        ref_id = (r or {}).get("id")
+        if not ref_id:
+            return {"found": False,
+                    "error": "no matching reference — fetch or build it first"}
+    d = get_reference(ref_id)
+    if d:
+        path, sha, sp = d.get("artifact_path"), (d.get("identity") or {}).get("sha"), d.get("structural_path")
+    else:  # legacy reference without a descriptor → fall back to the entity
+        from core.graph.entities import get_entity
+        e = get_entity(ref_id)
+        if not e:
+            return {"error": f"unknown reference {ref_id}"}
+        meta = e.get("metadata") or {}
+        path, sha, sp = e.get("artifact_path"), meta.get("sha"), meta.get("structural_path")
+    if not path:
+        return {"error": f"reference {ref_id} has no resolvable path"}
+
+    run_id = None
+    pinned = False
+    tid = (ctx or {}).get("thread_id")
+    if tid:
+        from content.bio.lifecycle.runs import active_run_id
+        run_id = active_run_id(tid)
+        if run_id:
+            try:
+                from core.graph.edges import add_edge
+                add_edge(run_id, ref_id, "used")
+                pinned = True
+            except Exception:  # noqa: BLE001 — provenance pin is best-effort
+                pass
+    return {"status": "ok", "reference_id": ref_id, "local_path": path,
+            "version_lock": sha, "structural_path": sp, "run_id": run_id,
+            "note": ("Pinned: run used this reference@sha." if pinned
+                     else "No open run — returned the path without a run-lock.")}
+
+
 def _unpack(path: str, kind: str) -> str:
     """Unpack a fetched archive next to itself; return the unpacked dir (or the
     original path if `kind` is falsy / unrecognized)."""
