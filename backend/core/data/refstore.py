@@ -434,15 +434,48 @@ def promote_reference(ref_id: str, to_scope: str,
             "moved": True, "artifact_path": new_d.get("artifact_path")}
 
 
+# Facet matching is normalized so the agent's natural inputs hit stored refs:
+# 'Drosophila melanogaster' / 'fly' / 'drosophila_melanogaster' all match, and
+# 'genome' == 'Genome'. (Live-agent test 2026-06-28 caught exact-match missing.)
+_ORGANISM_ALIASES = {
+    "human": "homo_sapiens", "homo sapiens": "homo_sapiens",
+    "mouse": "mus_musculus", "mus musculus": "mus_musculus",
+    "fly": "drosophila_melanogaster", "fruit fly": "drosophila_melanogaster",
+    "drosophila": "drosophila_melanogaster",
+    "drosophila melanogaster": "drosophila_melanogaster",
+    "zebrafish": "danio_rerio", "rat": "rattus_norvegicus",
+    "yeast": "saccharomyces_cerevisiae", "budding yeast": "saccharomyces_cerevisiae",
+    "worm": "caenorhabditis_elegans", "c elegans": "caenorhabditis_elegans",
+}
+
+
+def _norm_facet(s: Optional[str]) -> Optional[str]:
+    """Case/separator-fold a facet for matching (genome == Genome; GRCh38 == grch38)."""
+    if not s:
+        return s
+    return re.sub(r"[\s._-]+", "_", str(s).strip().lower()).strip("_")
+
+
+def _norm_organism(s: Optional[str]) -> Optional[str]:
+    """Fold an organism to a canonical key: common name → binomial, separators →
+    space, lowercased — so 'Drosophila melanogaster' == 'drosophila_melanogaster'
+    == 'fly'."""
+    if not s:
+        return s
+    spaced = re.sub(r"[\s._-]+", " ", str(s).strip().lower()).strip()
+    return _ORGANISM_ALIASES.get(spaced, spaced.replace(" ", "_"))
+
+
 def list_references(organism: Optional[str] = None, role: Optional[str] = None,
                     assembly: Optional[str] = None) -> list[dict]:
+    nq_org, nq_role, nq_asm = _norm_organism(organism), _norm_facet(role), _norm_facet(assembly)
     out = []
     for d in _iter_descriptors():
-        if organism and d.get("organism") != organism:
+        if nq_org and _norm_organism(d.get("organism")) != nq_org:
             continue
-        if role and d.get("role") != role:
+        if nq_role and _norm_facet(d.get("role")) != nq_role:
             continue
-        if assembly and d.get("assembly") != assembly:
+        if nq_asm and _norm_facet(d.get("assembly")) != nq_asm:
             continue
         out.append(_row(d))
     return out
