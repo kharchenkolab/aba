@@ -56,6 +56,23 @@ def register_file_io_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def view_file(path: str, max_chars: int = 20000,
+                  aba_ctx_id: str | None = None) -> dict:
+        """SEE or READ an attached / on-disk file's CONTENT in your context — the
+        EXPLICIT way to pull a file in (uploads do NOT auto-enter your context).
+        Routes by type:
+          - image -> you SEE the image (vision);
+          - PDF -> its extracted text (figures not included);
+          - text/code/csv/json/... -> the text (truncated to max_chars);
+          - unrecognized/binary -> a hex+ascii head + a magic-byte type guess, so
+            you can tell the user what it is or ask.
+        For a DATA file you'll PROCESS in bulk (h5ad / fastq / large csv), use
+        run_python with the path instead — view_file is for reading/seeing."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools.view_file import view_file_tool
+        return view_file_tool({"path": path, "max_chars": max_chars}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def edit_file(path: str, old_string: str, new_string: str,
                   replace_all: bool = False,
                   aba_ctx_id: str | None = None) -> dict:
