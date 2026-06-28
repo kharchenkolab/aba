@@ -557,6 +557,23 @@ def _run_in_named_env(env: str, code: str, lang: str, timeout_s: int) -> dict:
             "execution_mode": "isolated"}
 
 
+def _background_timeout_s(input_: dict, est_min: float) -> int:
+    """Size a BACKGROUND job's timeout CEILING. Background work is long, so it does
+    NOT use the interactive 300s default / 30-min cap (live incident 2026-06-28: a
+    40-min STAR index build was killed at 300s). Honor an explicit `timeout_s`,
+    else derive from the agent's `estimated_runtime_min` (estimates are rough → 2x
+    margin), else a 1 h default; bounded only by the 24 h hung-job backstop."""
+    from core.jobs.runner import BACKGROUND_DEFAULT_TIMEOUT_S, BACKGROUND_MAX_TIMEOUT_S
+    explicit = input_.get("timeout_s")
+    if explicit:
+        base = int(explicit)
+    elif est_min and est_min > 0:
+        base = int(est_min * 60 * 2)
+    else:
+        base = BACKGROUND_DEFAULT_TIMEOUT_S
+    return max(60, min(base, BACKGROUND_MAX_TIMEOUT_S))
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -623,9 +640,12 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         # background executor / slurm_entry activate it (standalone, its own python).
         est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
                "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
+        # Background jobs get a timeout sized from the estimate, NOT the
+        # interactive 300s/30-min ceiling that `timeout_s` (above) carries.
+        bg_timeout_s = _background_timeout_s(input_, est_min)
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
                                 focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                                timeout_s=timeout_s, project_id=str(project_id),
+                                timeout_s=bg_timeout_s, project_id=str(project_id),
                                 thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
                                 estimate=est, env=env_name)
         return {
