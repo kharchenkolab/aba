@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from core.config import REFS_DIR
-from core.graph.entities import create_entity, get_entity, list_entities
+from core.graph.entities import create_entity
 
 REFERENCE = "reference"
 
@@ -33,16 +33,78 @@ REFERENCE = "reference"
 #   registry/<id>.json   — the descriptor (the durable truth)
 #   objects/<sha>/<name> — owned bytes pool (by-value, dedup); absent for linked
 #   catalog/<path>/data  — human view → objects/<sha>/ OR an external path
-def _objects_dir() -> Path:
-    return REFS_DIR / "objects"
+def _objects_dir(root: Path) -> Path:
+    return root / "objects"
 
 
-def _registry_dir() -> Path:
-    return REFS_DIR / "registry"
+def _registry_dir(root: Path) -> Path:
+    return root / "registry"
 
 
-def _catalog_dir() -> Path:
-    return REFS_DIR / "catalog"
+def _catalog_dir(root: Path) -> Path:
+    return root / "catalog"
+
+
+# ── Scoped tiers (misc/refs.md §3.3) ──────────────────────────────────────
+# Phase 1: refs are layered across tier roots resolved from site.yaml's `refs:`
+# block (group/institution, {group}/{user}/{home}-expanded via the scope
+# resolver) plus the legacy REFS_DIR as the always-present personal/default
+# tier (== Phase 0 behavior when there is no site.yaml). The project tier is a
+# documented follow-up.
+def _tier_roots(env: Optional[dict] = None) -> list[tuple[str, Path]]:
+    """[(scope, root)] in find-precedence order (narrowest → widest)."""
+    env = env if env is not None else dict(os.environ)
+    roots: list[tuple[str, Path]] = [("personal", Path(REFS_DIR))]
+    try:
+        from core.bundle.scope_resolver import (
+            _read_site_yaml, _resolve_group, _expand_placeholders, _user_id)
+        site_path = env.get("ABA_SITE_CONFIG")
+        site = _read_site_yaml(Path(site_path)) if site_path else None
+        if site:
+            group = _resolve_group(env)
+            user = _user_id(env)
+            home = Path(env.get("HOME") or Path.home())
+            refs_cfg = site.get("refs") or {}
+            for scope in ("group", "institution"):
+                tmpl = refs_cfg.get(scope)
+                if not tmpl:
+                    continue
+                expanded = _expand_placeholders(str(tmpl), user=user,
+                                                group=group, home=home)
+                if expanded:
+                    roots.append((scope, Path(expanded)))
+    except Exception:  # noqa: BLE001 — tier resolution must never break the store
+        pass
+    return roots
+
+
+def _root_for_scope(scope: str, env: Optional[dict] = None) -> Path:
+    """Where register(scope=…) writes. Falls back to the personal tier when the
+    requested scope isn't configured/resolvable on this box."""
+    tiers = dict(_tier_roots(env))
+    return tiers.get(scope) or tiers.get("personal") or Path(REFS_DIR)
+
+
+def _iter_descriptors(env: Optional[dict] = None):
+    """Yield every reference descriptor across the readable tier roots, in
+    precedence order, first-id-wins. The discovery index — replaces
+    list_entities so refs are visible across the projects/users that share a
+    tier (refs.md §8). Each yielded descriptor carries `_scope`/`_root`."""
+    seen: set = set()
+    for scope, root in _tier_roots(env):
+        rd = _registry_dir(root)
+        if not rd.is_dir():
+            continue
+        for f in sorted(rd.glob("*.json")):
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            rid = d.get("id")
+            if rid and rid not in seen:
+                seen.add(rid)
+                d["_scope"], d["_root"] = scope, str(root)
+                yield d
 
 
 def _slug(s: str) -> str:
@@ -80,10 +142,10 @@ def _symlink_force(link: Path, target: Path) -> None:
         pass
 
 
-def _write_descriptor(d: dict) -> Path:
-    """Write registry/<id>.json — the one durable artifact. Bumps the tier's
-    freshness marker so a per-backend index knows to rescan (refs.md §8)."""
-    rd = _registry_dir()
+def _write_descriptor(d: dict, root: Path) -> Path:
+    """Write <tier>/registry/<id>.json — the one durable artifact. Bumps the
+    tier's freshness marker so a per-backend index knows to rescan (refs.md §8)."""
+    rd = _registry_dir(root)
     rd.mkdir(parents=True, exist_ok=True)
     fp = rd / f"{d['id']}.json"
     fp.write_text(json.dumps(d, indent=2, default=str))
@@ -94,24 +156,21 @@ def _write_descriptor(d: dict) -> Path:
     return fp
 
 
-def get_reference(ref_id: str) -> Optional[dict]:
-    """The descriptor for a reference id, or None."""
-    fp = _registry_dir() / f"{ref_id}.json"
-    if not fp.exists():
-        return None
-    try:
-        return json.loads(fp.read_text())
-    except (OSError, ValueError):
-        return None
+def get_reference(ref_id: str, env: Optional[dict] = None) -> Optional[dict]:
+    """The descriptor for a reference id (searched across tiers), or None."""
+    for d in _iter_descriptors(env):
+        if d.get("id") == ref_id:
+            return d
+    return None
 
 
-def _emit_catalog(sp: str, data_target: Path, ref_id: str) -> Path:
-    """Materialize the human catalog node: a `data` symlink to the bytes and a
-    `reference.json` back-pointer to the descriptor. Derived + regenerable."""
-    node = _catalog_dir() / sp
+def _emit_catalog(sp: str, data_target: Path, ref_id: str, root: Path) -> Path:
+    """Materialize the human catalog node under the tier root: a `data` symlink
+    to the bytes and a `reference.json` back-pointer to the descriptor."""
+    node = _catalog_dir(root) / sp
     node.mkdir(parents=True, exist_ok=True)
     _symlink_force(node / "data", data_target)
-    _symlink_force(node / "reference.json", _registry_dir() / f"{ref_id}.json")
+    _symlink_force(node / "reference.json", _registry_dir(root) / f"{ref_id}.json")
     return node
 
 
@@ -139,18 +198,17 @@ def content_sha(path: Union[str, Path]) -> str:
 
 
 def _find_by_sha(sha: str) -> Optional[dict]:
-    for e in list_entities(type_filter=REFERENCE):
-        if (e.get("metadata") or {}).get("sha") == sha:
-            return e
+    for d in _iter_descriptors():
+        if (d.get("identity") or {}).get("sha") == sha:
+            return d
     return None
 
 
 def _find_by_path(path: str) -> Optional[dict]:
     """Dedup key for LINKED refs (no content-sha): the external path itself."""
-    for e in list_entities(type_filter=REFERENCE):
-        meta = e.get("metadata") or {}
-        if not meta.get("owned", True) and e.get("artifact_path") == path:
-            return e
+    for d in _iter_descriptors():
+        if not d.get("owned", True) and d.get("artifact_path") == path:
+            return d
     return None
 
 
@@ -201,13 +259,14 @@ def register_reference(
     if mode not in ("copy", "link"):
         raise ValueError(f"register_reference: mode must be 'copy' or 'link', got {mode!r}")
     owned = (mode == "copy")
+    root = _root_for_scope(scope)  # which tier this reference is written to
 
     if owned:
         sha = content_sha(src)
         existing = _find_by_sha(sha)
         if existing is not None:
             return existing["id"]
-        cas = _objects_dir() / sha
+        cas = _objects_dir(root) / sha
         artifact = cas / src.name
         if not cas.exists():
             cas.mkdir(parents=True, exist_ok=True)
@@ -264,17 +323,19 @@ def register_reference(
         "scope": scope, "artifact_path": str(artifact),
         "registered_at": _now_iso(),
     }
-    _write_descriptor(descriptor)
-    _emit_catalog(sp, artifact, eid)
+    _write_descriptor(descriptor, root)
+    _emit_catalog(sp, artifact, eid, root)
     return eid
 
 
-def _row(e: dict) -> dict:
-    meta = e.get("metadata") or {}
-    return {"id": e["id"], "title": e["title"], "artifact_path": e["artifact_path"],
-            "organism": meta.get("organism"), "role": meta.get("role"),
-            "assembly": meta.get("assembly"), "source": meta.get("source"),
-            "sha": meta.get("sha")}
+def _row(d: dict) -> dict:
+    ident = d.get("identity") or {}
+    return {"id": d.get("id"), "title": d.get("title"),
+            "artifact_path": d.get("artifact_path"),
+            "organism": d.get("organism"), "role": d.get("role"),
+            "assembly": d.get("assembly"),
+            "source": (d.get("acquisition") or {}).get("source"),
+            "sha": ident.get("sha"), "scope": d.get("_scope")}
 
 
 def find_reference(organism: Optional[str] = None, role: Optional[str] = None,
@@ -288,13 +349,12 @@ def find_reference(organism: Optional[str] = None, role: Optional[str] = None,
 def list_references(organism: Optional[str] = None, role: Optional[str] = None,
                     assembly: Optional[str] = None) -> list[dict]:
     out = []
-    for e in list_entities(type_filter=REFERENCE):
-        meta = e.get("metadata") or {}
-        if organism and meta.get("organism") != organism:
+    for d in _iter_descriptors():
+        if organism and d.get("organism") != organism:
             continue
-        if role and meta.get("role") != role:
+        if role and d.get("role") != role:
             continue
-        if assembly and meta.get("assembly") != assembly:
+        if assembly and d.get("assembly") != assembly:
             continue
-        out.append(_row(e))
+        out.append(_row(d))
     return out
