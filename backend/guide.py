@@ -261,6 +261,7 @@ async def stream_response(
     thread_id: str = "default",
     annotation_image: str | None = None,
     annotation_note: str | None = None,
+    attachments: list[dict] | None = None,
     retry: bool = False,
     plan_entity_id: str | None = None,
     run_id: str | None = None,
@@ -382,7 +383,16 @@ async def stream_response(
         # a user statement and bias all subsequent turns toward
         # whatever figure the user happened to click last (focus
         # regression found 2026-06-07 in thread thr_806a2ced).
-        user_blocks: list[dict] = [{"type": "text", "text": user_text}]
+        # Empty text is valid when the user just paperclips a file with no words.
+        _text = user_text or ("(see attached)" if attachments else "")
+        user_blocks: list[dict] = [{"type": "text", "text": _text}]
+        if attachments:
+            # UI-only chip/thumbnail block (stripped before the model by
+            # history_prep.api_messages); the agent gets the files via the
+            # ephemeral context note + vision blocks injected below.
+            from core.runtime.attachments import ui_item
+            user_blocks.append({"type": "attachments",
+                                "items": [ui_item(a) for a in attachments]})
         append_message("user", user_blocks, entity_id=WORKSPACE_ID,
                        focus_entity_id=focus_entity_id, thread_id=store_tid)
     history = get_messages(WORKSPACE_ID, thread_id=store_tid)
@@ -501,6 +511,20 @@ async def stream_response(
                     "marked region; otherwise answer as asked.]",
         })
         history[-1] = {**last, "content": content}
+
+    # Attachments (composer paperclip / clipboard paste): inject an ephemeral
+    # context note + (for images) vision blocks into THIS user turn so the agent
+    # is well-contextualized to follow up. NOT persisted — the persisted
+    # `attachments` chip block (stripped before the model) handles re-render.
+    # Same lifecycle as annotation_image: leads the turn, gone on later turns.
+    if attachments and history:
+        from core.runtime.attachments import build_injection
+        note, image_blocks = build_injection(attachments, allow_vision=not FAKE_SESSION)
+        history = list(history)
+        last = dict(history[-1])
+        content = list(last["content"])
+        lead = ([{"type": "text", "text": note}] if note else []) + image_blocks
+        history[-1] = {**last, "content": [*lead, *content]}
 
     # Capability set for this turn (disabled tools are neither offered nor
     # advertised). A3: also pass through the spec's tool_allowlist so the
