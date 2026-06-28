@@ -427,10 +427,20 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
         try:
             update_job(job_id, project_id=project_id, status="failed",
                        error=f"worker exception: {type(e).__name__}: {e}"[:1000],
+                       log_tail=traceback.format_exc()[-2000:],
                        finished_at=_utcnow())
         except Exception:  # noqa: BLE001
             pass
         _record_worker_failure("_run_one", job_id, e)
+        # A worker-level crash (run_python_code itself threw — not a non-zero
+        # exit) must STILL resume the agent's plan; otherwise the turn hangs
+        # forever on a job that died with nobody notified. Fire the SAME failure
+        # continuation a result-level failure uses (it was wired only into
+        # _finalize_job's paths, so an exception here bypassed it entirely).
+        try:
+            await _continue_after_failure(job_id, project_id, str(effective_pid))
+        except Exception as ce:  # noqa: BLE001
+            _record_worker_failure("_run_one/continue", job_id, ce)
     finally:
         cancellation.release(job_id)
 

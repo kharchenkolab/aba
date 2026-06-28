@@ -756,6 +756,11 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             # the base — auto-route to an ISOLATED env the agent can use.
             if _is_constraint_conflict(str(e)):
                 return _auto_isolate(name, list(prov["pip"]), cap)
+            # Capture the full stack — unlike the job worker, this path only
+            # stored str(e), so the `Permission denied: ''` class was undiagnosable
+            # from the agent-facing note. Log it for the server console.
+            import traceback as _tb
+            print(f"[ensure_capability] materialize failed for {name!r}:\n{_tb.format_exc()}", flush=True)
             return {"status": "error", "name": name, "note": f"materialization failed: {e}"}
         # Authoritatively resolve the import name (seed override → auto-detect),
         # so the agent never guesses `import <pipname>` and thrashes.
