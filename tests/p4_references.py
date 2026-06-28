@@ -28,7 +28,7 @@ from core.data import DataHandle, resolve, get_reference      # noqa: E402
 import content.bio  # noqa: E402,F401
 from content.bio.tools import (                              # noqa: E402
     register_reference_tool, find_reference_tool, describe_reference_tool,
-    fetch_url, lookup_sra_runinfo,
+    promote_reference_tool, fetch_url, lookup_sra_runinfo,
 )
 
 _failures: list[str] = []
@@ -90,6 +90,14 @@ def main() -> int:
           and (desc.get("derivation") or {}).get("kind") == "derived_from"
           and r1["reference_id"] in ((desc.get("derivation") or {}).get("sources") or []),
           str(desc)[:160])
+
+    print("promote to an UNCONFIGURED tier is an honest no-op (not a false 'ok')")
+    pr = promote_reference_tool({"reference_id": r1["reference_id"], "scope": "institution"})
+    check("promote to unconfigured tier → status 'noop' (not 'ok')", pr.get("status") == "noop", str(pr)[:160])
+    check("promote no-op reports moved=False + available_scopes",
+          pr.get("moved") is False and isinstance(pr.get("available_scopes"), list))
+    check("register surfaces available_scopes too",
+          isinstance(r1.get("available_scopes"), list) and r1.get("available_scopes"))
 
     print("linked (external) reference — adopt in place, no copy (refs.md §4)")
     ext = Path(_tmp) / "preexisting_cluster_ref"

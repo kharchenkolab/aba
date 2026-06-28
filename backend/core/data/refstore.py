@@ -97,6 +97,15 @@ def _root_for_scope(scope: str, env: Optional[dict] = None) -> Path:
     return tiers.get(scope) or tiers.get("personal") or Path(REFS_DIR)
 
 
+def available_scopes(env: Optional[dict] = None) -> list[str]:
+    """Reference tiers actually configured on this install, narrowest→widest.
+    Single-user is typically ['project','personal']; 'group'/'institution' only
+    appear with a site.yaml refs: block (cluster/OOD). Lets the agent offer +
+    promote to scopes that really exist instead of guessing the abstract
+    project→group→institution ladder."""
+    return [scope for scope, _ in _tier_roots(env)]
+
+
 def _writable(root: Path) -> bool:
     """Can this process create the tier root and write into it? Permissions are
     the governance gate (refs.md §8) — a regular user can't write the curator-
@@ -392,13 +401,27 @@ def promote_reference(ref_id: str, to_scope: str,
         raise ValueError(f"unknown reference {ref_id}")
     src_root = Path(d.get("_root") or REFS_DIR)
     src_scope = d.get("_scope")
+    tiers = dict(_tier_roots(env))
+    avail = list(tiers)
+    # Honest no-ops: report the ACTUAL scope (not the requested one) so a caller
+    # can't read this as a successful move. Distinguish "tier not configured on
+    # this install" from "already there" — the agent needs to understand which.
+    if to_scope not in tiers:
+        shared = " — already the shared store, reusable across all your projects" if src_scope == "personal" else ""
+        return {"reference_id": ref_id, "scope": src_scope, "moved": False,
+                "available_scopes": avail,
+                "note": (f"scope {to_scope!r} is not configured on this install "
+                         f"(available tiers: {avail}); nothing to promote to. The "
+                         f"reference stays at {src_scope!r}{shared}.")}
     if src_scope == to_scope:
         return {"reference_id": ref_id, "scope": to_scope, "moved": False,
-                "note": "already at this scope"}
+                "available_scopes": avail, "note": f"already at {to_scope!r} scope"}
     dst_root = _root_for_scope(to_scope, env)
     if dst_root.resolve() == src_root.resolve():
-        return {"reference_id": ref_id, "scope": to_scope, "moved": False,
-                "note": f"tier {to_scope!r} resolves to the same path as the source"}
+        return {"reference_id": ref_id, "scope": src_scope, "moved": False,
+                "available_scopes": avail,
+                "note": (f"tier {to_scope!r} resolves to the same store as {src_scope!r} "
+                         f"on this install; nothing moved.")}
 
     new_d = {k: v for k, v in d.items() if not k.startswith("_")}
     new_d["scope"] = to_scope
