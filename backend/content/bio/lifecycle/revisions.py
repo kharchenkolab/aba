@@ -144,14 +144,16 @@ def _reanchor_results_to(new_eid: str, old_ids: set, *,
 
     Rewrites BOTH the member `ref`s AND the Result's
     `primary_evidence_id` (the field RunView reads to decide which output
-    shows the red pin), and adds an `includes` edge to the new anchor.
-    Idempotent: a ref already at `new_eid` is skipped. Returns one
-    {result_id, old_ref, new_ref} per Result moved."""
+    shows the red pin — historically the re-anchor moved only the member
+    refs, leaving the pin stuck on the old anchor), and adds an `includes`
+    edge to the new anchor. Idempotent: a ref already at `new_eid` is
+    skipped. Returns one {result_id, member_id, old_ref, new_ref} per
+    Result moved (member_id kept for the re_anchored_members contract)."""
     moved: list[dict] = []
     for old_id in old_ids:
         if not old_id or old_id == new_eid:
             continue
-        for rid, _mid in _result_members_referencing(old_id):
+        for rid, mid in _result_members_referencing(old_id):
             r = get_entity(rid)
             if not r:
                 continue
@@ -173,8 +175,8 @@ def _reanchor_results_to(new_eid: str, old_ids: set, *,
                 except Exception as e:  # noqa: BLE001
                     _log.warning("reanchor: add includes %s→%s failed: %s",
                                  rid, new_eid, e)
-                moved.append({"result_id": rid, "old_ref": old_id,
-                              "new_ref": new_eid})
+                moved.append({"result_id": rid, "member_id": mid,
+                              "old_ref": old_id, "new_ref": new_eid})
     return moved
 
 
@@ -500,38 +502,16 @@ def delete_revision(entity_id: str) -> dict:
                              cid, parent_id, e)
         re_parented.append(cid)
 
-    # 2) Re-anchor any Result members whose ref points at entity_id.
-    # The new anchor is the parent (if we deleted a non-anchor mid- or
-    # head-revision) — but when we deleted the anchor itself, parent_id
-    # is None and the natural new anchor is the first child.
+    # 2) Re-anchor any Result members whose ref points at entity_id onto
+    # the new anchor — the parent (deleting a non-anchor revision), or the
+    # first child when we deleted the chain anchor itself. _reanchor_results_to
+    # also moves primary_evidence_id (the pin), not just member refs. The
+    # old includes edge is removed by delete_entity_hard below.
     new_anchor = parent_id if parent_id else (children[0] if children else None)
     re_anchored: list[dict] = []
-    for rid, mid in _result_members_referencing(entity_id):
-        if not new_anchor:
-            continue
-        r = get_entity(rid)
-        if not r:
-            continue
-        meta = dict(r.get("metadata") or {})
-        members = list(meta.get("members") or [])
-        changed = False
-        for m in members:
-            if m.get("ref") == entity_id:
-                m["ref"] = new_anchor
-                changed = True
-        if changed:
-            meta["members"] = members
-            update_entity(rid, metadata=meta)
-            # Add the includes edge to the new anchor (idempotent — the
-            # old includes edge is removed by delete_entity_hard below).
-            try:
-                add_edge(rid, new_anchor, "includes",
-                         {"created_by": "delete_revision"})
-            except Exception as e:  # noqa: BLE001
-                _log.warning("re-anchor: add includes %s→%s failed: %s",
-                             rid, new_anchor, e)
-            re_anchored.append({"result_id": rid, "member_id": mid,
-                                "new_ref": new_anchor})
+    if new_anchor:
+        re_anchored = _reanchor_results_to(
+            new_anchor, {entity_id}, created_by="delete_revision")
 
     # 3) Hard-delete the entity (cleans remaining incident edges via
     # FK cascade inside delete_entity_hard).
@@ -638,31 +618,11 @@ def set_current_revision(entity_id: str) -> dict:
     #     visible head),
     #   - newly-restored entries whose refs were re-pointed by an
     #     earlier set_current_revision and now need to follow back.
-    re_anchored: list[dict] = []
+    # _reanchor_results_to moves member refs AND primary_evidence_id (the
+    # pin) onto the chosen current revision, and adds the includes edge.
     chain_ids = {e["id"] for e in full if e.get("id") and e["id"] != entity_id}
-    for old_id in chain_ids:
-        for rid, mid in _result_members_referencing(old_id):
-            r = get_entity(rid)
-            if not r:
-                continue
-            meta = dict(r.get("metadata") or {})
-            members = list(meta.get("members") or [])
-            changed = False
-            for m in members:
-                if m.get("ref") == old_id:
-                    m["ref"] = entity_id
-                    changed = True
-            if changed:
-                meta["members"] = members
-                update_entity(rid, metadata=meta)
-                try:
-                    add_edge(rid, entity_id, "includes",
-                             {"created_by": "set_current_revision"})
-                except Exception as e:  # noqa: BLE001
-                    _log.warning("set_current: add includes %s→%s failed: %s",
-                                 rid, entity_id, e)
-                re_anchored.append({"result_id": rid, "member_id": mid,
-                                    "new_ref": entity_id})
+    re_anchored = _reanchor_results_to(
+        entity_id, chain_ids, created_by="set_current_revision")
 
     try:
         from core.runtime.notifications import broadcast
