@@ -80,6 +80,7 @@ class Provenance:
     overrideable_files: dict[str, dict] = field(default_factory=dict)
     skills: dict[str, dict] = field(default_factory=dict)
     capabilities: dict[str, dict] = field(default_factory=dict)
+    refsources: dict[str, dict] = field(default_factory=dict)
     settings_keys: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -106,6 +107,11 @@ class EffectiveBundle:
     catalog: list[CatalogEntry] = field(default_factory=list)
     r_base_specs: list[str] = field(default_factory=list)
     collection_dirs: list[Path] = field(default_factory=list)
+    # Reference-source provider catalog (refsources.md / misc/refs.md §5.1),
+    # composed from each scope's knowhow/refsources/ — override by provider name,
+    # narrowest wins (exactly like `catalog`). refsources.py consumes this map;
+    # it does NO layering of its own.
+    refsources: dict[str, dict] = field(default_factory=dict)
     settings: dict = field(default_factory=dict)
     provenance: Provenance = field(default_factory=Provenance)
 
@@ -638,6 +644,49 @@ def _compose_catalog(chain: list[ScopeBundle],
     return sorted(seen.values(), key=lambda c: c.name), r_base, collection_dirs
 
 
+def _compose_refsources(chain: list[ScopeBundle],
+                        provenance: Provenance) -> dict[str, dict]:
+    """Compose each present scope's ``knowhow/refsources/*.yaml`` into one
+    provider map — override by ``provider:`` name, narrowest scope wins (exactly
+    like capabilities in `_compose_catalog`).
+
+    This is the *data half* of fetch_reference: the platform seed is the system
+    scope's floor, the recipe-pack / institution overlay extends or overrides
+    providers, all without any layering logic in refsources.py — it just consumes
+    ``EffectiveBundle.refsources``."""
+    scope_docs: list[tuple[ScopeBundle, list[dict]]] = []
+    for s in chain:
+        if not s.present:
+            continue
+        rdir = s.path / "knowhow" / "refsources"
+        if not rdir.is_dir():
+            continue
+        docs = [d for yf in sorted(rdir.glob("*.yaml"))
+                if (d := _read_yaml_safe(yf, provenance, s.name))]
+        if docs:
+            scope_docs.append((s, docs))
+
+    seen: dict[str, dict] = {}
+    src: dict[str, str] = {}
+    shadowed: dict[str, list[str]] = {}
+    for s, docs in reversed(scope_docs):          # narrowest first
+        for doc in docs:
+            name = doc.get("provider")
+            if not name:
+                continue
+            if name in seen:
+                shadowed.setdefault(name, []).append(s.name)
+                continue
+            seen[name] = doc
+            src[name] = s.name
+    for name in seen:
+        provenance.refsources[name] = {
+            "effective_scope": src[name],
+            "shadowed_in": shadowed.get(name, []),
+        }
+    return seen
+
+
 # -----------------------------------------------------------------------
 # Top-level entry
 # -----------------------------------------------------------------------
@@ -674,6 +723,9 @@ def load_bundle(resolution: ScopeResolution) -> EffectiveBundle:
     # 6. catalog (capabilities override-by-name + curated R-base + collections)
     eb.catalog, eb.r_base_specs, eb.collection_dirs = _compose_catalog(
         chain, eb.provenance)
+
+    # 7. refsources (provider manifests, override-by-provider-name like catalog)
+    eb.refsources = _compose_refsources(chain, eb.provenance)
 
     # Carry resolver-side warnings through
     eb.provenance.warnings.extend(resolution.warnings)
