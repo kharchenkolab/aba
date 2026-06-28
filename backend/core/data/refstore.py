@@ -54,7 +54,19 @@ def _catalog_dir(root: Path) -> Path:
 def _tier_roots(env: Optional[dict] = None) -> list[tuple[str, Path]]:
     """[(scope, root)] in find-precedence order (narrowest → widest)."""
     env = env if env is not None else dict(os.environ)
-    roots: list[tuple[str, Path]] = [("personal", Path(REFS_DIR))]
+    roots: list[tuple[str, Path]] = []
+    # Project tier (narrowest) — only in multi-project mode, where a project's
+    # own refs live under its dir and don't leak to other projects/users.
+    try:
+        from core import projects
+        if not projects.SINGLE:
+            pid = projects.current()
+            if pid and pid != "single":
+                from core.config import project_root
+                roots.append(("project", Path(project_root(pid)) / "refs"))
+    except Exception:  # noqa: BLE001
+        pass
+    roots.append(("personal", Path(REFS_DIR)))
     try:
         from core.bundle.scope_resolver import (
             _read_site_yaml, _resolve_group, _expand_placeholders, _user_id)
@@ -83,6 +95,17 @@ def _root_for_scope(scope: str, env: Optional[dict] = None) -> Path:
     requested scope isn't configured/resolvable on this box."""
     tiers = dict(_tier_roots(env))
     return tiers.get(scope) or tiers.get("personal") or Path(REFS_DIR)
+
+
+def _writable(root: Path) -> bool:
+    """Can this process create the tier root and write into it? Permissions are
+    the governance gate (refs.md §8) — a regular user can't write the curator-
+    only institution tier, so register falls back gracefully rather than crash."""
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(root, os.W_OK)
 
 
 def _iter_descriptors(env: Optional[dict] = None):
@@ -224,7 +247,7 @@ def register_reference(
     source: Optional[str] = None,
     assembly: Optional[str] = None,
     derived_from: Optional[Union[str, list[str]]] = None,
-    scope: str = "institution",
+    scope: str = "personal",
     title: Optional[str] = None,
     version: Optional[str] = None,
     mode: str = "copy",
@@ -259,7 +282,18 @@ def register_reference(
     if mode not in ("copy", "link"):
         raise ValueError(f"register_reference: mode must be 'copy' or 'link', got {mode!r}")
     owned = (mode == "copy")
-    root = _root_for_scope(scope)  # which tier this reference is written to
+    # Resolve the ACTUAL write tier so the descriptor is truthful: the requested
+    # scope if it's configured + writable here, else fall back to personal
+    # (refs.md §3.3, §8). EACCES-graceful — a regular user can't write the
+    # curator-only institution tier, so we land it personal rather than crash.
+    tiers = dict(_tier_roots())
+    if scope not in tiers:
+        scope = "personal"
+    root = tiers.get(scope) or Path(REFS_DIR)
+    if not _writable(root):
+        personal_root = tiers.get("personal", Path(REFS_DIR))
+        if scope != "personal" and _writable(personal_root):
+            scope, root = "personal", personal_root
 
     if owned:
         sha = content_sha(src)
