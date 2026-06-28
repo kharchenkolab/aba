@@ -28,7 +28,7 @@ os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                              # noqa: E402
-from core.runtime.history_prep import api_messages                  # noqa: E402
+from core.runtime.history_prep import api_messages, strip_ui_blocks  # noqa: E402
 from core.runtime.attachments import save_attachment, ui_item, build_injection, attachments_root  # noqa: E402
 
 _failures: list[str] = []
@@ -65,10 +65,17 @@ def main() -> int:
     check("ui_item drops the disk path", "path" not in item and item["name"] == "report.csv"
           and item["url"] == ref["url"])
 
-    print("api_messages STRIPS the UI-only attachments block before the model")
-    hist = [{"role": "user", "thread_id": None, "focus_entity_id": None, "ts": 1,
-             "content": [{"type": "text", "text": "look at this"},
-                         {"type": "attachments", "items": [item]}]}]
+    print("strip_ui_blocks drops the attachments block at the real API boundary (core/llm.py)")
+    content = [{"type": "text", "text": "look at this"}, {"type": "attachments", "items": [item]}]
+    check("strip_ui_blocks removes attachments, keeps text + real blocks",
+          strip_ui_blocks(content) == [{"type": "text", "text": "look at this"}], str(strip_ui_blocks(content)))
+    check("strip_ui_blocks passes a string content through untouched",
+          strip_ui_blocks("hello") == "hello")
+    check("strip_ui_blocks keeps image/tool blocks",
+          strip_ui_blocks([{"type": "image"}, {"type": "tool_use"}]) == [{"type": "image"}, {"type": "tool_use"}])
+
+    print("api_messages (boundary shaper) also strips it")
+    hist = [{"role": "user", "thread_id": None, "focus_entity_id": None, "ts": 1, "content": content}]
     out = api_messages(hist)
     check("attachments block removed; text kept",
           out == [{"role": "user", "content": [{"type": "text", "text": "look at this"}]}], str(out))
