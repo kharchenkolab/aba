@@ -755,6 +755,9 @@ def format_effective_bundle(eb: EffectiveBundle) -> str:
     lines.append(f"[bundle] catalog: {len(eb.catalog)} capabilities, "
                   f"{len(eb.r_base_specs)} r-base pkgs, "
                   f"{len(eb.collection_dirs)} collection(s)")
+    n_rs_shadow = sum(1 for v in eb.provenance.refsources.values() if v.get("shadowed_in"))
+    lines.append(f"[bundle] refsources: {len(eb.refsources)} provider(s)"
+                 + (f", {n_rs_shadow} overridden" if n_rs_shadow else ""))
     lines.append(f"[bundle] settings: {len(eb.settings)} top-level keys")
     if eb.provenance.warnings:
         lines.append(f"[bundle] warnings: {len(eb.provenance.warnings)}")

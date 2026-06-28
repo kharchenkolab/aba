@@ -66,6 +66,32 @@ def load_providers() -> dict[str, dict]:
     return out
 
 
+def _match_facet_asset(assets, role, organism, assembly):
+    """First asset matching normalized facets (refs.md): role/assembly fold
+    case+separators; organism also accepts aliases AND a substring match
+    ('phiX174' ⊃ 'phix'; 'drosophila' ⊂ 'drosophila_melanogaster'); the assembly
+    accession is the strong key, organism is fuzzy. None if no match. Shared by
+    the `manifest` (url) and `local` (path) kinds."""
+    from core.data.refstore import _norm_organism, _norm_facet
+    nq_role, nq_org, nq_asm = _norm_facet(role), _norm_organism(organism), _norm_facet(assembly)
+
+    def _org_ok(av):
+        if not nq_org:
+            return True
+        na = _norm_organism(av)
+        return bool(na) and (na == nq_org or na in nq_org or nq_org in na)
+
+    for a in assets or []:
+        if nq_role and _norm_facet(a.get("role")) != nq_role:
+            continue
+        if not _org_ok(a.get("organism")):
+            continue
+        if nq_asm and _norm_facet(a.get("assembly")) != nq_asm:
+            continue
+        return a
+    return None
+
+
 def resolve_asset(
     provider: str,
     *,
@@ -77,9 +103,10 @@ def resolve_asset(
 ) -> dict:
     """Resolve a request to a concrete asset for `provider`.
 
-    Returns a dict with EITHER `url` (fetchable now) OR `command` (a CLI the
-    agent runs), plus `unpack`/`version`/facets. Raises ValueError on an unknown
-    provider, an unsupported role, or no matching asset."""
+    Returns a dict with `url` (fetchable now), `command` (a CLI the agent runs),
+    or `path` (a pre-existing on-cluster file → adopt via link), plus
+    `unpack`/`version`/facets. Raises ValueError on an unknown provider, an
+    unsupported role, or no matching asset."""
     provs = load_providers()
     m = provs.get(provider)
     if not m:
@@ -88,32 +115,29 @@ def resolve_asset(
     kind = m.get("kind", "manifest")
 
     if kind == "manifest":
-        # Match normalized facets (refs.md) so the agent's natural inputs hit:
-        # role/assembly fold case+separators; organism also accepts aliases AND a
-        # substring match ('phiX174' ⊃ 'phix'; 'drosophila' ⊂ 'drosophila_melanogaster').
-        # The assembly accession is the strong key; organism is fuzzy.
-        from core.data.refstore import _norm_organism, _norm_facet
-        nq_role, nq_org, nq_asm = _norm_facet(role), _norm_organism(organism), _norm_facet(assembly)
-
-        def _org_ok(av):
-            if not nq_org:
-                return True
-            na = _norm_organism(av)
-            return bool(na) and (na == nq_org or na in nq_org or nq_org in na)
-
-        for a in m.get("assets") or []:
-            if nq_role and _norm_facet(a.get("role")) != nq_role:
-                continue
-            if not _org_ok(a.get("organism")):
-                continue
-            if nq_asm and _norm_facet(a.get("assembly")) != nq_asm:
-                continue
+        a = _match_facet_asset(m.get("assets"), role, organism, assembly)
+        if a:
             return {"provider": provider, "kind": "manifest",
                     "url": a.get("url"), "unpack": a.get("unpack"),
                     "version": a.get("version"), "role": a.get("role"),
                     "organism": a.get("organism"), "assembly": a.get("assembly")}
         raise ValueError(
             f"{provider}: no asset for role={role} organism={organism} "
+            f"assembly={assembly}")
+
+    if kind == "local":
+        # Pre-existing on-cluster reference store (refs.md §5.1): assets carry a
+        # filesystem `path` instead of a url, so fetch_reference adopts it in
+        # place (register mode=link) — no download, no copy. Lets an institution
+        # overlay expose a site's mirrored references as first-class providers.
+        a = _match_facet_asset(m.get("assets"), role, organism, assembly)
+        if a:
+            return {"provider": provider, "kind": "local",
+                    "path": a.get("path"), "version": a.get("version"),
+                    "role": a.get("role"), "organism": a.get("organism"),
+                    "assembly": a.get("assembly")}
+        raise ValueError(
+            f"{provider}: no local asset for role={role} organism={organism} "
             f"assembly={assembly}")
 
     if kind == "template":
