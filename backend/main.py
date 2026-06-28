@@ -173,6 +173,16 @@ async def startup():
     from core import projects
     projects.init()          # picks/creates the active project + init_db
     start_worker()
+    # Recover sys.executable FIRST if the launcher left it '' (bare argv[0] in
+    # os.execve) — an empty interpreter silently poisons every subprocess that
+    # falls back to it (base self-heal pip, run_python, materialize), surfacing as
+    # `PermissionError: [Errno 13] Permission denied: ''`. Must run before
+    # anything spawns a subprocess (incl. the reaper + base self-heal below).
+    try:
+        from core.exec.env_integrity import ensure_sys_executable
+        ensure_sys_executable()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] sys.executable recovery failed (non-fatal): {e}")
     # Orphan-kernel reaper — SIGKILL any kernels left behind by a prior
     # uvicorn that didn't run our shutdown handler (forced kill / crash /
     # SIGKILL during dev bouncing). Called explicitly here (not lazily on
@@ -197,7 +207,8 @@ async def startup():
         if set_base_writable(False):
             print("[startup] base set read-only (immutable foundation)")
     except Exception as e:  # noqa: BLE001
-        print(f"[startup] base self-heal failed (non-fatal): {e}")
+        import traceback as _tb
+        print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
     # §11.6 lazy GC: reclaim the built bytes of long-idle isolated envs (their
     # spec/lock stays, so next use rebuilds transparently). Cheap; only touches
     # envs idle past the threshold.

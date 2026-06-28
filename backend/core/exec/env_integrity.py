@@ -509,6 +509,31 @@ def set_base_writable(writable: bool) -> bool:
         return False
 
 
+def ensure_sys_executable() -> str:
+    """Recover ``sys.executable`` when it is '' (empty).
+
+    Launching the server via ``os.execve(py, ["python", ...])`` with a BARE
+    argv[0] (not an absolute path) leaves the interpreter unable to locate itself,
+    so ``sys.executable`` becomes ''. That empty string then silently poisons
+    EVERY subprocess that falls back to it — the base self-heal's pip, run_python's
+    interpreter, capability materialize — each surfacing as the cryptic
+    ``PermissionError: [Errno 13] Permission denied: ''`` (live incident
+    2026-06-28, prj_0590c5d8). Resolve the real interpreter from
+    ``sys._base_executable`` or the venv layout and patch it back into
+    ``sys.executable`` process-wide. Idempotent; returns the resolved path."""
+    if sys.executable:
+        return sys.executable
+    import os
+    for cand in (getattr(sys, "_base_executable", "") or "",
+                 os.path.join(sys.prefix, "bin", "python3"),
+                 os.path.join(sys.prefix, "bin", "python")):
+        if cand and os.path.exists(cand):
+            sys.executable = cand
+            print(f"[env] recovered empty sys.executable -> {cand}", flush=True)
+            return cand
+    return sys.executable
+
+
 def repair_base(*, python_exe: Optional[str] = None) -> dict:
     """Self-heal a broken base: reinstall the missing closure FROM THE CANONICAL
     LOCK (so versions stay consistent). Flips the read-only base writable for the
