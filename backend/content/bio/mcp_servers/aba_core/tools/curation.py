@@ -238,3 +238,13 @@ def register_curation_tools(mcp: FastMCP) -> None:
              "role": role, "assembly": assembly},
             peek_ctx(aba_ctx_id),
         )
+
+    @mcp.tool()
+    def describe_reference(reference_id: str,
+                           aba_ctx_id: str | None = None) -> dict:
+        """Inspect a stored reference: facets, content identity, lineage,
+        structural path, and how it was acquired."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import describe_reference_tool
+        return describe_reference_tool({"reference_id": reference_id},
+                                       peek_ctx(aba_ctx_id))
