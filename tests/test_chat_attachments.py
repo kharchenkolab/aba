@@ -112,6 +112,30 @@ def main() -> int:
           f"disallowed leaked: {sent - ALLOWED_API_BLOCK_TYPES}")
     check("legit blocks preserved", {"text", "image", "tool_use", "tool_result"} <= sent, str(sent))
 
+    print("view_file: the agent's EXPLICIT pull-into-context (image→vision, text, unknown)")
+    from content.bio.tools.view_file import view_file_tool
+    vf = Path(_tmp) / "vf"; vf.mkdir(parents=True, exist_ok=True)
+    (vf / "t.csv").write_text("a,b\n1,2\n")
+    rt = view_file_tool({"path": str(vf / "t.csv")})
+    check("text → kind=text + content", rt.get("kind") == "text" and "a,b" in (rt.get("text") or ""), str(rt)[:100])
+    (vf / "x.bin").write_bytes(b"\x1f\x8b\x08\x00\x00rest-of-some-binary")   # gzip magic
+    rb = view_file_tool({"path": str(vf / "x.bin")})
+    check("unknown/binary → kind=binary + magic type_guess + head",
+          rb.get("kind") == "binary" and "gzip" in (rb.get("type_guess") or "") and rb.get("head_hex"),
+          str(rb)[:120])
+    check("missing file → error (path guard)", "error" in view_file_tool({"path": str(vf / "nope.csv")}))
+    try:
+        from PIL import Image
+        Image.new("RGB", (8, 8), (0, 255, 0)).save(vf / "s.png")
+        ri = view_file_tool({"path": str(vf / "s.png")})
+        vb = ri.get("_vision_blocks") or []
+        check("image → _vision_blocks [text, image] (the model SEES it via the envelope)",
+              ri.get("kind") == "image" and len(vb) == 2
+              and vb[0].get("type") == "text" and vb[1].get("type") == "image"
+              and vb[1].get("source", {}).get("type") == "base64", str(ri)[:120])
+    except ImportError:
+        print("  [skip] PIL unavailable — image view assertion skipped")
+
     print()
     if _failures:
         print(f"FAILED ({len(_failures)}): " + ", ".join(_failures))
