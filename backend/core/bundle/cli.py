@@ -66,6 +66,13 @@ def _state_dict(r: ScopeResolution, eb: EffectiveBundle) -> dict[str, Any]:
                 "disabled": n_disabled,
                 "agent_filtered": n_agent_filtered,
             },
+            "refsources": {
+                "total": len(eb.refsources),
+                "shadowed": sum(1 for v in eb.provenance.refsources.values()
+                                if v.get("shadowed_in")),
+                "by_scope": {name: p.get("effective_scope")
+                             for name, p in eb.provenance.refsources.items()},
+            },
             "settings_top_level_keys": list(eb.settings.keys()),
         },
         "warnings": list(eb.provenance.warnings),
