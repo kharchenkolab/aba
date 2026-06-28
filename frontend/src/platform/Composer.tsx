@@ -1,6 +1,25 @@
-import { useState, useRef, useEffect, useLayoutEffect } from 'react'
-import type { KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import type { KeyboardEvent, ClipboardEvent, ChangeEvent } from 'react'
+import type { Attachment } from '../types'
+import { Paperclip } from '../components/icons'
 import './Composer.css'
+
+/** Composer-local attachment record: an in-flight upload (no `ref` yet) or a
+ *  landed one (carries the server `ref`). One per file the user picked/pasted. */
+interface PendingAttachment {
+  id: string
+  name: string
+  /** Set once POST /api/attach resolves; until then the chip shows "uploading…". */
+  ref?: Attachment
+  status: 'uploading' | 'done' | 'error'
+  error?: string
+  /** Object-URL preview for image uploads, shown while the server ref is still
+   *  in flight so the thumbnail appears immediately (revoked on landing/remove). */
+  localPreview?: string
+}
+
+const newAttId = () => 'att' + Math.random().toString(36).slice(2, 10)
+const IMAGE_RE = /\.(png|jpe?g|gif|webp)$/i
 
 // Auto-grow cap as a fraction of viewport height — a 4k paste should
 // surface, not vanish into a 160px scrollbox. Min keeps it sensible
@@ -8,7 +27,7 @@ import './Composer.css'
 const MAX_GROW_PX = () => Math.max(180, Math.floor(window.innerHeight * 0.45))
 
 interface Props {
-  onSend: (text: string) => void
+  onSend: (text: string, attachments?: Attachment[]) => void
   disabled: boolean
   prefill?: string
   onPrefillConsumed?: () => void
@@ -18,16 +37,23 @@ interface Props {
    *  and enables the Cmd+Enter Steer shortcut. */
   streaming?: boolean
   /** Cmd/Ctrl+Enter while streaming = "Steer": cancel + send. */
-  onSteer?: (text: string) => void
+  onSteer?: (text: string, attachments?: Attachment[]) => void
   /** Stop button rendered inside the composer box. Visible only while
    *  streaming. Icon-only, sits next to the Send arrow. */
   onStop?: () => void
   /** Stable per-thread key for persisting the unsent draft across unmounts
    *  (switching tabs/views) so typed-but-unsent text isn't lost. */
   draftKey?: string
+  /** Per-request project pin for POST /api/attach (mirrors the rest of the
+   *  app's project_id flow). Absent → the backend falls back to its current
+   *  project global. */
+  projectId?: string
+  /** Thread the attachment is scratch-stashed under (server keys the scratch
+   *  dir + the serve url by this). The composer is per-thread. */
+  threadId?: string
 }
 
-export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop, draftKey }: Props) {
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop, draftKey, projectId, threadId }: Props) {
   // Restore any persisted draft for this thread (the composer unmounts when you
   // switch views, so without this the unsent text would vanish).
   const [value, setValue] = useState<string>(() => (draftKey && sessionStorage.getItem(draftKey)) || '')
@@ -38,6 +64,88 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   const [stopping, setStopping] = useState(false)
   useEffect(() => { if (!streaming) setStopping(false) }, [streaming])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // ── Chat attachments (paperclip / paste) ──
+  // Composer-local: files upload to /api/attach the moment they're picked or
+  // pasted; the returned ref is collected here and rides along on the next
+  // send (then state clears). A send is blocked while any upload is in flight.
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Mirror of `attachments` so submit() (a stable closure) reads the latest set.
+  const attachmentsRef = useRef<PendingAttachment[]>([])
+  attachmentsRef.current = attachments
+
+  const setAttachment = (id: string, patch: Partial<PendingAttachment>) =>
+    setAttachments(prev => prev.map(a => (a.id === id ? { ...a, ...patch } : a)))
+
+  const uploadOne = useCallback(async (file: File) => {
+    const id = newAttId()
+    const localPreview = IMAGE_RE.test(file.name) ? URL.createObjectURL(file) : undefined
+    setAttachments(prev => [...prev, { id, name: file.name, status: 'uploading', localPreview }])
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('thread_id', threadId ?? 'default')
+      const url = `/api/attach${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`
+      const res = await fetch(url, { method: 'POST', body: fd })
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try { const j = await res.json(); if (j.detail) msg = j.detail } catch { /* ignore */ }
+        setAttachment(id, { status: 'error', error: msg })
+        return
+      }
+      const ref = (await res.json()) as Attachment
+      setAttachment(id, { status: 'done', ref })
+    } catch (e) {
+      setAttachment(id, { status: 'error', error: String(e) })
+    }
+  }, [projectId, threadId])
+
+  const uploadFiles = useCallback((files: FileList | File[]) => {
+    Array.from(files).forEach(f => { if (f) uploadOne(f) })
+  }, [uploadOne])
+
+  const removeAttachment = (id: string) => setAttachments(prev => {
+    const hit = prev.find(a => a.id === id)
+    if (hit?.localPreview) URL.revokeObjectURL(hit.localPreview)
+    return prev.filter(a => a.id !== id)
+  })
+
+  // Revoke any outstanding object-URLs on unmount.
+  useEffect(() => () => {
+    attachmentsRef.current.forEach(a => { if (a.localPreview) URL.revokeObjectURL(a.localPreview) })
+  }, [])
+
+  const onPickFiles = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) uploadFiles(e.target.files)
+    e.target.value = ''   // allow re-picking the same file
+  }
+
+  // Clipboard paste — pull files/images out of the clipboard so pasting a
+  // screenshot attaches it. Only swallow the default when there ARE files,
+  // so normal text paste is untouched.
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const cd = e.clipboardData
+    if (!cd) return
+    const fromFiles = Array.from(cd.files || [])
+    // Some browsers (screenshot paste) surface the image only via items, not
+    // files — collect those too, de-duping against `files`.
+    const fromItems: File[] = []
+    for (const it of Array.from(cd.items || [])) {
+      if (it.kind === 'file') { const f = it.getAsFile(); if (f) fromItems.push(f) }
+    }
+    const files = fromFiles.length ? fromFiles : fromItems
+    if (files.length) { e.preventDefault(); uploadFiles(files) }
+  }
+
+  const uploading = attachments.some(a => a.status === 'uploading')
+  // Refs to land on a send (drop errored ones). Read in submit().
+  const readyRefs = (): Attachment[] =>
+    attachmentsRef.current.filter(a => a.status === 'done' && a.ref).map(a => a.ref!)
+  const clearAttachments = () => setAttachments(prev => {
+    prev.forEach(a => { if (a.localPreview) URL.revokeObjectURL(a.localPreview) })
+    return []
+  })
   const persist = (v: string) => {
     if (!draftKey) return
     try { if (v) sessionStorage.setItem(draftKey, v); else sessionStorage.removeItem(draftKey) }
@@ -175,10 +283,12 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     // becomes Queue while streaming via onSend → enqueue mapping).
     if (streaming && (e.metaKey || e.ctrlKey) && onSteer) {
       const text = value.trim()
-      if (!text) return
-      pushHistory(text)
-      onSteer(text)
+      const refs = readyRefs()
+      if ((!text && !refs.length) || uploading) return
+      if (text) pushHistory(text)
+      onSteer(text, refs.length ? refs : undefined)
       setDraft('')
+      clearAttachments()
       return
     }
     submit()
@@ -186,10 +296,14 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
 
   function submit() {
     const text = value.trim()
-    if (!text || disabled) return
-    pushHistory(text)
-    onSend(text)
+    const refs = readyRefs()
+    // Allow sending with attachments even if the text is empty. Block while any
+    // upload is still in flight, and on the disabled gate.
+    if ((!text && !refs.length) || disabled || uploading) return
+    if (text) pushHistory(text)
+    onSend(text, refs.length ? refs : undefined)
     setDraft('')
+    clearAttachments()
     // Defense: the useLayoutEffect on [value] SHOULD clear the inline
     // height when value transitions to '', but during rapid streaming
     // render cycles the textarea has been seen to retain its stretched
@@ -266,6 +380,22 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   return (
     <div className="composer">
       <div className="composer__box">
+        {attachments.length > 0 && (
+          <div className="composer__attachments">
+            {attachments.map(a => (
+              <AttachmentChip key={a.id} att={a} onRemove={() => removeAttachment(a.id)} />
+            ))}
+          </div>
+        )}
+        <div className="composer__row">
+        {/* Hidden file input — click-to-pick (mirrors Home.tsx's pattern). */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={onPickFiles}
+        />
         <textarea
           ref={textareaRef}
           className="composer__input"
@@ -273,8 +403,19 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           value={value}
           onChange={e => { histIdx.current = null; setDraft(e.target.value) }}
           onKeyDown={handleKey}
+          onPaste={onPaste}
           rows={1}
         />
+        {/* Attach — sits immediately to the left of STOP/SEND. */}
+        <button
+          type="button"
+          className="composer__attach"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach files (or paste a screenshot)"
+          aria-label="Attach files"
+        >
+          <Paperclip size={18} />
+        </button>
         {streaming && onStop && (
           <button
             type="button"
@@ -314,14 +455,40 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
         <button
           className="composer__send"
           onClick={submit}
-          disabled={!value.trim()}
-          title={streaming ? 'Queue (Enter) — Cmd/Ctrl+Enter to steer' : 'Send (Enter)'}
+          disabled={(!value.trim() && readyRefs().length === 0) || uploading}
+          title={uploading ? 'Waiting for attachments to finish uploading…'
+                 : streaming ? 'Queue (Enter) — Cmd/Ctrl+Enter to steer' : 'Send (Enter)'}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
           </svg>
         </button>
+        </div>
       </div>
+    </div>
+  )
+}
+
+/** A single attachment chip in the composer: filename + remove ✕, with an
+ *  inline thumbnail for images and an uploading/error state. */
+function AttachmentChip({ att, onRemove }: { att: PendingAttachment; onRemove: () => void }) {
+  const isImage = !!att.ref?.is_image || (!att.ref && IMAGE_RE.test(att.name))
+  const thumbSrc = att.ref?.is_image ? att.ref.url : att.localPreview
+  return (
+    <div className={`composer__chip composer__chip--${att.status}`} title={att.name}>
+      {isImage && thumbSrc
+        ? <img className="composer__chip-thumb" src={thumbSrc} alt={att.name} />
+        : <span className="composer__chip-icon" aria-hidden>📄</span>}
+      <span className="composer__chip-name">{att.name}</span>
+      {att.status === 'uploading' && <span className="composer__chip-spinner" aria-label="uploading" />}
+      {att.status === 'error' && <span className="composer__chip-err" title={att.error}>!</span>}
+      <button
+        type="button"
+        className="composer__chip-x"
+        onClick={onRemove}
+        title="Remove attachment"
+        aria-label="Remove attachment"
+      >✕</button>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DisplayMessage, Entity, PendingClarification, PendingApproval } from '../types'
+import type { DisplayMessage, Entity, PendingClarification, PendingApproval, Attachment } from '../types'
 import { AGENTS, AgentGlyph } from '../components/icons'
 // Per-message rendering dispatches through the lib message-renderer
 // registry — ChatPane (platform infra) doesn't import from bio/
@@ -17,7 +17,7 @@ interface Props {
   /** True while a thread's history is being fetched — suppress the empty-state. */
   loading?: boolean
   streamMsg: DisplayMessage | null
-  onSend: (text: string) => void
+  onSend: (text: string, attachments?: Attachment[]) => void
   /** Open the Data tab — the empty-project welcome's "create a dataset" action. */
   onOpenData?: () => void
   focusedEntity: Entity | null
@@ -64,16 +64,20 @@ interface Props {
   /** Stop the current turn (cancel + kill any running work). */
   onStop?: () => void
   /** Queued follow-ups (set when user hits Enter while streaming). Drains one
-   *  per completed turn. */
-  queuedMessages?: string[]
+   *  per completed turn. Each item carries its own attachments. */
+  queuedMessages?: { text: string; attachments?: Attachment[] }[]
   /** Drop ALL queued messages (Clear all). */
   onDropQueue?: () => void
   /** Drop a single queued message by position (per-chip ✕). */
   onDropQueueAt?: (index: number) => void
-  /** Steer — cancel current turn AND send `text` as the replacement. */
-  onSteer?: (text: string) => void
-  /** Current thread id — used to persist the composer draft per thread. */
+  /** Steer — cancel current turn AND send `text` (+ attachments) as the replacement. */
+  onSteer?: (text: string, attachments?: Attachment[]) => void
+  /** Current thread id — used to persist the composer draft per thread AND as
+   *  the per-thread scratch key for chat attachment uploads. */
   threadId?: string | null
+  /** Per-request project pin — threaded into the composer's /api/attach
+   *  uploads (mirrors the rest of the app's project_id flow). */
+  projectId?: string
   /** #334 Phase 2 — current run_id, threaded to <Message> → <ToolStep> so an
    *  orphan tool_start can rehydrate live output via the buffer endpoint. */
   currentRunId?: string | null
@@ -116,6 +120,7 @@ export default function ChatPane({
   onDropQueueAt,
   onSteer,
   threadId,
+  projectId,
   currentRunId,
   onOpenData,
 }: Props) {
@@ -237,11 +242,11 @@ export default function ChatPane({
   // Any user-initiated send (composer, plan Go, scenario chip, etc.) should
   // re-pin to the bottom even if the user was scrolled up reading history —
   // typing a new message implies "I want to see what comes next".
-  const sendAndPin = useCallback((text: string) => {
+  const sendAndPin = useCallback((text: string, attachments?: Attachment[]) => {
     isAtBottomRef.current = true
     setShowJump(false)
     setNewCount(0)
-    onSend(text)
+    onSend(text, attachments)
     // Nudge on the next frame so the new optimistic user message lands
     // in view immediately; the auto-scroll effect handles subsequent
     // stream tokens.
@@ -513,13 +518,15 @@ export default function ChatPane({
                     <span className="queue-chip__label">
                       {queuedMessages.length > 1 ? `Queued ${i + 1}:` : 'Queued:'}
                     </span>
-                    <span className="queue-chip__text">{msg}</span>
+                    <span className="queue-chip__text">
+                      {msg.text || (msg.attachments?.length ? `(${msg.attachments.length} attachment${msg.attachments.length > 1 ? 's' : ''})` : '')}
+                    </span>
                     <div className="queue-chip__actions">
                       {/* "Send now" only on the head — steer interrupts the
                           current turn to send the NEXT message immediately. */}
                       {streaming && onSteer && i === 0 && (
                         <button className="queue-chip__send"
-                                onClick={() => { onDropQueueAt?.(0); onSteer(msg) }}
+                                onClick={() => { onDropQueueAt?.(0); onSteer(msg.text, msg.attachments) }}
                                 title="Stop the current turn and send this now">
                           Send now
                         </button>
@@ -552,6 +559,8 @@ export default function ChatPane({
               onPrefillConsumed={onPrefillConsumed}
               focusSignal={(composerFocus ?? 0) + extraFocus}
               draftKey={`chatdraft:${threadId ?? 'default'}`}
+              projectId={projectId}
+              threadId={threadId ?? 'default'}
             />
           </div>
         )}

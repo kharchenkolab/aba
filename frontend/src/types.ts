@@ -28,6 +28,25 @@ export interface ArtifactRef {
   url?: string | null
   original_name?: string
 }
+/** A chat attachment ref returned by POST /api/attach. The user attaches
+ *  files (click-to-pick or clipboard paste) in the composer; the ref rides
+ *  along in the /api/chat body and the backend persists a UI-only
+ *  `attachments` content block on the user message. `url` is a same-origin
+ *  server path that serves the file (used as an <img src> for image thumbs). */
+export interface Attachment {
+  name: string
+  /** Absolute on-disk path (present on the fresh /api/attach ref; the
+   *  persisted UI block drops it — only name/kind/url/etc. are kept). */
+  path?: string
+  /** 'image' for raster images, else the file extension ('csv', 'pdf', …). */
+  kind: string
+  is_image: boolean
+  size_bytes?: number
+  url: string
+}
+/** Persisted UI block on a user message: the attachments the user sent with
+ *  that turn. Rendered as a row of chips (image thumbnails for `is_image`). */
+export interface AttachmentsBlock { type: 'attachments'; items: Attachment[] }
 /** Transient status line (e.g. "Model is busy — retrying…"); not persisted. */
 export interface NoticeBlock { type: 'notice'; text: string }
 /** A failed turn — rendered with a retry affordance and expandable detail. */
@@ -105,7 +124,7 @@ export interface PlanBlock {
   concerns?: PlanConcern[]
 }
 
-export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock | PlanBlock
+export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | NoticeBlock | ErrorBlock | PlanBlock | AttachmentsBlock
 
 export interface DisplayMessage {
   id: string
