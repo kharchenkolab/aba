@@ -111,9 +111,46 @@ def test_sys_executable_recovery():
     check("idempotent when already set", ensure_sys_executable() == sys.executable and bool(sys.executable))
 
 
+def test_background_timeout_sizing():
+    print("Background timeout sized from the estimate, NOT the interactive 300s/1800s")
+    from content.bio.tools.run_exec import _background_timeout_s
+    from core.jobs.runner import BACKGROUND_DEFAULT_TIMEOUT_S, BACKGROUND_MAX_TIMEOUT_S
+    check("estimate 40 min → ~2x (4800s), not 300/1800", _background_timeout_s({}, 40) == 4800,
+          str(_background_timeout_s({}, 40)))
+    check("explicit timeout_s honored above the 30-min cap", _background_timeout_s({"timeout_s": 7200}, 40) == 7200)
+    check("no estimate → 1 h default (not 300)", _background_timeout_s({}, 0) == BACKGROUND_DEFAULT_TIMEOUT_S)
+    check("absurd estimate clamped to the 24 h backstop", _background_timeout_s({}, 100000) == BACKGROUND_MAX_TIMEOUT_S)
+
+
+def test_worker_honors_long_timeout():
+    print("Worker (_run_one) honors a >30-min timeout (no 1800s re-clamp)")
+    jobs.create_job("job_longto", "run_python", "t", None,
+                    {"code": "x=1", "project_id": "default", "timeout_s": 5000})
+    import core.exec.run as _run
+    captured = {}
+    _orig = _run.run_python_code
+    def _cap(code, **k):
+        captured["timeout_s"] = k.get("timeout_s")
+        return {"error": "stop"}                     # error branch → simple finalize
+    _run.run_python_code = _cap
+    _orig_cont = runner._continue_after_failure
+    async def _noop(*a, **k):
+        pass
+    runner._continue_after_failure = _noop
+    try:
+        asyncio.run(runner._run_one("job_longto", "default"))
+    finally:
+        _run.run_python_code = _orig
+        runner._continue_after_failure = _orig_cont
+    check("worker ran with the full 5000s ceiling (not clamped to 1800)",
+          captured.get("timeout_s") == 5000, str(captured))
+
+
 def main() -> int:
     init_db()
     test_sys_executable_recovery()
+    test_background_timeout_sizing()
+    test_worker_honors_long_timeout()
     test_issue_b_worker_crash_notifies()
     test_issue_a_empty_interp_guard()
     print()

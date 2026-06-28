@@ -85,6 +85,14 @@ _LAST_JOB_AT: float = 0.0          # when the worker last picked up a job
 _RECENT_FAILURES: list[dict] = []  # last 10 worker-level failures (capped)
 _RECENT_FAILURES_CAP = 10
 
+# Background jobs exist to run LONG work, so they do NOT inherit the interactive
+# 30-min kernel ceiling (that's only to keep the live kernel snappy). Default a
+# generous 1 h when the submitter gave no size; the 24 h cap is a hung-job
+# backstop. The submitter (run_python tool) sizes the real ceiling from the
+# agent's estimated_runtime_min — see content/bio/tools/run_exec._background_timeout_s.
+BACKGROUND_DEFAULT_TIMEOUT_S = 3600        # 1 h
+BACKGROUND_MAX_TIMEOUT_S = 24 * 3600       # 24 h
+
 # Emitted to anyone listening (the Queues view polls instead, but this is
 # here for a future SSE channel).
 _LISTENERS: list = []
@@ -386,7 +394,10 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
 
     params = job["params"] or {}
     code = params.get("code", "")
-    timeout_s = max(5, min(int(params.get("timeout_s") or 300), 1800))
+    # Honor the submitter's ceiling (sized from the agent's estimate); background
+    # jobs are NOT clamped to the interactive 30-min cap — only the 24 h backstop.
+    timeout_s = max(5, min(int(params.get("timeout_s") or BACKGROUND_DEFAULT_TIMEOUT_S),
+                           BACKGROUND_MAX_TIMEOUT_S))
     # Prefer the project_id we dequeued; fall back to params (legacy rows).
     effective_pid = project_id or params.get("project_id") or "default"
     focus_entity_id = job["focus_entity_id"]
