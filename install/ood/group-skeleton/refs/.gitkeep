@@ -1,0 +1,3 @@
+# The lab-shared reference store (refs.md). aba-preflight makes this
+# group-writable + setgid so members share genomes/indices and new files
+# inherit the lab group. Owned (CAS) + linked refs land in objects/registry/catalog.

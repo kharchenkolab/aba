@@ -52,6 +52,33 @@ def read_cred_file(p):
     return (None, None)
 
 
+def ensure_group_writable(path, group_name, warnings):
+    """Make a lab-shared dir group-writable with the setgid bit (mode 2775) so
+    members share refs and new files INHERIT the lab group (refs.md §8). chgrp to
+    the lab's unix group when it exists and we're a member; otherwise leave
+    ownership and warn (non-fatal). Returns the resolved gid or None."""
+    import grp
+    try:
+        os.chmod(path, 0o2775)   # rwxrwsr-x: setgid (children inherit group) + group-writable
+    except OSError as e:  # noqa: BLE001
+        warnings.append(f"chmod 2775 {path}: {e}")
+    if not group_name:
+        return None
+    try:
+        gid = grp.getgrnam(group_name).gr_gid
+    except KeyError:
+        warnings.append(f"unix group {group_name!r} not found — left refs group ownership as-is")
+        return None
+    try:
+        os.chown(path, -1, gid)
+        return gid
+    except PermissionError:
+        warnings.append(f"not permitted to chgrp {path} to {group_name!r} (not a member?)")
+    except OSError as e:  # noqa: BLE001
+        warnings.append(f"chgrp {path} -> {group_name!r}: {e}")
+    return None
+
+
 def main():
     site_path = Path(os.environ.get("ABA_SITE_CONFIG") or "/cluster/aba/site.yaml")
     group = (os.environ.get("ABA_PF_GROUP") or "").strip()
@@ -121,6 +148,23 @@ def main():
     if not blocked:
         state_dir.mkdir(parents=True, exist_ok=True)
         envs_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- group refs tier (shared lab reference store, refs.md §3.3) ----
+    # The backend reads the refs paths from site.yaml itself (via ABA_SITE_CONFIG
+    # + its scope resolver), so there's no refs env var to emit — the preflight's
+    # job is just to make the GROUP refs dir exist, group-writable + setgid, owned
+    # by the lab group, so members can register and new files inherit the group.
+    refs_cfg = site.get("refs") or {}
+    refs_state, refs_detail, group_refs = "disabled", "no refs.group configured", None
+    if not blocked and refs_cfg.get("group"):
+        group_refs = Path(ex(refs_cfg["group"]))
+        try:
+            group_refs.mkdir(parents=True, exist_ok=True)
+            ensure_group_writable(group_refs, group, warnings)
+            refs_state, refs_detail = "ok", str(group_refs)
+        except OSError as e:  # noqa: BLE001
+            warnings.append(f"group refs dir {group_refs}: {e}")
+            refs_state, refs_detail = "error", str(e)
 
     inst_path = icfg.get("bundle_path")
     inst_state = "absent" if not inst_path else ("ok" if Path(ex(inst_path)).is_dir() else "missing")
@@ -213,6 +257,7 @@ def main():
             "institution": {"state": inst_state, "detail": ex(inst_path) if inst_path else "not configured"},
             "group": {"state": group_state, "detail": group_detail, "bundle_present": bundle_present},
             "user": {"state": ("blocked" if blocked else "ok"), "detail": str(state_dir)},
+            "refs": {"state": refs_state, "detail": refs_detail},
         },
         "credentials": {"resolved": bool(cred_mode), "source": cred_source,
                         "mode": ("oauth" if cred_mode in ("oauth", "oauth_env") else cred_mode)},

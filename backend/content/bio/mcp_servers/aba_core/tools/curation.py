@@ -171,14 +171,20 @@ def register_curation_tools(mcp: FastMCP) -> None:
                            assembly: str | None = None,
                            source: str | None = None,
                            derived_from: str | None = None,
+                           version: str | None = None,
+                           mode: str = "copy",
+                           scope: str | None = None,
                            aba_ctx_id: str | None = None) -> dict:
-        """Keep a file/dir as a reusable, content-addressed reference."""
+        """Keep a file/dir as a reusable reference. mode='copy' owns the bytes
+        (content-addressed copy); mode='link' adopts a pre-existing cluster path
+        in place without copying (for large shared genome/index stores). scope
+        ('project'|'group'|'institution') picks the tier it's shared at."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import register_reference_tool
         return register_reference_tool(
             {"path": path, "organism": organism, "role": role,
-             "assembly": assembly, "source": source,
-             "derived_from": derived_from},
+             "assembly": assembly, "source": source, "derived_from": derived_from,
+             "version": version, "mode": mode, "scope": scope},
             peek_ctx(aba_ctx_id),
         )
 
@@ -196,3 +202,62 @@ def register_curation_tools(mcp: FastMCP) -> None:
              "all": all},
             peek_ctx(aba_ctx_id),
         )
+
+    @mcp.tool()
+    def fetch_reference(provider: str,
+                        organism: str | None = None,
+                        assembly: str | None = None,
+                        role: str | None = None,
+                        accession: str | None = None,
+                        aba_ctx_id: str | None = None) -> dict:
+        """Fetch a reference / pre-built index from a known provider
+        (aws-indexes, ncbi, …) and register it with a re-runnable spec. For
+        reference DATA (assemblies, annotations, indices) — distinct from
+        lookup_sra_runinfo (sequencing reads). Prefer a pre-built index over
+        building one. find_reference first to avoid re-fetching."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import fetch_reference_tool
+        return fetch_reference_tool(
+            {"provider": provider, "organism": organism, "assembly": assembly,
+             "role": role, "accession": accession},
+            peek_ctx(aba_ctx_id),
+        )
+
+    @mcp.tool()
+    def resolve_reference(reference_id: str | None = None,
+                          organism: str | None = None,
+                          role: str | None = None,
+                          assembly: str | None = None,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Resolve a stored reference (by id or organism/role/assembly) to a
+        local path for use in the current run, and pin the run-lock so the run
+        records exactly which reference version it used. Call before reading a
+        reference in run_python/run_r."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import resolve_reference_tool
+        return resolve_reference_tool(
+            {"reference_id": reference_id, "organism": organism,
+             "role": role, "assembly": assembly},
+            peek_ctx(aba_ctx_id),
+        )
+
+    @mcp.tool()
+    def promote_reference(reference_id: str, scope: str,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Promote a reference up a tier (scope = project|group|institution) so
+        it's shared more widely — e.g. a project reference that proves reusable
+        lab-wide. Institution is curator-only (permission-gated)."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import promote_reference_tool
+        return promote_reference_tool({"reference_id": reference_id, "scope": scope},
+                                      peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
+    def describe_reference(reference_id: str,
+                           aba_ctx_id: str | None = None) -> dict:
+        """Inspect a stored reference: facets, content identity, lineage,
+        structural path, and how it was acquired."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import describe_reference_tool
+        return describe_reference_tool({"reference_id": reference_id},
+                                       peek_ctx(aba_ctx_id))

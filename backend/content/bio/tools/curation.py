@@ -28,25 +28,59 @@ from .ctx_read import _ctx_thread
 from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
 
 
+def _infer_scope(input_: dict, ctx: dict | None) -> str:
+    """Default-by-signal placement (refs.md §3.3): an explicit scope always
+    wins; a linked cluster path → group (shared data is lab-reusable); a freshly
+    built/derived artifact registered while a run is open → project; otherwise
+    personal. promotion moves it wider later if reuse appears."""
+    if input_.get("scope"):
+        return input_["scope"]
+    if input_.get("mode") == "link":
+        return "group"
+    tid = (ctx or {}).get("thread_id")
+    if tid:
+        try:
+            from content.bio.lifecycle.runs import active_run_id
+            if active_run_id(tid):
+                return "project"
+        except Exception:  # noqa: BLE001
+            pass
+    return "personal"
+
+
 def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
-    """Keep a file/dir as a reusable, content-addressed reference (P4)."""
+    """Keep a file/dir as a reusable reference. mode='copy' (default) owns the
+    bytes (content-addressed); mode='link' adopts a pre-existing path in place
+    (no copy) — for large cluster reference stores. Scope defaults by signal
+    (see _infer_scope); pass scope explicitly to override."""
     path = input_.get("path")
     if not path:
         return {"error": "path is required"}
-    from core.data import register_reference as _reg
-    from core.graph.entities import get_entity
+    from core.data import register_reference as _reg, get_reference
+    requested = input_.get("scope")
+    scope = _infer_scope(input_, ctx)
     try:
         eid = _reg(path, organism=input_.get("organism"), role=input_.get("role"),
                    source=input_.get("source"), assembly=input_.get("assembly"),
-                   derived_from=input_.get("derived_from"))
+                   derived_from=input_.get("derived_from"),
+                   version=input_.get("version"), mode=input_.get("mode", "copy"),
+                   scope=scope)
     except Exception as e:  # noqa: BLE001
         return {"error": f"register failed: {e}"}
-    e = get_entity(eid) or {}
-    meta = e.get("metadata") or {}
-    return {"status": "ok", "reference_id": eid, "sha": meta.get("sha"),
-            "organism": meta.get("organism"), "role": meta.get("role"),
-            "artifact_path": e.get("artifact_path"),
-            "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
+    d = get_reference(eid) or {}
+    ident = d.get("identity") or {}
+    owned = d.get("owned", True)
+    actual = d.get("scope")
+    resp = {"status": "ok", "reference_id": eid, "sha": ident.get("sha"),
+            "owned": owned, "scope": actual, "organism": d.get("organism"),
+            "role": d.get("role"), "structural_path": d.get("structural_path"),
+            "artifact_path": d.get("artifact_path"),
+            "note": ("Owned content-addressed copy (deduplicated)." if owned
+                     else "Linked in place — no copy.") + " Reuse via find_reference."}
+    if requested and actual and actual != requested:
+        resp["warning"] = (f"no write access to the {requested!r} tier; stored at "
+                           f"{actual!r} — ask a curator to promote it")
+    return resp
 
 
 def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
@@ -58,6 +92,188 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     r = _find(organism=input_.get("organism"), role=input_.get("role"),
               assembly=input_.get("assembly"))
     return {"found": bool(r), "reference": r}
+
+
+def promote_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Promote a reference up a tier (project → group → institution) so it's
+    shared more widely — e.g. when a project reference proves reusable lab-wide.
+    Gated in practice by write access to the destination tier (institution is
+    curator-only). `scope` is the destination tier."""
+    ref_id = input_.get("reference_id")
+    to = input_.get("scope") or input_.get("to_scope")
+    if not ref_id or not to:
+        return {"error": "reference_id and scope (destination tier) are required"}
+    from core.data import promote_reference
+    try:
+        return {"status": "ok", **promote_reference(ref_id, to)}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"promote failed: {e}"}
+
+
+def describe_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Inspect a stored reference: facets, content identity, lineage,
+    structural path, and acquisition provenance (how it was obtained)."""
+    ref_id = input_.get("reference_id")
+    if not ref_id:
+        return {"error": "reference_id is required"}
+    from core.data import get_reference
+    d = get_reference(ref_id)
+    if d:
+        return {"found": True, "reference_id": d.get("id"), "title": d.get("title"),
+                "organism": d.get("organism"), "assembly": d.get("assembly"),
+                "role": d.get("role"), "structural_path": d.get("structural_path"),
+                "owned": d.get("owned"), "sha": (d.get("identity") or {}).get("sha"),
+                "identity": d.get("identity"), "acquisition": d.get("acquisition"),
+                "derivation": d.get("derivation"), "scope": d.get("scope"),
+                "artifact_path": d.get("artifact_path")}
+    # Legacy reference without a descriptor → fall back to the entity.
+    from core.graph.entities import get_entity
+    e = get_entity(ref_id)
+    if not e:
+        return {"found": False, "error": f"unknown reference {ref_id}"}
+    meta = e.get("metadata") or {}
+    return {"found": True, "reference_id": ref_id, "title": e.get("title"),
+            "organism": meta.get("organism"), "assembly": meta.get("assembly"),
+            "role": meta.get("role"), "structural_path": meta.get("structural_path"),
+            "sha": meta.get("sha"), "artifact_path": e.get("artifact_path"),
+            "legacy": True}
+
+
+def resolve_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Resolve a stored reference to a local path for use in a run and pin the
+    run-lock (a schema-legal `run --used--> reference` edge + the content-sha
+    version lock), so the run records exactly which reference version it
+    consumed (refs.md §9). Local tier: the store path IS the local path —
+    nothing to stage; the actual staging (mount/download) is the seam that
+    activates for object-store / remote tiers. Resolve by `reference_id` or by
+    organism/role/assembly facets."""
+    from core.data import get_reference, find_reference
+    ref_id = input_.get("reference_id")
+    if not ref_id:
+        r = find_reference(organism=input_.get("organism"), role=input_.get("role"),
+                           assembly=input_.get("assembly"))
+        ref_id = (r or {}).get("id")
+        if not ref_id:
+            return {"found": False,
+                    "error": "no matching reference — fetch or build it first"}
+    d = get_reference(ref_id)
+    if d:
+        path, sha, sp = d.get("artifact_path"), (d.get("identity") or {}).get("sha"), d.get("structural_path")
+    else:  # legacy reference without a descriptor → fall back to the entity
+        from core.graph.entities import get_entity
+        e = get_entity(ref_id)
+        if not e:
+            return {"error": f"unknown reference {ref_id}"}
+        meta = e.get("metadata") or {}
+        path, sha, sp = e.get("artifact_path"), meta.get("sha"), meta.get("structural_path")
+    if not path:
+        return {"error": f"reference {ref_id} has no resolvable path"}
+
+    run_id = None
+    pinned = False
+    tid = (ctx or {}).get("thread_id")
+    if tid:
+        from content.bio.lifecycle.runs import active_run_id
+        run_id = active_run_id(tid)
+        if run_id:
+            try:
+                from core.graph.edges import add_edge
+                add_edge(run_id, ref_id, "used")
+                pinned = True
+            except Exception:  # noqa: BLE001 — provenance pin is best-effort
+                pass
+    return {"status": "ok", "reference_id": ref_id, "local_path": path,
+            "version_lock": sha, "structural_path": sp, "run_id": run_id,
+            "note": ("Pinned: run used this reference@sha." if pinned
+                     else "No open run — returned the path without a run-lock.")}
+
+
+def _unpack(path: str, kind: str) -> str:
+    """Unpack a fetched archive next to itself; return the unpacked dir (or the
+    original path if `kind` is falsy / unrecognized)."""
+    import tarfile
+    import zipfile
+    from pathlib import Path as _P
+    p = _P(path)
+    if not kind:
+        return path
+    out = p.parent / (p.name + ".unpacked")
+    out.mkdir(parents=True, exist_ok=True)
+    if kind == "zip":
+        with zipfile.ZipFile(p) as z:
+            z.extractall(out)
+    elif kind in ("tar.gz", "tgz", "tar"):
+        with tarfile.open(p) as t:
+            t.extractall(out)
+    elif kind == "gz":
+        import gzip
+        import shutil as _sh
+        dst = out / p.stem
+        with gzip.open(p, "rb") as fi, open(dst, "wb") as fo:
+            _sh.copyfileobj(fi, fo)
+    else:
+        return path
+    # If the archive expanded to a single top dir, return that (cleaner catalog).
+    kids = [c for c in out.iterdir()]
+    return str(kids[0]) if len(kids) == 1 and kids[0].is_dir() else str(out)
+
+
+def fetch_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Fetch a reference / pre-built index from a known provider (refs.md §5.1)
+    and register it with a re-runnable spec. Distinct from lookup_sra_runinfo
+    (sequencing reads). `provider` + facets (or an `accession` for template
+    providers) resolve to an asset via the reference-source catalog."""
+    provider = input_.get("provider")
+    if not provider:
+        return {"error": "provider is required (e.g. aws-indexes, ncbi)"}
+    from core.data.refsources import resolve_asset
+    from core.data import register_reference, get_reference
+    try:
+        asset = resolve_asset(provider, organism=input_.get("organism"),
+                              assembly=input_.get("assembly"), role=input_.get("role"),
+                              accession=input_.get("accession"),
+                              filename=input_.get("filename"))
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"resolve failed: {e}"}
+
+    # URL-based asset → fetch + unpack + register now.
+    if asset.get("url"):
+        from content.bio.tools.discovery import fetch_url
+        fr = fetch_url({"url": asset["url"]}, ctx)
+        if fr.get("status") != "ok":
+            return {"error": f"fetch failed: {fr.get('error') or fr}", "url": asset["url"]}
+        path = fr["path"]
+        if asset.get("unpack"):
+            try:
+                path = _unpack(path, asset["unpack"])
+            except Exception as e:  # noqa: BLE001
+                return {"error": f"unpack failed: {e}", "path": fr["path"]}
+        spec = {"mode": "fetch", "provider": provider, "url": asset["url"],
+                "version": asset.get("version"), "unpack": asset.get("unpack")}
+        try:
+            eid = register_reference(
+                path, organism=asset.get("organism") or input_.get("organism"),
+                assembly=asset.get("assembly") or input_.get("assembly"),
+                role=asset.get("role") or input_.get("role"),
+                source=provider, version=asset.get("version"), acquisition=spec,
+                scope=input_.get("scope") or "group")  # fetched standard refs → lab-shared
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"register failed: {e}"}
+        d = get_reference(eid) or {}
+        return {"status": "ok", "reference_id": eid, "owned": d.get("owned"),
+                "structural_path": d.get("structural_path"), "source": provider,
+                "note": "Fetched + registered (re-runnable spec recorded)."}
+
+    # Template/CLI asset → hand the agent the command to run (Phase 0: not auto-run).
+    if asset.get("command"):
+        return {"status": "manual", "provider": provider,
+                "command": asset["command"], "unpack": asset.get("unpack"),
+                "version": asset.get("version"),
+                "note": (f"Run this command (needs the provider's CLI), then "
+                         f"register_reference(path=<output>, source='{provider}', "
+                         f"version='{asset.get('version')}', role='{asset.get('role')}'). "
+                         f"The CLI is not auto-run in Phase 0.")}
+    return {"error": "resolved asset had neither a url nor a command"}
 
 
 def _within(p: str, base: str) -> bool:

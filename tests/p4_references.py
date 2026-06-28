@@ -24,11 +24,11 @@ os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                       # noqa: E402
-from core.graph.provenance import upstream                   # noqa: E402
-from core.data import DataHandle, resolve                    # noqa: E402
+from core.data import DataHandle, resolve, get_reference      # noqa: E402
 import content.bio  # noqa: E402,F401
 from content.bio.tools import (                              # noqa: E402
-    register_reference_tool, find_reference_tool, fetch_url, lookup_sra_runinfo,
+    register_reference_tool, find_reference_tool, describe_reference_tool,
+    fetch_url, lookup_sra_runinfo,
 )
 
 _failures: list[str] = []
@@ -63,8 +63,55 @@ def main() -> int:
                                   "derived_from": r1["reference_id"]})
     check("derived reference registered", r2.get("status") == "ok"
           and r2.get("reference_id") != r1.get("reference_id"), str(r2))
-    up = {n["id"] for n in upstream(r2["reference_id"])}
-    check("lineage edge: index wasDerivedFrom transcriptome", r1["reference_id"] in up)
+    # Lineage now lives in the descriptor (the `reference` type forbids
+    # out-edges, so the old wasDerivedFrom-edge path errored at validation).
+    d2 = get_reference(r2["reference_id"]) or {}
+    deriv = d2.get("derivation") or {}
+    check("lineage in descriptor: index derived_from transcriptome",
+          deriv.get("kind") == "derived_from" and r1["reference_id"] in (deriv.get("sources") or []),
+          str(deriv))
+
+    print("descriptor + human catalog (refs.md §3)")
+    d1 = get_reference(r1["reference_id"]) or {}
+    check("descriptor records owned + content-sha identity",
+          d1.get("owned") is True and (d1.get("identity") or {}).get("sha") == r1.get("sha"))
+    check("descriptor has a structural_path", bool(d1.get("structural_path")), str(d1.get("structural_path")))
+    cat_node = refs_dir / "catalog" / d1["structural_path"]
+    data_link = cat_node / "data"
+    check("catalog node + data symlink exist", data_link.is_symlink(), str(cat_node))
+    check("catalog data resolves to the owned bytes under objects/",
+          data_link.exists() and (refs_dir / "objects") in data_link.resolve().parents,
+          str(data_link.resolve()) if data_link.exists() else "broken link")
+
+    print("describe_reference (facets + lineage + acquisition)")
+    desc = describe_reference_tool({"reference_id": r2["reference_id"]})
+    check("describe → facets + derived_from lineage",
+          desc.get("found") and desc.get("role") == "fai_index"
+          and (desc.get("derivation") or {}).get("kind") == "derived_from"
+          and r1["reference_id"] in ((desc.get("derivation") or {}).get("sources") or []),
+          str(desc)[:160])
+
+    print("linked (external) reference — adopt in place, no copy (refs.md §4)")
+    ext = Path(_tmp) / "preexisting_cluster_ref"
+    ext.mkdir()
+    (ext / "genome.fa").write_text(">chr1\nACGT\n")
+    rl = register_reference_tool({"path": str(ext), "organism": "fly", "role": "genome",
+                                  "assembly": "BDGP6", "mode": "link"})
+    check("link register → ok + owned=false", rl.get("status") == "ok" and rl.get("owned") is False, str(rl))
+    check("linked ref NOT copied into objects/ (artifact stays at the external path)",
+          rl.get("artifact_path") == str(ext)
+          and (refs_dir / "objects") not in Path(rl["artifact_path"]).parents,
+          str(rl.get("artifact_path")))
+    dl = get_reference(rl["reference_id"]) or {}
+    check("linked descriptor uses fingerprint identity (lazy sha)",
+          (dl.get("identity") or {}).get("kind") == "fingerprint"
+          and (dl.get("identity") or {}).get("sha") is None
+          and (dl.get("identity") or {}).get("fingerprint", {}).get("size", -1) >= 0)
+    cat_data = refs_dir / "catalog" / dl["structural_path"] / "data"
+    check("linked catalog data points at the external path",
+          cat_data.is_symlink() and Path(os.readlink(cat_data)) == ext, str(cat_data))
+    rl2 = register_reference_tool({"path": str(ext), "organism": "fly", "role": "genome", "mode": "link"})
+    check("link dedup by path → same reference id", rl2.get("reference_id") == rl.get("reference_id"))
 
     print("find_reference + resolve")
     f1 = find_reference_tool({"organism": "phage_x", "role": "transcriptome"})
