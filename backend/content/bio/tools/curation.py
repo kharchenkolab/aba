@@ -65,6 +65,93 @@ def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     return {"found": bool(r), "reference": r}
 
 
+def _unpack(path: str, kind: str) -> str:
+    """Unpack a fetched archive next to itself; return the unpacked dir (or the
+    original path if `kind` is falsy / unrecognized)."""
+    import tarfile
+    import zipfile
+    from pathlib import Path as _P
+    p = _P(path)
+    if not kind:
+        return path
+    out = p.parent / (p.name + ".unpacked")
+    out.mkdir(parents=True, exist_ok=True)
+    if kind == "zip":
+        with zipfile.ZipFile(p) as z:
+            z.extractall(out)
+    elif kind in ("tar.gz", "tgz", "tar"):
+        with tarfile.open(p) as t:
+            t.extractall(out)
+    elif kind == "gz":
+        import gzip
+        import shutil as _sh
+        dst = out / p.stem
+        with gzip.open(p, "rb") as fi, open(dst, "wb") as fo:
+            _sh.copyfileobj(fi, fo)
+    else:
+        return path
+    # If the archive expanded to a single top dir, return that (cleaner catalog).
+    kids = [c for c in out.iterdir()]
+    return str(kids[0]) if len(kids) == 1 and kids[0].is_dir() else str(out)
+
+
+def fetch_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Fetch a reference / pre-built index from a known provider (refs.md §5.1)
+    and register it with a re-runnable spec. Distinct from lookup_sra_runinfo
+    (sequencing reads). `provider` + facets (or an `accession` for template
+    providers) resolve to an asset via the reference-source catalog."""
+    provider = input_.get("provider")
+    if not provider:
+        return {"error": "provider is required (e.g. aws-indexes, ncbi)"}
+    from core.data.refsources import resolve_asset
+    from core.data import register_reference, get_reference
+    try:
+        asset = resolve_asset(provider, organism=input_.get("organism"),
+                              assembly=input_.get("assembly"), role=input_.get("role"),
+                              accession=input_.get("accession"),
+                              filename=input_.get("filename"))
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"resolve failed: {e}"}
+
+    # URL-based asset → fetch + unpack + register now.
+    if asset.get("url"):
+        from content.bio.tools.discovery import fetch_url
+        fr = fetch_url({"url": asset["url"]}, ctx)
+        if fr.get("status") != "ok":
+            return {"error": f"fetch failed: {fr.get('error') or fr}", "url": asset["url"]}
+        path = fr["path"]
+        if asset.get("unpack"):
+            try:
+                path = _unpack(path, asset["unpack"])
+            except Exception as e:  # noqa: BLE001
+                return {"error": f"unpack failed: {e}", "path": fr["path"]}
+        spec = {"mode": "fetch", "provider": provider, "url": asset["url"],
+                "version": asset.get("version"), "unpack": asset.get("unpack")}
+        try:
+            eid = register_reference(
+                path, organism=asset.get("organism") or input_.get("organism"),
+                assembly=asset.get("assembly") or input_.get("assembly"),
+                role=asset.get("role") or input_.get("role"),
+                source=provider, version=asset.get("version"), acquisition=spec)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"register failed: {e}"}
+        d = get_reference(eid) or {}
+        return {"status": "ok", "reference_id": eid, "owned": d.get("owned"),
+                "structural_path": d.get("structural_path"), "source": provider,
+                "note": "Fetched + registered (re-runnable spec recorded)."}
+
+    # Template/CLI asset → hand the agent the command to run (Phase 0: not auto-run).
+    if asset.get("command"):
+        return {"status": "manual", "provider": provider,
+                "command": asset["command"], "unpack": asset.get("unpack"),
+                "version": asset.get("version"),
+                "note": (f"Run this command (needs the provider's CLI), then "
+                         f"register_reference(path=<output>, source='{provider}', "
+                         f"version='{asset.get('version')}', role='{asset.get('role')}'). "
+                         f"The CLI is not auto-run in Phase 0.")}
+    return {"error": "resolved asset had neither a url nor a command"}
+
+
 def _within(p: str, base: str) -> bool:
     import os
     p, base = os.path.abspath(p), os.path.abspath(base)

@@ -1,0 +1,28 @@
+# Pre-built aligner indices mirrored on AWS S3 by the Langmead lab.
+# https://benlangmead.github.io/aws-indexes/
+# kind: manifest → an explicit asset list (role × organism × assembly → url).
+# Extend by adding entries; the recipe pack can ship a fuller manifest that
+# layers over this seed.
+provider: aws-indexes
+description: Pre-built aligner indices (Bowtie2/HISAT2/…) on public AWS S3.
+kind: manifest
+homepage: https://benlangmead.github.io/aws-indexes/
+assets:
+  - role: bowtie2_index
+    organism: homo_sapiens
+    assembly: GRCh38
+    version: GRCh38_noalt_as
+    url: https://genome-idx.s3.amazonaws.com/bt/GRCh38_noalt_as.zip
+    unpack: zip
+  - role: hisat2_index
+    organism: homo_sapiens
+    assembly: GRCh38
+    version: grch38_genome
+    url: https://genome-idx.s3.amazonaws.com/hisat/grch38_genome.tar.gz
+    unpack: tar.gz
+  - role: bowtie2_index
+    organism: mus_musculus
+    assembly: GRCm39
+    version: GRCm39
+    url: https://genome-idx.s3.amazonaws.com/bt/GRCm39.zip
+    unpack: zip
