@@ -23,10 +23,25 @@ from __future__ import annotations
 import json
 
 
+# Content blocks that exist ONLY for the web UI and must never reach the model
+# (the Anthropic SDK rejects unknown block types). The `attachments` chip block
+# is persisted for re-render; the agent gets the files via the ephemeral context
+# note + vision blocks injected in guide.py instead.
+_UI_ONLY_BLOCK_TYPES = {"attachments"}
+
+
 def api_messages(history: list) -> list:
-    """Strip our internal-bookkeeping fields from history rows down to
-    the bare {role, content} shape the Anthropic SDK accepts."""
-    return [{"role": m["role"], "content": m["content"]} for m in history]
+    """Strip our internal-bookkeeping fields + UI-only content blocks from
+    history rows down to the bare {role, content} shape the Anthropic SDK
+    accepts."""
+    out = []
+    for m in history:
+        content = m["content"]
+        if isinstance(content, list):
+            content = [b for b in content
+                       if not (isinstance(b, dict) and b.get("type") in _UI_ONLY_BLOCK_TYPES)]
+        out.append({"role": m["role"], "content": content})
+    return out
 
 
 def is_interrupted_fill(block: dict) -> bool:
