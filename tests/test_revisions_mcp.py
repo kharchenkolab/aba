@@ -59,10 +59,15 @@ def test_register_revision_tools():
           f"got {names}")
     check("set_current_revision registered",
           "set_current_revision" in names, f"got {names}")
+    # The five core revision tools, plus the env-reproduction trio added by
+    # the provenance P4/P5 work (1b60e8c, 2026-06-26): diff_env / rebuild_env
+    # / export_reproduction_bundle. Kept as an exact-set check so an
+    # accidental leak (e.g. a lifecycle helper registered by mistake) is
+    # still caught.
     expected = {"make_revision", "reproduce_from_exec",
-                "delete_revision", "list_revisions",
-                "set_current_revision"}
-    check("revision tool set is exactly the expected five",
+                "delete_revision", "list_revisions", "set_current_revision",
+                "diff_env", "rebuild_env", "export_reproduction_bundle"}
+    check("revision tool set is exactly the expected eight",
           set(names) == expected, f"got {names}")
 
 
