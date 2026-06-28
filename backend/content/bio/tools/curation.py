@@ -71,12 +71,17 @@ def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     ident = d.get("identity") or {}
     owned = d.get("owned", True)
     actual = d.get("scope")
+    from core.data.refstore import available_scopes
+    avail = available_scopes()
+    shared = " (the shared store — reusable across all your projects)" if actual == "personal" else ""
     resp = {"status": "ok", "reference_id": eid, "sha": ident.get("sha"),
-            "owned": owned, "scope": actual, "organism": d.get("organism"),
+            "owned": owned, "scope": actual, "available_scopes": avail,
+            "organism": d.get("organism"),
             "role": d.get("role"), "structural_path": d.get("structural_path"),
             "artifact_path": d.get("artifact_path"),
             "note": ("Owned content-addressed copy (deduplicated)." if owned
-                     else "Linked in place — no copy.") + " Reuse via find_reference."}
+                     else "Linked in place — no copy.") + f" Registered at {actual!r} scope"
+                     + shared + ". Reuse via find_reference."}
     if requested and actual and actual != requested:
         resp["warning"] = (f"no write access to the {requested!r} tier; stored at "
                            f"{actual!r} — ask a curator to promote it")
@@ -104,10 +109,15 @@ def promote_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
     if not ref_id or not to:
         return {"error": "reference_id and scope (destination tier) are required"}
     from core.data import promote_reference
+    from core.data.refstore import available_scopes
     try:
-        return {"status": "ok", **promote_reference(ref_id, to)}
+        res = promote_reference(ref_id, to)
     except Exception as e:  # noqa: BLE001
         return {"error": f"promote failed: {e}"}
+    res.setdefault("available_scopes", available_scopes())
+    # status reflects what ACTUALLY happened — a no-op is NOT "ok", so the agent
+    # reports it honestly instead of claiming a move that didn't occur.
+    return {"status": ("ok" if res.get("moved") else "noop"), **res}
 
 
 def describe_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
