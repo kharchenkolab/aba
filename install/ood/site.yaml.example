@@ -42,6 +42,16 @@ scopes:
     state_dir: /groups/{group}/aba/users/{user}
     # envs_dir: /groups/{group}/aba/users/{user}/envs   # default: <state_dir>/envs
 
+# Shared reference store tiers (genomes, indices, annotations — refs.md §3.3).
+# The backend reads these paths directly via its scope resolver (ABA_SITE_CONFIG);
+# aba-preflight creates the GROUP dir group-writable + setgid, owned by the lab
+# group, so members share refs and new files inherit the group. The institution
+# tier is optional + curator-managed (read-only to users); a regular user's
+# register falls back to their personal store and suggests a promote.
+refs:
+  group: /groups/{group}/aba/refs
+  # institution: /cluster/aba/refs        # optional; curator writes, everyone reads
+
 group_resolution:
   source: ood_form
   fallback: unix_primary_group
