@@ -145,6 +145,15 @@ def _find_by_sha(sha: str) -> Optional[dict]:
     return None
 
 
+def _find_by_path(path: str) -> Optional[dict]:
+    """Dedup key for LINKED refs (no content-sha): the external path itself."""
+    for e in list_entities(type_filter=REFERENCE):
+        meta = e.get("metadata") or {}
+        if not meta.get("owned", True) and e.get("artifact_path") == path:
+            return e
+    return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -160,64 +169,78 @@ def register_reference(
     scope: str = "institution",
     title: Optional[str] = None,
     version: Optional[str] = None,
+    mode: str = "copy",
 ) -> str:
-    """Place a reference into the content-addressed store (dedup by content),
-    register it as a `reference` entity, and write its descriptor + human
-    `catalog/` entry (misc/refs.md §3). Returns the reference id — the existing
-    one if identical content is already stored (no re-copy).
+    """Register a reference + write its descriptor + human `catalog/` entry
+    (misc/refs.md §3). Returns the reference id — the existing one on a dedup
+    hit (no re-copy / re-link).
 
-    Lineage (`derived_from`) is recorded in the **descriptor**, not as an entity
+    `mode="copy"` (default) → **owned**: content-hash the bytes and copy them
+    into `objects/<sha>/`. `mode="link"` → **linked**: adopt a pre-existing path
+    (a cluster genome store, iGenomes, …) in place, *no copy*; identity is a
+    cheap fingerprint (path+size+mtime), the full sha computed lazily later.
+
+    Lineage (`derived_from`) is recorded in the **descriptor**, not an entity
     edge: the `reference` type forbids out-edges, so the pre-2026-06-29
-    wasDerivedFrom-edge path errored at validation. The descriptor's
-    `derivation.sources` is the portable, schema-independent lineage record."""
+    wasDerivedFrom-edge path errored at validation."""
     src = Path(src_path).resolve()
     if not src.exists():
         raise FileNotFoundError(f"reference source not found: {src}")
-    # Refuse pathological paths. The content-addressed copy + hash is
-    # O(bytes) so handing register_reference a system-temp / home-root
-    # / fs-root recursively walks + duplicates the entire tree —
-    # 2026-06-04 a test bug pointed it at /tmp and burnt 304 GB across
-    # six invocations before being caught. Better to fail loudly than
-    # silently duplicate a multi-GB-of-junk directory.
+    # Refuse pathological sources (a copy is O(bytes); even a link of the whole
+    # home/root as one "reference" is nonsense). 2026-06-04 a test pointed copy
+    # at /tmp and burnt 304 GB before being caught — fail loudly.
     forbidden = {Path("/tmp").resolve(), Path("/var/tmp").resolve(),
                  Path("/").resolve(), Path.home().resolve()}
     if src in forbidden:
         raise ValueError(
             f"register_reference refuses pathological source {src!r}. "
             f"Reference data should be a specific dataset/genome/index dir, "
-            f"not a system temp / home / root directory. If this is "
-            f"genuinely intentional, copy what you want into a "
-            f"purpose-named subdirectory first."
+            f"not a system temp / home / root directory."
         )
-    sha = content_sha(src)
+    if mode not in ("copy", "link"):
+        raise ValueError(f"register_reference: mode must be 'copy' or 'link', got {mode!r}")
+    owned = (mode == "copy")
 
-    existing = _find_by_sha(sha)
-    if existing is not None:
-        return existing["id"]
-
-    # Owned bytes under objects/<sha>/ (by-value, dedup).
-    cas = _objects_dir() / sha
-    artifact = cas / src.name
-    if not cas.exists():
-        cas.mkdir(parents=True, exist_ok=True)
-        if src.is_dir():
-            shutil.copytree(src, artifact)
-        else:
-            shutil.copy2(src, artifact)
-    elif not artifact.exists():
-        children = list(cas.iterdir())
-        artifact = children[0] if children else cas
+    if owned:
+        sha = content_sha(src)
+        existing = _find_by_sha(sha)
+        if existing is not None:
+            return existing["id"]
+        cas = _objects_dir() / sha
+        artifact = cas / src.name
+        if not cas.exists():
+            cas.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, artifact)
+            else:
+                shutil.copy2(src, artifact)
+        elif not artifact.exists():
+            children = list(cas.iterdir())
+            artifact = children[0] if children else cas
+        identity = {"kind": "content-sha", "sha": sha,
+                    "fingerprint": None, "verified_at": _now_iso()}
+        build = version or f"sha_{sha[:8]}"
+        meta_sha: Optional[str] = sha
+    else:  # linked — adopt in place, no copy
+        existing = _find_by_path(str(src))
+        if existing is not None:
+            return existing["id"]
+        artifact = src
+        identity = {"kind": "fingerprint", "sha": None,
+                    "fingerprint": _fingerprint(src), "verified_at": _now_iso()}
+        build = version or f"link_{hashlib.sha256(str(src).encode()).hexdigest()[:8]}"
+        meta_sha = None
 
     _ref_targets = [derived_from] if isinstance(derived_from, str) else (derived_from or [])
-    sp = structural_path(organism=organism, assembly=assembly, role=role,
-                         build=version or f"sha_{sha[:8]}")
+    sp = structural_path(organism=organism, assembly=assembly, role=role, build=build)
     if sp == "misc":
-        sp = f"misc/{sha[:8]}"
+        sp = f"misc/{build}"
     derived_title = title or f"{organism or 'ref'}:{role or src.name}"
 
     from core.graph.derivation import imported, SYSTEM_ACTOR
-    meta = {"scope": scope, "sha": sha, "organism": organism, "role": role,
-            "assembly": assembly, "source": source, "structural_path": sp}
+    meta = {"scope": scope, "sha": meta_sha, "organism": organism, "role": role,
+            "assembly": assembly, "source": source, "structural_path": sp,
+            "owned": owned}
     eid = create_entity(
         entity_type=REFERENCE,
         title=derived_title,
@@ -229,12 +252,11 @@ def register_reference(
 
     descriptor = {
         "id": eid,
-        "owned": True,
-        "identity": {"kind": "content-sha", "sha": sha,
-                     "fingerprint": None, "verified_at": _now_iso()},
+        "owned": owned,
+        "identity": identity,
         "organism": organism, "assembly": assembly, "role": role,
         "structural_path": sp, "title": derived_title,
-        "acquisition": {"mode": "imported", "source": source},
+        "acquisition": {"mode": ("linked" if not owned else "imported"), "source": source},
         "derivation": ({"kind": "derived_from", "sources": list(_ref_targets)}
                        if _ref_targets else {"kind": "imported", "source": source}),
         "scope": scope, "artifact_path": str(artifact),

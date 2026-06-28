@@ -29,24 +29,29 @@ from .run_exec import _run_scratch_cwd, _prior_run_files_preamble
 
 
 def register_reference_tool(input_: dict, ctx: dict | None = None) -> dict:
-    """Keep a file/dir as a reusable, content-addressed reference (P4)."""
+    """Keep a file/dir as a reusable reference. mode='copy' (default) owns the
+    bytes (content-addressed); mode='link' adopts a pre-existing path in place
+    (no copy) — for large cluster reference stores."""
     path = input_.get("path")
     if not path:
         return {"error": "path is required"}
-    from core.data import register_reference as _reg
-    from core.graph.entities import get_entity
+    from core.data import register_reference as _reg, get_reference
     try:
         eid = _reg(path, organism=input_.get("organism"), role=input_.get("role"),
                    source=input_.get("source"), assembly=input_.get("assembly"),
-                   derived_from=input_.get("derived_from"))
+                   derived_from=input_.get("derived_from"),
+                   version=input_.get("version"), mode=input_.get("mode", "copy"))
     except Exception as e:  # noqa: BLE001
         return {"error": f"register failed: {e}"}
-    e = get_entity(eid) or {}
-    meta = e.get("metadata") or {}
-    return {"status": "ok", "reference_id": eid, "sha": meta.get("sha"),
-            "organism": meta.get("organism"), "role": meta.get("role"),
-            "artifact_path": e.get("artifact_path"),
-            "note": "Stored content-addressed (deduplicated). Reuse via find_reference."}
+    d = get_reference(eid) or {}
+    ident = d.get("identity") or {}
+    owned = d.get("owned", True)
+    return {"status": "ok", "reference_id": eid, "sha": ident.get("sha"),
+            "owned": owned, "organism": d.get("organism"), "role": d.get("role"),
+            "structural_path": d.get("structural_path"),
+            "artifact_path": d.get("artifact_path"),
+            "note": ("Owned content-addressed copy (deduplicated)." if owned
+                     else "Linked in place — no copy.") + " Reuse via find_reference."}
 
 
 def find_reference_tool(input_: dict, ctx: dict | None = None) -> dict:

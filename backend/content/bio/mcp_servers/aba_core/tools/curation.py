@@ -171,14 +171,18 @@ def register_curation_tools(mcp: FastMCP) -> None:
                            assembly: str | None = None,
                            source: str | None = None,
                            derived_from: str | None = None,
+                           version: str | None = None,
+                           mode: str = "copy",
                            aba_ctx_id: str | None = None) -> dict:
-        """Keep a file/dir as a reusable, content-addressed reference."""
+        """Keep a file/dir as a reusable reference. mode='copy' owns the bytes
+        (content-addressed copy); mode='link' adopts a pre-existing cluster path
+        in place without copying (for large shared genome/index stores)."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import register_reference_tool
         return register_reference_tool(
             {"path": path, "organism": organism, "role": role,
-             "assembly": assembly, "source": source,
-             "derived_from": derived_from},
+             "assembly": assembly, "source": source, "derived_from": derived_from,
+             "version": version, "mode": mode},
             peek_ctx(aba_ctx_id),
         )
 

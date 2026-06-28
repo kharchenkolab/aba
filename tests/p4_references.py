@@ -82,6 +82,28 @@ def main() -> int:
           data_link.exists() and (refs_dir / "objects") in data_link.resolve().parents,
           str(data_link.resolve()) if data_link.exists() else "broken link")
 
+    print("linked (external) reference — adopt in place, no copy (refs.md §4)")
+    ext = Path(_tmp) / "preexisting_cluster_ref"
+    ext.mkdir()
+    (ext / "genome.fa").write_text(">chr1\nACGT\n")
+    rl = register_reference_tool({"path": str(ext), "organism": "fly", "role": "genome",
+                                  "assembly": "BDGP6", "mode": "link"})
+    check("link register → ok + owned=false", rl.get("status") == "ok" and rl.get("owned") is False, str(rl))
+    check("linked ref NOT copied into objects/ (artifact stays at the external path)",
+          rl.get("artifact_path") == str(ext)
+          and (refs_dir / "objects") not in Path(rl["artifact_path"]).parents,
+          str(rl.get("artifact_path")))
+    dl = get_reference(rl["reference_id"]) or {}
+    check("linked descriptor uses fingerprint identity (lazy sha)",
+          (dl.get("identity") or {}).get("kind") == "fingerprint"
+          and (dl.get("identity") or {}).get("sha") is None
+          and (dl.get("identity") or {}).get("fingerprint", {}).get("size", -1) >= 0)
+    cat_data = refs_dir / "catalog" / dl["structural_path"] / "data"
+    check("linked catalog data points at the external path",
+          cat_data.is_symlink() and Path(os.readlink(cat_data)) == ext, str(cat_data))
+    rl2 = register_reference_tool({"path": str(ext), "organism": "fly", "role": "genome", "mode": "link"})
+    check("link dedup by path → same reference id", rl2.get("reference_id") == rl.get("reference_id"))
+
     print("find_reference + resolve")
     f1 = find_reference_tool({"organism": "phage_x", "role": "transcriptome"})
     check("find_reference locates the transcriptome", f1.get("found")
