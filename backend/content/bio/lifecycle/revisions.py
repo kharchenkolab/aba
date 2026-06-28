@@ -26,6 +26,7 @@ from core.graph._schema import _conn
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
 from core.graph.entities import (
     create_entity, get_entity, update_entity, delete_entity_hard,
+    find_entities,
 )
 from core.graph import exec_records
 from content.bio.lifecycle.scenarios import _detect_language, _PY_SIGNALS, _R_SIGNALS
@@ -115,6 +116,66 @@ def _newer_than(entity_id: str) -> list[str]:
                 out.append(sid)
         frontier = nxt
     return out
+
+
+def _run_for_figure(entity: dict) -> Optional[str]:
+    """The Run a figure/table belongs to. Prefer its existing
+    wasGeneratedBy target; fall back to the exec record's run_id (the
+    authoritative source materialize uses); finally its parent_entity_id."""
+    if not entity:
+        return None
+    for e in edges_from(entity["id"]):
+        if e.get("rel_type") == "wasGeneratedBy":
+            return e.get("target_id")
+    eid = entity.get("exec_id")
+    if eid:
+        try:
+            rec = exec_records.get(eid)
+            if rec and rec.get("run_id"):
+                return rec["run_id"]
+        except Exception:  # noqa: BLE001
+            pass
+    return entity.get("parent_entity_id")
+
+
+def _reanchor_results_to(new_eid: str, old_ids: set, *,
+                         created_by: str) -> list[dict]:
+    """Move every Result anchored at one of `old_ids` onto `new_eid`.
+
+    Rewrites BOTH the member `ref`s AND the Result's
+    `primary_evidence_id` (the field RunView reads to decide which output
+    shows the red pin), and adds an `includes` edge to the new anchor.
+    Idempotent: a ref already at `new_eid` is skipped. Returns one
+    {result_id, old_ref, new_ref} per Result moved."""
+    moved: list[dict] = []
+    for old_id in old_ids:
+        if not old_id or old_id == new_eid:
+            continue
+        for rid, _mid in _result_members_referencing(old_id):
+            r = get_entity(rid)
+            if not r:
+                continue
+            meta = dict(r.get("metadata") or {})
+            members = list(meta.get("members") or [])
+            changed = False
+            for m in members:
+                if m.get("ref") == old_id:
+                    m["ref"] = new_eid
+                    changed = True
+            if meta.get("primary_evidence_id") == old_id:
+                meta["primary_evidence_id"] = new_eid
+                changed = True
+            if changed:
+                meta["members"] = members
+                update_entity(rid, metadata=meta)
+                try:
+                    add_edge(rid, new_eid, "includes", {"created_by": created_by})
+                except Exception as e:  # noqa: BLE001
+                    _log.warning("reanchor: add includes %s→%s failed: %s",
+                                 rid, new_eid, e)
+                moved.append({"result_id": rid, "old_ref": old_id,
+                              "new_ref": new_eid})
+    return moved
 
 
 def make_revision(
@@ -256,6 +317,34 @@ def make_revision(
             except Exception as e:  # noqa: BLE001
                 _log.warning("supersede failed for %s: %s", old_id, e)
 
+    # Wire the revision into its Run and carry the promoted pin forward.
+    # make_revision creates the entity via raw create_entity, which skips
+    # the materialize path that (1) adds the wasGeneratedBy run edge — and
+    # it never (2) moved the promoted Result onto the new revision nor
+    # (3) refreshed the Run's output manifest. Net effect (prj_0590c5d8,
+    # 2026-06-28): a revised+promoted figure vanished from the Run's Plots
+    # strip + figures/ folder with its red pin stuck on the now-hidden
+    # original. Do all three here so a revision behaves like any other
+    # harvested Run output.
+    run_id = _run_for_figure(parent)
+    if run_id:
+        try:
+            add_edge(new_eid, run_id, "wasGeneratedBy")
+        except Exception as e:  # noqa: BLE001
+            _log.warning("revision %s wasGeneratedBy %s edge failed: %s",
+                         new_eid, run_id, e)
+    # The promoted Result (if any) was anchored at the parent — or at one
+    # of the just-superseded newer revisions. Move it onto the new head.
+    reanchored = _reanchor_results_to(
+        new_eid, {entity_id, *superseded_ids}, created_by="make_revision")
+    if run_id:
+        try:
+            from content.bio.lifecycle.runs import refresh_output_manifest
+            refresh_output_manifest(run_id)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("revision manifest refresh for run %s failed: %s",
+                         run_id, e)
+
     # Broadcast entity_updated so the frontend's SSE listener triggers a
     # refresh — without this, the user has to reload the page to see the
     # new chevrons appear on the focused Result. Best-effort: a failed
@@ -268,6 +357,7 @@ def make_revision(
             "reason": "revision_created",
             "wasRevisionOf": entity_id,
             "superseded": superseded_ids,
+            "reanchored": [m["result_id"] for m in reanchored],
         })
     except Exception:  # noqa: BLE001
         pass
@@ -277,6 +367,7 @@ def make_revision(
         "exec_id": new_exec_id,
         "superseded": superseded_ids,
         "wasRevisionOf": entity_id,
+        "reanchored_results": reanchored,
         "produced": result.get("plots") if kind == "figure" else result.get("tables"),
     }
 
@@ -838,3 +929,85 @@ def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
         f"items are present, then run the script.\n")
     return {"bundle_dir": str(bdir), "files": sorted(p.name for p in bdir.iterdir()),
             "language": lang, "n_packages": len(pkg)}
+
+
+def repair_revision_wiring() -> dict:
+    """Idempotent backfill for revision chains created before make_revision
+    wired revisions into their Run (2026-06-28).
+
+    Three passes, mirroring what make_revision now does on every revision:
+      1. Every figure/table that IS a revision (has an outgoing
+         wasRevisionOf edge) but lacks a wasGeneratedBy edge gets one to
+         its Run — so it shows in the Run's figures/ folder.
+      2. For each revision chain, any Result anchored at a non-head entry
+         (parent or a superseded branch) is moved onto the active head —
+         primary_evidence_id + member refs — so the red pin follows the
+         figure forward instead of sticking on the hidden original.
+      3. Each affected Run's output manifest is recomputed so the Plots
+         strip lists the head's output.
+
+    Safe to re-run: edges de-dupe, re-anchors already at the head are
+    skipped, manifest refresh is a pure recompute.
+
+    Returns {"edges_added": [...], "reanchored": [...], "runs_refreshed": [...]}.
+    """
+    from content.bio.graph.figure_history import figure_history
+    edges_added: list[dict] = []
+    reanchored: list[dict] = []
+    runs: set = set()
+
+    figs = list(find_entities(type="figure")) + list(find_entities(type="table"))
+
+    # 1) ensure each revision has a wasGeneratedBy edge to its Run.
+    for e in figs:
+        if not _wasrevof_parent(e["id"]):
+            continue  # chain anchor (original) — already wired by materialize
+        if any(x.get("rel_type") == "wasGeneratedBy" for x in edges_from(e["id"])):
+            continue
+        run_id = _run_for_figure(e)
+        if not run_id:
+            continue
+        try:
+            add_edge(e["id"], run_id, "wasGeneratedBy")
+            edges_added.append({"figure": e["id"], "run": run_id})
+            runs.add(run_id)
+        except Exception as ex:  # noqa: BLE001
+            _log.warning("repair: wasGeneratedBy %s→%s failed: %s",
+                         e["id"], run_id, ex)
+
+    # 2) re-anchor promoted Results onto each chain's active head.
+    processed_heads: set = set()
+    for e in figs:
+        if e.get("status") == "superseded":
+            continue  # compute heads from active members only
+        active_chain = figure_history(e["id"])              # active trunk, newest first
+        if not active_chain:
+            continue
+        head = active_chain[0]["id"]
+        if head in processed_heads:
+            continue
+        processed_heads.add(head)
+        full_chain = figure_history(e["id"], include_superseded=True)
+        old_ids = {c["id"] for c in full_chain if c.get("id") and c["id"] != head}
+        if not old_ids:
+            continue
+        moved = _reanchor_results_to(head, old_ids,
+                                     created_by="repair_revision_wiring")
+        if moved:
+            reanchored.extend(moved)
+            r = _run_for_figure(get_entity(head) or {})
+            if r:
+                runs.add(r)
+
+    # 3) recompute affected Run manifests.
+    from content.bio.lifecycle.runs import refresh_output_manifest
+    runs_refreshed: list[str] = []
+    for run_id in runs:
+        try:
+            refresh_output_manifest(run_id)
+            runs_refreshed.append(run_id)
+        except Exception as ex:  # noqa: BLE001
+            _log.warning("repair: manifest refresh %s failed: %s", run_id, ex)
+
+    return {"edges_added": edges_added, "reanchored": reanchored,
+            "runs_refreshed": runs_refreshed}
