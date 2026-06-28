@@ -54,6 +54,13 @@ export const apiPost = <T = unknown>(path: string, body?: unknown) => apiSend<T>
 export const apiPatch = <T = unknown>(path: string, body?: unknown) => apiSend<T>(path, 'PATCH', body)
 export const apiDelete = <T = unknown>(path: string) => apiSend<T>(path, 'DELETE')
 
+/** Multipart POST — send a FormData body (the browser sets the multipart
+ *  boundary; no Content-Type header). For file uploads / chat attachments.
+ *  Throws ApiError on a non-2xx; returns the parsed JSON. */
+export function apiUpload<T = unknown>(path: string, form: FormData): Promise<T> {
+  return _do<T>(path, { method: 'POST', body: form })
+}
+
 // --- Typed helpers for common endpoints (extend as the shell migrates) ---
 
 export interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }
