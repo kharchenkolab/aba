@@ -396,15 +396,6 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           style={{ display: 'none' }}
           onChange={onPickFiles}
         />
-        <button
-          type="button"
-          className="composer__attach"
-          onClick={() => fileInputRef.current?.click()}
-          title="Attach files (or paste a screenshot)"
-          aria-label="Attach files"
-        >
-          <Paperclip size={18} />
-        </button>
         <textarea
           ref={textareaRef}
           className="composer__input"
@@ -415,6 +406,16 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           onPaste={onPaste}
           rows={1}
         />
+        {/* Attach — sits immediately to the left of STOP/SEND. */}
+        <button
+          type="button"
+          className="composer__attach"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach files (or paste a screenshot)"
+          aria-label="Attach files"
+        >
+          <Paperclip size={18} />
+        </button>
         {streaming && onStop && (
           <button
             type="button"
