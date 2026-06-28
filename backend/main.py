@@ -912,6 +912,11 @@ class ChatRequest(BaseModel):
     # annotation composited on, plus a short note describing the gesture.
     annotation_image: str | None = None
     annotation_note: str | None = None
+    # Chat attachments (the composer paperclip / clipboard paste). Each is a ref
+    # from POST /api/attach: {name, path, kind, is_image, size_bytes, url}.
+    # Persisted as a UI chip block + injected as an ephemeral agent context note
+    # (+ vision blocks for images) for this turn. See core.runtime.attachments.
+    attachments: list[dict] | None = None
     # Regenerate the last turn's reply without appending a new user message
     # (used by the message-level retry after a transient API failure).
     retry: bool = False
@@ -967,6 +972,7 @@ async def chat(req: ChatRequest):
             thread_id=req.thread_id,
             annotation_image=req.annotation_image,
             annotation_note=req.annotation_note,
+            attachments=req.attachments,
             retry=req.retry,
             run_id=run_id,
             spec_override=req.spec,
@@ -1385,6 +1391,34 @@ def entities_edges(entity_id: str):
 
 # Phase 8.E: /api/entities/{id}/history, /provenance, /create-scenario
 # (with ScenarioRequest) moved to content/bio/web/routes.py.
+
+
+# ---------- Chat attachments (composer paperclip) ----------
+
+
+@app.post("/api/attach")
+async def attach(file: UploadFile = File(...), thread_id: str = Form("default"),
+                 _pid: str = Depends(require_project)):
+    """Stash a chat attachment in the thread's scratch area (NOT a dataset entity
+    — the agent registers it only if the user asks). Returns the ref the chat
+    turn carries + a serve url for the chip/thumbnail."""
+    if not file.filename:
+        raise HTTPException(400, "filename missing")
+    from core.config import current_project_id
+    from core.runtime.attachments import save_attachment
+    return save_attachment(current_project_id(), thread_id, file.filename, file.file)
+
+
+@app.get("/api/attachments/{thread_id}/{name}")
+def serve_attachment(thread_id: str, name: str, _pid: str = Depends(require_project)):
+    """Serve a stashed chat attachment (project-scoped, path-traversal guarded)."""
+    from core.config import current_project_id
+    from core.runtime.attachments import attachments_root
+    root = attachments_root(current_project_id(), thread_id).resolve()
+    f = (root / Path(name).name).resolve()
+    if not str(f).startswith(str(root) + os.sep) or not f.is_file():
+        raise HTTPException(404, "attachment not found")
+    return FileResponse(str(f))
 
 
 # ---------- Upload ----------

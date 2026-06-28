@@ -23,10 +23,45 @@ from __future__ import annotations
 import json
 
 
+# Content blocks that exist ONLY for the web UI and must never reach the model
+# (the Anthropic SDK rejects unknown block types). The `attachments` chip block
+# is persisted for re-render; the agent gets the files via the ephemeral context
+# note + vision blocks injected in guide.py instead.
+_UI_ONLY_BLOCK_TYPES = {"attachments"}
+
+
+def strip_ui_blocks(content):
+    """Drop UI-only content blocks (e.g. the `attachments` chip block) from a
+    message's content. They exist purely for the web UI and the Anthropic SDK
+    rejects unknown block types — so this MUST run at every history→API boundary
+    (see core/llm.py)."""
+    if not isinstance(content, list):
+        return content
+    return [b for b in content
+            if not (isinstance(b, dict) and b.get("type") in _UI_ONLY_BLOCK_TYPES)]
+
+
+# The block `type`s the Anthropic Messages API accepts (from the API's own
+# rejection message). The validity-guard test asserts api_messages never emits a
+# type outside this set — so a UI/internal block can never silently reach the API
+# again (the live 2026-06-28 `attachments` 400). Update only when the SDK adds a
+# real block type.
+ALLOWED_API_BLOCK_TYPES = frozenset({
+    "text", "image", "document", "thinking", "redacted_thinking",
+    "tool_use", "tool_result", "server_tool_use", "mid_conv_system",
+    "search_result", "connector_text", "container_upload",
+    "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result",
+    "code_execution_tool_result", "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
+})
+
+
 def api_messages(history: list) -> list:
-    """Strip our internal-bookkeeping fields from history rows down to
-    the bare {role, content} shape the Anthropic SDK accepts."""
-    return [{"role": m["role"], "content": m["content"]} for m in history]
+    """THE single history→API transform: strip internal-bookkeeping fields + UI-only
+    content blocks down to the bare {role, content} the Anthropic SDK accepts.
+    core/llm.py builds its `messages` from this — so the validity-guard test runs
+    here."""
+    return [{"role": m["role"], "content": strip_ui_blocks(m.get("content"))} for m in history]
 
 
 def is_interrupted_fill(block: dict) -> bool:

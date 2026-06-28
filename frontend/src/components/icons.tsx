@@ -155,6 +155,18 @@ export function AgentAvatar({ agent, size = 24 }: { agent: AgentKey; size?: numb
   )
 }
 
+/** Paperclip — the chat composer's "attach file" affordance. Stroked,
+ *  inherits currentColor, matches the size-prop convention of the other
+ *  glyphs in this file. */
+export function Paperclip({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.3 3.3 0 0 1 4.7 4.7l-9 9a1.7 1.7 0 0 1-2.4-2.4l8.3-8.3" />
+    </svg>
+  )
+}
+
 // ---------- Left-rail icons (from the mockup) ----------
 
 export type RailIconName =

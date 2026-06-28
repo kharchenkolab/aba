@@ -298,6 +298,47 @@
   border: 1px solid var(--panel-bd);
   box-shadow: var(--shadow-md);
 }
+
+/* User-attached files (paperclip / paste), rendered on the user message. */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+.msg-attachment--image {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 180px;
+}
+/* The image thumb here is smaller than a tool-result plot — it's the user's
+   own attachment preview, not a figure. */
+.msg-attachment--image .msg-image,
+.msg-attachment--image img { max-height: 160px; margin: 0; }
+.msg-attachment__name {
+  font-size: 11px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;
+}
+.msg-attachment--file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--panel-bd);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  max-width: 240px;
+}
+.msg-attachment--file:hover { border-color: var(--accent); }
+.msg-attachment__icon { color: var(--text-3); flex-shrink: 0; }
+.msg-attachment--file .msg-attachment__name { max-width: 150px; color: var(--text); }
+.msg-attachment__kind {
+  font-size: 10.5px; color: var(--text-4); text-transform: uppercase; flex-shrink: 0;
+}
 .msg-text table { width: auto; max-width: 100%; overflow-x: auto; display: block; }
 .msg-text td em { color: var(--text-4); font-style: normal; }
 
