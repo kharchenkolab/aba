@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import type { KeyboardEvent, ClipboardEvent, ChangeEvent } from 'react'
 import type { Attachment } from '../types'
+import { apiUpload, ApiError } from '../lib/api'
 import { Paperclip } from '../components/icons'
 import './Composer.css'
 
@@ -87,17 +88,11 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
       fd.append('file', file)
       fd.append('thread_id', threadId ?? 'default')
       const url = `/api/attach${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`
-      const res = await fetch(url, { method: 'POST', body: fd })
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`
-        try { const j = await res.json(); if (j.detail) msg = j.detail } catch { /* ignore */ }
-        setAttachment(id, { status: 'error', error: msg })
-        return
-      }
-      const ref = (await res.json()) as Attachment
+      const ref = await apiUpload<Attachment>(url, fd)
       setAttachment(id, { status: 'done', ref })
     } catch (e) {
-      setAttachment(id, { status: 'error', error: String(e) })
+      const msg = e instanceof ApiError ? (e.body || `HTTP ${e.status}`) : String(e)
+      setAttachment(id, { status: 'error', error: msg })
     }
   }, [projectId, threadId])
 
