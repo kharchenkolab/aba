@@ -12,15 +12,189 @@ P4 ships the primitives; the agent orchestrates the fetch→build→register cha
 """
 from __future__ import annotations
 import hashlib
+import json
+import os
+import re
 import shutil
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
 from core.config import REFS_DIR
-from core.graph.entities import create_entity, get_entity, list_entities
-from core.graph.edges import add_edge
+from core.graph.entities import create_entity
 
 REFERENCE = "reference"
+
+
+# ── Store layout (misc/refs.md §3.1) ──────────────────────────────────────
+# Three roles, so an OWNED reference (bytes in our CAS) and a LINKED one
+# (bytes at a pre-existing path) are handled the same way:
+#   registry/<id>.json   — the descriptor (the durable truth)
+#   objects/<sha>/<name> — owned bytes pool (by-value, dedup); absent for linked
+#   catalog/<path>/data  — human view → objects/<sha>/ OR an external path
+def _objects_dir(root: Path) -> Path:
+    return root / "objects"
+
+
+def _registry_dir(root: Path) -> Path:
+    return root / "registry"
+
+
+def _catalog_dir(root: Path) -> Path:
+    return root / "catalog"
+
+
+# ── Scoped tiers (misc/refs.md §3.3) ──────────────────────────────────────
+# Phase 1: refs are layered across tier roots resolved from site.yaml's `refs:`
+# block (group/institution, {group}/{user}/{home}-expanded via the scope
+# resolver) plus the legacy REFS_DIR as the always-present personal/default
+# tier (== Phase 0 behavior when there is no site.yaml). The project tier is a
+# documented follow-up.
+def _tier_roots(env: Optional[dict] = None) -> list[tuple[str, Path]]:
+    """[(scope, root)] in find-precedence order (narrowest → widest)."""
+    env = env if env is not None else dict(os.environ)
+    roots: list[tuple[str, Path]] = []
+    # Project tier (narrowest) — only in multi-project mode, where a project's
+    # own refs live under its dir and don't leak to other projects/users.
+    try:
+        from core import projects
+        if not projects.SINGLE:
+            pid = projects.current()
+            if pid and pid != "single":
+                from core.config import project_root
+                roots.append(("project", Path(project_root(pid)) / "refs"))
+    except Exception:  # noqa: BLE001
+        pass
+    roots.append(("personal", Path(REFS_DIR)))
+    try:
+        from core.bundle.scope_resolver import (
+            _read_site_yaml, _resolve_group, _expand_placeholders, _user_id)
+        site_path = env.get("ABA_SITE_CONFIG")
+        site = _read_site_yaml(Path(site_path)) if site_path else None
+        if site:
+            group = _resolve_group(env)
+            user = _user_id(env)
+            home = Path(env.get("HOME") or Path.home())
+            refs_cfg = site.get("refs") or {}
+            for scope in ("group", "institution"):
+                tmpl = refs_cfg.get(scope)
+                if not tmpl:
+                    continue
+                expanded = _expand_placeholders(str(tmpl), user=user,
+                                                group=group, home=home)
+                if expanded:
+                    roots.append((scope, Path(expanded)))
+    except Exception:  # noqa: BLE001 — tier resolution must never break the store
+        pass
+    return roots
+
+
+def _root_for_scope(scope: str, env: Optional[dict] = None) -> Path:
+    """Where register(scope=…) writes. Falls back to the personal tier when the
+    requested scope isn't configured/resolvable on this box."""
+    tiers = dict(_tier_roots(env))
+    return tiers.get(scope) or tiers.get("personal") or Path(REFS_DIR)
+
+
+def _writable(root: Path) -> bool:
+    """Can this process create the tier root and write into it? Permissions are
+    the governance gate (refs.md §8) — a regular user can't write the curator-
+    only institution tier, so register falls back gracefully rather than crash."""
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(root, os.W_OK)
+
+
+def _iter_descriptors(env: Optional[dict] = None):
+    """Yield every reference descriptor across the readable tier roots, in
+    precedence order, first-id-wins. The discovery index — replaces
+    list_entities so refs are visible across the projects/users that share a
+    tier (refs.md §8). Each yielded descriptor carries `_scope`/`_root`."""
+    seen: set = set()
+    for scope, root in _tier_roots(env):
+        rd = _registry_dir(root)
+        if not rd.is_dir():
+            continue
+        for f in sorted(rd.glob("*.json")):
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            rid = d.get("id")
+            if rid and rid not in seen:
+                seen.add(rid)
+                d["_scope"], d["_root"] = scope, str(root)
+                yield d
+
+
+def _slug(s: str) -> str:
+    """Filesystem-safe catalog slug per knowhow/refs/NAMING.md."""
+    s = (s or "").strip().lower().replace(" ", "_")
+    s = re.sub(r"[^a-z0-9._-]+", "-", s).strip("-._")
+    return s or "x"
+
+
+def structural_path(*, organism: Optional[str], assembly: Optional[str],
+                    role: Optional[str], build: Optional[str]) -> str:
+    """The human catalog path: <organism>/<assembly>/<role>/<build>, skipping
+    missing facets. Empty → 'misc' (the caller appends a sha for uniqueness)."""
+    parts = [_slug(p) for p in (organism, assembly, role, build) if p]
+    return "/".join(parts) if parts else "misc"
+
+
+def _fingerprint(p: Path) -> dict:
+    """Cheap identity for a (possibly huge, linked) path — a stat, not a read."""
+    st = p.stat()
+    return {"path": str(p), "size": st.st_size, "mtime": int(st.st_mtime)}
+
+
+def _symlink_force(link: Path, target: Path) -> None:
+    """Idempotent symlink: leave it alone if already pointing at target."""
+    try:
+        if link.is_symlink():
+            if os.readlink(link) == str(target):
+                return
+            link.unlink()
+        elif link.exists():
+            return  # a real file sits here (shouldn't happen) — don't clobber
+        link.symlink_to(target)
+    except FileExistsError:
+        pass
+
+
+def _write_descriptor(d: dict, root: Path) -> Path:
+    """Write <tier>/registry/<id>.json — the one durable artifact. Bumps the
+    tier's freshness marker so a per-backend index knows to rescan (refs.md §8)."""
+    rd = _registry_dir(root)
+    rd.mkdir(parents=True, exist_ok=True)
+    fp = rd / f"{d['id']}.json"
+    fp.write_text(json.dumps(d, indent=2, default=str))
+    try:
+        (rd / ".seq").write_text(str(int(time.time() * 1000)))
+    except OSError:
+        pass
+    return fp
+
+
+def get_reference(ref_id: str, env: Optional[dict] = None) -> Optional[dict]:
+    """The descriptor for a reference id (searched across tiers), or None."""
+    for d in _iter_descriptors(env):
+        if d.get("id") == ref_id:
+            return d
+    return None
+
+
+def _emit_catalog(sp: str, data_target: Path, ref_id: str, root: Path) -> Path:
+    """Materialize the human catalog node under the tier root: a `data` symlink
+    to the bytes and a `reference.json` back-pointer to the descriptor."""
+    node = _catalog_dir(root) / sp
+    node.mkdir(parents=True, exist_ok=True)
+    _symlink_force(node / "data", data_target)
+    _symlink_force(node / "reference.json", _registry_dir(root) / f"{ref_id}.json")
+    return node
 
 
 def _sha_file(p: Path) -> str:
@@ -47,10 +221,22 @@ def content_sha(path: Union[str, Path]) -> str:
 
 
 def _find_by_sha(sha: str) -> Optional[dict]:
-    for e in list_entities(type_filter=REFERENCE):
-        if (e.get("metadata") or {}).get("sha") == sha:
-            return e
+    for d in _iter_descriptors():
+        if (d.get("identity") or {}).get("sha") == sha:
+            return d
     return None
+
+
+def _find_by_path(path: str) -> Optional[dict]:
+    """Dedup key for LINKED refs (no content-sha): the external path itself."""
+    for d in _iter_descriptors():
+        if not d.get("owned", True) and d.get("artifact_path") == path:
+            return d
+    return None
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def register_reference(
@@ -61,76 +247,129 @@ def register_reference(
     source: Optional[str] = None,
     assembly: Optional[str] = None,
     derived_from: Optional[Union[str, list[str]]] = None,
-    scope: str = "institution",
+    scope: str = "personal",
     title: Optional[str] = None,
+    version: Optional[str] = None,
+    mode: str = "copy",
+    acquisition: Optional[dict] = None,
 ) -> str:
-    """Place a reference into the content-addressed store (dedup by content) and
-    register it as a `reference` entity. Returns the entity id — the existing one
-    if identical content is already stored (no re-copy)."""
+    """Register a reference + write its descriptor + human `catalog/` entry
+    (misc/refs.md §3). Returns the reference id — the existing one on a dedup
+    hit (no re-copy / re-link).
+
+    `mode="copy"` (default) → **owned**: content-hash the bytes and copy them
+    into `objects/<sha>/`. `mode="link"` → **linked**: adopt a pre-existing path
+    (a cluster genome store, iGenomes, …) in place, *no copy*; identity is a
+    cheap fingerprint (path+size+mtime), the full sha computed lazily later.
+
+    Lineage (`derived_from`) is recorded in the **descriptor**, not an entity
+    edge: the `reference` type forbids out-edges, so the pre-2026-06-29
+    wasDerivedFrom-edge path errored at validation."""
     src = Path(src_path).resolve()
     if not src.exists():
         raise FileNotFoundError(f"reference source not found: {src}")
-    # Refuse pathological paths. The content-addressed copy + hash is
-    # O(bytes) so handing register_reference a system-temp / home-root
-    # / fs-root recursively walks + duplicates the entire tree —
-    # 2026-06-04 a test bug pointed it at /tmp and burnt 304 GB across
-    # six invocations before being caught. Better to fail loudly than
-    # silently duplicate a multi-GB-of-junk directory.
+    # Refuse pathological sources (a copy is O(bytes); even a link of the whole
+    # home/root as one "reference" is nonsense). 2026-06-04 a test pointed copy
+    # at /tmp and burnt 304 GB before being caught — fail loudly.
     forbidden = {Path("/tmp").resolve(), Path("/var/tmp").resolve(),
                  Path("/").resolve(), Path.home().resolve()}
     if src in forbidden:
         raise ValueError(
             f"register_reference refuses pathological source {src!r}. "
             f"Reference data should be a specific dataset/genome/index dir, "
-            f"not a system temp / home / root directory. If this is "
-            f"genuinely intentional, copy what you want into a "
-            f"purpose-named subdirectory first."
+            f"not a system temp / home / root directory."
         )
-    sha = content_sha(src)
+    if mode not in ("copy", "link"):
+        raise ValueError(f"register_reference: mode must be 'copy' or 'link', got {mode!r}")
+    owned = (mode == "copy")
+    # Resolve the ACTUAL write tier so the descriptor is truthful: the requested
+    # scope if it's configured + writable here, else fall back to personal
+    # (refs.md §3.3, §8). EACCES-graceful — a regular user can't write the
+    # curator-only institution tier, so we land it personal rather than crash.
+    tiers = dict(_tier_roots())
+    if scope not in tiers:
+        scope = "personal"
+    root = tiers.get(scope) or Path(REFS_DIR)
+    if not _writable(root):
+        personal_root = tiers.get("personal", Path(REFS_DIR))
+        if scope != "personal" and _writable(personal_root):
+            scope, root = "personal", personal_root
 
-    existing = _find_by_sha(sha)
-    if existing is not None:
-        return existing["id"]
+    if owned:
+        sha = content_sha(src)
+        existing = _find_by_sha(sha)
+        if existing is not None:
+            return existing["id"]
+        cas = _objects_dir(root) / sha
+        artifact = cas / src.name
+        if not cas.exists():
+            cas.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, artifact)
+            else:
+                shutil.copy2(src, artifact)
+        elif not artifact.exists():
+            children = list(cas.iterdir())
+            artifact = children[0] if children else cas
+        identity = {"kind": "content-sha", "sha": sha,
+                    "fingerprint": None, "verified_at": _now_iso()}
+        build = version or f"sha_{sha[:8]}"
+        meta_sha: Optional[str] = sha
+    else:  # linked — adopt in place, no copy
+        existing = _find_by_path(str(src))
+        if existing is not None:
+            return existing["id"]
+        artifact = src
+        identity = {"kind": "fingerprint", "sha": None,
+                    "fingerprint": _fingerprint(src), "verified_at": _now_iso()}
+        build = version or f"link_{hashlib.sha256(str(src).encode()).hexdigest()[:8]}"
+        meta_sha = None
 
-    cas = REFS_DIR / sha
-    if not cas.exists():
-        cas.mkdir(parents=True, exist_ok=True)
-        if src.is_dir():
-            shutil.copytree(src, cas / src.name)
-            artifact = cas / src.name
-        else:
-            shutil.copy2(src, cas / src.name)
-            artifact = cas / src.name
-    else:
-        # CAS dir exists (shouldn't happen without an entity, but tolerate):
-        # point at whatever single child is there.
-        children = list(cas.iterdir())
-        artifact = children[0] if children else cas
-
-    meta = {"scope": scope, "sha": sha, "organism": organism,
-            "role": role, "assembly": assembly, "source": source}
-    from core.graph.derivation import derived_from as _mk_derived, imported, SYSTEM_ACTOR
     _ref_targets = [derived_from] if isinstance(derived_from, str) else (derived_from or [])
+    sp = structural_path(organism=organism, assembly=assembly, role=role, build=build)
+    if sp == "misc":
+        sp = f"misc/{build}"
+    derived_title = title or f"{organism or 'ref'}:{role or src.name}"
+
+    from core.graph.derivation import imported, SYSTEM_ACTOR
+    meta = {"scope": scope, "sha": meta_sha, "organism": organism, "role": role,
+            "assembly": assembly, "source": source, "structural_path": sp,
+            "owned": owned}
     eid = create_entity(
         entity_type=REFERENCE,
-        title=title or f"{organism or 'ref'}:{role or src.name}",
+        title=derived_title,
         artifact_path=str(artifact),
-        # Phase 2B: derived_from the given targets, else imported (a loaded reference).
-        derivation=(_mk_derived(list(_ref_targets)) if _ref_targets else imported(source or "reference")),
+        derivation=imported(source or "reference"),  # always imported; lineage → descriptor
         actor=SYSTEM_ACTOR,
         metadata=meta,
     )
-    for target in _ref_targets:
-        add_edge(eid, target, "wasDerivedFrom")
+
+    descriptor = {
+        "id": eid,
+        "owned": owned,
+        "identity": identity,
+        "organism": organism, "assembly": assembly, "role": role,
+        "structural_path": sp, "title": derived_title,
+        "acquisition": acquisition or {"mode": ("linked" if not owned else "imported"),
+                                       "source": source},
+        "derivation": ({"kind": "derived_from", "sources": list(_ref_targets)}
+                       if _ref_targets else {"kind": "imported", "source": source}),
+        "scope": scope, "artifact_path": str(artifact),
+        "registered_at": _now_iso(),
+    }
+    _write_descriptor(descriptor, root)
+    _emit_catalog(sp, artifact, eid, root)
     return eid
 
 
-def _row(e: dict) -> dict:
-    meta = e.get("metadata") or {}
-    return {"id": e["id"], "title": e["title"], "artifact_path": e["artifact_path"],
-            "organism": meta.get("organism"), "role": meta.get("role"),
-            "assembly": meta.get("assembly"), "source": meta.get("source"),
-            "sha": meta.get("sha")}
+def _row(d: dict) -> dict:
+    ident = d.get("identity") or {}
+    return {"id": d.get("id"), "title": d.get("title"),
+            "artifact_path": d.get("artifact_path"),
+            "organism": d.get("organism"), "role": d.get("role"),
+            "assembly": d.get("assembly"),
+            "source": (d.get("acquisition") or {}).get("source"),
+            "sha": ident.get("sha"), "scope": d.get("_scope")}
 
 
 def find_reference(organism: Optional[str] = None, role: Optional[str] = None,
@@ -141,16 +380,102 @@ def find_reference(organism: Optional[str] = None, role: Optional[str] = None,
     return None
 
 
+def promote_reference(ref_id: str, to_scope: str,
+                      env: Optional[dict] = None) -> dict:
+    """Move a reference UP a tier (project → group → institution): copy owned
+    bytes into the destination tier's objects pool (idempotent), write the
+    descriptor + catalog there with the new scope, and remove it from the source
+    tier. Leaves source objects for GC (refs.md §12). Permission-gated in
+    practice by write access to the destination tier (institution = curator)."""
+    d = get_reference(ref_id, env)
+    if not d:
+        raise ValueError(f"unknown reference {ref_id}")
+    src_root = Path(d.get("_root") or REFS_DIR)
+    src_scope = d.get("_scope")
+    if src_scope == to_scope:
+        return {"reference_id": ref_id, "scope": to_scope, "moved": False,
+                "note": "already at this scope"}
+    dst_root = _root_for_scope(to_scope, env)
+    if dst_root.resolve() == src_root.resolve():
+        return {"reference_id": ref_id, "scope": to_scope, "moved": False,
+                "note": f"tier {to_scope!r} resolves to the same path as the source"}
+
+    new_d = {k: v for k, v in d.items() if not k.startswith("_")}
+    new_d["scope"] = to_scope
+    if d.get("owned", True):
+        sha = (d.get("identity") or {}).get("sha")
+        if sha:
+            src_obj = _objects_dir(src_root) / sha
+            dst_obj = _objects_dir(dst_root) / sha
+            if src_obj.exists() and not dst_obj.exists():
+                shutil.copytree(src_obj, dst_obj)
+            name = Path(d.get("artifact_path") or "").name
+            if name and (dst_obj / name).exists():
+                new_d["artifact_path"] = str(dst_obj / name)
+
+    _write_descriptor(new_d, dst_root)
+    _emit_catalog(new_d.get("structural_path") or "misc",
+                  Path(new_d["artifact_path"]), ref_id, dst_root)
+    # Remove from the source tier (descriptor + catalog symlinks); objects stay
+    # for GC since other refs may share the sha.
+    try:
+        (_registry_dir(src_root) / f"{ref_id}.json").unlink()
+    except OSError:
+        pass
+    src_cat = _catalog_dir(src_root) / (d.get("structural_path") or "")
+    for n in ("data", "reference.json"):
+        p = src_cat / n
+        try:
+            if p.is_symlink() or p.exists():
+                p.unlink()
+        except OSError:
+            pass
+    return {"reference_id": ref_id, "from": src_scope, "to": to_scope,
+            "moved": True, "artifact_path": new_d.get("artifact_path")}
+
+
+# Facet matching is normalized so the agent's natural inputs hit stored refs:
+# 'Drosophila melanogaster' / 'fly' / 'drosophila_melanogaster' all match, and
+# 'genome' == 'Genome'. (Live-agent test 2026-06-28 caught exact-match missing.)
+_ORGANISM_ALIASES = {
+    "human": "homo_sapiens", "homo sapiens": "homo_sapiens",
+    "mouse": "mus_musculus", "mus musculus": "mus_musculus",
+    "fly": "drosophila_melanogaster", "fruit fly": "drosophila_melanogaster",
+    "drosophila": "drosophila_melanogaster",
+    "drosophila melanogaster": "drosophila_melanogaster",
+    "zebrafish": "danio_rerio", "rat": "rattus_norvegicus",
+    "yeast": "saccharomyces_cerevisiae", "budding yeast": "saccharomyces_cerevisiae",
+    "worm": "caenorhabditis_elegans", "c elegans": "caenorhabditis_elegans",
+}
+
+
+def _norm_facet(s: Optional[str]) -> Optional[str]:
+    """Case/separator-fold a facet for matching (genome == Genome; GRCh38 == grch38)."""
+    if not s:
+        return s
+    return re.sub(r"[\s._-]+", "_", str(s).strip().lower()).strip("_")
+
+
+def _norm_organism(s: Optional[str]) -> Optional[str]:
+    """Fold an organism to a canonical key: common name → binomial, separators →
+    space, lowercased — so 'Drosophila melanogaster' == 'drosophila_melanogaster'
+    == 'fly'."""
+    if not s:
+        return s
+    spaced = re.sub(r"[\s._-]+", " ", str(s).strip().lower()).strip()
+    return _ORGANISM_ALIASES.get(spaced, spaced.replace(" ", "_"))
+
+
 def list_references(organism: Optional[str] = None, role: Optional[str] = None,
                     assembly: Optional[str] = None) -> list[dict]:
+    nq_org, nq_role, nq_asm = _norm_organism(organism), _norm_facet(role), _norm_facet(assembly)
     out = []
-    for e in list_entities(type_filter=REFERENCE):
-        meta = e.get("metadata") or {}
-        if organism and meta.get("organism") != organism:
+    for d in _iter_descriptors():
+        if nq_org and _norm_organism(d.get("organism")) != nq_org:
             continue
-        if role and meta.get("role") != role:
+        if nq_role and _norm_facet(d.get("role")) != nq_role:
             continue
-        if assembly and meta.get("assembly") != assembly:
+        if nq_asm and _norm_facet(d.get("assembly")) != nq_asm:
             continue
-        out.append(_row(e))
+        out.append(_row(d))
     return out

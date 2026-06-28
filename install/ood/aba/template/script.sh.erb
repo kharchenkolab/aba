@@ -48,6 +48,12 @@ if [ -n "${ABA_SIF:-}" ]; then
   # --containall so the host $HOME doesn't shadow the baked /opt; forward ABA's
   # resolved runtime env + bind the cluster scope mounts. The image's runscript
   # starts uvicorn on $ABA_PORT inside the container.
+  # /groups + /cluster/aba also cover the reference-store tiers (refs.md): the
+  # group refs at /groups/<group>/aba/refs and the optional institution refs at
+  # /cluster/aba/refs are already inside these mounts, and ABA_SITE_CONFIG +
+  # ABA_GROUP are forwarded below — so the backend resolves + reads refs with no
+  # refs-specific bind or env. (If a site puts institution refs OUTSIDE
+  # /cluster/aba, add a --bind for it here.)
   binds=( --bind /groups --bind /cluster/aba --bind "${PWD}/dist" )
   # slim image: mount the shared conda base (+ R base) the image expects at /opt.
   [ -n "${ABA_BASE_DIR:-}" ] && binds+=( --bind "${ABA_BASE_DIR}:/opt/aba-venv" )
