@@ -346,6 +346,60 @@ def find_reference(organism: Optional[str] = None, role: Optional[str] = None,
     return None
 
 
+def promote_reference(ref_id: str, to_scope: str,
+                      env: Optional[dict] = None) -> dict:
+    """Move a reference UP a tier (project → group → institution): copy owned
+    bytes into the destination tier's objects pool (idempotent), write the
+    descriptor + catalog there with the new scope, and remove it from the source
+    tier. Leaves source objects for GC (refs.md §12). Permission-gated in
+    practice by write access to the destination tier (institution = curator)."""
+    d = get_reference(ref_id, env)
+    if not d:
+        raise ValueError(f"unknown reference {ref_id}")
+    src_root = Path(d.get("_root") or REFS_DIR)
+    src_scope = d.get("_scope")
+    if src_scope == to_scope:
+        return {"reference_id": ref_id, "scope": to_scope, "moved": False,
+                "note": "already at this scope"}
+    dst_root = _root_for_scope(to_scope, env)
+    if dst_root.resolve() == src_root.resolve():
+        return {"reference_id": ref_id, "scope": to_scope, "moved": False,
+                "note": f"tier {to_scope!r} resolves to the same path as the source"}
+
+    new_d = {k: v for k, v in d.items() if not k.startswith("_")}
+    new_d["scope"] = to_scope
+    if d.get("owned", True):
+        sha = (d.get("identity") or {}).get("sha")
+        if sha:
+            src_obj = _objects_dir(src_root) / sha
+            dst_obj = _objects_dir(dst_root) / sha
+            if src_obj.exists() and not dst_obj.exists():
+                shutil.copytree(src_obj, dst_obj)
+            name = Path(d.get("artifact_path") or "").name
+            if name and (dst_obj / name).exists():
+                new_d["artifact_path"] = str(dst_obj / name)
+
+    _write_descriptor(new_d, dst_root)
+    _emit_catalog(new_d.get("structural_path") or "misc",
+                  Path(new_d["artifact_path"]), ref_id, dst_root)
+    # Remove from the source tier (descriptor + catalog symlinks); objects stay
+    # for GC since other refs may share the sha.
+    try:
+        (_registry_dir(src_root) / f"{ref_id}.json").unlink()
+    except OSError:
+        pass
+    src_cat = _catalog_dir(src_root) / (d.get("structural_path") or "")
+    for n in ("data", "reference.json"):
+        p = src_cat / n
+        try:
+            if p.is_symlink() or p.exists():
+                p.unlink()
+        except OSError:
+            pass
+    return {"reference_id": ref_id, "from": src_scope, "to": to_scope,
+            "moved": True, "artifact_path": new_d.get("artifact_path")}
+
+
 def list_references(organism: Optional[str] = None, role: Optional[str] = None,
                     assembly: Optional[str] = None) -> list[dict]:
     out = []
