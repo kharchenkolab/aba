@@ -65,7 +65,10 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           would be meaningfully faster on Slurm; size it with est_cores /
           est_mem_gb / est_gpu / estimated_runtime_min (mapped to a
           partition/QoS; ignored off-cluster). `estimated_runtime_min` is a
-          sizing/ walltime hint, NOT an auto-background trigger.
+          sizing/ walltime hint, NOT an auto-background trigger — and it sets the
+          background job's TIMEOUT ceiling (~2x the estimate). Give a realistic
+          `estimated_runtime_min` (or an explicit `timeout_s`) for a long job;
+          background jobs are NOT capped at the interactive 30-min limit.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
