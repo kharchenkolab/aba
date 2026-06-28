@@ -16,6 +16,7 @@ from core.data.store import resolve, register, promote, version
 from core.data.workspace import scratch_dir, gc_scratch
 from core.data.refstore import (
     register_reference, find_reference, list_references, content_sha,
+    get_reference,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "resolve", "register", "promote", "version",
     "scratch_dir", "gc_scratch",
     "register_reference", "find_reference", "list_references", "content_sha",
+    "get_reference",
 ]

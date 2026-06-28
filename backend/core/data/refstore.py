@@ -12,15 +12,107 @@ P4 ships the primitives; the agent orchestrates the fetch→build→register cha
 """
 from __future__ import annotations
 import hashlib
+import json
+import os
+import re
 import shutil
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
 from core.config import REFS_DIR
 from core.graph.entities import create_entity, get_entity, list_entities
-from core.graph.edges import add_edge
 
 REFERENCE = "reference"
+
+
+# ── Store layout (misc/refs.md §3.1) ──────────────────────────────────────
+# Three roles, so an OWNED reference (bytes in our CAS) and a LINKED one
+# (bytes at a pre-existing path) are handled the same way:
+#   registry/<id>.json   — the descriptor (the durable truth)
+#   objects/<sha>/<name> — owned bytes pool (by-value, dedup); absent for linked
+#   catalog/<path>/data  — human view → objects/<sha>/ OR an external path
+def _objects_dir() -> Path:
+    return REFS_DIR / "objects"
+
+
+def _registry_dir() -> Path:
+    return REFS_DIR / "registry"
+
+
+def _catalog_dir() -> Path:
+    return REFS_DIR / "catalog"
+
+
+def _slug(s: str) -> str:
+    """Filesystem-safe catalog slug per knowhow/refs/NAMING.md."""
+    s = (s or "").strip().lower().replace(" ", "_")
+    s = re.sub(r"[^a-z0-9._-]+", "-", s).strip("-._")
+    return s or "x"
+
+
+def structural_path(*, organism: Optional[str], assembly: Optional[str],
+                    role: Optional[str], build: Optional[str]) -> str:
+    """The human catalog path: <organism>/<assembly>/<role>/<build>, skipping
+    missing facets. Empty → 'misc' (the caller appends a sha for uniqueness)."""
+    parts = [_slug(p) for p in (organism, assembly, role, build) if p]
+    return "/".join(parts) if parts else "misc"
+
+
+def _fingerprint(p: Path) -> dict:
+    """Cheap identity for a (possibly huge, linked) path — a stat, not a read."""
+    st = p.stat()
+    return {"path": str(p), "size": st.st_size, "mtime": int(st.st_mtime)}
+
+
+def _symlink_force(link: Path, target: Path) -> None:
+    """Idempotent symlink: leave it alone if already pointing at target."""
+    try:
+        if link.is_symlink():
+            if os.readlink(link) == str(target):
+                return
+            link.unlink()
+        elif link.exists():
+            return  # a real file sits here (shouldn't happen) — don't clobber
+        link.symlink_to(target)
+    except FileExistsError:
+        pass
+
+
+def _write_descriptor(d: dict) -> Path:
+    """Write registry/<id>.json — the one durable artifact. Bumps the tier's
+    freshness marker so a per-backend index knows to rescan (refs.md §8)."""
+    rd = _registry_dir()
+    rd.mkdir(parents=True, exist_ok=True)
+    fp = rd / f"{d['id']}.json"
+    fp.write_text(json.dumps(d, indent=2, default=str))
+    try:
+        (rd / ".seq").write_text(str(int(time.time() * 1000)))
+    except OSError:
+        pass
+    return fp
+
+
+def get_reference(ref_id: str) -> Optional[dict]:
+    """The descriptor for a reference id, or None."""
+    fp = _registry_dir() / f"{ref_id}.json"
+    if not fp.exists():
+        return None
+    try:
+        return json.loads(fp.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _emit_catalog(sp: str, data_target: Path, ref_id: str) -> Path:
+    """Materialize the human catalog node: a `data` symlink to the bytes and a
+    `reference.json` back-pointer to the descriptor. Derived + regenerable."""
+    node = _catalog_dir() / sp
+    node.mkdir(parents=True, exist_ok=True)
+    _symlink_force(node / "data", data_target)
+    _symlink_force(node / "reference.json", _registry_dir() / f"{ref_id}.json")
+    return node
 
 
 def _sha_file(p: Path) -> str:
@@ -53,6 +145,10 @@ def _find_by_sha(sha: str) -> Optional[dict]:
     return None
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def register_reference(
     src_path: Union[str, Path],
     *,
@@ -63,10 +159,17 @@ def register_reference(
     derived_from: Optional[Union[str, list[str]]] = None,
     scope: str = "institution",
     title: Optional[str] = None,
+    version: Optional[str] = None,
 ) -> str:
-    """Place a reference into the content-addressed store (dedup by content) and
-    register it as a `reference` entity. Returns the entity id — the existing one
-    if identical content is already stored (no re-copy)."""
+    """Place a reference into the content-addressed store (dedup by content),
+    register it as a `reference` entity, and write its descriptor + human
+    `catalog/` entry (misc/refs.md §3). Returns the reference id — the existing
+    one if identical content is already stored (no re-copy).
+
+    Lineage (`derived_from`) is recorded in the **descriptor**, not as an entity
+    edge: the `reference` type forbids out-edges, so the pre-2026-06-29
+    wasDerivedFrom-edge path errored at validation. The descriptor's
+    `derivation.sources` is the portable, schema-independent lineage record."""
     src = Path(src_path).resolve()
     if not src.exists():
         raise FileNotFoundError(f"reference source not found: {src}")
@@ -92,36 +195,53 @@ def register_reference(
     if existing is not None:
         return existing["id"]
 
-    cas = REFS_DIR / sha
+    # Owned bytes under objects/<sha>/ (by-value, dedup).
+    cas = _objects_dir() / sha
+    artifact = cas / src.name
     if not cas.exists():
         cas.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
-            shutil.copytree(src, cas / src.name)
-            artifact = cas / src.name
+            shutil.copytree(src, artifact)
         else:
-            shutil.copy2(src, cas / src.name)
-            artifact = cas / src.name
-    else:
-        # CAS dir exists (shouldn't happen without an entity, but tolerate):
-        # point at whatever single child is there.
+            shutil.copy2(src, artifact)
+    elif not artifact.exists():
         children = list(cas.iterdir())
         artifact = children[0] if children else cas
 
-    meta = {"scope": scope, "sha": sha, "organism": organism,
-            "role": role, "assembly": assembly, "source": source}
-    from core.graph.derivation import derived_from as _mk_derived, imported, SYSTEM_ACTOR
     _ref_targets = [derived_from] if isinstance(derived_from, str) else (derived_from or [])
+    sp = structural_path(organism=organism, assembly=assembly, role=role,
+                         build=version or f"sha_{sha[:8]}")
+    if sp == "misc":
+        sp = f"misc/{sha[:8]}"
+    derived_title = title or f"{organism or 'ref'}:{role or src.name}"
+
+    from core.graph.derivation import imported, SYSTEM_ACTOR
+    meta = {"scope": scope, "sha": sha, "organism": organism, "role": role,
+            "assembly": assembly, "source": source, "structural_path": sp}
     eid = create_entity(
         entity_type=REFERENCE,
-        title=title or f"{organism or 'ref'}:{role or src.name}",
+        title=derived_title,
         artifact_path=str(artifact),
-        # Phase 2B: derived_from the given targets, else imported (a loaded reference).
-        derivation=(_mk_derived(list(_ref_targets)) if _ref_targets else imported(source or "reference")),
+        derivation=imported(source or "reference"),  # always imported; lineage → descriptor
         actor=SYSTEM_ACTOR,
         metadata=meta,
     )
-    for target in _ref_targets:
-        add_edge(eid, target, "wasDerivedFrom")
+
+    descriptor = {
+        "id": eid,
+        "owned": True,
+        "identity": {"kind": "content-sha", "sha": sha,
+                     "fingerprint": None, "verified_at": _now_iso()},
+        "organism": organism, "assembly": assembly, "role": role,
+        "structural_path": sp, "title": derived_title,
+        "acquisition": {"mode": "imported", "source": source},
+        "derivation": ({"kind": "derived_from", "sources": list(_ref_targets)}
+                       if _ref_targets else {"kind": "imported", "source": source}),
+        "scope": scope, "artifact_path": str(artifact),
+        "registered_at": _now_iso(),
+    }
+    _write_descriptor(descriptor)
+    _emit_catalog(sp, artifact, eid)
     return eid
 
 
