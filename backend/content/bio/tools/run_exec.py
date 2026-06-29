@@ -825,9 +825,15 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     if choice.location == "background":
         from core.jobs.runner import submit_r_job
         from content.bio.lifecycle.runs import active_run_id
+        # Background jobs get a timeout sized from the estimate, NOT the interactive
+        # 600s/30-min ceiling that `timeout_s` (above) carries — mirrors run_python
+        # (the 2026-06-28 STAR-build incident). Without this, an R job with a 30-min
+        # `estimated_runtime_min` but no explicit `timeout_s` was killed at the 600s
+        # default (the IntegrateLayers retry that timed out).
+        bg_timeout_s = _background_timeout_s(input_, est_min)
         job = submit_r_job(code, title=input_.get("title") or "Background R analysis",
                            focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                           timeout_s=timeout_s, project_id=str(project_id),
+                           timeout_s=bg_timeout_s, project_id=str(project_id),
                            thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
                            estimate=est, env=env_name)
         return {
