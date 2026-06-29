@@ -345,9 +345,13 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     # the Run. Interactive callers omit it and keep the ambient project.
     pid = project_id or current_project_id()
     adir = project_artifacts_dir(pid)
+    import time as _time
+    _harvest_begin = _time.time()   # agent's own writes precede this; our copies follow it
+    _created: set = set()           # uuid copies WE make this call (excluded from the off-convention pass)
 
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
         dest_name = f"{uuid.uuid4().hex}{ext}"
+        _created.add(dest_name)
         shutil.copy2(str(f), str(adir / dest_name))
         # original_name preserves the subdir context so the agent knows
         # WHERE the file lived (e.g. 'pagoda2_GSM.../qc_violin.png'), not
@@ -417,6 +421,47 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
                 pass
             continue
         _copy_and_record(f, files, suf)
+
+    # A+B: figures the agent saved DIRECTLY into the store dir (off-convention,
+    # e.g. savefig('/artifacts/<pid>/tree.png')) never touch scratch, so they'd be
+    # orphaned — on disk but unregistered/unpinnable, eventually reaped. Catch files
+    # written into the store DURING this exec (mtime in [since_ts, harvest-begin),
+    # excluding our own copies) and register them through the same path, nudging the
+    # agent back to the working dir. Gated on since_ts (the session/persistent-kernel
+    # path) so the one-shot path — fresh scratch, no start stamp — can't over-catch.
+    if since_ts:
+        for g in sorted(adir.glob("*")):
+            if not g.is_file() or g.name in _created:
+                continue
+            try:
+                mt = g.stat().st_mtime
+            except OSError:
+                continue
+            if not (since_ts <= mt < _harvest_begin):
+                continue
+            suf = g.suffix.lower()
+            if suf == ".png":
+                if _png_is_blank(g):
+                    continue
+                _copy_and_record(g, plots, suf)
+            elif suf in (".csv", ".tsv"):
+                _copy_and_record(g, tables, suf)
+            elif suf in _FILE_EXTS:
+                try:
+                    if g.stat().st_size > _MAX_HARVEST_BYTES:
+                        continue
+                except OSError:
+                    continue
+                if suf == ".pdf" and _pdf_page_count(g) == 1:
+                    _copy_and_record(g, plots, suf)
+                else:
+                    _copy_and_record(g, files, suf)
+            else:
+                continue
+            warnings.append(
+                f"'{g.name}' was written into the artifacts dir directly; I captured + "
+                f"registered it so it's tracked + pinnable."
+            )
 
     return plots, tables, files, warnings
 
