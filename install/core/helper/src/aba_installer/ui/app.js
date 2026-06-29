@@ -370,15 +370,22 @@
     });
 
     // Light poll for status changes so the UI reflects external `aba stop` etc.
-    if (window._abaPollTimer) clearInterval(window._abaPollTimer);
-    window._abaPollTimer = setInterval(async () => {
+    // Adaptive cadence: while the backend is warming up (running but not yet
+    // serving) poll fast so 'Starting…' flips to 'Running' promptly; once
+    // steady, back off to a gentle idle poll.
+    if (window._abaPollTimer) clearTimeout(window._abaPollTimer);
+    const tick = async () => {
+      let warming = false;
       try {
         const s = await fetchJSON('/api/status');
         refreshControl(s);
+        warming = !!s.backend_running && !s.backend_ready;
         const d = document.getElementById('diag');
         if (d && d.open) loadDiag();
       } catch(e){}
-    }, 5000);
+      window._abaPollTimer = setTimeout(tick, warming ? 1000 : 5000);
+    };
+    window._abaPollTimer = setTimeout(tick, 1000);
   }
 
   async function loadDiag() {
@@ -401,10 +408,17 @@
     const stop = document.getElementById('ctl-stop');
     const restart = document.getElementById('ctl-restart');
     const running = !!s.backend_running;
-    if (running) {
+    const ready = !!s.backend_ready;          // process up AND serving HTTP
+    if (running && ready) {
       status.textContent = '●  Running';
       status.style.color = 'var(--green)';
       meta.textContent = `pid ${s.backend_pid} · ${s.aba_home}`;
+    } else if (running) {
+      // Process exists but not serving yet — cold-start warmup. Don't let the
+      // user click Open onto a dead port; show that it's coming up.
+      status.textContent = '◌  Starting…';
+      status.style.color = 'var(--amber, #d08700)';
+      meta.textContent = `pid ${s.backend_pid} · warming up · ${s.aba_home}`;
     } else {
       status.textContent = '○  Stopped';
       status.style.color = 'var(--muted)';
@@ -414,9 +428,9 @@
     if (start) start.disabled = running;
     if (stop) stop.disabled = !running;
     if (restart) restart.disabled = !running;
-    // "Open ABA" is a link, not a <button> — grey it out when stopped.
+    // "Open ABA" is a link, not a <button> — enable only once actually serving.
     const open = document.getElementById('open-aba');
-    if (open) open.classList.toggle('disabled', !running);
+    if (open) open.classList.toggle('disabled', !ready);
   }
 
   // ─── playbook event stream (used by both Install + Update) ─────────────
