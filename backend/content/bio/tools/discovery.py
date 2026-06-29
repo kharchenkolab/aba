@@ -276,9 +276,10 @@ def search_skills_tool(input_: dict) -> dict:
 
 
 def search_bioconda(input_: dict) -> dict:
-    """Check whether a tool exists on bioconda (P2′ awareness only). Returns
-    presence + a note that conda materialization is deferred — so the agent can
-    answer honestly about CLI tools it cannot yet install (e.g. salmon, STAR)."""
+    """Check whether a tool exists on bioconda AND whether a cluster environment
+    module provides it. On a cluster the module is preferred (faster than a conda
+    build, and covers tools NOT on bioconda — e.g. cellranger), so it's surfaced
+    here where the agent looks for tool availability."""
     import json as _json
     import urllib.error
     import urllib.request
@@ -286,12 +287,20 @@ def search_bioconda(input_: dict) -> dict:
     name = (input_.get("query") or input_.get("name") or "").strip().lower()
     if not name:
         return {"error": "query is required"}
+    # Cluster module match (exact name; a no-op off a cluster).
+    _mod = None
+    try:
+        from core.exec import modules as _modprov
+        if _modprov.modules_active():
+            _mod = _modprov.resolve(name)
+    except Exception:  # noqa: BLE001
+        _mod = None
     try:
         with urllib.request.urlopen(
             f"https://api.anaconda.org/package/bioconda/{name}", timeout=10
         ) as resp:
             data = _json.loads(resp.read())
-        return {
+        result = {
             "found": True, "name": name,
             "latest_version": data.get("latest_version"),
             "summary": data.get("summary"),
@@ -301,10 +310,20 @@ def search_bioconda(input_: dict) -> dict:
         }
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return {"found": False, "name": name}
-        return {"error": f"bioconda lookup failed ({e.code})"}
+            result = {"found": False, "name": name}
+        else:
+            result = {"error": f"bioconda lookup failed ({e.code})"}
     except Exception as e:  # noqa: BLE001
-        return {"error": f"bioconda lookup failed: {e}"}
+        result = {"error": f"bioconda lookup failed: {e}"}
+    if _mod:
+        result["found"] = True
+        result["cluster_module"] = _mod
+        result["note"] = (
+            f"Provided by cluster environment module '{_mod}' — call "
+            f"ensure_capability('{name}') to use it (loaded for run_python and for "
+            f"background Slurm jobs; preferred over a conda build). "
+            + result.get("note", ""))
+    return result
 
 
 def _http_get_json(url: str, timeout: int = 15) -> dict:
@@ -675,9 +694,44 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     if not name:
         return {"error": "name is required"}
     _ct = (ctx or {}).get("cancel_token")
+    # Cluster module provider (prefer:first, job-path scope): does a cluster module
+    # satisfy this tool by exact name? resolve() matches only an exact module name,
+    # so pip libraries never match and fall through. Record it now so the project's
+    # background Slurm jobs `module load` it; the branches below read `_mod` (conda
+    # still builds for in-process; an uncatalogued tool like cellranger is
+    # module-only — see the not_found path). No-op off a cluster.
+    _mod = None
+    try:
+        from core.exec import modules as _modprov
+        if _modprov.modules_active():
+            _mod = _modprov.resolve(name)
+            if _mod:
+                from core import projects as _projects
+                _modprov.record_project_module(_projects.current(), _mod)
+                # B: make the tool usable IN-PROCESS now — prepend the module's
+                # env-delta to the live kernel so run_python subprocesses find its
+                # binary (no background job / restart needed just to load it).
+                _snip = _modprov.kernel_env_snippet(_mod)
+                _tid = (ctx or {}).get("thread_id")
+                if _snip and _tid:
+                    from core.exec.kernels import get_pool
+                    _s = get_pool().peek(str(_tid), "python")
+                    if _s is not None:
+                        _s.execute(_snip, timeout_s=20)
+    except Exception:  # noqa: BLE001
+        _mod = None
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
     if not cap:
+        if _mod:
+            # Uncatalogued but a cluster module provides it (e.g. cellranger):
+            # prefer:first → satisfy via the module (recorded above for the
+            # project's background jobs) rather than suggest a slower pip/conda
+            # install. Run it from a backgrounded run (Slurm step).
+            return {"status": "ready", "name": name, "archetype": "cli", "module": _mod,
+                    "note": f"Provided by cluster module '{_mod}', loaded in background "
+                            f"Slurm jobs; not installed in-process. Invoke it from "
+                            f"run_python(background=True) / a Slurm step."}
         # E-1: parallel-search external registries for an exact-name match
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
@@ -799,15 +853,25 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
+        # `_mod` (resolved + recorded up top) means a cluster module also covers this
+        # CLI tool — it's loaded in the project's background jobs. We still build conda
+        # for in-process use; a conda failure is non-fatal when `_mod` covers it.
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
+            if _mod:
+                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                        "archetype": cap.get("archetype"), "module": _mod,
+                        "note": f"Provided by cluster module '{_mod}' (loaded in background Slurm "
+                                f"jobs); the conda install isn't needed there and failed: {e}"}
             return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
+        _note = ("Installed into the conda tools env; the binary is on PATH — "
+                 "invoke it from run_python via subprocess.")
+        if _mod:
+            _note += f" Background Slurm jobs also load cluster module '{_mod}'."
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"),
-                "note": "Installed into the conda tools env; the binary is on PATH — "
-                        "invoke it from run_python via subprocess."}
+                "archetype": cap.get("archetype"), "note": _note, "module": _mod}
     if prov.get("mcp_server"):
         # Live adoption: connect the external server now so its tools become
         # callable as 'server:tool' for the rest of this session.

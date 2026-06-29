@@ -93,8 +93,12 @@ def status() -> dict:
             api_key = _frozen or ""
         except Exception:  # noqa: BLE001
             api_key = ""
-    mode = (os.environ.get("ABA_LLM_CREDENTIAL") or cfg.get("ABA_LLM_CREDENTIAL")
-            or "apikey").lower()
+    try:                                   # reflect the oauth_cc auto-default, not just the raw env
+        from core.llm import _credential_mode
+        mode = _credential_mode()
+    except Exception:  # noqa: BLE001
+        mode = (os.environ.get("ABA_LLM_CREDENTIAL") or cfg.get("ABA_LLM_CREDENTIAL")
+                or "apikey").lower()
     pasted = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
               or cfg.get("CLAUDE_CODE_OAUTH_TOKEN") or "")
     # Use the SAME resolver a turn uses (oauth.json → CLAUDE_CODE_OAUTH_TOKEN →
@@ -191,6 +195,14 @@ def _detect_kind(cred: str) -> str | None:
     return None
 
 
+def _sanitize_credential(cred: str) -> str:
+    """Rescue a mangled paste: drop whitespace (incl. a newline from a terminal-
+    wrapped copy, e.g. `more .credentials.json`) and obvious paste punctuation
+    (surrounding quotes, trailing comma). sk-ant keys/tokens contain none of these,
+    so this only ever helps."""
+    return re.sub(r"\s+", "", (cred or "")).strip("'\",;")
+
+
 def _test_credential(kind: str, cred: str) -> tuple[bool, str | None]:
     """Make a 1-token Haiku call to confirm Anthropic accepts the credential
     BEFORE we persist. (True, None) on success; (False, message) otherwise."""
@@ -220,10 +232,11 @@ def set_credential(cred: str) -> dict:
     key or a pasted OAuth token, VERIFY it against Anthropic, then persist + go
     live. Raises ValueError (→ HTTP 400) on bad format or rejection — nothing is
     written unless the credential actually works."""
-    cred = (cred or "").strip()
+    cred = _sanitize_credential(cred)      # rescue terminal-wrapped / quoted pastes
     kind = _detect_kind(cred)
     if kind is None:
-        raise ValueError("That doesn't look like an Anthropic API key (expected sk-ant-…).")
+        raise ValueError("That doesn't look like an Anthropic API key or OAuth token "
+                         "(expected sk-ant-… or sk-ant-oat…).")
     ok, err = _test_credential(kind, cred)
     if not ok:
         raise ValueError(err or "The credential was rejected.")

@@ -51,15 +51,25 @@ class SlurmSubmitter:
         done_path = run_dir / "done"
         log_path, err_path = run_dir / "job.log", run_dir / "job.err"
 
+        # Cluster module provider: the modules this project resolved (recorded by
+        # ensure_capability) get `module load`ed in the login-less job script.
+        # project_modules() is [] off-cluster, so this is a safe no-op there.
+        from core.exec.modules import load_lines, project_modules
+        mods = list(params.get("modules") or [])
+        for _m in project_modules(pid):
+            if _m not in mods:
+                mods.append(_m)
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             "run_id": job["id"], "timeout_s": int(params.get("timeout_s") or 600),
             "result_path": str(result_path), "env": params.get("env"),
+            "modules": mods,                              # provenance (cluster module provider)
         }))
         job_sh = run_dir / "job.sh"
         job_sh.write_text(
             "#!/bin/bash\n"
             f"cd {run_dir}\n"
+            f"{load_lines(mods)}"
             f"export PYTHONPATH={_BACKEND_DIR}:$PYTHONPATH\n"
             f"{sys.executable} -m core.jobs.slurm_entry {spec_path}\n"
             f"echo $? > {done_path}\n"
