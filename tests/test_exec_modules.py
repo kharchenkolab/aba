@@ -141,3 +141,23 @@ def test_project_module_set_threads_to_jobs(tmp_path):
             os.environ["ABA_BATCH_SUBMITTER"] = saved
         if saved_rt is not None:
             os.environ["ABA_RUNTIME_DIR"] = saved_rt
+
+
+def test_kernel_env_snippet():
+    """In-process application (B): the snippet prepends the module's bin to the
+    kernel's PATH so subprocesses find the binary — no background job needed."""
+    saved = os.environ.get("ABA_BATCH_SUBMITTER")
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    try:
+        if not M.modules_active():                       # no module system (CI) → no-op
+            assert M.kernel_env_snippet("samtools/1.10-foss-2018b") == ""
+            return
+        snip = M.kernel_env_snippet("samtools/1.10-foss-2018b")
+        assert "import os as _o" in snip
+        assert "_o.environ['PATH']" in snip
+        assert "samtools/1.10-foss-2018b/bin" in snip    # the module's bin prepended
+    finally:
+        if saved is None:
+            os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        else:
+            os.environ["ABA_BATCH_SUBMITTER"] = saved
