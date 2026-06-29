@@ -39,11 +39,21 @@ def _read_token() -> str | None:
 
 
 def _snapshot_dotclaude() -> str:
+    """Snapshot mtimes under ~/.claude to prove the test didn't pollute it.
+    Skips per-session churn (transcripts, history, todos, shell snapshots,
+    telemetry) that ANY concurrent Claude Code session writes — otherwise
+    running this demo from inside a live session gives a false 'isolation
+    failed'. The isolation we actually care about is credentials + settings."""
     home_claude = Path.home() / ".claude"
     if not home_claude.exists():
         return ""
+    IGNORE = {"projects", "file-history", "todos", "shell-snapshots",
+              "history.jsonl", "statsig", "logs"}
     out = []
     for p in sorted(home_claude.rglob("*")):
+        rel = p.relative_to(home_claude)
+        if rel.parts and rel.parts[0] in IGNORE:
+            continue
         try:
             out.append(f"{p.stat().st_mtime_ns} {p}")
         except Exception:
@@ -67,6 +77,12 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="aba_live_repair_"))
     aba_home = work / "aba"; aba_home.mkdir()
     cfg_dir = work / "claude-cfg"; cfg_dir.mkdir()
+    # agent_repair._aba_credential_env() reads the credential from
+    # $ABA_HOME/config.env (or oauth.json) — NOT from the CLAUDE_CODE_OAUTH_TOKEN
+    # env var. Setting only the env var (as this demo used to) trips the
+    # repair hook's no-credential gate → "ABA isn't signed in yet" and the agent
+    # never runs. Seed it where the code actually looks.
+    (aba_home / "config.env").write_text(f"export CLAUDE_CODE_OAUTH_TOKEN={token}\n")
 
     # A stand-in "micromamba" that is QUARANTINED (Gatekeeper flag set).
     binp = aba_home / "bin" / "micromamba"
