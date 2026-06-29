@@ -374,7 +374,8 @@ def _human_size(n: int) -> str:
     return f"{n} B"
 
 
-def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = None) -> None:
+def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = None,
+                            ensure_names: Optional[list] = None) -> None:
     """Scan the Run's output directory and write a `metadata.run` manifest
     (outputs / bulk) so the Run view lists what the pipeline produced — figures
     (with thumbnails), tables, and every other file (.rds/.h5ad/…) as a
@@ -414,14 +415,13 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     except Exception as e:  # noqa: BLE001 — manifest refresh must not fail
         _log.warning("refresh_output_manifest: artifact lookup failed: %s", e)
 
-    outputs: list[dict] = []
-    for f in sorted(base.rglob("*")):
+    def _entry(f: Path) -> Optional[dict]:
         if not f.is_file() or f.name.startswith("."):
-            continue
+            return None
         try:
             sz = f.stat().st_size
         except OSError:
-            continue
+            return None
         rel = f.relative_to(base).as_posix()
         ext = f.suffix.lower().lstrip(".")
         url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
@@ -435,24 +435,61 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
             if ext == "pdf" and _ensure_pdf_thumb(f):
                 from urllib.parse import quote as _q
                 from core.exec.previews import PREVIEW_SUFFIX as _PREV
-                thumb_rel = (f.relative_to(base).as_posix() + _PREV)
+                thumb_rel = (rel + _PREV)
                 thumb_url = f"/api/runs/{run_id}/file?rel={_q(thumb_rel)}"
             out: dict = {"kind": "figure", "label": rel, "thumb": thumb_url,
-                          "href": url, "size": _human_size(sz)}
-            if artifact_id:
-                out["artifact_id"] = artifact_id
-            outputs.append(out)
+                         "href": url, "size": _human_size(sz)}
         elif ext in _TAB_EXT:
             out = {"kind": "table", "label": rel, "href": url, "size": _human_size(sz)}
-            if artifact_id:
-                out["artifact_id"] = artifact_id
-            outputs.append(out)
         else:
             out = {"kind": "file", "label": rel, "href": url + "&download=1",
-                    "size": _human_size(sz)}
-            if artifact_id:
-                out["artifact_id"] = artifact_id
-            outputs.append(out)
+                   "size": _human_size(sz)}
+        if artifact_id:
+            out["artifact_id"] = artifact_id
+        return out
+
+    outputs: list[dict] = []
+    seen_rel: set[str] = set()
+    for f in sorted(base.rglob("*")):
+        e = _entry(f)
+        if e:
+            outputs.append(e)
+            seen_rel.add(e["label"])
+    # NFS lag: a file a compute node just wrote may be invisible to a login-node
+    # readdir AND to a by-name stat (the Run dir was created here pre-submit, so
+    # its empty listing + negative dentries are cached). The harvester's result
+    # (result.json) is the authoritative list of what the job produced, so union
+    # those names in REGARDLESS of local visibility — size best-effort, and the
+    # href/thumb resolve once NFS propagates (seconds, well before a user opens
+    # the Run). Without this a just-finished Slurm job shows an empty Run.
+    # (Interactive callers pass already-listed names → deduped to a no-op.)
+    for nm in (ensure_names or []):
+        rel = Path(str(nm)).as_posix()
+        if not rel or rel in seen_rel:
+            continue
+        name = rel.rsplit("/", 1)[-1]
+        ext = ("." + rel.rsplit(".", 1)[-1]).lower() if "." in name else ""
+        ext = ext.lstrip(".")
+        url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
+        try:
+            sz = (base / rel).stat().st_size
+        except OSError:
+            sz = None                       # not visible yet → omit size, still list it
+        if ext in _FIG_EXT:
+            out = {"kind": "figure", "label": rel,
+                   "thumb": plot_urls_by_name.get(name) or url, "href": url}
+        elif ext in _TAB_EXT:
+            out = {"kind": "table", "label": rel, "href": url}
+        else:
+            out = {"kind": "file", "label": rel, "href": url + "&download=1"}
+        if sz is not None:
+            out["size"] = _human_size(sz)
+        artifact_id = name_to_artifact.get(name)
+        if artifact_id:
+            out["artifact_id"] = artifact_id
+        outputs.append(out)
+        seen_rel.add(rel)
+    outputs.sort(key=lambda o: o["label"])
     bulk = None
     if len(outputs) > _MANIFEST_CAP:
         bulk = {"count": len(outputs), "note": f"{len(outputs)} files in the run folder"}

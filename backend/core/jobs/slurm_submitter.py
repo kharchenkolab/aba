@@ -154,8 +154,29 @@ class SlurmSubmitter:
                 return json.loads(rp.read_text())
             except Exception:  # noqa: BLE001
                 pass
+        # `done` is here but result.json isn't readable yet. slurm_entry ALWAYS
+        # writes result.json BEFORE job.sh writes `done`, so on a clean exit
+        # (rc==0) a missing/unparseable result.json is NFS visibility lag on the
+        # polling (login) node — NOT a real absence. Returning the empty fallback
+        # would silently drop the job's stdout AND every harvested artifact: the
+        # agent would think a successful job produced nothing, and the Run would
+        # stay empty (the live 2026-06-29 Seurat symptom). Re-poll instead until
+        # it shows up; bound the wait on `done`'s mtime so a genuinely truncated
+        # run (or pathological lag) still terminates with the fallback.
+        if rc == 0 and not self._result_overdue(done):
+            return None
         return ({"returncode": 0, "stdout": "", "stderr": ""} if rc == 0
                 else {"error": f"slurm job exited {rc}", "returncode": rc})
+
+    @staticmethod
+    def _result_overdue(done: Path, grace_s: float = 90.0) -> bool:
+        """True once `done` is older than grace_s — bounds how long poll() waits
+        for a lagging result.json (NFS acdirmax is ~60s) before giving up."""
+        import time
+        try:
+            return (time.time() - done.stat().st_mtime) > grace_s
+        except OSError:
+            return True
 
     def _in_squeue(self, slurm_id) -> bool:
         """True iff squeue still lists the job (pending/running/completing) — the

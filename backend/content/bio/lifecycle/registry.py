@@ -204,7 +204,14 @@ def register_artifacts_from_tool_result(
                 _plots = (result_obj.get("plots") or []) if isinstance(result_obj, dict) else []
                 _by_name = {p.get("original_name"): p.get("url") for p in _plots
                             if p.get("original_name") and p.get("url")}
-                refresh_output_manifest(_rid, plot_urls_by_name=_by_name)
+                # The harvester's authoritative output names (rel to the Run dir):
+                # pass them so a just-finished Slurm job's outputs attach even if
+                # the login-node dir listing hasn't caught up (NFS — see
+                # refresh_output_manifest).
+                _names = [a.get("original_name") for grp in ("plots", "tables", "files")
+                          for a in (result_obj.get(grp) or []) if a.get("original_name")] \
+                    if isinstance(result_obj, dict) else []
+                refresh_output_manifest(_rid, plot_urls_by_name=_by_name, ensure_names=_names)
         except Exception:  # noqa: BLE001 — manifest is best-effort cosmetic
             pass
     return refreshed
