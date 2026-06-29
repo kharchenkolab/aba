@@ -39,6 +39,28 @@ HELPER_DIR="$ABA_HOME/installer"
 ABA_REPO_URL="${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}"
 ABA_RECIPES_URL="${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}"
 
+# ── failure handling ───────────────────────────────────────────────────────
+# The bootstrap runs in Terminal before the helper / web UI / sign-in / agent
+# exist, so terminal text is the ONLY feedback. Every abort must say what broke
+# and what to do, and must NOT auto-close the window (that happens only on a
+# clean finish, gated by SETUP_DONE).
+SETUP_DONE=0
+fail() {  # $@: message lines — branded, actionable, then abort.
+  echo >&2
+  echo "✖ ABA Setup failed." >&2
+  printf '   %s\n' "$@" >&2
+  exit 1
+}
+on_err() {  # ERR trap for UNanticipated aborts (set -e). $1 = failing line.
+  local rc=$? ln="${1:-?}"
+  [ "$SETUP_DONE" = 1 ] && return 0
+  echo >&2
+  echo "✖ ABA Setup failed (line $ln, exit $rc)." >&2
+  echo "   See the messages above. Fix the issue and re-run this installer." >&2
+  echo "   If the helper started, its logs are under $HELPER_DIR/." >&2
+}
+trap 'on_err $LINENO' ERR
+
 cat <<EOF
 ABA Setup
 ─────────
@@ -68,15 +90,30 @@ mkdir -p "$REPO_DIR" "$HELPER_DIR"
 # Clone (or refresh) the repo + recipe library — in this shell, so SSH keys /
 # git credentials work while the repos are private.
 clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
+  local name; name="$(basename "$2")"
   if [[ -d "$2/.git" ]]; then
-    echo "Updating $(basename "$2") …"
-    git -C "$2" pull --ff-only || true
+    echo "Updating $name …"
+    # Don't abort the whole install on a non-fast-forward; warn and keep the
+    # existing checkout (better than dead-ending an otherwise-working setup).
+    git -C "$2" pull --ff-only \
+      || echo "  warning: could not fast-forward $name; continuing with the existing checkout." >&2
   else
-    echo "Cloning $(basename "$2") …"
+    echo "Cloning $name …"
+    # `|| rc=$?` keeps set -e from aborting before we can give a useful message.
+    local rc=0
     if [[ -n "${3:-}" ]]; then
-      git clone -b "$3" --depth 1 "$1" "$2"
+      git clone -b "$3" --depth 1 "$1" "$2" || rc=$?
     else
-      git clone --depth 1 "$1" "$2"
+      git clone --depth 1 "$1" "$2" || rc=$?
+    fi
+    if [[ "$rc" != 0 ]]; then
+      fail "Could not clone $1" \
+           "If the ABA repositories are still private, clone over SSH with your own access:" \
+           "    ABA_REPO_URL=git@github.com:kharchenkolab/aba.git \\" \
+           "    ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipe-pack.git \\" \
+           "        bash \"$0\"" \
+           "Otherwise: check your network, that 'git --version' works, and that the" \
+           "Xcode Command Line Tools are installed (xcode-select --install)."
     fi
   fi
 }
@@ -90,7 +127,9 @@ if [[ ! -x "$HELPER_DIR/venv/bin/python" ]]; then
   "$PY" -m venv "$HELPER_DIR/venv"
 fi
 "$HELPER_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$HELPER_DIR/venv/bin/pip" install --quiet "$REPO_DIR/aba/install/core/helper"
+# NOT --quiet: if this fails (network, build error), the pip output is the only
+# clue the user (or we) get — the ERR trap aborts with it visible.
+"$HELPER_DIR/venv/bin/pip" install "$REPO_DIR/aba/install/core/helper"
 
 # Render + load the LaunchAgent so the helper auto-starts on login — and
 # starts it now (RunAtLoad). The plist is a template needing path
@@ -115,23 +154,35 @@ if [[ "$(uname -s)" == "Darwin" && "${ABA_INSTALL_TRAY:-1}" != "0" ]]; then
     echo "Warning: ABA Tray install failed; continuing without the menu-bar app." >&2
 fi
 
-# Wait for the helper to come up, then open the browser.
+# Wait for the helper to come up, then open the browser. A helper that never
+# readies must be a hard failure — NOT a silent fall-through that opens a dead
+# page and claims success (the old behaviour).
 echo "Starting helper …"
 PORT=8765
+ready=0
 for _ in $(seq 1 60); do
   if [[ -f "$HELPER_DIR/port.txt" ]]; then
     PORT="$(cat "$HELPER_DIR/port.txt")"
   fi
   if curl -fs "http://127.0.0.1:$PORT/ready" > /dev/null 2>&1; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+if [[ "$ready" != 1 ]]; then
+  fail "The ABA helper did not come up within 30s." \
+       "Look at the helper logs for the cause:" \
+       "    $HELPER_DIR/helper.err.log" \
+       "    $HELPER_DIR/helper.out.log" \
+       "Fix the issue (or report it with those logs) and re-run this installer."
+fi
 
 # Use localhost (not 127.0.0.1) so the UI tab shares an origin with the OAuth
 # callback (http://localhost:PORT/callback) — lets the callback advance the
 # Setup tab after Sign in with Claude.ai.
 URL="http://localhost:$PORT/"
+SETUP_DONE=1   # past the point of failure — success path; ERR footer now silenced
 echo
 echo "ABA Setup is running."
 echo "Opening $URL in your browser…"
