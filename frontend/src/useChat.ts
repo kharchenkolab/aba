@@ -6,7 +6,7 @@ import { getActiveMember } from './bio/activeMemberRef'
 // close / cancellation behavior unit-testable in isolation.
 import { readSSEStream } from './lib/sseReader'
 
-type RawMsg = { role: string; content: unknown[]; ts?: string }
+type RawMsg = { id?: number; role: string; content: unknown[]; ts?: string }
 
 /** Coerce a model-supplied plan `steps` value to a clean string[] — the model
  *  sometimes returns a single string (or other shape) instead of an array. */
@@ -137,10 +137,13 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
         b => b.type === 'tool_result',
       )
       if (allToolResults) {
-        // Lift these tool_results into the previous assistant message's blocks.
+        // Lift these tool_results into the previous assistant message's blocks
+        // — and record this row's id on that bubble so a search hit on the
+        // tool_result row still scrolls to where it's shown.
         const last = display[display.length - 1]
         if (last && last.role === 'assistant') {
           last.blocks = [...last.blocks, ...blocksFromContent(m.content as Record<string, unknown>[])]
+          if (typeof m.id === 'number') last.dbIds = [...(last.dbIds || []), m.id]
         }
         i++
         continue
@@ -148,6 +151,7 @@ function collapseHistory(raw: RawMsg[]): DisplayMessage[] {
     }
     display.push({
       id: `hist-${i}`,
+      dbIds: typeof m.id === 'number' ? [m.id] : [],
       role: m.role as 'user' | 'assistant',
       blocks: blocksFromContent(m.content as Record<string, unknown>[]),
       ts: m.ts,

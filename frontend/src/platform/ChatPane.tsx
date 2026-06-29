@@ -13,6 +13,10 @@ import './ChatPane.css'
 
 interface Props {
   messages: DisplayMessage[]
+  /** A chat search hit: scroll to + flash the bubble containing this
+   *  messages-table row id. Cleared via onScrollConsumed once handled. */
+  scrollToMsgId?: number | null
+  onScrollConsumed?: () => void
   streaming: boolean
   /** True while a thread's history is being fetched — suppress the empty-state. */
   loading?: boolean
@@ -85,6 +89,8 @@ interface Props {
 
 export default function ChatPane({
   messages,
+  scrollToMsgId,
+  onScrollConsumed,
   streaming,
   loading,
   streamMsg,
@@ -131,6 +137,21 @@ export default function ChatPane({
     if (pendingClarification) clarifyInputRef.current?.focus()
   }, [pendingClarification])
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Scroll to + flash a chat search hit. Re-runs when `messages` arrive (the
+  // thread switch loads history async, so the target bubble may not be in the
+  // DOM on the first pass). No-op if the row isn't found (collapsed away /
+  // different thread) — we still consume the request so it doesn't linger.
+  useEffect(() => {
+    if (scrollToMsgId == null) return
+    const sel = `.msg-anchor[data-msg-ids~="${scrollToMsgId}"]`
+    const el = scrollRef.current?.querySelector(sel) as HTMLElement | null
+    if (!el) return   // not loaded yet — wait for the next messages update
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el.classList.add('msg-flash')
+    const t = setTimeout(() => { el.classList.remove('msg-flash'); onScrollConsumed?.() }, 1700)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToMsgId, messages])
   // "Pinned to bottom" auto-follow: while pinned, new content auto-scrolls
   // the view; while UN-pinned (the user has scrolled up to read history),
   // we DON'T jerk them back to the bottom — instead a floating button shows
@@ -381,7 +402,9 @@ export default function ChatPane({
               const Message = message_renderer()
               if (!Message) return null   // bio hasn't loaded yet; chat will refresh
               return (
-                <ErrorBoundary key={m.id} label="message"
+                <div key={m.id} className="msg-anchor"
+                     data-msg-ids={(m.dbIds || []).join(' ') || undefined}>
+                <ErrorBoundary label="message"
                   fallback={reset => (
                     <div className="errbound">
                       <span className="errbound__text">This message couldn’t be displayed.</span>
@@ -415,6 +438,7 @@ export default function ChatPane({
                   onPlanAdjust={() => setExtraFocus(n => n + 1)}
                 />
                 </ErrorBoundary>
+                </div>
               )
             })}
             {starters && starters.length > 0 && !all.some(m => m.role === 'user') && (

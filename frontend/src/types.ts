@@ -128,6 +128,9 @@ export type Block = TextBlock | ImageBlock | ToolStartBlock | ToolResultBlock | 
 
 export interface DisplayMessage {
   id: string
+  /** messages-table row id(s) this bubble was built from (history only; a
+   *  collapsed bubble can span several rows). Used to scroll to a search hit. */
+  dbIds?: number[]
   role: Role
   blocks: Block[]
   ts?: string
