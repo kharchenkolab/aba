@@ -71,7 +71,11 @@ steps:
       # mistaken for complete — we wipe and rebuild it (the package cache makes
       # that fast). conda-meta would appear before the pip layer and skip a
       # broken env, leaving "uvicorn: No such file or directory" at start.
-      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; "$ABA_HOME/bin/micromamba" create -y -v -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # --channel-priority strict: with a conda-forge + bioconda mix, strict
+      # priority keeps the solver from exploring lower-priority channels for
+      # packages conda-forge already satisfies — a large solve speedup (and the
+      # correct, deterministic resolution). micromamba 2.x does not default to it.
+      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
     remediation: |
       The conda solve/build failed — usually a network/channel hiccup or low
@@ -120,7 +124,7 @@ steps:
       Seurat (a late, heavy package) so a half-built env rebuilds rather than
       being mistaken for complete.
     commands:
-      - 'TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi'
+      - 'TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi'
     timeout_seconds: 1800
 
   - id: build-frontend
