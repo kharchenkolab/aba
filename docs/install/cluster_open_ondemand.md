@@ -57,7 +57,8 @@ default*, the platform code, or the base packages.
 ## 1. Build the image
 
 `install/sif/build.sh` builds from the same `install/core` specs as the other
-installers, **baking the recipe pack** into both profiles:
+installers, **baking the recipe pack** (and the OOD `aba_preflight.py`, at
+`/opt/aba/ood/`) into both profiles:
 
 ```bash
 export APPTAINER=…/apptainer/bin/apptainer APPTAINER_TMPDIR=…/tmp
@@ -148,12 +149,7 @@ host's app dir (`/var/www/ood/apps/sys/`, root).
    (`cluster: "dev-cluster"`). Set both to *your* OOD cluster — the one defined in
    `/etc/ood/config/clusters.d/<name>.yml` — or launches won't submit.
 
-2. **Wire up preflight** (see the gap note below). `before.sh.erb` runs
-   `aba_preflight.py` to turn `site.yaml` into the session env. The shipped line
-   uses an absolute **dev-machine** path for the python + script — repoint it at a
-   node-reachable python + `aba_preflight.py` for your deployment.
-
-3. **Copy it in**, scripts executable:
+2. **Copy it in**, scripts executable:
    ```bash
    rm -rf /var/www/ood/apps/sys/aba
    cp -r install/ood/aba /var/www/ood/apps/sys/aba
@@ -163,18 +159,15 @@ host's app dir (`/var/www/ood/apps/sys/`, root).
    *Iterating?* Deploy to `~/ondemand/dev/aba` instead — it shows under **Develop →
    My Sandbox Apps** and reloads each launch (no sys-app copy).
 
-4. **Verify.** OOD discovers sys apps on the next dashboard load (no restart). Open
+3. **Verify.** OOD discovers sys apps on the next dashboard load (no restart). Open
    **Interactive Apps → Servers → ABA**, pick a lab + instance, launch, and click
    **Connect to ABA** once *Running*. A blocked launch shows why on the session card
    (preflight rc 10 = the group's `/aba` isn't an ABA workspace).
 
-> **Known gap — preflight staging.** `before.sh.erb`'s preflight call is the one
-> piece not yet deployment-generic: it points at a dev checkout, and the SIF (§1)
-> currently bakes only `backend/`, `frontend-dist/`, and `system_bundle/` — **not**
-> `install/ood/aba_preflight.py`. Until that's baked into the image + the script
-> reworked to run it from the SIF, stage `aba_preflight.py` (and a python with
-> PyYAML — the SIF's `/opt/aba-venv/bin/python` once baked) on shared storage and
-> point the line there.
+**Preflight needs no setup.** `before.sh.erb` resolves the image from `site.yaml`
+and runs the **baked** `aba_preflight.py` from it (`/opt/aba/ood/aba_preflight.py`,
+via `apptainer exec` — `template/preflight.sh`) — version-locked to the backend,
+runs on any node, nothing to hand-edit.
 
 ## 5. Onboard a lab
 
