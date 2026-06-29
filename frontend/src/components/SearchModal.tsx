@@ -148,7 +148,7 @@ export default function SearchModal({ open, onClose, onPickEntity, onPickFile, o
                      className={'search-row' + (active === msgBase + i ? ' is-active' : '')}
                      onMouseEnter={() => setActive(msgBase + i)}
                      onClick={() => { onPickMessage(m.thread_id, m.id); onClose() }}>
-                  <span className="badge-type">{m.role}</span>
+                  <span className="badge-type">{m.role === 'assistant' ? 'Guide' : m.role === 'user' ? 'You' : m.role}</span>
                   <div className="body"><div className="snippet">{highlight(m.snippet, q)}</div></div>
                 </div>
               ))}
