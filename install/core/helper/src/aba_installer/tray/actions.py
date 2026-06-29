@@ -148,7 +148,11 @@ def check_updates(*, port: int,
     Internal Server Error with no recovery affordance.
     """
     notify = notify or (lambda *a: None)
-    url = f"http://127.0.0.1:{port}/"
+    # ?update=1 tells the control page to AUTO-START the update on load — the
+    # menu item is "Check for updates", so opening the page and making the user
+    # click again was the wrong contract. The page strips the param after firing
+    # so a manual refresh doesn't re-trigger, and skips if one's already running.
+    url = f"http://127.0.0.1:{port}/?update=1"
 
     # Path 1: control page is healthy.
     if _control_page_ok(port=port, urlopen=urlopen):
