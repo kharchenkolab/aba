@@ -53,6 +53,11 @@ if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$SB/skills/recipes/"; e
 if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$SB/catalog/"; fi
 echo "   recipes baked: $(find "$SB/skills/recipes" -name '*.md' 2>/dev/null | wc -l | tr -d ' ') files, $(ls "$SB/catalog"/*.yaml 2>/dev/null | wc -l | tr -d ' ') catalog"
 
+# ── bake the OOD preflight so before.sh.erb runs it FROM the image (version-
+# locked to the backend; no dev-path surgery on the launch card) ──
+mkdir -p "$STAGE/ood"; cp "$REPO_ROOT/install/ood/aba_preflight.py" "$STAGE/ood/aba_preflight.py"
+echo "   ood preflight baked: /opt/aba/ood/aba_preflight.py"
+
 # ── runtime-install essentials the debian:12-slim base omits (no %post needed) ──
 # CA certs: without them every runtime https download (pip/PyPI, micromamba, CRAN/
 # Bioconductor) fails with CERTIFICATE_VERIFY_FAILED. micromamba: the agent needs
@@ -86,6 +91,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    $STAGE/backend /opt/aba/backend"
   echo "    $STAGE/frontend-dist /opt/aba/frontend-dist"
   echo "    $STAGE/system_bundle /opt/aba/system_bundle"
+  echo "    $STAGE/ood/aba_preflight.py /opt/aba/ood/aba_preflight.py"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
