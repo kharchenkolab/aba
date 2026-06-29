@@ -124,11 +124,68 @@ def doctor() -> int:
     return 0 if fails == 0 else 1
 
 
+def _wall_to_h(val: str | None) -> int | None:
+    """sacctmgr MaxWall ('D-HH:MM:SS' / 'HH:MM:SS') → whole hours. Blank / unlimited → None."""
+    val = (val or "").strip()
+    if not val or val.lower() in ("unlimited", "none", "-1"):
+        return None
+    days = 0
+    if "-" in val:
+        d, val = val.split("-", 1)
+        days = int(d) if d.isdigit() else 0
+    hh = val.split(":")[0]
+    return days * 24 + (int(hh) if hh.isdigit() else 0)
+
+
+def _discover_qos(user: str) -> tuple[list[str], dict, str | None]:
+    """Probe `sacctmgr` for the user's valid QOS + each QOS's MaxWall + the user's
+    account. Slurm exposes partitions via `sinfo` but NOT a user's QOS — without
+    this, ABA submits no `--qos` and jobs land on the cluster default QOS (often an
+    8h cap), so anything longer is rejected with QOSMaxWallDurationPerJobLimit.
+
+    Returns (qos_ranked, {qos: max_h}, account); QOS ranked most-permissive first
+    (largest MaxWall, ties toward generic/short names so a cross-partition `long`
+    beats a partition-scoped `c_long`). Empty/None when sacctmgr is absent/quiet."""
+    import getpass
+    user = user or os.environ.get("USER") or getpass.getuser()
+    if not shutil.which("sacctmgr"):
+        return [], {}, None
+    qos: set[str] = set()
+    account: str | None = None
+    try:
+        r = subprocess.run(["sacctmgr", "-nP", "show", "assoc", f"user={user}",
+                            "format=account,qos"], capture_output=True, text=True, timeout=20)
+        for line in (r.stdout or "").splitlines():
+            f = line.split("|")
+            if len(f) >= 2:
+                if f[0].strip() and account is None:
+                    account = f[0].strip()
+                qos.update(q.strip() for q in f[1].split(",") if q.strip())
+    except Exception:  # noqa: BLE001
+        return [], {}, None
+    if not qos:
+        return [], {}, account
+    walls: dict[str, int | None] = {}
+    try:
+        r = subprocess.run(["sacctmgr", "-nP", "show", "qos", "format=name,maxwall"],
+                           capture_output=True, text=True, timeout=20)
+        for line in (r.stdout or "").splitlines():
+            f = line.split("|")
+            if len(f) >= 2 and f[0].strip():
+                walls[f[0].strip()] = _wall_to_h(f[1])
+    except Exception:  # noqa: BLE001
+        pass
+    _INF = 1 << 30
+    ranked = sorted(qos, key=lambda q: (-(_INF if walls.get(q) is None else walls[q]), len(q), q))
+    return ranked, {q: walls.get(q) for q in ranked}, account
+
+
 def gen_hpc_config(out_path: str | None = None) -> int:
-    """Probe `sinfo` and write a starting hpc.yaml partition catalog (cluster-
-    personal profile). The live router tolerates a stale/edited file, so this is
-    a convenience: a good default the user refines (QOS/account/walltime). Returns
-    0 on success, 1 when Slurm isn't reachable."""
+    """Probe `sinfo` (+ `sacctmgr`) and write a starting hpc.yaml partition catalog
+    (cluster-personal profile). The live router tolerates a stale/edited file, so
+    this is a convenience: a good default the user refines. Partitions come from
+    `sinfo`; QOS + account from `sacctmgr` (which `sinfo` can't provide). Returns 0
+    on success, 1 when Slurm isn't reachable."""
     import re
     import yaml
     from aba_installer import paths
@@ -147,8 +204,9 @@ def gen_hpc_config(out_path: str | None = None) -> int:
             continue
         p = parts.setdefault(name, {"name": name, "max_cores": 0, "max_mem_gb": 0,
                                     "max_walltime_h": 24, "gpu": False})
-        if cpn.isdigit():
-            p["max_cores"] = max(p["max_cores"], int(cpn))
+        mc = re.match(r"(\d+)", cpn)             # %c is "22+" on heterogeneous partitions
+        if mc:
+            p["max_cores"] = max(p["max_cores"], int(mc.group(1)))
         m = re.match(r"(\d+)", mpn)
         if m:
             p["max_mem_gb"] = max(p["max_mem_gb"], round(int(m.group(1)) / 1024))
@@ -160,12 +218,37 @@ def gen_hpc_config(out_path: str | None = None) -> int:
     if not parts:
         print("sinfo returned no partitions — leaving hpc.yaml unwritten.")
         return 1
-    cfg = {"hpc": {"partitions": list(parts.values()), "qos": [],
-                   "defaults": {"partition": next(iter(parts)), "cores": 1,
-                                "mem_gb": 4, "walltime_h": 4}}}
+    for p in parts.values():                 # drop unparseable 0 ceilings → router uses its own default
+        for k in ("max_cores", "max_mem_gb"):
+            if not p.get(k):
+                p.pop(k, None)
+    qos_ranked, walls, account = _discover_qos(os.environ.get("USER", ""))
+    primary_w = walls.get(qos_ranked[0]) if qos_ranked else None
+    # Clamp partition walltime ceilings to the chosen QOS's MaxWall so the runtime
+    # router never requests more time than the QOS allows (primary_w None =
+    # unlimited QOS → keep the sinfo-derived ceiling).
+    if primary_w:
+        for p in parts.values():
+            p["max_walltime_h"] = primary_w
+    cfg: dict = {"hpc": {"partitions": list(parts.values()),
+                         "qos": qos_ranked,
+                         "defaults": {"partition": next(iter(parts)), "cores": 1,
+                                      "mem_gb": 4, "walltime_h": 4}}}
+    if account:
+        cfg["hpc"]["account"] = account
     out.write_text(yaml.safe_dump(cfg, sort_keys=False))
-    print(f"wrote {out} with {len(parts)} partition(s): {', '.join(parts)} "
-          f"— edit it to set QOS / account / walltime caps.")
+    print(f"wrote {out} with {len(parts)} partition(s): {', '.join(parts)}")
+    if qos_ranked:
+        pw = "unlimited" if primary_w is None else f"{primary_w}h"
+        shown = ", ".join(f"{q}({'∞' if walls.get(q) is None else str(walls[q]) + 'h'})"
+                          for q in qos_ranked[:8])
+        print(f"  QOS: default '{qos_ranked[0]}' (MaxWall {pw}) of {len(qos_ranked)} available "
+              f"[{shown}{'…' if len(qos_ranked) > 8 else ''}]"
+              + (f"; account={account}" if account else ""))
+        print("  (qos[0] is used for all jobs; reorder to prefer a higher-priority "
+              "shorter-walltime QOS if your jobs are short)")
+    else:
+        print("  QOS: none discovered (sacctmgr absent/quiet) — jobs use the cluster default QOS.")
     return 0
 
 
