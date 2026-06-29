@@ -30,6 +30,33 @@ def test_job_paths_execute_under_captured_run():
     assert "stream=True" in e_src
 
 
+def test_sentinel_repolls_when_result_json_lags(tmp_path):
+    """`done` present but result.json not yet visible (NFS lag) on a clean exit
+    must RE-POLL (return None), not return the empty fallback that would drop the
+    job's stdout + artifacts."""
+    import os
+    import time
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    sub = SlurmSubmitter()
+
+    (tmp_path / "done").write_text("0\n")              # clean exit, result.json lagging
+    assert sub._result_from_sentinel(tmp_path) is None   # re-poll, don't discard
+
+    (tmp_path / "result.json").write_text('{"returncode":0,"plots":[{"original_name":"x.png"}]}')
+    r = sub._result_from_sentinel(tmp_path)
+    assert r and r.get("plots"), r                       # full result once visible
+
+    # a real failure (rc!=0, no result.json) returns the error fallback immediately
+    j2 = tmp_path / "j2"; j2.mkdir(); (j2 / "done").write_text("1\n")
+    r2 = sub._result_from_sentinel(j2)
+    assert r2 and "error" in r2, r2
+
+    # overdue (done long ago) + still no result.json → give up with the fallback
+    j3 = tmp_path / "j3"; j3.mkdir(); (j3 / "done").write_text("0\n")
+    os.utime(j3 / "done", (time.time() - 1000, time.time() - 1000))
+    assert sub._result_from_sentinel(j3) == {"returncode": 0, "stdout": "", "stderr": ""}
+
+
 def test_manifest_refresh_targets_captured_run_not_active():
     """register_artifacts_from_tool_result must refresh the Run from analysis_ctx
     (the captured Run), preferring it over the thread's currently-open Run."""

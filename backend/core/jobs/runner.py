@@ -359,17 +359,25 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
     # Provenance: stamp the exec record + inject exec_id BEFORE registration, so
     # the produced artifacts attach to it (revisable like an interactive run).
     _write_exec_record_for_job(job, result_obj, lookup_pid, effective_pid)
-    dispatch("on_job_complete", {
-        "tool_name": kind,
-        "tool_input": {"code": code},
-        "result_obj": result_obj,
-        "focus_entity_id": focus_entity_id,
-        "analysis_ctx": {"analysis_id": params.get("run_id"), "turn_index": 0},
-        "thread_id": params.get("thread_id"),
-        "project_id": effective_pid,
-        "job_id": job_id,
-        "new_entities": [],
-    })
+    # Bind the project for the WHOLE registration. The Slurm poll loop and the
+    # local worker call _finalize_job with NO project bound, so without this the
+    # on_job_complete handler's get_entity/update_entity hit the schema-less
+    # `_workspace` DB — refresh_output_manifest's get_entity raises, is swallowed,
+    # and the Run is never updated. This is why background-job outputs never
+    # attached to their Run (the live 2026-06-29 Seurat re-render dance).
+    from core import projects as _projects
+    with _projects.bind(str(effective_pid)):
+        dispatch("on_job_complete", {
+            "tool_name": kind,
+            "tool_input": {"code": code},
+            "result_obj": result_obj,
+            "focus_entity_id": focus_entity_id,
+            "analysis_ctx": {"analysis_id": params.get("run_id"), "turn_index": 0},
+            "thread_id": params.get("thread_id"),
+            "project_id": effective_pid,
+            "job_id": job_id,
+            "new_entities": [],
+        })
     update_job(job_id, project_id=lookup_pid, status="done", log_tail=log_tail,
                finished_at=_utcnow())
     try:
