@@ -380,6 +380,19 @@ def _prior_run_files_preamble(project_id: str, thread_id: str,
                 "ensure_capability installs prebuilt conda/bioconda binaries).")
         if cwd:
             lines.append(f"cwd: {cwd}  (bare filenames in your code land here)")
+        # Surface the RESOLVED DATA_DIR + the input files actually present (incl.
+        # SUBDIRS) so the agent doesn't conclude "no data — ask the user to
+        # upload" when files are on disk but unregistered (forensic: coloc/foci).
+        try:
+            from core.config import project_data_dir as _pdd
+            _dd = _pdd(str(project_id))
+            _df = [p for p in sorted(_dd.rglob("*")) if p.is_file() and _keep(p.name)][:max_files]
+            if _df:
+                lines.append(f"DATA_DIR = {_dd}  (input data is here; load via DATA_DIR/<name>):")
+                for _p in _df:
+                    lines.append(f"  - {_p.relative_to(_dd).as_posix()}")
+        except Exception:  # noqa: BLE001
+            pass
         lines.append("")
         if datasets:
             lines.append("Registered datasets in this project (canonical paths — use verbatim):")

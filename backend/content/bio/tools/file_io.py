@@ -76,18 +76,31 @@ def list_data_files(_input: dict) -> dict:
     # datasets — otherwise the agent sees "no datasets", concludes the project
     # is empty, and asks the user to upload files that are already present.
     # These are readable directly by filename (read_csv_info / run_python).
-    _DATA_EXTS = {".csv", ".tsv", ".tab", ".txt", ".xlsx", ".parquet",
-                  ".h5ad", ".h5", ".loom", ".mtx", ".gz", ".tar", ".zip", ".fa", ".fasta"}
+    # Recurse so files in SUBDIRECTORIES surface too (e.g. an image folder
+    # coloc/f1_ch1.tif). A non-recursive top-level scan made folder-of-files
+    # datasets look empty, so the agent concluded "no data — ask the user to
+    # upload" when the data was present (forensic: colocalization/foci sweep).
+    # No extension allowlist — the old allowlist silently hid .tif/.nii imaging
+    # data; list every real file (skip only dotfiles + obvious junk), capped.
+    _SKIP_SUFFIX = (".pyc", ".log", ".lock")
     n_unregistered = 0
     from core.config import current_project_id, project_data_dir
     _data_dir = project_data_dir(current_project_id())
+    _CAP = 300
     try:
-        for p in sorted(_data_dir.iterdir()):
-            if not p.is_file() or p.name in registered_names:
+        for p in sorted(_data_dir.rglob("*")):
+            if not p.is_file():
                 continue
-            if p.suffix.lower() not in _DATA_EXTS:
+            rel = p.relative_to(_data_dir).as_posix()   # subdir files show as 'coloc/f1_ch1.tif'
+            if rel in registered_names or p.name in registered_names:
                 continue
-            files.append({"filename": p.name, "size_bytes": p.stat().st_size,
+            if p.name.startswith(".") or p.name.lower().endswith(_SKIP_SUFFIX):
+                continue
+            if n_unregistered >= _CAP:
+                files.append({"filename": f"…(+more, {_CAP} shown)", "size_bytes": None,
+                              "path": None, "registered": False})
+                break
+            files.append({"filename": rel, "size_bytes": p.stat().st_size,
                           "path": str(p), "registered": False})
             n_unregistered += 1
     except Exception:
