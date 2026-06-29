@@ -42,11 +42,17 @@ behavior without touching code.
 | What | Where | Set by | Takes effect |
 |---|---|---|---|
 | **Deployment config** — scope paths, credential chain, image, job offload | `/cluster/aba/site.yaml` (§3) | platform admin | next launch |
-| **Site-wide recipes / policy** | `/cluster/aba/installation/` — institution bundle | platform admin | next launch |
+| **Site recipes / policy** — institution overlay that *adds to or overrides* the baked pack | `/cluster/aba/installation/` — institution bundle | platform admin | next launch |
 | **Slurm queues** (optional — auto-detected from `sinfo`) | `/cluster/aba/hpc.yaml` + `jobs:` in `site.yaml` (§3) | platform admin | next launch |
 | **A lab's recipes / rules** | `/groups/<lab>/aba/bundle/` (§5) | lab admin | next launch |
-| **Baked recipes / code / base packages** | the SIF (§1) | platform admin | **rebuild** |
+| **Platform code + default recipe pack** (+ the conda/R base in *fat*) — the base every overlay sits on | the SIF (§1) | platform admin | **rebuild** |
 | **Launch form** — instance sizes, GPU, group list | `install/ood/aba/form.yml.erb` + `submit.yml.erb` (§4) | platform admin | redeploy app |
+
+The recipe pack ships **baked into the SIF** as the default. The institution bundle
+(`/cluster/aba/installation/`) and each lab's bundle (`/groups/<lab>/aba/bundle/`)
+**layer over** it — adding or overriding recipes, skills, and rules — and take
+effect on the next launch, no rebuild. Rebuild the SIF only to change that *baked
+default*, the platform code, or the base packages.
 
 ## 1. Build the image
 
@@ -124,16 +130,51 @@ one; otherwise users paste a key on the form.
 
 ## 4. Deploy the OOD app
 
-The app source is `install/ood/aba/` (an OOD *batch_connect* interactive app:
-`form.yml.erb` lists labs from `/groups` and reads `site.yaml`; `before.sh.erb`
-runs `aba_preflight.py`; `script.sh.erb` launches the backend from the SIF). Copy
-it into the dashboard's sys-apps dir and keep `script.sh.erb` executable:
+The app source is `install/ood/aba/` — an OOD *batch_connect* interactive app:
 
-```bash
-rm -rf /var/www/ood/apps/sys/aba
-cp -r install/ood/aba /var/www/ood/apps/sys/aba
-chmod -R a+rX /var/www/ood/apps/sys/aba && chmod +x /var/www/ood/apps/sys/aba/template/script.sh.erb
-```
+| File | Role |
+|---|---|
+| `manifest.yml` | the entry under **Interactive Apps → Servers → ABA** |
+| `form.yml.erb` | the launch form — reads `/cluster/aba/site.yaml`, lists labs under `/groups`, exposes Lab / Instance / GPU / API-key |
+| `submit.yml.erb` | Slurm submission — Instance→cores, optional `--gres=gpu`, 8 h walltime |
+| `template/before.sh.erb` | runs on the node *before* the server: picks a port, runs `aba_preflight.py`, sources the generated env |
+| `template/script.sh.erb` | launches the backend from the SIF + reverse-proxies the port |
+| `view.html.erb` | the **Connect to ABA** button |
+
+**Prerequisite:** Open OnDemand is installed and you can write to the dashboard
+host's app dir (`/var/www/ood/apps/sys/`, root).
+
+1. **Name your cluster.** `form.yml.erb` and `submit.yml.erb` reference a cluster
+   (`cluster: "dev-cluster"`). Set both to *your* OOD cluster — the one defined in
+   `/etc/ood/config/clusters.d/<name>.yml` — or launches won't submit.
+
+2. **Wire up preflight** (see the gap note below). `before.sh.erb` runs
+   `aba_preflight.py` to turn `site.yaml` into the session env. The shipped line
+   uses an absolute **dev-machine** path for the python + script — repoint it at a
+   node-reachable python + `aba_preflight.py` for your deployment.
+
+3. **Copy it in**, scripts executable:
+   ```bash
+   rm -rf /var/www/ood/apps/sys/aba
+   cp -r install/ood/aba /var/www/ood/apps/sys/aba
+   chmod -R a+rX /var/www/ood/apps/sys/aba
+   chmod +x /var/www/ood/apps/sys/aba/template/{before,script}.sh.erb
+   ```
+   *Iterating?* Deploy to `~/ondemand/dev/aba` instead — it shows under **Develop →
+   My Sandbox Apps** and reloads each launch (no sys-app copy).
+
+4. **Verify.** OOD discovers sys apps on the next dashboard load (no restart). Open
+   **Interactive Apps → Servers → ABA**, pick a lab + instance, launch, and click
+   **Connect to ABA** once *Running*. A blocked launch shows why on the session card
+   (preflight rc 10 = the group's `/aba` isn't an ABA workspace).
+
+> **Known gap — preflight staging.** `before.sh.erb`'s preflight call is the one
+> piece not yet deployment-generic: it points at a dev checkout, and the SIF (§1)
+> currently bakes only `backend/`, `frontend-dist/`, and `system_bundle/` — **not**
+> `install/ood/aba_preflight.py`. Until that's baked into the image + the script
+> reworked to run it from the SIF, stage `aba_preflight.py` (and a python with
+> PyYAML — the SIF's `/opt/aba-venv/bin/python` once baked) on shared storage and
+> point the line there.
 
 ## 5. Onboard a lab
 
