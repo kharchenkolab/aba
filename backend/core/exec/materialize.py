@@ -263,8 +263,10 @@ class MaterializingExecutor:
         cancel_token=None,
         timeout_s: int = 90,
         env_vars: Optional[dict] = None,
+        stream: bool = False,
     ) -> ExecResult:
         return self._local.exec(
             env, command, cwd=cwd, mounts=mounts,
             cancel_token=cancel_token, timeout_s=timeout_s, env_vars=env_vars,
+            stream=stream,
         )

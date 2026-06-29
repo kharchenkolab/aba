@@ -127,7 +127,12 @@ def register_artifacts_from_tool_result(
     # Run is the recompute unit — not just cells that happened to emit a figure.
     if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
         from content.bio.lifecycle.runs import active_run_id, append_run_code
-        _rid = active_run_id(thread_id)
+        # Prefer the Run captured for THIS result (analysis_ctx) over the thread's
+        # currently-open Run: a long background job may complete after the agent
+        # has moved on to a different Run, and its code/outputs must still land on
+        # the Run it was submitted under. Interactive calls leave analysis_ctx
+        # empty here and fall back to active_run_id (unchanged behavior).
+        _rid = analysis_ctx.get("analysis_id") or active_run_id(thread_id)
         if _rid:
             append_run_code(_rid, tool_input.get("code", "") if isinstance(tool_input, dict) else "")
 
@@ -192,7 +197,9 @@ def register_artifacts_from_tool_result(
     if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
         try:
             from content.bio.lifecycle.runs import active_run_id, refresh_output_manifest
-            _rid = active_run_id(thread_id)
+            # Same as above: refresh the Run this result belongs to, not just
+            # whatever Run is open now (matters for background-job completion).
+            _rid = analysis_ctx.get("analysis_id") or active_run_id(thread_id)
             if _rid:
                 _plots = (result_obj.get("plots") or []) if isinstance(result_obj, dict) else []
                 _by_name = {p.get("original_name"): p.get("url") for p in _plots

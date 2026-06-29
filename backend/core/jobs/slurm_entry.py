@@ -17,8 +17,11 @@ def main() -> int:
     with open(sys.argv[1]) as f:
         spec = json.load(f)
     from core.exec.run import run_python_code, run_r_code
+    # stream=True tees the child's stdout/stderr to THIS process's stdout, which
+    # sbatch captures to job.log (-o) — so the running job is tailable live
+    # rather than silent until result.json is written at the end.
     kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
-              timeout_s=int(spec.get("timeout_s") or 600))
+              timeout_s=int(spec.get("timeout_s") or 600), stream=True)
     if spec.get("kind") == "run_r":          # isolated R env = its lib first on .libPaths()
         result = run_r_code(spec["code"], env=spec.get("env"), **kw)
     else:                                    # isolated python env = its own python, standalone

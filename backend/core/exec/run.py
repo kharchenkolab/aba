@@ -27,6 +27,7 @@ def run_python_code(
     timeout_s: int = 90,
     cancel_token=None,
     env: Optional[str] = None,
+    stream: bool = False,
 ) -> dict:
     """Run `code` in the project's scratch workspace and return the run_python
     result shape ({stdout, stderr, returncode, plots, tables} | {error} |
@@ -58,8 +59,11 @@ def run_python_code(
     # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
     # appended (the .venv wins, overlay fills gaps). An isolated env is
     # standalone — skip the overlay so its own site-packages are authoritative.
-    from core.config import current_project_id, project_data_dir
-    _pid = str(project_id) if env else current_project_id()
+    from core.config import project_data_dir
+    # `project_id` is authoritative (the job's project). The ambient
+    # current_project_id() is the _workspace fallback on a Slurm compute node,
+    # so always use the passed id for the data dir + pylib overlay.
+    _pid = str(project_id)
     _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
     if not env:
@@ -73,6 +77,11 @@ def run_python_code(
     lines.append(f"import random as _aba_rnd; _aba_rnd.seed({_seed})")
     lines.append(f"try:\n    import numpy as _aba_np; _aba_np.random.seed({_seed})\nexcept Exception: pass")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
+    # Harvest only what THIS run produced. When run_id is the active Run, the
+    # scratch IS the Run's work dir (shared with prior cells), so filter by the
+    # script's mtime (same FS as the outputs → no cross-host clock skew) to
+    # avoid re-harvesting earlier cells' files as if this run made them.
+    _since = (scratch / "script.py").stat().st_mtime
 
     ex = MaterializingExecutor()
     menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
@@ -96,7 +105,7 @@ def run_python_code(
     result = ex.exec(
         menv, [used_interp, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
-        env_vars=env_vars,
+        env_vars=env_vars, stream=stream,
     )
 
     if result.timed_out:
@@ -106,7 +115,8 @@ def run_python_code(
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
 
-    plots, tables, files, warns = harvest_artifacts(scratch)
+    plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
+                                                    project_id=str(project_id))
     from core.exec.output_cap import snip_middle
     # Provenance (provenance.md §3.1): snapshot the env DESCRIPTOR through the
     # interpreter that ran — the background/Slurm analog of the kernel-session
@@ -143,6 +153,7 @@ def run_r_code(
     timeout_s: int = 600,
     cancel_token=None,
     env: Optional[str] = None,
+    stream: bool = False,
 ) -> dict:
     """Background R execution — mirrors run_python_code's return shape so the
     existing on_job_complete hook + artifact harvester work unchanged.
@@ -162,9 +173,10 @@ def run_r_code(
     run_id = run_id or uuid.uuid4().hex
     scratch = scratch_dir(str(project_id), str(run_id))
 
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
     from core.exec.r import _rscript, libpaths_expr
-    _data_dir = project_data_dir(current_project_id())
+    # Authoritative project (see run_python_code) — not the _workspace ambient.
+    _data_dir = project_data_dir(str(project_id))
 
     rscript = _rscript()
     if not rscript.exists():
@@ -190,6 +202,7 @@ def run_r_code(
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run
     preamble = "\n".join(preamble_lines)
     (scratch / "script.R").write_text(preamble + "\n" + code)
+    _since = (scratch / "script.R").stat().st_mtime   # harvest only this run's outputs
 
     ex = MaterializingExecutor()
     env = ex.materialize(Provisioning())
@@ -202,7 +215,7 @@ def run_r_code(
     result = ex.exec(
         env, [str(rscript), "--vanilla", str(scratch / "script.R")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
-        env_vars=env_vars,
+        env_vars=env_vars, stream=stream,
     )
 
     if result.timed_out:
@@ -212,7 +225,8 @@ def run_r_code(
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
 
-    plots, tables, files, warns = harvest_artifacts(scratch)
+    plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
+                                                    project_id=str(project_id))
     from core.exec.output_cap import snip_middle
     # Provenance: snapshot the R env with the SAME .libPaths() the run used.
     from core.exec.fingerprint import package_versions_for_interpreter
@@ -290,7 +304,8 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         yield f
 
 
-def harvest_artifacts(scratch: Path, since_ts: float = 0.0
+def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
+                      project_id: Optional[str] = None
                       ) -> tuple[list, list, list, list]:
     """Copy kept outputs from a working dir into the artifact store and return
     `(plots, tables, files, warnings)`.
@@ -323,7 +338,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0
     scratch = Path(scratch)
     plots, tables, files, warnings = [], [], [], []
     from core.config import current_project_id, project_artifacts_dir
-    pid = current_project_id()
+    # `project_id` is passed by the background/Slurm runners, where the ambient
+    # current_project_id() is the no-project `_workspace` fallback (the compute
+    # node never bound the project) — using it would bucket artifacts under
+    # /artifacts/_workspace/ instead of the real project, orphaning them from
+    # the Run. Interactive callers omit it and keep the ambient project.
+    pid = project_id or current_project_id()
     adir = project_artifacts_dir(pid)
 
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
