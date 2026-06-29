@@ -9,16 +9,19 @@ from core.graph._schema import _conn
 
 
 def _walk_files(node: dict, ql: str, out: list, seen: set, limit: int) -> None:
-    """Collect file/readme nodes whose name, path, or title matches `ql`
-    (case-insensitive substring). Dedupes by path (the tree is multi-rooted —
-    the same artifact can appear under several paths; we keep distinct paths)."""
+    """Collect file/readme nodes whose own NAME or title matches `ql`
+    (case-insensitive substring). Deliberately NOT matching the full path: a
+    query that hits an ancestor folder name (e.g. a run dir 'foo_gse123/') would
+    otherwise drag in every descendant file, flooding results with noise. We
+    also skip dot-prefixed subtrees (.exec/, .cache/) exactly as the Files tab
+    does — those are bookkeeping the user never asked to see. Dedupe by path."""
     if len(out) >= limit:
         return
     if node.get("kind") in ("file", "readme"):
         name = node.get("name") or ""
-        path = node.get("path") or ""
         title = node.get("title") or ""
-        if ql in name.lower() or ql in path.lower() or ql in title.lower():
+        if ql in name.lower() or ql in title.lower():
+            path = node.get("path") or ""
             if path and path not in seen:
                 seen.add(path)
                 out.append({
@@ -28,6 +31,8 @@ def _walk_files(node: dict, ql: str, out: list, seen: set, limit: int) -> None:
                     "title": title or name,
                 })
     for ch in (node.get("children") or []):
+        if (ch.get("name") or "").startswith("."):
+            continue   # system folders/files (.exec/, .cache/) — hidden in the Files tab too
         _walk_files(ch, ql, out, seen, limit)
 
 
@@ -40,14 +45,19 @@ def search(q: str, limit: int = 25) -> dict:
         return {"entities": [], "files": [], "messages": []}
     like = f"%{q}%"
     ql = q.lower()
+    # Exclude workspace + hidden infrastructure types (capability, reference) —
+    # the same set list_entities() hides, so search shows only user content.
+    from core.graph.entities import HIDDEN_TYPES
+    excluded = ("workspace", *HIDDEN_TYPES)
+    ph = ",".join("?" * len(excluded))
     with _conn() as c:
         ent_rows = c.execute(
-            "SELECT id, type, title, status, created_at FROM entities "
-            "WHERE deleted_at IS NULL AND status = 'active' AND type != 'workspace' "
-            "AND (title LIKE ? OR notes LIKE ?) "
+            f"SELECT id, type, title, status, created_at FROM entities "
+            f"WHERE deleted_at IS NULL AND status = 'active' AND type NOT IN ({ph}) "
+            f"AND (title LIKE ? OR notes LIKE ?) "
             # Rank title matches above notes-only matches; recency breaks ties.
-            "ORDER BY (CASE WHEN title LIKE ? THEN 0 ELSE 1 END), updated_at DESC LIMIT ?",
-            (like, like, like, limit),
+            f"ORDER BY (CASE WHEN title LIKE ? THEN 0 ELSE 1 END), updated_at DESC LIMIT ?",
+            (*excluded, like, like, like, limit),
         ).fetchall()
         msg_rows = c.execute(
             "SELECT id, role, content, ts, thread_id FROM messages WHERE content LIKE ? "
