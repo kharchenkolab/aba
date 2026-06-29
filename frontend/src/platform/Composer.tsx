@@ -186,6 +186,10 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   const firstDraftKey = useRef(true)
   const prevDraftKey = useRef(draftKey)
   const valueRef = useRef(value); valueRef.current = value
+  // True once the user has actually edited the textarea since mount — as
+  // opposed to a value RESTORED from sessionStorage or set programmatically.
+  // Gates the placeholder→real carry below so a restored draft isn't migrated.
+  const typedRef = useRef(false)
   useEffect(() => {
     const prev = prevDraftKey.current
     prevDraftKey.current = draftKey
@@ -194,13 +198,19 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
     const wasPlaceholder = !!prev && prev.endsWith(':default')
     if (newSaved != null) {
       setValue(newSaved)
-    } else if (wasPlaceholder && valueRef.current) {
-      // Carry typing-in-flight across the placeholder→real upgrade.
+    } else if (wasPlaceholder && valueRef.current && typedRef.current) {
+      // Carry GENUINE typing-in-flight across the placeholder→real upgrade
+      // (2026-06-04 fix). Gated on typedRef: a value merely RESTORED from
+      // storage on reload must NOT be re-propagated, or a sent message's text
+      // resurrects from the orphaned ':default' draft on every refresh.
       if (draftKey) { try { sessionStorage.setItem(draftKey, valueRef.current) } catch { /* */ } }
       // setValue is intentionally NOT called — the existing live value stays.
     } else {
       setValue('')
     }
+    // Once a real thread is active, the ':default' placeholder draft is stale —
+    // drop it so a sent-and-cleared message can't linger there and reappear.
+    if (wasPlaceholder && prev) { try { sessionStorage.removeItem(prev) } catch { /* */ } }
     histIdx.current = null
     try { setHistory(draftKey ? JSON.parse(sessionStorage.getItem(histKey(draftKey)) || '[]') : []) }
     catch { setHistory([]) }
@@ -396,7 +406,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
           className="composer__input"
           placeholder={placeholder}
           value={value}
-          onChange={e => { histIdx.current = null; setDraft(e.target.value) }}
+          onChange={e => { histIdx.current = null; typedRef.current = true; setDraft(e.target.value) }}
           onKeyDown={handleKey}
           onPaste={onPaste}
           rows={1}
