@@ -283,3 +283,23 @@ def project_modules(project_id: str) -> list[str]:
         return sorted(set(json.loads(_project_modules_file(project_id).read_text())))
     except Exception:  # noqa: BLE001
         return []
+
+
+def kernel_env_snippet(full_module: str) -> str:
+    """Python that prepends `full_module`'s env-delta to os.environ in a RUNNING
+    kernel, so subprocesses spawned by run_python find the tool's binary IN-PROCESS
+    (no background job, no kernel restart). '' if the module yields no delta / is
+    inactive. For binary-tool use only — we never make a kernel import a module's
+    Python libs (that's the fragile interpreter-linking case)."""
+    d = env_delta(full_module)
+    if not d:
+        return ""
+    lines = ["import os as _o"]
+    for var, val in d.items():
+        if isinstance(val, list):                        # PATH-like → prepend our entries
+            add = ":".join(val)
+            lines.append(f"_o.environ[{var!r}] = {add!r} + (':'+_o.environ[{var!r}] "
+                         f"if _o.environ.get({var!r}) else '')")
+        else:                                            # scalar → set
+            lines.append(f"_o.environ[{var!r}] = {val!r}")
+    return "\n".join(lines)
