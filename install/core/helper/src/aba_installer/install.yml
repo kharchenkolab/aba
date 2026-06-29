@@ -45,7 +45,10 @@ steps:
       - 'mkdir -p "$ABA_HOME/bin"'
       # OS/arch-aware platform (the one micromamba seam): osx-<arch> on macOS,
       # linux-64 / linux-aarch64 on Linux. Override with ABA_MAMBA_PLATFORM.
-      - 'PLATFORM="${ABA_MAMBA_PLATFORM:-$(case "$(uname -s)/$(uname -m)" in Darwin/*) echo "osx-$(uname -m)";; Linux/aarch64|Linux/arm64) echo "linux-aarch64";; Linux/*) echo "linux-64";; *) echo "linux-64";; esac)}"; if [ -x "$ABA_HOME/bin/micromamba" ]; then echo "micromamba already installed"; else echo "platform: $PLATFORM"; curl -fsSL "https://micro.mamba.pm/api/micromamba/$PLATFORM/latest" | tar -xj -C "$ABA_HOME" bin/micromamba; fi'
+      # Leading-paren case patterns ( (Darwin/*) … ) are required: under
+      # /bin/sh an unparenthesized pattern's ')' prematurely closes the
+      # enclosing $( … ) command substitution, mangling PLATFORM.
+      - 'PLATFORM="${ABA_MAMBA_PLATFORM:-$(case "$(uname -s)/$(uname -m)" in (Darwin/*) echo "osx-$(uname -m)";; (Linux/aarch64|Linux/arm64) echo "linux-aarch64";; (Linux/*) echo "linux-64";; (*) echo "linux-64";; esac)}"; if [ -x "$ABA_HOME/bin/micromamba" ]; then echo "micromamba already installed"; else echo "platform: $PLATFORM"; curl -fsSL "https://micro.mamba.pm/api/micromamba/$PLATFORM/latest" | tar -xj -C "$ABA_HOME" bin/micromamba; fi'
       - '"$ABA_HOME/bin/micromamba" --version'
     timeout_seconds: 120
     remediation: |
