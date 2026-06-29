@@ -675,9 +675,34 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     if not name:
         return {"error": "name is required"}
     _ct = (ctx or {}).get("cancel_token")
+    # Cluster module provider (prefer:first, job-path scope): does a cluster module
+    # satisfy this tool by exact name? resolve() matches only an exact module name,
+    # so pip libraries never match and fall through. Record it now so the project's
+    # background Slurm jobs `module load` it; the branches below read `_mod` (conda
+    # still builds for in-process; an uncatalogued tool like cellranger is
+    # module-only — see the not_found path). No-op off a cluster.
+    _mod = None
+    try:
+        from core.exec import modules as _modprov
+        if _modprov.modules_active():
+            _mod = _modprov.resolve(name)
+            if _mod:
+                from core import projects as _projects
+                _modprov.record_project_module(_projects.current(), _mod)
+    except Exception:  # noqa: BLE001
+        _mod = None
     from core.catalog import resolve_capability
     cap = resolve_capability(name)
     if not cap:
+        if _mod:
+            # Uncatalogued but a cluster module provides it (e.g. cellranger):
+            # prefer:first → satisfy via the module (recorded above for the
+            # project's background jobs) rather than suggest a slower pip/conda
+            # install. Run it from a backgrounded run (Slurm step).
+            return {"status": "ready", "name": name, "archetype": "cli", "module": _mod,
+                    "note": f"Provided by cluster module '{_mod}', loaded in background "
+                            f"Slurm jobs; not installed in-process. Invoke it from "
+                            f"run_python(background=True) / a Slurm step."}
         # E-1: parallel-search external registries for an exact-name match
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
@@ -799,23 +824,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
-        # Cluster module provider (prefer:first, job-path scope): if a module
-        # satisfies this CLI tool, record it so the project's background Slurm jobs
-        # `module load` it. We STILL install into the conda tools env so the tool is
-        # available in-process; for a tool with no conda package the module is the
-        # provider and a conda failure is then non-fatal. A no-op off a cluster.
-        _mod = None
-        try:
-            from core.exec import modules as _modprov
-            if _modprov.modules_active():
-                _spec = prov["conda"].get("spec") if isinstance(prov["conda"], dict) else ""
-                _tool = (_spec or "").split("=")[0].split()[0].strip() or (cap.get("name") or name)
-                _mod = _modprov.resolve(_tool)
-                if _mod:
-                    from core import projects as _projects
-                    _modprov.record_project_module(_projects.current(), _mod)
-        except Exception:  # noqa: BLE001
-            _mod = None
+        # `_mod` (resolved + recorded up top) means a cluster module also covers this
+        # CLI tool — it's loaded in the project's background jobs. We still build conda
+        # for in-process use; a conda failure is non-fatal when `_mod` covers it.
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
