@@ -105,11 +105,11 @@ if ! "$HELPER_DIR/venv/bin/python" -c \
 fi
 
 # Tier-0-tray (misc/mac-install.md § 3c): install ABA.app into
-# ~/Applications + register the tray LaunchAgent. v1 rollout is OPT-IN
-# via ABA_INSTALL_TRAY=1 — flip the default to on after the early users
-# have validated it. Failures are non-fatal; the rest of the install
-# still completes and the browser UI still works.
-if [[ "${ABA_INSTALL_TRAY:-}" == "1" ]]; then
+# ~/Applications + register the tray LaunchAgent. Now ON by default on macOS
+# (the menu-bar app is the primary way users start/stop ABA); opt OUT with
+# ABA_INSTALL_TRAY=0. Failures are non-fatal — the rest of the install still
+# completes and the browser control panel still works.
+if [[ "$(uname -s)" == "Darwin" && "${ABA_INSTALL_TRAY:-1}" != "0" ]]; then
   echo "Installing ABA Tray …"
   "$HELPER_DIR/venv/bin/python" -m aba_installer.tray_install || \
     echo "Warning: ABA Tray install failed; continuing without the menu-bar app." >&2
