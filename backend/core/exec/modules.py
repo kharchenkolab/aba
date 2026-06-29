@@ -233,3 +233,17 @@ def env_delta(full_module: str) -> dict:
         return {}
     before_txt, _, after_txt = r.stdout.partition("__ABA_MID__")
     return _delta(_parse_env(before_txt), _parse_env(after_txt))
+
+
+def load_lines(mods: list[str]) -> str:
+    """Bash prologue that loads `mods` in a non-login Slurm job script: source the
+    module init (job.sh is not a login shell, so `module` is undefined), then
+    `module load`. Returns '' when inactive, no mods, or no init — so injecting it
+    is always safe. Unsafe names are dropped (guards shell interpolation)."""
+    if not mods or not modules_active():
+        return ""
+    init = _init_script()
+    safe = [m for m in mods if m and _SAFE_MODULE.match(m)]
+    if not init or not safe:
+        return ""
+    return f". {init} >/dev/null 2>&1\nmodule load {' '.join(safe)}\n"

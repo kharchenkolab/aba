@@ -94,3 +94,22 @@ def test_gating_off_when_not_cluster():
 def test_unsafe_module_name_rejected():
     # env_delta must refuse a name that could inject shell, before any subprocess.
     assert M.env_delta("samtools/1.0; rm -rf /") == {}
+
+
+def test_load_lines_job_prologue():
+    saved = os.environ.get("ABA_BATCH_SUBMITTER")
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"          # simulate a cluster install
+    try:
+        if not M.modules_active():                       # no module system (e.g. CI) → safe no-op
+            assert M.load_lines(["samtools/1.10-foss-2018b"]) == ""
+            return
+        out = M.load_lines(["samtools/1.10-foss-2018b", "bwa/0.7.17"])
+        assert "module load samtools/1.10-foss-2018b bwa/0.7.17" in out
+        assert out.lstrip().startswith(".")              # sources an init script first
+        assert M.load_lines([]) == ""                    # nothing → no prologue
+        assert M.load_lines(["evil; rm -rf /"]) == ""    # unsafe name dropped
+    finally:
+        if saved is None:
+            os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        else:
+            os.environ["ABA_BATCH_SUBMITTER"] = saved
