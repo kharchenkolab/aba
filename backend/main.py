@@ -192,33 +192,32 @@ async def startup():
         _reap_orphan_kernels()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
-    # Base self-heal + immutability (env_refactor.md): the base .venv is the
-    # shared foundation every kernel runs from. Repair a broken dependency
-    # closure FROM THE LOCK (the recurring `six`-vanishes corruption), then make
-    # the base read-only so nothing can silently mutate it again.
-    try:
-        from core.exec.env_integrity import base_health, repair_base, set_base_writable
-        h = base_health(deep=True)
-        if not h["ok"]:
-            rep = repair_base()
-            print(f"[startup] base was broken {h['problems'][:3]} -> repair: {rep}")
-        else:
-            print("[startup] base health: ok")
-        if set_base_writable(False):
-            print("[startup] base set read-only (immutable foundation)")
-    except Exception as e:  # noqa: BLE001
-        import traceback as _tb
-        print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
-    # §11.6 lazy GC: reclaim the built bytes of long-idle isolated envs (their
-    # spec/lock stays, so next use rebuilds transparently). Cheap; only touches
-    # envs idle past the threshold.
-    try:
-        from core.exec.isolated_env import gc_isolated_envs
-        gc = gc_isolated_envs()
-        if gc:
-            print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] isolated-env GC failed (non-fatal): {e}")
+    # Base self-heal + immutability (env_refactor.md) and isolated-env GC, run in
+    # the BACKGROUND so startup-to-ready isn't blocked. self_heal_base skips the
+    # ~9s deep verify entirely when the base is unchanged (fingerprint stamp) or
+    # on a read-only image (SIF/OOD) — both the steady state — and only does the
+    # full deep verify + repair-from-lock + refreeze when the base actually
+    # changed. The kernel-spawn path's import failures still get caught + repaired
+    # post-hoc by env_root_cause, covering the brief first-boot window.
+    async def _bg_base_maintenance():
+        def _work():
+            try:
+                from core.exec.env_integrity import self_heal_base
+                self_heal_base()
+            except Exception as e:  # noqa: BLE001
+                import traceback as _tb
+                print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
+            # §11.6 lazy GC: reclaim built bytes of long-idle isolated envs (their
+            # spec/lock stays, so next use rebuilds transparently).
+            try:
+                from core.exec.isolated_env import gc_isolated_envs
+                gc = gc_isolated_envs()
+                if gc:
+                    print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[startup] isolated-env GC failed (non-fatal): {e}")
+        await asyncio.to_thread(_work)
+    asyncio.create_task(_bg_base_maintenance())
     # Capture the asyncio loop so worker-thread producers
     # (auto_interpret, background jobs) can push events to the
     # /api/notifications SSE channel.
