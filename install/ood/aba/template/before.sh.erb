@@ -17,8 +17,9 @@ export ABA_PF_TOKEN="<%= context.aba_token %>"
 <%- end -%>
 
 echo "before.sh: PWD=${PWD}" > "${PWD}/preflight.log"
-/home/pkharchenko/aba/aba_runtime/.venv/bin/python \
-  /home/pkharchenko/aba/aba/install/ood/aba_preflight.py >> "${PWD}/preflight.log" 2>&1
+# Run preflight FROM the SIF (baked at /opt/aba/ood; image path resolved from
+# site.yaml). preflight.sh is staged from template/ next to this script.
+bash "${PWD}/preflight.sh"
 pf_rc=$?
 echo "preflight rc=${pf_rc}" >> "${PWD}/preflight.log"
 # rc 10 = preflight refused (e.g. the group's /aba folder isn't an ABA workspace).
