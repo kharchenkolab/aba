@@ -11,8 +11,11 @@ Run:  .venv/bin/python -m pytest install/ood/test_ood_launch.py -q
 """
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 BUILD_SH = REPO / "install/sif/build.sh"
@@ -74,3 +77,54 @@ def test_preflight_sh_passes_through_block_rc(tmp_path):
 def test_preflight_sh_aborts_when_sif_unresolvable(tmp_path):
     rc, argv, _s, _sif = _run_preflight(tmp_path, with_sif_key=False)
     assert rc == 1 and argv == ""        # never calls apptainer
+
+
+def _apptainer():
+    for c in (os.environ.get("APPTAINER"), "apptainer", "singularity",
+              "/home/pkharchenko/aba/tools/apptainer-env/bin/apptainer"):
+        if c and (shutil.which(c) or (os.sep in c and os.path.exists(c))):
+            return c
+    return None
+
+
+@pytest.mark.skipif(not os.environ.get("ABA_OOD_INTEGRATION"),
+                    reason="opt-in (ABA_OOD_INTEGRATION=1) — builds a real SIF, needs apptainer + network")
+def test_baked_preflight_runs_in_a_real_sif(tmp_path):
+    """L4 — the actual chain: bake aba_preflight.py into a real apptainer image
+    (as build.sh does, at /opt/aba/ood/) and run it FROM the image; it must emit
+    aba-env.sh + status.yaml + auto-create the lab workspace from inside."""
+    ap = _apptainer()
+    if not ap:
+        pytest.skip("no apptainer/singularity available")
+    pf = REPO / "install/ood/aba_preflight.py"
+    (tmp_path / "tmp").mkdir()
+    defp = tmp_path / "pf.def"
+    defp.write_text(f"Bootstrap: docker\nFrom: python:3.12-slim\n%files\n"
+                    f"    {pf} /opt/aba/ood/aba_preflight.py\n%post\n"
+                    f"    pip install --no-cache-dir pyyaml >/dev/null\n"
+                    f"    mkdir -p /opt/aba-venv/bin && ln -sf \"$(command -v python)\" /opt/aba-venv/bin/python\n")
+    sif = tmp_path / "test.sif"
+    env = {**os.environ, "APPTAINER_TMPDIR": str(tmp_path / "tmp")}
+    b = subprocess.run([ap, "build", str(sif), str(defp)], env=env, capture_output=True, text=True, timeout=600)
+    assert sif.exists(), b.stderr[-800:]
+
+    staged = tmp_path / "staged"; staged.mkdir(); (tmp_path / "home").mkdir()
+    site = tmp_path / "site.yaml"
+    site.write_text(  # block style — flow `{...}` collides with the {group} template
+        f"image:\n  sif: {sif}\nscopes:\n  group:\n    enabled: true\n"
+        f"    root_path: {tmp_path}/groups/{{group}}/aba\n    bundle_subdir: bundle\n"
+        f"    auto_create_skeleton: false\n  user:\n    state_dir: {tmp_path}/state/{{user}}\n"
+        f"credentials:\n  order: [user_form_paste]\njobs:\n  submitter: slurm\n")
+    r = subprocess.run(
+        [ap, "exec", "--bind", f"{tmp_path}:{tmp_path}",
+         "--env", f"ABA_SITE_CONFIG={site}", "--env", "ABA_PF_GROUP=lab1", "--env", "ABA_PF_USER=alice",
+         "--env", f"ABA_PF_HOME={tmp_path}/home", "--env", f"ABA_PF_STAGED={staged}",
+         "--env", "ABA_PF_TOKEN=sk-ant-api-XXXX",
+         str(sif), "/opt/aba-venv/bin/python", "/opt/aba/ood/aba_preflight.py"],
+        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-800:]
+    env_sh = (staged / "aba-env.sh").read_text()
+    for v in ("ABA_SITE_CONFIG", "ABA_SIF", "ABA_RUNTIME_DIR", "ABA_BATCH_SUBMITTER", "ANTHROPIC_API_KEY"):
+        assert f"export {v}=" in env_sh, f"aba-env.sh missing {v}"
+    assert "ready: true" in (staged / "status.yaml").read_text()
+    assert (tmp_path / "groups/lab1/aba/.aba-workspace").exists()
