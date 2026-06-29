@@ -152,9 +152,13 @@ def home_summary(project_id: str | None = None):
         counts[e["type"]] = counts.get(e["type"], 0) + 1
     jobs = list_jobs(limit=100)
     suggestions = list_context_suggestions(status="pending")
+    # Advisor notes paused (see advisors.runner.advisors_enabled) — skip the
+    # O(n)-entities tally entirely while disabled.
     note_total = 0
-    for e in ents:
-        note_total += len(list_advisor_notes(e["id"]))
+    from content.bio.advisors.runner import advisors_enabled
+    if advisors_enabled():
+        for e in ents:
+            note_total += len(list_advisor_notes(e["id"]))
     created = sorted(
         (e for e in ents if e["type"] != "analysis"),
         key=lambda e: e["created_at"],

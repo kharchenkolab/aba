@@ -7,6 +7,8 @@ import Rail from './platform/Rail'
 import ProjectTree from './bio/ProjectTree'
 import ChatPane from './platform/ChatPane'
 import AdvisorStrip from './components/AdvisorStrip'
+import SearchPill from './components/SearchPill'
+import { ADVISORS_ENABLED } from './lib/flags'
 import FocusCanvas from './components/FocusCanvas'
 import FileCanvas from './viewers/FileCanvas'
 import type { FileNode } from './viewers/types'
@@ -948,8 +950,10 @@ export default function App() {
                 overview
               </button>
             )}
-            <AdvisorStrip focusedId={focusedId} focusedType={focused?.type}
-                          onTry={setPrefill} onFocus={goToEntity} />
+            {ADVISORS_ENABLED
+              ? <AdvisorStrip focusedId={focusedId} focusedType={focused?.type}
+                              onTry={setPrefill} onFocus={goToEntity} />
+              : <SearchPill onOpen={() => setSearchOpen(true)} />}
             {!overview && <PostureToggle posture={posture} onChange={setPosture} entityLabel={entityLabel(focused)} />}
           </div>
         </div>
@@ -1025,7 +1029,9 @@ export default function App() {
       </div>
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)}
-                   onPick={openEntity} />
+                   onPickEntity={goToEntity}
+                   onPickFile={(path) => url.setFilePath(path)}
+                   onPickMessage={(tid) => { if (tid) selectThread(tid) }} />
       <UndoToast undoable={undoable} onUndo={undoProposal} onClose={clearUndo} />
 
       {/* T2.4 Drawer: slides in from the right when the toggle is clicked.

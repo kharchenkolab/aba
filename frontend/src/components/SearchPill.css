@@ -1,0 +1,32 @@
+/* SearchPill — sits in the canvas title-bar (old AdvisorStrip slot). A subtle,
+   search-box-looking affordance that opens the ⌘K palette. */
+.search-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #e2e2e6);
+  border-radius: 6px;
+  background: var(--surface-2, #f6f6f7);
+  color: var(--muted, #8a8a92);
+  font-size: 12px;
+  cursor: text;            /* reads as a search field */
+  transition: background .12s, border-color .12s, color .12s;
+}
+.search-pill:hover {
+  background: var(--surface, #fff);
+  border-color: var(--border-strong, #cfcfd6);
+  color: var(--fg, #333);
+}
+.search-pill svg { width: 13px; height: 13px; opacity: .8; flex: none; }
+.search-pill-label { line-height: 1; }
+.search-pill-kbd {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-3, #ececef);
+  color: var(--muted, #8a8a92);
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

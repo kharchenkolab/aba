@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react'
 // shell asks for the tile list, bio decides the labels + count rules
 // (which entity types roll up into "results", "runs", etc.).
 import { home_tiles, card_order } from '../lib/homeTiles'
+import { ADVISORS_ENABLED } from '../lib/flags'
 import './Home.css'
 
 interface Project {
@@ -381,7 +382,7 @@ export default function Home({ onEnter, onProjectsChanged }: Props) {
 
                   <div className="home__section home__section--attention">
                     <div className="home__panel-head">Attention</div>
-                    <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />
+                    {ADVISORS_ENABLED && <AttentionRow n={summary?.attention.advisor_notes ?? 0} label="advisor notes" />}
                     <AttentionRow n={summary?.attention.pending_suggestions ?? 0} label="context suggestions" />
                     <AttentionRow n={summary?.attention.active_jobs ?? 0} label="running jobs" />
                     <AttentionRow n={summary?.attention.failed_jobs ?? 0} label="failed jobs" danger />
