@@ -111,6 +111,10 @@ steps:
       - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog" "$INST/knowhow"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi; if [ -d "$PACK/knowhow" ]; then cp -R "$PACK/knowhow/." "$INST/knowhow/"; fi'
       - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files + $(ls "$ABA_HOME/installation/knowhow/refsources"/*.yaml 2>/dev/null | wc -l | tr -d " ") refsource providers into $ABA_HOME/installation"'
     timeout_seconds: 60
+    remediation: |
+      Importing the recipe pack failed — usually $ABA_HOME/repo/aba-recipe-pack
+      is missing or incomplete. Confirm that directory exists (re-run the clone
+      step if not), check $HOME has free space, then re-run.
 
   - id: create-r-tools-env
     title: Build the R toolchain
@@ -126,6 +130,11 @@ steps:
     commands:
       - 'TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi'
     timeout_seconds: 1800
+    remediation: |
+      The R toolchain build failed — this is NON-FATAL: ABA still runs and the
+      backend provisions R on demand the first time it's needed. To pre-build it
+      now, ensure conda-forge/bioconda are reachable and ~5 GB is free, then
+      re-run.
 
   - id: build-frontend
     title: Build the interface
@@ -160,6 +169,9 @@ steps:
       - 'mkdir -p "$ABA_HOME/bin"'
       - 'install -m 0755 "$ABA_HOME/installer/aba" "$ABA_HOME/bin/aba"'
     timeout_seconds: 10
+    remediation: |
+      Installing the aba launcher failed — check that $ABA_HOME/bin is writable
+      and $HOME has free space, then re-run.
 
   - id: start-backend
     title: Start ABA
