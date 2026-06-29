@@ -113,3 +113,31 @@ def test_load_lines_job_prologue():
             os.environ.pop("ABA_BATCH_SUBMITTER", None)
         else:
             os.environ["ABA_BATCH_SUBMITTER"] = saved
+
+
+def test_project_module_set_threads_to_jobs(tmp_path):
+    """ensure_capability records resolved modules per project; the submitter reads
+    them and load_lines() turns them into job.sh `module load` lines (1c threading)."""
+    saved = os.environ.get("ABA_BATCH_SUBMITTER")
+    saved_rt = os.environ.get("ABA_RUNTIME_DIR")
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    os.environ["ABA_RUNTIME_DIR"] = str(tmp_path)            # isolate the per-project file
+    os.environ.pop("ABA_PROJECTS_DIR", None)
+    try:
+        if not M.modules_active():                          # no module system (CI) → record no-ops
+            M.record_project_module("p1", "samtools/1.10-foss-2018b")
+            assert M.project_modules("p1") == []
+            return
+        M.record_project_module("p1", "samtools/1.10-foss-2018b")
+        M.record_project_module("p1", "samtools/1.10-foss-2018b")   # dedup
+        M.record_project_module("p1", "bwa/0.7.17")
+        assert M.project_modules("p1") == ["bwa/0.7.17", "samtools/1.10-foss-2018b"]
+        assert M.project_modules("other") == []             # per-project isolation
+        assert "module load bwa/0.7.17 samtools/1.10-foss-2018b" in M.load_lines(M.project_modules("p1"))
+    finally:
+        if saved is None:
+            os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        else:
+            os.environ["ABA_BATCH_SUBMITTER"] = saved
+        if saved_rt is not None:
+            os.environ["ABA_RUNTIME_DIR"] = saved_rt
