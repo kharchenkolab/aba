@@ -307,7 +307,10 @@
       } catch(e){}
       boot();
     });
-    document.getElementById('ctl-update').addEventListener('click', () => {
+    const runUpdate = () => {
+      const upd = document.getElementById('ctl-update');
+      if (upd && upd.disabled) return;            // already running — don't double-fire (409)
+      if (upd) { upd.disabled = true; upd.textContent = '↻ Updating…'; }
       const wrap = document.getElementById('update-progress');
       wrap.hidden = false;
       streamPlaybook('/api/update', {
@@ -315,8 +318,20 @@
         line: document.getElementById('update-line'),
         stepsEl: document.getElementById('update-steps'),
         onComplete: () => boot(),
+        // Re-enable on any terminal outcome (ok, failure, or dropped stream) by
+        // reconciling against the server's operation state.
+        onSettled: () => { fetchJSON('/api/status').then(refreshControl).catch(() => {}); },
       });
-    });
+    };
+    document.getElementById('ctl-update').addEventListener('click', runUpdate);
+    // The tray's "Check for updates" opens us with ?update=1 to auto-start.
+    // One-shot: strip the param so a refresh won't re-trigger; refreshControl
+    // (called by mountControl above) has already disabled the button if an
+    // update is mid-flight, and runUpdate bails in that case.
+    if (new URLSearchParams(location.search).get('update') === '1') {
+      history.replaceState(null, '', location.pathname);
+      runUpdate();
+    }
 
     // ── Model selector ────────────────────────────────────────────────
     // Populate from /api/auth/model so the dropdown can't drift from the
@@ -431,10 +446,21 @@
     // "Open ABA" is a link, not a <button> — enable only once actually serving.
     const open = document.getElementById('open-aba');
     if (open) open.classList.toggle('disabled', !ready);
+    // Update button reflects the server's long-op state: disabled + relabelled
+    // while an install/update runs (incl. one started by the tray or another
+    // tab), re-enabled when it finishes. This is the single source of truth, so
+    // the 5s/1s status poll re-enables the button after the op completes.
+    const upd = document.getElementById('ctl-update');
+    if (upd) {
+      upd.disabled = !!s.operation;
+      upd.textContent = s.operation === 'update' ? '↻ Updating…'
+                      : s.operation === 'install' ? '↻ Installing…'
+                      : '⤓ Check updates';
+    }
   }
 
   // ─── playbook event stream (used by both Install + Update) ─────────────
-  function streamPlaybook(url, { current, line, stepsEl, logEl, onComplete }) {
+  function streamPlaybook(url, { current, line, stepsEl, logEl, onComplete, onSettled }) {
     // EventSource doesn't support POST; use fetch + ReadableStream
     fetch(url, { method: 'POST' }).then(async (r) => {
       if (!r.ok) {
@@ -502,7 +528,9 @@
           }
         }
       }
-    });
+    }).catch(() => {
+      if (current) current.textContent = 'Update connection lost.';
+    }).finally(() => { if (onSettled) onSettled(); });
   }
 
   boot();

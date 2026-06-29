@@ -98,7 +98,7 @@ def test_check_updates_happy_path_opens_browser_when_control_page_ok():
         urlopen=_ok_resp,
     )
     assert res.ok
-    assert opened == ["http://127.0.0.1:8765/"]
+    assert opened == ["http://127.0.0.1:8765/?update=1"]
 
 
 def test_check_updates_kickstarts_when_control_page_is_5xx():
@@ -138,7 +138,7 @@ def test_check_updates_kickstarts_when_control_page_is_5xx():
     )
     assert res.ok, res.message
     assert launchctl_calls and launchctl_calls[0][0] == "launchctl"
-    assert opened == ["http://127.0.0.1:8765/"]
+    assert opened == ["http://127.0.0.1:8765/?update=1"]
     # User saw a notification explaining the restart — no silent flicker.
     assert any("Reviving" in sub for _, sub, _ in notes), notes
 
