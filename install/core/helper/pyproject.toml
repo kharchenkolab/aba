@@ -26,4 +26,6 @@ where = ["src"]
 [tool.setuptools.package-data]
 # *.yml ships the install/update playbooks — without them a non-editable
 # install (the real tarball install) has no playbooks and /api/install 500s.
-aba_installer = ["ui/**/*", "*.yml", "templates/**/*"]
+# *.md ships repair_recipe.md — agent_repair passes it via --append-system-prompt;
+# omitting it makes every adaptive-preflight / repair step fail "file not found".
+aba_installer = ["ui/**/*", "*.yml", "*.md", "templates/**/*"]
