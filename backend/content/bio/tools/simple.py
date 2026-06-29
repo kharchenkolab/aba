@@ -72,6 +72,23 @@ def list_capabilities_tool(input_: dict) -> dict:
                          "ensure_capability. read_capability for its source_ref/idioms, "
                          "or find a runnable library/CLI instead (search_pypi/search_bioconda).")
         out.append(e)
+    # Surface a cluster environment module that satisfies the query (e.g. cellranger)
+    # so the agent sees it as available even when nothing is catalogued. No-op off a
+    # cluster; exact-name match keeps it conservative.
+    try:
+        if (query or "").strip():
+            from core.exec import modules as _modprov
+            if _modprov.modules_active():
+                _mod = _modprov.resolve(query.strip())
+                if _mod and not any(o.get("module") == _mod for o in out):
+                    out.append({
+                        "name": query.strip(), "archetype": "cli", "module": _mod,
+                        "runnable": True,
+                        "note": f"Available as cluster environment module '{_mod}'. "
+                                f"Call ensure_capability('{query.strip()}') to use it "
+                                f"(loaded for run_python and background Slurm jobs)."})
+    except Exception:  # noqa: BLE001
+        pass
     return {"capabilities": out}
 
 

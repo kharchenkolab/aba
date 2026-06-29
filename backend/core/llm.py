@@ -181,9 +181,32 @@ _CC_MARKER_BLOCK = {"type": "text",
                     "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."}
 
 
+_auto_oauth_logged = False
+
+
 def _credential_mode() -> str:
-    """ABA_LLM_CREDENTIAL ∈ {apikey, oauth, oauth_cc}. Default apikey."""
-    return os.environ.get("ABA_LLM_CREDENTIAL", "apikey").lower()
+    """ABA_LLM_CREDENTIAL ∈ {apikey, oauth, oauth_cc}. An explicit value always
+    wins. When UNSET, auto-default to oauth_cc IFF there is no API key but a usable
+    Claude Code subscription token is present (refreshable store /
+    $CLAUDE_CODE_OAUTH_TOKEN / ~/.claude/.credentials.json) — so a personal install
+    'just works' on the subscription with no paste. Logged once (not silent); save
+    an API key or set ABA_LLM_CREDENTIAL=apikey to opt out. NB: oauth_cc bills the
+    subscription, so this is a personal/dev convenience."""
+    explicit = os.environ.get("ABA_LLM_CREDENTIAL")
+    if explicit:
+        return explicit.lower()
+    # No explicit mode AND no API key: prefer a detected subscription token over a
+    # broken 'apikey' mode with an empty key. (Short-circuits before the file/IO of
+    # _oauth_bearer when an API key IS set — the common path.)
+    if not (os.environ.get("ANTHROPIC_API_KEY") or API_KEY) and _oauth_bearer():
+        global _auto_oauth_logged
+        if not _auto_oauth_logged:
+            _auto_oauth_logged = True
+            print("[llm] no API key set — auto-using the detected Claude Code "
+                  "subscription token (oauth_cc). Save an API key or set "
+                  "ABA_LLM_CREDENTIAL=apikey to opt out.", flush=True)
+        return "oauth_cc"
+    return "apikey"
 
 
 def _current_api_key() -> str:
