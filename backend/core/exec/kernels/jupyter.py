@@ -381,6 +381,17 @@ def _kernel_env(lang: str, cwd: str) -> dict:
         tenv = tools_env()
         env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         env["PATH"] = str(tenv / "bin") + os.pathsep + env.get("PATH", "")
+        # R `future` defaults (Seurat/IntegrateLayers etc.): sequential plan + a
+        # generous globals ceiling. future's 500 MiB future.globals.maxSize default
+        # trips on real single-cell objects (IntegrateLayers ships the layered object
+        # to workers — the classic error), and on one node parallel `future` usually
+        # costs more than it saves. A step that benefits opts in with plan()/options()
+        # in its own R code (which override these env defaults). Applies to in-process
+        # run_r AND Slurm jobs (slurm_entry → run_r_code → this same kernel env).
+        # Tune via ABA_R_FUTURE_PLAN / ABA_R_FUTURE_GLOBALS_MAXSIZE.
+        env["R_FUTURE_PLAN"] = os.environ.get("ABA_R_FUTURE_PLAN", "sequential")
+        env["R_FUTURE_GLOBALS_MAXSIZE"] = os.environ.get(
+            "ABA_R_FUTURE_GLOBALS_MAXSIZE", str(8 * 1024 ** 3))
     return env
 
 
