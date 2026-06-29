@@ -240,13 +240,25 @@
         strip.textContent = '✓ Setup ready — just finish signing in.';
         clearInterval(stripTimer);
       } else if (s.status === 'error') {
-        let fstep = '';
-        for (const e of (s.events || [])) {
-          const p = e.payload || {};
-          if (e.event === 'step_end' && p.ok === false) fstep = p.step_id;
+        // Pre-agent regime: no agent yet, so the strip IS the help — show the
+        // failed step's remediation right here, then note that signing in lets
+        // ABA attempt an automatic fix (works when the cause is agent-fixable).
+        const { failed } = extractFailure(s);
+        strip.textContent = '';
+        const t = document.createElement('strong');
+        t.textContent = (failed ? failed.title : 'Setup') + ' hit a snag.';
+        strip.appendChild(t);
+        const rem = failed && (failed.remediation || failed.error);
+        if (rem) {
+          const r = document.createElement('span');
+          r.style.display = 'block'; r.style.whiteSpace = 'pre-line'; r.style.marginTop = '4px';
+          r.textContent = failed.remediation || failed.error.slice(0, 400);
+          strip.appendChild(r);
         }
-        strip.textContent = 'Setup hit a snag' + (fstep ? ` at "${fstep}"` : '')
-          + ' — sign in and the assistant can help fix it.';
+        const hint = document.createElement('span');
+        hint.style.display = 'block'; hint.style.marginTop = '4px';
+        hint.textContent = 'Sign in and ABA can try to fix this automatically.';
+        strip.appendChild(hint);
         clearInterval(stripTimer);
       } else { strip.hidden = true; }
     }), 2000);
@@ -268,21 +280,29 @@
   // retry — instead of a generic "Setup failed" that loops forever. In the
   // pre-agent regime this message is the ONLY help the user gets, so it must be
   // legible, not buried in the raw event log.
-  function renderSetupFailure(errEl, auto) {
-    const steps = (auto && auto.steps) || [];
+  // Pull the failed step (title + remediation + error) and the agent's closing
+  // diagnosis out of the auto-install event stream. Shared by the Setup-page
+  // failure panel and the pre-sign-in Welcome strip.
+  function extractFailure(auto) {
     const titleById = {};
-    steps.forEach(s => { titleById[s.id] = s.title || s.id; });
+    ((auto && auto.steps) || []).forEach(s => { titleById[s.id] = s.title || s.id; });
     let failed = null, agentMsg = '';
     for (const e of ((auto && auto.events) || [])) {
       const p = e.payload || {};
       if (e.event === 'step_end' && p.ok === false)
-        failed = { id: p.step_id, error: p.error || '', remediation: p.remediation || '' };
+        failed = { id: p.step_id, title: titleById[p.step_id] || p.step_id,
+                   error: p.error || '', remediation: p.remediation || '' };
       if (e.event === 'repair' && p.message && (p.phase === 'done' || p.phase === 'skip'))
         agentMsg = p.message;
     }
+    return { failed, agentMsg };
+  }
+
+  function renderSetupFailure(errEl, auto) {
+    const { failed, agentMsg } = extractFailure(auto);
     errEl.textContent = '';
     const head = document.createElement('strong');
-    head.textContent = (failed ? (titleById[failed.id] || failed.id) : 'Setup') + ' failed.';
+    head.textContent = (failed ? failed.title : 'Setup') + ' failed.';
     errEl.appendChild(head);
     const detail = failed && (failed.remediation || failed.error);
     if (detail) {
