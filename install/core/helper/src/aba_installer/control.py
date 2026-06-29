@@ -449,6 +449,24 @@ def _backend_pid() -> Optional[int]:
         return None
 
 
+# The backend port is fixed by the launcher (`uvicorn … --port 8000`).
+_BACKEND_HEALTH_URL = "http://127.0.0.1:8000/health"
+
+
+def _backend_ready(timeout: float = 0.5) -> bool:
+    """True only when the backend is actually SERVING HTTP — not merely that its
+    process exists. uvicorn forks long before the app finishes importing (seconds
+    on a cold cache), so a pid-only check enables 'Open ABA' onto a dead port.
+    A cheap localhost GET /health gates the UI on real readiness instead."""
+    import urllib.request
+    import urllib.error  # noqa: F401  (for the except clause)
+    try:
+        with urllib.request.urlopen(_BACKEND_HEALTH_URL, timeout=timeout) as r:
+            return 200 <= getattr(r, "status", r.getcode()) < 300
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @router.post("/start")
 def start_backend() -> dict:
     """Start the ABA backend via the aba launcher. No-op if already running."""
@@ -487,6 +505,9 @@ def status() -> dict:
     home = aba_home()
     installed = _is_installed()
     pid = _backend_pid()
+    # Probe HTTP readiness only when the process exists (skip the network cost
+    # otherwise). 'running' = process up; 'ready' = actually serving requests.
+    ready = _backend_ready() if pid is not None else False
     with _op_lock:
         op = _op_state.name
     config_present = (home / "config.env").exists()
@@ -494,6 +515,7 @@ def status() -> dict:
         "aba_home": str(home),
         "installed": installed,
         "backend_running": pid is not None,
+        "backend_ready": ready,
         "backend_pid": pid,
         "operation": op,
         "credentials": config_present,
