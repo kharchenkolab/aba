@@ -226,6 +226,8 @@ export default function App() {
   }
   const [annotation, setAnnotation] = useState<{ image: string; note: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  // A chat search hit to scroll to once its thread is open (consumed by ChatPane).
+  const [pendingScrollMsg, setPendingScrollMsg] = useState<number | null>(null)
   const [hasProject, setHasProject] = useState(true)
   const [chatReload, setChatReload] = useState(0)       // bump to refetch the thread's messages
   const orientedRef = useRef<Set<string>>(new Set())    // cold-start orient attempts
@@ -760,6 +762,8 @@ export default function App() {
   const chatPane = (compact: boolean) => (
     <ChatPane
       messages={messages}
+      scrollToMsgId={pendingScrollMsg}
+      onScrollConsumed={() => setPendingScrollMsg(null)}
       streaming={streaming}
       loading={chatLoading}
       streamMsg={streamMsg}
@@ -1031,7 +1035,7 @@ export default function App() {
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)}
                    onPickEntity={goToEntity}
                    onPickFile={(path) => url.setFilePath(path)}
-                   onPickMessage={(tid) => { if (tid) selectThread(tid) }} />
+                   onPickMessage={(tid, mid) => { if (tid) selectThread(tid); setPendingScrollMsg(mid ?? null) }} />
       <UndoToast undoable={undoable} onUndo={undoProposal} onClose={clearUndo} />
 
       {/* T2.4 Drawer: slides in from the right when the toggle is clicked.

@@ -50,12 +50,13 @@ def get_messages(entity_id: str = WORKSPACE_ID, thread_id: Optional[str] = None)
         params.append(thread_id)
     with _conn() as c:
         rows = c.execute(
-            f"SELECT role, content, ts, focus_entity_id, thread_id FROM messages "
+            f"SELECT id, role, content, ts, focus_entity_id, thread_id FROM messages "
             f"WHERE {where} ORDER BY id",
             params,
         ).fetchall()
     return [
         {
+            "id": r["id"],          # row id — lets the UI deep-link/scroll to a search hit
             "role": r["role"],
             "content": json.loads(r["content"]),
             "ts": r["ts"],

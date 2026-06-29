@@ -17,7 +17,7 @@ interface Props {
   onClose: () => void
   onPickEntity: (id: string) => void                     // claim-aware router (goToEntity)
   onPickFile: (path: string) => void                      // open in the Files tab
-  onPickMessage: (threadId: string | undefined) => void   // jump to the thread
+  onPickMessage: (threadId: string | undefined, msgId: number) => void   // jump to the thread + message
 }
 
 // Wrap the first case-insensitive match of `q` in <mark> for at-a-glance relevance.
@@ -62,7 +62,7 @@ export default function SearchModal({ open, onClose, onPickEntity, onPickFile, o
     const r: Array<() => void> = []
     files.forEach(f => r.push(() => { onPickFile(f.path); onClose() }))
     ents.forEach(e => r.push(() => { onPickEntity(e.id); onClose() }))
-    msgs.forEach(m => r.push(() => { onPickMessage(m.thread_id); onClose() }))
+    msgs.forEach(m => r.push(() => { onPickMessage(m.thread_id, m.id); onClose() }))
     return r
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files, ents, msgs])
@@ -147,7 +147,7 @@ export default function SearchModal({ open, onClose, onPickEntity, onPickFile, o
                 <div key={'m' + m.id}
                      className={'search-row' + (active === msgBase + i ? ' is-active' : '')}
                      onMouseEnter={() => setActive(msgBase + i)}
-                     onClick={() => { onPickMessage(m.thread_id); onClose() }}>
+                     onClick={() => { onPickMessage(m.thread_id, m.id); onClose() }}>
                   <span className="badge-type">{m.role}</span>
                   <div className="body"><div className="snippet">{highlight(m.snippet, q)}</div></div>
                 </div>

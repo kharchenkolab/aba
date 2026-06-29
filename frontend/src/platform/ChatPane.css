@@ -249,6 +249,14 @@
   overflow-x: hidden;
   padding: 8px 0;
 }
+/* Per-message scroll anchor (carries data-msg-ids). Layout-neutral — it just
+   wraps each bubble so search can scroll to + flash it. */
+.msg-anchor { scroll-margin: 16px; border-radius: 8px; }
+.msg-anchor.msg-flash { animation: msg-flash 1.7s ease-out; }
+@keyframes msg-flash {
+  0%, 15%   { background: var(--accent-soft, #fde68a); box-shadow: 0 0 0 2px var(--accent, #f59e0b) inset; }
+  100%      { background: transparent; box-shadow: none; }
+}
 
 .chat-empty {
   display: flex;
