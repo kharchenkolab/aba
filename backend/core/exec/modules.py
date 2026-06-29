@@ -247,3 +247,39 @@ def load_lines(mods: list[str]) -> str:
     if not init or not safe:
         return ""
     return f". {init} >/dev/null 2>&1\nmodule load {' '.join(safe)}\n"
+
+
+# ── per-project module set (job-path scope: background jobs load these) ───────
+def _project_modules_file(project_id: str) -> Path:
+    from core.data.workspace import _project_work_root
+    return _project_work_root(str(project_id or "default")) / "modules.json"
+
+
+def record_project_module(project_id: str, module_full: str) -> None:
+    """Add a resolved module to the project's set so its background Slurm jobs
+    `module load` it — `ensure_capability` records here, `SlurmSubmitter` reads it.
+    No-op off-cluster / for an unsafe name."""
+    if not module_full or not _SAFE_MODULE.match(module_full) or not modules_active():
+        return
+    f = _project_modules_file(project_id)
+    try:
+        cur = set(json.loads(f.read_text())) if f.exists() else set()
+    except Exception:  # noqa: BLE001
+        cur = set()
+    if module_full in cur:
+        return
+    cur.add(module_full)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(sorted(cur)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def project_modules(project_id: str) -> list[str]:
+    """Modules recorded for a project's background jobs (deduped, sorted). [] if
+    none — a pure file read, safe to call anywhere (the submitter unions it in)."""
+    try:
+        return sorted(set(json.loads(_project_modules_file(project_id).read_text())))
+    except Exception:  # noqa: BLE001
+        return []

@@ -799,15 +799,39 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
+        # Cluster module provider (prefer:first, job-path scope): if a module
+        # satisfies this CLI tool, record it so the project's background Slurm jobs
+        # `module load` it. We STILL install into the conda tools env so the tool is
+        # available in-process; for a tool with no conda package the module is the
+        # provider and a conda failure is then non-fatal. A no-op off a cluster.
+        _mod = None
+        try:
+            from core.exec import modules as _modprov
+            if _modprov.modules_active():
+                _spec = prov["conda"].get("spec") if isinstance(prov["conda"], dict) else ""
+                _tool = (_spec or "").split("=")[0].split()[0].strip() or (cap.get("name") or name)
+                _mod = _modprov.resolve(_tool)
+                if _mod:
+                    from core import projects as _projects
+                    _modprov.record_project_module(_projects.current(), _mod)
+        except Exception:  # noqa: BLE001
+            _mod = None
         from core.exec import MaterializingExecutor, Provisioning
         try:
             MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
+            if _mod:
+                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                        "archetype": cap.get("archetype"), "module": _mod,
+                        "note": f"Provided by cluster module '{_mod}' (loaded in background Slurm "
+                                f"jobs); the conda install isn't needed there and failed: {e}"}
             return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
+        _note = ("Installed into the conda tools env; the binary is on PATH — "
+                 "invoke it from run_python via subprocess.")
+        if _mod:
+            _note += f" Background Slurm jobs also load cluster module '{_mod}'."
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"),
-                "note": "Installed into the conda tools env; the binary is on PATH — "
-                        "invoke it from run_python via subprocess."}
+                "archetype": cap.get("archetype"), "note": _note, "module": _mod}
     if prov.get("mcp_server"):
         # Live adoption: connect the external server now so its tools become
         # callable as 'server:tool' for the rest of this session.
