@@ -40,6 +40,7 @@ class LocalSubprocessExecutor:
         cancel_token=None,
         timeout_s: int = 90,
         env_vars: Optional[dict] = None,
+        stream: bool = False,
     ) -> ExecResult:
         # mounts are a no-op for local execution (the process sees the real
         # filesystem); they matter only for container/remote executors.
@@ -97,14 +98,23 @@ class LocalSubprocessExecutor:
 
         timed_out = False
         try:
-            try:
-                stdout, stderr = proc.communicate(timeout=timeout_s)
-                returncode = proc.returncode
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                returncode = -1
-                timed_out = True
+            if stream:
+                # Live mode: drain stdout/stderr line-by-line on threads so a
+                # long background/Slurm job's progress is tailable AS IT RUNS
+                # (the child's stdout is captured to job.log by `sbatch -o`).
+                # Threads keep the pipes drained → no communicate()-style
+                # deadlock; timeout/cancel still kill via the group.
+                stdout, stderr, returncode, timed_out = self._exec_streaming(
+                    proc, timeout_s)
+            else:
+                try:
+                    stdout, stderr = proc.communicate(timeout=timeout_s)
+                    returncode = proc.returncode
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    returncode = -1
+                    timed_out = True
         finally:
             if unregister is not None:
                 unregister()
@@ -117,3 +127,48 @@ class LocalSubprocessExecutor:
             cancelled=cancelled,
             timed_out=timed_out,
         )
+
+    @staticmethod
+    def _exec_streaming(proc, timeout_s):
+        """Drain proc.stdout/stderr on daemon threads, tee'ing each line to this
+        process's stdout/stderr (live, flushed) while accumulating for the
+        result. Returns (stdout, stderr, returncode, timed_out). Used when
+        `stream=True` — the background/Slurm job path — so job.log is live."""
+        import threading
+
+        out_chunks: list[str] = []
+        err_chunks: list[str] = []
+
+        def _pump(src, sink, chunks):
+            try:
+                for line in iter(src.readline, ""):
+                    chunks.append(line)
+                    try:
+                        sink.write(line)
+                        sink.flush()
+                    except Exception:  # noqa: BLE001 — tee is best-effort
+                        pass
+            finally:
+                try:
+                    src.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        t_out = threading.Thread(target=_pump, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
+        t_err = threading.Thread(target=_pump, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+        t_out.start()
+        t_err.start()
+        timed_out = False
+        try:
+            returncode = proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                returncode = proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                returncode = -1
+            timed_out = True
+        # Let the pumps flush the tail the child wrote before exiting.
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        return "".join(out_chunks), "".join(err_chunks), returncode, timed_out

@@ -64,7 +64,11 @@ class Executor(Protocol):
         cancel_token=None,
         timeout_s: int = 90,
         env_vars: Optional[dict] = None,
+        stream: bool = False,
     ) -> ExecResult:
         """Run `command` in `env` with `cwd` as the working directory.
-        Honors a CancelToken (Stop button) and a wall-clock timeout."""
+        Honors a CancelToken (Stop button) and a wall-clock timeout. When
+        `stream` is set the child's stdout/stderr are tee'd live to this
+        process's stdout/stderr (for a background/Slurm job whose stdout is
+        captured to a tailable job.log) AND still returned in the result."""
         ...

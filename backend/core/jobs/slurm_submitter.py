@@ -61,7 +61,13 @@ class SlurmSubmitter:
                 mods.append(_m)
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
-            "run_id": job["id"], "timeout_s": int(params.get("timeout_s") or 600),
+            # Run UNDER the Run captured at submit (active_run_id), not the job's
+            # own id — so harvested artifacts land in the Run's work dir and
+            # attach to it (no agent re-render). Job CONTROL files (spec/result/
+            # done/job.log) stay in the job dir via _run_dir(). Falls back to the
+            # job id when there was no open Run.
+            "run_id": params.get("run_id") or job["id"],
+            "timeout_s": int(params.get("timeout_s") or 600),
             "result_path": str(result_path), "env": params.get("env"),
             "modules": mods,                              # provenance (cluster module provider)
         }))
@@ -71,7 +77,9 @@ class SlurmSubmitter:
             f"cd {run_dir}\n"
             f"{load_lines(mods)}"
             f"export PYTHONPATH={_BACKEND_DIR}:$PYTHONPATH\n"
-            f"{sys.executable} -m core.jobs.slurm_entry {spec_path}\n"
+            # -u: unbuffered stdout so slurm_entry's tee'd child output reaches
+            # job.log (sbatch -o) live, not only at exit.
+            f"{sys.executable} -u -m core.jobs.slurm_entry {spec_path}\n"
             f"echo $? > {done_path}\n"
         )
         job_sh.chmod(0o755)

@@ -414,21 +414,27 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     from core.runtime import cancellation
     token = cancellation.acquire(job_id)
     kind = job.get("kind") or "run_python"
+    # Execute UNDER the Run captured at submit (active_run_id), not the job's own
+    # id — so artifacts land in the Run's work dir (which refresh_output_manifest
+    # scans) and attach to the Run automatically, instead of being orphaned in a
+    # job-scoped dir the agent then has to re-materialize. Falls back to job_id
+    # when the submit had no open Run. stream=True tees output to a live job.log.
+    exec_run_id = params.get("run_id") or job_id
     try:
         loop = asyncio.get_event_loop()
         if kind == "run_r":
             result_obj = await loop.run_in_executor(
                 None,
-                lambda: run_r_code(code, project_id=str(effective_pid), run_id=job_id,
+                lambda: run_r_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                    timeout_s=timeout_s, cancel_token=token,
-                                   env=params.get("env")),
+                                   env=params.get("env"), stream=True),
             )
         else:
             result_obj = await loop.run_in_executor(
                 None,
-                lambda: run_python_code(code, project_id=str(effective_pid), run_id=job_id,
+                lambda: run_python_code(code, project_id=str(effective_pid), run_id=exec_run_id,
                                         timeout_s=timeout_s, cancel_token=token,
-                                        env=params.get("env")),
+                                        env=params.get("env"), stream=True),
             )
 
         await _finalize_job(job, result_obj, project_id, str(effective_pid))
