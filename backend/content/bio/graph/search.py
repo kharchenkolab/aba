@@ -45,10 +45,12 @@ def search(q: str, limit: int = 25) -> dict:
         return {"entities": [], "files": [], "messages": []}
     like = f"%{q}%"
     ql = q.lower()
-    # Exclude workspace + hidden infrastructure types (capability, reference) —
-    # the same set list_entities() hides, so search shows only user content.
+    # Exclude workspace + hidden infrastructure types (capability, reference),
+    # plus 'plan' — a plan is conversational (proposed in chat), so it surfaces
+    # via its chat message (which scrolls to the exact plan block), not as a
+    # standalone artifact that dead-ends on a generic entity page.
     from core.graph.entities import HIDDEN_TYPES
-    excluded = ("workspace", *HIDDEN_TYPES)
+    excluded = ("workspace", "plan", *HIDDEN_TYPES)
     ph = ",".join("?" * len(excluded))
     with _conn() as c:
         ent_rows = c.execute(
@@ -86,8 +88,16 @@ def search(q: str, limit: int = 25) -> dict:
         text = ""
         try:
             for b in json.loads(r["content"]):
-                if isinstance(b, dict) and b.get("type") == "text":
+                if not isinstance(b, dict):
+                    continue
+                bt = b.get("type")
+                if bt == "text":
                     text += (b.get("text") or "") + " "
+                elif bt == "plan":
+                    # Plans live in chat as a plan block — index their title +
+                    # summary so a plan-title search lands on (and scrolls to)
+                    # the message where the plan was proposed.
+                    text += (b.get("title") or "") + " " + (b.get("summary") or "") + " "
         except Exception:
             text = r["content"]
         idx = text.lower().find(ql)
