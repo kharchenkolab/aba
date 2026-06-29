@@ -107,9 +107,12 @@ def install_tray() -> Path:
 
 
 def main() -> int:
-    """``setup.command`` shells here. No-op unless ``ABA_INSTALL_TRAY=1``."""
+    """``setup.command`` shells here. Installs by default on macOS; opt OUT with
+    ABA_INSTALL_TRAY=0 (matches setup.command's own gate). The old opt-in default
+    silently no-op'd here even though setup.command invoked it — so the tray never
+    installed unless the var was explicitly truthy."""
     flag = (os.environ.get("ABA_INSTALL_TRAY") or "").strip().lower()
-    if flag not in ("1", "true", "yes", "on"):
+    if flag in ("0", "false", "no", "off"):
         return 0
     try:
         dest = install_tray()

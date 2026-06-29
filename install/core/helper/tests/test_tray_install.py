@@ -113,10 +113,11 @@ def test_install_tray_calls_install_launch_agent(tmp_path, monkeypatch):
 
 
 # ─── (4) gating ────────────────────────────────────────────────────────
-def test_main_runs_install_when_flag_set(tmp_path, monkeypatch):
-    """The CLI entrypoint that setup.command shells into checks the env
-    flag. Without it set, it skips the whole install step (v1 opt-in)."""
-    monkeypatch.setenv("ABA_INSTALL_TRAY", "1")
+def test_main_runs_install_by_default(tmp_path, monkeypatch):
+    """The CLI entrypoint setup.command shells into now installs by DEFAULT on
+    macOS — unset means install. (The old opt-in default silently no-op'd here
+    even though setup.command invoked it, so the tray never appeared.)"""
+    monkeypatch.delenv("ABA_INSTALL_TRAY", raising=False)
     called = []
     monkeypatch.setattr(ti, "install_tray", lambda: called.append(1) or tmp_path)
     rc = ti.main()
@@ -124,13 +125,11 @@ def test_main_runs_install_when_flag_set(tmp_path, monkeypatch):
     assert called == [1]
 
 
-def test_main_skips_when_flag_unset(monkeypatch):
-    monkeypatch.delenv("ABA_INSTALL_TRAY", raising=False)
+def test_main_skips_when_opted_out(monkeypatch):
+    """Opt out with ABA_INSTALL_TRAY=0 (or false/no/off)."""
+    monkeypatch.setenv("ABA_INSTALL_TRAY", "0")
     called = []
     monkeypatch.setattr(ti, "install_tray", lambda: called.append(1) or None)
     rc = ti.main()
     assert rc == 0
-    assert called == [], (
-        "without ABA_INSTALL_TRAY=1, main() must be a no-op so setup.command "
-        "doesn't accidentally install the tray on every old install during "
-        "the v1 rollout window")
+    assert called == [], "ABA_INSTALL_TRAY=0 must opt out of the tray install"
