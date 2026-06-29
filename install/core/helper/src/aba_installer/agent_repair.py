@@ -32,6 +32,7 @@ RECIPE_PATH = Path(__file__).with_name("repair_recipe.md")
 DEFAULT_ALLOWED_TOOLS = [
     "Read", "Write",
     "Bash(ls *)", "Bash(cat *)", "Bash(echo *)", "Bash(mkdir *)", "Bash(chmod *)",
+    "Bash(rm *)",               # clear a stale/half-built env dir (recipe: only within $ABA_HOME)
     "Bash(xattr *)",            # de-quarantine downloaded binaries (Gatekeeper)
     "Bash(curl *)",             # re-download / mirror
     "Bash(xcode-select *)",     # detect (cannot silently install) the CLT
