@@ -13,11 +13,14 @@ symmetric: ``verify_python_imports`` mirrors run_python's path assembly,
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 
 def verify_python_imports(
@@ -566,6 +569,111 @@ def repair_base(*, python_exe: Optional[str] = None) -> dict:
     return {"repaired": after["ok"], "installed": targets or "lock-closure",
             "still_broken": after["problems"] if not after["ok"] else [],
             "error": None if ok else (proc.stderr or proc.stdout or "")[-800:]}
+
+
+# ─── verify-once / skip-while-unchanged (avoid the ~9s deep check every boot) ──
+# The base is an IMMUTABLE foundation: once we've deep-verified it and frozen it
+# read-only, it cannot change until a rebuild. So re-running the full deep import
+# check on every startup is pure waste — it scales with the base's file count
+# (84k+ once the R/scientific stack lands) and dominates startup latency. We
+# stamp a fingerprint after a clean verify and skip the deep check while it holds.
+
+def base_is_readonly_fs() -> bool:
+    """True if the base lives on a read-only *filesystem* (not just chmod'd
+    read-only). The SIF/OOD case: the base is baked into a read-only squashfs
+    image and was already verified at build time, so per-launch re-verification
+    (and set_base_writable) is both pointless and impossible. Distinct from our
+    own `a-w` chmod, which leaves the FS writable — hence statvfs, not os.access."""
+    try:
+        st = os.statvfs(_base_site_dir())
+        return bool(st.f_flag & os.ST_RDONLY)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _base_stamp_path() -> Path:
+    """Where the 'base verified' stamp lives — under the mutable runtime root, NOT
+    the (read-only) base. Independent per install / per OOD tenant."""
+    from core.config import RUNTIME_DIR
+    return Path(str(RUNTIME_DIR)) / "base-verified.json"
+
+
+def base_fingerprint() -> str:
+    """Cheap identity of the current base: the canonical lock's content + the
+    base site-dir's mtime (changes when packages are added/removed) + the
+    interpreter. Stable across our read-only chmod (which doesn't alter dir
+    mtime), changes whenever the base is rebuilt or repaired."""
+    h = hashlib.sha256()
+    try:
+        lock = canonical_lock_path() or base_constraints_path()
+        if lock and lock.exists():
+            h.update(lock.read_bytes())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        site = _base_site_dir()
+        h.update(str(site).encode())
+        h.update(str(site.stat().st_mtime_ns).encode())
+    except Exception:  # noqa: BLE001
+        pass
+    h.update(sys.version.encode())
+    h.update((sys.executable or "").encode())
+    return h.hexdigest()
+
+
+def _verified_stamp_matches(fp: str) -> bool:
+    try:
+        data = json.loads(_base_stamp_path().read_text())
+        return data.get("fingerprint") == fp
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _write_verified_stamp(fp: str) -> None:
+    try:
+        p = _base_stamp_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"fingerprint": fp}))
+        os.replace(tmp, p)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
+    """Startup base self-heal, but only when it can actually matter:
+
+    - read-only FS (SIF/OOD immutable image) → skip; verified at build time.
+    - fingerprint stamp current → skip; base is immutable and unchanged since
+      its last clean deep verify.
+    - otherwise → deep verify, repair from the lock if broken, refreeze read-only,
+      and stamp. Meant to run in a BACKGROUND thread so startup-to-ready isn't
+      blocked on the ~9s deep import (env_root_cause covers the brief first-boot
+      window where a kernel could spawn before this completes)."""
+    site = _base_site_dir()
+    if not site.exists():
+        return {"skipped": "no-base"}
+    if base_is_readonly_fs():
+        log("[startup] base on read-only filesystem (immutable image) — skipping deep verify")
+        return {"skipped": "readonly_fs"}
+    fp = base_fingerprint()
+    if _verified_stamp_matches(fp):
+        log("[startup] base unchanged since last verify — skipping deep check")
+        return {"skipped": "stamp"}
+    h = base_health(deep=True)
+    repaired = None
+    if not h["ok"]:
+        repaired = repair_base()
+        log(f"[startup] base was broken {h['problems'][:3]} -> repair: {repaired}")
+        h = base_health(deep=True)
+    else:
+        log("[startup] base health: ok (deep)")
+    if set_base_writable(False):
+        log("[startup] base set read-only (immutable foundation)")
+    if h["ok"]:
+        _write_verified_stamp(base_fingerprint())   # recompute: repair may have changed it
+        log("[startup] base verified — stamped to skip next boot's deep check")
+    return {"ok": h["ok"], "repaired": repaired}
 
 
 _BASE_HEALTH_TS = 0.0
