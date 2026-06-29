@@ -240,7 +240,13 @@
         strip.textContent = '✓ Setup ready — just finish signing in.';
         clearInterval(stripTimer);
       } else if (s.status === 'error') {
-        strip.textContent = 'Setup hit a snag (details after you sign in).';
+        let fstep = '';
+        for (const e of (s.events || [])) {
+          const p = e.payload || {};
+          if (e.event === 'step_end' && p.ok === false) fstep = p.step_id;
+        }
+        strip.textContent = 'Setup hit a snag' + (fstep ? ` at "${fstep}"` : '')
+          + ' — sign in and the assistant can help fix it.';
         clearInterval(stripTimer);
       } else { strip.hidden = true; }
     }), 2000);
@@ -255,6 +261,52 @@
       if (e.event === 'command_output' && e.payload && e.payload.line) return e.payload.line;
     }
     return '';
+  }
+
+  // On a terminal install failure, surface the failed step's remediation (and
+  // the repair agent's diagnosis, if it ran) as a readable message + an explicit
+  // retry — instead of a generic "Setup failed" that loops forever. In the
+  // pre-agent regime this message is the ONLY help the user gets, so it must be
+  // legible, not buried in the raw event log.
+  function renderSetupFailure(errEl, auto) {
+    const steps = (auto && auto.steps) || [];
+    const titleById = {};
+    steps.forEach(s => { titleById[s.id] = s.title || s.id; });
+    let failed = null, agentMsg = '';
+    for (const e of ((auto && auto.events) || [])) {
+      const p = e.payload || {};
+      if (e.event === 'step_end' && p.ok === false)
+        failed = { id: p.step_id, error: p.error || '', remediation: p.remediation || '' };
+      if (e.event === 'repair' && p.message && (p.phase === 'done' || p.phase === 'skip'))
+        agentMsg = p.message;
+    }
+    errEl.textContent = '';
+    const head = document.createElement('strong');
+    head.textContent = (failed ? (titleById[failed.id] || failed.id) : 'Setup') + ' failed.';
+    errEl.appendChild(head);
+    const detail = failed && (failed.remediation || failed.error);
+    if (detail) {
+      const d = document.createElement('p');
+      d.style.whiteSpace = 'pre-line'; d.style.marginTop = '6px';
+      d.textContent = failed.remediation || failed.error.slice(0, 500);
+      errEl.appendChild(d);
+    }
+    // Show the agent's own conclusion when it ran but couldn't fix it (skip the
+    // "not signed in" gate message — that's noise, not guidance).
+    if (agentMsg && !/sign.?in|signed in/i.test(agentMsg)) {
+      const a = document.createElement('p');
+      a.className = 'muted'; a.style.whiteSpace = 'pre-line'; a.style.marginTop = '6px';
+      a.textContent = 'Assistant: ' + agentMsg.slice(0, 500);
+      errEl.appendChild(a);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.textContent = 'Try again'; btn.style.marginTop = '8px';
+    btn.addEventListener('click', () => {
+      errEl.textContent = '';
+      fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
+      mountSetup();
+    });
+    errEl.appendChild(btn);
   }
 
   // ─── Setup page (authed; the background install is finishing) ──────────
@@ -280,9 +332,10 @@
         boot();  // installed → boot auto-starts the backend → Control
       } else if (st === 'error') {
         clearInterval(timer);
-        errEl.textContent = 'Setup failed — see details. Retrying…';
-        fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
-        setTimeout(mountSetup, 4000);
+        // Surface the failed step's remediation + agent diagnosis with an
+        // explicit retry, instead of a generic message on an infinite loop.
+        const auto = await fetchJSON('/api/install/auto').catch(() => null);
+        renderSetupFailure(errEl, auto);
       }
     }, 1500);
     window._abaSetupTimer = timer;
