@@ -103,12 +103,16 @@ def required_params(schema: dict) -> set:
     return {p["name"] for p in parse_params(schema) if p["required"]}
 
 
-def param_form(schema: dict) -> list[dict]:
+def param_form(schema: dict, exclude: set | None = None) -> list[dict]:
     """The renderable launch-form spec: ordered groups, each with its params —
-    [{group, params:[{name,type,required,default,enum,help}]}]. Used by the plan
-    card (editable form for a pipeline step) and describe_pipeline."""
+    [{group, params:[{name,type,required,default,enum,help}]}]. `exclude` drops
+    params ABA sets itself (e.g. `outdir`) so they don't show as misleading empty
+    required fields in the launch form."""
+    exclude = exclude or set()
     groups: dict[str, list] = {}
     for p in parse_params(schema):
+        if p["name"] in exclude:
+            continue
         groups.setdefault(p["group"], []).append(
             {k: p.get(k) for k in ("name", "type", "required", "default", "enum", "help")})
     return [{"group": g, "params": ps} for g, ps in groups.items()]
@@ -135,7 +139,7 @@ def enrich_plan_steps(steps: list) -> list:
                 s["pipeline"] = pipeline
                 s["revision"] = revision
                 s["prefilled"] = params.get("params") or {}
-                s["param_form"] = param_form(schema)
+                s["param_form"] = param_form(schema, exclude=_AUTO_PROVIDED)
         out.append(s)
     return out
 

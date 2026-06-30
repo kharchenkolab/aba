@@ -398,6 +398,10 @@ function PlanCard({ block, active, onGo, onAdjust }: {
                       <span className="plan-card__pipeline-gear">⚙</span>
                       {s.pipeline}{s.revision ? ' @ ' + s.revision : ''}
                     </div>
+                    <div className="plan-card__phint">
+                      Required fields are marked <span className="plan-card__preq">*</span>.
+                      Leave a field empty to use the pipeline's default.
+                    </div>
                     {groups.map((g, gi) => (
                       <fieldset key={gi} className="plan-card__pgroup">
                         <legend>{g.group}</legend>
