@@ -268,6 +268,9 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
     for m in (exp.get("must_not") or []):
         if m.lower() in txt:
             fails.append(f"forbidden_present:{m!r}")
+    for t in (exp.get("tools_used") or []):   # the agent actually invoked this tool this turn
+        if t not in (cap.get("tools") or []):
+            fails.append(f"tool_not_used:{t} (used={cap.get('tools')})")
     for k, n in (exp.get("produces") or {}).items():
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
@@ -312,6 +315,10 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         nsup = sum(1 for e in ents if e.get("status") == "superseded")
         if nsup < st["superseded_min"]:
             fails.append(f"superseded>={st['superseded_min']} but {nsup}")
+    if "revision_deleted" in st:   # THIS step's delete_revision result
+        dr = (created.get(step["id"]) or {}).get("delete_revision") or {}
+        if bool(dr.get("deleted")) != bool(st["revision_deleted"]):
+            fails.append(f"revision_deleted={dr.get('deleted')} expected {st['revision_deleted']}")
     rv = st.get("revisions_min")   # {ref: sX, n: N}: the chain for that entity has >=N revisions
     if rv and rv.get("ref"):
         rec = created.get(rv["ref"]) or {}
