@@ -30,6 +30,14 @@ from typing import Optional
 
 # ── site config ──────────────────────────────────────────────────────────────
 _DEFAULT_HEAD = {"cores": 2, "mem_gb": 8, "qos": None, "partition": None, "walltime_h": 24}
+# env var → (name, caster) for per-field head-resource overrides (see nextflow_config).
+_HEAD_ENV_OVERRIDES = {
+    "cores": ("ABA_NEXTFLOW_HEAD_CORES", int),
+    "mem_gb": ("ABA_NEXTFLOW_HEAD_MEM_GB", int),
+    "walltime_h": ("ABA_NEXTFLOW_HEAD_WALLTIME_H", int),
+    "qos": ("ABA_NEXTFLOW_HEAD_QOS", str),
+    "partition": ("ABA_NEXTFLOW_HEAD_PARTITION", str),
+}
 
 
 def nextflow_config() -> dict:
@@ -74,6 +82,18 @@ def nextflow_config() -> dict:
     # the module/PATH provides.
     java_home = os.environ.get("ABA_NEXTFLOW_JAVA_HOME", cfg.get("java_home"))
     head = {**_DEFAULT_HEAD, **(cfg.get("head") or {})}
+    # Admin overrides for the head job's Slurm footprint (env wins over site config).
+    # walltime_h especially is a scheduling knob: a head that requests a very long window
+    # backfills poorly (the scheduler needs a guaranteed free slot ≥ walltime), so on a busy
+    # cluster a shorter walltime + auto-resume schedules far faster. cores/mem/qos/partition
+    # let a site pin the head to a cheap interactive-ish QOS.
+    for key, (envname, caster) in _HEAD_ENV_OVERRIDES.items():
+        raw = os.environ.get(envname)
+        if raw not in (None, ""):
+            try:
+                head[key] = caster(raw)
+            except (TypeError, ValueError):
+                pass
     return {"module": module or None, "profiles": profiles,
             "singularity_cachedir": cachedir or None,
             "workdir_root": workdir_root or None, "config_file": config_file or None,
