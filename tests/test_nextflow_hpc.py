@@ -57,10 +57,11 @@ def test_merged_profile_caller_first_then_site_dedup():
 def test_command_builder_full():
     cmd = nf.nextflow_command("nf-core/rnaseq", revision="3.14.0", profile="test,cbe",
                               outdir="/out", params={"input": "s.csv"}, work_dir="/wd",
-                              reports_dir="/rep", resume=True)
+                              reports_dir="/rep", resume=True, config_file="/etc/cbe.config")
     s = " ".join(cmd)
     assert cmd[:3] == ["nextflow", "run", "nf-core/rnaseq"]
     assert "-r 3.14.0" in s and "-profile test,cbe" in s
+    assert "-c /etc/cbe.config" in s
     assert "-work-dir /wd" in s and "-resume" in s
     assert "-with-trace /rep/trace.txt" in s and "-with-report /rep/report.html" in s
     assert "--outdir /out" in s and "--input s.csv" in s
