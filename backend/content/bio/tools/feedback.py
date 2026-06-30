@@ -70,6 +70,51 @@ def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, c
     return build(s, d, e)[:budget - 1] + "…"
 
 
+_LOG_FILES = {"backend": "backend.log", "installer": "installer.log", "install": "installer.log",
+              "helper": "../installer/helper.err.log"}
+
+
+def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
+    """Surface a redacted, size-capped slice of ABA's own logs TO GUIDE so it can
+    find the real error and summarize the cause into a bug report. Reads only
+    files under $ABA_HOME/logs (+ the helper err log); never arbitrary paths."""
+    which = (input_.get("which") or "backend").strip().lower()
+    fname = _LOG_FILES.get(which)
+    if not fname:
+        return {"error": f"unknown log '{which}'; choose one of {sorted(set(_LOG_FILES))}"}
+    try:
+        tail = max(1, min(int(input_.get("tail") or 80), 400))
+    except (TypeError, ValueError):
+        tail = 80
+    grep = (input_.get("grep") or "").strip().lower()
+
+    home = Path(os.getenv("ABA_HOME", str(Path.home() / ".aba")))
+    log = (home / "logs" / fname).resolve()
+    # Containment: must stay within ABA_HOME (the ".." helper path resolves under it).
+    if not str(log).startswith(str(home.resolve())):
+        return {"error": "refusing to read outside ABA_HOME"}
+    if not log.exists():
+        return {"ok": True, "which": which, "lines": [], "note": "log not found / empty"}
+    try:
+        rows = log.read_text(errors="replace").splitlines()
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"could not read {fname}: {e}"}
+
+    if grep:
+        rows = [ln for ln in rows if grep in ln.lower()]
+    sel = [_redact(ln) for ln in rows[-tail:]]
+    text = "\n".join(sel)
+    if len(text) > 6000:                 # keep Guide's context manageable
+        text = text[-6000:]
+        sel = text.splitlines()
+    return {
+        "ok": True, "which": which, "matched": len(sel), "lines": sel,
+        "_agent_hint": ("Find the actual error/root cause in these lines and "
+                        "SUMMARIZE it for the report's diagnosis. Do NOT paste raw "
+                        "log lines into build_bug_report — the email is size-capped."),
+    }
+
+
 def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
     """input_: {headline, what_doing?, diagnosis?, error_tail?}. Returns
     {ok, mailto_url, body, report_id}."""
