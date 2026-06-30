@@ -19,9 +19,11 @@ a deployment sets the `nextflow:` block in hpc.yaml (or the ABA_NEXTFLOW_* env).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import statistics
 from pathlib import Path
 from typing import Optional
 
@@ -247,6 +249,75 @@ def parse_trace_containers(trace_path) -> list[str]:
         return []
 
 
+def parse_multiqc(outdir) -> dict:
+    """Parse a finished pipeline's MultiQC output into a structured QC summary the
+    agent can INTERPRET — the General Statistics table (per-sample headline metrics +
+    their titles/descriptions), which tools contributed, and statistical outliers.
+    Finds ``multiqc_data/multiqc_data.json`` anywhere under ``outdir``; {} if none.
+
+    We deliberately don't hardcode pass/fail QC thresholds (those are metric- and
+    study-specific) — we surface the legible table + generic >2σ outliers and let the
+    agent judge ('sample X has high duplication')."""
+    op = Path(outdir)
+    found = sorted(op.rglob("multiqc_data.json"), key=lambda p: len(p.parts))
+    if not found:
+        return {}
+    try:
+        data = json.loads(found[0].read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    # General-stats column metadata (list of {col_key: {title, description, …}}) → merged.
+    headers: dict[str, dict] = {}
+    for h in (data.get("report_general_stats_headers") or []):
+        if isinstance(h, dict):
+            for k, meta in h.items():
+                if isinstance(meta, dict):
+                    headers[k] = {"title": (meta.get("title") or k),
+                                  "description": (meta.get("description") or "").strip()}
+    # General-stats values (list of {sample: {col_key: val}}) → merged per sample.
+    per_sample: dict[str, dict] = {}
+    for block in (data.get("report_general_stats_data") or []):
+        if isinstance(block, dict):
+            for sample, vals in block.items():
+                if isinstance(vals, dict):
+                    per_sample.setdefault(str(sample), {}).update(vals)
+
+    samples = sorted(per_sample)[:100]
+    metric_keys = (list(headers) or sorted({k for v in per_sample.values() for k in v}))[:30]
+    title = lambda k: headers.get(k, {}).get("title", k)
+    metrics = [{"key": k, "title": title(k), "description": headers.get(k, {}).get("description", "")}
+               for k in metric_keys]
+    rows: dict[str, dict] = {}
+    for s in samples:
+        rows[s] = {title(k): per_sample[s][k] for k in metric_keys if k in per_sample[s]}
+
+    # Generic, metric-agnostic outliers via the modified z-score (Iglewicz–Hoaglin):
+    # median + MAD, flag |z| ≥ 3.5. Robust to the outliers themselves (a single bad
+    # sample doesn't inflate the dispersion the way mean+stdev does — which, for small
+    # n, caps a real outlier's plain z-score just under 2). Needs ≥4 numeric samples.
+    outliers: list[dict] = []
+    for k in metric_keys:
+        pairs = [(s, per_sample[s][k]) for s in samples
+                 if isinstance(per_sample[s].get(k), (int, float)) and not isinstance(per_sample[s].get(k), bool)]
+        nums = [v for _, v in pairs]
+        if len(nums) >= 4:
+            med = statistics.median(nums)
+            mad = statistics.median([abs(v - med) for v in nums])
+            if mad > 0:
+                for s, v in pairs:
+                    mz = 0.6745 * (v - med) / mad
+                    if abs(mz) >= 3.5:
+                        outliers.append({"sample": s, "metric": title(k),
+                                         "value": v, "z": round(mz, 1)})
+    tools = sorted((data.get("report_data_sources") or {}).keys())
+    report = next((str(p.relative_to(op)) for p in op.rglob("multiqc_report.html")), None)
+    return {"n_samples": len(per_sample), "tools": tools, "metrics": metrics,
+            "samples": rows, "outliers": outliers[:25], "report": report}
+
+
 # ── the reusable execution+harvest function ──────────────────────────────────
 def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] = None,
                       revision: Optional[str] = None, profile: Optional[str] = None,
@@ -331,6 +402,14 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     failure = {}
     if res.returncode != 0:
         failure = parse_failure(res.stderr or "", trace_rows, str(Path(scratch) / ".nextflow.log"))
+    # P3b: interpret the QC. Parse the pipeline's MultiQC general-stats into a per-sample
+    # summary + outliers the agent reasons over (best-effort; {} if no MultiQC).
+    multiqc = {}
+    if op.exists():
+        try:
+            multiqc = parse_multiqc(op)
+        except Exception:  # noqa: BLE001
+            multiqc = {}
 
     nf_ver = ""
     try:
@@ -352,6 +431,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         "cwd": str(scratch),
         "outdir": outdir, "outputs": out_files,
         "task_summary": summary,          # surfaced to the agent in the tool result
+        "multiqc": multiqc,               # P3b: per-sample QC the agent interprets
         "execution_mode": "workflow",
         # consumed by runner._write_exec_record_for_job (kind:workflow branch)
         "workflow": {
@@ -359,7 +439,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
             "per_process_images": parse_trace_containers(reports / "trace.txt"),
             "pipeline": pipeline, "revision": revision, "profile": prof,
             "params": params or {}, "outputs": out_files[:50], "command": cmd_str,
-            "task_summary": summary, "reports": reports_rel,
+            "task_summary": summary, "reports": reports_rel, "multiqc": multiqc,
         },
         "command": cmd_str,
     }

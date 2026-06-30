@@ -50,9 +50,12 @@ calling, a 10x cohort).
    (pass `estimated_runtime_min` if you can). It runs as a background Slurm job —
    the head fans its tasks out via the site executor; you'll be resumed when it
    finishes. If `run_nextflow` returns `invalid_params`, fix them and re-present.
-6. **Interpret** — on completion, summarize from the result's `task_summary` and
-   the harvested **MultiQC** report; flag QC concerns (low mapping, high
-   duplication, outlier samples) before any downstream analysis.
+6. **Interpret** — on completion the result carries `task_summary` (per-task status/
+   resources) and **`multiqc`** — the per-sample QC table (headline metrics + their
+   meanings), flagged statistical `outliers`, and a link to the full MultiQC report.
+   Summarize the run and **flag QC concerns** (low mapping, high duplication, outlier
+   samples) before any downstream analysis. If unsure what a metric or output file
+   means, read the `docs.output` page from describe_pipeline.
 
 Keep the in-kernel recipe as the alternative for small/interactive work; name the
 trade-off when you propose the pipeline so the user can choose.

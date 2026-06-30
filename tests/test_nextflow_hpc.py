@@ -312,6 +312,50 @@ def test_poll_flags_infra_death(monkeypatch):
     assert r and r.get("slurm_terminal_fail") == "TIMEOUT" and r["returncode"] == 1
 
 
+# ── P3b: MultiQC interpretation ───────────────────────────────────────────────
+def _write_multiqc(tmp_path):
+    """A trimmed multiqc_data.json under <out>/multiqc/multiqc_data/, like nf-core writes."""
+    import json
+    out = tmp_path / "results"
+    d = out / "multiqc" / "multiqc_data"; d.mkdir(parents=True)
+    (out / "multiqc" / "multiqc_report.html").write_text("<html>report</html>")
+    data = {
+        "report_general_stats_headers": [
+            {"percent_duplicates": {"title": "% Dups", "description": "% Duplicate Reads"}},
+            {"percent_aligned": {"title": "% Aligned", "description": "% Aligned reads"}},
+        ],
+        "report_general_stats_data": [
+            {"WT_REP1": {"percent_duplicates": 12.3}, "WT_REP2": {"percent_duplicates": 11.8},
+             "WT_REP3": {"percent_duplicates": 12.0}, "WT_REP4": {"percent_duplicates": 12.5},
+             "BAD": {"percent_duplicates": 80.0}},                       # outlier
+            {"WT_REP1": {"percent_aligned": 95.1}, "WT_REP2": {"percent_aligned": 96.0},
+             "WT_REP3": {"percent_aligned": 95.5}, "WT_REP4": {"percent_aligned": 94.8},
+             "BAD": {"percent_aligned": 41.0}},                          # outlier
+        ],
+        "report_data_sources": {"FastQC": {}, "STAR": {}, "Salmon": {}},
+    }
+    (d / "multiqc_data.json").write_text(json.dumps(data))
+    return out
+
+
+def test_parse_multiqc(tmp_path):
+    out = _write_multiqc(tmp_path)
+    mq = nf.parse_multiqc(out)
+    assert mq["n_samples"] == 5
+    assert sorted(m["title"] for m in mq["metrics"]) == ["% Aligned", "% Dups"]
+    assert mq["samples"]["WT_REP1"]["% Dups"] == 12.3 and mq["samples"]["BAD"]["% Aligned"] == 41.0
+    assert set(mq["tools"]) == {"FastQC", "STAR", "Salmon"}
+    assert mq["report"] == "multiqc/multiqc_report.html"
+    # the BAD sample is a >2σ outlier on BOTH metrics
+    bad = {(o["sample"], o["metric"]) for o in mq["outliers"]}
+    assert ("BAD", "% Dups") in bad and ("BAD", "% Aligned") in bad
+    assert all(o["sample"] == "BAD" for o in mq["outliers"])             # only the outlier flagged
+
+
+def test_parse_multiqc_absent(tmp_path):
+    assert nf.parse_multiqc(tmp_path) == {}                              # no multiqc_data.json → {}
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
