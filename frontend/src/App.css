@@ -68,6 +68,14 @@
   font-size: 12px; padding: 4px 11px; border-radius: 9999px; cursor: pointer;
 }
 .canvas-inventory:hover { background: var(--tree-active-bg); color: var(--text); }
+/* Unobtrusive bug-report button (icon-only) — sits in the canvas actions. */
+.canvas-bug {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0;
+  border: 1px solid transparent; background: transparent; color: var(--text-4);
+  border-radius: 9999px; cursor: pointer; transition: color .12s, background .12s, border-color .12s;
+}
+.canvas-bug:hover { background: var(--tree-active-bg); color: var(--text-2); border-color: var(--border); }
 .canvas-hl {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--border); background: var(--bg); color: var(--text-3);
