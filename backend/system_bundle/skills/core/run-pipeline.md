@@ -17,14 +17,17 @@ calling, a 10x cohort).
 ## The loop
 
 1. **Find** — `search_nf_core(query)` to choose the pipeline (e.g. `nf-core/rnaseq`).
-2. **Inspect** — `describe_pipeline(pipeline)` to learn its parameters (required,
-   types, allowed values, help) and the latest release. **Never guess params.**
-3. **Fill** — prefill ONLY the essentials: `input` (the samplesheet) plus the few
-   biologically meaningful choices the user named (e.g. `genome`/`fasta`, maybe the
-   aligner). **Leave everything else to the pipeline's defaults** — the launch form
-   shows the rest under "Show all" for anyone who wants to tune advanced options.
-   Don't prefill dozens of params (it makes the form scary). `--outdir` is set
-   automatically — do **not** pass it.
+2. **Inspect** — `describe_pipeline(pipeline)` returns the run parameters (required,
+   types, allowed values, help), the latest release, AND **`input_format`** — the exact
+   **samplesheet columns** (name, required, type, allowed values) the pipeline expects.
+   **Never guess the params or the input format.**
+3. **Prepare the input** — build the `--input` file from the user's data using
+   `input_format`: write a CSV with EXACTLY those columns (one row per sample) into the
+   project workspace via `run_python`/`run_r`, then pass its path as `input`. (If the user
+   already has a samplesheet, use it.) Then prefill ONLY the other essentials the user
+   named (e.g. `genome`/`fasta`, maybe the aligner) — **leave everything else to the
+   pipeline's defaults**; the launch form shows the rest under "Show all". Don't prefill
+   dozens of params (it makes the form scary). `--outdir` is set automatically — do **not** pass it.
 4. **Present a plan** — call `present_plan` with a dedicated step for the pipeline,
    carrying the pipeline + your prefilled params in `parameters`:
    ```json

@@ -20,6 +20,7 @@ _TIMEOUT = 12
 # In-process caches (the tool call runs in the backend process; the head job on the
 # compute node never re-validates — validation is pre-submit).
 _SCHEMA_CACHE: dict[tuple, Optional[dict]] = {}
+_INPUT_SCHEMA_CACHE: dict[tuple, Optional[dict]] = {}
 _RELEASE_CACHE: dict[str, Optional[str]] = {}
 
 # ABA always injects these on the `nextflow run` line itself, so they're never
@@ -59,6 +60,54 @@ def fetch_schema(pipeline: str, revision: Optional[str] = None) -> Optional[dict
             break
     _SCHEMA_CACHE[key] = schema
     return schema
+
+
+def fetch_input_schema(pipeline: str, revision: Optional[str] = None) -> Optional[dict]:
+    """Fetch a pipeline's ``assets/schema_input.json`` — the per-row SAMPLESHEET
+    schema (the machine-readable INPUT format), distinct from nextflow_schema.json
+    (the run params). Returns the parsed dict or None. Cached per (pipeline, revision).
+    This is what lets Guide build a correct ``--input`` file from the user's data."""
+    pipeline = (pipeline or "").strip().strip("/")
+    if "/" not in pipeline:
+        return None
+    key = (pipeline, revision)
+    if key in _INPUT_SCHEMA_CACHE:
+        return _INPUT_SCHEMA_CACHE[key]
+    schema = None
+    for ref in [r for r in (revision, "master", "main") if r]:
+        url = f"https://raw.githubusercontent.com/{pipeline}/{ref}/assets/schema_input.json"
+        d = _get(url)
+        if isinstance(d, dict) and (d.get("items") or d.get("properties")):
+            schema = d
+            break
+    _INPUT_SCHEMA_CACHE[key] = schema
+    return schema
+
+
+def parse_input_columns(input_schema: dict) -> list[dict]:
+    """Parse ``schema_input.json`` into the samplesheet columns, in order:
+    [{name, required, type, format, enum, help}]. The samplesheet is an array of
+    row objects, so the columns live under ``items.properties`` (+ ``items.required``);
+    fall back to top-level ``properties`` for non-standard schemas."""
+    items = input_schema.get("items") if isinstance(input_schema, dict) else None
+    if not isinstance(items, dict) or not items.get("properties"):
+        items = input_schema if isinstance(input_schema, dict) else {}
+    props = items.get("properties") or {}
+    required = set(items.get("required") or [])
+    cols: list[dict] = []
+    for name, spec in props.items():
+        if not isinstance(spec, dict):
+            continue
+        cols.append({
+            "name": name,
+            "required": name in required,
+            "type": spec.get("type"),
+            "format": spec.get("format"),
+            "enum": spec.get("enum"),
+            # nf-core puts the human-readable column help in `errorMessage`.
+            "help": (spec.get("description") or spec.get("errorMessage") or "").strip(),
+        })
+    return cols
 
 
 def _groups(schema: dict) -> dict:
