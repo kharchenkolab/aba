@@ -245,6 +245,21 @@ class SlurmSubmitter:
             out.update({k: (f[i] if i < len(f) and f[i] else None) for i, k in enumerate(keys)})
         else:
             out["state"] = self._sacct_state(sid)
+        # P1: live Nextflow progress — the head's trace file is updated as tasks
+        # change state, so the (i) monitor / poll loop can show "N/M processes" while
+        # the pipeline runs (the head sbatch job just looks like one RUNNING job to Slurm).
+        if job.get("kind") == "run_nextflow":
+            try:
+                from core.exec.nextflow import parse_trace_rows, trace_progress
+                from core.config import project_work_dir
+                rid = params.get("run_id") or job["id"]
+                trace = (project_work_dir(str(params.get("project_id") or "default"))
+                         / str(rid) / "nf_reports" / "trace.txt")
+                prog = trace_progress(parse_trace_rows(trace))
+                if prog.get("total"):
+                    out["nextflow"] = prog
+            except Exception:  # noqa: BLE001 — progress is best-effort
+                pass
         return out
 
     def _sacct_state(self, slurm_id: str) -> Optional[str]:

@@ -157,6 +157,58 @@ def test_workflow_exec_record_written():
     assert result_obj.get("exec_id")          # a record was created + injected
 
 
+# ── P1: monitoring — trace summary / live progress / failure diagnosis ────────
+_TRACE = (
+    "task_id\thash\tnative_id\tname\tstatus\texit\trealtime\t%cpu\tpeak_rss\n"
+    "1\taa/1\t101\tFASTQC (s1)\tCOMPLETED\t0\t2m\t180%\t512 MB\n"
+    "2\tbb/2\t102\tSTAR_ALIGN (s1)\tCOMPLETED\t0\t30m\t750%\t12 GB\n"
+    "3\tcc/3\t103\tSALMON (s1)\tRUNNING\t-\t-\t-\t-\n"
+    "4\tdd/4\t104\tMULTIQC\tSUBMITTED\t-\t-\t-\t-\n"
+    "5\tee/5\t105\tTRIM (s2)\tFAILED\t1\t10s\t90%\t256 MB\n"
+)
+
+
+def _rows(tmp_path):
+    t = tmp_path / "trace.txt"; t.write_text(_TRACE)
+    return nf.parse_trace_rows(t)
+
+
+def test_parse_trace_rows(tmp_path):
+    rows = _rows(tmp_path)
+    assert len(rows) == 5 and rows[1]["name"] == "STAR_ALIGN (s1)"
+    assert rows[1]["peak_rss"] == "12 GB" and rows[4]["status"] == "FAILED"
+    assert nf.parse_trace_rows(tmp_path / "nope.txt") == []
+
+
+def test_trace_summary(tmp_path):
+    s = nf.trace_summary(_rows(tmp_path))
+    assert s["total_tasks"] == 5
+    assert s["status_counts"]["COMPLETED"] == 2 and s["status_counts"]["FAILED"] == 1
+    assert s["peak_process"] == "STAR_ALIGN" and abs(s["peak_rss_mb"] - 12 * 1024) < 1
+    assert {f["process"] for f in s["failed"]} == {"TRIM"}      # exit/status flagged, '(s2)' stripped
+
+
+def test_trace_progress(tmp_path):
+    p = nf.trace_progress(_rows(tmp_path))
+    assert p["total"] == 5 and p["completed"] == 2 and p["running"] == 1
+    assert p["submitted"] == 1 and p["failed"] == 1
+    assert p["current"] == ["SALMON"] and p["pct"] == 40.0
+
+
+def test_parse_failure(tmp_path):
+    stderr = ("Foo\nError executing process > 'TRIM (s2)'\nCaused by: exit status 1\n"
+              "Command error: trimgalore: not found\n")
+    f = nf.parse_failure(stderr, _rows(tmp_path))
+    assert "TRIM (exit 1)" in f["failed_processes"]
+    assert "Error executing process" in f["error_excerpt"] and "trimgalore" in f["error_excerpt"]
+
+
+def test_size_mb():
+    assert nf._size_mb("12 GB") == 12 * 1024
+    assert nf._size_mb("512 MB") == 512 and nf._size_mb("1024 KB") == 1.0
+    assert nf._size_mb("-") == 0.0 and nf._size_mb("") == 0.0
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
