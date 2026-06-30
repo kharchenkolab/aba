@@ -43,7 +43,8 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         The tool stamps ABA version, OS/arch, model, and thread/focus ids and
         enforces a strict size budget — keep inputs tight, most important first.
         After it returns, present `mailto_url` as a markdown link
-        '🐛 Review & send bug report' (not the raw URL); it opens the user's mail
+        'Review & send bug report' (not the raw URL, no emoji — the UI draws the
+        bug icon); it opens the user's mail
         client prefilled with a blank space at the top for their own note. Replies
         route back to us and we can ask you to pull more detail, so a tight,
         accurate first report beats a padded one."""
