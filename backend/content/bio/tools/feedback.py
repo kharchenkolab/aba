@@ -205,9 +205,11 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
             pid = _proj.current()
         except Exception:  # noqa: BLE001
             pid = None
-    ctxline = (f"— ABA {_aba_commit()} · {platform.system()} {platform.release()} "
-               f"{platform.machine()} · host {node} · user {user} · project {pid or '—'} · "
-               f"model {os.getenv('ABA_MODEL', '?')} · thr {tid} · focus {focus} · {rid}")
+    # Compact, slash-delimited locator line (no labels — it's for the agent/parser,
+    # not the user). Positional schema:
+    #   commit / os release / arch / node / user / project / model / thread / focus / report-id
+    ctxline = (f"— {_aba_commit()}/{platform.system()} {platform.release()}/{platform.machine()}/"
+               f"{node}/{user}/{pid or '—'}/{os.getenv('ABA_MODEL', '?')}/{tid}/{focus}/{rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
     # Lead the subject with 🪲 so the team can filter on it (matches the bug
