@@ -63,34 +63,45 @@ git clone git@github.com:kharchenkolab/aba.git && cd aba
 
 This builds the self-contained environment (Python + R + the bio stack), imports
 the recipe library, builds the UI, and configures Slurm offload — it sets
-`ABA_BATCH_SUBMITTER=slurm`, puts the runtime on your shared path, and **probes
-`sinfo` and `sacctmgr` to write a starting `~/.aba/hpc.yaml`** describing your
-partitions, your valid **QOS** (with their walltime caps), and your **account**. It
-installs an `aba` launcher under `~/.aba`.
+`ABA_BATCH_SUBMITTER=slurm` and puts the runtime on your shared path. It **doesn't
+write an `hpc.yaml`**: ABA discovers your **partitions, QOS, and account live** from
+`sinfo` + `sacctmgr` at submit time (the installer just prints what it detected so
+you can sanity-check it). It installs an `aba` launcher under `~/.aba`.
 
 > - **Home not shared?** Add `ABA_HOME=/scratch/$USER/aba-home` before the command so
 >   the environment itself is on the shared filesystem too. Package caches
 >   (`MAMBA_ROOT_PREFIX`, `CONDA_PKGS_DIRS`, `PIP_CACHE_DIR`) default to under
 >   `ABA_HOME` so conda can **hardlink** into the env — keep them on the same
 >   filesystem as the env or the build crawls (every package is copied, not linked).
-> - **Python via a module?** If no usable `python3` was on your `PATH`, the installer
->   may have used `module load python`; it prints a note when it does. A later
->   `aba update` runs in a venv built from that python, so either load the same module
->   first or re-run the installer with `ABA_PYTHON` pointed at a self-contained python
->   to drop the dependency.
+> - **Python:** if no usable `python3` is on your `PATH`, the installer stands up a
+>   **self-contained** one with micromamba, so the helper venv (which `aba update` /
+>   `doctor` / `hpc-config` run) keeps working with no module loaded. Only if that
+>   can't run — e.g. no network to fetch micromamba — does it fall back to `module
+>   load python` and print a note; then those commands need that module loaded (or set
+>   `ABA_PYTHON` to a self-contained python).
 > - **Credentials without a key:** run `aba auth` — it prints a URL you approve in any
 >   browser, then paste the code back.
 
 ## Tune your cluster's queues (`hpc.yaml`) — optional
 
-**You can usually skip this.** The installer already wrote `~/.aba/hpc.yaml` by
-probing the cluster — partitions and their limits from `sinfo`, and your valid
-**QOS** + **account** from `sacctmgr` (the things `sinfo` alone can't report, and
-which jobs are silently rejected for missing). The runtime router also re-checks
-live `sinfo`, so the file is a starting point you only edit to change what was
-discovered — prefer a different QOS, tighten a walltime, or fix a name.
+**You can usually skip this.** At submit time ABA queries the scheduler live —
+partitions and their limits from `sinfo`, and your valid **QOS** + **account** from
+`sacctmgr` (the things `sinfo` alone can't report, and that jobs are silently
+rejected for missing). It uses the most-permissive QOS and clamps each request to
+that QOS's walltime cap. So an unconfigured cluster routes jobs correctly with no
+file at all.
 
-A generated `hpc.yaml` looks like:
+**To pin or override** — for determinism, to reorder QOS, or when a sysadmin wants
+to *ground* the catalog rather than trust live discovery — write an `hpc.yaml`:
+
+```bash
+aba hpc-config            # snapshot the live probe to $ABA_HOME/hpc.yaml, then edit it
+aba hpc-config --print    # preview what ABA detects without writing a file
+```
+
+The runtime loads `$ABA_HOME/hpc.yaml` automatically (or any path in
+`$ABA_HPC_CONFIG`); a present file **overrides** live discovery, so it's the
+grounding/pinning mechanism. A written `hpc.yaml` looks like:
 
 ```yaml
 hpc:
@@ -105,12 +116,13 @@ hpc:
 ```
 
 **About `qos`** — it's a *ranked* list, and ABA submits `--qos=<qos[0]>` on every
-job. The installer ranks your QOS **most-permissive first** (largest `MaxWall`), so
-out of the box nothing is rejected for asking too much walltime, and it **clamps each
-partition's `max_walltime_h` to that QOS's cap** so the router never over-requests.
-The list may include partition-scoped variants (e.g. `c_long`) ranked among the
-generic ones. If your jobs are short *and* your cluster gives shorter-walltime QOS
-higher scheduling priority, **reorder the list** to put that QOS first.
+job. Live discovery (and `aba hpc-config`) ranks your QOS **most-permissive first**
+(largest `MaxWall`), so out of the box nothing is rejected for asking too much
+walltime, and ABA **clamps each request to that QOS's walltime cap** so it never
+over-requests. The list may include partition-scoped variants (e.g. `c_long`) ranked
+among the generic ones. If your jobs are short *and* your cluster gives
+shorter-walltime QOS higher scheduling priority, write the file and **reorder the
+list** to put that QOS first.
 
 From the agent's estimate (runtime, and optional cores / memory / GPU hints) ABA
 picks the **first partition that fits**, else the largest, and clamps the request to
@@ -118,8 +130,8 @@ that partition's ceilings; GPU work goes to a `gpu: true` partition. Set `mem_gb
 to omit `--mem` and let the scheduler use its default. (`sacctmgr show assoc
 user=$USER` lists your valid accounts/QOS.)
 
-> Re-running `setup.sh --cluster-personal` **regenerates** `hpc.yaml` from a fresh
-> probe, overwriting hand edits — back it up first if you've customized it.
+> `aba hpc-config` **overwrites** an existing `hpc.yaml` (it's an explicit snapshot
+> of the live probe) — back up a hand-edited file before regenerating.
 
 ## Launch and reach it
 
@@ -182,13 +194,13 @@ that `ABA_BATCH_SUBMITTER=slurm`. Common issues:
 - **R job: "Rscript not provisioned"** — run any small R command once interactively
   to build the R base under the runtime, then retry.
 - **Job rejected `QOSMaxWallDurationPerJobLimit` / `InvalidQOS`** — ABA submits
-  `--qos=<qos[0]>`. Either that QOS's walltime cap is below the request (the installer
-  normally ranks the most-permissive QOS first and clamps to it) or the name is stale.
-  Check / reorder the `qos` list in `hpc.yaml`; `sacctmgr show assoc user=$USER` lists
-  your valid QOS.
-- **Wrong partition/account** — `hpc.yaml` must use your cluster's real names. The
-  installer fills account + QOS from `sacctmgr`; `sinfo` and `sacctmgr show assoc
-  user=$USER` show valid values if you need to correct them.
+  `--qos=<qos[0]>`, the most-permissive QOS it discovered, and clamps to its cap.
+  Run `aba hpc-config --print` to see what it's detecting; if it's wrong, `aba
+  hpc-config` to write a file and reorder/fix the `qos` list. `sacctmgr show assoc
+  user=$USER` lists your valid QOS.
+- **Wrong partition/account** — ABA discovers them live from `sinfo`/`sacctmgr`.
+  Check with `aba hpc-config --print`; to override, `aba hpc-config` writes an
+  editable `hpc.yaml` (`sacctmgr show assoc user=$USER` shows valid values).
 - **Install crawling?** Package caches live under `ABA_HOME` so conda can hardlink
   into the env. If `ABA_HOME` is on a different mount than the env, every package is
   copied instead and the build is slow — keep both on one filesystem.

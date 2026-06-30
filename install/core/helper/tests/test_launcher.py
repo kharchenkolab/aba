@@ -112,5 +112,5 @@ def test_rendered_launcher_has_known_subcommands():
     out = render(ctx)
     for action in ("up)", "stop)", "status)", "logs)", "uninstall)"):
         assert action in out, f"launcher missing subcommand: {action}"
-    # update / doctor / auth share one case → the headless CLI (works browserless).
-    assert "update|doctor|auth)" in out, "launcher missing the update/doctor/auth subcommand"
+    # update / doctor / auth / hpc-config share one case → the headless CLI (browserless).
+    assert "update|doctor|auth|hpc-config)" in out, "launcher missing the headless-CLI subcommand"
