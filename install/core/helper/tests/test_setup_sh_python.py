@@ -128,6 +128,16 @@ def test_resolver_keeps_module_and_micromamba_fallbacks(tmp_path):
     assert "micro.mamba.pm" in body                  # the bootstrap download
 
 
+def test_resolver_prefers_self_contained_over_module():
+    """The persistent helper venv must outlive the install shell, so the SELF-CONTAINED
+    micromamba bootstrap is preferred over a module python (whose libpython vanishes
+    when the module unloads). Guard the call ORDER in the fallback chain."""
+    body = SETUP_SH.read_text()
+    mm = body.index('|| bootstrap_python_via_micromamba')   # the call site, not the def
+    mod = body.index('|| try_module_python')                # the call site, not the def
+    assert mm < mod, "micromamba bootstrap must be attempted before the module python"
+
+
 def test_hands_env_spec_from_local_checkout_to_create_env():
     """create-env runs before clone-repos, so on a private/local install the
     playbook would 404 fetching environment.yml from GitHub. setup.sh installs

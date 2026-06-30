@@ -55,13 +55,19 @@ fi
 # The helper (install/core/helper) needs Python >=3.9 + setuptools>=68. A bare
 # RHEL7 python3 is 3.6: it PASSES a naive "import ensurepip" check yet then dies
 # deep in pip ("No matching distribution found for setuptools>=68"). So we check
-# the *version*, and rather than fail we try, in order: the newest interpreter
-# on PATH, the newest Python environment-module (HPC), then a private Python we
-# stand up via micromamba. Override the whole dance with ABA_PYTHON=/path/python3.
+# the *version*, and rather than fail we try, in order: the newest interpreter on
+# PATH, then a SELF-CONTAINED Python we stand up via micromamba, and only as a LAST
+# resort a Python environment-module (HPC). The helper venv is PERSISTENT — `aba
+# update/doctor/auth/hpc-config` run it long after this shell exits — so a module
+# python (whose libpython disappears once the module unloads) is avoided whenever we
+# can build a self-contained one. Override the whole dance with ABA_PYTHON=/path/python3.
 py_ver()    { "$1" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null; }
 py_usable() { "$1" -c 'import sys,ensurepip; sys.exit(0 if sys.version_info[:2]>=(3,'"$MIN_PY_MINOR"') else 1)' >/dev/null 2>&1; }
 
-# (modules) newest python module >=3.9 on an Lmod / environment-modules system.
+# (modules) LAST resort: newest python module >=3.9 on an Lmod / environment-modules
+# system. Used only if PATH and the micromamba bootstrap both fail — a module python
+# isn't self-contained (its libpython is gone once the module unloads), so the NOTE
+# below warns that later `aba` commands need the module loaded.
 try_module_python() {
   if ! command -v module >/dev/null 2>&1; then          # define `module` in this non-login shell
     for f in "${LMOD_PKG:-}/init/bash" "${MODULESHOME:-}/init/bash" \
@@ -93,8 +99,10 @@ try_module_python() {
   return 1
 }
 
-# (micromamba) last resort: a self-contained Python that needs no system python.
-# Reuses $ABA_HOME/bin/micromamba, so the later install-micromamba step is a no-op.
+# (micromamba) preferred fallback when PATH has no modern Python: a SELF-CONTAINED
+# Python that needs no system python or module — so the persistent helper venv keeps
+# working after this shell exits. Reuses $ABA_HOME/bin/micromamba, so the later
+# install-micromamba step is a no-op.
 bootstrap_python_via_micromamba() {
   echo "   bootstrapping a private Python via micromamba…"
   local mm="$ABA_HOME/bin/micromamba" bp="$ABA_HOME/bootstrap" plat
@@ -117,8 +125,10 @@ else
     p="$(command -v "$c" 2>/dev/null)" || continue
     if py_usable "$p"; then PYBOOT="$p"; break; fi
   done
-  [ -n "$PYBOOT" ] || try_module_python            || true
+  # Prefer the self-contained micromamba python over a module one: the helper venv
+  # built from it must keep working after this shell (and any loaded module) is gone.
   [ -n "$PYBOOT" ] || bootstrap_python_via_micromamba || true
+  [ -n "$PYBOOT" ] || try_module_python               || true
 fi
 if [ -z "$PYBOOT" ]; then
   echo "ERROR: no usable Python (>=3.$MIN_PY_MINOR) found, and bootstrap failed."
