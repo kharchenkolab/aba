@@ -121,6 +121,8 @@ def test_enrich_plan_steps(monkeypatch):
     assert s2["prefilled"] == {"input": "s.csv"}
     assert isinstance(s2["param_form"], list)
     assert any(g["group"] == "Input/output options" for g in s2["param_form"])
+    names = {p["name"] for g in s2["param_form"] for p in g["params"]}
+    assert "input" in names and "outdir" not in names      # outdir is ABA-set → excluded from the form
 
 
 def test_enrich_plan_steps_no_schema(monkeypatch):
