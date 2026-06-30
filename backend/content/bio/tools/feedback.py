@@ -189,9 +189,25 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
     rid = _report_id()
     tid = ctx.get("thread_id") or "—"
     focus = ctx.get("focus_entity_id") or "—"
+    # Locators for controlled deployments (e.g. VBC): short node id + login + project
+    # let us SSH in and introspect the real ~/.aba/logs. User-visible (the whole
+    # email is reviewed before sending), so consented; short node only (no FQDN).
+    node = (platform.node() or "?").split(".")[0]
+    try:
+        import getpass
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001
+        user = os.getenv("USER") or "?"
+    pid = ctx.get("project_id")
+    if not pid:
+        try:
+            from core import projects as _proj
+            pid = _proj.current()
+        except Exception:  # noqa: BLE001
+            pid = None
     ctxline = (f"— ABA {_aba_commit()} · {platform.system()} {platform.release()} "
-               f"{platform.machine()} · model {os.getenv('ABA_MODEL', '?')} · "
-               f"thr {tid} · focus {focus} · {rid}")
+               f"{platform.machine()} · host {node} · user {user} · project {pid or '—'} · "
+               f"model {os.getenv('ABA_MODEL', '?')} · thr {tid} · focus {focus} · {rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
     # Lead the subject with 🪲 so the team can filter on it (matches the bug
