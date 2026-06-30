@@ -41,3 +41,35 @@ def test_kernel_pid_falls_back_to_provisioner_pid():
 def test_kernel_dead_unknown_is_not_dead():
     # No proc + no pid → must NOT falsely report dead (would kill live turns).
     assert _session(_km()).kernel_dead() is False
+
+
+# --- P1: bounded kernel startup (start_kernel / start_channels can't hang forever) ---
+import time
+import pytest
+
+
+class _ShutdownSpyKM:
+    def __init__(self): self.shutdown_called = False
+    def shutdown_kernel(self, now=False): self.shutdown_called = True
+
+
+def test_start_bounded_returns_fast_result():
+    s = _session(_ShutdownSpyKM())
+    assert s._start_bounded(lambda: 42, "start_kernel", 5.0) == 42
+    assert s._km.shutdown_called is False     # success path: no kill
+
+
+def test_start_bounded_times_out_and_reaps():
+    s = _session(_ShutdownSpyKM())
+    t0 = time.time()
+    with pytest.raises(TimeoutError):
+        s._start_bounded(lambda: time.sleep(10), "start_kernel", 0.4)
+    assert time.time() - t0 < 2.0             # fired near the deadline, not at 10s
+    assert s._km.shutdown_called is True      # half-started kernel best-effort reaped
+
+
+def test_start_bounded_surfaces_worker_error():
+    s = _session(_ShutdownSpyKM())
+    def _boom(): raise RuntimeError("zmq EAGAIN")
+    with pytest.raises(RuntimeError, match="zmq EAGAIN"):
+        s._start_bounded(_boom, "start_channels", 5.0)

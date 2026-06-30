@@ -30,6 +30,13 @@ _SPEC_NAME = "aba_py"
 _R_SPEC_NAME = "aba_r"          # private R spec we own (not the clobberable 'ir')
 _spec_ready = False
 _r_spec_ready = False
+# P1: hard deadlines for the otherwise-unbounded startup steps. get_or_start()
+# holds the pool lock across the whole constructor, so a startup that BLOCKS (vs
+# raises) under resource pressure wedges every other kernel request behind it.
+# Normal startup is a few seconds; these caps just stop an infinite wedge.
+_START_KERNEL_TIMEOUT_S = 60     # spawn the kernel subprocess
+_START_CHANNELS_TIMEOUT_S = 30   # open the zmq channels
+_WAIT_READY_TIMEOUT_S = 60       # kernel-ready handshake
 
 
 def _ensure_python_kernelspec() -> str:
@@ -424,14 +431,47 @@ class JupyterKernelSession:
             if _ov:
                 kenv["PYTHONPATH"] = os.pathsep.join(
                     _ov + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
-        self._km.start_kernel(cwd=str(cwd), env=kenv)
+        # P1: bound the startup. These library calls take no timeout and run while
+        # the pool lock is held — if one BLOCKS under resource pressure it wedges
+        # all kernel acquisition. Cap each so a bad startup fails fast (releasing
+        # the lock) instead of hanging forever.
+        self._start_bounded(lambda: self._km.start_kernel(cwd=str(cwd), env=kenv),
+                            "start_kernel", _START_KERNEL_TIMEOUT_S)
         self._kc = self._km.client()
-        self._kc.start_channels()
-        self._kc.wait_for_ready(timeout=60)
+        self._start_bounded(self._kc.start_channels, "start_channels", _START_CHANNELS_TIMEOUT_S)
+        self._kc.wait_for_ready(timeout=_WAIT_READY_TIMEOUT_S)
         self.alive = True
         # Configure the session namespace (overlay + DATA_DIR for Python; cwd +
         # DATA_DIR for R).
         self.execute(setup, timeout_s=setup_to)
+
+    def _start_bounded(self, fn, what: str, timeout_s: float):
+        """Run a blocking startup call (start_kernel / start_channels) under a hard
+        deadline (P1). On timeout, best-effort kill the half-started kernel and
+        raise, so get_or_start() fails fast + releases the pool lock. No stale
+        session is stored — the raise precedes `self._sessions[key] = s`."""
+        box: dict = {}
+
+        def _r():
+            try:
+                box["v"] = fn()
+            except BaseException as e:  # noqa: BLE001 — surface to the constructor
+                box["e"] = e
+
+        t = threading.Thread(target=_r, name=f"kstart-{what}", daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if t.is_alive():
+            try:
+                self._km.shutdown_kernel(now=True)
+            except Exception:  # noqa: BLE001 — best-effort; the worker is abandoned
+                pass
+            raise TimeoutError(
+                f"kernel {what}() exceeded {timeout_s:.0f}s during startup "
+                "(resource pressure?) — aborting so the pool isn't wedged")
+        if "e" in box:
+            raise box["e"]
+        return box.get("v")
 
     def touch(self) -> None:
         self.last_used = time.time()
