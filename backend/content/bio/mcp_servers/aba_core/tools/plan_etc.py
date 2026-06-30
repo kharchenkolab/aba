@@ -121,23 +121,28 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                      outdir: str | None = None,
                      timeout_s: int | None = None,
                      background: bool = True,
+                     execution: str | None = None,
                      estimated_runtime_min: float | None = None,
                      aba_ctx_id: str | None = None) -> dict:
         """Launch a Nextflow / nf-core pipeline (e.g. 'nf-core/rnaseq').
 
         background=True (the DEFAULT, recommended for real pipelines): the head runs
         as a long Slurm job that fans tasks out via the site executor; returns a
-        deferred handle and resumes you on completion. Pass `estimated_runtime_min`
-        to size the head's walltime. background=False runs it synchronously here —
-        only for tiny `-profile test` smoke runs. `profile` (e.g. 'test,cbe') and
-        `params` (the pipeline's `--<k> <v>`) are passed through."""
+        deferred handle and resumes you on completion. background=False runs it
+        synchronously here — only for tiny `-profile test` smoke runs. `profile`
+        (e.g. 'test,cbe') and `params` (the pipeline's `--<k> <v>`) are passed through.
+
+        execution: "slurm" (default) submits each task as its own Slurm job — use for
+        heavy real-data runs. "local" runs all tasks on the head's own (larger) node
+        allocation — far faster for small or `-profile test` pipelines, where per-task
+        Slurm queue latency would otherwise dwarf the seconds of actual compute."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_nextflow as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:
             return _impl(
                 {"pipeline": pipeline, "revision": revision,
                  "profile": profile, "params": params, "outdir": outdir,
-                 "timeout_s": timeout_s, "background": background,
+                 "timeout_s": timeout_s, "background": background, "execution": execution,
                  "estimated_runtime_min": estimated_runtime_min},
                 ctx,
             )

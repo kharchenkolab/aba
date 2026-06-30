@@ -220,7 +220,7 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
             focus_entity_id=(ctx or {}).get("focus_entity_id"),
             revision=revision, profile=profile,
             nf_params=input_.get("params") or {}, outdir=input_.get("outdir"),
-            timeout_s=None, project_id=str(pid),
+            timeout_s=None, execution=input_.get("execution"), project_id=str(pid),
             thread_id=str(tid) if tid else None,
             run_id=active_run_id(str(tid)) if tid else None,
             estimate={"runtime_min": est_min})
