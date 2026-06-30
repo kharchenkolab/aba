@@ -177,6 +177,21 @@ def nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
     return cmd
 
 
+def clear_stale_reports(reports_dir) -> None:
+    """Delete any `-with-trace/-report/-timeline` files left from a prior run in this
+    reports dir. Nextflow ABORTS AT STARTUP if these exist (no `*.overwrite` set when
+    enabled via CLI) — which would break every `-resume` / auto-resume into the same
+    run dir. The reports are regenerated each run (cached tasks just show as CACHED),
+    so removing the stale ones is safe."""
+    rd = Path(reports_dir)
+    for pat in ("trace.txt*", "report.html*", "timeline.html*", "dag.*"):
+        for p in rd.glob(pat):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def parse_trace_rows(trace_path) -> list[dict]:
     """Read a `-with-trace` TSV into a list of header-keyed row dicts. [] on any
     miss. Nextflow updates this file live as tasks change state, so it doubles as
@@ -408,6 +423,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
             work_dir = str(Path(scratch) / "work")
     reports = Path(scratch) / "nf_reports"
     reports.mkdir(parents=True, exist_ok=True)
+    clear_stale_reports(reports)   # else a -resume aborts on the prior run's trace/report files
     Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     ex = MaterializingExecutor()
