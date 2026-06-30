@@ -99,6 +99,25 @@ export interface PlanStepShape {
   expected_outputs?: string[]
   skill?: string | null
   parameters?: Record<string, unknown>
+  /** T-pipeline: a step the backend identified as a Nextflow pipeline launch.
+   *  `pipeline`/`revision` name the workflow, `prefilled` are the params the
+   *  Guide already chose (rendered into the form), and `param_form` is the
+   *  grouped parameter schema scraped from the pipeline's nextflow_schema.json.
+   *  Only pipeline steps carry these fields. */
+  pipeline?: string
+  revision?: string | null
+  prefilled?: Record<string, unknown>
+  param_form?: {
+    group: string
+    params: {
+      name: string
+      type?: string
+      required?: boolean
+      default?: unknown
+      enum?: unknown[]
+      help?: string
+    }[]
+  }[]
 }
 
 /** A validator-emitted concern attached to a plan or specific step. */

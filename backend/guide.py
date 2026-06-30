@@ -856,6 +856,16 @@ async def stream_response(
                         _note += ("\n\nWhen you resume, your first run_python runs in the "
                                   "new Run's working dir — use these canonical paths verbatim "
                                   "(do NOT guess the directory):\n" + _orient)
+                    # Pipeline steps → enrich with a schema-derived editable
+                    # param_form so the plan card renders a launch form inline
+                    # (merged launch-form, nfcore.md §7c). Best-effort; the live
+                    # card reads ev.steps from this emitted payload.
+                    _plan_dict = plan.to_dict()
+                    try:
+                        from core.exec.nextflow_schema import enrich_plan_steps
+                        _plan_dict["steps"] = enrich_plan_steps(_plan_dict.get("steps") or [])
+                    except Exception:  # noqa: BLE001 — enrichment is best-effort
+                        pass
                     return {
                         "status": "presented",
                         "plan_entity_id": plan_eid,
@@ -864,7 +874,7 @@ async def stream_response(
                         "_runtime_halt_after": "plan",
                         "_emit_sse_post": {"type": "plan",
                                            "entity_id": plan_eid,
-                                           **plan.to_dict()},
+                                           **_plan_dict},
                     }
 
                 # ask_clarification: question validate, ack envelope.

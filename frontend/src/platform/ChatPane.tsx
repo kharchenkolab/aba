@@ -432,9 +432,11 @@ export default function ChatPane({
                   keptKeys={keptKeys}
                   onKeepMessage={onKeepMessage}
                   planActive={!streaming && i === all.length - 1 && m.role === 'assistant'}
-                  onPlanGo={(saveAsRun: boolean) => sendAndPin(saveAsRun
-                    ? 'Go ahead with the plan as proposed.'
-                    : 'Go ahead with the plan as proposed. Do not save this as a run.')}
+                  onPlanGo={(saveAsRun: boolean, pipelineParams?: { pipeline?: string; revision?: string | null; params: Record<string, unknown> }[]) =>
+                    sendAndPin('Go ahead with the plan as proposed.'
+                      + (saveAsRun ? '' : ' Do not save this as a run.')
+                      + (pipelineParams && pipelineParams.length
+                           ? ' Use these final pipeline parameters (verbatim): ' + JSON.stringify(pipelineParams) : ''))}
                   onPlanAdjust={() => setExtraFocus(n => n + 1)}
                 />
                 </ErrorBoundary>

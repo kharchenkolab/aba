@@ -103,6 +103,43 @@ def required_params(schema: dict) -> set:
     return {p["name"] for p in parse_params(schema) if p["required"]}
 
 
+def param_form(schema: dict) -> list[dict]:
+    """The renderable launch-form spec: ordered groups, each with its params —
+    [{group, params:[{name,type,required,default,enum,help}]}]. Used by the plan
+    card (editable form for a pipeline step) and describe_pipeline."""
+    groups: dict[str, list] = {}
+    for p in parse_params(schema):
+        groups.setdefault(p["group"], []).append(
+            {k: p.get(k) for k in ("name", "type", "required", "default", "enum", "help")})
+    return [{"group": g, "params": ps} for g, ps in groups.items()]
+
+
+def enrich_plan_steps(steps: list) -> list:
+    """For each plan step that launches a pipeline (``skill == 'run_nextflow'`` or
+    ``parameters.pipeline`` set), attach a schema-derived ``param_form`` + the
+    ``pipeline``/``revision``/``prefilled`` values, so the plan card can render an
+    editable launch form inline. Pure + best-effort: a non-pipeline step, or one
+    whose schema can't be fetched, is returned unchanged. Used by guide.py's
+    present_plan handler to enrich the emitted plan before it reaches the UI."""
+    out = []
+    for s in steps or []:
+        s = dict(s) if isinstance(s, dict) else s
+        if not isinstance(s, dict):
+            out.append(s); continue
+        params = s.get("parameters") or {}
+        pipeline = params.get("pipeline") if isinstance(params, dict) else None
+        if ((s.get("skill") == "run_nextflow" or pipeline) and pipeline):
+            revision = params.get("revision")
+            schema = fetch_schema(pipeline, revision)
+            if schema:
+                s["pipeline"] = pipeline
+                s["revision"] = revision
+                s["prefilled"] = params.get("params") or {}
+                s["param_form"] = param_form(schema)
+        out.append(s)
+    return out
+
+
 def _type_ok(value, jtype: Optional[str]) -> bool:
     """Pragmatic type check (params often arrive as strings). Only flags a CLEAR
     mismatch; unknown/absent types pass."""
