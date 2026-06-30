@@ -149,8 +149,9 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
         parameters (required, types, defaults, allowed values, help — grouped), the
         latest release, AND `input_format`: the exact samplesheet columns the pipeline
         expects (name, required, type, allowed values) so you can BUILD the `--input`
-        file from the user's data. Call this BEFORE run_nextflow. Returns a note if the
-        pipeline ships no schema."""
+        file from the user's data, plus `docs` (fetchable links to usage.md / output.md /
+        README / the nf-co.re page) to read if anything is unclear. Call this BEFORE
+        run_nextflow. Returns a note if the pipeline ships no schema."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import describe_pipeline as _impl
         return _impl({"pipeline": pipeline, "revision": revision}, peek_ctx(aba_ctx_id))
