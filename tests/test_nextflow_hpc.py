@@ -63,6 +63,19 @@ def test_head_resource_env_overrides(monkeypatch):
     assert nf.nextflow_config()["head"]["walltime_h"] == 24
 
 
+def test_clear_stale_reports_unblocks_resume(tmp_path):
+    # A prior run's report files would make Nextflow abort at startup on -resume.
+    rd = tmp_path / "nf_reports"; rd.mkdir()
+    for f in ("trace.txt", "report.html", "timeline.html", "dag.dot"):
+        (rd / f).write_text("old")
+    (rd / "keep.txt").write_text("unrelated")
+    nf.clear_stale_reports(rd)
+    assert not (rd / "trace.txt").exists() and not (rd / "report.html").exists()
+    assert not (rd / "timeline.html").exists() and not (rd / "dag.dot").exists()
+    assert (rd / "keep.txt").exists()          # only nextflow's own report files are removed
+    nf.clear_stale_reports(rd)                  # idempotent / no error on empty
+
+
 def test_head_timeout_tracks_walltime_not_estimate(monkeypatch):
     # The head app-timeout = generous walltime + margin (NOT a runtime estimate), so a head
     # whose tasks are merely queued on a busy cluster does not self-kill.
