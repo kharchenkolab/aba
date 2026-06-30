@@ -50,7 +50,7 @@ def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, c
 
     # Bugfixer-facing labels (the reader is a developer/agent, not the user).
     def build(s, d, e):
-        parts = [f"🐛 {headline}"]
+        parts = [f"🪲 {headline}"]
         if s: parts.append(f"Repro/context: {s}")
         if d: parts.append(f"\nDiagnosis: {d}")
         if e: parts.append(f"\nError: {e}")
@@ -89,8 +89,10 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
                f"thr {tid} · focus {focus} · {rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
-    # Lead the subject with 🐛 so the team can filter on it.
-    subject = (f"🐛 ABA bug: {headline}")[:80]
+    # Lead the subject with 🪲 so the team can filter on it (matches the bug
+    # glyph used in the UI; plain text can't carry the SVG, so this is the
+    # closest stand-in — deliberately not the 🐛 caterpillar).
+    subject = (f"🪲 ABA bug: {headline}")[:80]
     q = urllib.parse.urlencode({"subject": subject, "body": body}, quote_via=urllib.parse.quote)
     mailto_url = f"mailto:{FEEDBACK_TO}?{q}".replace("%0A", "%0D%0A")
 
@@ -100,7 +102,8 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
         "mailto_url": mailto_url,
         "body": body,   # for the agent to show as a preview if it wants
         "_agent_hint": ("Present mailto_url to the user as a markdown link titled "
-                        "'🐛 Review & send bug report' (do NOT paste the raw URL); say "
+                        "'Review & send bug report' (do NOT paste the raw URL, and "
+                        "do NOT add an emoji — the UI renders the bug icon); say "
                         "it opens their email prefilled, with a blank space at the top "
                         "for their own note. Remember the report is read by an ABA "
                         "developer/bugfixer — it captured the technical diagnosis, not "
