@@ -231,13 +231,55 @@ function ArtifactPin({ artifact_id, onPinned }: {
 const PLAN_AUTOFIRE_MS = 60_000
 const PLAN_TICK_MS = 250
 
+/** When the plan contains pipeline steps, Go ships the user's edited params
+ *  alongside the save-as-run choice. One entry per pipeline step, in step order. */
+type PlanGoFn = (
+  saveAsRun: boolean,
+  pipelineParams?: { pipeline?: string; revision?: string | null; params: Record<string, unknown> }[],
+) => void
+
 function PlanCard({ block, active, onGo, onAdjust }: {
   block: Extract<Block, { type: 'plan' }>
-  active: boolean; onGo?: (saveAsRun: boolean) => void; onAdjust?: () => void
+  active: boolean; onGo?: PlanGoFn; onAdjust?: () => void
 }) {
+  // T2.5: steps can be strings (legacy) or PlanStepShape objects with
+  // title/description/expected_outputs/skill/parameters. Pipeline steps add
+  // pipeline/revision/prefilled/param_form (only those carry param_form).
+  type PStep = string | {
+    n?: number; title: string; description?: string; expected_outputs?: string[]
+    skill?: string | null; parameters?: Record<string, unknown>
+    pipeline?: string; revision?: string | null; prefilled?: Record<string, unknown>
+    param_form?: { group: string; params: { name: string; type?: string; required?: boolean; default?: unknown; enum?: unknown[]; help?: string }[] }[]
+  }
+  const steps = (Array.isArray(block.steps) ? block.steps : []) as PStep[]
+  // A pipeline step is an object carrying param_form. The Go button ships the
+  // edited params for these; a plain plan auto-fires after 60s, a pipeline
+  // plan never auto-launches an expensive run.
+  const isPipelineStep = (s: PStep): s is Extract<PStep, object> =>
+    typeof s === 'object' && !!s.param_form
+  const hasPipeline = steps.some(isPipelineStep)
+
   // Pre-checked: by default a plan's outputs group into one Run (see open_run).
   // Unchecking rides along on the Go message as a hint to skip it.
   const [saveAsRun, setSaveAsRun] = useState(true)
+  // Per-pipeline-step form values, keyed by step index. Seeded ONLY from the
+  // Guide's `prefilled` choices — NOT from schema defaults (defaults stay as
+  // placeholder text so the backend can apply them itself if left blank).
+  const [formVals, setFormVals] = useState<Record<number, Record<string, unknown>>>(() => {
+    const init: Record<number, Record<string, unknown>> = {}
+    steps.forEach((s, i) => {
+      if (isPipelineStep(s) && s.prefilled && typeof s.prefilled === 'object') {
+        init[i] = { ...s.prefilled }
+      }
+    })
+    return init
+  })
+  const setField = (stepIdx: number, name: string, value: unknown) => {
+    setFormVals(prev => ({ ...prev, [stepIdx]: { ...(prev[stepIdx] || {}), [name]: value } }))
+  }
+  // A real pipeline can have 100+ params; by default show only required +
+  // prefilled ones, with a per-card toggle to reveal the rest.
+  const [showAll, setShowAll] = useState(false)
   // Remaining time on the auto-fire timer (ms). Drives the ring + auto-fire.
   const [remainingMs, setRemainingMs] = useState(PLAN_AUTOFIRE_MS)
   // Refs let the interval read the *latest* saveAsRun / onGo without
@@ -252,12 +294,20 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   const stopTimer = () => {
     if (intervalRef.current != null) { clearInterval(intervalRef.current); intervalRef.current = null }
   }
+  // Collect each pipeline step's edited params, in step order, for Go.
+  const collectPipelines = () =>
+    steps.flatMap((s, i) =>
+      isPipelineStep(s)
+        ? [{ pipeline: s.pipeline, revision: s.revision ?? null, params: formVals[i] || {} }]
+        : [])
   // Fire the plan exactly once, honoring the current "Save as a run" choice.
+  // Pipeline plans only fire on a manual click (auto-fire is disabled below),
+  // so `collectPipelines` reads the current-render `formVals` — no stale ref.
   const fire = () => {
     if (firedRef.current) return
     firedRef.current = true
     stopTimer()
-    onGoRef.current?.(saveAsRunRef.current)
+    onGoRef.current?.(saveAsRunRef.current, hasPipeline ? collectPipelines() : undefined)
   }
   // Adjust (or anything that drops out of the active state) cancels the timer.
   const adjust = () => { stopTimer(); onAdjust?.() }
@@ -266,8 +316,11 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   // Keyed on `hasGo` (a stable boolean) rather than `onGo`'s identity so an
   // inline parent callback doesn't restart the timer on every render.
   const hasGo = !!onGo
+  // A pipeline plan never auto-launches — an expensive run must be an explicit
+  // click — so the countdown only arms for plain plans.
+  const autoFires = hasGo && !hasPipeline
   useEffect(() => {
-    if (!active || !hasGo) return
+    if (!active || !autoFires) return
     firedRef.current = false
     setRemainingMs(PLAN_AUTOFIRE_MS)
     const startedAt = Date.now()
@@ -278,12 +331,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
     }, PLAN_TICK_MS)
     return stopTimer
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, hasGo])
-  // T2.5: steps can be strings (legacy) or PlanStepShape objects with
-  // title/description/expected_outputs/skill/parameters.
-  const steps = (Array.isArray(block.steps) ? block.steps : []) as (
-    string | { n?: number; title: string; description?: string; expected_outputs?: string[]; skill?: string | null; parameters?: Record<string, unknown> }
-  )[]
+  }, [active, autoFires])
   // The model occasionally emits non-array shapes (string, object, null) — normalize
   // at ingestion so a bad payload doesn't crash the message and white-screen the chat.
   // See [[feedback_render_robustness]] in memory.
@@ -326,6 +374,73 @@ function PlanCard({ block, active, onGo, onAdjust }: {
                   → {outs.join(', ')}
                 </div>
               )}
+              {isPipelineStep(s) && s.param_form && (() => {
+                const prefilledKeys = new Set(Object.keys(s.prefilled || {}))
+                const isVisible = (p: { name: string; required?: boolean }) =>
+                  showAll || p.required || prefilledKeys.has(p.name)
+                const total = s.param_form.reduce((acc, g) => acc + g.params.length, 0)
+                const groups = s.param_form
+                  .map(g => ({ group: g.group, params: g.params.filter(isVisible) }))
+                  .filter(g => g.params.length > 0)
+                const shownCount = groups.reduce((acc, g) => acc + g.params.length, 0)
+                // Offer the toggle whenever some params are hidden, or whenever
+                // everything is shown (so the user can collapse back).
+                const hasMore = showAll || shownCount < total
+                return (
+                  <div className="plan-card__pipeline">
+                    <div className="plan-card__pipeline-head">
+                      <span className="plan-card__pipeline-gear">⚙</span>
+                      {s.pipeline}{s.revision ? ' @ ' + s.revision : ''}
+                    </div>
+                    {groups.map((g, gi) => (
+                      <fieldset key={gi} className="plan-card__pgroup">
+                        <legend>{g.group}</legend>
+                        {g.params.map(p => {
+                          const val = formVals[i]?.[p.name]
+                          const enumOpts = Array.isArray(p.enum) ? p.enum : []
+                          const fieldId = `pf-${i}-${p.name}`
+                          const ph = p.default != null ? 'default: ' + String(p.default) : ''
+                          return (
+                            <div key={p.name} className="plan-card__pfield">
+                              <label htmlFor={fieldId}>
+                                {p.name}
+                                {p.required && <span className="plan-card__preq" title="required">*</span>}
+                              </label>
+                              {p.type === 'enum' && enumOpts.length > 0 ? (
+                                <select id={fieldId} value={String(val ?? '')}
+                                        onChange={e => setField(i, p.name, e.target.value)}>
+                                  <option value="">—</option>
+                                  {enumOpts.map((o, oi) => (
+                                    <option key={oi} value={String(o)}>{String(o)}</option>
+                                  ))}
+                                </select>
+                              ) : p.type === 'boolean' ? (
+                                <input id={fieldId} type="checkbox" checked={!!val}
+                                       onChange={e => setField(i, p.name, e.target.checked)} />
+                              ) : (p.type === 'integer' || p.type === 'number') ? (
+                                <input id={fieldId} type="number" value={String(val ?? '')}
+                                       placeholder={ph}
+                                       onChange={e => setField(i, p.name, e.target.value)} />
+                              ) : (
+                                <input id={fieldId} type="text" value={String(val ?? '')}
+                                       placeholder={ph}
+                                       onChange={e => setField(i, p.name, e.target.value)} />
+                              )}
+                              {p.help && <div className="plan-card__phelp">{p.help}</div>}
+                            </div>
+                          )
+                        })}
+                      </fieldset>
+                    ))}
+                    {hasMore && (
+                      <button type="button" className="plan-card__showall"
+                              onClick={() => setShowAll(v => !v)}>
+                        {showAll ? 'Show fewer' : `Show all ${total} parameters`}
+                      </button>
+                    )}
+                  </div>
+                )
+              })()}
               {myConcerns.map((c, j) => (
                 <div key={j} className={`plan-card__concern plan-card__concern--${c.level}`}>
                   {c.level === 'warn' ? '⚠' : c.level === 'error' ? '⛔' : '·'} {c.message}
@@ -343,27 +458,28 @@ function PlanCard({ block, active, onGo, onAdjust }: {
       {active && (() => {
         // Timer state for the Go button's auto-fire indicator. `frac` is the
         // share of time STILL REMAINING — the solid pie wedge below "Go"
-        // sweeps that arc and shrinks to nothing at zero, then fires.
-        const frac = hasGo
+        // sweeps that arc and shrinks to nothing at zero, then fires. Only
+        // plain plans auto-fire; a pipeline plan shows a bare Go (no ring).
+        const frac = autoFires
           ? Math.max(0, Math.min(1, remainingMs / PLAN_AUTOFIRE_MS))
           : 0
         const secs = Math.ceil(remainingMs / 1000)
-        const goTitle = hasGo
+        const goTitle = autoFires
           ? `Auto-runs in ${secs}s — click to run now, or Adjust… to cancel`
           : 'Run this plan'
         return (
           <div className="plan-card__actions">
             <button className="plan-card__go" onClick={fire} title={goTitle}
-                    aria-label={hasGo ? `Run plan (auto-runs in ${secs} seconds)` : 'Run plan'}>
+                    aria-label={autoFires ? `Run plan (auto-runs in ${secs} seconds)` : 'Run plan'}>
               <span className="plan-card__go-label">Go</span>
-              {hasGo && (
+              {autoFires && (
                 <span className="plan-card__go-timer" aria-hidden="true"
                       style={{ ['--frac' as string]: `${frac * 360}deg` }} />
               )}
             </button>
             <button className="plan-card__adjust" onClick={adjust}
-                    title={hasGo ? 'Cancel the auto-run and revise the plan'
-                                 : 'Revise the plan'}>Adjust…</button>
+                    title={autoFires ? 'Cancel the auto-run and revise the plan'
+                                     : 'Revise the plan'}>Adjust…</button>
             <label className="plan-card__saverun"
                    title="Group this plan's outputs into one Run in the project tree">
               <input type="checkbox" checked={saveAsRun}
@@ -378,7 +494,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
 }
 
 function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => void, entities?: Entity[], onPin?: (id: string, pinned: boolean) => void, isUser?: boolean,
-                      planActive?: boolean, onPlanGo?: (saveAsRun: boolean) => void, onPlanAdjust?: () => void,
+                      planActive?: boolean, onPlanGo?: PlanGoFn, onPlanAdjust?: () => void,
                       isStreaming?: boolean, pinnedFigureIds?: Set<string>,
                       fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>,
                       currentRunId?: string | null,
@@ -865,7 +981,7 @@ interface Props {
   fileMap?: Map<string, { url: string; kind: 'plot' | 'table' | 'file' }>
   /** A presented plan awaiting a decision (latest message): show Go / Adjust. */
   planActive?: boolean
-  onPlanGo?: (saveAsRun: boolean) => void
+  onPlanGo?: PlanGoFn
   onPlanAdjust?: () => void
 }
 

@@ -552,3 +552,69 @@
 .plan-card__concern--info { color: var(--text-3); background: var(--bg-soft, #f6f5f3); }
 .plan-card__concern--warn { color: #b45309; background: #fef3c7; }
 .plan-card__concern--error { color: #b91c1c; background: #fee2e2; }
+
+/* ===== Pipeline launch form (a plan step that is a Nextflow pipeline) =====
+   A real pipeline carries 100+ params, so by default we show only required +
+   prefilled fields and offer a "show all" toggle. Styled to sit quietly inside
+   the plan card: soft surface, hairline border, mono field text. */
+.plan-card__pipeline {
+  margin-top: 8px;
+  padding: 9px 11px 7px;
+  background: var(--bg-soft, #f6f5f3);
+  border: 1px solid var(--panel-bd, var(--border));
+  border-radius: var(--r-sm, 6px);
+}
+.plan-card__pipeline-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; color: var(--text-2);
+  font-family: var(--mono);
+}
+.plan-card__pipeline-gear { color: var(--accent); font-weight: 400; }
+.plan-card__pgroup {
+  border: 0; margin: 0; padding: 7px 0 0;
+}
+.plan-card__pgroup legend {
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-4); font-weight: 500;
+}
+.plan-card__pfield {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 6px;
+}
+.plan-card__pfield label {
+  font-size: 12px; color: var(--text-2);
+  display: flex; align-items: baseline; gap: 3px;
+}
+.plan-card__preq { color: var(--accent); font-weight: 700; }
+.plan-card__pfield input[type="text"],
+.plan-card__pfield input[type="number"],
+.plan-card__pfield select {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--text);
+  background: var(--bg, #fff);
+  border: 1px solid var(--panel-bd, var(--border));
+  border-radius: 4px;
+  padding: 4px 7px;
+  width: 100%; max-width: 340px;
+}
+.plan-card__pfield input[type="text"]:focus,
+.plan-card__pfield input[type="number"]:focus,
+.plan-card__pfield select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.plan-card__pfield input[type="checkbox"] {
+  margin: 0; cursor: pointer; align-self: flex-start;
+}
+.plan-card__phelp {
+  font-size: 11px; color: var(--text-3); font-style: italic;
+  line-height: 1.4;
+}
+.plan-card__showall {
+  margin-top: 9px; padding: 0;
+  background: none; border: 0; cursor: pointer;
+  font-size: 11px; color: var(--text-4); text-decoration: underline;
+}
+.plan-card__showall:hover { color: var(--accent); }

@@ -97,6 +97,39 @@ def test_fetch_schema_no_repo_path():
     assert ns.fetch_schema("hello") is None                 # needs owner/repo
 
 
+def test_param_form():
+    groups = ns.param_form(SCHEMA)
+    assert isinstance(groups, list) and [g["group"] for g in groups][:1] == ["Input/output options"]
+    io = next(g for g in groups if g["group"] == "Input/output options")
+    inp = next(p for p in io["params"] if p["name"] == "input")
+    assert inp["required"] and set(inp) == {"name", "type", "required", "default", "enum", "help"}
+    ref = next(p for g in groups for p in g["params"] if p["name"] == "genome")
+    assert ref["enum"] == ["GRCh38", "GRCm38"]
+
+
+def test_enrich_plan_steps(monkeypatch):
+    monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: SCHEMA)
+    steps = [
+        {"n": 1, "title": "QC", "skill": "bp-quality-control", "parameters": {}},
+        {"n": 2, "title": "RNA-seq", "skill": "run_nextflow",
+         "parameters": {"pipeline": "nf-core/rnaseq", "revision": "3.26.0", "params": {"input": "s.csv"}}},
+    ]
+    out = ns.enrich_plan_steps(steps)
+    assert "param_form" not in out[0]                          # non-pipeline step untouched
+    s2 = out[1]
+    assert s2["pipeline"] == "nf-core/rnaseq" and s2["revision"] == "3.26.0"
+    assert s2["prefilled"] == {"input": "s.csv"}
+    assert isinstance(s2["param_form"], list)
+    assert any(g["group"] == "Input/output options" for g in s2["param_form"])
+
+
+def test_enrich_plan_steps_no_schema(monkeypatch):
+    monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: None)
+    out = ns.enrich_plan_steps(
+        [{"n": 1, "title": "x", "skill": "run_nextflow", "parameters": {"pipeline": "nf-core/x"}}])
+    assert "param_form" not in out[0]                          # no schema → plain step, no crash
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

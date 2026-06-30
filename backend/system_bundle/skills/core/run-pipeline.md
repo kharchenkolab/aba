@@ -1,0 +1,47 @@
+---
+name: run-pipeline
+description: Run a Nextflow / nf-core pipeline as a planned background Slurm job — discover it, inspect its parameters, present an editable plan, launch on the user's Go, then interpret the results
+when_to_use: A task needs a standardized / production / large-scale bioinformatics workflow (bulk RNA-seq, single-cell, variant calling, fetch SRA reads, ATAC/ChIP, methylation, …) where a maintained community pipeline is more correct and reproducible than improvising the steps in the kernel
+keywords: [nextflow, nf-core, pipeline, workflow, rnaseq, scrnaseq, sarek, fetchngs, atacseq, chipseq, methylseq, ampliseq, run pipeline, multiqc, fastq]
+---
+
+# Run a pipeline (Nextflow / nf-core)
+
+For heavy, standardized, reproducible processing, hand the work to a community
+**nf-core pipeline** rather than improvising the steps in-kernel. The in-kernel
+recipes stay the fast, **interactive / exploratory** path; **escalate to a
+pipeline** when the run is production-scale, standardized across samples, or must
+be reproducible (e.g. fastq→counts for a whole study, germline/somatic variant
+calling, a 10x cohort).
+
+## The loop
+
+1. **Find** — `search_nf_core(query)` to choose the pipeline (e.g. `nf-core/rnaseq`).
+2. **Inspect** — `describe_pipeline(pipeline)` to learn its parameters (required,
+   types, allowed values, help) and the latest release. **Never guess params.**
+3. **Fill** — set the params you can infer from the data/context (e.g. `input` =
+   the samplesheet you prepared, `genome`/`fasta`). `--outdir` is set
+   automatically — do **not** pass it.
+4. **Present a plan** — call `present_plan` with a dedicated step for the pipeline,
+   carrying the pipeline + your prefilled params in `parameters`:
+   ```json
+   {"n": 3, "title": "Run nf-core/rnaseq", "skill": "run_nextflow",
+    "parameters": {"pipeline": "nf-core/rnaseq", "revision": "<release>",
+                   "params": {"input": "samplesheet.csv", "genome": "GRCh38"}}}
+   ```
+   The plan card renders this step as an **editable launch form** (the user can
+   adjust the params before running). A pipeline is long and resource-heavy, so
+   always present it in a plan — with its expected time/cost — and **stop** after
+   `present_plan`; wait for the user's decision.
+5. **Launch on Go** — when the user approves, their reply carries the FINAL params
+   (`"Use these final pipeline parameters (verbatim): [...]"`). Call
+   `run_nextflow(pipeline=…, revision=…, params=<those final params>, background=True)`
+   (pass `estimated_runtime_min` if you can). It runs as a background Slurm job —
+   the head fans its tasks out via the site executor; you'll be resumed when it
+   finishes. If `run_nextflow` returns `invalid_params`, fix them and re-present.
+6. **Interpret** — on completion, summarize from the result's `task_summary` and
+   the harvested **MultiQC** report; flag QC concerns (low mapping, high
+   duplication, outlier samples) before any downstream analysis.
+
+Keep the in-kernel recipe as the alternative for small/interactive work; name the
+trade-off when you propose the pipeline so the user can choose.
