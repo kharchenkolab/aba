@@ -1353,6 +1353,21 @@ def search_endpoint(q: str = "", limit: int = 25):
     return _search(q, limit=limit)
 
 
+class ClientContextIn(BaseModel):
+    context: dict = {}
+
+
+@app.post("/api/feedback/client-context")
+def feedback_client_context(payload: ClientContextIn):
+    """Stash a browser-side context snapshot (recent console errors, route, UI
+    state) so Guide can read it via read_client_context when filing a bug report
+    — Guide can't see the browser otherwise. Captured on bug-button click; not
+    sent anywhere until the user files a report. No project context needed."""
+    from content.bio.tools.feedback import stash_client_context
+    stash_client_context(payload.context)
+    return {"ok": True}
+
+
 # arch3.md Phase 8.A: /api/claims/* (12 endpoints) + claim helpers +
 # Pydantic models + the CONFIDENCE constant moved to
 # content/bio/web/routes.py. main.py mounts the bio router (see the
