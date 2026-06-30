@@ -493,12 +493,20 @@ def main() -> int:
                                               json={"title": (step.get("target") or {}).get("title")}).json()
                             created[sid] = {"entity_id": out.get("entity_id"), "result_id": out.get("result_id")}
                             print(f"[{sid}] {kind}/user  pinned {art.get('original_name')} -> result={out.get('result_id')}")
-                        elif kind == "delete":
+                        elif kind in ("delete", "drop"):
+                            # H6: a user `drop` is a soft-archive (discard a pinned
+                            # Result, restorable) — same route as a soft `delete`. It
+                            # used to fall through to the else: SKIP, so the entity was
+                            # never archived and the downstream entity_archived check
+                            # failed for a harness reason, not a platform one (microbiome s11).
                             eid = tg.get("result_id") or tg.get("entity_id")
-                            suffix = "?hard=true&cascade=members" if step.get("hard") else ""
-                            rc = client.delete(f"/api/entities/{eid}{suffix}").status_code
-                            created[sid] = tg
-                            print(f"[{sid}] {kind}/user  delete {eid} -> {rc}")
+                            if not eid:
+                                print(f"[{sid}] {kind}/user  unresolved target={step.get('target')}")
+                            else:
+                                suffix = "?hard=true&cascade=members" if step.get("hard") else ""
+                                rc = client.delete(f"/api/entities/{eid}{suffix}").status_code
+                                created[sid] = tg
+                                print(f"[{sid}] {kind}/user  {'hard-delete' if step.get('hard') else 'archive'} {eid} -> {rc}")
                         elif kind == "restore":
                             eid = tg.get("result_id") or tg.get("entity_id")
                             client.post(f"/api/entities/{eid}/restore"); created[sid] = tg
