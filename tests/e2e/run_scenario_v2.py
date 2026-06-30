@@ -445,6 +445,12 @@ def main() -> int:
     if not spec.get("steps"):
         print(f"{SCENARIO} is v1 (no steps) — use run_scenario_library.py"); return 2
     src = LIB / SCENARIO / "data"
+    # Scenario data/ is generated, not committed (see misc/scenarios/_regen_all.sh).
+    # On a fresh clone it won't exist yet — point the user at the regen step instead
+    # of a confusing empty-DATA_DIR run. Non-fatal (some scenarios fetch their data).
+    if not src.is_dir() or not any(src.iterdir()):
+        print(f"[note] {SCENARIO}/data is empty — if this scenario uses local data, run "
+              f"`bash misc/scenarios/_regen_all.sh` first (data is generated, not committed).")
 
     import content.bio  # noqa
     import content.bio.lifecycle.registry  # noqa
