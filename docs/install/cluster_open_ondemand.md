@@ -162,7 +162,8 @@ host's app dir (`/var/www/ood/apps/sys/`, root).
 3. **Verify.** OOD discovers sys apps on the next dashboard load (no restart). Open
    **Interactive Apps → Servers → ABA**, pick a lab + instance, launch, and click
    **Connect to ABA** once *Running*. A blocked launch shows why on the session card
-   (preflight rc 10 = the group's `/aba` isn't an ABA workspace).
+   (preflight rc 10 — `status.yaml` `blocked_on` says whether the group isn't
+   **enrolled** or its `/aba` is a foreign non-ABA folder).
 
 **Preflight needs no setup.** `before.sh.erb` resolves the image from `site.yaml`
 and runs the **baked** `aba_preflight.py` from it (`/opt/aba/ood/aba_preflight.py`,
@@ -171,9 +172,22 @@ runs on any node, nothing to hand-edit.
 
 ## 5. Onboard a lab
 
-A lab's space is created automatically on first launch (from `group-skeleton`,
-with a safety check that refuses a same-named non-ABA folder). To customize, the
-**lab admin** edits the lab bundle — the second interject point:
+How a lab joins depends on `scopes.group.auto_create_skeleton`:
+
+- **`false` — enrollment gate (recommended for a hand-held pilot).** An admin
+  enrolls the lab explicitly:
+  ```bash
+  python /cluster/aba/enroll-group.py <group> [--api-key sk-ant-api… | --oauth-token sk-ant-oat…]
+  ```
+  That stamps `/groups/<group>/aba` (the `.aba-workspace` marker — and an enrollment
+  record), and optionally drops the lab-shared credential (0600). Until a group is
+  enrolled it's **hidden from the launch form** and **blocked at preflight** with an
+  actionable message (`ui_text.enroll_contact`). Credential is per-group and swappable
+  later (API key now, OAuth later) — re-run `enroll-group` to change it.
+- **`true`** — a lab's space is auto-created on first launch (no gate).
+
+Either way a same-named **non-ABA** folder is refused (never clobbered). To customize
+a lab, the **lab admin** edits the lab bundle — the second interject point:
 
 ```
 /groups/<lab>/aba/bundle/

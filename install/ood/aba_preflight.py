@@ -9,7 +9,8 @@ bundle scopes.
 
 Inputs (env): ABA_SITE_CONFIG (default /cluster/aba/site.yaml), ABA_PF_GROUP,
 ABA_PF_USER, ABA_PF_HOME, ABA_PF_TOKEN (pasted key), ABA_PF_STAGED.
-Exit 10 = blocked (foreign group folder) — before.sh must NOT launch.
+Exit 10 = blocked — before.sh must NOT launch. status.yaml `blocked_on` says why:
+  group not enrolled (no /groups/<group>/aba workspace), or a foreign same-named folder.
 """
 import json, os, shutil, sys
 from pathlib import Path
@@ -103,12 +104,38 @@ def main():
     def ex(s):
         return expand(s, user=user, group=group, home=home)
 
-    # ---- group scope (with safety check) ----
+    # ---- group scope (enrollment gate + safety check) ----
+    # A group is ENROLLED when /groups/<group>/aba exists with an ABA marker
+    # (.aba-workspace) — stamped by an admin (enroll-group, or auto_create_skeleton).
+    #   ours marker            → ok
+    #   absent / empty + auto  → stamp it on the fly (opt-in convenience)
+    #   absent / empty, no auto → NOT ENROLLED → block with an actionable message
+    #                             (so a launch doesn't burn a Slurm slot to fail)
+    #   exists, non-empty, no marker → FOREIGN → block (never clobber a same-named dir)
     group_state, group_detail, bundle_present, group_root = "disabled", "group scope disabled", False, None
     if gcfg.get("enabled") and group:
+        site_name = (site.get("site") or {}).get("name")
         group_root = Path(ex(gcfg.get("root_path") or "/groups/{group}/aba"))
         bundle_dir = group_root / gcfg.get("bundle_subdir", "bundle")
         tmpl = gcfg.get("skeleton_template")
+        auto = bool(gcfg.get("auto_create_skeleton"))
+        can_stamp = bool(tmpl and Path(ex(tmpl)).is_dir())
+        not_enrolled = (gcfg.get("not_enrolled_message")
+                        or (f"Group '{group}' is not enrolled in ABA"
+                            + (f" at {site_name}" if site_name else "")
+                            + f". Ask an admin to enroll it (creates {group_root})."))
+
+        def _create():
+            # auto_create_skeleton (opt-in): stamp the skeleton if configured, else
+            # drop the bare .aba-workspace marker. (Manual enrollment uses the same
+            # skeleton via the enroll-group helper.)
+            group_root.mkdir(parents=True, exist_ok=True)
+            if can_stamp:
+                shutil.copytree(ex(tmpl), group_root, dirs_exist_ok=True)
+            else:
+                (group_root / ".aba-workspace").touch()
+            return "skeleton_just_created", f"new ABA workspace created at {group_root}"
+
         if group_root.exists():
             looks_ours = any((group_root / m).exists() for m in OURS_MARKERS)
             try:
@@ -117,23 +144,22 @@ def main():
                 is_empty = False
             if looks_ours:
                 group_state, group_detail = "ok", str(group_root)
-            elif is_empty and gcfg.get("auto_create_skeleton") and tmpl and Path(ex(tmpl)).is_dir():
-                shutil.copytree(ex(tmpl), group_root, dirs_exist_ok=True)
-                group_state, group_detail = "skeleton_just_created", f"new ABA workspace created at {group_root}"
+            elif is_empty and auto:
+                group_state, group_detail = _create()
+            elif is_empty:
+                blocked, blocked_reason = True, not_enrolled          # empty, not auto → not enrolled
+                group_state, group_detail = "not_enrolled", not_enrolled
             else:
                 # SAFETY: a same-named folder that isn't an ABA workspace.
                 blocked = True
                 blocked_reason = (f"{group_root} exists but is not an ABA workspace "
                                   f"(no {'/'.join(OURS_MARKERS)} marker) — refusing to launch")
                 group_state, group_detail = "foreign", blocked_reason
+        elif auto:
+            group_state, group_detail = _create()
         else:
-            if gcfg.get("auto_create_skeleton") and tmpl and Path(ex(tmpl)).is_dir():
-                shutil.copytree(ex(tmpl), group_root)
-                group_state, group_detail = "skeleton_just_created", f"new ABA workspace created at {group_root}"
-            else:
-                group_root.mkdir(parents=True, exist_ok=True)
-                (group_root / ".aba-workspace").touch()
-                group_state, group_detail = "skeleton_just_created", f"new ABA workspace created at {group_root}"
+            blocked, blocked_reason = True, not_enrolled              # absent, not auto → not enrolled
+            group_state, group_detail = "not_enrolled", not_enrolled
         if not blocked:
             bundle_present = bundle_dir.is_dir() and any(
                 p.name not in (".gitkeep",) for p in bundle_dir.iterdir())
