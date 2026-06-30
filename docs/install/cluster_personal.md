@@ -73,11 +73,12 @@ you can sanity-check it). It installs an `aba` launcher under `~/.aba`.
 >   (`MAMBA_ROOT_PREFIX`, `CONDA_PKGS_DIRS`, `PIP_CACHE_DIR`) default to under
 >   `ABA_HOME` so conda can **hardlink** into the env — keep them on the same
 >   filesystem as the env or the build crawls (every package is copied, not linked).
-> - **Python via a module?** If no usable `python3` was on your `PATH`, the installer
->   may have used `module load python`; it prints a note when it does. A later
->   `aba update` runs in a venv built from that python, so either load the same module
->   first or re-run the installer with `ABA_PYTHON` pointed at a self-contained python
->   to drop the dependency.
+> - **Python:** if no usable `python3` is on your `PATH`, the installer stands up a
+>   **self-contained** one with micromamba, so the helper venv (which `aba update` /
+>   `doctor` / `hpc-config` run) keeps working with no module loaded. Only if that
+>   can't run — e.g. no network to fetch micromamba — does it fall back to `module
+>   load python` and print a note; then those commands need that module loaded (or set
+>   `ABA_PYTHON` to a self-contained python).
 > - **Credentials without a key:** run `aba auth` — it prints a URL you approve in any
 >   browser, then paste the code back.
 
