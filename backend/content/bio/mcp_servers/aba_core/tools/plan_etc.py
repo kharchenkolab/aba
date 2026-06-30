@@ -141,3 +141,14 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                  "estimated_runtime_min": estimated_runtime_min},
                 ctx,
             )
+
+    @mcp.tool()
+    def describe_pipeline(pipeline: str, revision: str | None = None,
+                          aba_ctx_id: str | None = None) -> dict:
+        """Inspect a Nextflow / nf-core pipeline's parameters (from its
+        nextflow_schema.json): required params, types, defaults, allowed values, and
+        help, grouped. Call this BEFORE run_nextflow to build a correct invocation and
+        explain the inputs to the user. Returns a note if the pipeline ships no schema."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import describe_pipeline as _impl
+        return _impl({"pipeline": pipeline, "revision": revision}, peek_ctx(aba_ctx_id))

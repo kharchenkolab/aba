@@ -57,6 +57,7 @@ from .plan_etc import (    # noqa: F401, E402
     write_memory_tool,
     restart_kernel_tool,
     run_nextflow,
+    describe_pipeline,
     _available_container_engines,
     _nextflow_env_blocker,
     _nextflow_command,

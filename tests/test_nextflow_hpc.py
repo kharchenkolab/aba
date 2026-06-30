@@ -111,8 +111,11 @@ def test_submit_nextflow_job_params():
 def test_run_nextflow_background_routes(monkeypatch):
     import content.bio.tools.plan_etc as pe
     import core.jobs.runner as runner
+    import core.exec.nextflow_schema as _ns
     from core import projects as _proj
     monkeypatch.setattr(pe, "_nextflow_env_blocker", lambda *a, **k: None)   # ignore container-engine gate
+    monkeypatch.setattr(_ns, "fetch_schema", lambda *a, **k: None)           # skip P2 schema fetch (no network in unit)
+    monkeypatch.setattr(_ns, "latest_release", lambda *a, **k: None)
     monkeypatch.setattr(_proj, "current", lambda: "p1", raising=False)
     captured = {}
 
@@ -134,6 +137,39 @@ def test_run_nextflow_needs_pipeline():
     import content.bio.tools.plan_etc as pe
     r = pe.run_nextflow({"background": True}, None)
     assert r["status"] == "error" and "pipeline" in r["note"]
+
+
+_FIX_SCHEMA = {"definitions": {"io": {"title": "IO", "required": ["input"],
+               "properties": {"input": {"type": "string", "description": "samplesheet"},
+                              "genome": {"type": "string", "enum": ["GRCh38"]}}}}}
+
+
+def test_run_nextflow_blocks_invalid_params(monkeypatch):
+    # P2: a missing-required param is caught pre-submit — nothing reaches Slurm.
+    import content.bio.tools.plan_etc as pe
+    import core.jobs.runner as runner
+    import core.exec.nextflow_schema as _ns
+    from core import projects as _proj
+    monkeypatch.setattr(pe, "_nextflow_env_blocker", lambda *a, **k: None)
+    monkeypatch.setattr(_ns, "fetch_schema", lambda *a, **k: _FIX_SCHEMA)
+    monkeypatch.setattr(_ns, "latest_release", lambda *a, **k: None)
+    monkeypatch.setattr(_proj, "current", lambda: "p1", raising=False)
+    submitted = {"n": 0}
+    monkeypatch.setattr(runner, "submit_nextflow_job",
+                        lambda **k: submitted.__setitem__("n", submitted["n"] + 1) or {"id": "j"})
+    res = pe.run_nextflow({"pipeline": "nf-core/x", "background": True, "params": {}}, None)
+    assert res["status"] == "invalid_params" and any("input" in e for e in res["errors"])
+    assert submitted["n"] == 0                              # blocked before submit
+
+
+def test_describe_pipeline(monkeypatch):
+    import content.bio.tools.plan_etc as pe
+    import core.exec.nextflow_schema as _ns
+    monkeypatch.setattr(_ns, "fetch_schema", lambda *a, **k: _FIX_SCHEMA)
+    monkeypatch.setattr(_ns, "latest_release", lambda *a, **k: "1.2.0")
+    r = pe.describe_pipeline({"pipeline": "nf-core/x"}, None)
+    assert r["status"] == "ok" and r["required"] == ["input"] and r["latest_release"] == "1.2.0"
+    assert "IO" in r["param_groups"] and any(p["name"] == "genome" for p in r["param_groups"]["IO"])
 
 
 # ── provenance: the kind:workflow exec record ─────────────────────────────────
