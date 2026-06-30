@@ -355,8 +355,9 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
     schema = _ns.fetch_schema(pipeline, revision or latest)
     if not schema:
         return {"status": "no_schema", "pipeline": pipeline, "latest_release": latest,
-                "note": ("No nextflow_schema.json found — params can't be validated; pass "
-                         "the pipeline's documented `--<k> <v>` params directly to run_nextflow.")}
+                "docs": _ns.pipeline_doc_links(pipeline, revision or latest),
+                "note": ("No nextflow_schema.json found — params can't be validated. Read the "
+                         "pipeline's docs (see `docs`) and pass its `--<k> <v>` params to run_nextflow.")}
     groups: dict[str, list] = {}
     for p in _ns.parse_params(schema):
         groups.setdefault(p["group"], []).append({
@@ -380,12 +381,14 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
     return {"status": "ok", "pipeline": pipeline, "revision": revision or latest,
             "latest_release": latest, "required": required, "param_groups": groups,
             "input_format": input_format,
+            "docs": _ns.pipeline_doc_links(pipeline, revision or latest),
             "note": (f"{sum(len(v) for v in groups.values())} params in {len(groups)} groups; "
                      f"required: {', '.join(required) or 'none'}. "
                      + (f"Input: a samplesheet with columns {', '.join(c['name'] for c in input_format['columns'])} "
                         f"(required: {', '.join(input_format['required_columns']) or 'none'}). "
                         if input_format else "")
-                     + "Pass params to run_nextflow as a dict; --outdir is set automatically.")}
+                     + "Pass params to run_nextflow as a dict; --outdir is set automatically. "
+                     + "If unsure about the input format or an output, read `docs` (usage/output).")}
 
 
 def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:

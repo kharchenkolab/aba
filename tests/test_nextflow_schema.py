@@ -175,6 +175,16 @@ def test_fetch_input_schema_cached(monkeypatch):
     assert ns.fetch_input_schema("hello") is None               # needs owner/repo
 
 
+def test_pipeline_doc_links():
+    d = ns.pipeline_doc_links("nf-core/rnaseq", "3.26.0")
+    assert d["usage"] == "https://raw.githubusercontent.com/nf-core/rnaseq/3.26.0/docs/usage.md"
+    assert d["output"].endswith("/3.26.0/docs/output.md")
+    assert d["repo"] == "https://github.com/nf-core/rnaseq" and d["homepage"] == "https://nf-co.re/rnaseq"
+    d2 = ns.pipeline_doc_links("someuser/mypipe")               # non-nf-core: repo+readme+docs, no homepage
+    assert d2["repo"] == "https://github.com/someuser/mypipe" and "homepage" not in d2
+    assert ns.pipeline_doc_links("hello") == {}                 # needs owner/repo
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

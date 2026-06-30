@@ -177,6 +177,7 @@ def test_describe_pipeline(monkeypatch):
     assert "IO" in r["param_groups"] and any(p["name"] == "genome" for p in r["param_groups"]["IO"])
     assert r["input_format"]["required_columns"] == ["sample", "fastq_1"]      # P2.5
     assert any(c["name"] == "fastq_1" and c["format"] == "file-path" for c in r["input_format"]["columns"])
+    assert r["docs"]["usage"].endswith("docs/usage.md") and r["docs"]["repo"].startswith("https://github.com/")  # P2.5b
 
 
 # ── provenance: the kind:workflow exec record ─────────────────────────────────

@@ -240,6 +240,30 @@ def validate_params(schema: dict, params: Optional[dict]) -> dict:
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
+def pipeline_doc_links(pipeline: str, revision: Optional[str] = None) -> dict:
+    """Canonical documentation locations for a pipeline — fetchable URLs the agent can
+    read ON DEMAND when it hits doubt (how to format the input, what an output means,
+    an unusual param). We don't parse these; we just point at them. nf-core pipelines
+    follow a fixed layout; for any repo we still give the README + repo. Version-pinned
+    to `revision` when given. (We don't pre-verify each URL — the agent fetches on need.)"""
+    pipeline = (pipeline or "").strip().strip("/")
+    if "/" not in pipeline:
+        return {}
+    ref = revision or "master"
+    raw = f"https://raw.githubusercontent.com/{pipeline}/{ref}"
+    links = {
+        "repo": f"https://github.com/{pipeline}",
+        "readme": f"{raw}/README.md",
+        "usage": f"{raw}/docs/usage.md",        # how to prepare the input + run
+        "output": f"{raw}/docs/output.md",      # what the results / files mean
+    }
+    owner, name = pipeline.split("/", 1)
+    if owner == "nf-core":
+        links["homepage"] = f"https://nf-co.re/{name}"                      # human overview
+        links["parameters"] = f"https://nf-co.re/{name}/{revision or 'latest'}/parameters/"
+    return links
+
+
 def latest_release(pipeline: str) -> Optional[str]:
     """The pipeline's latest release tag (GitHub API), for pinning `-r` when the
     caller gave none. None if no releases / not fetchable. Cached."""

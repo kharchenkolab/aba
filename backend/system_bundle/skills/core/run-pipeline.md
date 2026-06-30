@@ -18,9 +18,12 @@ calling, a 10x cohort).
 
 1. **Find** — `search_nf_core(query)` to choose the pipeline (e.g. `nf-core/rnaseq`).
 2. **Inspect** — `describe_pipeline(pipeline)` returns the run parameters (required,
-   types, allowed values, help), the latest release, AND **`input_format`** — the exact
-   **samplesheet columns** (name, required, type, allowed values) the pipeline expects.
-   **Never guess the params or the input format.**
+   types, allowed values, help), the latest release, **`input_format`** — the exact
+   **samplesheet columns** (name, required, type, allowed values) the pipeline expects —
+   and **`docs`** (fetchable links: `usage.md`, `output.md`, README, the nf-co.re page).
+   **Never guess the params or the input format.** If anything is unclear (an unusual
+   param, the exact input layout, what an output file means), `fetch_url` the relevant
+   `docs` link and read it before proceeding.
 3. **Prepare the input** — build the `--input` file from the user's data using
    `input_format`: write a CSV with EXACTLY those columns (one row per sample) into the
    project workspace via `run_python`/`run_r`, then pass its path as `input`. (If the user
