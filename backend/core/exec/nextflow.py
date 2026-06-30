@@ -68,11 +68,16 @@ def nextflow_config() -> dict:
     # the slurm executor/queue/QOS + singularity, WITHOUT nf-core/configs' stale
     # `process.module` loads. Applied to every run when set.
     config_file = os.environ.get("ABA_NEXTFLOW_CONFIG", cfg.get("config_file"))
+    # JAVA_HOME for the head: modern nf-core pipelines pull plugins (nf-schema) compiled
+    # for Java 17+, but a cluster's `nextflow` module may pin an older Java. Point the head
+    # at a Java ≥17 here (the run sets JAVA_HOME, which Nextflow honors). None → use whatever
+    # the module/PATH provides.
+    java_home = os.environ.get("ABA_NEXTFLOW_JAVA_HOME", cfg.get("java_home"))
     head = {**_DEFAULT_HEAD, **(cfg.get("head") or {})}
     return {"module": module or None, "profiles": profiles,
             "singularity_cachedir": cachedir or None,
             "workdir_root": workdir_root or None, "config_file": config_file or None,
-            "head": head}
+            "java_home": java_home or None, "head": head}
 
 
 def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> Optional[str]:
@@ -367,6 +372,8 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
         env_vars["SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
+    if cfg.get("java_home"):
+        env_vars["JAVA_HOME"] = cfg["java_home"]      # Nextflow head runs on this Java (≥17 for nf-schema)
 
     cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
                            params=params, work_dir=work_dir, reports_dir=str(reports),

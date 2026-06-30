@@ -38,11 +38,13 @@ def test_config_env_overrides(monkeypatch):
     monkeypatch.setenv("ABA_NEXTFLOW_PROFILES", "cbe,singularity")
     monkeypatch.setenv("ABA_NEXTFLOW_CACHEDIR", "/resources/containers")
     monkeypatch.setenv("ABA_NEXTFLOW_WORKDIR", "/scratch-cbe/users/me/nxf")
+    monkeypatch.setenv("ABA_NEXTFLOW_JAVA_HOME", "/sw/java/21")
     c = nf.nextflow_config()
     assert c["module"] == "nextflow/24.10.6"
     assert c["profiles"] == ["cbe", "singularity"]
     assert c["singularity_cachedir"] == "/resources/containers"
     assert c["workdir_root"] == "/scratch-cbe/users/me/nxf"
+    assert c["java_home"] == "/sw/java/21"
 
 
 # ── pure: profile merge ──────────────────────────────────────────────────────
