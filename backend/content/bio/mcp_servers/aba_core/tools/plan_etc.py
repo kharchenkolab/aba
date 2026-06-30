@@ -132,10 +132,13 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
         synchronously here — only for tiny `-profile test` smoke runs. `profile`
         (e.g. 'test,cbe') and `params` (the pipeline's `--<k> <v>`) are passed through.
 
-        execution: "slurm" (default) submits each task as its own Slurm job — use for
-        heavy real-data runs. "local" runs all tasks on the head's own (larger) node
-        allocation — far faster for small or `-profile test` pipelines, where per-task
-        Slurm queue latency would otherwise dwarf the seconds of actual compute."""
+        execution: "slurm" (default) submits each task as its own Slurm job — for heavy
+        real-data runs. "local" runs all tasks on the head's own (larger) node allocation
+        — far faster for small or `-profile test` pipelines, where per-task Slurm queue
+        latency dwarfs the seconds of real compute. "auto" reads the pipeline's declared
+        resources and picks local when its heaviest task fits one node, else slurm. The
+        local allocation is auto-sized to that heaviest task (see describe_pipeline →
+        resources for the footprint + recommendation)."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_nextflow as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:

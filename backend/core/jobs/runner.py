@@ -258,9 +258,30 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
     since the head mostly waits in the queue (a walltime overrun is a Slurm kill → auto-resume)."""
     from core.exec.nextflow import nextflow_config, head_timeout_s
     ncfg = nextflow_config()
-    execution = (execution or ncfg.get("execution") or "slurm").lower()
-    if execution not in ("slurm", "local"):
-        execution = "slurm"
+    requested = (execution or ncfg.get("execution") or "slurm").lower()
+    if requested not in ("slurm", "local", "auto"):
+        requested = "slurm"
+    # The estimate sizes the local allocation AND routes "auto". Local mode runs every task
+    # on ONE allocation, so it's sized to the pipeline's heaviest task (from its declared
+    # nf-core resources). Best-effort: a fetch miss → auto falls back to slurm, and a chosen
+    # local run uses the flat nextflow.local default.
+    local_resources, resource_estimate, est = None, None, None
+    if requested in ("local", "auto"):
+        try:
+            from core.exec.nextflow_resources import estimate_pipeline_resources
+            est = estimate_pipeline_resources(pipeline, revision, profile)
+        except Exception:  # noqa: BLE001 — never block a submit on the estimate
+            est = None
+    if requested == "auto":
+        execution = "local" if (est and est.get("local_viable")) else "slurm"
+    else:
+        execution = requested
+    if execution == "local" and est:
+        local_resources = est.get("recommended_local")
+    if est:
+        resource_estimate = {**{k: est.get(k) for k in
+                                ("heaviest_task", "caps", "local_viable", "reason")},
+                             "requested": requested, "resolved": execution}
     if timeout_s is None:
         timeout_s = head_timeout_s(ncfg["local"] if execution == "local" else ncfg["head"])
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -271,6 +292,7 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"pipeline": pipeline, "revision": revision, "profile": profile,
                 "nf_params": nf_params or {}, "outdir": outdir, "execution": execution,
+                "local_resources": local_resources, "resource_estimate": resource_estimate,
                 "code": f"nextflow run {pipeline}" + (f" -profile {profile}" if profile else ""),
                 "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},

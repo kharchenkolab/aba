@@ -81,6 +81,7 @@ class SlurmSubmitter:
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
             "profile": params.get("profile"), "nf_params": params.get("nf_params"),
             "outdir": params.get("outdir"), "execution": params.get("execution"),
+            "local_resources": params.get("local_resources"),
         }))
         job_sh = run_dir / "job.sh"
         job_sh.write_text(
@@ -104,7 +105,13 @@ class SlurmSubmitter:
             from core.exec.nextflow import nextflow_config
             ncfg = nextflow_config()
             mode = (params.get("execution") or ncfg.get("execution") or "slurm").lower()
-            blk = ncfg["local"] if mode == "local" else ncfg["head"]
+            blk = dict(ncfg["local"] if mode == "local" else ncfg["head"])
+            # In local mode prefer the estimate-derived allocation (sized to the pipeline's
+            # heaviest task) over the flat default; fall back to nextflow.local on a miss.
+            lr = params.get("local_resources") if mode == "local" else None
+            if lr:
+                blk["cores"] = lr.get("cores") or blk.get("cores")
+                blk["mem_gb"] = lr.get("mem_gb") or blk.get("mem_gb")
             head_est = {"runtime_min": int(blk.get("walltime_h") or 24) * 60,
                         "cores": blk.get("cores") or 2, "mem_gb": blk.get("mem_gb") or 8}
             res = resolve_resources(head_est, hpc_config())
