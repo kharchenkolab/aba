@@ -422,15 +422,16 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             continue
         _copy_and_record(f, files, suf)
 
-    # A+B: figures the agent saved DIRECTLY into the store dir (off-convention,
-    # e.g. savefig('/artifacts/<pid>/tree.png')) never touch scratch, so they'd be
-    # orphaned — on disk but unregistered/unpinnable, eventually reaped. Catch files
-    # written into the store DURING this exec (mtime in [since_ts, harvest-begin),
-    # excluding our own copies) and register them through the same path, nudging the
-    # agent back to the working dir. Gated on since_ts (the session/persistent-kernel
-    # path) so the one-shot path — fresh scratch, no start stamp — can't over-catch.
-    if since_ts:
-        for g in sorted(adir.glob("*")):
+    # Off-convention captures: files the agent saved DIRECTLY into a known project
+    # dir instead of the cell's working dir, so they never touch `scratch` and would
+    # be orphaned — on disk but unregistered/unpinnable, eventually reaped. Catch
+    # files written there DURING this exec (mtime in [since_ts, harvest-begin),
+    # excluding our own copies) and register them through the same path. Gated on
+    # since_ts (the session/persistent-kernel path) so the one-shot path — fresh
+    # scratch, no start stamp — can't over-catch. NON-recursive so we don't re-walk
+    # scratch or sibling threads' subdirs.
+    def _capture_external(d: Path, note: str) -> None:
+        for g in sorted(d.glob("*")):
             if not g.is_file() or g.name in _created:
                 continue
             try:
@@ -458,10 +459,30 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
                     _copy_and_record(g, files, suf)
             else:
                 continue
-            warnings.append(
-                f"'{g.name}' was written into the artifacts dir directly; I captured + "
-                f"registered it so it's tracked + pinnable."
-            )
+            warnings.append(note.format(name=g.name))
+
+    if since_ts:
+        # (A+B) the artifacts STORE dir, e.g. savefig('/artifacts/<pid>/tree.png').
+        _capture_external(
+            adir,
+            "'{name}' was written into the artifacts dir directly; I captured + "
+            "registered it so it's tracked + pinnable.")
+        # (C4) the project WORK dir, e.g. savefig('<project>/work/fig.png') — the
+        # PARENT of the per-thread exec cwd. The agent reasonably uses an absolute
+        # path to the project work dir; without this its figures are orphaned even
+        # though the cell returns rc=0 and the file is on disk. This was the "A2"
+        # apparent fabrication: the agent CORRECTLY reports a save (rc=0 + its own
+        # "figure saved" print) that the harvest then loses (plots:[]/produced=[]).
+        try:
+            from core.config import project_work_dir as _pwd
+            wdir = _pwd(pid)
+            if wdir.resolve() != scratch.resolve():   # else the main scan already covered it
+                _capture_external(
+                    wdir,
+                    "'{name}' was saved to the project work dir (not the cell's working "
+                    "dir); I captured + registered it so it's tracked + pinnable.")
+        except Exception:  # noqa: BLE001 — work-dir capture is best-effort
+            pass
 
     return plots, tables, files, warnings
 
