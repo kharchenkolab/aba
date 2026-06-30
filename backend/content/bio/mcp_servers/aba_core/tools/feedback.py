@@ -63,6 +63,9 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         about confidence, and flag if it looks like a user-environment issue rather
         than an actual ABA defect.
 
+        FIRST, unless you've already gathered the evidence this turn, invoke the
+        `diagnose-aba-trouble` skill (Skill) for the procedure, and follow it.
+
         GATHER EVIDENCE BEFORE FILING — do not file a "couldn't locate" report
         without first checking the RIGHT source for the symptom:
           • install / setup failure (conda env, micromamba, R toolchain) →
@@ -76,6 +79,11 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         Find the real cause and fold a tight summary into `diagnosis` (+ the key
         line into `error_tail`). Only file a "couldn't reproduce" report if you
         checked the correct source and the evidence genuinely isn't there.
+
+        Keep every field TIGHT — the email is size-capped and over-long fields get
+        trimmed. Lead with what matters most to a fixer: the cause + suggested fix
+        in `diagnosis`, and the single key error line in `error_tail`. Keep
+        `what_doing` to one crisp sentence.
 
         Provide:
           • headline    — ONE line: the SYMPTOM / observed failure, specific.

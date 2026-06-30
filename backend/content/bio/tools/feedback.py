@@ -17,7 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 FEEDBACK_TO = os.getenv("ABA_FEEDBACK_EMAIL", "pk.restricted@gmail.com")
-BODY_BUDGET = 900          # keeps the encoded mailto URL well under the ~1800 safe ceiling
+# Body budget: ~1050 chars keeps the encoded mailto URL near ~1750 (under the
+# ~1800 cross-client safe ceiling) — measured ratio ≈1.7. Raised from 900 once we
+# saw 900 force-trim the verbatim error + suggested fix out of real reports.
+BODY_BUDGET = 1050
 
 
 def _redact(s: str) -> str:
@@ -57,16 +60,23 @@ def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, c
         if e: parts.append(f"\nError: {e}")
         return lead + "\n".join(parts) + "\n" + foot
 
+    # Trim to fit, lowest-value first. For the BUGFIXER the gold is the diagnosis
+    # (cause + fix) and the verbatim error_tail; the repro/context prose is the
+    # most compressible. So compress repro first (floor ~80), then error (floor
+    # ~160 — keep the key line), then diagnosis (floor ~240 — keep cause + fix).
+    def clip(t: str, n: int) -> str:
+        return (t[:max(0, n - 1)].rstrip() + "…") if len(t) > n else t
+
     s, d, e = what_doing, diagnosis, error_tail
-    for _ in range(5):                 # trim low-priority sections until it fits
+    for _ in range(8):
         body = build(s, d, e)
         if len(body) <= budget:
             return body
-        if e:                 e = ""
-        elif len(d) > 220:    d = d[:217].rstrip() + "…"
-        elif len(s) > 140:    s = s[:137].rstrip() + "…"
-        elif d:               d = ""
-        elif s:               s = ""
+        over = len(body) - budget
+        if len(s) > 80:       s = clip(s, max(80, len(s) - over))
+        elif len(e) > 160:    e = clip(e, max(160, len(e) - over))
+        elif len(d) > 240:    d = clip(d, max(240, len(d) - over))
+        elif s:               s = ""          # last resort: drop repro prose
         else:                 return body[:budget - 1] + "…"
     return build(s, d, e)[:budget - 1] + "…"
 
