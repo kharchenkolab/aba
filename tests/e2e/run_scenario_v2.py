@@ -29,6 +29,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -46,6 +47,38 @@ CRED_KEYS = ("ABA_LLM_CREDENTIAL", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN
              "ABA_HOME", "ABA_MODEL", "ABA_SYSTEM_BUNDLE", "ABA_INSTITUTION_BUNDLE",
              "ABA_SITE_CONFIG", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
 RUBRIC_DIMS = ("correctness", "completeness", "no_fabrication", "lifecycle", "efficiency")
+# H5: per-turn wall-clock ceiling. A wedged exec (kernel hang / zmq EAGAIN under
+# load) otherwise blocks consume()'s iter_lines() forever — the whole sweep hangs
+# and NO bundle is written (blast_seq s2). With a ceiling, the hung turn becomes a
+# TurnTimeout the per-step handler records (verdict FAIL) + recovers from, so the
+# hang is OBSERVABLE in the bundle instead of a silent void. Generous by default
+# so legitimate heavy work (installs, AF-DB fetch, training) isn't false-killed.
+TURN_TIMEOUT_S = float(os.environ.get("ABA_TURN_TIMEOUT_S", "600"))
+
+
+class TurnTimeout(RuntimeError):
+    """A single agent turn exceeded TURN_TIMEOUT_S (likely a wedged kernel/exec)."""
+
+
+def call_with_timeout(fn, timeout_s: float, *args, **kwargs):
+    """Run fn(*args) in a daemon thread; raise TurnTimeout if it outlives
+    timeout_s. The worker is abandoned (daemon) — the caller is expected to
+    restart_client() so a fresh app/session is used next. We don't try to kill the
+    in-process server turn; the kernel reaper culls its idle kernel later."""
+    box: dict = {}
+    def _run():
+        try:
+            box["v"] = fn(*args, **kwargs)
+        except BaseException as e:  # noqa: BLE001 — surface the worker's error to the caller
+            box["e"] = e
+    t = threading.Thread(target=_run, name="turn", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TurnTimeout(f"turn exceeded {timeout_s:.0f}s (wedged exec/kernel — abandoned)")
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
 
 
 def bootstrap_env() -> None:
@@ -142,7 +175,12 @@ def consume(stream, cap: dict) -> None:
 def drive_turn(client, pid, tid, text, resume_answer="Yes, go ahead.") -> dict:
     cap = {"run_id": None, "text": [], "tools": [], "entities": [], "usage": {},
            "kinds": {}, "tool_errors": [], "errors": [], "resume_hops": 0}
-    with client.stream("POST", "/api/chat",
+    # H5: a read-timeout on the SSE stream so a turn that goes SILENT (wedged exec
+    # emitting no events) unblocks iter_lines() on its own rather than leaking the
+    # worker thread. Best-effort — the wall-clock call_with_timeout guard is the
+    # hard backstop (TestClient's ASGI transport may not honor read timeouts).
+    sse_to = max(60.0, TURN_TIMEOUT_S * 0.8)
+    with client.stream("POST", "/api/chat", timeout=sse_to,
                        json={"text": text, "project_id": pid, "thread_id": tid}) as r:
         consume(r, cap)
     for _ in range(6):
@@ -156,7 +194,7 @@ def drive_turn(client, pid, tid, text, resume_answer="Yes, go ahead.") -> dict:
         if st != "awaiting_user":
             break
         cap["resume_hops"] += 1
-        with client.stream("POST", f"/api/turns/{rid}/resume",
+        with client.stream("POST", f"/api/turns/{rid}/resume", timeout=sse_to,
                            json={"user_text": resume_answer}) as r2:
             consume(r2, cap)
     cap["text"] = "".join(cap["text"]).strip()
@@ -425,8 +463,9 @@ def main() -> int:
                     if step.get("new_thread"):
                         tid = client.post("/api/threads", json={"project_id": pid,
                                           "title": f"{SCENARIO}:{sid}"}).json().get("id")
-                    cap = drive_turn(client, pid, tid, step["prompt"],
-                                     resume_answer=step.get("resume_answer", "Yes, go ahead."))
+                    cap = call_with_timeout(drive_turn, TURN_TIMEOUT_S, client, pid, tid,
+                                            step["prompt"],
+                                            resume_answer=step.get("resume_answer", "Yes, go ahead."))
                     _reqf = new_request_files(seen_reqs)
                     cmetrics = context_metrics(_reqf)
                     produced[sid] = discover_new_artifacts(client, pid, tid, seen_artifacts)
