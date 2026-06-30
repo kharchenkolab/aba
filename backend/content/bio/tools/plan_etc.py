@@ -183,6 +183,24 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     if blocked is not None:
         return blocked
 
+    # P2: pin the revision + validate params against the pipeline's nextflow_schema.json
+    # BEFORE anything hits Slurm. Best-effort — a pipeline with no schema (or a fetch
+    # miss) just skips; we never block a run on a network hiccup, only on real param errors.
+    from core.exec import nextflow_schema as _ns
+    if not revision and pipeline.lower().startswith("nf-core/"):
+        revision = _ns.latest_release(pipeline) or revision        # reproducible: pin latest release
+    _pre_warnings: list = []
+    _schema = _ns.fetch_schema(pipeline, revision)
+    if _schema:
+        _v = _ns.validate_params(_schema, input_.get("params") or {})
+        _pre_warnings = _v.get("warnings") or []
+        if not _v["ok"]:
+            return {"status": "invalid_params", "pipeline": pipeline, "revision": revision,
+                    "errors": _v["errors"], "warnings": _pre_warnings,
+                    "note": ("Params don't satisfy the pipeline's schema — fix them before "
+                             "launching (nothing was submitted). Call describe_pipeline for the "
+                             f"full param list. Errors: {'; '.join(_v['errors'])}")}
+
     # Background / HPC (the path for real pipelines): submit the run as its own
     # job. The Nextflow HEAD runs as a long-lived Slurm job and fans each task out
     # via the site executor (e.g. nf-core/configs `cbe`). The agent gets a deferred
@@ -205,12 +223,15 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
             thread_id=str(tid) if tid else None,
             run_id=active_run_id(str(tid)) if tid else None,
             estimate={"runtime_min": est_min})
+        note = (f"Submitted Nextflow pipeline '{pipeline}'"
+                + (f" @ {revision}" if revision else "")
+                + f" as background job {job['id']}. The head runs as a Slurm job and fans "
+                f"its tasks out via the site executor; I'll continue when it finishes.")
+        if _pre_warnings:
+            note += " Param warnings: " + "; ".join(_pre_warnings)
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
-            "status": "submitted",
-            "note": f"Submitted Nextflow pipeline '{pipeline}' as background job {job['id']}. "
-                    f"The head runs as a Slurm job and fans its tasks out via the site "
-                    f"executor; I'll continue when it finishes.",
+            "status": "submitted", "warnings": _pre_warnings, "note": note,
         }
     params = input_.get("params") or {}
     timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
@@ -318,6 +339,35 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         "execution_mode": "stateless",
         "exec_id": exec_id,
     }
+
+
+def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
+    """Describe a Nextflow / nf-core pipeline's parameters from its
+    nextflow_schema.json — required params, types, defaults, allowed values, help —
+    so the agent can build a correct run_nextflow call (and explain the inputs to the
+    user) WITHOUT guessing. Best-effort: a pipeline shipping no schema returns a note."""
+    pipeline = (input_.get("pipeline") or "").strip()
+    if not pipeline:
+        return {"status": "error", "note": "describe_pipeline needs `pipeline` (e.g. 'nf-core/rnaseq')."}
+    from core.exec import nextflow_schema as _ns
+    revision = input_.get("revision")
+    latest = _ns.latest_release(pipeline) if pipeline.lower().startswith("nf-core/") else None
+    schema = _ns.fetch_schema(pipeline, revision or latest)
+    if not schema:
+        return {"status": "no_schema", "pipeline": pipeline, "latest_release": latest,
+                "note": ("No nextflow_schema.json found — params can't be validated; pass "
+                         "the pipeline's documented `--<k> <v>` params directly to run_nextflow.")}
+    groups: dict[str, list] = {}
+    for p in _ns.parse_params(schema):
+        groups.setdefault(p["group"], []).append({
+            "name": p["name"], "type": p["type"], "required": p["required"],
+            "default": p["default"], "enum": p["enum"], "help": (p["help"] or "")[:140]})
+    required = sorted(p["name"] for grp in groups.values() for p in grp if p["required"])
+    return {"status": "ok", "pipeline": pipeline, "revision": revision or latest,
+            "latest_release": latest, "required": required, "param_groups": groups,
+            "note": (f"{sum(len(v) for v in groups.values())} params in {len(groups)} groups; "
+                     f"required: {', '.join(required) or 'none'}. Pass params to run_nextflow "
+                     f"as a dict; --outdir is set automatically.")}
 
 
 def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:
