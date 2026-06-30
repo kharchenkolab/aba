@@ -1,7 +1,7 @@
 ---
 name: diagnose-aba-trouble
 description: How to diagnose an ABA problem and file a useful bug report — classify the symptom, pull the RIGHT evidence, form a grounded root-cause hypothesis, then call build_bug_report. Never fabricate.
-when_to_use: The user reports that something broke, behaved wrong, or wants to report a bug/problem with ABA itself (an error, a failed run/install, a UI glitch, the env, a recipe, or odd agent behavior). Run this before calling build_bug_report.
+when_to_use: The user reports that something broke, behaved wrong, or wants to report a bug/problem with ABA itself (an error, a failed run/install, a UI glitch, the env, a recipe, or odd agent behavior) — OR you yourself observe behavior that looks like an ABA platform defect (not the user's code/data) and should offer to file a report. Run this before calling build_bug_report.
 requires_tools: [read_aba_logs, read_client_context, build_bug_report]
 capabilities_needed: []
 keywords: [bug, report, broken, error, failed, crash, doesn't work, not working, diagnose, troubleshoot, debug, install, environment, recipe, glitch, problem, meta]
