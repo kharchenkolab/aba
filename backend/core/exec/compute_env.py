@@ -54,6 +54,14 @@ def effective_mem_gb() -> float:
                 return round(int(line.split()[1]) / (1024 ** 2), 1)   # kB → GB
     except Exception:  # noqa: BLE001
         pass
+    # POSIX fallback (macOS has no /proc/meminfo) — host physical RAM via sysconf.
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page_size > 0:
+            return round(pages * page_size / (1024 ** 3), 1)
+    except (ValueError, OSError, AttributeError):
+        pass
     return 0.0
 
 
