@@ -1,22 +1,26 @@
 <%-
   # ── Preflight at form-render time, driven by /cluster/aba/site.yaml ──
-  # Discover candidate lab groups + whether each has an ABA bundle, and whether
-  # the user already has a saved credential. All paths come from site.yaml, so
-  # the form is generic across deployments (site-config.md surface 1).
-  require 'yaml'
+  # List ONLY the launching user's own unix groups that are ENROLLED in ABA —
+  # i.e. /groups/<group>/aba carries the .aba-workspace marker (the SAME signal
+  # aba_preflight gates on). Unenrolled groups are omitted so a user can't launch
+  # a session preflight would just block. All paths come from site.yaml.
+  require 'yaml'; require 'etc'
   site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || '/cluster/aba/site.yaml')) rescue nil) || {}
   gcfg = (site['scopes'] || {})['group'] || {}
-  root_tmpl    = gcfg['root_path'] || '/groups/{group}/aba'
-  groups_root  = root_tmpl.split('/{group}').first        # e.g. /groups
-  bundle_sub   = gcfg['bundle_subdir'] || 'bundle'
-  ui           = site['ui_text'] || {}
+  root_tmpl   = gcfg['root_path'] || '/groups/{group}/aba'
+  groups_root = root_tmpl.split('/{group}').first         # e.g. /groups
+  ui          = site['ui_text'] || {}
+  markers     = ['.aba-workspace', '.bundle', '.envs']    # == aba_preflight OURS_MARKERS
 
-  labs = (gcfg['enabled'] && Dir.exist?(groups_root)) ? Dir.children(groups_root).sort : []
-  lab_opts = labs.map do |g|
-    has = Dir.exist?(File.join(groups_root, g, 'aba', bundle_sub))
-    [(has ? "#{g}  ✓ ABA bundle" : "#{g}  — no ABA bundle yet"), g]
+  user_groups = (Process.groups + [Process.gid]).uniq.map { |gid|
+    (Etc.getgrgid(gid).name rescue nil) }.compact.sort     # the user's own groups (primary + supplementary)
+  enrolled = gcfg['enabled'] ? user_groups.select { |g|
+    markers.any? { |m| File.exist?(File.join(groups_root, g, 'aba', m)) } } : []
+  lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }
+  if lab_opts.empty?
+    contact = ui['enroll_contact'] || 'your ABA admin'
+    lab_opts = [["— no enrolled groups (contact #{contact} to join the ABA pilot)", ""]]
   end
-  lab_opts = [["(no groups under #{groups_root})", ""]] if lab_opts.empty?
 -%>
 ---
 cluster: "dev-cluster"
@@ -36,7 +40,7 @@ attributes:
   aba_lab:
     widget: "select"
     label: "Lab"
-    help: "<%= ui['form_intro'] || 'Groups discovered on disk; ✓ marks a present ABA bundle.' %>"
+    help: "<%= ui['form_intro'] || 'Your enrolled ABA groups (✓). Group not listed? Ask your admin to enroll it.' %>"
     options:
 <%- lab_opts.each do |label, val| -%>
       - ["<%= label %>", "<%= val %>"]

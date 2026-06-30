@@ -66,8 +66,9 @@ case "${1:-up}" in
   logs)
     tail -f "$ABA_HOME/logs/backend.log"
     ;;
-  update|doctor|auth)
-    # CLI path — pull latest / diagnose / sign in via the headless installer.
+  update|doctor|auth|hpc-config)
+    # CLI path — pull latest / diagnose / sign in / write an hpc.yaml override via
+    # the headless installer.
     # Works on a server with no browser (the old open/curl were mac-only). The
     # mac tray's Update button still uses the helper's /api/update for live UI.
     HELPER_PY="$ABA_HOME/installer/venv/bin/python"
@@ -96,6 +97,8 @@ usage: aba <command>
   update     Pull the latest code + recipes, refresh env, rebuild the UI
   doctor     Diagnose this install (env, frontend, recipes, credential, Slurm)
   auth       Set a credential (Sign in with Claude / --token / --api-key)
+  hpc-config Write an optional hpc.yaml override (partitions/QOS/account are
+             otherwise discovered live); --print to preview without writing
   uninstall  Remove ABA from this machine
 EOF
     exit 2

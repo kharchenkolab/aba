@@ -9,6 +9,7 @@ Slurm isn't installed or reachable, so callers degrade to the configured catalog
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -119,6 +120,57 @@ def user_access() -> list[dict]:
     out = _run(["sacctmgr", "-nP", "show", "assoc", f"user={user}",
                 "format=Account,Partition,QOS"])
     return parse_assoc(out) if out is not None else []
+
+
+def _wall_to_h(val) -> "int | None":
+    """sacctmgr MaxWall ('D-HH:MM:SS' / 'HH:MM:SS') → whole hours. Blank/unlimited → None."""
+    val = (val or "").strip()
+    if not val or val.lower() in ("unlimited", "none", "-1"):
+        return None
+    days = 0
+    if "-" in val:
+        d, val = val.split("-", 1)
+        days = int(d) if d.isdigit() else 0
+    hh = val.split(":")[0]
+    return days * 24 + (int(hh) if hh.isdigit() else 0)
+
+
+def qos_walls() -> dict:
+    """{qos_name: max_walltime_h or None} from `sacctmgr show qos format=name,maxwall`."""
+    out = _run(["sacctmgr", "-nP", "show", "qos", "format=name,maxwall"], timeout=20)
+    walls: dict = {}
+    for line in (out or "").splitlines():
+        f = (line.split("|") + ["", ""])[:2]
+        if f[0].strip():
+            walls[f[0].strip()] = _wall_to_h(f[1])
+    return walls
+
+
+@functools.lru_cache(maxsize=1)
+def qos_account_live() -> tuple:
+    """The user's valid QOS (ranked) + each QOS's MaxWall + their account, from
+    `sacctmgr` — the runtime analog of the installer's discovery, so QOS/account
+    are resolved ON THE FLY (symmetric with live partitions) and no hpc.yaml is
+    needed to carry them. Without this the runtime submits no ``--qos`` and jobs
+    land on the cluster-default QOS (often an 8h cap → QOSMaxWallDurationPerJobLimit).
+
+    Returns ``(qos_ranked, {qos: max_h}, account)`` — QOS ranked most-permissive
+    first (largest MaxWall; ties toward generic/short names so a cross-partition
+    ``long`` beats a partition-scoped ``c_long``). ``([], {}, None)`` when sacctmgr
+    is absent/quiet. Cached: a user's QOS/account is stable for the process; a
+    restart re-discovers (call ``qos_account_live.cache_clear()`` to force)."""
+    qos: set = set()
+    account = None
+    for row in user_access():                 # parse_assoc: [{account, partition, qos:[...]}]
+        if row.get("account") and account is None:
+            account = row["account"]
+        qos.update(row.get("qos") or [])
+    if not qos:
+        return (), {}, account
+    walls = qos_walls()
+    _INF = 1 << 30
+    ranked = sorted(qos, key=lambda q: (-(_INF if walls.get(q) is None else walls[q]), len(q), q))
+    return tuple(ranked), {q: walls.get(q) for q in ranked}, account
 
 
 def wait_label(part: dict, queue: dict) -> str:
