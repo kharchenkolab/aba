@@ -748,6 +748,59 @@ def _active_slurm_jobs() -> list[dict]:
     return out
 
 
+# A Nextflow head's wall-clock lifetime = task compute + the UNPREDICTABLE time its
+# task jobs spend queued, so an infrastructure kill (walltime/node-fail/preempt) is
+# expected on a busy cluster — not a pipeline error. We auto-resume it (same run_id →
+# same work-dir → `nextflow -resume` skips finished tasks), capped so a head that
+# can't make progress eventually fails instead of looping forever.
+_NF_MAX_RESUMES = 3
+
+
+def _reset_nextflow_run_dir(job: dict) -> None:
+    """Clear the dead head's CONTROL sentinels (done/result.json in the job dir) so
+    the next poll doesn't read stale state. Leaves the Nextflow work-dir (a separate
+    run_id-keyed dir) untouched — that IS the -resume cache."""
+    try:
+        from core.data.workspace import scratch_dir
+        pid = (job.get("params") or {}).get("project_id") or "default"
+        rd = scratch_dir(str(pid), job["id"])
+        for f in ("done", "result.json"):
+            p = rd / f
+            if p.exists():
+                p.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _maybe_resume_nextflow_job(sub, job: dict, result: dict, pid: str | None) -> bool:
+    """If a Nextflow head died at the Slurm level (no result written) and we're
+    under the resume cap, re-submit the SAME job (→ same work-dir → `-resume`) and
+    return True (handled — don't finalize as failed). Otherwise False."""
+    if (job.get("kind") != "run_nextflow" or not isinstance(result, dict)
+            or not result.get("slurm_terminal_fail")):
+        return False
+    params = job.get("params") or {}
+    resumes = int(params.get("nf_resumes") or 0)
+    st = result.get("slurm_terminal_fail")
+    if resumes >= _NF_MAX_RESUMES:
+        result["error"] = (f"{result.get('error') or 'slurm head died'} — gave up after "
+                           f"{_NF_MAX_RESUMES} auto-resume attempts.")
+        return False
+    update_job(job["id"], project_id=pid, status="queued", error=None,
+               params={**params, "nf_resumes": resumes + 1, "slurm_id": None})
+    fresh = get_job(job["id"], project_id=pid) or {**job,
+            "params": {**params, "nf_resumes": resumes + 1, "slurm_id": None}}
+    _reset_nextflow_run_dir(fresh)
+    try:
+        sub.submit(fresh)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("nextflow-resume", job.get("id"), e)
+        return False
+    print(f"[jobs.slurm] nextflow head {job['id']} died ({st}); auto-resumed "
+          f"(attempt {resumes + 1}/{_NF_MAX_RESUMES}, -resume from the work-dir)", flush=True)
+    return True
+
+
 async def _slurm_poll_loop() -> None:
     """Watch Slurm-submitted jobs for completion (the shared-FS ``done`` sentinel)
     and reflect RUNNING in the UI. Runs only when ABA_BATCH_SUBMITTER=slurm; the
@@ -764,6 +817,10 @@ async def _slurm_poll_loop() -> None:
                 pid = job.get("project_id")
                 result = sub.poll(job)
                 if result is not None:
+                    # Auto-resume a Nextflow head killed by Slurm (walltime/node-fail)
+                    # before it could finish — re-submit with -resume instead of failing.
+                    if _maybe_resume_nextflow_job(sub, job, result, pid):
+                        continue
                     await _finalize_job(job, result, pid, str(pid or "default"))
                 elif job.get("status") == "queued":
                     # Flip to running once Slurm starts it (UI only; squeue is

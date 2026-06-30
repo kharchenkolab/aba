@@ -209,6 +209,65 @@ def test_size_mb():
     assert nf._size_mb("-") == 0.0 and nf._size_mb("") == 0.0
 
 
+# ── P1.5: auto-resume a Slurm-killed Nextflow head (unpredictable head lifetime) ──
+class _FakeSub:
+    name = "slurm"
+    def __init__(self): self.submitted = []
+    def submit(self, job): self.submitted.append(job["id"])
+
+
+def test_resume_on_infra_death():
+    from core import projects
+    from core.jobs.runner import submit_nextflow_job, _maybe_resume_nextflow_job
+    from core.graph.jobs import get_job
+    projects.init(); pid = projects.create_project("nfresume1")["id"]
+    job = submit_nextflow_job(pipeline="nf-core/rnaseq", title="t", focus_entity_id=None,
+                              project_id=pid, run_id="run_r", timeout_s=3600)
+    sub = _FakeSub()
+    result = {"error": "slurm job TIMEOUT (no result written)", "returncode": 1,
+              "slurm_terminal_fail": "TIMEOUT"}
+    assert _maybe_resume_nextflow_job(sub, job, result, pid) is True
+    assert sub.submitted == [job["id"]]                     # re-submitted
+    fresh = get_job(job["id"], project_id=pid)
+    assert (fresh["params"].get("nf_resumes")) == 1 and fresh["status"] == "queued"
+
+
+def test_no_resume_on_pipeline_failure():
+    # a result.json that REPORTS a non-zero exit (real pipeline error) → no slurm_terminal_fail
+    from core.jobs.runner import _maybe_resume_nextflow_job
+    sub = _FakeSub()
+    job = {"id": "job_x", "kind": "run_nextflow", "params": {"project_id": "p", "nf_resumes": 0}}
+    result = {"returncode": 1, "error": "Nextflow pipeline failed (exit 1). Failed: TRIM."}
+    assert _maybe_resume_nextflow_job(sub, job, result, "p") is False
+    assert sub.submitted == []                              # NOT resubmitted (don't loop on real errors)
+
+
+def test_resume_cap_exhausted():
+    from core.jobs.runner import _maybe_resume_nextflow_job, _NF_MAX_RESUMES
+    sub = _FakeSub()
+    job = {"id": "job_y", "kind": "run_nextflow",
+           "params": {"project_id": "p", "nf_resumes": _NF_MAX_RESUMES}}
+    result = {"error": "slurm job TIMEOUT (no result written)", "returncode": 1,
+              "slurm_terminal_fail": "TIMEOUT"}
+    assert _maybe_resume_nextflow_job(sub, job, result, "p") is False
+    assert sub.submitted == [] and "gave up after" in result["error"]
+
+
+def test_poll_flags_infra_death(monkeypatch):
+    # SlurmSubmitter.poll annotates slurm_terminal_fail when the job is gone from
+    # squeue, past the grace, no sentinel, and sacct reports a terminal kill.
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    s = SlurmSubmitter()
+    job = {"id": "job_z", "kind": "run_nextflow",
+           "params": {"project_id": "p", "slurm_id": "999", "run_dir": "/nope"}}
+    monkeypatch.setattr(s, "_result_from_sentinel", lambda rd: None)
+    monkeypatch.setattr(s, "_in_squeue", lambda sid: False)
+    monkeypatch.setattr(s, "_too_young", lambda job, **k: False)
+    monkeypatch.setattr(s, "_sacct_state", lambda sid: "TIMEOUT")
+    r = s.poll(job)
+    assert r and r.get("slurm_terminal_fail") == "TIMEOUT" and r["returncode"] == 1
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

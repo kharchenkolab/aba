@@ -164,7 +164,13 @@ class SlurmSubmitter:
             return result
         st = self._sacct_state(sid)
         if st in _SACCT_TERMINAL_FAIL:
-            return {"error": f"slurm job {st} (no result written)", "returncode": 1}
+            # The job was killed by Slurm (walltime/node-fail/preempt/cancel) and
+            # never wrote a result. `slurm_terminal_fail` marks this as an
+            # INFRASTRUCTURE death — distinct from a result.json that reports a
+            # non-zero exit (a real pipeline error). Lets the runner auto-resume a
+            # Nextflow head whose unpredictable lifetime outran its walltime.
+            return {"error": f"slurm job {st} (no result written)", "returncode": 1,
+                    "slurm_terminal_fail": st}
         return None
 
     def _result_from_sentinel(self, run_dir: Path) -> Optional[dict]:
