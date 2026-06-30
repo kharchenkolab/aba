@@ -19,16 +19,21 @@ calling, a 10x cohort).
 1. **Find** — `search_nf_core(query)` to choose the pipeline (e.g. `nf-core/rnaseq`).
 2. **Inspect** — `describe_pipeline(pipeline)` to learn its parameters (required,
    types, allowed values, help) and the latest release. **Never guess params.**
-3. **Fill** — set the params you can infer from the data/context (e.g. `input` =
-   the samplesheet you prepared, `genome`/`fasta`). `--outdir` is set
+3. **Fill** — prefill ONLY the essentials: `input` (the samplesheet) plus the few
+   biologically meaningful choices the user named (e.g. `genome`/`fasta`, maybe the
+   aligner). **Leave everything else to the pipeline's defaults** — the launch form
+   shows the rest under "Show all" for anyone who wants to tune advanced options.
+   Don't prefill dozens of params (it makes the form scary). `--outdir` is set
    automatically — do **not** pass it.
 4. **Present a plan** — call `present_plan` with a dedicated step for the pipeline,
    carrying the pipeline + your prefilled params in `parameters`:
    ```json
-   {"n": 3, "title": "Run nf-core/rnaseq", "skill": "run_nextflow",
+   {"n": 3, "title": "Run nf-core/rnaseq", "skill": "run-pipeline",
     "parameters": {"pipeline": "nf-core/rnaseq", "revision": "<release>",
                    "params": {"input": "samplesheet.csv", "genome": "GRCh38"}}}
    ```
+   Use `"skill": "run-pipeline"` (this skill); the pipeline goes in `parameters`.
+   Keep `params` to the essentials so the launch form stays short.
    The plan card renders this step as an **editable launch form** (the user can
    adjust the params before running). A pipeline is long and resource-heavy, so
    always present it in a plan — with its expected time/cost — and **stop** after

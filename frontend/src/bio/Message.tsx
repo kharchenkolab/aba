@@ -375,9 +375,15 @@ function PlanCard({ block, active, onGo, onAdjust }: {
                 </div>
               )}
               {isPipelineStep(s) && s.param_form && (() => {
-                const prefilledKeys = new Set(Object.keys(s.prefilled || {}))
+                // Keep the DEFAULT view short + non-scary: only the must-fill
+                // (required) params + the handful the Guide prefilled (capped). The
+                // long technical tail stays opt-in behind "Show all" — most users
+                // never need it, the few who tune can expand.
+                const PREFILL_CAP = 8
+                const prefList = Object.keys(s.prefilled || {})
+                const defaultPref = new Set(showAll ? prefList : prefList.slice(0, PREFILL_CAP))
                 const isVisible = (p: { name: string; required?: boolean }) =>
-                  showAll || p.required || prefilledKeys.has(p.name)
+                  showAll || p.required || defaultPref.has(p.name)
                 const total = s.param_form.reduce((acc, g) => acc + g.params.length, 0)
                 const groups = s.param_form
                   .map(g => ({ group: g.group, params: g.params.filter(isVisible) }))
@@ -406,7 +412,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
                                 {p.name}
                                 {p.required && <span className="plan-card__preq" title="required">*</span>}
                               </label>
-                              {p.type === 'enum' && enumOpts.length > 0 ? (
+                              {enumOpts.length > 0 ? (
                                 <select id={fieldId} value={String(val ?? '')}
                                         onChange={e => setField(i, p.name, e.target.value)}>
                                   <option value="">—</option>
@@ -435,7 +441,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
                     {hasMore && (
                       <button type="button" className="plan-card__showall"
                               onClick={() => setShowAll(v => !v)}>
-                        {showAll ? 'Show fewer' : `Show all ${total} parameters`}
+                        {showAll ? '▾ Show fewer' : `▸ Show all ${total} parameters (${total - shownCount} more — advanced)`}
                       </button>
                     )}
                   </div>
