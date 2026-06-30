@@ -17,24 +17,36 @@ def register_feedback_tools(mcp: FastMCP) -> None:
                          diagnosis: str = "",
                          error_tail: str = "",
                          aba_ctx_id: str | None = None) -> dict:
-        """Compile a concise bug report the USER emails to the ABA team, and
-        return a ready-to-click `mailto:` link. Call this whenever the user wants
-        to report a bug or something that went wrong.
+        """Compile a bug report and return a ready-to-click `mailto:` link the
+        user emails to the ABA team. Call this whenever the user wants to report a
+        bug or something that went wrong.
+
+        AUDIENCE — read this carefully: the report is read by an ABA DEVELOPER (a
+        bugfixer agent or engineer) who will REPRODUCE and FIX the issue. Write it
+        FOR THEM, not for the user. Capture observed behavior, how to reproduce,
+        the technical state, and your root-cause hypothesis. Do NOT put user-facing
+        advice or reassurance in the report (e.g. "try reloading the page") — that
+        belongs in your chat reply to the user, never in the report. Be honest
+        about confidence, and flag if it looks like a user-environment issue rather
+        than an actual ABA defect.
 
         Provide:
-          • headline    — ONE line, plain language, human-readable: what went wrong.
-          • what_doing  — one line: what the user was doing when it happened.
-          • diagnosis   — your terse root-cause read; may be technical/abbreviated
-                          (an engineer or agent reads it to reproduce/fix).
-          • error_tail  — 1–3 most-relevant error lines, if any.
+          • headline    — ONE line: the SYMPTOM / observed failure, specific.
+          • what_doing  — how to REPRODUCE: what the user did + the steps/context
+                          that led to it.
+          • diagnosis   — your technical root-cause hypothesis FOR THE ENGINEER:
+                          what's actually happening, where (component/file), and
+                          why. Terse/abbreviated is fine; note your confidence.
+          • error_tail  — the 1–3 most relevant actual error/exception lines,
+                          verbatim, if any.
 
-        The tool stamps ABA version, OS/arch, model, and thread/focus ids, and
-        enforces a strict email-size budget (so keep inputs tight — the most
-        important content first). After it returns, present `mailto_url` to the
-        user as a markdown link 'Review & send bug report'; it opens their mail
-        client with everything prefilled and a blank space at the top for their
-        own comment. They review and hit send. Replies come back to us and we can
-        ask you (Guide) to pull more detail — so a tight first report is fine."""
+        The tool stamps ABA version, OS/arch, model, and thread/focus ids and
+        enforces a strict size budget — keep inputs tight, most important first.
+        After it returns, present `mailto_url` as a markdown link
+        '🐛 Review & send bug report' (not the raw URL); it opens the user's mail
+        client prefilled with a blank space at the top for their own note. Replies
+        route back to us and we can ask you to pull more detail, so a tight,
+        accurate first report beats a padded one."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import build_bug_report_impl
         ctx = peek_ctx(aba_ctx_id)

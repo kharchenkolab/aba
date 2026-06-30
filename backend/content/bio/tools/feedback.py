@@ -48,11 +48,12 @@ def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, c
     foot = ("\nNeed more? Reply — we'll have Guide (in your ABA) pull the exact "
             "detail you ask for.\n" + ctxline)
 
+    # Bugfixer-facing labels (the reader is a developer/agent, not the user).
     def build(s, d, e):
         parts = [f"🐛 {headline}"]
-        if s: parts.append(f"What I was doing: {s}")
-        if d: parts.append(f"\nGuide's read: {d}")
-        if e: parts.append(f"\n{e}")
+        if s: parts.append(f"Repro/context: {s}")
+        if d: parts.append(f"\nDiagnosis: {d}")
+        if e: parts.append(f"\nError: {e}")
         return lead + "\n".join(parts) + "\n" + foot
 
     s, d, e = what_doing, diagnosis, error_tail
@@ -88,7 +89,8 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
                f"thr {tid} · focus {focus} · {rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
-    subject = (f"ABA bug: {headline}")[:80]
+    # Lead the subject with 🐛 so the team can filter on it.
+    subject = (f"🐛 ABA bug: {headline}")[:80]
     q = urllib.parse.urlencode({"subject": subject, "body": body}, quote_via=urllib.parse.quote)
     mailto_url = f"mailto:{FEEDBACK_TO}?{q}".replace("%0A", "%0D%0A")
 
@@ -98,7 +100,10 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
         "mailto_url": mailto_url,
         "body": body,   # for the agent to show as a preview if it wants
         "_agent_hint": ("Present mailto_url to the user as a markdown link titled "
-                        "'🐛 Review & send bug report', and tell them it opens their "
-                        "email with the report prefilled — they can add a comment at "
-                        "the top and hit send. Do NOT paste the raw URL."),
+                        "'🐛 Review & send bug report' (do NOT paste the raw URL); say "
+                        "it opens their email prefilled, with a blank space at the top "
+                        "for their own note. Remember the report is read by an ABA "
+                        "developer/bugfixer — it captured the technical diagnosis, not "
+                        "user advice. Any guidance for the USER (e.g. workarounds) goes "
+                        "in your chat reply, NOT in the report."),
     }
