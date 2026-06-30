@@ -40,8 +40,11 @@ completion by watching for a sentinel file — no callbacks, no open ports.
 - An account on the cluster with SSH access.
 - The **Slurm client** on your launch node — `which sbatch` should succeed.
 - A **shared filesystem** reachable from the launch node and the compute nodes.
-- `git`, `curl`, and Python 3 with `venv` (the installer builds everything else —
-  you do **not** need to load a conda module).
+- `git` and `curl`. **Python is handled for you:** the installer uses a usable
+  `python3` (≥3.9 with `venv`) if one is on your `PATH`, otherwise loads a cluster
+  `python` **module**, and failing that **bootstraps its own** with micromamba — so
+  you don't need to pre-load a python or conda module. Override the choice with
+  `ABA_PYTHON=/path/to/python3`.
 - An **Anthropic API key** (simplest on a cluster) or a Claude.ai subscription.
 
 ## Install
@@ -61,42 +64,62 @@ git clone git@github.com:kharchenkolab/aba.git && cd aba
 This builds the self-contained environment (Python + R + the bio stack), imports
 the recipe library, builds the UI, and configures Slurm offload — it sets
 `ABA_BATCH_SUBMITTER=slurm`, puts the runtime on your shared path, and **probes
-`sinfo` to write a starting `~/.aba/hpc.yaml`** describing your partitions. It
+`sinfo` and `sacctmgr` to write a starting `~/.aba/hpc.yaml`** describing your
+partitions, your valid **QOS** (with their walltime caps), and your **account**. It
 installs an `aba` launcher under `~/.aba`.
 
 > - **Home not shared?** Add `ABA_HOME=/scratch/$USER/aba-home` before the command so
->   the environment itself is on the shared filesystem too.
-> - **No `python3-venv`?** Install it, or pass `ABA_PYTHON=/path/to/python` (e.g. a
->   conda python) before the command.
+>   the environment itself is on the shared filesystem too. Package caches
+>   (`MAMBA_ROOT_PREFIX`, `CONDA_PKGS_DIRS`, `PIP_CACHE_DIR`) default to under
+>   `ABA_HOME` so conda can **hardlink** into the env — keep them on the same
+>   filesystem as the env or the build crawls (every package is copied, not linked).
+> - **Python via a module?** If no usable `python3` was on your `PATH`, the installer
+>   may have used `module load python`; it prints a note when it does. A later
+>   `aba update` runs in a venv built from that python, so either load the same module
+>   first or re-run the installer with `ABA_PYTHON` pointed at a self-contained python
+>   to drop the dependency.
 > - **Credentials without a key:** run `aba auth` — it prints a URL you approve in any
 >   browser, then paste the code back.
 
 ## Tune your cluster's queues (`hpc.yaml`) — optional
 
-**You can skip this.** With no `hpc.yaml`, ABA auto-detects your partitions from
-live `sinfo`: ordinary CPU jobs use your **default partition**, and GPU / large
-jobs route to a partition that fits. Configure a catalog only to **add an account
-or QOS your cluster requires** (those can't be guessed), or to override the
-detected partitions. The installer already wrote a starting `~/.aba/hpc.yaml` from
-`sinfo` if it could — edit it (add QOS / account, tighten walltime):
+**You can usually skip this.** The installer already wrote `~/.aba/hpc.yaml` by
+probing the cluster — partitions and their limits from `sinfo`, and your valid
+**QOS** + **account** from `sacctmgr` (the things `sinfo` alone can't report, and
+which jobs are silently rejected for missing). The runtime router also re-checks
+live `sinfo`, so the file is a starting point you only edit to change what was
+discovered — prefer a different QOS, tighten a walltime, or fix a name.
+
+A generated `hpc.yaml` looks like:
 
 ```yaml
 hpc:
   partitions:
     # name = your real Slurm partition; the limits cap what ABA will request
-    - {name: short, max_cores: 16,  max_mem_gb: 64,  max_walltime_h: 4,  gpu: false}
-    - {name: long,  max_cores: 64,  max_mem_gb: 512, max_walltime_h: 72, gpu: false}
-    - {name: gpu,   max_cores: 16,  max_mem_gb: 128, max_walltime_h: 24, gpu: true}
-  qos: [normal]            # optional → passed as --qos=<first>
-  account: my_allocation   # optional → passed as --account
-  defaults: {partition: short, cores: 1, mem_gb: 4, walltime_h: 4}
+    - {name: c, max_cores: 22, max_mem_gb: 76,   max_walltime_h: 336, gpu: false}
+    - {name: m, max_cores: 76, max_mem_gb: 1436, max_walltime_h: 336, gpu: false}
+    - {name: g, max_cores: 30, max_mem_gb: 347,  max_walltime_h: 336, gpu: true}
+  qos: [long, medium, short, rapid]   # ranked; ABA passes --qos=<first> on EVERY job
+  account: my_allocation              # passed as --account (omitted if you have none)
+  defaults: {partition: c, cores: 1, mem_gb: 4, walltime_h: 4}
 ```
+
+**About `qos`** — it's a *ranked* list, and ABA submits `--qos=<qos[0]>` on every
+job. The installer ranks your QOS **most-permissive first** (largest `MaxWall`), so
+out of the box nothing is rejected for asking too much walltime, and it **clamps each
+partition's `max_walltime_h` to that QOS's cap** so the router never over-requests.
+The list may include partition-scoped variants (e.g. `c_long`) ranked among the
+generic ones. If your jobs are short *and* your cluster gives shorter-walltime QOS
+higher scheduling priority, **reorder the list** to put that QOS first.
 
 From the agent's estimate (runtime, and optional cores / memory / GPU hints) ABA
 picks the **first partition that fits**, else the largest, and clamps the request to
 that partition's ceilings; GPU work goes to a `gpu: true` partition. Set `mem_gb: 0`
 to omit `--mem` and let the scheduler use its default. (`sacctmgr show assoc
 user=$USER` lists your valid accounts/QOS.)
+
+> Re-running `setup.sh --cluster-personal` **regenerates** `hpc.yaml` from a fresh
+> probe, overwriting hand edits — back it up first if you've customized it.
 
 ## Launch and reach it
 
@@ -158,5 +181,14 @@ that `ABA_BATCH_SUBMITTER=slurm`. Common issues:
   nodes free up. Nothing to fix.
 - **R job: "Rscript not provisioned"** — run any small R command once interactively
   to build the R base under the runtime, then retry.
-- **Wrong partition/account** — `hpc.yaml` must use your cluster's real names;
-  `sinfo` and `sacctmgr show assoc user=$USER` show valid values.
+- **Job rejected `QOSMaxWallDurationPerJobLimit` / `InvalidQOS`** — ABA submits
+  `--qos=<qos[0]>`. Either that QOS's walltime cap is below the request (the installer
+  normally ranks the most-permissive QOS first and clamps to it) or the name is stale.
+  Check / reorder the `qos` list in `hpc.yaml`; `sacctmgr show assoc user=$USER` lists
+  your valid QOS.
+- **Wrong partition/account** — `hpc.yaml` must use your cluster's real names. The
+  installer fills account + QOS from `sacctmgr`; `sinfo` and `sacctmgr show assoc
+  user=$USER` show valid values if you need to correct them.
+- **Install crawling?** Package caches live under `ABA_HOME` so conda can hardlink
+  into the env. If `ABA_HOME` is on a different mount than the env, every package is
+  copied instead and the build is slow — keep both on one filesystem.
