@@ -48,7 +48,9 @@ def _report_id() -> str:
 
 def _assemble(headline: str, what_doing: str, diagnosis: str, error_tail: str, ctxline: str,
               budget: int = BODY_BUDGET) -> str:
-    lead = "[Add anything you'd like us to know above this line.]\n\n"
+    # Leading blank line = where the mail client drops the cursor, so the user
+    # types their note immediately; the divider marks where the auto-report begins.
+    lead = "\n—— your notes above · ABA report below ——\n\n"
     foot = ("\nNeed more? Reply — we'll have Guide (in your ABA) pull the exact "
             "detail you ask for.\n" + ctxline)
 
