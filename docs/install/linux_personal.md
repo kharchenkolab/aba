@@ -11,7 +11,9 @@ installs it for **one user** on a Linux desktop, workstation, or server.
 
 ## What you'll need
 
-- `git`, `curl`, and Python 3 with the `venv` module:
+- `git` and `curl`. A usable **Python 3** (≥3.9 with `venv`) is ideal but **not
+  required** — if none is on your `PATH`, the installer bootstraps its own with
+  micromamba. To provide one anyway:
   - Debian/Ubuntu: `sudo apt install git curl python3-venv`
   - Fedora/RHEL: `sudo dnf install git curl python3`
 - ~10–12 GB free in your home directory (the bioinformatics environment).
@@ -36,8 +38,9 @@ your system Python is never touched), imports the curated **recipe library**,
 builds the web interface, and starts ABA. Expect ~15–20 min and ~10 GB. It installs
 under `~/.aba` and adds an `aba` launcher.
 
-> **No `python3-venv`?** The installer will say so. Install the package, or point
-> it at any venv-capable python: `ABA_PYTHON=/path/to/python ./install/linux/setup.sh`.
+> **No usable Python?** The installer bootstraps one with micromamba automatically,
+> so a missing/old system Python rarely blocks you. To use a specific interpreter
+> instead, point it there: `ABA_PYTHON=/path/to/python ./install/linux/setup.sh`.
 
 ### Where your data lives
 
@@ -55,6 +58,10 @@ Choose this at install time. To relocate the *entire* install (the environment
 ```bash
 ./install/linux/setup.sh --install-dir /opt/aba
 ```
+
+Package caches (conda packages and pip downloads) also live under the install dir,
+so `--install-dir` moves them with the environment — and conda can hardlink from the
+cache into the env, which keeps the build fast as long as both are on one filesystem.
 
 ## Sign in
 
