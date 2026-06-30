@@ -120,16 +120,24 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                      params: dict | None = None,
                      outdir: str | None = None,
                      timeout_s: int | None = None,
+                     background: bool = True,
+                     estimated_runtime_min: float | None = None,
                      aba_ctx_id: str | None = None) -> dict:
-        """Launch an nf-core pipeline. Long-running — uses in_tool_ctx
-        so phase lines stream to the chat while it executes and
-        honours cancel-on-Stop."""
+        """Launch a Nextflow / nf-core pipeline (e.g. 'nf-core/rnaseq').
+
+        background=True (the DEFAULT, recommended for real pipelines): the head runs
+        as a long Slurm job that fans tasks out via the site executor; returns a
+        deferred handle and resumes you on completion. Pass `estimated_runtime_min`
+        to size the head's walltime. background=False runs it synchronously here —
+        only for tiny `-profile test` smoke runs. `profile` (e.g. 'test,cbe') and
+        `params` (the pipeline's `--<k> <v>`) are passed through."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import run_nextflow as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:
             return _impl(
                 {"pipeline": pipeline, "revision": revision,
                  "profile": profile, "params": params, "outdir": outdir,
-                 "timeout_s": timeout_s},
+                 "timeout_s": timeout_s, "background": background,
+                 "estimated_runtime_min": estimated_runtime_min},
                 ctx,
             )

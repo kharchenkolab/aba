@@ -237,6 +237,34 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
+                        revision: str | None = None, profile: str | None = None,
+                        nf_params: dict | None = None, outdir: str | None = None,
+                        timeout_s: int = BACKGROUND_DEFAULT_TIMEOUT_S,
+                        project_id: str | None = None, thread_id: str | None = None,
+                        run_id: str | None = None, estimate: dict | None = None) -> dict:
+    """Create a queued Nextflow pipeline job and enqueue it (kind='run_nextflow').
+    The worker / Slurm entry dispatches to core.exec.nextflow.run_nextflow_code,
+    which runs the head process (Nextflow fans tasks out via the site executor),
+    harvests --outdir, and writes a kind:workflow exec record. `nf_params` are the
+    pipeline's `--<k> <v>` params. Used by run_nextflow(background=True)."""
+    job_id = f"job_{uuid.uuid4().hex[:10]}"
+    job = create_job(
+        job_id=job_id,
+        kind="run_nextflow",
+        title=title or f"Nextflow: {pipeline}",
+        focus_entity_id=focus_entity_id,
+        params={"pipeline": pipeline, "revision": revision, "profile": profile,
+                "nf_params": nf_params or {}, "outdir": outdir,
+                "code": f"nextflow run {pipeline}" + (f" -profile {profile}" if profile else ""),
+                "timeout_s": timeout_s, "project_id": project_id,
+                "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},
+        project_id=project_id,
+    )
+    get_submitter().submit(job)
+    return job
+
+
 def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     """Cancel a queued or running job. Returns True if it was actionable. Fires
     the job's CancelToken so the shared exec core killpg's the whole process
@@ -253,6 +281,66 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     return True
 
 
+def _write_workflow_exec_record_for_job(job: dict, result_obj: dict,
+                                        lookup_pid: str | None, effective_pid: str) -> None:
+    """Provenance for a Nextflow job: a kind:workflow exec record (engine + the
+    reproducible `nextflow run …` command + pipeline/revision/profile/params +
+    per-process container images + produced). Injects exec_id so the harvested
+    outputs attach to it, exactly like the script path. Best-effort."""
+    try:
+        params = job.get("params") or {}
+        wf = result_obj.get("workflow") or {}
+        cwd = result_obj.get("cwd")
+        from core.graph import exec_records as _er
+        from core.exec.fingerprint import code_hash
+        from core import projects as _projects
+        produced: list[dict] = []
+        from core.entity_types import registry
+        groups = list(registry.artifact_groups().items())
+        groups.append(("files", "file"))
+        for grp, knd in groups:
+            for i, a in enumerate(result_obj.get(grp) or []):
+                if isinstance(a, dict):
+                    produced.append({"kind": knd, "idx": i, "url": a.get("url"),
+                                     "name": a.get("original_name") or a.get("name")})
+                else:
+                    produced.append({"kind": knd, "idx": i})
+        inputs: list[dict] = []
+        if job.get("focus_entity_id"):
+            inputs.append({"ref": job["focus_entity_id"], "kind": "entity"})
+        cmd_str = wf.get("command") or params.get("code", "")
+        with _projects.bind(str(lookup_pid or effective_pid)):
+            eid = _er.create(
+                thread_id=str(params.get("thread_id") or "default"),
+                run_id=params.get("run_id"),
+                tool_use_id=None,
+                tool_name="run_nextflow",
+                status="ok",
+                code=cmd_str,
+                code_hash=code_hash(cmd_str),
+                started_at=job.get("started_at") or _utcnow(),
+                completed_at=_utcnow(),
+                cwd=cwd,
+                payload={
+                    "kind": "workflow",
+                    "engine": wf.get("engine") or {"name": "nextflow"},
+                    "env": {"per_process_images": wf.get("per_process_images") or []},
+                    "params": {"pipeline": wf.get("pipeline"), "revision": wf.get("revision"),
+                               "profile": wf.get("profile"), "params": wf.get("params") or {}},
+                    "inputs": inputs,
+                    "produced": produced,
+                    "outputs": (wf.get("outputs") or [])[:50],
+                    "stdout_tail": (result_obj.get("stdout") or "")[-2000:],
+                    "stderr_tail": (result_obj.get("stderr") or "")[-2000:],
+                    "exit_code": result_obj.get("returncode"),
+                },
+            )
+        if eid:
+            result_obj["exec_id"] = eid
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("exec_record_workflow", job.get("id"), e)
+
+
 def _write_exec_record_for_job(job: dict, result_obj: dict,
                                lookup_pid: str | None, effective_pid: str) -> None:
     """Provenance (provenance.md Phase 1): a backgrounded/Slurm job writes the
@@ -264,10 +352,15 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
         params = job.get("params") or {}
         code = params.get("code", "")
         kind = job.get("kind") or "run_python"
-        lang = "r" if kind == "run_r" else "python"
         cwd = result_obj.get("cwd")
         if not cwd:
             return
+        # Nextflow → a kind:workflow record (engine + reproducible command +
+        # per-process container images + params), not a script record.
+        if kind == "run_nextflow":
+            _write_workflow_exec_record_for_job(job, result_obj, lookup_pid, effective_pid)
+            return
+        lang = "r" if kind == "run_r" else "python"
         from core.graph import exec_records as _er
         from core.exec.fingerprint import code_hash, env_fingerprint
         from core import projects as _projects
@@ -430,7 +523,18 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
     exec_run_id = params.get("run_id") or job_id
     try:
         loop = asyncio.get_event_loop()
-        if kind == "run_r":
+        if kind == "run_nextflow":
+            from core.exec.nextflow import run_nextflow_code
+            result_obj = await loop.run_in_executor(
+                None,
+                lambda: run_nextflow_code(
+                    params.get("pipeline") or "", project_id=str(effective_pid),
+                    run_id=exec_run_id, revision=params.get("revision"),
+                    profile=params.get("profile"), params=params.get("nf_params") or {},
+                    outdir=params.get("outdir"), timeout_s=timeout_s,
+                    cancel_token=token, stream=True),
+            )
+        elif kind == "run_r":
             result_obj = await loop.run_in_executor(
                 None,
                 lambda: run_r_code(code, project_id=str(effective_pid), run_id=exec_run_id,

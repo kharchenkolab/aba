@@ -22,7 +22,15 @@ def main() -> int:
     # rather than silent until result.json is written at the end.
     kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
               timeout_s=int(spec.get("timeout_s") or 600), stream=True)
-    if spec.get("kind") == "run_r":          # isolated R env = its lib first on .libPaths()
+    kind = spec.get("kind")
+    if kind == "run_nextflow":               # the Nextflow HEAD process; fans tasks out via the site executor
+        from core.exec.nextflow import run_nextflow_code
+        result = run_nextflow_code(
+            spec.get("pipeline") or "", project_id=spec["project_id"], run_id=spec["run_id"],
+            revision=spec.get("revision"), profile=spec.get("profile"),
+            params=spec.get("nf_params") or {}, outdir=spec.get("outdir"),
+            timeout_s=int(spec.get("timeout_s") or 3600), stream=True)
+    elif kind == "run_r":                    # isolated R env = its lib first on .libPaths()
         result = run_r_code(spec["code"], env=spec.get("env"), **kw)
     else:                                    # isolated python env = its own python, standalone
         result = run_python_code(spec["code"], env=spec.get("env"), **kw)

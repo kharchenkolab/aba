@@ -173,20 +173,45 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error",
                 "note": "run_nextflow needs `pipeline` (e.g. 'nf-core/rnaseq' or 'nextflow-io/hello')."}
 
-    # Remote/HPC seam: many pipelines will eventually run off-box. That routing
-    # decision lives here; for now only local synchronous execution is wired.
-    if input_.get("remote") or input_.get("background"):
-        return {"status": "unsupported_location",
-                "note": "Remote/HPC nextflow execution isn't wired yet — only local. "
-                        "Re-run without remote/background (long pipelines will move to HPC later)."}
-
     revision = input_.get("revision")
     profile = input_.get("profile")
-    # F6: fail fast if the environment can't run this (e.g. profile needs a
-    # container engine that isn't installed) instead of letting nextflow time out.
+    # F6: fail fast if the environment can't run this (e.g. profile names docker,
+    # which CBE doesn't have) instead of letting nextflow time out. Checks PATH on
+    # THIS node; singularity/apptainer are system-wide here so cbe/singularity
+    # profiles pass. Applies to both the background and sync paths.
     blocked = _nextflow_env_blocker(pipeline, profile)
     if blocked is not None:
         return blocked
+
+    # Background / HPC (the path for real pipelines): submit the run as its own
+    # job. The Nextflow HEAD runs as a long-lived Slurm job and fans each task out
+    # via the site executor (e.g. nf-core/configs `cbe`). The agent gets a deferred
+    # handle and is resumed on completion — same contract as run_python(background).
+    if input_.get("background") or input_.get("remote"):
+        from core.jobs.runner import submit_nextflow_job, BACKGROUND_DEFAULT_TIMEOUT_S
+        from content.bio.lifecycle.runs import active_run_id
+        from core import projects as _proj
+        pid = _proj.current() or "default"
+        tid = (ctx or {}).get("thread_id")
+        est_min = float(input_.get("estimated_runtime_min") or 0)
+        # Estimates are rough → 2× headroom; default 1 h; 24 h backstop.
+        bg_timeout = min(int(est_min * 60 * 2), 24 * 3600) if est_min else BACKGROUND_DEFAULT_TIMEOUT_S
+        job = submit_nextflow_job(
+            pipeline=pipeline, title=input_.get("title") or f"Nextflow: {pipeline}",
+            focus_entity_id=(ctx or {}).get("focus_entity_id"),
+            revision=revision, profile=profile,
+            nf_params=input_.get("params") or {}, outdir=input_.get("outdir"),
+            timeout_s=bg_timeout, project_id=str(pid),
+            thread_id=str(tid) if tid else None,
+            run_id=active_run_id(str(tid)) if tid else None,
+            estimate={"runtime_min": est_min})
+        return {
+            "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
+            "status": "submitted",
+            "note": f"Submitted Nextflow pipeline '{pipeline}' as background job {job['id']}. "
+                    f"The head runs as a Slurm job and fans its tasks out via the site "
+                    f"executor; I'll continue when it finishes.",
+        }
     params = input_.get("params") or {}
     timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
     cancel_token = (ctx or {}).get("cancel_token")
