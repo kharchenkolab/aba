@@ -47,6 +47,24 @@ def test_config_env_overrides(monkeypatch):
     assert c["java_home"] == "/sw/java/21"
 
 
+def test_java_env_prepends_without_shadowing():
+    # Reproduces the CBE case: the nextflow module pins Java 11 and puts its lib on
+    # LD_LIBRARY_PATH; our Java 21 must win without dropping the rest of the path.
+    base = {"PATH": "/usr/bin", "LD_LIBRARY_PATH": "/software/2020/software/java/11.0.2/lib"}
+    e = nf.java_env("/sw/java/21", base=base)
+    assert e["JAVA_HOME"] == "/sw/java/21"
+    assert e["PATH"] == "/sw/java/21/bin:/usr/bin"
+    assert e["LD_LIBRARY_PATH"] == "/sw/java/21/lib:/sw/java/21/lib/server:" \
+        "/software/2020/software/java/11.0.2/lib"
+    # no java_home → no overrides at all (use the module/PATH Java)
+    assert nf.java_env(None) == {}
+    assert nf.java_env("") == {}
+    # empty base → set dirs cleanly, no dangling separators
+    e2 = nf.java_env("/sw/java/21", base={})
+    assert e2["PATH"] == "/sw/java/21/bin"
+    assert e2["LD_LIBRARY_PATH"] == "/sw/java/21/lib:/sw/java/21/lib/server"
+
+
 # ── pure: profile merge ──────────────────────────────────────────────────────
 def test_merged_profile_caller_first_then_site_dedup():
     assert nf.merged_profile("test", ["cbe", "singularity"]) == "test,cbe,singularity"

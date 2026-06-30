@@ -93,6 +93,29 @@ def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> O
     return ",".join(out) or None
 
 
+def java_env(java_home: Optional[str], base: Optional[dict] = None) -> dict:
+    """Env overrides so a module-loaded Nextflow head runs on `java_home` (Java ≥17,
+    required by the nf-schema plugin) instead of the older Java its module pins.
+
+    Setting JAVA_HOME alone is *not* enough: a cluster's `nextflow` module typically
+    puts the old JDK's lib dir on LD_LIBRARY_PATH, so the newer `java` then loads that
+    old `libnet.so` (first on the path) and dies with
+    "libnio.so: undefined symbol: ipv4_available". We prepend our Java's own lib (and
+    bin) dirs so its native libraries win, leaving the rest of the path intact.
+    Returns {} when no java_home is configured (use whatever the module/PATH provides).
+    """
+    if not java_home:
+        return {}
+    env = os.environ if base is None else base
+    jbin, jlib = f"{java_home}/bin", f"{java_home}/lib:{java_home}/lib/server"
+    cur_path, cur_ld = env.get("PATH", ""), env.get("LD_LIBRARY_PATH", "")
+    return {
+        "JAVA_HOME": java_home,
+        "PATH": f"{jbin}:{cur_path}" if cur_path else jbin,
+        "LD_LIBRARY_PATH": f"{jlib}:{cur_ld}" if cur_ld else jlib,
+    }
+
+
 # ── pure helpers ─────────────────────────────────────────────────────────────
 def nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
                      params: dict | None = None, work_dir: Optional[str] = None,
@@ -372,8 +395,9 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
         env_vars["SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
-    if cfg.get("java_home"):
-        env_vars["JAVA_HOME"] = cfg["java_home"]      # Nextflow head runs on this Java (≥17 for nf-schema)
+    # Nextflow head runs on this Java (≥17 for nf-schema); also fixes up PATH/LD_LIBRARY_PATH
+    # so the module-pinned older JDK's libs don't shadow it (see java_env()).
+    env_vars.update(java_env(cfg.get("java_home")))
 
     cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
                            params=params, work_dir=work_dir, reports_dir=str(reports),
