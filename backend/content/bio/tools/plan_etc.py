@@ -224,15 +224,34 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
             thread_id=str(tid) if tid else None,
             run_id=active_run_id(str(tid)) if tid else None,
             estimate={"runtime_min": est_min})
+        jp = job.get("params") or {}
+        mode = jp.get("execution") or "slurm"
+        rest = jp.get("resource_estimate") or {}
+        if mode == "local":
+            how = ("The head runs as one Slurm allocation and executes all tasks on that node "
+                   "(executor=local) — fast for small pipelines, no per-task queue wait.")
+        else:
+            how = ("The head runs as a Slurm job and fans each task out as its own Slurm job "
+                   "(executor=slurm) — right for heavy real-data runs.")
         note = (f"Submitted Nextflow pipeline '{pipeline}'"
                 + (f" @ {revision}" if revision else "")
-                + f" as background job {job['id']}. The head runs as a Slurm job and fans "
-                f"its tasks out via the site executor; I'll continue when it finishes.")
-        if _pre_warnings:
-            note += " Param warnings: " + "; ".join(_pre_warnings)
+                + f" as background job {job['id']} (execution={mode}). {how} "
+                "I'll continue when it finishes.")
+        warnings = list(_pre_warnings)
+        # auto routed to slurm, or local explicitly asked for a pipeline too big for one node
+        if rest.get("local_viable") is False and rest.get("reason"):
+            msg = rest["reason"]
+            if rest.get("requested") == "local":     # honored the explicit ask, but flag it
+                warnings.append("execution=local requested but " + msg
+                                + " — tasks will be clamped to the node; consider execution=slurm.")
+            elif rest.get("requested") == "auto":     # auto already routed to fan-out
+                note += f" (auto-routed to fan-out: {msg}.)"
+        if warnings:
+            note += " Warnings: " + "; ".join(warnings)
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
-            "status": "submitted", "warnings": _pre_warnings, "note": note,
+            "status": "submitted", "execution": mode, "resource_estimate": rest,
+            "warnings": warnings, "note": note,
         }
     params = input_.get("params") or {}
     timeout_s = max(30, min(int(input_.get("timeout_s") or 1800), 3600))
@@ -379,15 +398,36 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
             "note": ("Build the `--input` file (usually a CSV) with EXACTLY these columns, "
                      "one row per sample, from the user's data before launching."),
         }
+    # Resource footprint (default-profile = real-data) → local-vs-fan-out recommendation,
+    # so the agent can pick run_nextflow's execution= up front.
+    resources = None
+    try:
+        from core.exec.nextflow_resources import estimate_pipeline_resources
+        _est = estimate_pipeline_resources(pipeline, revision or latest, None)
+    except Exception:  # noqa: BLE001
+        _est = None
+    if _est:
+        ht = _est["heaviest_task"]
+        resources = {
+            "heaviest_task": ht, "local_viable": _est["local_viable"],
+            "recommended_execution": "local" if _est["local_viable"] else "slurm",
+            "recommended_local_allocation": _est["recommended_local"],
+            "note": (f"Heaviest task ≈ {ht.get('cpus')} cpu / {ht.get('mem_gb')} GB. "
+                     + ("Fits a single node, so execution='local' works for full data too. "
+                        if _est["local_viable"] else f"{_est['reason']}. ")
+                     + "A `-profile test` smoke run is always fine on execution='local'; "
+                       "use execution='auto' to let ABA route by this estimate."),
+        }
     return {"status": "ok", "pipeline": pipeline, "revision": revision or latest,
             "latest_release": latest, "required": required, "param_groups": groups,
-            "input_format": input_format,
+            "input_format": input_format, "resources": resources,
             "docs": _ns.pipeline_doc_links(pipeline, revision or latest),
             "note": (f"{sum(len(v) for v in groups.values())} params in {len(groups)} groups; "
                      f"required: {', '.join(required) or 'none'}. "
                      + (f"Input: a samplesheet with columns {', '.join(c['name'] for c in input_format['columns'])} "
                         f"(required: {', '.join(input_format['required_columns']) or 'none'}). "
                         if input_format else "")
+                     + (f"Resources: {resources['note']}" if resources else "")
                      + "Pass params to run_nextflow as a dict; --outdir is set automatically. "
                      + "If unsure about the input format or an output, read `docs` (usage/output).")}
 
