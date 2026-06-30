@@ -62,10 +62,15 @@ def nextflow_config() -> dict:
     profiles = _csv(os.environ.get("ABA_NEXTFLOW_PROFILES")) or _csv(cfg.get("profiles"))
     cachedir = os.environ.get("ABA_NEXTFLOW_CACHEDIR", cfg.get("singularity_cachedir"))
     workdir_root = os.environ.get("ABA_NEXTFLOW_WORKDIR", cfg.get("workdir_root"))
+    # A site config (`-c <file>`) — e.g. an ABA-pinned cbe-derived profile that sets
+    # the slurm executor/queue/QOS + singularity, WITHOUT nf-core/configs' stale
+    # `process.module` loads. Applied to every run when set.
+    config_file = os.environ.get("ABA_NEXTFLOW_CONFIG", cfg.get("config_file"))
     head = {**_DEFAULT_HEAD, **(cfg.get("head") or {})}
     return {"module": module or None, "profiles": profiles,
             "singularity_cachedir": cachedir or None,
-            "workdir_root": workdir_root or None, "head": head}
+            "workdir_root": workdir_root or None, "config_file": config_file or None,
+            "head": head}
 
 
 def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> Optional[str]:
@@ -85,11 +90,13 @@ def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> O
 def nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
                      params: dict | None = None, work_dir: Optional[str] = None,
                      reports_dir: Optional[str] = None, resume: bool = True,
-                     extra_args=None) -> list[str]:
+                     config_file: Optional[str] = None, extra_args=None) -> list[str]:
     """Build the `nextflow run …` argv. Pure function — unit-tested."""
     cmd = ["nextflow", "run", pipeline]
     if revision:
         cmd += ["-r", str(revision)]
+    if config_file:
+        cmd += ["-c", str(config_file)]
     if profile:
         cmd += ["-profile", str(profile)]
     cmd += ["-ansi-log", "false"]
@@ -183,7 +190,8 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         env_vars["SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
 
     cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
-                           params=params, work_dir=work_dir, reports_dir=str(reports))
+                           params=params, work_dir=work_dir, reports_dir=str(reports),
+                           config_file=cfg.get("config_file"))
     res = ex.exec(menv, cmd, cwd=str(scratch), cancel_token=cancel_token,
                   timeout_s=timeout_s, env_vars=env_vars, stream=stream)
 
