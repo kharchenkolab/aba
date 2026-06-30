@@ -78,11 +78,19 @@ _LOG_FILES = {"backend": "backend.log", "installer": "installer.log", "install":
 def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
     """Surface a redacted, size-capped slice of ABA's own logs TO GUIDE so it can
     find the real error and summarize the cause into a bug report. Reads only
-    files under $ABA_HOME/logs (+ the helper err log); never arbitrary paths."""
-    which = (input_.get("which") or "backend").strip().lower()
-    fname = _LOG_FILES.get(which)
-    if not fname:
-        return {"error": f"unknown log '{which}'; choose one of {sorted(set(_LOG_FILES))}"}
+    files under $ABA_HOME/logs (+ the helper err log); never arbitrary paths.
+
+    which defaults to 'all' — searches every log and tags each line by source
+    ([backend]/[installer]/[helper]) — so Guide doesn't have to guess which log a
+    failure landed in (it reliably guesses wrong). Narrow to one only if asked."""
+    which = (input_.get("which") or "all").strip().lower()
+    if which == "all":
+        sources = [("backend", "backend.log"), ("installer", "installer.log"),
+                   ("helper", "../installer/helper.err.log")]
+    elif which in _LOG_FILES:
+        sources = [(which, _LOG_FILES[which])]
+    else:
+        return {"error": f"unknown log '{which}'; use 'all' or one of {sorted(set(_LOG_FILES))}"}
     try:
         tail = max(1, min(int(input_.get("tail") or 80), 400))
     except (TypeError, ValueError):
@@ -90,29 +98,37 @@ def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
     grep = (input_.get("grep") or "").strip().lower()
 
     home = Path(os.getenv("ABA_HOME", str(Path.home() / ".aba")))
-    log = (home / "logs" / fname).resolve()
-    # Containment: must stay within ABA_HOME (the ".." helper path resolves under it).
-    if not str(log).startswith(str(home.resolve())):
-        return {"error": "refusing to read outside ABA_HOME"}
-    if not log.exists():
-        return {"ok": True, "which": which, "lines": [], "note": "log not found / empty"}
-    try:
-        rows = log.read_text(errors="replace").splitlines()
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"could not read {fname}: {e}"}
+    home_res = str(home.resolve())
+    lines: list[str] = []
+    by_source: dict[str, int] = {}
+    for name, fname in sources:
+        log = (home / "logs" / fname).resolve()
+        if not str(log).startswith(home_res) or not log.exists():
+            by_source[name] = 0
+            continue
+        try:
+            rows = log.read_text(errors="replace").splitlines()
+        except Exception:  # noqa: BLE001
+            by_source[name] = 0
+            continue
+        # Drop the agent's own tool-call telemetry ("[feed] TOOL …") — it's not a
+        # failure and otherwise drowns the real error when grepping for one.
+        rows = [ln for ln in rows if "[feed] TOOL " not in ln]
+        if grep:
+            rows = [ln for ln in rows if grep in ln.lower()]
+        rows = rows[-tail:]
+        by_source[name] = len(rows)
+        for ln in rows:
+            lines.append(f"[{name}] " + _redact(ln))
 
-    if grep:
-        rows = [ln for ln in rows if grep in ln.lower()]
-    sel = [_redact(ln) for ln in rows[-tail:]]
-    text = "\n".join(sel)
+    text = "\n".join(lines)
     if len(text) > 6000:                 # keep Guide's context manageable
-        text = text[-6000:]
-        sel = text.splitlines()
+        lines = text[-6000:].splitlines()
     return {
-        "ok": True, "which": which, "matched": len(sel), "lines": sel,
-        "_agent_hint": ("Find the actual error/root cause in these lines and "
-                        "SUMMARIZE it for the report's diagnosis. Do NOT paste raw "
-                        "log lines into build_bug_report — the email is size-capped."),
+        "ok": True, "which": which, "matched_by_source": by_source, "lines": lines,
+        "_agent_hint": ("Lines are tagged by source. Find the actual error/root cause "
+                        "and SUMMARIZE it (note which log) for the report's diagnosis. "
+                        "Do NOT paste raw log lines into build_bug_report — it's size-capped."),
     }
 
 

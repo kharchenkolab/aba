@@ -17,8 +17,12 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         window into failures that didn't happen in your own tool calls (backend
         errors, the server, the installer).
 
-          • which — 'backend' (the running server), 'installer', or 'helper'.
-          • tail  — how many recent lines (default 80, max 400).
+          • which — defaults to 'all', which searches EVERY log (backend, installer,
+                    helper) and tags each line by source. Leave it at 'all' unless
+                    you specifically want to narrow to one ('backend' = running
+                    server/runtime/kernel, 'installer' = install/conda-env/setup,
+                    'helper' = menu-bar helper).
+          • tail  — how many recent lines per log (default 80, max 400).
           • grep  — optional case-insensitive substring filter (e.g. 'error',
                     'Traceback', the entity/run id).
 
@@ -59,12 +63,19 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         about confidence, and flag if it looks like a user-environment issue rather
         than an actual ABA defect.
 
-        If the failure is server/backend-side and you don't already have the error
-        in this conversation, call `read_aba_logs` FIRST, find the real cause, and
-        fold a tight summary of it into `diagnosis` (+ the key line into
-        `error_tail`). You can't see the browser/frontend directly — if the bug
-        looks UI-related, call `read_client_context` for the console errors + route
-        the user's browser captured, and fold the relevant bit into `diagnosis`.
+        GATHER EVIDENCE BEFORE FILING — do not file a "couldn't locate" report
+        without first checking the RIGHT source for the symptom:
+          • install / setup failure (conda env, micromamba, R toolchain) →
+            `read_aba_logs(which="installer")`
+          • backend/server error or env misprovisioning (ImportError, ABI/numpy
+            mismatch, kernel died) → `read_aba_logs(which="backend")`
+          • UI / frontend issue (page/button/view, blank, nothing happened) →
+            `read_client_context()` (your only window into the browser)
+          • a code cell or tool that errored → it's already in your tool history
+            this turn; quote the actual traceback.
+        Find the real cause and fold a tight summary into `diagnosis` (+ the key
+        line into `error_tail`). Only file a "couldn't reproduce" report if you
+        checked the correct source and the evidence genuinely isn't there.
 
         Provide:
           • headline    — ONE line: the SYMPTOM / observed failure, specific.
