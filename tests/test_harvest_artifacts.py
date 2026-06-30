@@ -6,6 +6,11 @@ only scratch, so 5 figures were on disk but `produced=[]` — orphaned/unpinnabl
 Fix: harvest also registers files the agent wrote INTO the store during this exec
 (mtime in [since_ts, harvest-begin), excluding our own copies) + nudges the agent.
 
+Timing note: the harvest window is mtime-based, and some cluster filesystems (beegfs)
+record mtime at **1-second granularity**. So we never lean on sub-second sleeps to
+separate "before" from "during" the window — we stamp each file's mtime explicitly
+with os.utime, which is deterministic regardless of FS granularity.
+
 Run: .venv/bin/python -m pytest tests/test_harvest_artifacts.py -q
 """
 from __future__ import annotations
@@ -24,12 +29,24 @@ sys.path.insert(0, str(ROOT / "backend"))
 from core.exec import run as runmod  # noqa: E402
 
 
-def _mkpng(p: Path):
-    """A non-blank PNG (random noise → wide range → passes the blank check)."""
+def _mkpng(p: Path, mtime: float | None = None):
+    """A non-blank PNG (random noise → wide range → passes the blank check).
+
+    If ``mtime`` is given, stamp it explicitly — the harvest window compares file
+    mtimes against ``since_ts``, and on a coarse-mtime FS a wall-clock ``time.time()``
+    can sit *after* a file's floored mtime, spuriously dropping it. Stamping makes the
+    before/during/after relation exact."""
     import numpy as np
     from PIL import Image
     a = np.random.default_rng(0).integers(0, 255, size=(48, 48, 3), dtype="uint8")
     Image.fromarray(a).save(p)
+    if mtime is not None:
+        os.utime(p, (mtime, mtime))
+
+
+# A fixed reference well in the past; harvest's upper bound is time.time() (now),
+# so files stamped at START+N (N << 100) land inside the [since_ts, now) window.
+START = time.time() - 100.0
 
 
 def _isolate(tmp_path, monkeypatch):
@@ -43,20 +60,17 @@ def _isolate(tmp_path, monkeypatch):
 
 def test_scratch_figure_still_harvested(tmp_path, monkeypatch):
     adir, scratch = _isolate(tmp_path, monkeypatch)
-    start = time.time(); time.sleep(0.05)
-    _mkpng(scratch / "umap.png")
-    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=start)
+    _mkpng(scratch / "umap.png", mtime=START + 50)
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     assert {p["original_name"] for p in plots} == {"umap.png"}
     assert not warns
 
 
 def test_offconvention_store_write_registered_and_warned(tmp_path, monkeypatch):
     adir, scratch = _isolate(tmp_path, monkeypatch)
-    start = time.time(); time.sleep(0.05)
-    _mkpng(scratch / "umap.png")              # normal (scratch)
-    _mkpng(adir / "cytc_tree.png")            # OFF-CONVENTION: agent wrote into the store
-    time.sleep(0.05)
-    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=start)
+    _mkpng(scratch / "umap.png", mtime=START + 50)        # normal (scratch)
+    _mkpng(adir / "cytc_tree.png", mtime=START + 50)      # OFF-CONVENTION: agent wrote into the store
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     names = {p["original_name"] for p in plots}
     assert "umap.png" in names                # regression
     assert "cytc_tree.png" in names           # A: off-convention figure now registered
@@ -66,9 +80,8 @@ def test_offconvention_store_write_registered_and_warned(tmp_path, monkeypatch):
 
 def test_preexisting_store_figure_not_recaught(tmp_path, monkeypatch):
     adir, scratch = _isolate(tmp_path, monkeypatch)
-    _mkpng(adir / "old.png")                  # written BEFORE the exec window
-    time.sleep(0.05); start = time.time(); time.sleep(0.05)
-    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=start)
+    _mkpng(adir / "old.png", mtime=START - 50)            # written BEFORE the exec window
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     assert "old.png" not in {p["original_name"] for p in plots}
     assert plots == []
 
@@ -99,11 +112,9 @@ def _isolate_with_work(tmp_path, monkeypatch):
 
 def test_workdir_figure_registered_and_warned(tmp_path, monkeypatch):
     adir, work, scratch = _isolate_with_work(tmp_path, monkeypatch)
-    start = time.time(); time.sleep(0.05)
-    _mkpng(scratch / "umap.png")              # normal (in the thread cwd)
-    _mkpng(work / "gfp_presentation.png")     # OFF-CONVENTION: absolute path to work/ (parent)
-    time.sleep(0.05)
-    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=start)
+    _mkpng(scratch / "umap.png", mtime=START + 50)            # normal (in the thread cwd)
+    _mkpng(work / "gfp_presentation.png", mtime=START + 50)   # OFF-CONVENTION: absolute path to work/ (parent)
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     names = {p["original_name"] for p in plots}
     assert "umap.png" in names                # regression (thread cwd still works)
     assert "gfp_presentation.png" in names    # C4: work-dir figure now captured
@@ -113,9 +124,8 @@ def test_workdir_figure_registered_and_warned(tmp_path, monkeypatch):
 
 def test_workdir_preexisting_not_recaught(tmp_path, monkeypatch):
     adir, work, scratch = _isolate_with_work(tmp_path, monkeypatch)
-    _mkpng(work / "old_wd.png")               # written BEFORE the exec window
-    time.sleep(0.05); start = time.time(); time.sleep(0.05)
-    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=start)
+    _mkpng(work / "old_wd.png", mtime=START - 50)            # written BEFORE the exec window
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     assert "old_wd.png" not in {p["original_name"] for p in plots}
 
 
