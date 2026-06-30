@@ -45,6 +45,22 @@ def test_config_env_overrides(monkeypatch):
     assert c["singularity_cachedir"] == "/resources/containers"
     assert c["workdir_root"] == "/scratch-cbe/users/me/nxf"
     assert c["java_home"] == "/sw/java/21"
+    # head resources default when unset
+    assert c["head"]["walltime_h"] == 24 and c["head"]["cores"] == 2
+
+
+def test_head_resource_env_overrides(monkeypatch):
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_WALLTIME_H", "8")
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_CORES", "4")
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_MEM_GB", "16")
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_QOS", "short")
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_PARTITION", "c")
+    h = nf.nextflow_config()["head"]
+    assert h["walltime_h"] == 8 and h["cores"] == 4 and h["mem_gb"] == 16
+    assert h["qos"] == "short" and h["partition"] == "c"
+    # a non-numeric override is ignored (keeps the default) rather than crashing
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_WALLTIME_H", "lots")
+    assert nf.nextflow_config()["head"]["walltime_h"] == 24
 
 
 def test_java_env_prepends_without_shadowing():
