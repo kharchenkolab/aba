@@ -180,12 +180,13 @@ def _discover_qos(user: str) -> tuple[list[str], dict, str | None]:
     return ranked, {q: walls.get(q) for q in ranked}, account
 
 
-def gen_hpc_config(out_path: str | None = None) -> int:
-    """Probe `sinfo` (+ `sacctmgr`) and write a starting hpc.yaml partition catalog
-    (cluster-personal profile). The live router tolerates a stale/edited file, so
-    this is a convenience: a good default the user refines. Partitions come from
-    `sinfo`; QOS + account from `sacctmgr` (which `sinfo` can't provide). Returns 0
-    on success, 1 when Slurm isn't reachable."""
+def gen_hpc_config(out_path: str | None = None, *, write: bool = True) -> int:
+    """Probe `sinfo` (+ `sacctmgr`) and write an `hpc.yaml` catalog. The RUNTIME now
+    discovers partitions (sinfo) AND QOS + account (sacctmgr) live, so this file is
+    a pure OPTIONAL OVERRIDE — generate it only to pin a partition list, reorder
+    QOS, or force an account. `write=False` (the installer's default probe) prints
+    what ABA detects without creating a file. Returns 0 on success, 1 when Slurm
+    isn't reachable."""
     import re
     import yaml
     from aba_installer import paths
@@ -236,8 +237,12 @@ def gen_hpc_config(out_path: str | None = None) -> int:
                                       "mem_gb": 4, "walltime_h": 4}}}
     if account:
         cfg["hpc"]["account"] = account
-    out.write_text(yaml.safe_dump(cfg, sort_keys=False))
-    print(f"wrote {out} with {len(parts)} partition(s): {', '.join(parts)}")
+    if write:
+        out.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        print(f"wrote {out} with {len(parts)} partition(s): {', '.join(parts)}")
+    else:
+        print(f"detected {len(parts)} partition(s): {', '.join(parts)} "
+              f"(not written — the runtime discovers partitions + QOS + account live)")
     if qos_ranked:
         pw = "unlimited" if primary_w is None else f"{primary_w}h"
         shown = ", ".join(f"{q}({'∞' if walls.get(q) is None else str(walls[q]) + 'h'})"
@@ -306,14 +311,16 @@ def main(argv=None) -> int:
     pi.add_argument("--skip", help="comma-separated step ids to skip")
     sub.add_parser("update", help="pull latest code + recipes, refresh env, rebuild UI")
     sub.add_parser("doctor", help="diagnose an existing install")
-    ph = sub.add_parser("hpc-config", help="probe sinfo -> write a starting hpc.yaml")
+    ph = sub.add_parser("hpc-config", help="write an optional hpc.yaml override (runtime discovers live)")
     ph.add_argument("--out", help="output path (default $ABA_HOME/hpc.yaml)")
+    ph.add_argument("--print", dest="print_only", action="store_true",
+                    help="probe + print what ABA detects; don't write a file")
     pa = sub.add_parser("auth", help="set a credential (OAuth sign-in / --token / --api-key)")
     pa.add_argument("--api-key", help="Anthropic API key (sk-ant-…)")
     pa.add_argument("--token", help="Claude Code OAuth token from `claude setup-token` (sk-ant-oat…)")
     a = p.parse_args(argv)
     if a.cmd == "hpc-config":
-        return gen_hpc_config(a.out)
+        return gen_hpc_config(a.out, write=not a.print_only)
     if a.cmd == "auth":
         return auth_cmd(a.api_key, a.token)
     if a.cmd == "install":

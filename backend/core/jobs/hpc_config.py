@@ -3,11 +3,13 @@
 The agent provides an ESTIMATE (runtime_min + optional cores/mem/gpu hints); the
 DEPLOYMENT describes available partitions/QoS/limits/defaults; this maps the two
 into a concrete Slurm request. A configured catalog (``$ABA_HPC_CONFIG`` or the
-bundle ``hpc:`` settings) is the source of truth; when NONE is configured, ABA
-auto-detects partitions from live ``sinfo`` (default partition first) so an
-unconfigured cluster still routes GPU / large jobs to real partitions. Skipping
-config is fine for ordinary CPU jobs (the default partition is used); configure a
-catalog only to add account / QoS or to override the detected partitions.
+bundle ``hpc:`` settings) wins when present; when it doesn't pin them, ABA
+auto-detects **partitions** from live ``sinfo`` (default partition first) AND the
+user's **QOS + account** from live ``sacctmgr`` (slurm_live.qos_account_live,
+ranked most-permissive first + the primary QOS's MaxWall as a walltime cap). So an
+unconfigured cluster routes GPU/large jobs to real partitions and submits the right
+``--qos``/``--account`` with no ``hpc.yaml`` at all — the file is a pure optional
+override (pin a partition list, reorder QOS, force an account).
 
 Config shape::
 
@@ -61,11 +63,24 @@ def hpc_config() -> dict:
     tests) → ``EffectiveBundle.settings['hpc']`` (composes system→inst→lab→user)
     → minimal defaults."""
     cfg: dict = {}
+    # Explicit env path wins; otherwise an optional `$ABA_HOME/hpc.yaml` is picked up
+    # automatically (so `aba hpc-config` "just works" without setting ABA_HPC_CONFIG).
     path = os.environ.get("ABA_HPC_CONFIG")
+    if not path:
+        home = os.environ.get("ABA_HOME")
+        if home and (Path(home) / "hpc.yaml").exists():
+            path = str(Path(home) / "hpc.yaml")
     if path and Path(path).exists():
         try:
             import yaml
             cfg = yaml.safe_load(Path(path).read_text()) or {}
+            # The file is written wrapped under a top-level `hpc:` key (installer
+            # output + the documented format + the bundle's settings['hpc'] shape).
+            # Unwrap it — without this the whole catalog (partitions/qos/account)
+            # was read as empty and silently ignored, so jobs submitted with no
+            # --qos/--account and fell back to the cluster default QOS.
+            if isinstance(cfg.get("hpc"), dict):
+                cfg = cfg["hpc"]
         except Exception:  # noqa: BLE001
             cfg = {}
     if not cfg:
@@ -77,6 +92,23 @@ def hpc_config() -> dict:
     cfg.setdefault("partitions", [])
     if not cfg["partitions"]:
         cfg["partitions"] = _live_partitions()       # auto-detect when nothing is configured
+    # QOS + account: discover live from sacctmgr when not configured — symmetric
+    # with live partitions, so no hpc.yaml is needed to carry them (a configured
+    # `qos`/`account` still wins). Also remember the primary QOS's MaxWall so
+    # resolve_resources never requests more walltime than the QOS allows.
+    if not cfg.get("qos"):
+        try:
+            from core.jobs.slurm_live import qos_account_live
+            ranked, walls, account = qos_account_live()
+        except Exception:  # noqa: BLE001 — best-effort; absence is normal
+            ranked, walls, account = (), {}, None
+        if ranked:
+            cfg["qos"] = list(ranked)
+            primary_w = walls.get(ranked[0])
+            if primary_w:
+                cfg["qos_max_walltime_h"] = primary_w
+        if account and not cfg.get("account"):
+            cfg["account"] = account
     d = dict(_DEFAULTS)
     d.update(cfg.get("defaults") or {})
     cfg["defaults"] = d
@@ -117,6 +149,11 @@ def resolve_resources(estimate: Optional[dict] = None, cfg: Optional[dict] = Non
         cores = min(cores, int(chosen.get("max_cores", cores)))
         mem_gb = min(mem_gb, int(chosen.get("max_mem_gb", mem_gb)))
         walltime_h = min(walltime_h, int(chosen.get("max_walltime_h", walltime_h)))
+    # Cap to the chosen QOS's MaxWall too (discovered live or configured) so the
+    # request is never rejected for exceeding the QOS limit, not just the partition's.
+    qmw = cfg.get("qos_max_walltime_h")
+    if qmw:
+        walltime_h = min(walltime_h, int(qmw))
     qos_list = cfg.get("qos") or []
     return {
         "partition": partition,

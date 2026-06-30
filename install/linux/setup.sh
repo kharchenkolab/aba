@@ -200,11 +200,15 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   write_cfg ABA_BATCH_SUBMITTER slurm
   echo "-- cluster-personal: ABA_BATCH_SUBMITTER=slurm, runtime=$RUNTIME_DIR --"
   if command -v sinfo >/dev/null 2>&1; then
-    "$PY" -m aba_installer.cli hpc-config --out "$ABA_HOME/hpc.yaml" || true
-    [ -f "$ABA_HOME/hpc.yaml" ] && write_cfg ABA_HPC_CONFIG "$ABA_HOME/hpc.yaml"
+    # The runtime discovers partitions + QOS + account LIVE (sinfo + sacctmgr) at
+    # submit time, so no hpc.yaml is written by default. Show what it detects;
+    # `aba hpc-config` writes an editable override later if you want to pin/reorder.
+    "$PY" -m aba_installer.cli hpc-config --print || true
+    echo "   (to pin a partition list / reorder QOS / force an account, run"
+    echo "    'aba hpc-config' to write \$ABA_HOME/hpc.yaml, then edit it)"
   else
-    echo "   (no sinfo here — run on a submit-capable node, or write $ABA_HOME/hpc.yaml"
-    echo "    by hand; the runtime router also queries the scheduler live)"
+    echo "   (no sinfo here — the runtime queries the scheduler live at submit time;"
+    echo "    or run 'aba hpc-config' on a submit-capable node to write an override)"
   fi
 fi
 
