@@ -59,6 +59,13 @@ class SlurmSubmitter:
         for _m in project_modules(pid):
             if _m not in mods:
                 mods.append(_m)
+        # Nextflow head job: `module load` the site's nextflow so it's on PATH for
+        # the compute-node head (run_nextflow_code then finds it without conda).
+        if kind == "run_nextflow":
+            from core.exec.nextflow import nextflow_config
+            _nfmod = nextflow_config().get("module")
+            if _nfmod and _nfmod not in mods:
+                mods.append(_nfmod)
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit (active_run_id), not the job's
@@ -70,6 +77,10 @@ class SlurmSubmitter:
             "timeout_s": int(params.get("timeout_s") or 600),
             "result_path": str(result_path), "env": params.get("env"),
             "modules": mods,                              # provenance (cluster module provider)
+            # Nextflow passthrough (None for python/r jobs).
+            "pipeline": params.get("pipeline"), "revision": params.get("revision"),
+            "profile": params.get("profile"), "nf_params": params.get("nf_params"),
+            "outdir": params.get("outdir"),
         }))
         job_sh = run_dir / "job.sh"
         job_sh.write_text(
@@ -84,7 +95,23 @@ class SlurmSubmitter:
         )
         job_sh.chmod(0o755)
 
-        res = resolve_resources(params.get("estimate") or {}, hpc_config())
+        if kind == "run_nextflow":
+            # The HEAD is a lightweight, LONG-lived orchestrator (it mostly waits
+            # while Nextflow submits the heavy task jobs). Size it from the site's
+            # nextflow.head config (modest cores/mem, generous walltime) — NOT the
+            # pipeline's task estimate — running it through resolve_resources so the
+            # walltime still maps to a valid partition/QOS/account.
+            from core.exec.nextflow import nextflow_config
+            head = nextflow_config()["head"]
+            head_est = {"runtime_min": int(head.get("walltime_h") or 24) * 60,
+                        "cores": head.get("cores") or 2, "mem_gb": head.get("mem_gb") or 8}
+            res = resolve_resources(head_est, hpc_config())
+            if head.get("qos"):
+                res["qos"] = head["qos"]
+            if head.get("partition"):
+                res["partition"] = head["partition"]
+        else:
+            res = resolve_resources(params.get("estimate") or {}, hpc_config())
         cmd = ["sbatch", "--parsable",
                f"--job-name=aba-{job['id']}",
                f"--output={log_path}", f"--error={err_path}", f"--chdir={run_dir}",
