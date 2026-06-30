@@ -30,6 +30,17 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         return read_aba_logs_impl({"which": which, "tail": tail, "grep": grep})
 
     @mcp.tool()
+    def read_client_context() -> dict:
+        """Read the BROWSER-side context (recent console errors, current route,
+        active section, focused entity) captured when the user clicked
+        'Report a bug'. This is your ONLY window into UI/frontend failures — you
+        can't see the browser otherwise. Use it when a bug looks UI-related, then
+        summarize the relevant console error + where it happened into your
+        diagnosis (don't paste raw)."""
+        from content.bio.tools import read_client_context_impl
+        return read_client_context_impl({})
+
+    @mcp.tool()
     def build_bug_report(headline: str,
                          what_doing: str = "",
                          diagnosis: str = "",
@@ -51,9 +62,9 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         If the failure is server/backend-side and you don't already have the error
         in this conversation, call `read_aba_logs` FIRST, find the real cause, and
         fold a tight summary of it into `diagnosis` (+ the key line into
-        `error_tail`). You can't see the browser/frontend — if the bug is UI-only,
-        say so and report it as user-observed (with whatever client_context you
-        were given).
+        `error_tail`). You can't see the browser/frontend directly — if the bug
+        looks UI-related, call `read_client_context` for the console errors + route
+        the user's browser captured, and fold the relevant bit into `diagnosis`.
 
         Provide:
           • headline    — ONE line: the SYMPTOM / observed failure, specific.

@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import subprocess
+import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,6 +113,39 @@ def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
         "_agent_hint": ("Find the actual error/root cause in these lines and "
                         "SUMMARIZE it for the report's diagnosis. Do NOT paste raw "
                         "log lines into build_bug_report — the email is size-capped."),
+    }
+
+
+# ── client-side (browser) context stash (B4) ───────────────────────────────
+# Guide can't see the browser; the bug button POSTs a snapshot here and Guide
+# reads it via read_client_context to diagnose UI-only failures. A single latest
+# snapshot is enough (per-install, single-user).
+_CLIENT_CTX: dict = {}
+
+
+def stash_client_context(context: dict | None) -> None:
+    _CLIENT_CTX["latest"] = {"ts": time.time(), "context": context or {}}
+
+
+def read_client_context_impl(input_: dict | None = None, ctx: dict | None = None) -> dict:
+    entry = _CLIENT_CTX.get("latest")
+    if not entry:
+        return {"ok": True, "found": False,
+                "note": ("No browser context captured. It's stashed when the user clicks "
+                         "'Report a bug' in the header; if this is a UI issue, ask them to.")}
+    c = entry.get("context") or {}
+    errors = [_redact(str(e))[:300] for e in (c.get("errors") or [])][:30]
+    return {
+        "ok": True, "found": True,
+        "captured_ago_s": int(time.time() - entry["ts"]),
+        "route": _redact(str(c.get("route") or "")),
+        "section": c.get("section"),
+        "focused_type": c.get("focusedType"),
+        "console_errors": errors,
+        "user_agent": (c.get("userAgent") or "")[:140],
+        "_agent_hint": ("Browser-side evidence (you can't see the UI directly). "
+                        "Summarize the relevant console error + where it happened into "
+                        "the bug report's diagnosis; do not paste raw lines."),
     }
 
 
