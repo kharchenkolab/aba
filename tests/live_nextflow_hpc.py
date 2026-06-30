@@ -69,9 +69,12 @@ def main() -> int:
             time.sleep(2); continue
         info = sub.info(job)
         state = info.get("state") or "?"
-        if state != last:
-            print(f"[poll] slurm_id={sid} state={state} node={info.get('node')} elapsed={info.get('elapsed')}")
-            last = state
+        prog = info.get("nextflow") or {}
+        snap = f"{state}|{prog.get('completed')}/{prog.get('total')}"
+        if snap != last:
+            print(f"[poll] slurm_id={sid} state={state} node={info.get('node')} "
+                  f"elapsed={info.get('elapsed')} nf_progress={prog or '-'}")
+            last = snap
         result = sub.poll(job)
         if result is not None:
             break
@@ -89,6 +92,9 @@ def main() -> int:
           f"outputs={len(result.get('outputs') or [])}")
     print(f"[result] harvested: plots={len(result.get('plots') or [])} "
           f"tables={len(result.get('tables') or [])} files={len(result.get('files') or [])}")
+    print(f"[result] task_summary={result.get('task_summary')}")
+    if wf.get("failure"):
+        print(f"[result] failure={wf.get('failure')}")
 
     # the shared completion path: exec record (kind:workflow) + artifact registration
     asyncio.run(_finalize_job(job, result, pid, pid))

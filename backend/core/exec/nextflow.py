@@ -116,6 +116,114 @@ def nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
     return cmd
 
 
+def parse_trace_rows(trace_path) -> list[dict]:
+    """Read a `-with-trace` TSV into a list of header-keyed row dicts. [] on any
+    miss. Nextflow updates this file live as tasks change state, so it doubles as
+    the running-progress source (trace_progress) and the post-hoc summary source."""
+    try:
+        lines = Path(trace_path).read_text().splitlines()
+    except Exception:  # noqa: BLE001
+        return []
+    if len(lines) < 2:
+        return []
+    header = lines[0].split("\t")
+    rows: list[dict] = []
+    for ln in lines[1:]:
+        parts = ln.split("\t")
+        if len(parts) >= len(header):
+            rows.append({header[i]: parts[i] for i in range(len(header))})
+    return rows
+
+
+def _size_mb(s: str) -> float:
+    """Parse a Nextflow size string ('2 MB', '1.5 GB', '512 KB', '0') → MB. 0 on miss."""
+    try:
+        s = (s or "").strip()
+        if not s or s in ("-", "0"):
+            return 0.0
+        m = re.match(r"([0-9.]+)\s*([KMGT]?)B?", s, re.I)
+        if not m:
+            return 0.0
+        val = float(m.group(1)); unit = (m.group(2) or "").upper()
+        return val * {"": 1.0 / 1024, "K": 1.0 / 1024, "M": 1.0, "G": 1024.0, "T": 1024.0 * 1024}.get(unit, 1.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _proc(name: str) -> str:
+    """The process name without Nextflow's per-task '(N)' / tag suffix."""
+    return re.sub(r"\s*\(.*\)$", "", (name or "").strip()) or (name or "")
+
+
+def trace_summary(rows: list[dict]) -> dict:
+    """Post-hoc per-task rollup for a finished run: counts by status, the failed
+    tasks (name + exit), and the peak-memory task. Surfaced on the Run + the
+    workflow exec record so a pipeline isn't just an opaque stdout blob."""
+    from collections import Counter
+    if not rows:
+        return {}
+    by_status = Counter((r.get("status") or "?").upper() for r in rows)
+    failed = [{"process": _proc(r.get("name", "")), "exit": r.get("exit"),
+               "status": (r.get("status") or "").upper()}
+              for r in rows
+              if (r.get("status") or "").upper() in ("FAILED", "ABORTED")
+              or (r.get("exit") not in (None, "", "-", "0"))]
+    peak_mb, peak_proc = 0.0, None
+    for r in rows:
+        mb = _size_mb(r.get("peak_rss", ""))
+        if mb > peak_mb:
+            peak_mb, peak_proc = mb, _proc(r.get("name", ""))
+    return {"total_tasks": len(rows), "status_counts": dict(by_status),
+            "failed": failed[:25], "peak_rss_mb": round(peak_mb, 1),
+            "peak_process": peak_proc}
+
+
+def trace_progress(rows: list[dict]) -> dict:
+    """Compact LIVE progress from the trace (read while the run is in flight):
+    how many tasks are done/running/failed and what's currently running."""
+    if not rows:
+        return {}
+    done = running = submitted = failed = 0
+    current: list[str] = []
+    for r in rows:
+        st = (r.get("status") or "").upper()
+        if st in ("COMPLETED", "CACHED"):
+            done += 1
+        elif st == "RUNNING":
+            running += 1
+            current.append(_proc(r.get("name", "")))
+        elif st in ("SUBMITTED", "PENDING"):
+            submitted += 1
+        elif st in ("FAILED", "ABORTED"):
+            failed += 1
+    total = len(rows)
+    return {"total": total, "completed": done, "running": running,
+            "submitted": submitted, "failed": failed,
+            "pct": round(100.0 * done / total, 1) if total else 0.0,
+            "current": sorted(set(current))[:8]}
+
+
+def parse_failure(stderr: str, rows: list[dict], log_path: Optional[str] = None) -> dict:
+    """On a non-zero pipeline, surface WHAT failed: the failed process(es) from the
+    trace + Nextflow's 'Error executing process' block (from stderr, else the
+    .nextflow.log). Gives the agent an actionable diagnosis, not just an exit code."""
+    failed = [f"{_proc(r.get('name',''))} (exit {r.get('exit')})"
+              for r in rows if (r.get("status") or "").upper() in ("FAILED", "ABORTED")]
+    text = stderr or ""
+    if not text and log_path:
+        try:
+            text = Path(log_path).read_text()
+        except Exception:  # noqa: BLE001
+            text = ""
+    block = ""
+    idx = text.find("Error executing process")
+    if idx == -1:
+        idx = text.find("ERROR ~")
+    if idx != -1:
+        block = text[idx:idx + 800]
+    return {"failed_processes": failed[:10], "error_excerpt": block.strip()}
+
+
 def parse_trace_containers(trace_path) -> list[str]:
     """Unique container images from a `-with-trace` TSV (`container` column) — the
     per-process engine env for workflow provenance. [] on any miss."""
@@ -209,6 +317,20 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         except Exception:  # noqa: BLE001 — harvest is best-effort
             plots, tables, files = [], [], []
         out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
+    # P1: also harvest the run reports (report.html / timeline.html live in the
+    # reports dir, not --outdir) so they attach to the Run as pinnable artifacts.
+    try:
+        _rp, _rt, rep_files, _ = harvest_artifacts(reports, project_id=str(project_id))
+        files = list(files) + list(rep_files)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # P1: monitoring. Parse the trace once → a per-task summary; diagnose failures.
+    trace_rows = parse_trace_rows(reports / "trace.txt")
+    summary = trace_summary(trace_rows)
+    failure = {}
+    if res.returncode != 0:
+        failure = parse_failure(res.stderr or "", trace_rows, str(Path(scratch) / ".nextflow.log"))
 
     nf_ver = ""
     try:
@@ -220,13 +342,16 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         nf_ver = ""
 
     cmd_str = " ".join(cmd)
-    return {
+    reports_rel = {"trace": "nf_reports/trace.txt", "report": "nf_reports/report.html",
+                   "timeline": "nf_reports/timeline.html"}
+    out: dict = {
         "returncode": res.returncode,
         "stdout": snip_middle(res.stdout or ""),
         "stderr": snip_middle(res.stderr or ""),
         "plots": plots, "tables": tables, "files": files,
         "cwd": str(scratch),
         "outdir": outdir, "outputs": out_files,
+        "task_summary": summary,          # surfaced to the agent in the tool result
         "execution_mode": "workflow",
         # consumed by runner._write_exec_record_for_job (kind:workflow branch)
         "workflow": {
@@ -234,6 +359,15 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
             "per_process_images": parse_trace_containers(reports / "trace.txt"),
             "pipeline": pipeline, "revision": revision, "profile": prof,
             "params": params or {}, "outputs": out_files[:50], "command": cmd_str,
+            "task_summary": summary, "reports": reports_rel,
         },
         "command": cmd_str,
     }
+    # An actionable failure diagnosis → _finalize_job's failed-path note + the
+    # continuation, instead of a bare non-zero exit.
+    if res.returncode != 0:
+        out["workflow"]["failure"] = failure
+        procs = ", ".join(failure.get("failed_processes") or []) or "unknown process"
+        out["error"] = (f"Nextflow pipeline failed (exit {res.returncode}). Failed: {procs}."
+                        + (f"\n{failure.get('error_excerpt')}" if failure.get("error_excerpt") else ""))
+    return out
