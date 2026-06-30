@@ -298,6 +298,32 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
         got = sum(1 for e in ents if e.get("type") == k and e.get("status") == "active")
         if got < n:
             fails.append(f"entities_of_type[{k}]>={n} but {got}")
+    # --- provenance / versioning state ---
+    if "reproduced" in st:   # checks THIS step's reproduce result (user-action `reproduce`)
+        rr = (created.get(step["id"]) or {}).get("reproduce") or {}
+        if bool(rr.get("reproduced")) != bool(st["reproduced"]):
+            fails.append(f"reproduced={rr.get('reproduced')} expected {st['reproduced']} "
+                         f"(err={str(rr.get('error'))[:80]})")
+    if "env_drift" in st:
+        rr = (created.get(step["id"]) or {}).get("reproduce") or {}
+        if bool(rr.get("env_drift")) != bool(st["env_drift"]):
+            fails.append(f"env_drift={rr.get('env_drift')} expected {st['env_drift']}")
+    if st.get("superseded_min") is not None:   # a non-destructive revert hid newer versions
+        nsup = sum(1 for e in ents if e.get("status") == "superseded")
+        if nsup < st["superseded_min"]:
+            fails.append(f"superseded>={st['superseded_min']} but {nsup}")
+    rv = st.get("revisions_min")   # {ref: sX, n: N}: the chain for that entity has >=N revisions
+    if rv and rv.get("ref"):
+        rec = created.get(rv["ref"]) or {}
+        eid = rec.get("entity_id") or rec.get("result_id")
+        chain = []
+        if eid:
+            try:
+                chain = (client.get(f"/api/entities/{eid}/revisions").json() or {}).get("chain") or []
+            except Exception:
+                pass
+        if len(chain) < (rv.get("n") or 0):
+            fails.append(f"revisions[{rv['ref']}]>={rv.get('n')} but {len(chain)}")
     ctx = exp.get("context") or {}
     # NOTE: msgs_grow is NOT a hard gate. Empirically ABA does NOT monotonically
     # accumulate API messages — pre-resume it grows (11->30->45) but a resume
@@ -459,7 +485,12 @@ def main() -> int:
                     print(f"[{sid}] (resume) re-attached to DB")
 
                 cap, cmetrics, judged = {}, {}, None
-                if actor == "agent":
+                # H8: a pure state step (e.g. `resume` with no prompt) defaults to
+                # actor=agent but has nothing to send — re-attach already happened
+                # above, so skip the turn instead of KeyError'ing on step["prompt"].
+                if actor == "agent" and not step.get("prompt"):
+                    print(f"[{sid}] {kind}/agent  (no prompt — state-only step, no turn)")
+                elif actor == "agent":
                     if step.get("new_thread"):
                         tid = client.post("/api/threads", json={"project_id": pid,
                                           "title": f"{SCENARIO}:{sid}"}).json().get("id")
@@ -518,8 +549,39 @@ def main() -> int:
                         elif kind == "modify_figure" and tg.get("entity_id") and step.get("modified_code"):
                             out = client.post(f"/api/entities/{tg['entity_id']}/make_revision",
                                               json={"modified_code": step["modified_code"]}).json()
-                            created[sid] = {"entity_id": out.get("new_entity_id")}
-                            print(f"[{sid}] {kind}/user  revised -> {out.get('new_entity_id')}")
+                            # H7: the HTTP route returns the new id at out["entity"]["id"],
+                            # NOT out["new_entity_id"] (that's the lifecycle fn's key). Reading
+                            # the wrong key gave entity_id=None, so CHAINED modify_figure steps
+                            # SKIPped (version_revert s5/s6). Also surface a 400 (supersede guard).
+                            new_eid = (out.get("entity") or {}).get("id") or out.get("new_entity_id")
+                            created[sid] = {"entity_id": new_eid}
+                            print(f"[{sid}] {kind}/user  revised -> {new_eid}"
+                                  f"{'  ERR:'+str(out.get('detail'))[:90] if not new_eid else ''}")
+                        elif kind == "reproduce":
+                            # Provenance: re-run the exec that produced this entity in
+                            # the CURRENT env and report (reproduced / env_drift /
+                            # produced). Does NOT create a new entity. Prefer the
+                            # figure entity_id (carries exec_id) over the result wrapper.
+                            eid = tg.get("entity_id") or tg.get("result_id")
+                            if not eid:
+                                print(f"[{sid}] {kind}/user  unresolved target={step.get('target')}")
+                            else:
+                                out = client.post(f"/api/entities/{eid}/reproduce").json()
+                                created[sid] = {**tg, "reproduce": out}
+                                print(f"[{sid}] {kind}/user  {eid} -> reproduced={out.get('reproduced')} "
+                                      f"drift={out.get('env_drift')} produced={len(out.get('produced') or [])}"
+                                      f"{' ERR:'+str(out.get('error'))[:80] if out.get('error') else ''}")
+                        elif kind == "delete_revision":
+                            # Hard-delete ONE revision from the chain (tests re-parent +
+                            # member re-anchor), distinct from soft-archiving an entity.
+                            eid = tg.get("entity_id") or tg.get("result_id")
+                            if not eid:
+                                print(f"[{sid}] {kind}/user  unresolved target={step.get('target')}")
+                            else:
+                                out = client.post(f"/api/entities/{eid}/delete-revision").json()
+                                created[sid] = {**tg, "delete_revision": out}
+                                print(f"[{sid}] {kind}/user  {eid} -> new_anchor={out.get('new_anchor')} "
+                                      f"re_parented={len(out.get('re_parented_children') or [])}")
                         else:
                             print(f"[{sid}] {kind}/user  unresolved/SKIP target={step.get('target')}")
                     except Exception as e:  # noqa: BLE001
