@@ -12,6 +12,24 @@ from mcp.server.fastmcp import FastMCP
 def register_feedback_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
+    def read_aba_logs(which: str = "backend", tail: int = 80, grep: str = "") -> dict:
+        """Read recent lines of ABA's OWN logs to diagnose a problem — your only
+        window into failures that didn't happen in your own tool calls (backend
+        errors, the server, the installer).
+
+          • which — 'backend' (the running server), 'installer', or 'helper'.
+          • tail  — how many recent lines (default 80, max 400).
+          • grep  — optional case-insensitive substring filter (e.g. 'error',
+                    'Traceback', the entity/run id).
+
+        Use this when investigating a bug BEFORE calling build_bug_report: read the
+        logs, find the actual error/cause, then SUMMARIZE it in your diagnosis. Do
+        NOT paste raw log lines into the report — it's strictly size-capped, so
+        distill the evidence into a tight technical cause."""
+        from content.bio.tools import read_aba_logs_impl
+        return read_aba_logs_impl({"which": which, "tail": tail, "grep": grep})
+
+    @mcp.tool()
     def build_bug_report(headline: str,
                          what_doing: str = "",
                          diagnosis: str = "",
@@ -29,6 +47,13 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         belongs in your chat reply to the user, never in the report. Be honest
         about confidence, and flag if it looks like a user-environment issue rather
         than an actual ABA defect.
+
+        If the failure is server/backend-side and you don't already have the error
+        in this conversation, call `read_aba_logs` FIRST, find the real cause, and
+        fold a tight summary of it into `diagnosis` (+ the key line into
+        `error_tail`). You can't see the browser/frontend — if the bug is UI-only,
+        say so and report it as user-observed (with whatever client_context you
+        were given).
 
         Provide:
           • headline    — ONE line: the SYMPTOM / observed failure, specific.
