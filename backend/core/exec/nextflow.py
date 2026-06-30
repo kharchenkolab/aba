@@ -29,8 +29,16 @@ from typing import Optional
 
 
 # ── site config ──────────────────────────────────────────────────────────────
+# Two execution modes (see run_nextflow_code / nextflow_config["execution"]):
+#   "slurm" (default) — lightweight head fans each task out as its OWN Slurm job
+#                       (executor=slurm via the cbe config). Right for heavy real data.
+#   "local"           — the head IS the worker: tasks run as subprocesses on its node
+#                       (executor=local), so it needs a bigger allocation. One scheduling
+#                       event, not N — right for small/test pipelines whose per-task compute
+#                       is dwarfed by Slurm queue latency.
 _DEFAULT_HEAD = {"cores": 2, "mem_gb": 8, "qos": None, "partition": None, "walltime_h": 24}
-# env var → (name, caster) for per-field head-resource overrides (see nextflow_config).
+_DEFAULT_LOCAL = {"cores": 8, "mem_gb": 32, "qos": None, "partition": None, "walltime_h": 24}
+# env var → (name, caster) for per-field resource overrides (see nextflow_config).
 _HEAD_ENV_OVERRIDES = {
     "cores": ("ABA_NEXTFLOW_HEAD_CORES", int),
     "mem_gb": ("ABA_NEXTFLOW_HEAD_MEM_GB", int),
@@ -38,6 +46,26 @@ _HEAD_ENV_OVERRIDES = {
     "qos": ("ABA_NEXTFLOW_HEAD_QOS", str),
     "partition": ("ABA_NEXTFLOW_HEAD_PARTITION", str),
 }
+_LOCAL_ENV_OVERRIDES = {
+    "cores": ("ABA_NEXTFLOW_LOCAL_CORES", int),
+    "mem_gb": ("ABA_NEXTFLOW_LOCAL_MEM_GB", int),
+    "walltime_h": ("ABA_NEXTFLOW_LOCAL_WALLTIME_H", int),
+    "qos": ("ABA_NEXTFLOW_LOCAL_QOS", str),
+    "partition": ("ABA_NEXTFLOW_LOCAL_PARTITION", str),
+}
+
+
+def _apply_env_overrides(base: dict, overrides: dict) -> dict:
+    """Return `base` with each field replaced by its env override when set+castable."""
+    out = dict(base)
+    for key, (envname, caster) in overrides.items():
+        raw = os.environ.get(envname)
+        if raw not in (None, ""):
+            try:
+                out[key] = caster(raw)
+            except (TypeError, ValueError):
+                pass
+    return out
 
 
 def nextflow_config() -> dict:
@@ -81,23 +109,23 @@ def nextflow_config() -> dict:
     # at a Java ≥17 here (the run sets JAVA_HOME, which Nextflow honors). None → use whatever
     # the module/PATH provides.
     java_home = os.environ.get("ABA_NEXTFLOW_JAVA_HOME", cfg.get("java_home"))
-    head = {**_DEFAULT_HEAD, **(cfg.get("head") or {})}
-    # Admin overrides for the head job's Slurm footprint (env wins over site config).
-    # walltime_h especially is a scheduling knob: a head that requests a very long window
-    # backfills poorly (the scheduler needs a guaranteed free slot ≥ walltime), so on a busy
-    # cluster a shorter walltime + auto-resume schedules far faster. cores/mem/qos/partition
-    # let a site pin the head to a cheap interactive-ish QOS.
-    for key, (envname, caster) in _HEAD_ENV_OVERRIDES.items():
-        raw = os.environ.get(envname)
-        if raw not in (None, ""):
-            try:
-                head[key] = caster(raw)
-            except (TypeError, ValueError):
-                pass
+    # Per-field admin overrides for the head/local Slurm footprint (env wins over site config).
+    # walltime_h is a scheduling knob: a head that requests a very long window backfills poorly
+    # (the scheduler needs a guaranteed free slot ≥ walltime), so on a busy cluster a shorter
+    # walltime + auto-resume schedules far faster. cores/mem/qos/partition let a site pin the
+    # allocation. The `local` block is the bigger allocation used in execution="local".
+    head = _apply_env_overrides({**_DEFAULT_HEAD, **(cfg.get("head") or {})}, _HEAD_ENV_OVERRIDES)
+    local = _apply_env_overrides({**_DEFAULT_LOCAL, **(cfg.get("local") or {})}, _LOCAL_ENV_OVERRIDES)
+    # Default execution mode (per-run param overrides this): slurm fan-out unless a site opts
+    # into local (e.g. a single-node deploy) via ABA_NEXTFLOW_EXECUTION=local.
+    execution = (os.environ.get("ABA_NEXTFLOW_EXECUTION") or cfg.get("execution") or "slurm").lower()
+    if execution not in ("slurm", "local"):
+        execution = "slurm"
     return {"module": module or None, "profiles": profiles,
             "singularity_cachedir": cachedir or None,
             "workdir_root": workdir_root or None, "config_file": config_file or None,
-            "java_home": java_home or None, "head": head}
+            "java_home": java_home or None, "head": head, "local": local,
+            "execution": execution}
 
 
 def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> Optional[str]:
@@ -111,6 +139,29 @@ def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> O
         if t not in out:
             out.append(t)
     return ",".join(out) or None
+
+
+def local_executor_config(cores: int, mem_gb: int) -> str:
+    """Groovy config (passed as a second `-c`, so it overrides the cbe config's
+    executor=slurm) that runs tasks on the LOCAL executor — i.e. as subprocesses on
+    the head's own node — instead of fanning each out as a Slurm job. The executor
+    pool is bounded to the head allocation, and resourceLimits clamps each task's
+    request to that pool so an oversized process still schedules (just slower). The
+    cbe config's singularity cache + igenomes settings still apply."""
+    c, m = int(cores), int(mem_gb)
+    return (
+        "// ABA: force local execution (tasks run on the head node, not fanned out to Slurm)\n"
+        "process {\n"
+        "    executor = 'local'\n"
+        "    clusterOptions = null\n"
+        "    queue = null\n"
+        f"    resourceLimits = [ cpus: {c}, memory: {m}.GB, time: 14.d ]\n"
+        "}\n"
+        "executor {\n"
+        f"    cpus = {c}\n"
+        f"    memory = '{m} GB'\n"
+        "}\n"
+    )
 
 
 def head_timeout_s(head: Optional[dict] = None) -> int:
@@ -151,13 +202,18 @@ def java_env(java_home: Optional[str], base: Optional[dict] = None) -> dict:
 def nextflow_command(pipeline: str, *, revision=None, profile=None, outdir: str,
                      params: dict | None = None, work_dir: Optional[str] = None,
                      reports_dir: Optional[str] = None, resume: bool = True,
-                     config_file: Optional[str] = None, extra_args=None) -> list[str]:
-    """Build the `nextflow run …` argv. Pure function — unit-tested."""
+                     config_file: Optional[str] = None, extra_configs=None,
+                     extra_args=None) -> list[str]:
+    """Build the `nextflow run …` argv. Pure function — unit-tested.
+    `extra_configs` are additional `-c` files appended AFTER config_file (later `-c`
+    wins), e.g. the local-executor override (see local_executor_config)."""
     cmd = ["nextflow", "run", pipeline]
     if revision:
         cmd += ["-r", str(revision)]
     if config_file:
         cmd += ["-c", str(config_file)]
+    for ec in (extra_configs or []):
+        cmd += ["-c", str(ec)]
     if profile:
         cmd += ["-profile", str(profile)]
     cmd += ["-ansi-log", "false"]
@@ -397,6 +453,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
                       revision: Optional[str] = None, profile: Optional[str] = None,
                       params: Optional[dict] = None, outdir: Optional[str] = None,
                       work_dir: Optional[str] = None, timeout_s: int = 3600,
+                      execution: Optional[str] = None,
                       cancel_token=None, stream: bool = False) -> dict:
     """Run a Nextflow pipeline head process in the project workspace, harvest its
     --outdir, and return the standard background result_obj (returncode/stdout/
@@ -446,9 +503,18 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     # so the module-pinned older JDK's libs don't shadow it (see java_env()).
     env_vars.update(java_env(cfg.get("java_home")))
 
+    # Execution mode: "local" runs tasks on the head node (one allocation); "slurm" fans out.
+    mode = (execution or cfg.get("execution") or "slurm").lower()
+    extra_configs: list[str] = []
+    if mode == "local":
+        loc = cfg.get("local") or {}
+        lc = Path(scratch) / "local_executor.config"
+        lc.write_text(local_executor_config(loc.get("cores") or 8, loc.get("mem_gb") or 32))
+        extra_configs.append(str(lc))
+
     cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
                            params=params, work_dir=work_dir, reports_dir=str(reports),
-                           config_file=cfg.get("config_file"))
+                           config_file=cfg.get("config_file"), extra_configs=extra_configs)
     res = ex.exec(menv, cmd, cwd=str(scratch), cancel_token=cancel_token,
                   timeout_s=timeout_s, env_vars=env_vars, stream=stream)
 

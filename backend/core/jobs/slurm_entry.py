@@ -29,6 +29,7 @@ def main() -> int:
             spec.get("pipeline") or "", project_id=spec["project_id"], run_id=spec["run_id"],
             revision=spec.get("revision"), profile=spec.get("profile"),
             params=spec.get("nf_params") or {}, outdir=spec.get("outdir"),
+            execution=spec.get("execution"),
             timeout_s=int(spec.get("timeout_s") or 3600), stream=True)
     elif kind == "run_r":                    # isolated R env = its lib first on .libPaths()
         result = run_r_code(spec["code"], env=spec.get("env"), **kw)

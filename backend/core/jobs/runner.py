@@ -240,7 +240,7 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
 def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
                         revision: str | None = None, profile: str | None = None,
                         nf_params: dict | None = None, outdir: str | None = None,
-                        timeout_s: int | None = None,
+                        timeout_s: int | None = None, execution: str | None = None,
                         project_id: str | None = None, thread_id: str | None = None,
                         run_id: str | None = None, estimate: dict | None = None) -> dict:
     """Create a queued Nextflow pipeline job and enqueue it (kind='run_nextflow').
@@ -249,12 +249,20 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
     harvests --outdir, and writes a kind:workflow exec record. `nf_params` are the
     pipeline's `--<k> <v>` params. Used by run_nextflow(background=True).
 
+    `execution` is "slurm" (default: fan each task out as its own Slurm job — for heavy
+    real data) or "local" (run tasks on the head's own, larger, allocation — far faster
+    for small/test pipelines whose per-task compute is dwarfed by Slurm queue latency).
+
     `timeout_s` is the head's app-level kill timeout; left None it defaults to the
-    head's generous Slurm walltime (head_timeout_s) — NOT a runtime estimate, since the
-    head mostly waits in the queue (a walltime overrun is a Slurm kill → auto-resume)."""
+    chosen allocation's generous Slurm walltime (head_timeout_s) — NOT a runtime estimate,
+    since the head mostly waits in the queue (a walltime overrun is a Slurm kill → auto-resume)."""
+    from core.exec.nextflow import nextflow_config, head_timeout_s
+    ncfg = nextflow_config()
+    execution = (execution or ncfg.get("execution") or "slurm").lower()
+    if execution not in ("slurm", "local"):
+        execution = "slurm"
     if timeout_s is None:
-        from core.exec.nextflow import head_timeout_s
-        timeout_s = head_timeout_s()
+        timeout_s = head_timeout_s(ncfg["local"] if execution == "local" else ncfg["head"])
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
@@ -262,7 +270,7 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         title=title or f"Nextflow: {pipeline}",
         focus_entity_id=focus_entity_id,
         params={"pipeline": pipeline, "revision": revision, "profile": profile,
-                "nf_params": nf_params or {}, "outdir": outdir,
+                "nf_params": nf_params or {}, "outdir": outdir, "execution": execution,
                 "code": f"nextflow run {pipeline}" + (f" -profile {profile}" if profile else ""),
                 "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},

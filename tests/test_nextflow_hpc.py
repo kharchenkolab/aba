@@ -63,6 +63,32 @@ def test_head_resource_env_overrides(monkeypatch):
     assert nf.nextflow_config()["head"]["walltime_h"] == 24
 
 
+def test_local_execution_block_and_default_mode(monkeypatch):
+    c = nf.nextflow_config()
+    assert c["execution"] == "slurm"                         # fan-out is the default
+    assert c["local"]["cores"] == 8 and c["local"]["mem_gb"] == 32   # bigger than head
+    monkeypatch.setenv("ABA_NEXTFLOW_EXECUTION", "local")
+    monkeypatch.setenv("ABA_NEXTFLOW_LOCAL_CORES", "16")
+    monkeypatch.setenv("ABA_NEXTFLOW_LOCAL_MEM_GB", "64")
+    c2 = nf.nextflow_config()
+    assert c2["execution"] == "local"
+    assert c2["local"]["cores"] == 16 and c2["local"]["mem_gb"] == 64
+    monkeypatch.setenv("ABA_NEXTFLOW_EXECUTION", "bogus")     # invalid → safe fallback
+    assert nf.nextflow_config()["execution"] == "slurm"
+
+
+def test_local_executor_config_and_extra_c_ordering():
+    snip = nf.local_executor_config(8, 32)
+    assert "executor = 'local'" in snip
+    assert "cpus = 8" in snip and "memory = '32 GB'" in snip
+    assert "resourceLimits = [ cpus: 8, memory: 32.GB" in snip   # clamps oversized requests
+    # the local override is a SECOND -c, after the base config, so it wins
+    cmd = nf.nextflow_command("nf-core/rnaseq", outdir="/o", config_file="/cbe.config",
+                              extra_configs=["/local.config"])
+    i_cbe, i_loc = cmd.index("/cbe.config"), cmd.index("/local.config")
+    assert cmd[i_cbe - 1] == "-c" and cmd[i_loc - 1] == "-c" and i_loc > i_cbe
+
+
 def test_clear_stale_reports_unblocks_resume(tmp_path):
     # A prior run's report files would make Nextflow abort at startup on -resume.
     rd = tmp_path / "nf_reports"; rd.mkdir()

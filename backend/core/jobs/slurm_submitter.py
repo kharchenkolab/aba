@@ -80,7 +80,7 @@ class SlurmSubmitter:
             # Nextflow passthrough (None for python/r jobs).
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
             "profile": params.get("profile"), "nf_params": params.get("nf_params"),
-            "outdir": params.get("outdir"),
+            "outdir": params.get("outdir"), "execution": params.get("execution"),
         }))
         job_sh = run_dir / "job.sh"
         job_sh.write_text(
@@ -96,20 +96,22 @@ class SlurmSubmitter:
         job_sh.chmod(0o755)
 
         if kind == "run_nextflow":
-            # The HEAD is a lightweight, LONG-lived orchestrator (it mostly waits
-            # while Nextflow submits the heavy task jobs). Size it from the site's
-            # nextflow.head config (modest cores/mem, generous walltime) — NOT the
-            # pipeline's task estimate — running it through resolve_resources so the
-            # walltime still maps to a valid partition/QOS/account.
+            # Size the head allocation from the site's nextflow config — NOT the pipeline's
+            # task estimate — through resolve_resources so the walltime maps to a valid
+            # partition/QOS/account. In "slurm" mode the head is a lightweight orchestrator
+            # (modest cores/mem) that fans heavy tasks out as their own jobs; in "local" mode
+            # the head IS the worker (tasks run on its node), so use the bigger `local` block.
             from core.exec.nextflow import nextflow_config
-            head = nextflow_config()["head"]
-            head_est = {"runtime_min": int(head.get("walltime_h") or 24) * 60,
-                        "cores": head.get("cores") or 2, "mem_gb": head.get("mem_gb") or 8}
+            ncfg = nextflow_config()
+            mode = (params.get("execution") or ncfg.get("execution") or "slurm").lower()
+            blk = ncfg["local"] if mode == "local" else ncfg["head"]
+            head_est = {"runtime_min": int(blk.get("walltime_h") or 24) * 60,
+                        "cores": blk.get("cores") or 2, "mem_gb": blk.get("mem_gb") or 8}
             res = resolve_resources(head_est, hpc_config())
-            if head.get("qos"):
-                res["qos"] = head["qos"]
-            if head.get("partition"):
-                res["partition"] = head["partition"]
+            if blk.get("qos"):
+                res["qos"] = blk["qos"]
+            if blk.get("partition"):
+                res["partition"] = blk["partition"]
         else:
             res = resolve_resources(params.get("estimate") or {}, hpc_config())
         cmd = ["sbatch", "--parsable",
