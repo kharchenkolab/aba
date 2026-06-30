@@ -167,9 +167,16 @@ def test_describe_pipeline(monkeypatch):
     import core.exec.nextflow_schema as _ns
     monkeypatch.setattr(_ns, "fetch_schema", lambda *a, **k: _FIX_SCHEMA)
     monkeypatch.setattr(_ns, "latest_release", lambda *a, **k: "1.2.0")
+    monkeypatch.setattr(_ns, "fetch_input_schema", lambda *a, **k: {
+        "type": "array", "description": "samplesheet",
+        "items": {"properties": {"sample": {"type": "string"},
+                                 "fastq_1": {"type": "string", "format": "file-path"}},
+                  "required": ["sample", "fastq_1"]}})
     r = pe.describe_pipeline({"pipeline": "nf-core/x"}, None)
     assert r["status"] == "ok" and r["required"] == ["input"] and r["latest_release"] == "1.2.0"
     assert "IO" in r["param_groups"] and any(p["name"] == "genome" for p in r["param_groups"]["IO"])
+    assert r["input_format"]["required_columns"] == ["sample", "fastq_1"]      # P2.5
+    assert any(c["name"] == "fastq_1" and c["format"] == "file-path" for c in r["input_format"]["columns"])
 
 
 # ── provenance: the kind:workflow exec record ─────────────────────────────────

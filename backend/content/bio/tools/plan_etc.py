@@ -363,11 +363,29 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
             "name": p["name"], "type": p["type"], "required": p["required"],
             "default": p["default"], "enum": p["enum"], "help": (p["help"] or "")[:140]})
     required = sorted(p["name"] for grp in groups.values() for p in grp if p["required"])
+    # P2.5: the INPUT format — the samplesheet columns the agent must build `--input`
+    # from (from assets/schema_input.json). This is what enables reliable data prep.
+    input_format = None
+    isch = _ns.fetch_input_schema(pipeline, revision or latest)
+    if isch:
+        cols = _ns.parse_input_columns(isch)
+        cols = [{**c, "help": (c.get("help") or "")[:160]} for c in cols]
+        input_format = {
+            "description": (isch.get("description") or "").strip(),
+            "required_columns": [c["name"] for c in cols if c["required"]],
+            "columns": cols,
+            "note": ("Build the `--input` file (usually a CSV) with EXACTLY these columns, "
+                     "one row per sample, from the user's data before launching."),
+        }
     return {"status": "ok", "pipeline": pipeline, "revision": revision or latest,
             "latest_release": latest, "required": required, "param_groups": groups,
+            "input_format": input_format,
             "note": (f"{sum(len(v) for v in groups.values())} params in {len(groups)} groups; "
-                     f"required: {', '.join(required) or 'none'}. Pass params to run_nextflow "
-                     f"as a dict; --outdir is set automatically.")}
+                     f"required: {', '.join(required) or 'none'}. "
+                     + (f"Input: a samplesheet with columns {', '.join(c['name'] for c in input_format['columns'])} "
+                        f"(required: {', '.join(input_format['required_columns']) or 'none'}). "
+                        if input_format else "")
+                     + "Pass params to run_nextflow as a dict; --outdir is set automatically.")}
 
 
 def restart_kernel_tool(input_: dict, ctx: dict | None = None) -> dict:

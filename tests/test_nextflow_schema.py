@@ -132,6 +132,49 @@ def test_enrich_plan_steps_no_schema(monkeypatch):
     assert "param_form" not in out[0]                          # no schema → plain step, no crash
 
 
+# A trimmed nf-core-style samplesheet schema (assets/schema_input.json): an array of
+# row objects; columns under items.properties, required under items.required.
+INPUT_SCHEMA = {
+    "type": "array",
+    "description": "Samplesheet (CSV) for the rnaseq pipeline",
+    "items": {
+        "type": "object",
+        "properties": {
+            "sample": {"type": "string", "pattern": "^\\S+$", "errorMessage": "Sample name; no spaces", "meta": ["id"]},
+            "fastq_1": {"type": "string", "format": "file-path", "errorMessage": "R1 fastq.gz must be provided"},
+            "fastq_2": {"type": "string", "format": "file-path", "errorMessage": "R2 fastq.gz (optional)"},
+            "strandedness": {"type": "string", "enum": ["forward", "reverse", "unstranded", "auto"],
+                             "errorMessage": "strandedness"},
+        },
+        "required": ["sample", "fastq_1", "strandedness"],
+    },
+}
+
+
+def test_parse_input_columns():
+    cols = ns.parse_input_columns(INPUT_SCHEMA)
+    assert [c["name"] for c in cols] == ["sample", "fastq_1", "fastq_2", "strandedness"]  # order kept
+    by = {c["name"]: c for c in cols}
+    assert by["sample"]["required"] and by["fastq_1"]["required"] and by["fastq_2"]["required"] is False
+    assert by["fastq_1"]["format"] == "file-path"
+    assert by["strandedness"]["enum"] == ["forward", "reverse", "unstranded", "auto"]
+    assert by["fastq_1"]["help"]                                # help carried (from errorMessage)
+
+
+def test_fetch_input_schema_cached(monkeypatch):
+    calls = {"n": 0}
+    def fake_get(url, as_json=True):
+        calls["n"] += 1
+        return INPUT_SCHEMA if url.endswith("/master/assets/schema_input.json") else None
+    monkeypatch.setattr(ns, "_get", fake_get)
+    ns._INPUT_SCHEMA_CACHE.clear()
+    assert ns.fetch_input_schema("nf-core/demo") is INPUT_SCHEMA
+    n1 = calls["n"]
+    ns.fetch_input_schema("nf-core/demo")                       # cached → no new HTTP
+    assert calls["n"] == n1
+    assert ns.fetch_input_schema("hello") is None               # needs owner/repo
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
