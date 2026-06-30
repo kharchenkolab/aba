@@ -206,20 +206,21 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     # via the site executor (e.g. nf-core/configs `cbe`). The agent gets a deferred
     # handle and is resumed on completion — same contract as run_python(background).
     if input_.get("background") or input_.get("remote"):
-        from core.jobs.runner import submit_nextflow_job, BACKGROUND_DEFAULT_TIMEOUT_S
+        from core.jobs.runner import submit_nextflow_job
         from content.bio.lifecycle.runs import active_run_id
         from core import projects as _proj
         pid = _proj.current() or "default"
         tid = (ctx or {}).get("thread_id")
         est_min = float(input_.get("estimated_runtime_min") or 0)
-        # Estimates are rough → 2× headroom; default 1 h; 24 h backstop.
-        bg_timeout = min(int(est_min * 60 * 2), 24 * 3600) if est_min else BACKGROUND_DEFAULT_TIMEOUT_S
+        # The head's kill timeout is NOT sized off est_min: the head mostly waits in the
+        # task queue (lifetime ≠ compute), so submit_nextflow_job defaults it to the head's
+        # generous walltime (a walltime overrun auto-resumes). est_min is kept for the record.
         job = submit_nextflow_job(
             pipeline=pipeline, title=input_.get("title") or f"Nextflow: {pipeline}",
             focus_entity_id=(ctx or {}).get("focus_entity_id"),
             revision=revision, profile=profile,
             nf_params=input_.get("params") or {}, outdir=input_.get("outdir"),
-            timeout_s=bg_timeout, project_id=str(pid),
+            timeout_s=None, project_id=str(pid),
             thread_id=str(tid) if tid else None,
             run_id=active_run_id(str(tid)) if tid else None,
             estimate={"runtime_min": est_min})

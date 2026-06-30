@@ -240,14 +240,21 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
 def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
                         revision: str | None = None, profile: str | None = None,
                         nf_params: dict | None = None, outdir: str | None = None,
-                        timeout_s: int = BACKGROUND_DEFAULT_TIMEOUT_S,
+                        timeout_s: int | None = None,
                         project_id: str | None = None, thread_id: str | None = None,
                         run_id: str | None = None, estimate: dict | None = None) -> dict:
     """Create a queued Nextflow pipeline job and enqueue it (kind='run_nextflow').
     The worker / Slurm entry dispatches to core.exec.nextflow.run_nextflow_code,
     which runs the head process (Nextflow fans tasks out via the site executor),
     harvests --outdir, and writes a kind:workflow exec record. `nf_params` are the
-    pipeline's `--<k> <v>` params. Used by run_nextflow(background=True)."""
+    pipeline's `--<k> <v>` params. Used by run_nextflow(background=True).
+
+    `timeout_s` is the head's app-level kill timeout; left None it defaults to the
+    head's generous Slurm walltime (head_timeout_s) — NOT a runtime estimate, since the
+    head mostly waits in the queue (a walltime overrun is a Slurm kill → auto-resume)."""
+    if timeout_s is None:
+        from core.exec.nextflow import head_timeout_s
+        timeout_s = head_timeout_s()
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,

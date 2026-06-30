@@ -63,6 +63,17 @@ def test_head_resource_env_overrides(monkeypatch):
     assert nf.nextflow_config()["head"]["walltime_h"] == 24
 
 
+def test_head_timeout_tracks_walltime_not_estimate(monkeypatch):
+    # The head app-timeout = generous walltime + margin (NOT a runtime estimate), so a head
+    # whose tasks are merely queued on a busy cluster does not self-kill.
+    assert nf.head_timeout_s({"walltime_h": 24}) == 24 * 3600 + 1800
+    assert nf.head_timeout_s({"walltime_h": 8}) == 8 * 3600 + 1800
+    assert nf.head_timeout_s({}) == 24 * 3600 + 1800            # default walltime
+    # picks up the env override path via nextflow_config when no head passed
+    monkeypatch.setenv("ABA_NEXTFLOW_HEAD_WALLTIME_H", "8")
+    assert nf.head_timeout_s() == 8 * 3600 + 1800
+
+
 def test_java_env_prepends_without_shadowing():
     # Reproduces the CBE case: the nextflow module pins Java 11 and puts its lib on
     # LD_LIBRARY_PATH; our Java 21 must win without dropping the rest of the path.

@@ -113,6 +113,17 @@ def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> O
     return ",".join(out) or None
 
 
+def head_timeout_s(head: Optional[dict] = None) -> int:
+    """App-level kill timeout for the Nextflow *head* process: its generous Slurm
+    walltime plus a margin. The head's wall-clock is dominated by UNPREDICTABLE task
+    queue waits, not compute, so this tracks the walltime (the real bound — a walltime
+    kill is a `slurm_terminal_fail` that auto-resumes), NOT a runtime estimate. Sizing
+    the head off an estimate is the bug that self-kills a head whose tasks are merely
+    queued on a busy cluster."""
+    h = head if head is not None else nextflow_config()["head"]
+    return int(h.get("walltime_h") or 24) * 3600 + 1800
+
+
 def java_env(java_home: Optional[str], base: Optional[dict] = None) -> dict:
     """Env overrides so a module-loaded Nextflow head runs on `java_home` (Java ≥17,
     required by the nf-schema plugin) instead of the older Java its module pins.
