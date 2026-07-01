@@ -66,6 +66,13 @@ def test_parse_max_caps():
     assert nr.parse_max_caps("nothing here") == {}
 
 
+def test_parse_max_caps_resource_limits_block():
+    # Newer nf-core (nf-schema era) drops max_* for a resourceLimits block — must still parse,
+    # else a -profile test is mis-sized to the 128GB template fallback and mis-routes to slurm.
+    cfg = "params {\n  resourceLimits = [\n cpus: 4,\n memory: '15.GB',\n time: '1.h'\n  ]\n}\n"
+    assert nr.parse_max_caps(cfg) == {"cpus": 4, "mem_gb": 15, "time_h": 1}
+
+
 def test_estimate_test_profile_is_local_viable():
     # test caps everything tiny → heaviest task is 2c/6GB → easily fits one node
     L = nr.parse_resource_labels(BASE)

@@ -185,6 +185,41 @@ def test_pipeline_doc_links():
     assert ns.pipeline_doc_links("hello") == {}                 # needs owner/repo
 
 
+def test_ver_tuple_and_compare():
+    assert ns._ver_tuple("24.10.6") == (24, 10, 6)
+    assert ns._ver_tuple("25.04.3") > ns._ver_tuple("24.10.6")
+    assert ns._ver_tuple("24.10.6") >= ns._ver_tuple("24.10.5")
+
+
+def test_installed_nextflow_version_from_module(monkeypatch):
+    monkeypatch.setenv("ABA_NEXTFLOW_MODULE", "nextflow/24.10.6")
+    assert ns.installed_nextflow_version() == "24.10.6"
+
+
+def test_latest_compatible_release_picks_newest_that_runs(monkeypatch):
+    # Stub the fetchers (no network): 3.26.0 needs 25.04.3, 3.21.0 needs 24.10.5, etc.
+    mins = {"3.26.0": "25.04.3", "3.21.0": "24.10.5", "3.19.0": "24.04.2", "3.14.0": "23.04.0"}
+    monkeypatch.setattr(ns, "_list_releases", lambda p: ["3.26.0", "3.21.0", "3.19.0", "3.14.0"])
+    monkeypatch.setattr(ns, "latest_release", lambda p: "3.26.0")
+    monkeypatch.setattr(ns, "release_min_nextflow", lambda p, r: mins.get(r))
+
+    ns._COMPAT_CACHE.clear()
+    c = ns.latest_compatible_release("nf-core/rnaseq", installed="24.10.6")
+    assert c["revision"] == "3.21.0" and c["latest"] == "3.26.0" and c["note"]   # newest that runs
+
+    ns._COMPAT_CACHE.clear()
+    assert ns.latest_compatible_release("nf-core/rnaseq", installed="25.10.0")["revision"] == "3.26.0"  # newest fits
+    ns._COMPAT_CACHE.clear()
+    c3 = ns.latest_compatible_release("nf-core/rnaseq", installed="23.10.0")   # only oldest fits
+    assert c3["revision"] == "3.14.0"
+
+    # unknown installed → no constraint → the absolute latest
+    ns._COMPAT_CACHE.clear()
+    monkeypatch.setattr(ns, "installed_nextflow_version", lambda: None)
+    c4 = ns.latest_compatible_release("nf-core/rnaseq", installed=None)
+    assert c4["revision"] == "3.26.0" and c4["note"] is None
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

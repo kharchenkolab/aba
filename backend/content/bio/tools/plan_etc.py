@@ -187,9 +187,21 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     # BEFORE anything hits Slurm. Best-effort — a pipeline with no schema (or a fetch
     # miss) just skips; we never block a run on a network hiccup, only on real param errors.
     from core.exec import nextflow_schema as _ns
-    if not revision and pipeline.lower().startswith("nf-core/"):
-        revision = _ns.latest_release(pipeline) or revision        # reproducible: pin latest release
     _pre_warnings: list = []
+    if not revision and pipeline.lower().startswith("nf-core/"):
+        # Pin the latest release that RUNS on the installed Nextflow — not blindly the newest,
+        # which often needs a newer Nextflow than the deployment has (would fail at startup).
+        _compat = _ns.latest_compatible_release(pipeline)
+        revision = _compat.get("revision") or revision
+        if _compat.get("note"):
+            _pre_warnings.append(_compat["note"])
+    elif revision and pipeline.lower().startswith("nf-core/"):
+        # Explicit pin: warn (don't block) if it needs a newer Nextflow than we have.
+        _minv = _ns.release_min_nextflow(pipeline, revision)
+        _inst = _ns.installed_nextflow_version()
+        if _minv and _inst and _ns._ver_tuple(_minv) > _ns._ver_tuple(_inst):
+            _pre_warnings.append(f"revision {revision} requires Nextflow ≥{_minv} but this "
+                                 f"deployment runs {_inst} — it will likely fail at startup.")
     _schema = _ns.fetch_schema(pipeline, revision)
     if _schema:
         _v = _ns.validate_params(_schema, input_.get("params") or {})
@@ -371,7 +383,10 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "error", "note": "describe_pipeline needs `pipeline` (e.g. 'nf-core/rnaseq')."}
     from core.exec import nextflow_schema as _ns
     revision = input_.get("revision")
-    latest = _ns.latest_release(pipeline) if pipeline.lower().startswith("nf-core/") else None
+    # Report the latest Nextflow-COMPATIBLE release (what will actually run here), not blindly
+    # the newest — and describe/validate against THAT revision.
+    _compat = _ns.latest_compatible_release(pipeline) if pipeline.lower().startswith("nf-core/") else {}
+    latest = _compat.get("revision")
     schema = _ns.fetch_schema(pipeline, revision or latest)
     if not schema:
         return {"status": "no_schema", "pipeline": pipeline, "latest_release": latest,
@@ -419,12 +434,16 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
                      + "A `-profile test` smoke run is always fine on execution='local'; "
                        "use execution='auto' to let ABA route by this estimate."),
         }
+    nextflow_compat = {"installed": _compat.get("installed"), "latest_release": _compat.get("latest"),
+                       "recommended_revision": latest, "note": _compat.get("note")} if _compat else None
     return {"status": "ok", "pipeline": pipeline, "revision": revision or latest,
-            "latest_release": latest, "required": required, "param_groups": groups,
-            "input_format": input_format, "resources": resources,
+            "latest_release": _compat.get("latest") or latest, "required": required,
+            "param_groups": groups, "input_format": input_format, "resources": resources,
+            "nextflow_compat": nextflow_compat,
             "docs": _ns.pipeline_doc_links(pipeline, revision or latest),
             "note": (f"{sum(len(v) for v in groups.values())} params in {len(groups)} groups; "
                      f"required: {', '.join(required) or 'none'}. "
+                     + ((_compat.get("note") + ". ") if _compat and _compat.get("note") else "")
                      + (f"Input: a samplesheet with columns {', '.join(c['name'] for c in input_format['columns'])} "
                         f"(required: {', '.join(input_format['required_columns']) or 'none'}). "
                         if input_format else "")

@@ -13,6 +13,8 @@ on the cluster login node; results are cached in-process per (pipeline, revision
 from __future__ import annotations
 
 import json
+import os
+import re
 import urllib.request
 from typing import Optional
 
@@ -22,6 +24,9 @@ _TIMEOUT = 12
 _SCHEMA_CACHE: dict[tuple, Optional[dict]] = {}
 _INPUT_SCHEMA_CACHE: dict[tuple, Optional[dict]] = {}
 _RELEASE_CACHE: dict[str, Optional[str]] = {}
+_RELEASES_CACHE: dict[str, list] = {}
+_MINNF_CACHE: dict[tuple, Optional[str]] = {}
+_COMPAT_CACHE: dict[tuple, dict] = {}
 
 # ABA always injects these on the `nextflow run` line itself, so they're never
 # "missing" even when the schema marks them required and the agent omits them.
@@ -276,3 +281,95 @@ def latest_release(pipeline: str) -> Optional[str]:
     tag = d.get("tag_name") if isinstance(d, dict) else None
     _RELEASE_CACHE[pipeline] = tag
     return tag
+
+
+# ── Nextflow-version compatibility guard ──────────────────────────────────────
+# The latest nf-core release often requires a newer Nextflow than a deployment has
+# installed (e.g. rnaseq 3.26.0 needs Nextflow ≥25.04.3; the cluster module is 24.10.6).
+# Running it fails at startup. So when we INFER a revision, pick the latest release whose
+# manifest.nextflowVersion is satisfied by the installed Nextflow — a durable guard that
+# self-adjusts as Nextflow is upgraded (this problem recurs whenever the installed version
+# trails the newest releases, regardless of deployment shape).
+
+def _ver_tuple(v: Optional[str]) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+
+def installed_nextflow_version() -> Optional[str]:
+    """The Nextflow version pipelines run on here — from ABA_NEXTFLOW_MODULE
+    ('nextflow/24.10.6' → '24.10.6'), else `nextflow -version`, else None (unknown → don't
+    constrain revision inference)."""
+    m = re.search(r"(\d+\.\d+\.\d+)", os.environ.get("ABA_NEXTFLOW_MODULE") or "")
+    if m:
+        return m.group(1)
+    try:
+        import shutil, subprocess
+        if shutil.which("nextflow"):
+            out = subprocess.run(["nextflow", "-version"], capture_output=True, text=True, timeout=20).stdout
+            mm = re.search(r"version\s+(\d+\.\d+\.\d+)", out)
+            return mm.group(1) if mm else None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def release_min_nextflow(pipeline: str, revision: str) -> Optional[str]:
+    """The minimum Nextflow a pipeline release requires — its `manifest.nextflowVersion`
+    (e.g. '!>=25.04.3' → '25.04.3'). None if not declared / not fetchable. Cached."""
+    key = (pipeline, revision)
+    if key in _MINNF_CACHE:
+        return _MINNF_CACHE[key]
+    txt = _get(f"https://raw.githubusercontent.com/{pipeline}/{revision}/nextflow.config", as_json=False)
+    minv = None
+    if txt:
+        m = re.search(r"nextflowVersion\s*=\s*['\"][^'\"]*?(\d+\.\d+\.\d+)", txt)
+        minv = m.group(1) if m else None
+    _MINNF_CACHE[key] = minv
+    return minv
+
+
+def _list_releases(pipeline: str) -> list:
+    """Release tags newest-first (GitHub API). Cached."""
+    if pipeline in _RELEASES_CACHE:
+        return _RELEASES_CACHE[pipeline]
+    d = _get(f"https://api.github.com/repos/{pipeline}/releases?per_page=30")
+    tags = [r.get("tag_name") for r in d if isinstance(r, dict) and r.get("tag_name")] if isinstance(d, list) else []
+    _RELEASES_CACHE[pipeline] = tags
+    return tags
+
+
+def latest_compatible_release(pipeline: str, installed: Optional[str] = None,
+                              max_check: int = 20) -> dict:
+    """The latest release that RUNS on the installed Nextflow (manifest.nextflowVersion ≤
+    installed). Returns {revision, latest, installed, min_required, note}: `note` is set when
+    the pick differs from the absolute latest (or nothing compatible was found). If the
+    installed version is unknown → the absolute latest (no constraint). Cached."""
+    pipeline = (pipeline or "").strip().strip("/")
+    installed = installed or installed_nextflow_version()
+    latest = latest_release(pipeline)
+    if "/" not in pipeline or not installed or not latest:
+        return {"revision": latest, "latest": latest, "installed": installed,
+                "min_required": None, "note": None}
+    key = (pipeline, installed)
+    if key in _COMPAT_CACHE:
+        return _COMPAT_CACHE[key]
+    inst_t = _ver_tuple(installed)
+    tags = _list_releases(pipeline) or [latest]
+    out = None
+    for tag in tags[:max_check]:
+        minv = release_min_nextflow(pipeline, tag)
+        if not minv or _ver_tuple(minv) <= inst_t:
+            note = None if tag == latest else (
+                f"pinned {tag}: the latest release {latest} requires Nextflow "
+                f"≥{release_min_nextflow(pipeline, latest)} but this deployment runs {installed}")
+            out = {"revision": tag, "latest": latest, "installed": installed,
+                   "min_required": minv, "note": note}
+            break
+    if out is None:                       # nothing compatible in the window — best-effort latest + warn
+        out = {"revision": latest, "latest": latest, "installed": installed,
+               "min_required": release_min_nextflow(pipeline, latest),
+               "note": (f"no release compatible with Nextflow {installed} in the latest "
+                        f"{min(len(tags), max_check)} — using {latest} (may fail at startup); "
+                        f"upgrade Nextflow to run newer releases")}
+    _COMPAT_CACHE[key] = out
+    return out
