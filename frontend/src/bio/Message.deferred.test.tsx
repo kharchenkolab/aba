@@ -78,4 +78,24 @@ describe('Message — deferred tool (Fix #5)', () => {
     expect(container.querySelector('.tool-line--queued')).toBeNull()
     expect(container.querySelector('.tool-spinner')).toBeNull()
   })
+
+  it('run_nextflow with no result shows backgrounded badge, not an infinite spinner (reload fidelity)', () => {
+    // After a reload the deferred_tool_pending SSE flag is gone; run_nextflow is
+    // always backgrounded, so a resultless one must NOT render the running spinner.
+    const blocks: Block[] = [
+      {
+        type: 'tool_start',
+        name: 'run_nextflow',
+        input: { pipeline: 'nf-core/rnaseq' },
+        tool_use_id: 'tu_nf',
+        // note: no `deferred` flag (simulates post-reload), no tool_result
+      } as Block,
+    ]
+    const m: DisplayMessage = { id: 'm4', role: 'assistant', blocks }
+    const { container } = render(
+      <Message message={m} entities={[]} pinnedFigureIds={new Set()} keptKeys={new Set()} />
+    )
+    expect(container.querySelector('.tool-line--queued')).not.toBeNull()
+    expect(container.querySelector('.tool-spinner')).toBeNull()
+  })
 })

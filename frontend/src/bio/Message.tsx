@@ -747,7 +747,13 @@ function ToolLine({ block, result, currentRunId }: {
   // AWAITING_TOOL_RESULT; the eventual tool_result is delivered by the
   // job-complete webhook. Until that lands, render a queued badge with the
   // job id instead of the running spinner so the chat is unblocked-looking.
-  const deferred = !done && !!(block as { deferred?: boolean }).deferred
+  // The live `deferred` flag comes from the (un-persisted) deferred_tool_pending SSE, so
+  // after a reload it's gone and a resultless tool would fall back to the running spinner
+  // forever. run_nextflow always runs in the background, so treat it as backgrounded whenever
+  // it has no result yet — settled ⏳ badge, not an infinite spinner. Live status is in the
+  // Jobs panel (the tool_use is intentionally never resolved in history for background jobs).
+  const BACKGROUND_TOOLS = new Set(['run_nextflow'])
+  const deferred = !done && (!!(block as { deferred?: boolean }).deferred || BACKGROUND_TOOLS.has(block.name))
   const deferredJobId = (block as { deferredJobId?: string }).deferredJobId
   // Failure detection from structured fields — no need to interpret output
   // text. Covers all three failure shapes (PK 2026-06-03):
@@ -871,7 +877,7 @@ function ToolLine({ block, result, currentRunId }: {
         {done
           ? <span className="tool-line__icon">{hasError ? '✗' : '✓'}</span>
           : deferred
-            ? <span className="tool-line__icon" title="queued — running in background">⏳</span>
+            ? <span className="tool-line__icon" title="backgrounded — see the Jobs panel for live status">⏳</span>
             : <span className="tool-spinner" />}
         <span className="tool-line__label">
           {done
