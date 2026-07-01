@@ -292,6 +292,14 @@
 .jobs__hpc { margin: 4px 0; padding: 5px 8px; border-left: 2px solid var(--accent); }
 .jobs__hpc .jobs__detail-meta strong { color: var(--text-2); font-weight: 600; }
 
+/* Live Nextflow pipeline progress (task counts + current stage + a thin bar) */
+.jobs__nfprog { margin: 4px 0; padding: 5px 8px; border-left: 2px solid var(--accent); }
+.jobs__nfprog-track { height: 5px; border-radius: 3px; background: var(--bg-soft, #eee); overflow: hidden; margin: 3px 0 4px; }
+.jobs__nfprog-fill { height: 100%; background: var(--accent, #c0392b); border-radius: 3px; transition: width .4s ease; }
+.jobs__nfprog .jobs__detail-meta strong { color: var(--text-2); font-weight: 600; }
+.jobs__nfprog-fail { color: #c0392b; }
+.jobs__nfprog-stage { font-size: 10.5px; color: var(--text-2); font-family: var(--mono); margin-top: 2px; }
+
 /* Jobs tab — status filter pills (with counts) + text filter */
 .jobs__pills { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 8px; }
 .jobs__pill {

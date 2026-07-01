@@ -335,6 +335,33 @@ def trace_progress(rows: list[dict]) -> dict:
             "current": sorted(set(current))[:8]}
 
 
+def nextflow_job_progress(job: dict) -> dict:
+    """Live progress for a Nextflow job, read from its incrementally-written trace.txt:
+    {total, completed, running, submitted, failed, pct, current[], latest}. Powers the Jobs-card
+    readout so an inline/local head shows task counts + the running stage instead of a bare
+    spinner. {} when the job isn't a pipeline or has no trace yet. Cheap: one file read + parse.
+    Works for inline AND Slurm heads (both write the trace under the run's project scratch)."""
+    params = job.get("params") or {}
+    if job.get("kind") != "run_nextflow" and not params.get("pipeline"):
+        return {}
+    run_id = params.get("run_id") or job.get("id")
+    pid = params.get("project_id") or job.get("project_id") or "_workspace"
+    if not run_id:
+        return {}
+    try:
+        from core.data.workspace import project_work_dir
+        trace = project_work_dir(str(pid)) / str(run_id) / "nf_reports" / "trace.txt"
+    except Exception:  # noqa: BLE001
+        return {}
+    rows = parse_trace_rows(trace)
+    prog = trace_progress(rows)
+    if prog and rows:
+        # 'current' (RUNNING rows) is the best "what's happening now", but Nextflow flushes the
+        # trace lazily so it's often empty; the last row's process is a reliable stage fallback.
+        prog["latest"] = _proc(rows[-1].get("name", ""))
+    return prog
+
+
 def parse_failure(stderr: str, rows: list[dict], log_path: Optional[str] = None) -> dict:
     """On a non-zero pipeline, surface WHAT failed: the failed process(es) from the
     trace + Nextflow's 'Error executing process' block (from stderr, else the
