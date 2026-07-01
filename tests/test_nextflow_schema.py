@@ -125,6 +125,27 @@ def test_enrich_plan_steps(monkeypatch):
     assert "input" in names and "outdir" not in names      # outdir is ABA-set → excluded from the form
 
 
+def test_enrich_plan_steps_test_profile_hides_empty_input(monkeypatch):
+    # A -profile test run supplies its own input data → `input` shouldn't render as an empty
+    # required field (the user's confusion). Hidden like `outdir`; other params still shown.
+    monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: SCHEMA)
+    out = ns.enrich_plan_steps([{"n": 1, "title": "RNA-seq (test)", "skill": "run_nextflow",
+                                 "parameters": {"pipeline": "nf-core/rnaseq", "profile": "test", "params": {}}}])
+    names = {p["name"] for g in out[0]["param_form"] for p in g["params"]}
+    assert "input" not in names and "outdir" not in names   # both auto-provided (profile / ABA)
+    assert "genome" in names                                 # unrelated params still editable
+
+
+def test_enrich_plan_steps_test_profile_keeps_prefilled_input(monkeypatch):
+    # But if the plan prefilled an input path even with -profile test, keep it visible/editable.
+    monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: SCHEMA)
+    out = ns.enrich_plan_steps([{"n": 1, "title": "RNA-seq", "skill": "run_nextflow",
+                                 "parameters": {"pipeline": "nf-core/rnaseq", "profile": "test",
+                                                "params": {"input": "s.csv"}}}])
+    names = {p["name"] for g in out[0]["param_form"] for p in g["params"]}
+    assert "input" in names                                  # prefilled → real editable choice
+
+
 def test_enrich_plan_steps_no_schema(monkeypatch):
     monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: None)
     out = ns.enrich_plan_steps(

@@ -192,8 +192,18 @@ def enrich_plan_steps(steps: list) -> list:
             if schema:
                 s["pipeline"] = pipeline
                 s["revision"] = revision
-                s["prefilled"] = params.get("params") or {}
-                s["param_form"] = param_form(schema, exclude=_AUTO_PROVIDED)
+                prefilled = params.get("params") or {}
+                s["prefilled"] = prefilled
+                # The `test` profile ships its own input data, so `input` is auto-provided just
+                # like `outdir` — showing it as an empty required field misleads users into
+                # thinking they must supply a samplesheet. Hide it for a test run UNLESS the plan
+                # actually prefilled an input path (then it's a real, editable choice).
+                excl = set(_AUTO_PROVIDED)
+                profile = params.get("profile")
+                if (profile and any(t.strip() == "test" for t in str(profile).split(","))
+                        and not prefilled.get("input")):
+                    excl.add("input")
+                s["param_form"] = param_form(schema, exclude=excl)
         out.append(s)
     return out
 
