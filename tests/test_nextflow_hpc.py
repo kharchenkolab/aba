@@ -535,6 +535,36 @@ def test_parse_multiqc_cross_tool_title_dedup(tmp_path):
     assert mq["samples"]["S1"]["% Dups (Picard)"] == 20.0
 
 
+def test_parse_multiqc_modern_dict_format(tmp_path):
+    # Modern MultiQC keys general-stats by MODULE (a dict), not a list of blocks. parse_multiqc
+    # must handle it (older versions → 'n_samples: 0', QC silently empty), and a column repeated
+    # across modules (FastQC raw vs trimmed 'pct_dups') must stay distinct, not overwrite.
+    data = {
+        "report_general_stats_headers": {
+            "fastqc_raw": {"pct_dups": {"title": "% Dups", "namespace": "FastQC (raw)", "scale": "OrRd"}},
+            "fastqc_trimmed": {"pct_dups": {"title": "% Dups", "namespace": "FastQC (trimmed)", "scale": "OrRd"}},
+            "star": {"pct_aligned": {"title": "% Aligned", "namespace": "STAR", "scale": "RdYlGn"}},
+        },
+        "report_general_stats_data": {
+            "fastqc_raw": {"S1": {"pct_dups": 30.0}, "S2": {"pct_dups": 31.0},
+                           "S3": {"pct_dups": 29.0}, "S4": {"pct_dups": 30.5}},
+            "fastqc_trimmed": {"S1": {"pct_dups": 12.0}, "S2": {"pct_dups": 11.5},
+                               "S3": {"pct_dups": 12.5}, "S4": {"pct_dups": 12.2}},
+            "star": {"S1": {"pct_aligned": 95.0}, "S2": {"pct_aligned": 96.0},
+                     "S3": {"pct_aligned": 95.5}, "S4": {"pct_aligned": 94.0}},
+        },
+        "report_data_sources": {"FastQC": {}, "STAR": {}},
+    }
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    assert mq["n_samples"] == 4                                     # dict format parsed (was 0)
+    assert sorted(m["title"] for m in mq["metrics"]) == \
+        ["% Aligned", "% Dups (FastQC (raw))", "% Dups (FastQC (trimmed))"]
+    assert mq["samples"]["S1"]["% Dups (FastQC (raw))"] == 30.0     # raw kept
+    assert mq["samples"]["S1"]["% Dups (FastQC (trimmed))"] == 12.0 # trimmed kept, not overwritten
+    dirs = {m["title"]: m["direction"] for m in mq["metrics"]}
+    assert dirs["% Aligned"] == "higher_better" and dirs["% Dups (FastQC (raw))"] == "higher_worse"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
