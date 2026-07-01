@@ -692,18 +692,20 @@ function NextflowProgressBlock({ job }: { job: JobInfo }) {
   if (!p) return null
   const stage = (p.current && p.current.length) ? p.current.map(procShort).join(', ')
               : (p.latest ? procShort(p.latest) : '')
+  // Nextflow builds a DYNAMIC DAG — the total task count isn't known until the run ends, so a
+  // percentage would sit near 100% and mislead. While running, show an INDETERMINATE bar (a
+  // moving stripe = "working") + live counts; only a finished run gets a solid full bar.
   return (
     <div className="jobs__nfprog">
       <div className="jobs__detail-label">pipeline progress</div>
-      <div className="jobs__nfprog-track">
-        <div className="jobs__nfprog-fill" style={{ width: `${Math.max(2, p.pct)}%` }} />
+      <div className={`jobs__nfprog-track${running ? ' jobs__nfprog-track--live' : ''}`}>
+        <div className="jobs__nfprog-fill" style={running ? undefined : { width: '100%' }} />
       </div>
       <div className="jobs__detail-meta">
         <span><strong>{p.completed}</strong> done</span>
         {p.running > 0 && <span>{p.running} running</span>}
         {p.submitted > 0 && <span>{p.submitted} queued</span>}
         {p.failed > 0 && <span className="jobs__nfprog-fail">{p.failed} failed</span>}
-        <span>{p.pct}%</span>
       </div>
       {stage && <div className="jobs__nfprog-stage">{running ? 'running: ' : 'last: '}{stage}</div>}
     </div>
@@ -761,12 +763,12 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
         {detail.finished_at && <span title={detail.finished_at}>finished {fmtTimeStr(detail.finished_at)}</span>}
       </div>
       {cancellable && (
-        <div className="jobs__actions">
+        <div className="jobs__actions jobs__actions--right">
+          {cancelErr && <span className="jobs__cancel-err">{cancelErr}</span>}
           <button type="button" className="jobs__cancel" disabled={cancelling}
                   onClick={() => setConfirming(true)}>
             {cancelling ? 'cancelling…' : 'Cancel job'}
           </button>
-          {cancelErr && <span className="jobs__cancel-err">{cancelErr}</span>}
         </div>
       )}
       {confirming && (
