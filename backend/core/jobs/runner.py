@@ -429,6 +429,24 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def _submitter_for_job(job: dict):
+    """The submitter that actually OWNS a created job's execution — used for cancel.
+    In-place submission (misc/inplace_submission.md) means the deployment default is
+    NOT reliable: with ABA_BATCH_SUBMITTER=slurm a small job may still have run INLINE,
+    and routing its cancel to SlurmSubmitter would `scancel` a job with no Slurm id (a
+    no-op) while the inline process keeps running (orphaned head). So pick by the target
+    resolved at submit (params.submission); fall back to hard evidence it reached Slurm
+    (submitter/slurm_id), else the deployment default (legacy rows predating IP)."""
+    from core.jobs.submitter import get_submitter_for
+    params = job.get("params") or {}
+    target = params.get("submission")
+    if target in ("inline", "slurm"):
+        return get_submitter_for(target)
+    if params.get("submitter") == "slurm" or params.get("slurm_id"):
+        return get_submitter_for("slurm")
+    return get_submitter()
+
+
 def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     """Cancel a queued or running job. Returns True if it was actionable. Fires
     the job's CancelToken so the shared exec core killpg's the whole process
@@ -444,9 +462,10 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     # the user cancelled. The marker lets _maybe_resume_nextflow_job refuse (see there).
     update_job(job_id, project_id=project_id,
                params={**(job.get("params") or {}), "cancel_requested": True})
-    # The active submitter stops the actual execution — CancelToken+killpg
-    # locally, `scancel <id>` on Slurm.
-    get_submitter().cancel(job)
+    # The submitter that OWNS this job stops the actual execution — CancelToken+killpg
+    # locally/inline, `scancel <id>` on Slurm. Must match how the job was submitted, not
+    # the deployment default (an inline job on a slurm deploy would otherwise orphan).
+    _submitter_for_job(job).cancel(job)
     update_job(job_id, project_id=project_id, status="cancelled", finished_at=_utcnow())
     # Resolve the parked deferred tool_use so the chat tool line settles (the endpoint
     # additionally fires the continuation to notify the agent). Idempotent.

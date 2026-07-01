@@ -115,6 +115,45 @@ def test_submit_python_job_records_submission_target():
     assert (job.get("params") or {}).get("execution") == "local"
 
 
+def _with_default_submitter(name, fn):
+    prev = os.environ.get("ABA_BATCH_SUBMITTER")
+    os.environ["ABA_BATCH_SUBMITTER"] = name
+    try:
+        fn()
+    finally:
+        if prev is None:
+            os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        else:
+            os.environ["ABA_BATCH_SUBMITTER"] = prev
+
+
+def test_cancel_routes_inline_to_local_even_on_slurm_deploy():
+    # Regression: on a slurm-default deploy, an INLINE job's cancel must go to LocalSubmitter
+    # (fire the CancelToken → killpg the head), NOT SlurmSubmitter.scancel — which would be a
+    # no-op (the inline job has no slurm id) and leave the Nextflow head orphaned. cancel_job
+    # routes via _submitter_for_job(job) on params.submission, not the deployment default.
+    from core.jobs.runner import _submitter_for_job, LocalSubmitter
+    from core.jobs.slurm_submitter import SlurmSubmitter
+
+    def _check():
+        assert isinstance(_submitter_for_job({"params": {"submission": "inline"}}), LocalSubmitter)
+        assert isinstance(_submitter_for_job({"params": {"submission": "slurm"}}), SlurmSubmitter)
+        # legacy row (pre-IP, no submission field) that reached Slurm → SlurmSubmitter
+        assert isinstance(_submitter_for_job({"params": {"submitter": "slurm", "slurm_id": "42"}}),
+                          SlurmSubmitter)
+        # legacy row, no evidence at all → deployment default (slurm here)
+        assert isinstance(_submitter_for_job({"params": {}}), SlurmSubmitter)
+    _with_default_submitter("slurm", _check)
+
+
+def test_cancel_routes_legacy_row_to_local_on_local_deploy():
+    from core.jobs.runner import _submitter_for_job, LocalSubmitter
+    # local-default deploy: a legacy row with no target resolves to LocalSubmitter (today's path)
+    def _check():
+        assert isinstance(_submitter_for_job({"params": {}}), LocalSubmitter)
+    _with_default_submitter("local", _check)
+
+
 def main() -> int:
     tests = [test_local_submitter_always_inline, test_login_node_forces_slurm,
              test_fits_runs_inline, test_exceeds_cores_falls_back_to_slurm,
@@ -123,7 +162,9 @@ def main() -> int:
              test_auto_ceiling_fans_out_large_jobs_even_if_they_fit,
              test_concurrency_guard_uses_free_cores, test_get_submitter_for_maps_target,
              test_bg_submission_maps_execution_for_python_r,
-             test_submit_python_job_records_submission_target]
+             test_submit_python_job_records_submission_target,
+             test_cancel_routes_inline_to_local_even_on_slurm_deploy,
+             test_cancel_routes_legacy_row_to_local_on_local_deploy]
     failed = []
     for t in tests:
         try:
