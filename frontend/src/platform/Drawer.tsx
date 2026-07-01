@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { ManifestSnapshot, LogEntry, JobInfo } from '../types'
 import SearchInput from '../components/SearchInput'
+import ConfirmDialog from '../components/ConfirmDialog'
 import './Drawer.css'
 
 type Tab = 'console' | 'jobs' | 'context' | 'env'
@@ -675,6 +676,22 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
   // behavior in the chat (which auto-reveals the error pane).
   const hasOutput = !!(detail?.log_tail || detail?.error)
   const [showOut, setShowOut] = useState(true)
+  // Cancel: only queued/running jobs are cancellable. Confirm via a modal, then
+  // POST /api/jobs/{id}/cancel; the row status updates on the next /api/jobs poll.
+  const cancellable = job.status === 'queued' || job.status === 'running'
+  const [confirming, setConfirming] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelErr, setCancelErr] = useState<string | null>(null)
+  const doCancel = async () => {
+    setCancelling(true); setCancelErr(null)
+    try {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, { method: 'POST' })
+      if (!r.ok) throw new Error(`cancel failed (${r.status})`)
+      setConfirming(false)
+    } catch (e) {
+      setCancelErr(e instanceof Error ? e.message : 'cancel failed')
+    } finally { setCancelling(false) }
+  }
 
   if (!detail && loading) {
     return <div className="jobs__detail jobs__detail--loading">loading…</div>
@@ -698,6 +715,23 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
         {detail.started_at && <span title={detail.started_at}>started {fmtTimeStr(detail.started_at)}</span>}
         {detail.finished_at && <span title={detail.finished_at}>finished {fmtTimeStr(detail.finished_at)}</span>}
       </div>
+      {cancellable && (
+        <div className="jobs__actions">
+          <button type="button" className="jobs__cancel" disabled={cancelling}
+                  onClick={() => setConfirming(true)}>
+            {cancelling ? 'cancelling…' : 'Cancel job'}
+          </button>
+          {cancelErr && <span className="jobs__cancel-err">{cancelErr}</span>}
+        </div>
+      )}
+      {confirming && (
+        <ConfirmDialog
+          title="Cancel this job?"
+          body={`This stops the ${job.status} job${job.title ? ` “${job.title}”` : ''}. Work already completed is kept, but the job won't finish.`}
+          variant="destructive" primaryLabel="Cancel job" cancelLabel="Keep running"
+          onPrimary={doCancel} onCancel={() => setConfirming(false)}
+        />
+      )}
       {detail.params?.submitter === 'slurm' && <HpcJobBlock job={job} params={detail.params} />}
       {err && (
         <div className="jobs__error">
