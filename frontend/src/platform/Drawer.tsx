@@ -674,7 +674,8 @@ function procShort(s: string): string { const p = (s || '').split(':'); return p
  *  Renders for any pipeline job; hides itself until the run's trace.txt has tasks. */
 function NextflowProgressBlock({ job }: { job: JobInfo }) {
   const [p, setP] = useState<{ total: number; completed: number; running: number; submitted: number;
-                               failed: number; pct: number; current?: string[]; latest?: string } | null>(null)
+                               failed: number; pct: number; current?: string[]; latest?: string;
+                               total_expected?: number | null } | null>(null)
   const running = job.status === 'queued' || job.status === 'running'
   useEffect(() => {
     let alive = true
@@ -692,20 +693,31 @@ function NextflowProgressBlock({ job }: { job: JobInfo }) {
   if (!p) return null
   const stage = (p.current && p.current.length) ? p.current.map(procShort).join(', ')
               : (p.latest ? procShort(p.latest) : '')
-  // Nextflow builds a DYNAMIC DAG — the total task count isn't known until the run ends, so a
-  // percentage would sit near 100% and mislead. While running, show an INDETERMINATE bar (a
-  // moving stripe = "working") + live counts; only a finished run gets a solid full bar.
+  // Nextflow's task total isn't known mid-run (dynamic DAG), so we can't derive a % from the
+  // trace alone. But if we've completed this pipeline+profile before, the backend supplies a
+  // learned `total_expected` → show a REAL done/expected fraction (capped <100% while running,
+  // since the estimate varies with the samplesheet). No estimate yet → indeterminate "working"
+  // stripe + live counts, so it's never a fake 100%.
+  const exp = p.total_expected && p.total_expected > 0 ? p.total_expected : null
+  const frac = exp ? Math.min(p.completed / exp, running ? 0.99 : 1) : null
   return (
     <div className="jobs__nfprog">
       <div className="jobs__detail-label">pipeline progress</div>
-      <div className={`jobs__nfprog-track${running ? ' jobs__nfprog-track--live' : ''}`}>
-        <div className="jobs__nfprog-fill" style={running ? undefined : { width: '100%' }} />
-      </div>
+      {frac != null ? (
+        <div className="jobs__nfprog-track">
+          <div className="jobs__nfprog-fill" style={{ width: `${Math.max(2, frac * 100)}%` }} />
+        </div>
+      ) : (
+        <div className={`jobs__nfprog-track${running ? ' jobs__nfprog-track--live' : ''}`}>
+          <div className="jobs__nfprog-fill" style={running ? undefined : { width: '100%' }} />
+        </div>
+      )}
       <div className="jobs__detail-meta">
-        <span><strong>{p.completed}</strong> done</span>
+        <span><strong>{p.completed}</strong>{exp ? ` / ~${exp}` : ''} done</span>
         {p.running > 0 && <span>{p.running} running</span>}
         {p.submitted > 0 && <span>{p.submitted} queued</span>}
         {p.failed > 0 && <span className="jobs__nfprog-fail">{p.failed} failed</span>}
+        {frac != null && <span>{Math.round(frac * 100)}%</span>}
       </div>
       {stage && <div className="jobs__nfprog-stage">{running ? 'running: ' : 'last: '}{stage}</div>}
     </div>
