@@ -226,8 +226,34 @@ def test_metadata_edits_land_in_location2_not_location1():
     print("OK  test_metadata_edits_land_in_location2_not_location1")
 
 
+def test_scrape_populates_imported_run_manifest():
+    """The load-bearing wiring: the on_job_complete path must recognize kind='import_run' and
+    refresh the Run's output MANIFEST from its by-reference artifact_path. (Post-cutover, harvested
+    outputs are NOT minted as child entities — they surface via the manifest + exec record and pin
+    on demand.) Regression guard for the bug where 'import_run' wasn't in _ARTIFACT_TOOLS, so an
+    imported Run's outputs never appeared."""
+    from content.bio.lifecycle.runs import open_imported_run
+    from content.bio.lifecycle.registry import register_artifacts_from_tool_result
+    from core.graph.entities import get_entity
+    root = Path(tempfile.mkdtemp(dir=_TMP))
+    src = _make_external_run(root)
+    rid = open_imported_run("thr_att", "Imported", str(src), pipeline="nf-core/rnaseq")
+    r = import_run_code(str(src), project_id="prj_att", run_id="imp_att")
+    register_artifacts_from_tool_result(
+        tool_name="import_run", tool_input={}, result_obj=r,
+        focused_entity_id=None, analysis_ctx={"analysis_id": rid}, thread_id="thr_att")
+    man = ((get_entity(rid) or {}).get("metadata") or {}).get("run") or {}
+    labels = [o.get("label", "") for o in (man.get("outputs") or [])]
+    assert labels, "imported Run manifest was not populated (import_run not recognized?)"
+    assert any("multiqc_report.html" in l for l in labels), labels
+    assert any(l.endswith("aln.bam") for l in labels), \
+        f"the bulk .bam must be listed (browsable, not copied): {labels}"
+    print("OK  test_scrape_populates_imported_run_manifest")
+
+
 def main() -> int:
     tests = [test_import_run_code_scrapes_external_dir,
+             test_scrape_populates_imported_run_manifest,
              test_import_run_code_missing_dir,
              test_harvest_cap_bounds_copies_and_warns,
              test_open_imported_run_is_by_reference_with_baseline,
