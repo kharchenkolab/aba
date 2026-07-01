@@ -660,7 +660,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                 focus_entity_id=(ctx or {}).get("focus_entity_id"),
                                 timeout_s=bg_timeout_s, project_id=str(project_id),
                                 thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                                estimate=est, env=env_name)
+                                estimate=est, env=env_name, execution=input_.get("execution"))
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
@@ -848,7 +848,7 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
                            focus_entity_id=(ctx or {}).get("focus_entity_id"),
                            timeout_s=bg_timeout_s, project_id=str(project_id),
                            thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                           estimate=est, env=env_name)
+                           estimate=est, env=env_name, execution=input_.get("execution"))
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",

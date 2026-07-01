@@ -207,15 +207,30 @@ def _record_worker_failure(where: str, job_id: str | None, exc: BaseException) -
     print(rec["traceback"], file=sys.stderr, flush=True)
 
 
+def _bg_submission(execution: str | None, estimate: dict | None) -> tuple[str, str | None]:
+    """Submission target for a plain background job (python/r), shared with the nf path via
+    resolve_submission_target. execution None/'slurm' → 'slurm' (sbatch, today's default);
+    'local'/'auto' → 'inline' when the job's estimate fits ABA's allocation, else 'slurm'."""
+    if (execution or "").lower() not in ("local", "auto"):
+        return "slurm", None
+    from core.exec.hpc_session import aba_allocation_capacity
+    heaviest = {"cpus": (estimate or {}).get("cores"), "mem_gb": (estimate or {}).get("mem_gb")}
+    return resolve_submission_target(execution.lower(), heaviest, aba_allocation_capacity())
+
+
 def submit_python_job(code: str, title: str, focus_entity_id: str | None,
                       timeout_s: int = 300, project_id: str | None = None,
                       thread_id: str | None = None, run_id: str | None = None,
-                      estimate: dict | None = None, env: str | None = None) -> dict:
+                      estimate: dict | None = None, env: str | None = None,
+                      execution: str | None = None) -> dict:
     """Create a queued job and enqueue it. Returns the job record. `project_id`
     is captured at submit time so the job runs in the right project's scratch
     workspace even if the active project changes before the worker picks it up.
     `thread_id` + `run_id` (the active Run at submit time) are captured so the
-    job's outputs attach to the originating Run/thread instead of orphaning."""
+    job's outputs attach to the originating Run/thread instead of orphaning.
+    `execution` 'local'/'auto' runs it in-place in ABA's own allocation (no sbatch)
+    when it fits; None/'slurm' sbatches (the default when ABA_BATCH_SUBMITTER=slurm)."""
+    submission, submission_reason = _bg_submission(execution, estimate)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
@@ -224,23 +239,27 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
-                "env": env},
+                "env": env, "execution": execution,
+                "submission": submission, "submission_reason": submission_reason},
         project_id=project_id,
     )
-    get_submitter().submit(job)
+    from core.jobs.submitter import get_submitter_for
+    get_submitter_for(submission).submit(job)
     return job
 
 
 def submit_r_job(code: str, title: str, focus_entity_id: str | None,
                  timeout_s: int = 600, project_id: str | None = None,
                  thread_id: str | None = None, run_id: str | None = None,
-                 estimate: dict | None = None, env: str | None = None) -> dict:
+                 estimate: dict | None = None, env: str | None = None,
+                 execution: str | None = None) -> dict:
     """Create a queued R job. Mirrors submit_python_job but with kind='run_r';
     the worker dispatches to run_r_code in core.exec.run, which invokes Rscript
     against the project's tools-env R + project library, captures stdout/stderr,
     and harvests artifacts. Used by run_r(background=True) — the proper path
     for long Seurat/DESeq2/etc. work that would otherwise force the agent to
     shell out via run_python(subprocess.run([\"Rscript\", ...]))."""
+    submission, submission_reason = _bg_submission(execution, estimate)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job = create_job(
         job_id=job_id,
@@ -249,10 +268,12 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"code": code, "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {},
-                "env": env},
+                "env": env, "execution": execution,
+                "submission": submission, "submission_reason": submission_reason},
         project_id=project_id,
     )
-    get_submitter().submit(job)
+    from core.jobs.submitter import get_submitter_for
+    get_submitter_for(submission).submit(job)
     return job
 
 

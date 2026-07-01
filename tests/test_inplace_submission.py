@@ -74,11 +74,32 @@ def test_get_submitter_for_maps_target():
     assert get_submitter_for("slurm").name == "slurm"
 
 
+def test_bg_submission_maps_execution_for_python_r():
+    # IP2: the same knob generalizes to plain background jobs. Test env has no
+    # ABA_BATCH_SUBMITTER → local submitter → local/auto inline; None/slurm → slurm.
+    from core.jobs.runner import _bg_submission
+    assert _bg_submission("local", {"cores": 2, "mem_gb": 4})[0] == "inline"
+    assert _bg_submission("auto", None)[0] == "inline"
+    assert _bg_submission(None, {"cores": 2})[0] == "slurm"      # unset → today's default (sbatch)
+    assert _bg_submission("slurm", {"cores": 99})[0] == "slurm"
+
+
+def test_submit_python_job_records_submission_target():
+    # execution=local → inline (LocalSubmitter enqueue, no sbatch) + recorded in params.
+    from core.jobs.runner import submit_python_job
+    job = submit_python_job("print(1)", title="t", focus_entity_id=None,
+                            execution="local", estimate={"cores": 2, "mem_gb": 4})
+    assert (job.get("params") or {}).get("submission") == "inline"
+    assert (job.get("params") or {}).get("execution") == "local"
+
+
 def main() -> int:
     tests = [test_local_submitter_always_inline, test_login_node_forces_slurm,
              test_fits_runs_inline, test_exceeds_cores_falls_back_to_slurm,
              test_exceeds_mem_falls_back_to_slurm, test_no_heaviest_estimate_runs_inline,
-             test_unknown_mem_capacity_ignored, test_get_submitter_for_maps_target]
+             test_unknown_mem_capacity_ignored, test_get_submitter_for_maps_target,
+             test_bg_submission_maps_execution_for_python_r,
+             test_submit_python_job_records_submission_target]
     failed = []
     for t in tests:
         try:
