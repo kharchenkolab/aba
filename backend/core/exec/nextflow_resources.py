@@ -111,6 +111,25 @@ def parse_max_caps(config_text: str) -> dict:
     m = re.search(r"max_time\s*=\s*'?\s*([\d.]+\s*\.?\s*(?:min|[smhd]))", text, re.I)
     if m:
         caps["time_h"] = time_to_h(m.group(1))
+    # Newer nf-core (nf-schema era) dropped max_* for a resourceLimits block:
+    #   resourceLimits = [ cpus: 4, memory: '15.GB', time: '1.h' ]
+    # Fill any caps the max_* keys didn't provide (so a -profile test isn't mis-sized to the
+    # 128GB template fallback → wrong local-vs-slurm routing).
+    rl = re.search(r"resourceLimits\s*=\s*\[(.*?)\]", text, re.S)
+    if rl:
+        body = rl.group(1)
+        if "cpus" not in caps:
+            mm = re.search(r"cpus\s*:\s*([\d.]+)", body)
+            if mm:
+                caps["cpus"] = _f(mm.group(1))
+        if "mem_gb" not in caps:
+            mm = re.search(r"memory\s*:\s*['\"]?\s*([\d.]+\s*\.?\s*[KMGTP]B?)", body, re.I)
+            if mm:
+                caps["mem_gb"] = mem_to_gb(mm.group(1))
+        if "time_h" not in caps:
+            mm = re.search(r"time\s*:\s*['\"]?\s*([\d.]+\s*\.?\s*(?:min|[smhd]))", body, re.I)
+            if mm:
+                caps["time_h"] = time_to_h(mm.group(1))
     return caps
 
 
