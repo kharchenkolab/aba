@@ -335,6 +335,48 @@ def trace_progress(rows: list[dict]) -> dict:
             "current": sorted(set(current))[:8]}
 
 
+def _tc_key(pipeline, revision, profile) -> str:
+    return f"{(pipeline or '').strip()}|{(revision or '').strip()}|{(profile or '').strip()}"
+
+
+def _task_count_path():
+    from core.config import RUNTIME_DIR
+    return Path(str(RUNTIME_DIR)) / "nf_task_counts.json"
+
+
+def record_task_count(pipeline, revision, profile, total) -> None:
+    """Remember a COMPLETED run's task count per (pipeline, revision, profile). Nextflow doesn't
+    expose a task total mid-run (the DAG is dynamic), so a future run's progress bar uses this
+    learned value to show a real done/expected fraction instead of a bare spinner. Best-effort."""
+    try:
+        total = int(total or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total <= 0:
+        return
+    try:
+        p = _task_count_path()
+        d = json.loads(p.read_text()) if p.exists() else {}
+        d[_tc_key(pipeline, revision, profile)] = total
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(d))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def expected_task_count(pipeline, revision, profile):
+    """Typical task total for this (pipeline, revision, profile) from a prior completed run, or
+    None if we've never finished one. An ESTIMATE (varies with the samplesheet) — the UI caps the
+    bar below 100% until the run is actually done, and it self-corrects as runs complete."""
+    try:
+        p = _task_count_path()
+        if p.exists():
+            return (json.loads(p.read_text()) or {}).get(_tc_key(pipeline, revision, profile))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def nextflow_job_progress(job: dict) -> dict:
     """Live progress for a Nextflow job, read from its incrementally-written trace.txt:
     {total, completed, running, submitted, failed, pct, current[], latest}. Powers the Jobs-card
@@ -359,6 +401,11 @@ def nextflow_job_progress(job: dict) -> dict:
         # 'current' (RUNNING rows) is the best "what's happening now", but Nextflow flushes the
         # trace lazily so it's often empty; the last row's process is a reliable stage fallback.
         prog["latest"] = _proc(rows[-1].get("name", ""))
+    if prog:
+        # A learned total (from a prior completed run) lets the card show a real done/expected
+        # fraction; None → the UI falls back to an indeterminate bar + live counts.
+        prog["total_expected"] = expected_task_count(
+            params.get("pipeline"), params.get("revision"), params.get("profile"))
     return prog
 
 
@@ -770,4 +817,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         else:
             out["error"] = (f"Nextflow pipeline failed (exit {res.returncode})."
                             + (f"\n{excerpt}" if excerpt else ""))
+    else:
+        # Learn this pipeline's task count so the NEXT run's progress bar shows a real fraction.
+        record_task_count(pipeline, revision, profile, (summary or {}).get("total_tasks"))
     return out
