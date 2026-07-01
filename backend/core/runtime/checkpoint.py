@@ -8,7 +8,7 @@ import json
 from typing import Optional
 
 from core.graph._schema import _conn
-from core.runtime.turn import Turn
+from core.runtime.turn import Turn, TurnState
 
 
 def checkpoint(turn: Turn) -> None:
@@ -344,4 +344,92 @@ def cancel_turn(run_id: str, *, reason: str = "user cancelled") -> bool:
         repair_orphaned_tool_use_in_messages()
     except Exception:  # noqa: BLE001
         pass
+    return True
+
+
+# ── deferred background-job resolution ────────────────────────────────────────
+# A background tool (run_python/run_r/run_nextflow with background=true) parks its
+# turn in AWAITING_TOOL_RESULT with pending_deferred={tool_use_id, deferred_id=job_id}
+# and writes the assistant tool_use to history WITHOUT a tool_result. When the job
+# reaches a terminal state (done/failed/cancelled/dropped), settle_deferred_job resolves
+# that held tool_use — the single point that does so for EVERY background-job kind and
+# EVERY terminal transition, so the chat tool line resolves (no forever-spinner) and the
+# message history is well-formed. Driven entirely by the durable runs/messages tables, so
+# it also works after a restart (reap_stale_turns leaves AWAITING_TOOL_RESULT intact).
+
+def _find_awaiting_turn_for_job(job_id: str) -> Optional[str]:
+    """run_id of the AWAITING_TOOL_RESULT turn whose deferred_id == job_id, else None."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT run_id, pending_blob FROM runs "
+            "WHERE state='awaiting_tool_result' AND pending_blob IS NOT NULL"
+        ).fetchall()
+    for r in rows:
+        try:
+            pend = json.loads(r["pending_blob"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if (pend.get("pending_deferred") or {}).get("deferred_id") == job_id:
+            return r["run_id"]
+    return None
+
+
+def deferred_settle_content(job: dict) -> dict:
+    """The structured tool_result content that resolves a deferred tool_use, keyed on the
+    job's terminal status. Kept brief in P1 — the continuation still carries the rich
+    'continue the plan' message; this just makes the tool_use a well-formed pair."""
+    status = job.get("status") or "done"
+    jid = job.get("id") or "?"
+    title = job.get("title") or "background job"
+    # status values chosen to match the frontend tool-line icon logic:
+    #   'ok' → ✓ ; 'cancelled' → ✓ (non-error, a user action) ; 'error' → ✗.
+    if status == "cancelled":
+        return {"status": "cancelled",
+                "note": f"The background job `{jid}` ({title}) was cancelled before it finished."}
+    if status == "done":
+        return {"status": "ok", "deferred_id": jid,
+                "note": f"The background job `{jid}` ({title}) finished; outputs are registered to this Run."}
+    if status == "failed":
+        err = (job.get("error") or "").strip().splitlines()
+        return {"status": "error", "note": f"The background job `{jid}` ({title}) failed.",
+                "error": (err[0][:300] if err else "")}
+    # dropped / anything else — did not complete (defensive)
+    return {"status": "error",
+            "note": f"The background job `{jid}` ({title}) did not complete (interrupted)."}
+
+
+def settle_deferred_job(job: dict) -> bool:
+    """Resolve the parked deferred turn for a TERMINATED background job: write a terminal
+    tool_result for its held tool_use and transition the turn out of AWAITING_TOOL_RESULT.
+    Idempotent — no-op if there is no still-awaiting parked turn for this job (already
+    settled, reaped, or the job never deferred). Returns True iff it settled one."""
+    job_id = job.get("id")
+    if not job_id:
+        return False
+    run_id = _find_awaiting_turn_for_job(job_id)
+    if not run_id:
+        return False
+    t = load_turn(run_id)
+    if t is None or t.state != TurnState.AWAITING_TOOL_RESULT or not t.pending_deferred:
+        return False
+    tool_use_id = t.pending_deferred.get("tool_use_id")
+    if not tool_use_id:
+        return False
+    from core.graph.messages import append_message
+    try:
+        append_message(
+            "user",
+            [{"type": "tool_result", "tool_use_id": tool_use_id,
+              "content": json.dumps(deferred_settle_content(job))}],
+            entity_id=t.entity_id or "workspace",
+            focus_entity_id=t.focus_entity_id,
+            thread_id=t.thread_id,
+        )
+    except Exception:  # noqa: BLE001 — never let a message-write break job finalization
+        return False
+    # Transition out of AWAITING_TOOL_RESULT so the turn is no longer 'held' (the reaper /
+    # request-time shim leave awaiting turns alone) and pending_deferred is cleared.
+    t.pending_deferred = None
+    t.transition(TurnState.FAILED if job.get("status") in ("failed", "cancelled") else TurnState.DONE)
+    checkpoint(t)
     return True
