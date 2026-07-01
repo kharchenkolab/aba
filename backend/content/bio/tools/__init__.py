@@ -63,6 +63,7 @@ from .plan_etc import (    # noqa: F401, E402
     write_memory_tool,
     restart_kernel_tool,
     run_nextflow,
+    import_run,
     describe_pipeline,
     _available_container_engines,
     _nextflow_env_blocker,

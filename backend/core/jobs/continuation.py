@@ -181,6 +181,54 @@ def _is_nextflow_job(job: dict) -> bool:
     return job.get("kind") == "run_nextflow" or bool(params.get("pipeline"))
 
 
+def _is_import_run_job(job: dict) -> bool:
+    return job.get("kind") == "import_run"
+
+
+def _import_done_text(job: dict, project_id: str | None) -> str:
+    """Present an IMPORTED external Run (misc/external_import.md). An import is a finished
+    'pipeline' whose outputs already exist — surface them + QC and PRESENT, exactly like a native
+    completion, but note it REFERENCES an external dir (so repeatability is limited)."""
+    params = job.get("params") or {}
+    job_id = job.get("id") or "?"
+    run_id = params.get("run_id") or job_id
+    src = params.get("source_dir") or "(the external results dir)"
+    label = params.get("pipeline") or "external run"
+
+    mq, report_url, n_files = {}, None, None
+    try:
+        from core.exec.nextflow import parse_multiqc, publish_multiqc_report
+        from core.data.external_ref import fingerprint
+        mq = parse_multiqc(src) or {}
+        report_url = publish_multiqc_report(src, str(project_id), str(run_id))
+        n_files = fingerprint(str(src)).get("n_files")
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [f"[continuation: imported run `{job_id}` ({label}) — PRESENT it to the user]", ""]
+    intro = f"Imported an external run from `{src}` (referenced in place, read-only)"
+    if n_files:
+        intro += f" — {n_files} file(s) in the results tree"
+    lines.append(intro + ".")
+    if mq.get("n_samples"):
+        concerns = [o for o in (mq.get("outliers") or []) if o.get("concern")]
+        s = f"MultiQC parsed {mq['n_samples']} samples across {len(mq.get('metrics') or [])} metrics"
+        if concerns:
+            s += (f"; {len(concerns)} outlier(s) flagged as QC concerns "
+                  f"(e.g. {', '.join(sorted({o.get('metric', '') for o in concerns}))[:120]})")
+        lines.append(s + ".")
+    if report_url:
+        lines.append(f"Open the full MultiQC report: [MultiQC report]({report_url}) — link it for "
+                     f"the user with that exact URL (servable; do NOT emit a file:// path).")
+    lines.append(
+        "PRESENT this imported Run now: briefly summarize what it contains, surface the key "
+        "results/plots and any QC concerns, and invite the user to pin what matters. Outputs are "
+        "browsable in the Run view; the full payload stays in the external dir (ABA references it, "
+        "never copies the bulk). Repeatability is limited — it was produced outside ABA; only offer "
+        "to re-run if you can reconstruct the pipeline + params (e.g. from a pipeline_info/ dir).")
+    return "\n".join(lines)
+
+
 def _nextflow_done_text(job: dict, project_id: str | None) -> str:
     """Completion message for a SUCCEEDED Nextflow pipeline. Unlike run_python/run_r, a pipeline's
     success signal is the pipeline itself completing (returncode 0) — its outputs harvest as files,
@@ -308,6 +356,13 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     # artifact-count heuristic below would see 0 entities and mislabel the success as a no-op
     # ("wrong interpreter, swallowed args, inspect run.log"), which is exactly wrong. Give the
     # agent the pipeline's own completion signal instead.
+    # An IMPORTED run is checked FIRST: its params may carry `pipeline` (→ would match
+    # _is_nextflow_job), but it's a scrape of an external dir, not a launched pipeline.
+    if status == "done" and _is_import_run_job(job):
+        try:
+            return _import_done_text(job, project_id)
+        except Exception:  # noqa: BLE001 — fall back to the generic message
+            pass
     if status == "done" and _is_nextflow_job(job):
         try:
             return _nextflow_done_text(job, project_id)

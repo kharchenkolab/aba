@@ -429,6 +429,38 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def submit_import_run_job(source_dir: str, title: str, run_id: str,
+                          focus_entity_id: str | None = None,
+                          pipeline: str | None = None, revision: str | None = None,
+                          project_id: str | None = None, thread_id: str | None = None,
+                          timeout_s: int | None = None) -> dict:
+    """Create + enqueue a queued import job (kind='import_run'). The worker dispatches to
+    core.exec.import_run.import_run_code, which SCRAPES the external `source_dir` and returns the
+    standard result_obj — so the artifacts attach to the pre-created Run (`run_id`) and the
+    continuation presents it, exactly like a finished pipeline (misc/external_import.md).
+
+    Always runs INLINE (submission='inline'): a scrape is local I/O in ABA's own allocation — no
+    compute to fan out, nothing to sbatch. The Run entity itself is created by the caller
+    (open_imported_run) BEFORE submit, so `run_id` names it and harvested children attach to it."""
+    job_id = f"job_{uuid.uuid4().hex[:10]}"
+    job = create_job(
+        job_id=job_id,
+        kind="import_run",
+        title=title or f"Import: {source_dir}",
+        focus_entity_id=focus_entity_id,
+        params={"source_dir": source_dir, "run_id": run_id,
+                "pipeline": pipeline, "revision": revision,
+                "submission": "inline",
+                "code": f"import_run {source_dir}",
+                "timeout_s": timeout_s or 1800, "project_id": project_id,
+                "thread_id": thread_id},
+        project_id=project_id,
+    )
+    from core.jobs.submitter import get_submitter_for
+    get_submitter_for("inline").submit(job)
+    return job
+
+
 def _submitter_for_job(job: dict):
     """The submitter that actually OWNS a created job's execution — used for cancel.
     In-place submission (misc/inplace_submission.md) means the deployment default is
@@ -550,9 +582,9 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
         cwd = result_obj.get("cwd")
         if not cwd:
             return
-        # Nextflow → a kind:workflow record (engine + reproducible command +
-        # per-process container images + params), not a script record.
-        if kind == "run_nextflow":
+        # Nextflow (and an imported external run) → a kind:workflow record (engine + command +
+        # params + produced), not a script record. Both carry result_obj["workflow"].
+        if kind in ("run_nextflow", "import_run"):
             _write_workflow_exec_record_for_job(job, result_obj, lookup_pid, effective_pid)
             return
         lang = "r" if kind == "run_r" else "python"
@@ -733,6 +765,18 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
                     outdir=params.get("outdir"),
                     execution=params.get("execution"),          # inline head must use executor=local
                     local_resources=params.get("local_resources"),
+                    timeout_s=timeout_s, cancel_token=token, stream=True),
+            )
+        elif kind == "import_run":
+            # Scrape an external results dir into the standard result_obj — reuses the whole
+            # finalize→register→present chain to import an outside Run (misc/external_import.md).
+            from core.exec.import_run import import_run_code
+            result_obj = await loop.run_in_executor(
+                None,
+                lambda: import_run_code(
+                    params.get("source_dir") or "", project_id=str(effective_pid),
+                    run_id=exec_run_id, pipeline=params.get("pipeline"),
+                    revision=params.get("revision"),
                     timeout_s=timeout_s, cancel_token=token, stream=True),
             )
         elif kind == "run_r":

@@ -305,7 +305,8 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
 
 
 def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
-                      project_id: Optional[str] = None
+                      project_id: Optional[str] = None,
+                      max_files: Optional[int] = None
                       ) -> tuple[list, list, list, list]:
     """Copy kept outputs from a working dir into the artifact store and return
     `(plots, tables, files, warnings)`.
@@ -330,6 +331,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     (avoids re-harvesting them). Copies (not moves) so the agent can still
     read its own output file in a later cell.
 
+    `max_files` caps how many artifacts are COPIED into the store (None =
+    no cap, today's behavior). The external-import path (misc/external_import.md)
+    passes a cap: an outside results tree can hold hundreds of per-sample QC
+    files, but they stay fully browsable via the Run's manifest (no copy), so we
+    only entity-fy a high-signal cap and record how many were skipped.
+
     BLANK figures are dropped, not shown. A PNG that is a single flat colour
     (matplotlib saved an empty/never-drawn canvas) carries no information;
     surfacing it as a white box misleads the user and the agent both. Such
@@ -349,7 +356,12 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     _harvest_begin = _time.time()   # agent's own writes precede this; our copies follow it
     _created: set = set()           # uuid copies WE make this call (excluded from the off-convention pass)
 
+    _skipped_cap = [0]   # files not copied because max_files was reached (reported in warnings)
+
     def _copy_and_record(f: Path, bucket: list, ext: str) -> None:
+        if max_files is not None and len(_created) >= max_files:
+            _skipped_cap[0] += 1
+            return
         dest_name = f"{uuid.uuid4().hex}{ext}"
         _created.add(dest_name)
         shutil.copy2(str(f), str(adir / dest_name))
@@ -484,6 +496,10 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
         except Exception:  # noqa: BLE001 — work-dir capture is best-effort
             pass
 
+    if _skipped_cap[0]:
+        warnings.append(
+            f"{_skipped_cap[0]} additional output file(s) were NOT copied to the artifact store "
+            f"(hit the max_files={max_files} cap); they remain browsable in the run folder.")
     return plots, tables, files, warnings
 
 

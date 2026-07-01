@@ -373,6 +373,50 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
     }
 
 
+def import_run(input_: dict, ctx: dict | None = None) -> dict:
+    """Import an EXTERNAL results directory (produced outside ABA) as a Run — references it in
+    place (no bulk copy), scrapes it for viewables + QC, and presents it on completion, exactly
+    like a finished pipeline (misc/external_import.md). Returns a deferred handle."""
+    from core.data.external_ref import resolve_external
+    from core.jobs.runner import submit_import_run_job
+    from content.bio.lifecycle.runs import open_imported_run
+    from core import projects as _proj
+
+    raw = (input_.get("path") or input_.get("source_dir") or "").strip()
+    if not raw:
+        return {"error": "import_run needs `path` — the external results directory to import."}
+    source_dir, exists = resolve_external(raw)
+    if not exists:
+        return {"error": f"No directory found at {raw!r} (resolved to {source_dir}). Pass an "
+                         f"absolute path that exists on this cluster."}
+    if not os.path.isdir(source_dir):
+        return {"error": f"{source_dir} is a file, not a directory. To register a single external "
+                         f"file/folder as INPUT data, use register_dataset instead."}
+    pid = _proj.current() or "default"
+    tid = (ctx or {}).get("thread_id")
+    pipeline = (input_.get("pipeline") or "").strip() or None
+    revision = (input_.get("revision") or "").strip() or None
+    title = ((input_.get("title") or "").strip()
+             or (f"Imported: {pipeline}" if pipeline else f"Imported run — {Path(source_dir).name}"))
+    # Create the Run entity BY-REFERENCE up front (fingerprint baseline → sidecar → recovery-safe),
+    # then submit the scrape job against it (harvested children attach via this run_id).
+    rid = open_imported_run(str(tid) if tid else None, title, source_dir,
+                            pipeline=pipeline, revision=revision,
+                            source=input_.get("source") or "external",
+                            focus_entity_id=(ctx or {}).get("focus_entity_id"))
+    job = submit_import_run_job(
+        source_dir=source_dir, title=title, run_id=rid,
+        focus_entity_id=(ctx or {}).get("focus_entity_id"),
+        pipeline=pipeline, revision=revision,
+        project_id=str(pid), thread_id=str(tid) if tid else None)
+    return {
+        "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
+        "status": "submitted", "run_id": rid,
+        "note": (f"Importing external run from {source_dir} as Run {rid} (referenced in place, not "
+                 f"copied). I'll scrape its outputs + QC and present them when done."),
+    }
+
+
 def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
     """Describe a Nextflow / nf-core pipeline's parameters from its
     nextflow_schema.json — required params, types, defaults, allowed values, help —

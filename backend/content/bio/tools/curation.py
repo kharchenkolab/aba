@@ -562,15 +562,26 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # record (the agent passes `exec_id` for that, not free-form code).
     from core.graph.derivation import imported
     from content.bio.lifecycle.runs import agent_actor_for_thread
+    # By-reference (external, not adopted) → capture a drift baseline so we can later flag when the
+    # referenced payload changes or vanishes (misc/external_import.md). Stored INLINE so it lands in
+    # the entity sidecar and survives a DB-crash recovery. Stat-only; skipped for adopted/copied
+    # datasets (those are ABA-owned in DATA_DIR, so there's nothing to drift).
+    _md = {"thread_id": _ctx_thread(ctx), "origin": "external",
+           "by_reference": not adopted, "ref_path": abspath,
+           "summary": summary, "source": input_.get("source", ""),
+           "organism": input_.get("organism")}
+    if exists and not adopted:
+        try:
+            from core.data.external_ref import fingerprint as _fp
+            _md["import_fingerprint"] = _fp(abspath)
+        except Exception:  # noqa: BLE001 — a missing baseline just means no drift detection
+            pass
     eid = create_entity(
         entity_type="dataset", title=title,
         artifact_path=abspath if exists else None,
         derivation=imported(input_.get("source") or "external"),   # Phase 2B
         actor=agent_actor_for_thread(_ctx_thread(ctx)),            # Phase 2B
-        metadata={"thread_id": _ctx_thread(ctx), "origin": "external",
-                  "by_reference": not adopted, "ref_path": abspath,
-                  "summary": summary, "source": input_.get("source", ""),
-                  "organism": input_.get("organism")})
+        metadata=_md)
     if summary:
         # The dataset detail view shows `notes` as the description — populate it.
         update_entity(eid, notes=summary)

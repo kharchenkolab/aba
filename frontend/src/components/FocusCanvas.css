@@ -133,6 +133,17 @@
 }
 .focus__scenario-badge em { font-style: normal; font-weight: 600; }
 
+/* Imported by-reference (external) entity — payload lives outside ABA (misc/external_import.md). */
+.focus__ref-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-weight: 500;
+  cursor: default;
+}
+
 .focus__compare {
   padding: 5px 12px;
   font-size: 12px;

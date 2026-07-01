@@ -109,6 +109,14 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
       <div className="focus__header">
         <span className={`focus__type focus__type--${entity.type}`}>{entity.type}</span>
         <h2 className="focus__title">{entity.title}</h2>
+        {entity.metadata?.by_reference ? (
+          <span
+            className="focus__ref-badge"
+            title={`Imported by reference — the payload lives at ${String(entity.metadata?.ref_path ?? '')} and is not copied into ABA.`}
+          >
+            ↪ external
+          </span>
+        ) : null}
         {entity.scenario_of && baseline && (
           <span className="focus__scenario-badge" title={`scenario of ${baseline.title}`}>
             scenario of <em>{baseline.title}</em>

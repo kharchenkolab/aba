@@ -151,6 +151,31 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
             )
 
     @mcp.tool()
+    def import_run(path: str,
+                   pipeline: str | None = None,
+                   revision: str | None = None,
+                   title: str | None = None,
+                   source: str | None = None,
+                   aba_ctx_id: str | None = None) -> dict:
+        """Import an EXISTING results directory produced OUTSIDE ABA — e.g. an nf-core or custom
+        pipeline a bioinformatics core ran and pointed the user at — as a Run, WITHOUT copying the
+        data.
+
+        ABA references the directory in place (read-only): the full results tree becomes browsable
+        in the Run view, small viewable outputs + the MultiQC report are surfaced, and QC is parsed
+        and presented — exactly like a pipeline ABA launched itself. Pass `pipeline`/`revision` if
+        known (aids provenance + any future re-run). Returns a deferred handle; you're resumed to
+        PRESENT the imported Run to the user when the scrape finishes.
+
+        Use this for a RESULTS set. For a single external DATA file/folder that is an INPUT to
+        analyze (not results), use register_dataset instead (it also references by path, no copy)."""
+        from core.runtime.tool_ctx import in_tool_ctx
+        from content.bio.tools import import_run as _impl
+        with in_tool_ctx(aba_ctx_id) as ctx:
+            return _impl({"path": path, "pipeline": pipeline, "revision": revision,
+                          "title": title, "source": source}, ctx)
+
+    @mcp.tool()
     def describe_pipeline(pipeline: str, revision: str | None = None,
                           profile: str | None = None,
                           aba_ctx_id: str | None = None) -> dict:
