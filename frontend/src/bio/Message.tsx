@@ -338,7 +338,7 @@ function PlanCard({ block, active, onGo, onAdjust }: {
   const assumptions: string[] = Array.isArray(block.assumptions)
     ? (block.assumptions as unknown[]).map(a => typeof a === 'string' ? a : JSON.stringify(a))
     : []
-  const concerns = (Array.isArray(block.concerns) ? block.concerns : []) as { step_n?: number | null; text?: string }[]
+  const concerns = (Array.isArray(block.concerns) ? block.concerns : []) as { step_n?: number | null; level?: string; message?: string }[]
   const planConcerns = concerns.filter(c => c && c.step_n == null)
   const stepConcerns = (n: number) => concerns.filter(c => c && c.step_n === n)
   return (

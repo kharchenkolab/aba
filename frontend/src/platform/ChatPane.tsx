@@ -284,7 +284,7 @@ export default function ChatPane({
   // the capability catalog (~48), a default thread, and an analysis. "Empty" means
   // no data/results: no datasets, claims, results, or figures.
   const isEmptyProject = !(entities || []).some(
-    e => e.type === 'dataset' || e.type === 'data' || e.type === 'claim'
+    e => e.type === 'dataset' || e.type === 'claim'
       || e.type === 'result' || e.type === 'figure')
     && (!focusedEntity || focusedEntity.type === 'workspace')
   // basename → {url, kind} map for inline filename mentions in agent prose.

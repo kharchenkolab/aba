@@ -358,7 +358,7 @@ export default function App() {
     // Reload of a deep URL counts as NOT-bare; respect what the URL encodes
     // (don't auto-snap a data-only project to the Data tab if the user
     // explicitly landed on Threads or focused an entity).
-    const bareUrl = url.eid === 'workspace' && url.tid === 'default'
+    const bareUrl = url.focusedId === 'workspace' && url.threadId === 'default'
       && url.scene === null && url.section === 'threads'
     if (downstream > 0) {
       const onThreadsTab = projectSection === 'threads'
