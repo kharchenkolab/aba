@@ -198,3 +198,19 @@ def sample_project(_pid: str = Depends(require_project)):
         metadata={"size_bytes": dest.stat().st_size, "sample": True},
     )
     return get_entity(eid)
+
+
+@router.get("/api/entities/{entity_id}/drift")
+def entity_drift(entity_id: str, _pid: str = Depends(require_project)):
+    """On-demand drift status for a by-reference (imported) entity (misc/external_import.md):
+    does its external payload (Location 1) still match the import-time baseline? Flag-only — never
+    re-copies or mutates. Cheap for small refs; a stat-walk for large trees, so the frontend calls
+    this on the entity DETAIL view, not in list rendering. Non-external entities → stale:false."""
+    ent = get_entity(entity_id)
+    if not ent:
+        raise HTTPException(404, "no such entity")
+    md = ent.get("metadata") or {}
+    from core.data.external_ref import check_drift
+    return {"entity_id": entity_id, "by_reference": bool(md.get("by_reference")),
+            "origin": md.get("origin"), "ref_path": md.get("ref_path"),
+            **check_drift(md)}

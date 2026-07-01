@@ -151,6 +151,43 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     return rid
 
 
+def open_imported_run(thread_id: Optional[str], title: str, source_dir: str, *,
+                      pipeline: Optional[str] = None, revision: Optional[str] = None,
+                      source: Optional[str] = None,
+                      focus_entity_id: Optional[str] = None) -> str:
+    """Create a Run (analysis entity) that REFERENCES an external, read-only results dir produced
+    outside ABA (misc/external_import.md). Returns the run id.
+
+    The Run's `artifact_path` points at `source_dir` so the manifest browses the whole tree with
+    zero copy; `by_reference`/`ref_path`/`import_fingerprint` mark it external and give drift a
+    baseline. All of this lives in the entity sidecar (Location 2), so a DB-crash recovery
+    reconstructs the imported Run fully even if the external dir is offline. ABA never writes to
+    `source_dir`. Created `run_state="closed"` (a completed import — it doesn't hijack the thread's
+    active Run); harvested children still attach via the explicit analysis_id passed to the job."""
+    from core.graph.derivation import imported
+    from core.data.external_ref import fingerprint
+    md: dict = {"thread_id": thread_id, "run_state": "closed", "origin": "external",
+                "by_reference": True, "ref_path": str(source_dir),
+                "pipeline": pipeline, "revision": revision,
+                "source": source or "external"}
+    try:
+        md["import_fingerprint"] = fingerprint(str(source_dir))
+    except Exception:  # noqa: BLE001 — no baseline just means no drift detection
+        pass
+    rid = create_entity(
+        entity_type="analysis",
+        title=(title or "Imported run").strip()[:120],
+        parent_entity_id=focus_entity_id or WORKSPACE_ID,
+        derivation=imported(source or "external"),
+        metadata=md,
+    )
+    try:
+        update_entity(rid, artifact_path=str(source_dir))
+    except Exception:  # noqa: BLE001
+        pass
+    return rid
+
+
 def close_run(thread_id: str) -> Optional[str]:
     """Close the thread's open Run, if any. An EMPTY Run (no outputs, no
     captured exec records) is discarded instead of kept, so abandoned/
