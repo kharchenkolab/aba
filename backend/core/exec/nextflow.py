@@ -406,7 +406,8 @@ def parse_multiqc(outdir) -> dict:
             for k, meta in h.items():
                 if isinstance(meta, dict):
                     headers[k] = {"title": (meta.get("title") or k),
-                                  "description": (meta.get("description") or "").strip()}
+                                  "description": (meta.get("description") or "").strip(),
+                                  "namespace": (meta.get("namespace") or "").strip()}
     # General-stats values (list of {sample: {col_key: val}}) → merged per sample.
     per_sample: dict[str, dict] = {}
     for block in (data.get("report_general_stats_data") or []):
@@ -418,30 +419,57 @@ def parse_multiqc(outdir) -> dict:
     samples = sorted(per_sample)[:100]
     metric_keys = (list(headers) or sorted({k for v in per_sample.values() for k in v}))[:30]
     title = lambda k: headers.get(k, {}).get("title", k)
-    metrics = [{"key": k, "title": title(k), "description": headers.get(k, {}).get("description", "")}
+    # MultiQC merges the general-stats table across modules, so two column keys can carry the
+    # SAME title (e.g. FastQC and Picard both "% Dups"). Left as-is they collide in the per-
+    # sample table (one silently overwrites the other) and yield duplicate-looking outliers.
+    # Suffix the module namespace (or the raw key) to disambiguate a repeated title.
+    _tcount: dict[str, int] = {}
+    for k in metric_keys:
+        _tcount[title(k)] = _tcount.get(title(k), 0) + 1
+
+    def disp(k: str) -> str:
+        t = title(k)
+        if _tcount.get(t, 0) <= 1:
+            return t
+        ns = (headers.get(k, {}).get("namespace") or "").strip()
+        return f"{t} ({ns})" if ns else f"{t} [{k}]"
+
+    metrics = [{"key": k, "title": disp(k), "description": headers.get(k, {}).get("description", "")}
                for k in metric_keys]
     rows: dict[str, dict] = {}
     for s in samples:
-        rows[s] = {title(k): per_sample[s][k] for k in metric_keys if k in per_sample[s]}
+        rows[s] = {disp(k): per_sample[s][k] for k in metric_keys if k in per_sample[s]}
 
-    # Generic, metric-agnostic outliers via the modified z-score (Iglewicz–Hoaglin):
-    # median + MAD, flag |z| ≥ 3.5. Robust to the outliers themselves (a single bad
-    # sample doesn't inflate the dispersion the way mean+stdev does — which, for small
-    # n, caps a real outlier's plain z-score just under 2). Needs ≥4 numeric samples.
+    # Generic, metric-agnostic outliers via the modified z-score (Iglewicz–Hoaglin): median +
+    # MAD, flag |z| ≥ 3.5. Robust to the outliers themselves (a single bad sample doesn't
+    # inflate the dispersion the way mean+stdev does). Needs ≥4 numeric samples.
     outliers: list[dict] = []
     for k in metric_keys:
         pairs = [(s, per_sample[s][k]) for s in samples
                  if isinstance(per_sample[s].get(k), (int, float)) and not isinstance(per_sample[s].get(k), bool)]
         nums = [v for _, v in pairs]
-        if len(nums) >= 4:
-            med = statistics.median(nums)
-            mad = statistics.median([abs(v - med) for v in nums])
-            if mad > 0:
-                for s, v in pairs:
-                    mz = 0.6745 * (v - med) / mad
-                    if abs(mz) >= 3.5:
-                        outliers.append({"sample": s, "metric": title(k),
-                                         "value": v, "z": round(mz, 1)})
+        if len(nums) < 4:
+            continue
+        med = statistics.median(nums)
+        devs = [abs(v - med) for v in nums]
+        mad = statistics.median(devs)
+        meanad = statistics.fmean(devs)
+        if mad == 0 and meanad == 0:
+            continue                        # every sample identical → no spread, nothing to flag
+        # Deviations under 1% of the median magnitude are noise, not outliers. This gate stops
+        # a near-zero MAD (majority of samples tied) from blowing the z-score up and flagging
+        # trivially-different samples — the failure mode the plain MAD form had. It only affects
+        # the auto-flagged list; the full per-sample table is still surfaced for the agent.
+        min_dev = 0.01 * abs(med)
+        for s, v in pairs:
+            dev = v - med
+            if abs(dev) < min_dev:
+                continue
+            # MAD is the preferred robust scale; when it collapses to 0 (majority tied), fall
+            # back to the mean abs deviation — Iglewicz–Hoaglin's own MAD==0 remedy.
+            z = 0.6745 * dev / mad if mad > 0 else dev / (1.253314 * meanad)
+            if abs(z) >= 3.5:
+                outliers.append({"sample": s, "metric": disp(k), "value": v, "z": round(z, 1)})
     tools = sorted((data.get("report_data_sources") or {}).keys())
     report = next((str(p.relative_to(op)) for p in op.rglob("multiqc_report.html")), None)
     return {"n_samples": len(per_sample), "tools": tools, "metrics": metrics,
