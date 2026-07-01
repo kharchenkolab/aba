@@ -471,6 +471,51 @@ def test_parse_multiqc_tiny_diff_not_flagged(tmp_path):
     assert mq["outliers"] == [], mq["outliers"]
 
 
+def test_scale_direction_helper():
+    from core.exec.nextflow import _scale_direction
+    assert _scale_direction("RdYlGn") == 1           # green-at-high → higher is better
+    assert _scale_direction("OrRd") == -1            # red-at-high → higher is worse
+    assert _scale_direction("RdYlGn-rev") == -1      # -rev flips
+    assert _scale_direction("OrRd-rev") == 1
+    assert _scale_direction("RdBu") is None          # neutral diverging → no direction
+    assert _scale_direction("") is None and _scale_direction(None) is None
+
+
+def test_parse_multiqc_outlier_concern_from_direction(tmp_path):
+    # 2.5: directionality from the `scale` field. An outlier on the metric's BAD side is a
+    # concern; an outlier in the FAVORABLE direction is flagged notable but concern=False.
+    data = {
+        "report_general_stats_headers": [
+            {"dups": {"title": "% Dups", "scale": "OrRd"}},           # higher is worse
+            {"aligned": {"title": "% Aligned", "scale": "RdYlGn"}},   # higher is better
+        ],
+        "report_general_stats_data": [
+            {"S1": {"dups": 10.0}, "S2": {"dups": 10.2}, "S3": {"dups": 9.8},
+             "S4": {"dups": 10.1}, "BAD": {"dups": 80.0}},            # high on higher-worse → concern
+            {"S1": {"aligned": 95.0}, "S2": {"aligned": 95.1}, "S3": {"aligned": 94.9},
+             "S4": {"aligned": 95.0}, "HI": {"aligned": 99.9}},       # high on higher-better → good
+        ],
+    }
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    dirs = {m["title"]: m["direction"] for m in mq["metrics"]}
+    assert dirs["% Dups"] == "higher_worse" and dirs["% Aligned"] == "higher_better"
+    by = {(o["sample"], o["metric"]): o for o in mq["outliers"]}
+    assert by[("BAD", "% Dups")]["concern"] is True and by[("BAD", "% Dups")]["side"] == "high"
+    assert by[("HI", "% Aligned")]["concern"] is False       # favorable outlier, not a concern
+    assert by[("HI", "% Aligned")]["side"] == "high"
+
+
+def test_parse_multiqc_outlier_no_direction_when_scale_neutral(tmp_path):
+    # No usable scale → concern is None (agent judges from value + docs), still flagged.
+    vals = {"S1": 50.0, "S2": 50.1, "S3": 49.9, "S4": 50.0, "BAD": 500.0}
+    data = {"report_general_stats_headers": [{"m": {"title": "Reads M", "scale": "Blues"}}],
+            "report_general_stats_data": [{s: {"m": v} for s, v in vals.items()}]}
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    o = next(o for o in mq["outliers"] if o["sample"] == "BAD")
+    assert o["concern"] is None and o["side"] == "high"
+    assert mq["metrics"][0]["direction"] is None
+
+
 def test_parse_multiqc_cross_tool_title_dedup(tmp_path):
     # Two general-stats columns share the title "% Dups" (FastQC vs Picard). They must NOT
     # collide in the per-sample table (one silently overwriting the other) — disambiguate by ns.
