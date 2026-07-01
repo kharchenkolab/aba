@@ -1,3 +1,13 @@
+/* Feedback (mailto:) link — bug glyph + label, styled as a quiet inline pill so
+   it reads as an action, matching the header's Report-a-bug button. */
+.feedback-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border: 1px solid var(--border); border-radius: 9999px;
+  text-decoration: none; color: var(--text-2); font-weight: 500;
+}
+.feedback-link:hover { background: var(--tree-active-bg); color: var(--text); }
+.feedback-link svg { flex: none; }
+
 .msg {
   display: flex;
   gap: 8px;

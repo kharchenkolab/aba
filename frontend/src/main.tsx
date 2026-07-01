@@ -1,6 +1,12 @@
 import './oodBase'   // install OOD base-path shim before any request is made
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { installErrorRecorder } from './lib/errorLog'
+
+// Passive bug-report error recorder (misc/feedback.md B4) — zero cost at rest;
+// only records on an actual error, and only leaves the browser if the user files
+// a report. Install before render so early errors are captured.
+installErrorRecorder()
 import { BrowserRouter } from 'react-router-dom'
 import './tokens.css'
 import App from './App.tsx'
