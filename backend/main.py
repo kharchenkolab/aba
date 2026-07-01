@@ -1572,11 +1572,22 @@ def hpc_session():
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def jobs_cancel(job_id: str, _pid: str = Depends(require_project)):
+async def jobs_cancel(job_id: str, _pid: str = Depends(require_project)):
     ok = cancel_job(job_id)
     if not ok:
         raise HTTPException(400, "job not found or not cancellable")
-    return get_job(job_id)
+    # Notify the originating thread so the agent isn't left hanging on the deferred
+    # tool — a background job's terminal transition (here, user-cancel) fires a
+    # continuation exactly like done/failed do (continuation.py decides to skip if
+    # the job had no thread). Best-effort: never fail the cancel on a notify error.
+    job = get_job(job_id)
+    try:
+        from core.jobs.continuation import enqueue_continuation
+        pid = (job.get("params") or {}).get("project_id") if job else None
+        await enqueue_continuation(job or {}, str(pid) if pid else None)
+    except Exception as e:  # noqa: BLE001
+        print(f"[jobs.cancel] continuation after cancel failed for {job_id}: {e}", flush=True)
+    return job
 
 
 # Phase 8.E: /api/home-summary + /api/sample-project moved to
