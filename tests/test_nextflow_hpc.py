@@ -606,6 +606,21 @@ def test_parse_multiqc_modern_dict_format(tmp_path):
     assert dirs["% Aligned"] == "higher_better" and dirs["% Dups (FastQC (raw))"] == "higher_worse"
 
 
+def test_publish_multiqc_report(tmp_path):
+    # Copies the run's self-contained multiqc_report.html into the project artifacts store under
+    # a deterministic name and returns a servable /artifacts URL — so the agent links a CLICKABLE
+    # report, not a dead file:// path.
+    from core.exec.nextflow import publish_multiqc_report
+    from core.config import project_artifacts_dir
+    rep = tmp_path / "results" / "multiqc" / "star_salmon"
+    rep.mkdir(parents=True)
+    (rep / "multiqc_report.html").write_text("<html>report</html>")
+    url = publish_multiqc_report(tmp_path / "results", "prj_pub", "run_pub")
+    assert url == "/artifacts/prj_pub/multiqc-run_pub.html"
+    assert (project_artifacts_dir("prj_pub") / "multiqc-run_pub.html").read_text() == "<html>report</html>"
+    assert publish_multiqc_report(tmp_path / "no_such_dir", "prj_pub", "run_pub") is None  # no report → None
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

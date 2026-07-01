@@ -634,6 +634,27 @@ def parse_multiqc(outdir) -> dict:
             "samples": rows, "outliers": outliers[:25], "report": report}
 
 
+def publish_multiqc_report(outdir, project_id: str, run_id: str) -> Optional[str]:
+    """Copy the run's self-contained `multiqc_report.html` into the project artifacts store
+    under a deterministic name, so it's servable + clickable at `/artifacts/<pid>/<name>`.
+    Returns that URL, or None if there's no report. MultiQC's default HTML embeds all its
+    assets, so the single file renders standalone. Idempotent (overwrites on re-run). This is
+    what lets the agent hand the user an openable report instead of a dead `file://` path."""
+    try:
+        op = Path(outdir)
+        found = sorted(op.rglob("multiqc_report.html"), key=lambda p: len(p.parts))
+        if not found:
+            return None
+        from core.config import project_artifacts_dir
+        dest_dir = project_artifacts_dir(str(project_id))
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        name = f"multiqc-{run_id}.html"
+        shutil.copy2(found[0], dest_dir / name)
+        return f"/artifacts/{project_id}/{name}"
+    except Exception:  # noqa: BLE001 — best-effort; a missing report just means no link
+        return None
+
+
 # ── the reusable execution+harvest function ──────────────────────────────────
 def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] = None,
                       revision: Optional[str] = None, profile: Optional[str] = None,
@@ -766,6 +787,14 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
             multiqc = parse_multiqc(op)
         except Exception:  # noqa: BLE001
             multiqc = {}
+        # Publish the report to a servable /artifacts URL so the agent can hand the user a
+        # CLICKABLE report (not a dead file:// path). Kept alongside the parsed QC.
+        try:
+            _report_url = publish_multiqc_report(op, str(project_id), str(run_id))
+            if _report_url:
+                multiqc["report_url"] = _report_url
+        except Exception:  # noqa: BLE001
+            pass
 
     nf_ver = ""
     try:
