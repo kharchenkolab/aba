@@ -194,10 +194,11 @@ def _nextflow_done_text(job: dict, project_id: str | None) -> str:
     run_id = params.get("run_id") or job_id
     label = f"{pipeline}{(' ' + revision) if revision else ''}"
 
-    summary, mq = {}, {}
+    summary, mq, report_url = {}, {}, None
     try:
         from core.data.workspace import project_work_dir
-        from core.exec.nextflow import parse_trace_rows, trace_summary, parse_multiqc
+        from core.exec.nextflow import (parse_trace_rows, trace_summary, parse_multiqc,
+                                        publish_multiqc_report)
         scratch = project_work_dir(str(project_id or "_workspace")) / str(run_id)
         outdir = params.get("outdir") or str(scratch / "results")
         summary = trace_summary(parse_trace_rows(scratch / "nf_reports" / "trace.txt")) or {}
@@ -205,6 +206,9 @@ def _nextflow_done_text(job: dict, project_id: str | None) -> str:
             mq = parse_multiqc(outdir) or {}
         except Exception:  # noqa: BLE001
             mq = {}
+        # Publish the report to a servable /artifacts URL so the agent links a CLICKABLE report,
+        # not a dead file:// path (the concrete UI bug this fixes).
+        report_url = publish_multiqc_report(outdir, str(project_id), str(run_id))
     except Exception:  # noqa: BLE001
         outdir = params.get("outdir") or "(the run's results dir)"
 
@@ -222,8 +226,13 @@ def _nextflow_done_text(job: dict, project_id: str | None) -> str:
             s += (f"; {len(concerns)} outlier(s) flagged as QC concerns "
                   f"(e.g. {', '.join(sorted({o.get('metric', '') for o in concerns}))[:120]})")
         lines.append(s + ".")
-    lines.append(f"Outputs are in `{outdir}`"
-                 + (f"; full MultiQC report: `{mq['report']}` (relative to that dir)." if mq.get("report") else "."))
+    if report_url:
+        # A servable /artifacts URL — render it as a Markdown link so the user can open it.
+        lines.append(f"Outputs are in `{outdir}`. Open the full MultiQC report: "
+                     f"[MultiQC report]({report_url}) — link it for the user with that exact URL "
+                     f"(it is servable; do NOT emit a file:// path).")
+    else:
+        lines.append(f"Outputs are in `{outdir}`.")
     lines.append(
         "Interpret the results now: summarize the run and flag any QC concerns "
         "(low mapping, high duplication, outlier samples) per the run-pipeline skill, then tell "
