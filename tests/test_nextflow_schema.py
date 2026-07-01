@@ -128,12 +128,26 @@ def test_enrich_plan_steps(monkeypatch):
 def test_enrich_plan_steps_test_profile_hides_empty_input(monkeypatch):
     # A -profile test run supplies its own input data → `input` shouldn't render as an empty
     # required field (the user's confusion). Hidden like `outdir`; other params still shown.
+    # NB: the REAL agent step names the profile only in the title prose ("with -profile test")
+    # and uses skill "run-pipeline" — NOT a structured parameters.profile. Match that shape.
     monkeypatch.setattr(ns, "fetch_schema", lambda *a, **k: SCHEMA)
-    out = ns.enrich_plan_steps([{"n": 1, "title": "RNA-seq (test)", "skill": "run_nextflow",
-                                 "parameters": {"pipeline": "nf-core/rnaseq", "profile": "test", "params": {}}}])
+    out = ns.enrich_plan_steps([{"n": 1, "title": "Launch nf-core/rnaseq with -profile test",
+                                 "skill": "run-pipeline",
+                                 "parameters": {"pipeline": "nf-core/rnaseq", "revision": "3.21.0", "params": {}}}])
     names = {p["name"] for g in out[0]["param_form"] for p in g["params"]}
     assert "input" not in names and "outdir" not in names   # both auto-provided (profile / ABA)
     assert "genome" in names                                 # unrelated params still editable
+
+
+def test_uses_test_profile_detection():
+    # structured param
+    assert ns._uses_test_profile({}, {"profile": "test"})
+    assert ns._uses_test_profile({}, {"profile": "docker,test"})
+    # prose-only (the common real case)
+    assert ns._uses_test_profile({"title": "Launch nf-core/rnaseq with -profile test"}, {})
+    assert ns._uses_test_profile({"description": "quick run using the test profile"}, {})
+    # a real run — not test
+    assert not ns._uses_test_profile({"title": "Run nf-core/rnaseq on my samplesheet"}, {"profile": "docker"})
 
 
 def test_enrich_plan_steps_test_profile_keeps_prefilled_input(monkeypatch):

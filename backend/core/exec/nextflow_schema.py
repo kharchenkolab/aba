@@ -172,6 +172,18 @@ def param_form(schema: dict, exclude: set | None = None) -> list[dict]:
     return [{"group": g, "params": ps} for g, ps in groups.items()]
 
 
+def _uses_test_profile(step: dict, params: dict) -> bool:
+    """True if this pipeline step runs with nf-core's `test` profile (which ships its own input
+    data, so `input` is auto-provided). The agent may express the profile structurally
+    (parameters.profile) OR — as it commonly does — only in the step's prose, e.g. the title
+    'Launch nf-core/rnaseq with -profile test'. Detect both."""
+    prof = params.get("profile") if isinstance(params, dict) else None
+    if prof and any(t.strip() == "test" for t in str(prof).split(",")):
+        return True
+    text = f"{step.get('title', '')} {step.get('description', '')}".lower()
+    return bool(re.search(r"-profile\s+[\w,]*\btest\b|\btest\s+profile\b", text))
+
+
 def enrich_plan_steps(steps: list) -> list:
     """For each plan step that launches a pipeline (``skill == 'run_nextflow'`` or
     ``parameters.pipeline`` set), attach a schema-derived ``param_form`` + the
@@ -199,9 +211,7 @@ def enrich_plan_steps(steps: list) -> list:
                 # thinking they must supply a samplesheet. Hide it for a test run UNLESS the plan
                 # actually prefilled an input path (then it's a real, editable choice).
                 excl = set(_AUTO_PROVIDED)
-                profile = params.get("profile")
-                if (profile and any(t.strip() == "test" for t in str(profile).split(","))
-                        and not prefilled.get("input")):
+                if _uses_test_profile(s, params) and not prefilled.get("input"):
                     excl.add("input")
                 s["param_form"] = param_form(schema, exclude=excl)
         out.append(s)
