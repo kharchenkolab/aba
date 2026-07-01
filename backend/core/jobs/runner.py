@@ -277,24 +277,76 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def _running_inline_cores() -> float:
+    """Cores committed to currently-RUNNING inline jobs (params.submission=='inline'), summed
+    across project DBs — so the resolver won't oversubscribe ABA's allocation with concurrent
+    inline jobs. Best-effort; 0 on any error (and in SINGLE-DB mode, where there are no per-
+    project job tables to scan — the guard is a multi-project/production concern)."""
+    from core.config import PROJECTS_DIR
+    import sqlite3
+    total = 0.0
+    try:
+        if not PROJECTS_DIR.exists():
+            return 0.0
+        for proj_dir in sorted(PROJECTS_DIR.iterdir()):
+            db_file = proj_dir / "project.db"
+            if not proj_dir.is_dir() or not db_file.exists() or proj_dir.name.startswith("_"):
+                continue
+            c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
+            try:
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+                    continue
+                for r in c.execute("SELECT params FROM jobs WHERE status='running'").fetchall():
+                    p = json.loads(r["params"] or "{}")
+                    if p.get("submission") != "inline":
+                        continue
+                    lr = p.get("local_resources") or {}
+                    est = p.get("estimate") or {}
+                    total += float(lr.get("cores") or est.get("cores") or 1)
+            finally:
+                c.close()
+    except Exception:  # noqa: BLE001
+        return total
+    return total
+
+
+# AUTO only inlines genuinely SMALL jobs — beyond this a job fans out to Slurm even if it
+# would fit ABA's allocation, because many-task/heavy work parallelizes better across the
+# cluster and long jobs want Slurm's durability (inline dies with ABA). Explicit execution=local
+# bypasses this ceiling (the user asked for local); the physical-fit + concurrency checks always apply.
+def _auto_inline_ceiling() -> tuple[float, float]:
+    import os
+    return (float(os.environ.get("ABA_INLINE_AUTO_MAX_CORES") or 8),
+            float(os.environ.get("ABA_INLINE_AUTO_MAX_MEM_GB") or 32))
+
+
 def resolve_submission_target(requested: str, heaviest: dict | None, capacity: dict) -> tuple[str, str]:
     """Decide WHERE a background job runs — 'inline' (a subprocess in ABA's own allocation,
     no sbatch) vs 'slurm' (sbatch a dedicated allocation) — and why. Called when the job would
     run with a local executor (requested execution in local/auto). `heaviest` is the biggest
-    single task's {cpus, mem_gb} that must fit ABA's allocation. See misc/inplace_submission.md."""
+    single task's {cpus, mem_gb} that must fit ABA's *free* capacity. See misc/inplace_submission.md."""
     if capacity.get("submitter") != "slurm":
         return "inline", "local submitter — runs in ABA's process"
     if not capacity.get("inline_ok"):
         return "slurm", "ABA is on a login node (not in a compute allocation) — using Slurm"
     cap_c, cap_m = capacity.get("cores"), capacity.get("mem_gb")
+    used_c = capacity.get("inline_used_cores") or 0          # cores already committed to running inline jobs
+    avail_c = (cap_c - used_c) if cap_c else cap_c
     h_c, h_m = (heaviest or {}).get("cpus"), (heaviest or {}).get("mem_gb")
+    # Physical/concurrency fit (applies to explicit local AND auto): must fit what's FREE now.
     over = []
-    if h_c and cap_c and h_c > cap_c:
-        over.append(f"{h_c:g}c > {cap_c}c")
+    if h_c and avail_c is not None and h_c > avail_c:
+        over.append(f"{h_c:g}c > {avail_c:g}c free" + (f" ({used_c:g}c in use)" if used_c else ""))
     if h_m and cap_m and h_m > cap_m:
         over.append(f"{h_m:g}GB > {cap_m:g}GB")
     if over:
-        return "slurm", "heaviest task exceeds ABA's allocation (" + ", ".join(over) + ") — using Slurm"
+        return "slurm", "doesn't fit ABA's free allocation (" + ", ".join(over) + ") — using Slurm"
+    # AUTO preference: keep inline for SMALL jobs only; fan bigger work out for parallelism/durability.
+    if requested == "auto":
+        max_c, max_m = _auto_inline_ceiling()
+        if (h_c and h_c > max_c) or (h_m and h_m > max_m):
+            return "slurm", (f"auto: job ({h_c or '?'}c/{h_m or '?'}GB) is substantial — Slurm fan-out "
+                             f"for parallelism (inline is for small/quick work)")
     return "inline", f"fits ABA's allocation ({cap_c}c" + (f"/{cap_m:g}GB" if cap_m else "") + ") — runs in-place"
 
 
