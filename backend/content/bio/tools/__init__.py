@@ -146,6 +146,7 @@ from .curation import (    # noqa: F401, E402
     _resolve_dataset_path,
     _bundle_paths_into_data_dir,
     register_dataset_tool,
+    check_import_tool,
     _dataset_layout_hint,
     _compound_ext,
     add_to_dataset_tool,

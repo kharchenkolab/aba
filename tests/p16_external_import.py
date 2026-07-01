@@ -251,9 +251,34 @@ def test_scrape_populates_imported_run_manifest():
     print("OK  test_scrape_populates_imported_run_manifest")
 
 
+def test_check_import_tool_reports_drift():
+    """The agent-facing maintenance tool: report fresh / changed / missing for a by-reference
+    entity using the stored baseline (so the agent doesn't hand-roll a filesystem walk)."""
+    from content.bio.tools.curation import check_import_tool
+    from content.bio.lifecycle.runs import open_imported_run
+    from core.graph.entities import create_entity
+    from core.graph.derivation import manual
+    root = Path(tempfile.mkdtemp(dir=_TMP))
+    src = _make_external_run(root)
+    rid = open_imported_run("thr_ci", "Imported", str(src), pipeline="nf-core/rnaseq")
+    assert check_import_tool({"entity_id": rid})["stale"] is False
+    (src / "reanalysis.csv").write_text("a,b\n1,2\n")
+    o2 = check_import_tool({"entity_id": rid})
+    assert o2["stale"] and o2["reason"] == "changed" and "import_run" in o2["note"], o2
+    shutil.rmtree(src)
+    o3 = check_import_tool({"entity_id": rid})
+    assert o3["stale"] and o3["reason"] == "missing", o3
+    # a native (non-external) entity → nothing to check; a bad id → error
+    nid = create_entity(entity_type="analysis", title="native run", derivation=manual(), metadata={})
+    assert check_import_tool({"entity_id": nid})["stale"] is False
+    assert check_import_tool({"entity_id": "nope"}).get("error")
+    print("OK  test_check_import_tool_reports_drift")
+
+
 def main() -> int:
     tests = [test_import_run_code_scrapes_external_dir,
              test_scrape_populates_imported_run_manifest,
+             test_check_import_tool_reports_drift,
              test_import_run_code_missing_dir,
              test_harvest_cap_bounds_copies_and_warns,
              test_open_imported_run_is_by_reference_with_baseline,

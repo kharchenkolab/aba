@@ -617,6 +617,42 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
             "note": note}
 
 
+def check_import_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Check whether an IMPORTED (by-reference) Run or Dataset still matches the external directory
+    it references — flag-only drift, using the baseline captured at import (misc/external_import.md).
+    Fast (a stat-walk against the stored fingerprint), never re-copies. This is how the agent
+    'maintains' an imported entity: answer 'is it still current?' and, if stale, guide a refresh."""
+    from core.graph.entities import get_entity
+    from core.data.external_ref import check_drift
+    eid = (input_.get("entity_id") or "").strip()
+    if not eid:
+        return {"error": "check_import needs `entity_id`."}
+    ent = get_entity(eid)
+    if not ent:
+        return {"error": f"no entity {eid!r}"}
+    md = ent.get("metadata") or {}
+    ref = md.get("ref_path")
+    if not md.get("by_reference"):
+        return {"entity_id": eid, "by_reference": False, "stale": False,
+                "note": "Not imported by reference — its data is ABA-owned, so there's nothing to "
+                        "drift-check."}
+    d = check_drift(md)
+    if not d.get("stale"):
+        return {"entity_id": eid, "by_reference": True, "stale": False, "ref_path": ref,
+                "note": f"Up to date — the external payload at {ref} still matches the import baseline."}
+    if d.get("reason") == "missing":
+        return {"entity_id": eid, "by_reference": True, "stale": True, "reason": "missing",
+                "ref_path": ref,
+                "note": (f"STALE (missing): {ref} is gone or unreadable. The imported "
+                         f"{ent.get('type')} record is intact in ABA, but its external payload can't "
+                         f"be reached. Ask the user for the new location, then re-run import_run.")}
+    return {"entity_id": eid, "by_reference": True, "stale": True, "reason": "changed",
+            "ref_path": ref, "detail": d.get("detail"),
+            "note": (f"STALE (changed): the external results at {ref} differ from the import baseline "
+                     f"({d.get('detail')}). The collaborator likely re-ran it — re-run import_run on "
+                     f"that same path to refresh this run with the current outputs.")}
+
+
 def _dataset_layout_hint(path: str) -> str:
     """One-line description of what's at this dataset path. Helps the agent's
     next turn pick the right loader without re-inspecting the dir.

@@ -120,6 +120,17 @@ def register_curation_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def check_import(entity_id: str, aba_ctx_id: str | None = None) -> dict:
+        """Check whether an IMPORTED (by-reference) Run or Dataset is still up to date with the
+        external directory it references — did the collaborator re-run, move, or delete it? Fast
+        (compares against the baseline captured at import; no re-copy). If it reports STALE, re-run
+        import_run on the same path to refresh. Use this to 'maintain' an imported run when the user
+        asks whether it's current — do NOT hand-roll a filesystem walk in run_python."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import check_import_tool
+        return check_import_tool({"entity_id": entity_id}, peek_ctx(aba_ctx_id))
+
+    @mcp.tool()
     def add_to_dataset(dataset_id: str, paths: list[str],
                        aba_ctx_id: str | None = None) -> dict:
         """Hardlink one or more files into an existing directory-shaped
