@@ -362,25 +362,54 @@ def nextflow_job_progress(job: dict) -> dict:
     return prog
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def parse_failure(stderr: str, rows: list[dict], log_path: Optional[str] = None) -> dict:
-    """On a non-zero pipeline, surface WHAT failed: the failed process(es) from the
-    trace + Nextflow's 'Error executing process' block (from stderr, else the
-    .nextflow.log). Gives the agent an actionable diagnosis, not just an exit code."""
+    """On a non-zero pipeline, surface WHAT failed so the agent can ACT, not just an exit code:
+      - failed_processes: FAILED/ABORTED tasks from the trace (a real compute failure);
+      - error_excerpt:    Nextflow's 'Error executing process' / 'ERROR ~' block;
+      - abort_cause:      the 'Session aborted -- Cause: …' reason for a PRE-TASK abort — bad
+                          params, a missing/404 `--input`, a plugin/config error. Nextflow writes
+                          those DETAILS only to .nextflow.log (stderr just says 'check the log'),
+                          so we ALWAYS read the log too, not only when stderr is empty.
+    A pre-task abort has no failed task, so without abort_cause the caller could only say
+    'unknown process'; with it the agent sees e.g. '--input … does not exist' and can fix it."""
     failed = [f"{_proc(r.get('name',''))} (exit {r.get('exit')})"
               for r in rows if (r.get("status") or "").upper() in ("FAILED", "ABORTED")]
-    text = stderr or ""
-    if not text and log_path:
+    stderr = stderr or ""
+    log_text = ""
+    if log_path:
         try:
-            text = Path(log_path).read_text()
+            log_text = Path(log_path).read_text()
         except Exception:  # noqa: BLE001
-            text = ""
-    block = ""
-    idx = text.find("Error executing process")
-    if idx == -1:
-        idx = text.find("ERROR ~")
-    if idx != -1:
-        block = text[idx:idx + 800]
-    return {"failed_processes": failed[:10], "error_excerpt": block.strip()}
+            log_text = ""
+
+    def _find(text: str, needles, n: int = 800) -> str:
+        for needle in needles:
+            i = text.find(needle)
+            if i != -1:
+                return _ANSI_RE.sub("", text[i:i + n]).strip()
+        return ""
+
+    # A task-level error block (a process actually ran and failed).
+    block = (_find(stderr, ("Error executing process", "ERROR ~"))
+             or _find(log_text, ("Error executing process", "ERROR ~")))
+    # A pre-task abort cause — the reason lives after 'Session aborted -- Cause:' in the log;
+    # trim the Groovy/thread stack that follows so the agent gets just the human message.
+    abort = ""
+    for src in (log_text, stderr):
+        i = src.find("Session aborted -- Cause:")
+        if i == -1:
+            continue
+        seg = _ANSI_RE.sub("", src[i + len("Session aborted -- Cause:"): i + 1400])
+        for marker in ("\nThread[", "\n\tat ", "\n  java", "\n\n\n"):
+            j = seg.find(marker)
+            if j != -1:
+                seg = seg[:j]
+        abort = seg.strip()
+        break
+    return {"failed_processes": failed[:10], "error_excerpt": block, "abort_cause": abort}
 
 
 def parse_trace_containers(trace_path) -> list[str]:
@@ -714,7 +743,18 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     # continuation, instead of a bare non-zero exit.
     if res.returncode != 0:
         out["workflow"]["failure"] = failure
-        procs = ", ".join(failure.get("failed_processes") or []) or "unknown process"
-        out["error"] = (f"Nextflow pipeline failed (exit {res.returncode}). Failed: {procs}."
-                        + (f"\n{failure.get('error_excerpt')}" if failure.get("error_excerpt") else ""))
+        procs = failure.get("failed_processes") or []
+        excerpt = failure.get("error_excerpt") or ""
+        abort = failure.get("abort_cause") or ""
+        if procs:
+            out["error"] = (f"Nextflow pipeline failed (exit {res.returncode}). Failed: "
+                            f"{', '.join(procs)}." + (f"\n{excerpt}" if excerpt else ""))
+        elif abort:
+            # No task ran — a params/input/config problem, NOT a compute failure. Tell the agent
+            # so it fixes the params (or the profile/input) instead of retrying the same command.
+            out["error"] = (f"Nextflow aborted before running any task (exit {res.returncode}) — a "
+                            f"parameter/input/config problem, not a compute failure:\n{abort}")
+        else:
+            out["error"] = (f"Nextflow pipeline failed (exit {res.returncode})."
+                            + (f"\n{excerpt}" if excerpt else ""))
     return out
