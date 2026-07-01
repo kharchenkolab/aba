@@ -170,12 +170,17 @@ def _settle_job_deferred(job_id: str, lookup_pid: str | None) -> None:
     """Resolve the parked deferred tool_use for a now-terminal background job (idempotent):
     writes the terminal tool_result + transitions the turn out of AWAITING_TOOL_RESULT, so
     the chat tool line resolves instead of spinning forever. Best-effort — never let it
-    break job finalization. Call BEFORE the continuation so the tool_result lands in-order."""
+    break job finalization. Call BEFORE the continuation so the tool_result lands in-order.
+
+    Binds the job's project: the runs/messages tables are per-project (context-bound DB),
+    so settle must run under the job's project or it looks in the wrong DB and finds nothing."""
     try:
         from core.runtime.checkpoint import settle_deferred_job
-        fresh = get_job(job_id, project_id=lookup_pid)
-        if fresh:
-            settle_deferred_job(fresh)
+        from core import projects as _projects
+        with _projects.bind(str(lookup_pid) if lookup_pid else None):
+            fresh = get_job(job_id, project_id=lookup_pid)
+            if fresh:
+                settle_deferred_job(fresh)
     except Exception as e:  # noqa: BLE001
         _record_worker_failure("settle_deferred", job_id, e)
 
@@ -325,6 +330,12 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
         return False
     if job["status"] in ("done", "failed", "cancelled"):
         return False
+    # Persist the cancel INTENT before stopping execution. If ABA dies between the
+    # scancel and the status write, on restart the poll loop would see sacct=CANCELLED
+    # with no result.json → slurm_terminal_fail → and would otherwise AUTO-RESUME a job
+    # the user cancelled. The marker lets _maybe_resume_nextflow_job refuse (see there).
+    update_job(job_id, project_id=project_id,
+               params={**(job.get("params") or {}), "cancel_requested": True})
     # The active submitter stops the actual execution — CancelToken+killpg
     # locally, `scancel <id>` on Slurm.
     get_submitter().cancel(job)
@@ -690,6 +701,7 @@ def reconcile_jobs() -> dict:
 
     reaped = 0
     requeued: list[tuple[str, str, str]] = []   # (created_at, job_id, project_id)
+    reaped_targets: list[tuple[str, str]] = []  # (job_id, project_id) — settle their deferred turns
     reap_note = "backend restarted while job was running — orphaned"
 
     if not PROJECTS_DIR.exists():
@@ -727,6 +739,7 @@ def reconcile_jobs() -> dict:
                 c.execute("UPDATE jobs SET status='failed', error=COALESCE(error,'') || ?, "
                           "finished_at=? WHERE id=?", (reap_note, now, jid))
             reaped += len(reap_ids)
+            reaped_targets.extend((jid, pid) for jid in reap_ids)
             # 2. Collect queued rows for re-enqueue.
             # Re-enqueue queued rows to the LOCAL worker — but NOT Slurm jobs:
             # they were already sbatch'd, so re-enqueuing would double-run them
@@ -747,6 +760,12 @@ def reconcile_jobs() -> dict:
     requeued.sort(key=lambda t: t[0])
     for _, job_id, pid in requeued:
         _QUEUE.put_nowait((job_id, pid))
+
+    # Recovery: resolve each dropped (orphaned-running) job's parked deferred tool_use so a
+    # crash doesn't leave its chat tool line spinning forever. Done AFTER the per-project
+    # sqlite transactions close (settle opens its own project-scoped connection). Idempotent.
+    for jid, pid in reaped_targets:
+        _settle_job_deferred(jid, pid)
 
     stats = {
         "reaped_running": reaped,
@@ -839,6 +858,11 @@ def _maybe_resume_nextflow_job(sub, job: dict, result: dict, pid: str | None) ->
             or not result.get("slurm_terminal_fail")):
         return False
     params = job.get("params") or {}
+    # Never resurrect a job the user cancelled: a scancel looks exactly like an infra
+    # kill to the poll loop (sacct terminal + no result.json), so without this a cancel
+    # that raced a crash would auto-resume. cancel_job persists this before the scancel.
+    if params.get("cancel_requested"):
+        return False
     resumes = int(params.get("nf_resumes") or 0)
     st = result.get("slurm_terminal_fail")
     if resumes >= _NF_MAX_RESUMES:
