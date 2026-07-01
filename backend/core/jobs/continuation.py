@@ -176,6 +176,62 @@ def _output_failure_lines(text: str) -> list[str]:
             if any(m.lower() in ln.lower() for m in _JOB_FAIL_MARKERS)]
 
 
+def _is_nextflow_job(job: dict) -> bool:
+    params = job.get("params") or {}
+    return job.get("kind") == "run_nextflow" or bool(params.get("pipeline"))
+
+
+def _nextflow_done_text(job: dict, project_id: str | None) -> str:
+    """Completion message for a SUCCEEDED Nextflow pipeline. Unlike run_python/run_r, a pipeline's
+    success signal is the pipeline itself completing (returncode 0) — its outputs harvest as files,
+    not figure/table/cell entities, so the artifact-count heuristic is meaningless here. Surface
+    the pipeline's own summary (per-task counts + MultiQC) and tell the agent to interpret the QC,
+    so it reacts to a real completion instead of being told the job 'no-op'd'."""
+    params = job.get("params") or {}
+    job_id = job.get("id") or "?"
+    pipeline = params.get("pipeline") or "the pipeline"
+    revision = params.get("revision")
+    run_id = params.get("run_id") or job_id
+    label = f"{pipeline}{(' ' + revision) if revision else ''}"
+
+    summary, mq = {}, {}
+    try:
+        from core.data.workspace import project_work_dir
+        from core.exec.nextflow import parse_trace_rows, trace_summary, parse_multiqc
+        scratch = project_work_dir(str(project_id or "_workspace")) / str(run_id)
+        outdir = params.get("outdir") or str(scratch / "results")
+        summary = trace_summary(parse_trace_rows(scratch / "nf_reports" / "trace.txt")) or {}
+        try:
+            mq = parse_multiqc(outdir) or {}
+        except Exception:  # noqa: BLE001
+            mq = {}
+    except Exception:  # noqa: BLE001
+        outdir = params.get("outdir") or "(the run's results dir)"
+
+    lines = [f"[continuation: pipeline job `{job_id}` ({label}) COMPLETED successfully]", ""]
+    done_line = "The Nextflow pipeline finished successfully"
+    n_tasks = summary.get("total_tasks")
+    if n_tasks:
+        done_line += f" — {n_tasks} tasks ran, {len(summary.get('failed') or [])} failed"
+    lines.append(done_line + ".")
+    if mq.get("n_samples"):
+        concerns = [o for o in (mq.get("outliers") or []) if o.get("concern")]
+        s = (f"MultiQC parsed {mq['n_samples']} samples across "
+             f"{len(mq.get('metrics') or [])} metrics")
+        if concerns:
+            s += (f"; {len(concerns)} outlier(s) flagged as QC concerns "
+                  f"(e.g. {', '.join(sorted({o.get('metric', '') for o in concerns}))[:120]})")
+        lines.append(s + ".")
+    lines.append(f"Outputs are in `{outdir}`"
+                 + (f"; full MultiQC report: `{mq['report']}` (relative to that dir)." if mq.get("report") else "."))
+    lines.append(
+        "Interpret the results now: summarize the run and flag any QC concerns "
+        "(low mapping, high duplication, outlier samples) per the run-pipeline skill, then tell "
+        "the user. This is a SUCCESSFUL pipeline completion — do NOT treat it as a failed or "
+        "empty job; its outputs are pipeline files, not figure/table entities.")
+    return "\n".join(lines)
+
+
 def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     """The synthetic user message the Guide sees as fresh evidence. Starts
     with the literal `[continuation: …]` prefix so the frontend can render
@@ -225,6 +281,17 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
             f"decide whether to retry / fix / give up, and either continue "
             f"the plan or summarize what went wrong. Don't silently move on."
         )
+
+    # A completed Nextflow pipeline is not a run_python/run_r job — success means the pipeline
+    # ran (returncode 0), and its outputs harvest as files, not figure/table/cell entities. The
+    # artifact-count heuristic below would see 0 entities and mislabel the success as a no-op
+    # ("wrong interpreter, swallowed args, inspect run.log"), which is exactly wrong. Give the
+    # agent the pipeline's own completion signal instead.
+    if status == "done" and _is_nextflow_job(job):
+        try:
+            return _nextflow_done_text(job, project_id)
+        except Exception:  # noqa: BLE001 — fall back to the generic message
+            pass
 
     n_artifacts = _count_artifacts_registered(job, project_id)
 
