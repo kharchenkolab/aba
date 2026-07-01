@@ -98,6 +98,12 @@ def _ensure_analysis(focused_entity_id: str, analysis_ctx: dict,
     return aid
 
 
+# Tools whose result carries harvested outputs that belong to a Run: refresh the Run's output
+# manifest + attach the exec record. `import_run` is included so an IMPORTED external run's outputs
+# (scanned from its by-reference artifact_path) populate the Run view exactly like a native run.
+_ARTIFACT_TOOLS = ("run_python", "run_r", "run_nextflow", "import_run")
+
+
 def register_artifacts_from_tool_result(
     *,
     tool_name: str,
@@ -125,7 +131,7 @@ def register_artifacts_from_tool_result(
 
     # Capture every executed cell onto the thread's open Run (if any), so the
     # Run is the recompute unit — not just cells that happened to emit a figure.
-    if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
+    if tool_name in _ARTIFACT_TOOLS and thread_id:
         from content.bio.lifecycle.runs import active_run_id, append_run_code
         # Prefer the Run captured for THIS result (analysis_ctx) over the thread's
         # currently-open Run: a long background job may complete after the agent
@@ -156,7 +162,7 @@ def register_artifacts_from_tool_result(
     # on an upstream entity (provenance the user expects to navigate).
     plots = result_obj.get("plots") if isinstance(result_obj, dict) else None
     tables = result_obj.get("tables") if isinstance(result_obj, dict) else None
-    if tool_name in ("run_python", "run_r", "run_nextflow") and (plots or tables):
+    if tool_name in _ARTIFACT_TOOLS and (plots or tables):
         analysis_id = _ensure_analysis(focused_entity_id or WORKSPACE_ID, analysis_ctx, thread_id)
         focused = focused_entity_id or WORKSPACE_ID
         if focused != WORKSPACE_ID:
@@ -194,7 +200,7 @@ def register_artifacts_from_tool_result(
     # after EVERY code cell — even one that wrote only a .rds and emitted no
     # figure — so the Run view always reflects what the pipeline produced. Map
     # harvested PNG urls (served from /artifacts) as figure thumbnails.
-    if tool_name in ("run_python", "run_r", "run_nextflow") and thread_id:
+    if tool_name in _ARTIFACT_TOOLS and thread_id:
         try:
             from content.bio.lifecycle.runs import active_run_id, refresh_output_manifest
             # Same as above: refresh the Run this result belongs to, not just
