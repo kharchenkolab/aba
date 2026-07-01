@@ -69,6 +69,28 @@ def test_unknown_mem_capacity_ignored():
     assert t == "inline"
 
 
+def test_auto_ceiling_fans_out_large_jobs_even_if_they_fit():
+    # IP3: a big allocation (256c/512GB) would 'fit' a 12c/128GB task, but AUTO should still
+    # fan it out (inline is for small/quick work). Explicit local honors the user's ask.
+    big = _cap(cores=256, mem_gb=512.0)
+    t_auto, r = resolve_submission_target("auto", {"cpus": 12, "mem_gb": 128}, big)
+    assert t_auto == "slurm" and "substantial" in r
+    t_local, _ = resolve_submission_target("local", {"cpus": 12, "mem_gb": 128}, big)
+    assert t_local == "inline"                  # explicit local bypasses the auto ceiling
+    # a genuinely small job auto-inlines
+    assert resolve_submission_target("auto", {"cpus": 2, "mem_gb": 6}, big)[0] == "inline"
+
+
+def test_concurrency_guard_uses_free_cores():
+    # IP3: cores already committed to running inline jobs are subtracted → a job that fits the
+    # allocation but not what's FREE falls back to Slurm.
+    cap = _cap(cores=8, mem_gb=32.0); cap["inline_used_cores"] = 6
+    t, r = resolve_submission_target("local", {"cpus": 4, "mem_gb": 8}, cap)   # 4 > (8-6)=2 free
+    assert t == "slurm" and "free" in r
+    # fits within free cores → inline
+    assert resolve_submission_target("local", {"cpus": 2, "mem_gb": 8}, cap)[0] == "inline"
+
+
 def test_get_submitter_for_maps_target():
     assert get_submitter_for("inline").name == "local"
     assert get_submitter_for("slurm").name == "slurm"
@@ -97,7 +119,9 @@ def main() -> int:
     tests = [test_local_submitter_always_inline, test_login_node_forces_slurm,
              test_fits_runs_inline, test_exceeds_cores_falls_back_to_slurm,
              test_exceeds_mem_falls_back_to_slurm, test_no_heaviest_estimate_runs_inline,
-             test_unknown_mem_capacity_ignored, test_get_submitter_for_maps_target,
+             test_unknown_mem_capacity_ignored,
+             test_auto_ceiling_fans_out_large_jobs_even_if_they_fit,
+             test_concurrency_guard_uses_free_cores, test_get_submitter_for_maps_target,
              test_bg_submission_maps_execution_for_python_r,
              test_submit_python_job_records_submission_target]
     failed = []

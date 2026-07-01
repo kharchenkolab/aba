@@ -79,8 +79,14 @@ def aba_allocation_capacity() -> dict:
         cores = int(str(s.get("alloc_cores") or s.get("cores") or 1).split()[0])
     except (ValueError, IndexError):
         cores = int(s.get("cores") or 1)
+    used = 0.0
+    try:
+        from core.jobs.runner import _running_inline_cores
+        used = _running_inline_cores()          # don't oversubscribe with concurrent inline jobs
+    except Exception:  # noqa: BLE001
+        used = 0.0
     return {"inline_ok": inline_ok, "cores": max(1, cores),
-            "mem_gb": _cap_mem_gb(s.get("alloc_mem")),
+            "mem_gb": _cap_mem_gb(s.get("alloc_mem")), "inline_used_cores": used,
             "submitter": submitter, "on_slurm": bool(s.get("on_slurm"))}
 
 
