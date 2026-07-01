@@ -421,41 +421,63 @@ def parse_multiqc(outdir) -> dict:
     if not isinstance(data, dict):
         return {}
 
-    # General-stats column metadata (list of {col_key: {title, description, …}}) → merged.
-    headers: dict[str, dict] = {}
-    for h in (data.get("report_general_stats_headers") or []):
-        if isinstance(h, dict):
-            for k, meta in h.items():
-                if isinstance(meta, dict):
-                    headers[k] = {"title": (meta.get("title") or k),
-                                  "description": (meta.get("description") or "").strip(),
-                                  "namespace": (meta.get("namespace") or "").strip(),
-                                  "scale": (meta.get("scale") or "").strip()}
-    # General-stats values (list of {sample: {col_key: val}}) → merged per sample.
-    per_sample: dict[str, dict] = {}
-    for block in (data.get("report_general_stats_data") or []):
-        if isinstance(block, dict):
-            for sample, vals in block.items():
-                if isinstance(vals, dict):
-                    per_sample.setdefault(str(sample), {}).update(vals)
+    # General-stats data + headers. MultiQC emits these as EITHER a LIST of per-module blocks
+    # (older MultiQC) OR a DICT keyed by module (newer / nf-schema era) — the inner block shape
+    # is the same. Normalize to (module, block) pairs and key every metric by "<module>:<col>",
+    # so a column that repeats across modules (e.g. FastQC raw vs trimmed both 'percent_gc')
+    # stays distinct instead of one silently overwriting the other in the per-sample table.
+    def _modules(x):
+        if isinstance(x, dict):
+            return list(x.items())                        # {module: block}
+        if isinstance(x, list):
+            return list(enumerate(x))                     # [block, …] → module = index (parallel)
+        return []
+
+    headers: dict[str, dict] = {}                         # "mod:col" -> metadata
+    for mod, hblock in _modules(data.get("report_general_stats_headers")):
+        if not isinstance(hblock, dict):
+            continue
+        for col, meta in hblock.items():
+            if isinstance(meta, dict):
+                headers[f"{mod}:{col}"] = {"title": (meta.get("title") or col),
+                                           "description": (meta.get("description") or "").strip(),
+                                           "namespace": (meta.get("namespace") or "").strip(),
+                                           "scale": (meta.get("scale") or "").strip()}
+    per_sample: dict[str, dict] = {}                      # sample -> {"mod:col": val}
+    for mod, dblock in _modules(data.get("report_general_stats_data")):
+        if not isinstance(dblock, dict):
+            continue
+        for sample, vals in dblock.items():
+            if isinstance(vals, dict):
+                bag = per_sample.setdefault(str(sample), {})
+                for col, val in vals.items():
+                    bag[f"{mod}:{col}"] = val
 
     samples = sorted(per_sample)[:100]
     metric_keys = (list(headers) or sorted({k for v in per_sample.values() for k in v}))[:30]
-    title = lambda k: headers.get(k, {}).get("title", k)
-    # MultiQC merges the general-stats table across modules, so two column keys can carry the
-    # SAME title (e.g. FastQC and Picard both "% Dups"). Left as-is they collide in the per-
-    # sample table (one silently overwrites the other) and yield duplicate-looking outliers.
-    # Suffix the module namespace (or the raw key) to disambiguate a repeated title.
+    title = lambda k: (headers.get(k, {}).get("title") or k.split(":", 1)[-1])
+    # A metric title can still repeat across modules (FastQC vs Picard both "% Dups"). Assign a
+    # UNIQUE display title per metric: bare title when unique, else + module namespace, else a
+    # numeric suffix — guaranteeing 1:1 so the per-sample table never collides.
     _tcount: dict[str, int] = {}
     for k in metric_keys:
         _tcount[title(k)] = _tcount.get(title(k), 0) + 1
+    _disp: dict[str, str] = {}
+    _used: set = set()
+    for k in metric_keys:
+        t = title(k)
+        ns = (headers.get(k, {}).get("namespace") or "").strip()
+        cand = t if _tcount.get(t, 0) <= 1 else (f"{t} ({ns})" if ns else t)
+        if cand in _used:
+            n = 2
+            while f"{cand} #{n}" in _used:
+                n += 1
+            cand = f"{cand} #{n}"
+        _used.add(cand)
+        _disp[k] = cand
 
     def disp(k: str) -> str:
-        t = title(k)
-        if _tcount.get(t, 0) <= 1:
-            return t
-        ns = (headers.get(k, {}).get("namespace") or "").strip()
-        return f"{t} ({ns})" if ns else f"{t} [{k}]"
+        return _disp.get(k, title(k))
 
     # Directionality (higher-is-better/worse) harvested from MultiQC's colour `scale` — lets the
     # agent flag concerns on the BAD side and not cry wolf over an outlier in the good direction.
