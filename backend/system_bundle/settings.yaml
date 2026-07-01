@@ -29,7 +29,7 @@ llm_models:
     model: claude-opus-4-7
     spec: grounded_guide
   - label: Sonnet
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     spec: grounded_guide
   - label: Haiku
     model: claude-haiku-4-5-20251001
