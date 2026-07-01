@@ -66,9 +66,13 @@ calling, a 10x cohort).
 6. **Interpret** — on completion the result carries `task_summary` (per-task status/
    resources) and **`multiqc`** — the per-sample QC table (headline metrics + their
    meanings), flagged statistical `outliers`, and a link to the full MultiQC report.
-   Summarize the run and **flag QC concerns** (low mapping, high duplication, outlier
-   samples) before any downstream analysis. If unsure what a metric or output file
-   means, read the `docs.output` page from describe_pipeline.
+   Each metric carries a `direction` (`higher_better`/`higher_worse`, from MultiQC's own
+   colour scale) and each outlier a `side` + `concern` flag: **`concern:true` is on the bad
+   side (lead with these); `concern:false` is an outlier in the good direction (note, don't
+   alarm); `concern:null` means direction is unknown — judge from the value.** Summarize the
+   run and **flag QC concerns** (low mapping, high duplication, outlier samples) before any
+   downstream analysis. If unsure what a metric or output file means, read the `docs.output`
+   page from describe_pipeline.
 
 Keep the in-kernel recipe as the alternative for small/interactive work; name the
 trade-off when you propose the pipeline so the user can choose.

@@ -379,6 +379,28 @@ def parse_trace_containers(trace_path) -> list[str]:
         return []
 
 
+# MultiQC general-stats headers carry a colour `scale` that encodes each metric's quality
+# direction — the *module authors* set it, so reading it gives us "higher is better/worse" for
+# free across every pipeline, with no per-metric or per-pipeline table. Green-at-high diverging
+# scales (RdYlGn) mean higher-is-better; warm/red-at-high scales (OrRd, YlOrRd, Reds…) mean
+# higher-is-worse. Neutral sequential/diverging scales (Blues, RdBu, GnBu…) imply no direction.
+_SCALE_DIR = {"rdylgn": 1, "orrd": -1, "ylorrd": -1, "reds": -1, "oranges": -1, "ylorbr": -1}
+
+
+def _scale_direction(scale):
+    """+1 higher-is-better, -1 higher-is-worse, None if the scale implies no quality direction.
+    Honors MultiQC's '-rev' suffix (which reverses the colour order → flips the direction)."""
+    s = (scale or "").strip().lower()
+    if not s:
+        return None
+    rev = s.endswith("-rev")
+    base = s[:-4] if rev else s
+    d = _SCALE_DIR.get(base)
+    if d is None:
+        return None
+    return -d if rev else d
+
+
 def parse_multiqc(outdir) -> dict:
     """Parse a finished pipeline's MultiQC output into a structured QC summary the
     agent can INTERPRET — the General Statistics table (per-sample headline metrics +
@@ -407,7 +429,8 @@ def parse_multiqc(outdir) -> dict:
                 if isinstance(meta, dict):
                     headers[k] = {"title": (meta.get("title") or k),
                                   "description": (meta.get("description") or "").strip(),
-                                  "namespace": (meta.get("namespace") or "").strip()}
+                                  "namespace": (meta.get("namespace") or "").strip(),
+                                  "scale": (meta.get("scale") or "").strip()}
     # General-stats values (list of {sample: {col_key: val}}) → merged per sample.
     per_sample: dict[str, dict] = {}
     for block in (data.get("report_general_stats_data") or []):
@@ -434,8 +457,13 @@ def parse_multiqc(outdir) -> dict:
         ns = (headers.get(k, {}).get("namespace") or "").strip()
         return f"{t} ({ns})" if ns else f"{t} [{k}]"
 
-    metrics = [{"key": k, "title": disp(k), "description": headers.get(k, {}).get("description", "")}
-               for k in metric_keys]
+    # Directionality (higher-is-better/worse) harvested from MultiQC's colour `scale` — lets the
+    # agent flag concerns on the BAD side and not cry wolf over an outlier in the good direction.
+    def _dir(k):
+        return _scale_direction(headers.get(k, {}).get("scale"))
+    _lbl = {1: "higher_better", -1: "higher_worse"}
+    metrics = [{"key": k, "title": disp(k), "description": headers.get(k, {}).get("description", ""),
+                "direction": _lbl.get(_dir(k))} for k in metric_keys]
     rows: dict[str, dict] = {}
     for s in samples:
         rows[s] = {disp(k): per_sample[s][k] for k in metric_keys if k in per_sample[s]}
@@ -450,6 +478,7 @@ def parse_multiqc(outdir) -> dict:
         nums = [v for _, v in pairs]
         if len(nums) < 4:
             continue
+        d = _dir(k)                         # metric directionality (or None)
         med = statistics.median(nums)
         devs = [abs(v - med) for v in nums]
         mad = statistics.median(devs)
@@ -469,7 +498,11 @@ def parse_multiqc(outdir) -> dict:
             # back to the mean abs deviation — Iglewicz–Hoaglin's own MAD==0 remedy.
             z = 0.6745 * dev / mad if mad > 0 else dev / (1.253314 * meanad)
             if abs(z) >= 3.5:
-                outliers.append({"sample": s, "metric": disp(k), "value": v, "z": round(z, 1)})
+                # concern = outlier on the metric's BAD side (opposite its good direction);
+                # None when direction is unknown — the agent then judges from the value + docs.
+                concern = None if d is None else ((d > 0) != (dev > 0))
+                outliers.append({"sample": s, "metric": disp(k), "value": v, "z": round(z, 1),
+                                 "side": "high" if dev > 0 else "low", "concern": concern})
     tools = sorted((data.get("report_data_sources") or {}).keys())
     report = next((str(p.relative_to(op)) for p in op.rglob("multiqc_report.html")), None)
     return {"n_samples": len(per_sample), "tools": tools, "metrics": metrics,
