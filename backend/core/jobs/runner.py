@@ -166,6 +166,20 @@ async def _continue_after_failure(job_id: str, lookup_pid: str | None,
         _record_worker_failure("continuation-after-failure", job_id, e)
 
 
+def _settle_job_deferred(job_id: str, lookup_pid: str | None) -> None:
+    """Resolve the parked deferred tool_use for a now-terminal background job (idempotent):
+    writes the terminal tool_result + transitions the turn out of AWAITING_TOOL_RESULT, so
+    the chat tool line resolves instead of spinning forever. Best-effort — never let it
+    break job finalization. Call BEFORE the continuation so the tool_result lands in-order."""
+    try:
+        from core.runtime.checkpoint import settle_deferred_job
+        fresh = get_job(job_id, project_id=lookup_pid)
+        if fresh:
+            settle_deferred_job(fresh)
+    except Exception as e:  # noqa: BLE001
+        _record_worker_failure("settle_deferred", job_id, e)
+
+
 def _record_worker_failure(where: str, job_id: str | None, exc: BaseException) -> None:
     """Capture a worker-level failure for /api/jobs/worker. NOT for routine
     job failures (those land in the job's `error` column). This is for the
@@ -315,6 +329,9 @@ def cancel_job(job_id: str, project_id: str | None = None) -> bool:
     # locally, `scancel <id>` on Slurm.
     get_submitter().cancel(job)
     update_job(job_id, project_id=project_id, status="cancelled", finished_at=_utcnow())
+    # Resolve the parked deferred tool_use so the chat tool line settles (the endpoint
+    # additionally fires the continuation to notify the agent). Idempotent.
+    _settle_job_deferred(job_id, project_id)
     return True
 
 
@@ -469,11 +486,13 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
 
     if job_id in _CANCELLED or result_obj.get("status") == "cancelled":
         update_job(job_id, project_id=lookup_pid, status="cancelled", finished_at=_utcnow())
+        _settle_job_deferred(job_id, lookup_pid)
         return
     if "error" in result_obj:
         update_job(job_id, project_id=lookup_pid, status="failed",
                    error=result_obj["error"][:1000],
                    log_tail=result_obj["error"][:1500], finished_at=_utcnow())
+        _settle_job_deferred(job_id, lookup_pid)
         await _continue_after_failure(job_id, lookup_pid, effective_pid)
         return
     stdout = result_obj.get("stdout", "")
@@ -487,6 +506,7 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
         update_job(job_id, project_id=lookup_pid, status="failed",
                    error=stderr[-1000:] or f"exit code {result_obj.get('returncode')}",
                    log_tail=log_tail, finished_at=_utcnow())
+        _settle_job_deferred(job_id, lookup_pid)
         await _continue_after_failure(job_id, lookup_pid, effective_pid)
         return
     # Provenance: stamp the exec record + inject exec_id BEFORE registration, so
@@ -513,6 +533,7 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
         })
     update_job(job_id, project_id=lookup_pid, status="done", log_tail=log_tail,
                finished_at=_utcnow())
+    _settle_job_deferred(job_id, lookup_pid)
     try:
         from core.jobs.continuation import enqueue_continuation
         fresh = get_job(job_id, project_id=lookup_pid) or {}
