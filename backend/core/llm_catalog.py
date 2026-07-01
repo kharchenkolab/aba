@@ -12,7 +12,7 @@ from __future__ import annotations
 # unavailable. Keep the model ids in sync with the gateway's accepted models.
 _FALLBACK: list[dict] = [
     {"label": "Opus", "model": "claude-opus-4-7", "spec": "grounded_guide"},
-    {"label": "Sonnet", "model": "claude-sonnet-4-6", "spec": "grounded_guide"},
+    {"label": "Sonnet", "model": "claude-sonnet-5", "spec": "grounded_guide"},
     {"label": "Haiku", "model": "claude-haiku-4-5-20251001", "spec": "grounded_guide"},
 ]
 
