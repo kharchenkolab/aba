@@ -57,3 +57,18 @@ def get_submitter() -> "BatchSubmitter":
         return SlurmSubmitter()
     from core.jobs.runner import LocalSubmitter
     return LocalSubmitter()
+
+
+def get_submitter_for(target: str) -> "BatchSubmitter":
+    """Submitter for a per-job submission target (see in-place submission,
+    misc/inplace_submission.md): 'inline' → LocalSubmitter (run the job in ABA's own
+    process/allocation, no sbatch); 'slurm' → SlurmSubmitter. Anything else → the
+    deployment default. This is the seam that lets a small job run in-place even when
+    the deployment default is Slurm."""
+    if target == "inline":
+        from core.jobs.runner import LocalSubmitter
+        return LocalSubmitter()
+    if target == "slurm":
+        from core.jobs.slurm_submitter import SlurmSubmitter
+        return SlurmSubmitter()
+    return get_submitter()

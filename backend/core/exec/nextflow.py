@@ -484,10 +484,19 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     ex = MaterializingExecutor()
-    # nextflow on PATH (module-loaded on the Slurm head, or already installed) →
-    # use the base env and inherit it; else conda-install it (off-cluster local).
+    # Get `nextflow` on PATH. The Slurm head's job.sh already `module load`ed it (shutil.which
+    # finds it); an INLINE run (LocalSubmitter, no job.sh) has NOT — so if a module is
+    # configured, capture its env overlay in-process. Conda-install only off-cluster (no module,
+    # not on PATH).
+    module_overlay: dict = {}
+    if not shutil.which("nextflow") and cfg.get("module"):
+        try:
+            from core.exec.modules import module_env_overlay
+            module_overlay = module_env_overlay(cfg["module"])
+        except Exception:  # noqa: BLE001
+            module_overlay = {}
     try:
-        if shutil.which("nextflow"):
+        if shutil.which("nextflow") or module_overlay:
             menv = ex.materialize(Provisioning(), cancel_token=cancel_token)
         else:
             menv = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}),
@@ -496,12 +505,13 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         return {"error": f"Could not provision nextflow: {e}"}
 
     env_vars = {"NXF_HOME": str(Path(scratch) / ".nextflow")}
+    env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
         env_vars["SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
-    # Nextflow head runs on this Java (≥17 for nf-schema); also fixes up PATH/LD_LIBRARY_PATH
-    # so the module-pinned older JDK's libs don't shadow it (see java_env()).
-    env_vars.update(java_env(cfg.get("java_home")))
+    # Nextflow head runs on this Java (≥17 for nf-schema); compose ON TOP of the module overlay
+    # so java/21 wins over the module's pinned java/11 (see java_env()).
+    env_vars.update(java_env(cfg.get("java_home"), base={**os.environ, **module_overlay}))
 
     # Execution mode: "local" runs tasks on the head node (one allocation); "slurm" fans out.
     mode = (execution or cfg.get("execution") or "slurm").lower()

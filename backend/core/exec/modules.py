@@ -285,6 +285,26 @@ def project_modules(project_id: str) -> list[str]:
         return []
 
 
+def module_env_overlay(full_module: str, base_env: dict | None = None) -> dict:
+    """Concrete env-var overlay for `module load <full_module>`, ready to merge into an
+    exec env: PATH-like vars are prepended onto `base_env`'s current value; scalars are set.
+    {} if the module yields no delta / is inactive. This is how an IN-PROCESS run (an inline
+    job with no job.sh `module load`) gets the tool's binary on PATH — the counterpart to
+    load_lines() for Slurm job scripts."""
+    d = env_delta(full_module)
+    if not d:
+        return {}
+    env = os.environ if base_env is None else base_env
+    out: dict = {}
+    for var, val in d.items():
+        if isinstance(val, list):                # PATH-like → prepend our entries
+            cur = env.get(var, "")
+            out[var] = ":".join(val) + ((":" + cur) if cur else "")
+        else:                                    # scalar → set
+            out[var] = val
+    return out
+
+
 def kernel_env_snippet(full_module: str) -> str:
     """Python that prepends `full_module`'s env-delta to os.environ in a RUNNING
     kernel, so subprocesses spawned by run_python find the tool's binary IN-PROCESS

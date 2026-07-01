@@ -50,6 +50,40 @@ def session_allocation() -> dict:
     return out
 
 
+def _cap_mem_gb(val) -> float | None:
+    """Parse a squeue %m / SLURM mem string ('4G', '16000M', '32000') → GB float."""
+    if not val:
+        return None
+    import re
+    m = re.match(r"([\d.]+)\s*([KMGTP]?)", str(val).strip().upper())
+    if not m:
+        return None
+    n = float(m.group(1))
+    return round(n * {"K": 1e-6, "M": 1e-3, "G": 1.0, "T": 1000.0, "P": 1e6, "": 1e-3}.get(m.group(2), 1e-3), 3)
+
+
+def aba_allocation_capacity() -> dict:
+    """ABA's own schedulable capacity — for deciding whether a background job can run
+    IN-PLACE (a subprocess in ABA's allocation) instead of via `sbatch`.
+
+      inline_ok — safe to run heavy work here: True for a local submitter (ABA *is* the
+                  compute) or a Slurm submitter while ABA itself is in an allocation; False on
+                  a bare login node under a Slurm submitter (never hammer the login node).
+      cores / mem_gb — the allocation's size (mem_gb may be None if the scheduler didn't report it).
+    """
+    from core.jobs.submitter import submitter_name
+    s = session_allocation()
+    submitter = submitter_name()
+    inline_ok = (submitter != "slurm") or bool(s.get("on_slurm"))
+    try:
+        cores = int(str(s.get("alloc_cores") or s.get("cores") or 1).split()[0])
+    except (ValueError, IndexError):
+        cores = int(s.get("cores") or 1)
+    return {"inline_ok": inline_ok, "cores": max(1, cores),
+            "mem_gb": _cap_mem_gb(s.get("alloc_mem")),
+            "submitter": submitter, "on_slurm": bool(s.get("on_slurm"))}
+
+
 def job_hpc_info(job: dict) -> dict:
     """Live scheduler info for ONE job (for the Jobs tab). Uses the SlurmSubmitter
     regardless of the active submitter, since the job records how it was run."""
