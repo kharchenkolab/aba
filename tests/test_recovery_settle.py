@@ -77,6 +77,36 @@ def test_reconcile_reaps_and_settles_dropped_job():
     assert ("job_drop", "prj_droptest") in settled, f"reaped drop must be settled: {settled}"
 
 
+def test_reconcile_kills_orphaned_inline_process():
+    # Full path: a running INLINE job whose head (a child of the dead prior instance) is still
+    # alive. On restart reconcile must reap the row AND kill the leftover process, matched by
+    # the run's scratch token (params.run_id) in its command line.
+    import subprocess
+    import time
+    token = "ana_reconkill_" + os.urandom(5).hex()
+    proc = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(120)  # {token}"],
+                            start_new_session=True)
+    _make_project_db("prj_orphankill", "job_orphan", "running",
+                     {"project_id": "prj_orphankill", "run_id": token, "submission": "inline"})
+    settled, restore = _spy_settle()
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.05)                              # let it appear in /proc
+        stats = reconcile_jobs()
+    finally:
+        restore()
+        if proc.poll() is None:
+            proc.kill()
+    assert _job_status("prj_orphankill", "job_orphan") == "failed", "orphaned inline row reaped"
+    assert stats.get("killed_orphan_procs", 0) >= 1, f"orphan process must be killed: {stats}"
+    for _ in range(60):
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert proc.poll() is not None, "the leftover inline head process must be dead"
+
+
 def test_reconcile_does_not_settle_slurm_or_terminal():
     # Slurm jobs are exempt from reaping (poll re-adopts them) → not settled here; and a
     # terminal row is left alone.
@@ -119,11 +149,46 @@ def test_non_cancelled_terminal_fail_still_eligible():
     assert "gave up after" in result.get("error", "")             # proves it reached the cap branch, not the cancel guard
 
 
+def test_reap_orphan_processes_kills_by_token():
+    # A prior-instance orphan is identified by its per-run scratch token (run_id) in the
+    # process cmdline. Spawn a stand-in in its OWN session (like a reparented orphan), reap
+    # by token, assert it dies. Guards the restart path that stops inline heads leaking.
+    import subprocess
+    import time
+    from core.jobs.runner import _reap_orphan_processes
+    token = "ana_reaptest_" + os.urandom(5).hex()
+    p = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(120)  # {token}"],
+                         start_new_session=True)
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline and p.poll() is None:
+            time.sleep(0.05)                          # let it appear in /proc
+        assert _reap_orphan_processes([token]) >= 1
+        for _ in range(60):
+            if p.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert p.poll() is not None                   # the token match killed it
+    finally:
+        if p.poll() is None:
+            p.kill()
+
+
+def test_reap_orphan_processes_noop_on_empty_or_unmatched():
+    from core.jobs.runner import _reap_orphan_processes
+    assert _reap_orphan_processes([]) == 0
+    assert _reap_orphan_processes([""]) == 0          # empty token ignored
+    assert _reap_orphan_processes(["no_such_token_zzz_" + os.urandom(4).hex()]) == 0
+
+
 def main() -> int:
     tests = [test_reconcile_reaps_and_settles_dropped_job,
+             test_reconcile_kills_orphaned_inline_process,
              test_reconcile_does_not_settle_slurm_or_terminal,
              test_cancelled_job_not_auto_resumed,
-             test_non_cancelled_terminal_fail_still_eligible]
+             test_non_cancelled_terminal_fail_still_eligible,
+             test_reap_orphan_processes_kills_by_token,
+             test_reap_orphan_processes_noop_on_empty_or_unmatched]
     failed = []
     for t in tests:
         try:

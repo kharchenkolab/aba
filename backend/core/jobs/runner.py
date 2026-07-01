@@ -831,6 +831,7 @@ def reconcile_jobs() -> dict:
     reaped = 0
     requeued: list[tuple[str, str, str]] = []   # (created_at, job_id, project_id)
     reaped_targets: list[tuple[str, str]] = []  # (job_id, project_id) — settle their deferred turns
+    reap_run_tokens: list[str] = []             # per-run scratch tokens — kill leftover OS procs
     reap_note = "backend restarted while job was running — orphaned"
 
     if not PROJECTS_DIR.exists():
@@ -863,12 +864,23 @@ def reconcile_jobs() -> dict:
             #    on the cluster across an ABA restart (the poll loop re-adopts them).
             now = _utcnow()
             running = c.execute("SELECT id, params FROM jobs WHERE status='running'").fetchall()
-            reap_ids = [r["id"] for r in running if not _is_slurm_params(r["params"])]
+            reap_rows = [r for r in running if not _is_slurm_params(r["params"])]
+            reap_ids = [r["id"] for r in reap_rows]
             for jid in reap_ids:
                 c.execute("UPDATE jobs SET status='failed', error=COALESCE(error,'') || ?, "
                           "finished_at=? WHERE id=?", (reap_note, now, jid))
             reaped += len(reap_ids)
             reaped_targets.extend((jid, pid) for jid in reap_ids)
+            # The DB row is now 'failed', but a local/inline job's OS process was a child of
+            # the DEAD prior instance (now reparented to init) and keeps burning ABA's
+            # allocation. Capture each run's scratch token (run_id, in the head's -work-dir/
+            # --outdir args) so we can kill those leftover processes below.
+            for r in reap_rows:
+                try:
+                    rp = json.loads(r["params"] or "{}")
+                except Exception:  # noqa: BLE001
+                    rp = {}
+                reap_run_tokens.append(str(rp.get("run_id") or r["id"]))
             # 2. Collect queued rows for re-enqueue.
             # Re-enqueue queued rows to the LOCAL worker — but NOT Slurm jobs:
             # they were already sbatch'd, so re-enqueuing would double-run them
@@ -896,13 +908,73 @@ def reconcile_jobs() -> dict:
     for jid, pid in reaped_targets:
         _settle_job_deferred(jid, pid)
 
+    # Kill any leftover OS processes (e.g. a Nextflow head) from the prior instance whose
+    # command line names a reaped run's scratch dir — else they run on, orphaned, burning
+    # ABA's allocation while the DB says 'failed'. Best-effort; run_id is per-run unique.
+    killed = _reap_orphan_processes(reap_run_tokens)
+
     stats = {
         "reaped_running": reaped,
         "requeued_queued": len(requeued),
         "projects_scanned": n_projects,
+        "killed_orphan_procs": killed,
     }
     print(f"[jobs.reconcile] {stats}", flush=True)
     return stats
+
+
+def _reap_orphan_processes(run_tokens: list[str]) -> int:
+    """Best-effort: SIGKILL leftover processes from a PRIOR ABA instance whose command line
+    names one of these per-run scratch tokens (run_id). On restart, reconcile marks such
+    inline jobs 'failed' in the DB, but the process itself was a child of the now-dead
+    instance (reparented to init) and would keep consuming the allocation. run_id is a
+    per-run unique token, so a cmdline match cannot hit an unrelated process. We only reap
+    tokens for jobs that were 'running' at THIS startup, and reconcile runs BEFORE the worker
+    starts any new job, so we can never kill a live job of the current instance. Skips our own
+    process group; no-op where /proc is unavailable (non-Linux)."""
+    import glob
+    import signal
+    tokens = {t for t in run_tokens if t}
+    if not tokens:
+        return 0
+    try:
+        self_pgid = os.getpgid(os.getpid())
+    except OSError:
+        self_pgid = -1
+    victims: list[int] = []
+    for cmdpath in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(cmdpath, "rb") as fh:
+                cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue                                   # process vanished / not readable
+        if not any(t in cmd for t in tokens):
+            continue
+        try:
+            pid = int(cmdpath.rsplit("/", 2)[1])
+        except (ValueError, IndexError):
+            continue
+        if pid == os.getpid():
+            continue
+        victims.append(pid)
+    killed = 0
+    for pid in victims:
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            pgid = None
+        try:
+            if pgid is not None and pgid != self_pgid:
+                os.killpg(pgid, signal.SIGKILL)        # take the whole tree (java + tasks)
+            else:
+                os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except OSError:
+            pass                                        # already gone / not ours
+    if killed:
+        print(f"[jobs.reconcile] killed {killed} orphaned process(es) from a prior instance",
+              flush=True)
+    return killed
 
 
 def worker_status() -> dict:
