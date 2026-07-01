@@ -230,6 +230,17 @@
 .jobs__pre--err  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; max-height: 160px; }
 .jobs__error { display: flex; flex-direction: column; gap: 3px; }
 
+/* Cancel action — shown in the expanded detail panel for queued/running jobs. */
+.jobs__actions { display: flex; align-items: center; gap: 8px; }
+.jobs__cancel {
+  align-self: flex-start;
+  background: none; border: 1px solid #fca5a5; border-radius: 3px;
+  padding: 2px 9px; font: inherit; font-size: 10.5px; color: #b91c1c; cursor: pointer;
+}
+.jobs__cancel:hover:not(:disabled) { background: #fef2f2; border-color: #f87171; }
+.jobs__cancel:disabled { opacity: 0.6; cursor: default; }
+.jobs__cancel-err { font-size: 10.5px; color: #c0392b; }
+
 /* ---------- Env tab (layered Python + R envs) ---------- */
 .env-tab { display: flex; flex-direction: column; gap: 6px; }
 .env-tab__head { display: flex; align-items: center; gap: 6px; position: sticky; top: 0;
