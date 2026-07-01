@@ -45,6 +45,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                    fresh: bool = False,
                    title: str | None = None,
                    env: str | None = None,
+                   execution: str | None = None,
                    aba_ctx_id: str | None = None) -> dict:
         """Run Python in the project's scratch workspace. State persists
         across calls within a thread (interactive kernel); pass
@@ -69,6 +70,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           background job's TIMEOUT ceiling (~2x the estimate). Give a realistic
           `estimated_runtime_min` (or an explicit `timeout_s`) for a long job;
           background jobs are NOT capped at the interactive 30-min limit.
+          `execution` (with background=True): `'slurm'` (default on a cluster) submits an
+          sbatch job; `'local'` runs it in-place in ABA's OWN allocation — no queue wait —
+          when it fits (good for a quick background job); `'auto'` decides from the estimate.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
@@ -103,7 +107,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
                 "background": background,
                 "estimated_runtime_min": estimated_runtime_min,
                 "est_cores": est_cores, "est_mem_gb": est_mem_gb, "est_gpu": est_gpu,
-                "fresh": fresh, "title": title, "env": env,
+                "fresh": fresh, "title": title, "env": env, "execution": execution,
             }, ctx)
 
     @mcp.tool()
@@ -116,6 +120,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
               est_gpu: bool = False,
               title: str | None = None,
               env: str | None = None,
+              execution: str | None = None,
               aba_ctx_id: str | None = None) -> dict:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand
@@ -164,7 +169,7 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         from content.bio.tools import run_r as _impl
         with in_tool_ctx(aba_ctx_id) as ctx:
             return _impl({"code": code, "timeout_s": timeout_s,
-                          "background": background,
+                          "background": background, "execution": execution,
                           "estimated_runtime_min": estimated_runtime_min,
                           "est_cores": est_cores, "est_mem_gb": est_mem_gb,
                           "est_gpu": est_gpu,
