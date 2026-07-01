@@ -6,7 +6,8 @@ start_turn so the fire path runs to completion against a stub.
 
 Edge cases the spec calls out:
   1. job with no thread_id → skipped (no plan to continue)
-  2. job status='cancelled' → skipped (explicit cancel kills continuation)
+  2. job status='cancelled' → FIRES (acknowledge-and-stop message; the agent
+     must not be left hanging on the deferred tool)
   3. job status='done' + idle thread → fired immediately
   4. job status='failed' + idle thread → fired (failure-aware message)
   5. job status='done' + thread streaming → deferred
@@ -114,13 +115,15 @@ def test_skips_when_no_project_id():
     assert FIRED == []
 
 
-def test_skips_when_cancelled():
+def test_fires_for_cancelled_job():
+    """A user-cancelled background job now FIRES a continuation (a distinct
+    'was cancelled — acknowledge and stop' message) so the originating turn
+    isn't left hanging on the deferred tool. (Was previously skipped.)"""
     _reset()
-    j = _job(status="cancelled")
+    j = _job(status="cancelled", thread_id="thr_cancel")
     out = asyncio.run(continuation.enqueue_continuation(j, "prj_test"))
-    assert out["state"] == "skipped", out
-    assert "cancel" in out["reason"], out
-    assert FIRED == []
+    assert out["state"] == "fired", out
+    assert FIRED == [("job_t1", "thr_cancel")]
 
 
 def test_skips_when_status_is_unexpected():
@@ -195,17 +198,27 @@ def test_continuation_message_distinguishes_success_vs_failure():
     assert "ImportError" in fail
 
 
+def test_continuation_message_cancelled_tells_agent_to_stop():
+    """A cancelled job's message must tell the agent NOT to continue the plan —
+    just acknowledge + ask how to proceed."""
+    msg = continuation._continuation_message_text(_job(status="cancelled"))
+    assert msg.startswith("[continuation: "), msg[:60]
+    assert "cancel" in msg.lower()
+    assert "not continue" in msg.lower() or "do not" in msg.lower()
+
+
 def main() -> int:
     tests = [
         test_skips_when_no_thread_id,
         test_skips_when_no_project_id,
-        test_skips_when_cancelled,
+        test_fires_for_cancelled_job,
         test_skips_when_status_is_unexpected,
         test_fires_immediately_when_idle,
         test_fires_for_failed_job_too,
         test_defers_when_thread_is_streaming,
         test_deferred_fires_once_thread_closes,
         test_continuation_message_distinguishes_success_vs_failure,
+        test_continuation_message_cancelled_tells_agent_to_stop,
     ]
     failed = []
     for t in tests:

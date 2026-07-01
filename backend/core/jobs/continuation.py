@@ -13,7 +13,10 @@ Decided edge policy (per #296):
   * Labels as a continuation in the UI (frontend pattern-matches the
     "[continuation: …]" prefix on the synthetic user message — MVP for
     Phase C; a metadata-column approach is a Phase B follow-up).
-  * Does NOT fire if the job was explicitly cancelled.
+  * Cancelled jobs DO fire (a distinct "was cancelled — acknowledge and
+    stop, don't continue" message), so a user-cancelled background job
+    never leaves its originating turn hanging. (Originally skipped; that
+    left the agent un-notified and the tool line unresolved.)
   * Does NOT fire if the originating turn had no thread_id (e.g. a
     workspace-level standalone job — no plan to continue).
 
@@ -49,14 +52,13 @@ async def enqueue_continuation(job: dict, project_id: str | None) -> dict:
         return {"state": "skipped", "reason": "no thread_id"}
 
     status = job.get("status")
-    # Per spec — explicit cancellation kills the continuation.
-    if status == "cancelled":
-        return {"state": "skipped", "reason": "job cancelled"}
-    # Only continue for jobs that actually produced something to continue
-    # FROM. A failed job's continuation should give the agent the failure
-    # context so it can decide (retry / fix / give up).  done + failed both
-    # qualify; only cancelled is excluded above.
-    if status not in ("done", "failed"):
+    # Every terminal transition notifies the thread so the agent is never left
+    # hanging: done/failed continue the plan; cancelled tells the agent the run
+    # was stopped so it acknowledges and STOPS (the message says don't continue —
+    # see _continuation_message_text). Originally cancelled was skipped, but that
+    # left a background job's originating turn with no notification (broken flow +
+    # a tool line that never resolves).
+    if status not in ("done", "failed", "cancelled"):
         return {"state": "skipped", "reason": f"unexpected status {status!r}"}
 
     # Per spec — queue behind any actively-streaming turn on the same thread.
@@ -192,6 +194,16 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
     title = job.get("title") or "background job"
     job_id = job.get("id") or "?"
     status = job.get("status") or "done"
+    if status == "cancelled":
+        # The user stopped this background job (e.g. via the Jobs panel). Do NOT
+        # continue the plan — acknowledge and ask how to proceed.
+        return (
+            f"[continuation: background job `{job_id}` ({title}) was CANCELLED]\n\n"
+            f"The user cancelled the background job you submitted, so it did not finish. "
+            f"Do NOT continue the plan as if it succeeded. Briefly acknowledge the "
+            f"cancellation and ask the user how they'd like to proceed (retry, adjust "
+            f"parameters, or do something else)."
+        )
     if status == "failed":
         err = (job.get("error") or "").strip().splitlines()
         err_one = err[0][:200] if err else "(no detail)"
