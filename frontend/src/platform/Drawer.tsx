@@ -458,6 +458,7 @@ interface JobDetail {
   status: string
   params: { code?: string; thread_id?: string | null; project_id?: string | null; run_id?: string | null; timeout_s?: number;
             submitter?: string; slurm_id?: string;
+            pipeline?: string; revision?: string; profile?: string;
             resources?: { partition?: string; cores?: number; mem_gb?: number; walltime_h?: number; gpu?: boolean } } | null
   log_tail: string | null
   error: string | null
@@ -665,6 +666,50 @@ function HpcJobBlock({ job, params }: { job: JobInfo; params: NonNullable<JobDet
   )
 }
 
+function procShort(s: string): string { const p = (s || '').split(':'); return p[p.length - 1] || s }
+
+/** Live task progress for a running Nextflow job (inline OR Slurm head): completed/running/
+ *  queued counts + the current stage, polled from /api/jobs/{id}/progress every 4s. Turns the
+ *  bare "running" spinner into real feedback ("142 done · 4 running · RSEQC_INNERDISTANCE").
+ *  Renders for any pipeline job; hides itself until the run's trace.txt has tasks. */
+function NextflowProgressBlock({ job }: { job: JobInfo }) {
+  const [p, setP] = useState<{ total: number; completed: number; running: number; submitted: number;
+                               failed: number; pct: number; current?: string[]; latest?: string } | null>(null)
+  const running = job.status === 'queued' || job.status === 'running'
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/progress`)
+        if (r.ok && alive) { const d = await r.json(); setP(d && d.total ? d : null) }
+      } catch (_) { /* ignore */ }
+    }
+    load()
+    if (!running) return () => { alive = false }
+    const h = window.setInterval(load, 4000)
+    return () => { alive = false; window.clearInterval(h) }
+  }, [job.id, running])
+  if (!p) return null
+  const stage = (p.current && p.current.length) ? p.current.map(procShort).join(', ')
+              : (p.latest ? procShort(p.latest) : '')
+  return (
+    <div className="jobs__nfprog">
+      <div className="jobs__detail-label">pipeline progress</div>
+      <div className="jobs__nfprog-track">
+        <div className="jobs__nfprog-fill" style={{ width: `${Math.max(2, p.pct)}%` }} />
+      </div>
+      <div className="jobs__detail-meta">
+        <span><strong>{p.completed}</strong> done</span>
+        {p.running > 0 && <span>{p.running} running</span>}
+        {p.submitted > 0 && <span>{p.submitted} queued</span>}
+        {p.failed > 0 && <span className="jobs__nfprog-fail">{p.failed} failed</span>}
+        <span>{p.pct}%</span>
+      </div>
+      {stage && <div className="jobs__nfprog-stage">{running ? 'running: ' : 'last: '}{stage}</div>}
+    </div>
+  )
+}
+
 /** Inline detail panel rendered directly under an expanded jobs row. Mirrors
  *  the chat's tool-line "script" + "output" affordances so a background
  *  run feels like its synchronous run_python sibling — same content,
@@ -732,6 +777,7 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
           onPrimary={doCancel} onCancel={() => setConfirming(false)}
         />
       )}
+      {detail.params?.pipeline && <NextflowProgressBlock job={job} />}
       {detail.params?.submitter === 'slurm' && <HpcJobBlock job={job} params={detail.params} />}
       {err && (
         <div className="jobs__error">

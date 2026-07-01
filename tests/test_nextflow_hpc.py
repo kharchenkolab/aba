@@ -442,6 +442,30 @@ def test_parse_multiqc_absent(tmp_path):
     assert nf.parse_multiqc(tmp_path) == {}                              # no multiqc_data.json → {}
 
 
+def test_nextflow_job_progress(tmp_path):
+    # Live progress read from the run's trace.txt (under the project scratch), for the Jobs card.
+    from core.data.workspace import project_work_dir
+    pid, rid = "prj_prog", "run_prog"
+    rep = project_work_dir(pid) / rid / "nf_reports"
+    rep.mkdir(parents=True, exist_ok=True)
+    (rep / "trace.txt").write_text(
+        "task_id\tname\tstatus\texit\n"
+        "1\tNFCORE:RNASEQ:STAR_ALIGN (s1)\tCOMPLETED\t0\n"
+        "2\tNFCORE:RNASEQ:SALMON_QUANT (s1)\tCOMPLETED\t0\n"
+        "3\tNFCORE:RNASEQ:BAM_RSEQC:RSEQC_BAMSTAT (s2)\tRUNNING\t-\n"
+        "4\tNFCORE:RNASEQ:MULTIQC (s2)\tSUBMITTED\t-\n")
+    job = {"id": "job_x", "kind": "run_nextflow",
+           "params": {"pipeline": "nf-core/rnaseq", "run_id": rid, "project_id": pid}}
+    p = nf.nextflow_job_progress(job)
+    assert p["total"] == 4 and p["completed"] == 2 and p["running"] == 1 and p["submitted"] == 1
+    assert p["current"] == ["NFCORE:RNASEQ:BAM_RSEQC:RSEQC_BAMSTAT"]     # (s2) tag stripped
+    assert "MULTIQC" in p["latest"]                                      # last row's process
+    # non-pipeline job, or no trace yet → {} (card shows nothing, no crash)
+    assert nf.nextflow_job_progress({"id": "j", "kind": "run_python", "params": {}}) == {}
+    assert nf.nextflow_job_progress(
+        {"id": "j2", "kind": "run_nextflow", "params": {"pipeline": "x", "run_id": "nope", "project_id": pid}}) == {}
+
+
 def _write_multiqc_data(tmp_path, data):
     """Write an arbitrary multiqc_data.json (for the outlier / dedup edge cases)."""
     import json

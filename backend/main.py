@@ -1563,6 +1563,18 @@ def jobs_hpc(job_id: str):
     return job_hpc_info(j)
 
 
+@app.get("/api/jobs/{job_id}/progress")
+def jobs_progress(job_id: str):
+    """Live task progress for a running Nextflow job — completed/running/queued counts + the
+    current stage, read from its trace.txt. {} for non-pipeline jobs or before the trace exists.
+    Polled by the Jobs card so an inline/local head shows progress, not just a spinner."""
+    j = get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id} not found")
+    from core.exec.nextflow import nextflow_job_progress
+    return nextflow_job_progress(j)
+
+
 @app.get("/api/hpc/session")
 def hpc_session():
     """The ABA process' own compute allocation (Slurm node/cores/walltime, or the
