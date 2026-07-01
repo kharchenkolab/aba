@@ -256,6 +256,27 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
     return job
 
 
+def resolve_submission_target(requested: str, heaviest: dict | None, capacity: dict) -> tuple[str, str]:
+    """Decide WHERE a background job runs — 'inline' (a subprocess in ABA's own allocation,
+    no sbatch) vs 'slurm' (sbatch a dedicated allocation) — and why. Called when the job would
+    run with a local executor (requested execution in local/auto). `heaviest` is the biggest
+    single task's {cpus, mem_gb} that must fit ABA's allocation. See misc/inplace_submission.md."""
+    if capacity.get("submitter") != "slurm":
+        return "inline", "local submitter — runs in ABA's process"
+    if not capacity.get("inline_ok"):
+        return "slurm", "ABA is on a login node (not in a compute allocation) — using Slurm"
+    cap_c, cap_m = capacity.get("cores"), capacity.get("mem_gb")
+    h_c, h_m = (heaviest or {}).get("cpus"), (heaviest or {}).get("mem_gb")
+    over = []
+    if h_c and cap_c and h_c > cap_c:
+        over.append(f"{h_c:g}c > {cap_c}c")
+    if h_m and cap_m and h_m > cap_m:
+        over.append(f"{h_m:g}GB > {cap_m:g}GB")
+    if over:
+        return "slurm", "heaviest task exceeds ABA's allocation (" + ", ".join(over) + ") — using Slurm"
+    return "inline", f"fits ABA's allocation ({cap_c}c" + (f"/{cap_m:g}GB" if cap_m else "") + ") — runs in-place"
+
+
 def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
                         revision: str | None = None, profile: str | None = None,
                         nf_params: dict | None = None, outdir: str | None = None,
@@ -297,6 +318,18 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         execution = requested
     if execution == "local" and est:
         local_resources = est.get("recommended_local")
+    # Submission target: run IN-PLACE (no sbatch) in ABA's own allocation when the executor is
+    # local AND the heaviest task fits ABA's capacity; else sbatch. execution=slurm always sbatches.
+    submission, submission_reason = "slurm", None
+    if execution == "local":
+        from core.exec.hpc_session import aba_allocation_capacity
+        cap = aba_allocation_capacity()
+        submission, submission_reason = resolve_submission_target(
+            requested, (est or {}).get("heaviest_task") if est else None, cap)
+        if submission == "inline":
+            # size the local executor pool to ABA's OWN allocation (not the dedicated-head default)
+            local_resources = {"cores": cap["cores"],
+                               "mem_gb": cap.get("mem_gb") or (local_resources or {}).get("mem_gb")}
     if est:
         resource_estimate = {**{k: est.get(k) for k in
                                 ("heaviest_task", "caps", "local_viable", "reason")},
@@ -311,13 +344,15 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         focus_entity_id=focus_entity_id,
         params={"pipeline": pipeline, "revision": revision, "profile": profile,
                 "nf_params": nf_params or {}, "outdir": outdir, "execution": execution,
+                "submission": submission, "submission_reason": submission_reason,
                 "local_resources": local_resources, "resource_estimate": resource_estimate,
                 "code": f"nextflow run {pipeline}" + (f" -profile {profile}" if profile else ""),
                 "timeout_s": timeout_s, "project_id": project_id,
                 "thread_id": thread_id, "run_id": run_id, "estimate": estimate or {}},
         project_id=project_id,
     )
-    get_submitter().submit(job)
+    from core.jobs.submitter import get_submitter_for
+    get_submitter_for(submission).submit(job)
     return job
 
 
@@ -603,8 +638,10 @@ async def _run_one(job_id: str, project_id: str | None = None) -> None:
                     params.get("pipeline") or "", project_id=str(effective_pid),
                     run_id=exec_run_id, revision=params.get("revision"),
                     profile=params.get("profile"), params=params.get("nf_params") or {},
-                    outdir=params.get("outdir"), timeout_s=timeout_s,
-                    cancel_token=token, stream=True),
+                    outdir=params.get("outdir"),
+                    execution=params.get("execution"),          # inline head must use executor=local
+                    local_resources=params.get("local_resources"),
+                    timeout_s=timeout_s, cancel_token=token, stream=True),
             )
         elif kind == "run_r":
             result_obj = await loop.run_in_executor(
