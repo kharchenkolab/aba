@@ -621,6 +621,34 @@ def test_publish_multiqc_report(tmp_path):
     assert publish_multiqc_report(tmp_path / "no_such_dir", "prj_pub", "run_pub") is None  # no report → None
 
 
+def test_inline_silence_gate(tmp_path, monkeypatch):
+    # The hang watchdog's FS-only gate (nextflow_inline_silence): a run is a "suspect" ONLY when
+    # it has a RUNNING task (.command.begin, no .exitcode) AND has gone silent past the budget.
+    # A run with no tasks, a freshly-active task, or only finished tasks is NOT flagged — this is
+    # what keeps a slow-but-healthy pipeline from being killed.
+    import os as _os
+    from core.exec import nextflow as nf
+    run_id = "sil1"
+    monkeypatch.setenv("ABA_NEXTFLOW_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(nf, "_INLINE_STALL_MIN", 20)
+    job = {"kind": "run_nextflow", "id": "j1", "params": {"run_id": run_id, "project_id": "p"}}
+    wd = tmp_path / run_id
+    wd.mkdir()
+    assert nf.nextflow_work_dir(job) == wd            # resolves via ABA_NEXTFLOW_WORKDIR/<run_id>
+    assert nf.nextflow_inline_silence(job) is None    # no task dirs yet → not suspect
+
+    t0 = 1_000_000.0
+    d = wd / "aa" / "bbbbccccdddd"; d.mkdir(parents=True)
+    (d / ".command.begin").write_text("x"); (d / ".command.log").write_text("running")
+    _os.utime(d / ".command.begin", (t0, t0)); _os.utime(d / ".command.log", (t0, t0))
+    assert nf.nextflow_inline_silence(job, now=t0 + 60) is None        # 1 min idle → progressing
+    s = nf.nextflow_inline_silence(job, now=t0 + 21 * 60)              # 21 min idle → suspect
+    assert s and s["running_tasks"] == 1 and s["idle_min"] >= 20
+
+    (d / ".exitcode").write_text("0"); _os.utime(d / ".exitcode", (t0, t0))
+    assert nf.nextflow_inline_silence(job, now=t0 + 21 * 60) is None   # task finished → not running
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

@@ -31,7 +31,8 @@ from core.jobs.runner import reconcile_jobs, _maybe_resume_nextflow_job  # noqa:
 from core.config import PROJECTS_DIR  # noqa: E402
 
 
-def _make_project_db(pid: str, job_id: str, status: str, params: dict) -> None:
+def _make_project_db(pid: str, job_id: str, status: str, params: dict,
+                     kind: str = "run_python") -> None:
     """p14-style: a project.db with one jobs row (reconcile is a filesystem scan of
     PROJECTS_DIR/*/project.db, independent of single/multi mode)."""
     import sqlite3
@@ -42,9 +43,17 @@ def _make_project_db(pid: str, job_id: str, status: str, params: dict) -> None:
               "created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)")
     c.execute("INSERT INTO jobs (id,kind,title,status,params,created_at,started_at) "
               "VALUES (?,?,?,?,?,?,?)",
-              (job_id, "run_python", "dropped", status, json.dumps(params),
+              (job_id, kind, "dropped", status, json.dumps(params),
                "2026-07-01T00:00:00+00:00", "2026-07-01T00:00:01+00:00"))
     c.commit(); c.close()
+
+
+def _job_params(pid: str, job_id: str) -> dict:
+    import sqlite3
+    c = sqlite3.connect(PROJECTS_DIR / pid / "project.db")
+    row = c.execute("SELECT params FROM jobs WHERE id=?", (job_id,)).fetchone()
+    c.close()
+    return json.loads(row[0]) if row and row[0] else {}
 
 
 def _job_status(pid: str, job_id: str) -> str:
@@ -105,6 +114,48 @@ def test_reconcile_kills_orphaned_inline_process():
             break
         time.sleep(0.05)
     assert proc.poll() is not None, "the leftover inline head process must be dead"
+
+
+def test_reconcile_resumes_inline_pipeline():
+    # A running INLINE nextflow head that was mid-run when ABA died/timed-out. Its run_id-keyed
+    # work-dir on scratch is a `-resume` cache, so reconcile must RE-ENQUEUE it (queued, resume
+    # counter bumped) rather than fail it — and must NOT settle its deferred turn (the job is
+    # resuming, not terminal). This is the durability fix for the inline path.
+    _make_project_db("prj_nfresume", "job_nf", "running",
+                     {"project_id": "prj_nfresume", "run_id": "ana_res1", "submission": "inline",
+                      "pipeline": "nf-core/rnaseq"}, kind="run_nextflow")
+    settled, restore = _spy_settle()
+    try:
+        stats = reconcile_jobs()
+    finally:
+        restore()
+    assert _job_status("prj_nfresume", "job_nf") == "queued", "inline pipeline re-enqueued, not failed"
+    assert _job_params("prj_nfresume", "job_nf").get("nf_resumes") == 1, "resume counter bumped"
+    assert ("job_nf", "prj_nfresume") not in settled, "a resuming job must NOT be settled"
+    assert stats.get("resumed_inline", 0) >= 1, f"resumed_inline stat: {stats}"
+
+
+def test_reconcile_fails_inline_pipeline_past_cap():
+    # A pipeline that has already burned its resume budget is failed, not resurrected forever.
+    _make_project_db("prj_nfcap", "job_cap", "running",
+                     {"project_id": "prj_nfcap", "run_id": "ana_cap", "submission": "inline",
+                      "pipeline": "nf-core/rnaseq", "nf_resumes": 3}, kind="run_nextflow")
+    settled, restore = _spy_settle()
+    try:
+        reconcile_jobs()
+    finally:
+        restore()
+    assert _job_status("prj_nfcap", "job_cap") == "failed", "over-cap pipeline reaped"
+    assert ("job_cap", "prj_nfcap") in settled, "a reaped job is settled"
+
+
+def test_reconcile_does_not_resume_cancelled_pipeline():
+    # A user-cancelled inline pipeline must be reaped, never resumed (mirror of the slurm guard).
+    _make_project_db("prj_nfcancel", "job_canc", "running",
+                     {"project_id": "prj_nfcancel", "run_id": "ana_canc", "submission": "inline",
+                      "pipeline": "nf-core/rnaseq", "cancel_requested": True}, kind="run_nextflow")
+    reconcile_jobs()
+    assert _job_status("prj_nfcancel", "job_canc") == "failed", "cancelled pipeline not resumed"
 
 
 def test_reconcile_does_not_settle_slurm_or_terminal():
@@ -184,6 +235,9 @@ def test_reap_orphan_processes_noop_on_empty_or_unmatched():
 def main() -> int:
     tests = [test_reconcile_reaps_and_settles_dropped_job,
              test_reconcile_kills_orphaned_inline_process,
+             test_reconcile_resumes_inline_pipeline,
+             test_reconcile_fails_inline_pipeline_past_cap,
+             test_reconcile_does_not_resume_cancelled_pipeline,
              test_reconcile_does_not_settle_slurm_or_terminal,
              test_cancelled_job_not_auto_resumed,
              test_non_cancelled_terminal_fail_still_eligible,

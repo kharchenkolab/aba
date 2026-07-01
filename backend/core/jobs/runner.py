@@ -830,6 +830,7 @@ def reconcile_jobs() -> dict:
 
     reaped = 0
     requeued: list[tuple[str, str, str]] = []   # (created_at, job_id, project_id)
+    resumed: list[tuple[str, str]] = []         # (job_id, project_id) — inline pipelines to -resume
     reaped_targets: list[tuple[str, str]] = []  # (job_id, project_id) — settle their deferred turns
     reap_run_tokens: list[str] = []             # per-run scratch tokens — kill leftover OS procs
     reap_note = "backend restarted while job was running — orphaned"
@@ -860,27 +861,41 @@ def reconcile_jobs() -> dict:
                 c.close()
                 continue
             n_projects += 1
-            # 1. Reap orphan running rows — EXCEPT Slurm jobs, which keep running
-            #    on the cluster across an ABA restart (the poll loop re-adopts them).
+            # 1. Handle orphan running rows — EXCEPT Slurm jobs, which keep running on the
+            #    cluster across an ABA restart (the poll loop re-adopts them). An inline
+            #    PIPELINE gets a second chance: its run_id-keyed work-dir on scratch survived
+            #    the crash and IS the `-resume` cache, so re-enqueue it (→ same run_id → resume
+            #    skips finished tasks) rather than throwing away a partly-finished run. Anything
+            #    else (run_python/run_r, or a pipeline past the resume cap / user-cancelled) is
+            #    reaped as before. In BOTH cases we still capture the run token to kill the dead
+            #    instance's orphaned head below — so a fresh head owns the work-dir cleanly.
             now = _utcnow()
-            running = c.execute("SELECT id, params FROM jobs WHERE status='running'").fetchall()
-            reap_rows = [r for r in running if not _is_slurm_params(r["params"])]
-            reap_ids = [r["id"] for r in reap_rows]
-            for jid in reap_ids:
-                c.execute("UPDATE jobs SET status='failed', error=COALESCE(error,'') || ?, "
-                          "finished_at=? WHERE id=?", (reap_note, now, jid))
-            reaped += len(reap_ids)
-            reaped_targets.extend((jid, pid) for jid in reap_ids)
-            # The DB row is now 'failed', but a local/inline job's OS process was a child of
-            # the DEAD prior instance (now reparented to init) and keeps burning ABA's
-            # allocation. Capture each run's scratch token (run_id, in the head's -work-dir/
-            # --outdir args) so we can kill those leftover processes below.
-            for r in reap_rows:
+            running = c.execute(
+                "SELECT id, kind, created_at, params FROM jobs WHERE status='running'").fetchall()
+            for r in running:
+                if _is_slurm_params(r["params"]):
+                    continue
                 try:
                     rp = json.loads(r["params"] or "{}")
                 except Exception:  # noqa: BLE001
                     rp = {}
-                reap_run_tokens.append(str(rp.get("run_id") or r["id"]))
+                run_tok = str(rp.get("run_id") or r["id"])
+                reap_run_tokens.append(run_tok)   # kill the orphaned head either way
+                is_nf = (r["kind"] == "run_nextflow") or bool(rp.get("pipeline"))
+                resumes = int(rp.get("nf_resumes") or 0)
+                if is_nf and not rp.get("cancel_requested") and resumes < _NF_MAX_RESUMES:
+                    new_params = {**rp, "nf_resumes": resumes + 1, "slurm_id": None}
+                    c.execute("UPDATE jobs SET status='queued', error=NULL, params=? WHERE id=?",
+                              (json.dumps(new_params), r["id"]))
+                    # Re-enqueue in global FIFO with the queued rows; do NOT settle the deferred
+                    # tool_use — the job is RESUMING, not terminal.
+                    requeued.append((r["created_at"], r["id"], pid))
+                    resumed.append((r["id"], pid))
+                else:
+                    c.execute("UPDATE jobs SET status='failed', error=COALESCE(error,'') || ?, "
+                              "finished_at=? WHERE id=?", (reap_note, now, r["id"]))
+                    reaped += 1
+                    reaped_targets.append((r["id"], pid))
             # 2. Collect queued rows for re-enqueue.
             # Re-enqueue queued rows to the LOCAL worker — but NOT Slurm jobs:
             # they were already sbatch'd, so re-enqueuing would double-run them
@@ -908,14 +923,23 @@ def reconcile_jobs() -> dict:
     for jid, pid in reaped_targets:
         _settle_job_deferred(jid, pid)
 
+    # For each inline pipeline we're RESUMING, clear the dead head's control sentinels
+    # (done/result.json) so the re-run doesn't read stale state — the run_id-keyed work-dir
+    # (the -resume cache) is left untouched. Runs before the worker starts any job.
+    for jid, pid in resumed:
+        _reset_nextflow_run_dir({"id": jid, "params": {"project_id": pid}})
+
     # Kill any leftover OS processes (e.g. a Nextflow head) from the prior instance whose
-    # command line names a reaped run's scratch dir — else they run on, orphaned, burning
-    # ABA's allocation while the DB says 'failed'. Best-effort; run_id is per-run unique.
+    # command line names a reaped/resumed run's scratch token — else they run on, orphaned,
+    # burning ABA's allocation (and, for a resume, would fight the fresh head for the work-dir).
+    # Best-effort; run_id is per-run unique. reconcile runs BEFORE the worker starts any new
+    # head, so this can only hit the DEAD instance's processes, never the resumed job's new one.
     killed = _reap_orphan_processes(reap_run_tokens)
 
     stats = {
         "reaped_running": reaped,
-        "requeued_queued": len(requeued),
+        "resumed_inline": len(resumed),
+        "requeued_queued": len(requeued) - len(resumed),
         "projects_scanned": n_projects,
         "killed_orphan_procs": killed,
     }
@@ -1117,6 +1141,91 @@ async def _slurm_poll_loop() -> None:
         await asyncio.sleep(_SLURM_POLL_S)
 
 
+_INLINE_WATCH_S = 30.0    # hangs unfold over minutes — a slow cadence keeps this near-free
+
+
+def _active_inline_jobs() -> list[dict]:
+    """Running INLINE pipeline heads across project DBs — the rows the hang watchdog checks.
+    The mirror-image of _active_slurm_jobs: a run_nextflow (or params.pipeline) head that is
+    NOT Slurm-submitted (Slurm heads have their own durability and no local-hang mode)."""
+    from core.config import PROJECTS_DIR
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    out: list[dict] = []
+    if not PROJECTS_DIR.exists():
+        return out
+    for proj_dir in sorted(PROJECTS_DIR.iterdir()):
+        db_file = proj_dir / "project.db"
+        if not proj_dir.is_dir() or not db_file.exists() or proj_dir.name.startswith("_"):
+            continue
+        try:
+            c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
+            if not c.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+                c.close(); continue
+            for r in c.execute("SELECT * FROM jobs WHERE status='running'").fetchall():
+                if _is_slurm_params(r["params"]):
+                    continue
+                job = _row_to_job(r)
+                params = job.get("params") or {}
+                if job.get("kind") == "run_nextflow" or params.get("pipeline"):
+                    job["project_id"] = proj_dir.name
+                    out.append(job)
+            c.close()
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _inline_watchdog_loop() -> None:
+    """Reconstructible hang watchdog for INLINE pipeline heads. Each tick re-derives the
+    work-list from the DB and each head's health from the FILESYSTEM + /proc — there is NO
+    in-memory monitor state, so an ABA restart loses nothing: the next instance re-scans and
+    keeps watching. A CONFIRMED deadlock (a running task + the whole run silent past the budget
+    + ~0 CPU across a resample) is killed like an infra failure, NOT a user cancel — so the head
+    dies non-zero, _finalize_job takes the FAILED path, and the continuation tells the agent WHY
+    (params.stall_reason). Without this an inline task wedged on a container/FS lock would hold
+    ABA's allocation silently forever (the Apptainer-cache-on-NFS case)."""
+    from core.exec.nextflow import (nextflow_inline_silence, nextflow_work_dir,
+                                     _run_cpu_jiffies, _STALL_CPU_SAMPLE_S, _STALL_CPU_MIN_JIFFIES)
+    print("[jobs.watchdog] inline hang watchdog started", flush=True)
+    while True:
+        try:
+            for job in _active_inline_jobs():
+                sil = nextflow_inline_silence(job)
+                if not sil:
+                    continue
+                params = job.get("params") or {}
+                run_id = params.get("run_id") or job["id"]
+                wd = nextflow_work_dir(job)
+                # CPU cross-check: a quiet-but-computing task (a long alignment writing output
+                # only at the end) must NOT be killed — only ~0 CPU across the resample is a
+                # real deadlock. This is the only place the loop blocks, and only for a job that
+                # already looks silent (rare), so it stays cheap.
+                j0 = _run_cpu_jiffies(wd, str(run_id))
+                await asyncio.sleep(_STALL_CPU_SAMPLE_S)
+                j1 = _run_cpu_jiffies(wd, str(run_id))
+                if j0 is not None and j1 is not None and (j1 - j0) > _STALL_CPU_MIN_JIFFIES:
+                    continue                                  # still computing — leave it alone
+                pid = job.get("project_id")
+                reason = (f"inline pipeline auto-aborted: {sil['running_tasks']} task(s) running "
+                          f"but no output or CPU for {sil['idle_min']:.0f} min — likely a "
+                          f"container/filesystem deadlock (e.g. an Apptainer cache on NFS). Killed "
+                          f"so it doesn't hold ABA's allocation; retry (Slurm submission is more "
+                          f"robust for this) or check the container/mounts.")
+                # Persist WHY first (the FAILED continuation surfaces params.stall_reason), then
+                # kill the head's process group. We deliberately do NOT mark the row terminal:
+                # the worker owning _run_one is the single finalizer — it observes the head die
+                # (non-zero rc → FAILED path → continuation), so there is no double-finalize race.
+                update_job(job["id"], project_id=pid, params={**params, "stall_reason": reason})
+                killed = _reap_orphan_processes([str(run_id)])   # killpg by run token; skips self
+                print(f"[jobs.watchdog] {job['id']} deadlocked; killed {killed} proc(s) — {reason}",
+                      flush=True)
+        except Exception as e:  # noqa: BLE001
+            _record_worker_failure("inline-watchdog", None, e)
+        await asyncio.sleep(_INLINE_WATCH_S)
+
+
 def start_worker() -> None:
     """Launch the worker task once, from FastAPI startup.
 
@@ -1135,6 +1244,9 @@ def start_worker() -> None:
         _record_worker_failure("reconcile_jobs", None, e)
     _WORKER_STARTED = True
     asyncio.get_event_loop().create_task(_worker())
+    # Watch inline pipeline heads for deadlocks (any deployment — an inline head can happen
+    # regardless of the batch submitter, and it has no per-task walltime to catch a hang).
+    asyncio.get_event_loop().create_task(_inline_watchdog_loop())
     # On a Slurm deployment, also watch sbatch'd jobs for their completion
     # sentinel (the local worker only handles in-process jobs).
     from core.jobs.submitter import submitter_name

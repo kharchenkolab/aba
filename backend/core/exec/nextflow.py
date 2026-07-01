@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import statistics
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -407,6 +408,100 @@ def nextflow_job_progress(job: dict) -> dict:
         prog["total_expected"] = expected_task_count(
             params.get("pipeline"), params.get("revision"), params.get("profile"))
     return prog
+
+
+# ── inline-pipeline hang watchdog (misc/inplace_submission.md) ─────────────────────────────
+# An INLINE head runs in ABA's own allocation with NO per-task walltime, so a wedged container
+# task (the Apptainer-cache-on-NFS deadlock) would stall the whole run silently forever. The
+# watchdog (runner._inline_watchdog_loop) detects that from the FILESYSTEM + /proc — never from
+# in-memory monitor state — so it survives an ABA restart: a fresh instance just re-derives every
+# running head's health and keeps watching. These helpers are that verdict, kept pure/cheap.
+_INLINE_STALL_MIN = float(os.environ.get("ABA_INLINE_STALL_MIN") or 20)   # whole-run silence budget
+_STALL_CPU_SAMPLE_S = float(os.environ.get("ABA_INLINE_STALL_CPU_SAMPLE_S") or 3)
+_STALL_CPU_MIN_JIFFIES = 5   # >~50ms of CPU across the resample ⇒ still computing, not deadlocked
+
+
+def nextflow_work_dir(job: dict) -> Optional[Path]:
+    """The Nextflow -work-dir for a job (where task <hash>/.command.* live), recomputed EXACTLY
+    as run_nextflow_code does: <workdir_root>/<run_id>, else the run scratch's work/. None if
+    unresolvable. Pure path math — safe to call from the watchdog every tick."""
+    params = job.get("params") or {}
+    run_id = params.get("run_id") or job.get("id")
+    if not run_id:
+        return None
+    try:
+        cfg = nextflow_config()
+        if cfg.get("workdir_root"):
+            return Path(os.path.expandvars(cfg["workdir_root"])) / str(run_id)
+        from core.data.workspace import scratch_dir
+        pid = params.get("project_id") or job.get("project_id") or "_workspace"
+        return Path(scratch_dir(str(pid), str(run_id))) / "work"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _run_cpu_jiffies(run_dir: Optional[Path], run_id: str) -> Optional[int]:
+    """Sum utime+stime (clock ticks) over /proc for processes whose cmdline names this run's
+    work-dir or run_id — the Nextflow head + its task/container children. None if /proc is
+    unavailable (non-Linux) or nothing matches (⇒ no live process for this run)."""
+    tokens = [t for t in ((str(run_dir) if run_dir else ""), str(run_id)) if t]
+    if not tokens:
+        return None
+    total = 0
+    matched = False
+    try:
+        proc_iter = list(Path("/proc").glob("[0-9]*"))
+    except OSError:
+        return None
+    for pdir in proc_iter:
+        try:
+            cmd = (pdir / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        if not any(t in cmd for t in tokens):
+            continue
+        try:
+            fields = (pdir / "stat").read_text().rsplit(")", 1)[1].split()   # after "(comm)"
+            total += int(fields[11]) + int(fields[12])                       # utime, stime
+            matched = True
+        except (OSError, IndexError, ValueError):
+            continue
+    return total if matched else None
+
+
+def nextflow_inline_silence(job: dict, *, now: Optional[float] = None) -> Optional[dict]:
+    """FS-only gate for the hang watchdog: a suspect dict when an inline pipeline has ≥1 RUNNING
+    task (a task dir with .command.begin but no .exitcode) AND nothing in the WHOLE run's work-dir
+    has changed for _INLINE_STALL_MIN minutes — else None. Conservative on purpose: while ANY task
+    still writes output the run is progressing, so a single quiet task can't trip it. The CPU
+    cross-check (deadlock vs quiet-but-busy compute) is the loop's job — kept separate so it can
+    `await` the resample instead of blocking the event loop."""
+    params = job.get("params") or {}
+    if job.get("kind") != "run_nextflow" and not params.get("pipeline"):
+        return None
+    wd = nextflow_work_dir(job)
+    if not wd or not wd.exists():
+        return None
+    begins = list(wd.glob("*/*/.command.begin"))
+    if not begins:
+        return None
+    task_dirs = {b.parent for b in begins}
+    running = [d for d in task_dirs if not (d / ".exitcode").exists()]
+    if not running:
+        return None                       # nothing running → finalize handles it, not the watchdog
+    newest = 0.0
+    for d in task_dirs:
+        for fn in (".command.log", ".command.out", ".command.err", ".exitcode"):
+            try:
+                newest = max(newest, (d / fn).stat().st_mtime)
+            except OSError:
+                continue
+    if newest == 0.0:
+        return None
+    idle_s = (now if now is not None else time.time()) - newest
+    if idle_s < _INLINE_STALL_MIN * 60:
+        return None                       # something advanced recently → progressing
+    return {"idle_min": round(idle_s / 60, 1), "running_tasks": len(running), "work_dir": str(wd)}
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")

@@ -222,10 +222,28 @@ def test_continuation_message_nextflow_completion_is_pipeline_aware():
         assert bad not in msg, f"leaked run_python framing: {bad!r}"
 
 
+def test_continuation_message_stalled_pipeline_tells_agent_it_deadlocked():
+    """A watchdog-aborted (stalled) pipeline must be surfaced as a STALL with the concrete
+    reason — NOT a generic error — so the agent doesn't retry blindly or assume success."""
+    reason = ("inline pipeline auto-aborted: 1 task(s) running but no output or CPU for 22 min — "
+              "likely a container/filesystem deadlock (e.g. an Apptainer cache on NFS).")
+    job = {"id": "job_stall", "title": "Nextflow: nf-core/rnaseq", "status": "failed",
+           "kind": "run_nextflow", "focus_entity_id": "workspace", "error": "exit code 137",
+           "log_tail": "", "params": {"thread_id": "thr_s", "project_id": "prj_test",
+                                       "pipeline": "nf-core/rnaseq", "run_id": "ana_s",
+                                       "stall_reason": reason}}
+    msg = continuation._continuation_message_text(job, project_id="prj_test")
+    assert msg.startswith("[continuation: "), msg[:60]
+    assert "stalled" in msg.lower() and "deadlock" in msg.lower(), msg[:200]
+    assert reason in msg                                    # the concrete cause is passed through
+    assert "not assume" in msg.lower()                      # don't treat it as a success
+
+
 def main() -> int:
     tests = [
         test_skips_when_no_thread_id,
         test_continuation_message_nextflow_completion_is_pipeline_aware,
+        test_continuation_message_stalled_pipeline_tells_agent_it_deadlocked,
         test_skips_when_no_project_id,
         test_fires_for_cancelled_job,
         test_skips_when_status_is_unexpected,
