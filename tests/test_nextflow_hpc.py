@@ -333,6 +333,23 @@ def test_parse_failure(tmp_path):
     assert "Error executing process" in f["error_excerpt"] and "trimgalore" in f["error_excerpt"]
 
 
+def test_parse_failure_abort_cause_from_log(tmp_path):
+    # Pre-task abort (bad --input): nf-core prints only 'check the log' to stderr; the DETAILS are
+    # in .nextflow.log after 'Session aborted -- Cause:'. parse_failure must surface them (cleaned
+    # of ANSI + the trailing stack) so the agent isn't left with a useless 'unknown process'.
+    log = tmp_path / ".nextflow.log"
+    log.write_text(
+        "Jul-01 DEBUG nextflow.Session - Session aborted -- Cause: \x1b[0;31mThe following invalid "
+        "input values have been detected:\n\n* --input (https://x/s.csv): the file or directory "
+        "'https://x/s.csv' does not exist\x1b[0m\n"
+        "Thread[#33,process reaper]\n  java.base/jdk.internal...\n")
+    f = nf.parse_failure("ERROR ~ Validation of pipeline parameters failed -- Check '.nextflow.log'",
+                         rows=[], log_path=str(log))
+    assert f["failed_processes"] == []                            # no task ran
+    assert "--input" in f["abort_cause"] and "does not exist" in f["abort_cause"]
+    assert "Thread[" not in f["abort_cause"] and "\x1b[" not in f["abort_cause"]  # stack + ANSI trimmed
+
+
 def test_size_mb():
     assert nf._size_mb("12 GB") == 12 * 1024
     assert nf._size_mb("512 MB") == 512 and nf._size_mb("1024 KB") == 1.0
