@@ -442,6 +442,54 @@ def test_parse_multiqc_absent(tmp_path):
     assert nf.parse_multiqc(tmp_path) == {}                              # no multiqc_data.json → {}
 
 
+def _write_multiqc_data(tmp_path, data):
+    """Write an arbitrary multiqc_data.json (for the outlier / dedup edge cases)."""
+    import json
+    out = tmp_path / "results"
+    d = out / "multiqc" / "multiqc_data"; d.mkdir(parents=True)
+    (d / "multiqc_data.json").write_text(json.dumps(data))
+    return out
+
+
+def test_parse_multiqc_mad_zero_lone_outlier(tmp_path):
+    # 5 samples identical → MAD collapses to 0. The old `if mad > 0` guard SKIPPED the whole
+    # metric, so a real lone outlier was MISSED. The mean-abs-deviation fallback catches it.
+    vals = {"S1": 50.0, "S2": 50.0, "S3": 50.0, "S4": 50.0, "S5": 50.0, "BAD": 500.0}
+    data = {"report_general_stats_headers": [{"m": {"title": "Reads M"}}],
+            "report_general_stats_data": [{s: {"m": v} for s, v in vals.items()}]}
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    assert {o["sample"] for o in mq["outliers"]} == {"BAD"}, mq["outliers"]
+
+
+def test_parse_multiqc_tiny_diff_not_flagged(tmp_path):
+    # Same tie pattern, but the odd sample differs TRIVIALLY (50.00 vs 50.01). The old MAD form
+    # blew the z-score up and flagged it; the 1%-of-median gate now treats it as noise.
+    vals = {"S1": 50.0, "S2": 50.0, "S3": 50.0, "S4": 50.0, "S5": 50.0, "S6": 50.01}
+    data = {"report_general_stats_headers": [{"m": {"title": "Reads M"}}],
+            "report_general_stats_data": [{s: {"m": v} for s, v in vals.items()}]}
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    assert mq["outliers"] == [], mq["outliers"]
+
+
+def test_parse_multiqc_cross_tool_title_dedup(tmp_path):
+    # Two general-stats columns share the title "% Dups" (FastQC vs Picard). They must NOT
+    # collide in the per-sample table (one silently overwriting the other) — disambiguate by ns.
+    data = {
+        "report_general_stats_headers": [
+            {"fastqc_dups": {"title": "% Dups", "namespace": "FastQC"}},
+            {"picard_dups": {"title": "% Dups", "namespace": "Picard"}},
+        ],
+        "report_general_stats_data": [
+            {"S1": {"fastqc_dups": 10.0}, "S2": {"fastqc_dups": 11.0}},
+            {"S1": {"picard_dups": 20.0}, "S2": {"picard_dups": 22.0}},
+        ],
+    }
+    mq = nf.parse_multiqc(_write_multiqc_data(tmp_path, data))
+    assert sorted(m["title"] for m in mq["metrics"]) == ["% Dups (FastQC)", "% Dups (Picard)"]
+    assert mq["samples"]["S1"]["% Dups (FastQC)"] == 10.0          # both retained, no overwrite
+    assert mq["samples"]["S1"]["% Dups (Picard)"] == 20.0
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
