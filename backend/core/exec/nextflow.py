@@ -453,7 +453,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
                       revision: Optional[str] = None, profile: Optional[str] = None,
                       params: Optional[dict] = None, outdir: Optional[str] = None,
                       work_dir: Optional[str] = None, timeout_s: int = 3600,
-                      execution: Optional[str] = None,
+                      execution: Optional[str] = None, local_resources: Optional[dict] = None,
                       cancel_token=None, stream: bool = False) -> dict:
     """Run a Nextflow pipeline head process in the project workspace, harvest its
     --outdir, and return the standard background result_obj (returncode/stdout/
@@ -508,8 +508,11 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     extra_configs: list[str] = []
     if mode == "local":
         loc = cfg.get("local") or {}
+        lr = local_resources or {}            # estimate-derived (sized to the heaviest task)
+        cores = lr.get("cores") or loc.get("cores") or 8
+        mem_gb = lr.get("mem_gb") or loc.get("mem_gb") or 32
         lc = Path(scratch) / "local_executor.config"
-        lc.write_text(local_executor_config(loc.get("cores") or 8, loc.get("mem_gb") or 32))
+        lc.write_text(local_executor_config(cores, mem_gb))
         extra_configs.append(str(lc))
 
     cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
