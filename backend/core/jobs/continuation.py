@@ -270,6 +270,18 @@ def _continuation_message_text(job: dict, project_id: str | None = None) -> str:
             f"parameters, or do something else)."
         )
     if status == "failed":
+        # A watchdog-aborted deadlock: tell the agent it STALLED (not a normal error) and why,
+        # so it doesn't retry blindly or assume success. params.stall_reason is set by the inline
+        # hang watchdog just before it kills the head (runner._inline_watchdog_loop).
+        stall = (job.get("params") or {}).get("stall_reason")
+        if stall:
+            return (
+                f"[continuation: pipeline job `{job_id}` ({title}) was AUTO-ABORTED — stalled]\n\n"
+                f"{stall}\n\n"
+                f"ABA's watchdog killed this run because it deadlocked. Do NOT assume the pipeline "
+                f"succeeded or retry blindly — tell the user it stalled and why, and offer to retry "
+                f"(prefer Slurm submission) or investigate the container/mounts/inputs."
+            )
         err = (job.get("error") or "").strip().splitlines()
         err_one = err[0][:200] if err else "(no detail)"
         # A background/Slurm job runs in a FRESH process — if it failed on a
