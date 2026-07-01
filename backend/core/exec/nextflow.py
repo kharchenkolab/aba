@@ -647,7 +647,20 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
-        env_vars["SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
+    # Apptainer/Singularity hang INDEFINITELY when their working tmp/cache sit on this cluster's
+    # NFS home (file-lock stall — reproduced on CBE clip nodes: even `apptainer exec <img> true`
+    # never returns and ignores SIGKILL). The default APPTAINER_CACHEDIR is $HOME/.apptainer/cache
+    # and the inherited env had APPTAINER_TMPDIR on $HOME. Pin both to node-local /tmp (fast, off
+    # NFS, present on every node) so container tasks actually run — inline AND Slurm (sbatch
+    # inherits this env). This is what makes containerized local execution work here. Overridable.
+    _ap = (os.environ.get("ABA_APPTAINER_TMPDIR")
+           or f"/tmp/aba-apptainer-{os.environ.get('USER') or os.environ.get('LOGNAME') or 'u'}")
+    try:
+        Path(_ap).mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    for _k in ("APPTAINER_TMPDIR", "SINGULARITY_TMPDIR", "APPTAINER_CACHEDIR", "SINGULARITY_CACHEDIR"):
+        env_vars[_k] = _ap
     # Nextflow head runs on this Java (≥17 for nf-schema); compose ON TOP of the module overlay
     # so java/21 wins over the module's pinned java/11 (see java_env()).
     env_vars.update(java_env(cfg.get("java_home"), base={**os.environ, **module_overlay}))
