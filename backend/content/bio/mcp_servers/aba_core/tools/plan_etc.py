@@ -152,6 +152,7 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def describe_pipeline(pipeline: str, revision: str | None = None,
+                          profile: str | None = None,
                           aba_ctx_id: str | None = None) -> dict:
         """Inspect a Nextflow / nf-core pipeline before running it. Returns its run
         parameters (required, types, defaults, allowed values, help — grouped), the
@@ -159,7 +160,12 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
         expects (name, required, type, allowed values) so you can BUILD the `--input`
         file from the user's data, plus `docs` (fetchable links to usage.md / output.md /
         README / the nf-co.re page) to read if anything is unclear. Call this BEFORE
-        run_nextflow. Returns a note if the pipeline ships no schema."""
+        run_nextflow. Returns a note if the pipeline ships no schema.
+
+        Pass `profile` (e.g. 'test') if you know it: the returned `resources` block then
+        reflects THAT profile's footprint and its `recommended_execution` (local vs slurm) —
+        a `-profile test` run is tiny → 'local'. Omit it for the default/real-data footprint."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import describe_pipeline as _impl
-        return _impl({"pipeline": pipeline, "revision": revision}, peek_ctx(aba_ctx_id))
+        return _impl({"pipeline": pipeline, "revision": revision, "profile": profile},
+                     peek_ctx(aba_ctx_id))

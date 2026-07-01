@@ -398,12 +398,13 @@ def describe_pipeline(input_: dict, ctx: dict | None = None) -> dict:
             "note": ("Build the `--input` file (usually a CSV) with EXACTLY these columns, "
                      "one row per sample, from the user's data before launching."),
         }
-    # Resource footprint (default-profile = real-data) → local-vs-fan-out recommendation,
-    # so the agent can pick run_nextflow's execution= up front.
+    # Resource footprint → local-vs-fan-out recommendation, so the agent can pick
+    # run_nextflow's execution= up front. Estimate for the profile the agent intends to run
+    # (e.g. 'test' → tiny → local); None falls back to the default/real-data footprint.
     resources = None
     try:
         from core.exec.nextflow_resources import estimate_pipeline_resources
-        _est = estimate_pipeline_resources(pipeline, revision or latest, None)
+        _est = estimate_pipeline_resources(pipeline, revision or latest, input_.get("profile"))
     except Exception:  # noqa: BLE001
         _est = None
     if _est:
