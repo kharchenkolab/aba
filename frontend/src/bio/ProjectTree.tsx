@@ -136,7 +136,7 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
   const [editingTitle, setEditingTitle] = useState(false)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [sectionFilters, setSectionFilters] = useState<Record<ProjectSection, string>>(DEFAULT_FILTERS)
+  const [sectionFilters] = useState<Record<ProjectSection, string>>(DEFAULT_FILTERS)
   // Inline rename state for newly-created datasets (Datasets `+` flow).
   // Reused by any entity row that opts into rename (F5 polish).
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -335,10 +335,6 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
     // no `pinned` flag anymore; the Result IS the indicator.
     entity.tags.slice(0, 2).forEach(tag => meta.push(<span key={tag}>{tag}</span>))
     return meta
-  }
-  const selectFilter = (section: ProjectSection, filter: string) => {
-    setSectionFilters(s => ({ ...s, [section]: filter }))
-    setShowAll(s => ({ ...s, [`${section}:${filter}`]: false }))
   }
   const threadMatchesFilter = (thread: { id: string; lifecycle: string }, filter: string) => {
     const attentionCount = countForThread(thread.id, e =>
