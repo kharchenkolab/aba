@@ -43,11 +43,11 @@ from core.runtime import turn_sink as _ts  # noqa: E402
 _ts.active_for_thread = lambda tid: None      # type: ignore[assignment]  (no active turn → fire now)
 
 
-def _mk(job_id: str, status: str) -> dict:
-    create_job(job_id=job_id, kind="run_nextflow", title="cancel test",
+def _mk(job_id: str, status: str, kind: str = "run_nextflow") -> dict:
+    create_job(job_id=job_id, kind=kind, title="cancel test",
                focus_entity_id=None,
                params={"thread_id": "thr_x", "project_id": "prj_x",
-                       "pipeline": "nf-core/rnaseq", "code": "nextflow run"})
+                       "pipeline": "nf-core/rnaseq", "code": "sleep 1"})
     update_job(job_id, status=status)
     return get_job(job_id)
 
@@ -78,6 +78,18 @@ def test_cancel_running_job_notifies():
     assert [f[0] for f in FIRED] == ["job_r"], FIRED
 
 
+def test_cancel_notifies_for_every_background_kind():
+    """The notification is kind-agnostic — run_python / run_r / run_nextflow
+    background jobs all notify their thread on cancel (not just pipelines)."""
+    for i, kind in enumerate(("run_python", "run_r", "run_nextflow")):
+        FIRED.clear()
+        jid = f"job_k{i}"
+        _mk(jid, "running", kind=kind)
+        asyncio.run(_cancel_like_endpoint(jid))
+        assert get_job(jid)["status"] == "cancelled", kind
+        assert [f[0] for f in FIRED] == [jid], (kind, FIRED)
+
+
 def test_cancel_already_terminal_is_noop():
     FIRED.clear()
     _mk("job_done", "done")
@@ -88,6 +100,7 @@ def test_cancel_already_terminal_is_noop():
 
 def main() -> int:
     tests = [test_cancel_queued_job_notifies, test_cancel_running_job_notifies,
+             test_cancel_notifies_for_every_background_kind,
              test_cancel_already_terminal_is_noop]
     failed = []
     for t in tests:
