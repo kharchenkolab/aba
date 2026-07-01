@@ -232,6 +232,7 @@
 
 /* Cancel action — shown in the expanded detail panel for queued/running jobs. */
 .jobs__actions { display: flex; align-items: center; gap: 8px; }
+.jobs__actions--right { justify-content: flex-end; }   /* Cancel button hugs the card's right edge */
 .jobs__cancel {
   align-self: flex-start;
   background: none; border: 1px solid #fca5a5; border-radius: 3px;
@@ -296,6 +297,9 @@
 .jobs__nfprog { margin: 4px 0; padding: 5px 8px; border-left: 2px solid var(--accent); }
 .jobs__nfprog-track { height: 5px; border-radius: 3px; background: var(--bg-soft, #eee); overflow: hidden; margin: 3px 0 4px; }
 .jobs__nfprog-fill { height: 100%; background: var(--accent, #c0392b); border-radius: 3px; transition: width .4s ease; }
+/* Running: total is unknown (dynamic DAG), so an INDETERMINATE moving stripe, not a fake %. */
+.jobs__nfprog-track--live .jobs__nfprog-fill { width: 35%; animation: jobs-nfprog-indet 1.3s ease-in-out infinite; }
+@keyframes jobs-nfprog-indet { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 .jobs__nfprog .jobs__detail-meta strong { color: var(--text-2); font-weight: 600; }
 .jobs__nfprog-fail { color: #c0392b; }
 .jobs__nfprog-stage { font-size: 10.5px; color: var(--text-2); font-family: var(--mono); margin-top: 2px; }
