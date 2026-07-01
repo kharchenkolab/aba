@@ -207,9 +207,25 @@ def test_continuation_message_cancelled_tells_agent_to_stop():
     assert "not continue" in msg.lower() or "do not" in msg.lower()
 
 
+def test_continuation_message_nextflow_completion_is_pipeline_aware():
+    """A SUCCEEDED Nextflow pipeline must not get the run_python 'no-op / no artifacts minted'
+    message — its outputs harvest as files, not figure/table/cell entities. It should be told
+    the pipeline completed and to interpret the QC."""
+    job = {"id": "job_nf", "title": "Nextflow: nf-core/rnaseq", "status": "done",
+           "kind": "run_nextflow", "focus_entity_id": "workspace", "error": None, "log_tail": "",
+           "params": {"thread_id": "thr_x", "project_id": "prj_test",
+                      "pipeline": "nf-core/rnaseq", "revision": "3.21.0", "run_id": "ana_x"}}
+    msg = continuation._continuation_message_text(job, project_id="prj_test")
+    assert "COMPLETED" in msg and "Interpret the results" in msg, msg[:200]
+    assert "nf-core/rnaseq" in msg
+    for bad in ("no-op", "were minted", "swallowed args", "wrong interpreter"):
+        assert bad not in msg, f"leaked run_python framing: {bad!r}"
+
+
 def main() -> int:
     tests = [
         test_skips_when_no_thread_id,
+        test_continuation_message_nextflow_completion_is_pipeline_aware,
         test_skips_when_no_project_id,
         test_fires_for_cancelled_job,
         test_skips_when_status_is_unexpected,
