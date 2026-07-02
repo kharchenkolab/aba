@@ -258,3 +258,19 @@ def test_latest_compatible_release_picks_newest_that_runs(monkeypatch):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_validate_params_skip_required_for_test_profile():
+    # A -profile test run supplies its own required params via the profile config, so
+    # validate_params(skip_required=True) must NOT block on a missing required param — but must
+    # still type/enum-check any params the user DID pass. Regression for nf-core/demo -profile test.
+    from core.exec.nextflow_schema import validate_params
+    schema = {"$defs": {"input_output": {"properties": {
+        "input": {"type": "string", "format": "file-path"},
+        "aligner": {"type": "string", "enum": ["star", "hisat2"]},
+    }, "required": ["input"]}}}
+    assert not validate_params(schema, {})["ok"]                          # normal: missing --input → error
+    assert validate_params(schema, {}, skip_required=True)["ok"]          # test profile: allowed
+    # type/enum still enforced under skip_required
+    bad = validate_params(schema, {"aligner": "bowtie"}, skip_required=True)
+    assert not bad["ok"] and any("aligner" in e for e in bad["errors"])
