@@ -180,3 +180,55 @@ def _build_compute_env() -> dict:
                 env["partitions"], env["partitions_source"] = [], "none"
         env["user_access"] = sl.user_access()
     return env
+
+
+# ── Capability profile: which agent tools can actually run here ──────────────
+# A fast, which()-based snapshot (no live sinfo/hpc_config — safe in the skill-
+# discovery hot path). It answers "does a recipe's declared `requires_tools`
+# resolve in THIS environment?", so discovery can gate/flag recipes needing a
+# tool the machine can't run. Today the only environment-hard tool is
+# `run_nextflow` (nf-core pipelines need a container engine or a cluster);
+# run_python/run_r are always viable in ABA's stack. Cached per process
+# (capabilities don't change mid-run); pass refresh=True (tests) to recompute.
+_CONTAINER_ENGINES = ("docker", "singularity", "apptainer", "podman",
+                      "charliecloud", "shifter", "sarus")
+_ENV_PROFILE: Optional[dict] = None
+
+
+def _build_env_profile() -> dict:
+    import shutil
+    engines = [e for e in _CONTAINER_ENGINES if shutil.which(e)]
+    cluster = bool(shutil.which("sbatch") or shutil.which("sinfo"))
+    nextflow = bool(shutil.which("nextflow")
+                    or os.environ.get("ABA_NEXTFLOW_BIN")
+                    or os.environ.get("ABA_NEXTFLOW_MODULE"))
+    # nf-core needs a software backend (container engine) OR a cluster to run for
+    # real; a bare `nextflow` binary with neither is not a real pipeline env.
+    run_nextflow = nextflow and (bool(engines) or cluster)
+    return {
+        "run_python": True,
+        "run_r": True,                 # R is part of ABA's standard tools env
+        "run_nextflow": run_nextflow,
+        "nextflow_present": nextflow,
+        "container_engines": engines,
+        "cluster": cluster,
+        "gpu": bool(shutil.which("nvidia-smi")),
+    }
+
+
+def env_profile(*, refresh: bool = False) -> dict:
+    """Cached capability snapshot of this runtime (see _build_env_profile)."""
+    global _ENV_PROFILE
+    if _ENV_PROFILE is None or refresh:
+        _ENV_PROFILE = _build_env_profile()
+    return _ENV_PROFILE
+
+
+def tool_viable(tool: str, profile: Optional[dict] = None) -> bool:
+    """Can this agent tool actually run here? Only `run_nextflow` is
+    environment-hard today; run_python/run_r and any unmodeled tool are assumed
+    viable so discovery never over-gates on a tool we don't understand."""
+    prof = profile if profile is not None else env_profile()
+    if tool == "run_nextflow":
+        return bool(prof.get("run_nextflow"))
+    return True
