@@ -30,6 +30,7 @@ def _launcher_version() -> str:
 
 LAUNCHER_VERSION = _launcher_version()
 _STORE_SUFFIX = ".lstar.zarr"
+_ZIP_SUFFIX = ".lstar.zarr.zip"
 
 
 def _convert_h5ad(src: Path, out: Path) -> None:
@@ -38,7 +39,18 @@ def _convert_h5ad(src: Path, out: Path) -> None:
 
 
 def _copy_store(src: Path, out: Path) -> None:
+    """Native store already a directory — copy the tree into the served cache."""
     shutil.copytree(src, out)
+
+
+def _unzip_store(src: Path, out: Path) -> None:
+    """Native store shipped as a .lstar.zarr.zip — extract into a directory the
+    store route can serve (the browser can't range-read a zip over HTTP). The
+    archive's root IS the store root (.zattrs/axes/fields at top level)."""
+    import zipfile
+    out.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(src) as z:
+        z.extractall(out)
 
 
 def _resolve_source(node: dict, pid: str) -> Path:
@@ -65,11 +77,19 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
             f"pagoda3: source not found for {node.get('name') or node.get('path')!r}")
 
     cache_dir = project_root(pid) / "pagoda3"
-    stem = src.name[:-len(_STORE_SUFFIX)] if src.name.endswith(_STORE_SUFFIX) else src.stem
+    name = src.name.lower()
+    # Pick the derivation by source kind, and strip the (possibly two-part) suffix
+    # for a clean output name.
+    if name.endswith(_ZIP_SUFFIX):
+        convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
+    elif name.endswith(_STORE_SUFFIX):
+        convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
+    else:
+        convert, suffix = _convert_h5ad, None            # .h5ad etc → convert
+    stem = src.name[:-len(suffix)] if suffix else src.stem
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
 
-    convert = _copy_store if src.name.endswith(_STORE_SUFFIX) else _convert_h5ad
     store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
 
     return LaunchResult(
