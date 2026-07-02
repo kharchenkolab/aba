@@ -247,32 +247,38 @@ def search_skills_tool(input_: dict) -> dict:
     agent isn't limited to what happened to be in-prompt this turn. Pass
     `domain` to narrow to one facet (see the domain map in the skills index)."""
     from core.skills import search_skills
+    from core.skills.loader import unmet_tools
     q = (input_.get("query") or "").strip()
     if not q:
         return {"status": "error", "note": "search_skills needs a non-empty `query`."}
     limit = input_.get("limit") or 8
     hits = search_skills(q, limit=int(limit), domain=input_.get("domain"))
-    return {
-        "skills": [
-            {
-                # `invoke_with` is the literal tool call the agent
-                # should make next. We put it FIRST so it leads on
-                # serialization — for a pattern-matching model the
-                # first visible field shapes its next action far more
-                # than a wrapping note in the description does.
-                "invoke_with": f'Skill(skill="{s.name}")',
-                "name":        s.name,
-                "description": s.description,
-                "when_to_use": s.when_to_use,
-                "domain":      s.domain,
-                "capabilities_needed": list(s.capabilities_needed),
-            }
-            for s in hits
-        ],
-        "note": ("Each result is a SKILL — invoke it via its "
-                 "`invoke_with` value (which calls the `Skill` tool). "
-                 "The `name` alone is NOT a callable tool."),
-    }
+    skills, any_blocked = [], False
+    for s in hits:
+        unmet = unmet_tools(s)          # tools this recipe needs that can't run here
+        if unmet:
+            any_blocked = True
+        skills.append({
+            # `invoke_with` is the literal tool call the agent should make next.
+            # First so it leads on serialization — for a pattern-matching model
+            # the first visible field shapes its next action.
+            "invoke_with": f'Skill(skill="{s.name}")',
+            "name":        s.name,
+            "description": s.description,
+            "when_to_use": s.when_to_use,
+            "domain":      s.domain,
+            "capabilities_needed": list(s.capabilities_needed),
+            "runnable_here": not unmet,
+            "unmet_tools": unmet,
+        })
+    note = ("Each result is a SKILL — invoke it via its `invoke_with` value "
+            "(which calls the `Skill` tool). The `name` alone is NOT a callable tool.")
+    if any_blocked:
+        note += (" Results with `runnable_here: false` describe the right approach but "
+                 "need a tool that can't run in this environment (see `unmet_tools`, "
+                 "e.g. `run_nextflow` → run on HPC / a cluster) — explain that rather "
+                 "than launching them here.")
+    return {"skills": skills, "note": note}
 
 
 def search_bioconda(input_: dict) -> dict:
