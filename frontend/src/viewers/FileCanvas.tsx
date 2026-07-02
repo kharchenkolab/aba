@@ -11,9 +11,10 @@
  * artifact that's not entity-backed.
  */
 import { useState } from 'react'
-import type { FileNode, ViewersResponse } from './types'
+import type { FileNode, ViewerInfo, ViewersResponse } from './types'
 import { VIEWERS, hasViewer } from './registry'
 import { useViewerRegistry, dispatchResponse } from './dispatch'
+import { launchExternal } from './launch'
 import './FileCanvas.css'
 
 interface Props {
@@ -30,23 +31,71 @@ export default function FileCanvas({ node, onFocus, onClose }: Props) {
   const resp: ViewersResponse | null = registry ? dispatchResponse(node, registry) : null
   const [err] = useState<string | null>(null)
 
-  // Pick the highest-priority canvas-mode viewer whose component we
-  // actually have in the frontend registry.
-  const picked = resp?.viewers.find(
-    v => v.mode === 'canvas' && hasViewer(v.component),
-  ) ?? null
-
   if (err) {
     return <div className="viewer__error" style={{ padding: 16 }}>Viewer lookup failed: {err}</div>
   }
   if (!resp) {
     return <div className="viewer__empty" style={{ padding: 16 }}>Loading viewer…</div>
   }
+
+  // If the highest-priority applicable viewer is external (e.g. pagoda3 for a
+  // .lstar.zarr / .h5ad), the click launches it in a new window rather than
+  // rendering a canvas component.
+  const primary = resp.viewers[0] ?? null
+  if (primary && primary.mode === 'external') {
+    return <ExternalLaunch node={node} viewer={primary} resp={resp} />
+  }
+
+  // Otherwise pick the highest-priority canvas-mode viewer whose component we
+  // actually have in the frontend registry.
+  const picked = resp.viewers.find(
+    v => v.mode === 'canvas' && hasViewer(v.component),
+  ) ?? null
   if (!picked) {
     return <NoViewerFallback node={node} resp={resp} />
   }
   const Component = VIEWERS[picked.component!]
   return <Component node={node} viewer={picked} onFocus={onFocus} onClose={onClose} />
+}
+
+
+/** Panel shown when a file's primary viewer is external — a launch button that
+ *  opens the external viewer (pagoda3, cellxgene, …) in a new window, plus
+ *  download. Conversion, when needed, happens server-side behind the launch. */
+function ExternalLaunch({ node, viewer, resp }: { node: FileNode; viewer: ViewerInfo; resp: ViewersResponse }) {
+  const [pending, setPending] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function open() {
+    setPending(true); setErr(null)
+    try {
+      await launchExternal(node, viewer)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <article className="viewer viewer--external">
+      <header className="viewer__head"><span className="viewer__path">{node.path || node.name}</span></header>
+      <div className="viewer__body" style={{ padding: 18, maxWidth: 720 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button className="viewer__action viewer__action--primary" onClick={open} disabled={pending}>
+            {pending ? '… preparing' : `↗ ${viewer.label}`}
+          </button>
+          {resp.download_url && (
+            <a className="viewer__action" href={resp.download_url} download>⬇ Download</a>
+          )}
+        </div>
+        <p style={{ color: 'var(--text-3)', marginTop: 10, fontSize: 13 }}>
+          Opens in a new window.
+        </p>
+        {err && <div className="viewer__error" style={{ marginTop: 12 }}>{err}</div>}
+      </div>
+    </article>
+  )
 }
 
 
@@ -94,9 +143,10 @@ function NoViewerFallback({ node, resp }: { node: FileNode; resp: ViewersRespons
             <a className="viewer__action" href={resp.download_url} download>⬇ Download</a>
           )}
           {externals.map(v => (
-            <span key={v.id} className="viewer__action viewer__action--disabled" title="External launcher not yet wired">
-              {v.label} (external)
-            </span>
+            <button key={v.id} className="viewer__action"
+              onClick={() => { launchExternal(node, v).catch(e => setAiErr(String(e))) }}>
+              ↗ {v.label}
+            </button>
           ))}
           {hasAiSummary && (
             <button className="viewer__action viewer__action--ai" onClick={askSummary} disabled={pending === 'summary'}>

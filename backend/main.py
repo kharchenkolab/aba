@@ -2384,6 +2384,31 @@ def viewers_registry():
     return out
 
 
+def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
+    """Resolve a files-tree node from either an entity_id (entity-backed
+    file) or a path (any node in the tree). Shared by the viewer lookup
+    and launch endpoints. Raises HTTPException on missing/underspecified."""
+    if entity_id:
+        e = get_entity(entity_id)
+        if not e:
+            raise HTTPException(404, f"no entity {entity_id}")
+        return {
+            "entity_id": e["id"],
+            "entity_type": e["type"],
+            "name": e.get("title") or "",
+            "artifact_path": e.get("artifact_path"),
+            "size": None,
+        }
+    if path:
+        from content.bio.files.tree import build_files_tree, find_node
+        tree = build_files_tree(include_archived=False)
+        n = find_node(tree, path)
+        if n is None:
+            raise HTTPException(404, f"no node at {path!r}")
+        return n
+    raise HTTPException(400, "supply either entity_id or path")
+
+
 @app.get("/api/viewers/for")
 def viewers_for_node(
     entity_id: str | None = None,
@@ -2399,28 +2424,7 @@ def viewers_for_node(
     import content.bio  # noqa: F401 — ensure registrations
     from core.viewers.registry import viewers_for, to_wire
 
-    node: dict = {}
-    if entity_id:
-        e = get_entity(entity_id)
-        if not e:
-            raise HTTPException(404, f"no entity {entity_id}")
-        node = {
-            "entity_id": e["id"],
-            "entity_type": e["type"],
-            "name": e.get("title") or "",
-            "artifact_path": e.get("artifact_path"),
-            "size": None,
-        }
-    elif path:
-        from content.bio.files.tree import build_files_tree, find_node
-        tree = build_files_tree(include_archived=False)
-        n = find_node(tree, path)
-        if n is None:
-            raise HTTPException(404, f"no node at {path!r}")
-        node = n
-    else:
-        raise HTTPException(400, "supply either entity_id or path")
-
+    node = _resolve_files_node(entity_id, path)
     viewers = viewers_for(node)
     return {
         "primary": viewers[0].id if viewers else None,
@@ -2431,6 +2435,39 @@ def viewers_for_node(
             else None
         ),
     }
+
+
+class ViewerLaunchIn(BaseModel):
+    entity_id: str | None = None
+    path: str | None = None
+    viewer_id: str | None = None      # which external viewer; default = highest-priority
+
+
+@app.post("/api/viewers/launch")
+def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
+    """Resolve an `external`-mode viewer to a URL to open in a new window
+    (viewers.md §3). Picks the named viewer_id (or the highest-priority
+    external viewer that applies), calls its `open_external` launcher, and
+    returns `{url, prepare_job_id?, label}`. A launcher that isn't
+    registered yet → 501 (declared in YAML but not wired)."""
+    import content.bio  # noqa: F401 — ensure viewer + launcher registrations
+    from core.viewers.registry import viewers_for
+    from core.viewers.launchers import launch as launch_viewer
+
+    node = _resolve_files_node(body.entity_id, body.path)
+    ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
+    if body.viewer_id:
+        v = next((x for x in ext if x.id == body.viewer_id), None)
+    else:
+        v = ext[0] if ext else None
+    if v is None:
+        raise HTTPException(404, "no external viewer applies to this file")
+    try:
+        res = launch_viewer(v.open_external, node,
+                            {"entity_id": node.get("entity_id"), "path": body.path})
+    except KeyError as e:
+        raise HTTPException(501, str(e))
+    return {"url": res.url, "prepare_job_id": res.prepare_job_id, "label": res.label or v.label}
 
 
 @app.get("/api/files/content")
