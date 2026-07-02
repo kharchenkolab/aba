@@ -80,6 +80,31 @@ def ensure_group_writable(path, group_name, warnings):
     return None
 
 
+def resolve_release_image(release_root):
+    """Pin-on-launch for a VERSIONED (slim) deploy. Resolve `<release_root>/current` → the release
+    it names RIGHT NOW and return that session's image env: {ABA_RELEASE_ID, ABA_SHARE, ABA_SIF,
+    ABA_BASE_DIR, ABA_TOOLS_DIR} (only keys that resolve). Paths point at the CONCRETE
+    `releases/<id>/…` (not via `current`), so if an admin promotes a new release mid-session THIS
+    session keeps the one it launched on. {} when there's no versioned layout (→ caller falls back
+    to the static site.yaml image paths, i.e. fat / non-versioned slim are unchanged)."""
+    import glob
+    cur = os.path.join(release_root, "current")
+    if not os.path.islink(cur):
+        return {}
+    rdir = os.path.realpath(cur)               # concrete releases/<id> — the pin
+    out = {"ABA_RELEASE_ID": os.path.basename(rdir), "ABA_SHARE": release_root}
+    sifs = sorted(glob.glob(os.path.join(rdir, "sif", "*.sif")))
+    if sifs:
+        out["ABA_SIF"] = sifs[0]
+    venv = os.path.join(rdir, "env", "aba-venv")
+    if os.path.isdir(venv):
+        out["ABA_BASE_DIR"] = venv
+    tools = os.path.join(rdir, "env", "aba-tools")
+    if os.path.isdir(tools):
+        out["ABA_TOOLS_DIR"] = tools
+    return out
+
+
 def main():
     site_path = Path(os.environ.get("ABA_SITE_CONFIG") or "/cluster/aba/site.yaml")
     group = (os.environ.get("ABA_PF_GROUP") or "").strip()
@@ -249,13 +274,22 @@ def main():
         lines.append(f"export ABA_ENVS_DIR={shq(envs_dir)}")
         # image: if site.yaml configures a SIF, the node launches FROM it; for a
         # slim image, base_dir/tools_dir are the shared base mounts it expects.
+        # image.release_root (versioned deploy) takes precedence: pin this session to
+        # <release_root>/current's release and derive sif/base/tools from it (see
+        # misc/slim_sif_deploy.md). Absent → the static sif/base_dir/tools_dir below
+        # (fat + non-versioned slim, unchanged).
         img = site.get("image") or {}
-        if img.get("sif"):
-            lines.append(f"export ABA_SIF={shq(ex(img['sif']))}")
-        if img.get("base_dir"):
-            lines.append(f"export ABA_BASE_DIR={shq(ex(img['base_dir']))}")
-        if img.get("tools_dir"):
-            lines.append(f"export ABA_TOOLS_DIR={shq(ex(img['tools_dir']))}")
+        relenv = resolve_release_image(ex(img["release_root"])) if img.get("release_root") else {}
+        if relenv:
+            for _k, _v in relenv.items():
+                lines.append(f"export {_k}={shq(_v)}")
+        else:
+            if img.get("sif"):
+                lines.append(f"export ABA_SIF={shq(ex(img['sif']))}")
+            if img.get("base_dir"):
+                lines.append(f"export ABA_BASE_DIR={shq(ex(img['base_dir']))}")
+            if img.get("tools_dir"):
+                lines.append(f"export ABA_TOOLS_DIR={shq(ex(img['tools_dir']))}")
         # background-job offload: site.yaml jobs.submitter (local|slurm) +
         # jobs.hpc_config (partition/QOS catalog). Lets backgrounded work sbatch
         # its own Slurm job instead of running in-process on the session node.

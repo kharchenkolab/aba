@@ -295,6 +295,38 @@ def test_compute_version_tag_else_datesha(tmp_path):
     assert R.compute_version(str(repo)) == "v1.2.3"                          # a release tag wins
 
 
+def test_preflight_release_image_pins_concrete_release(tmp_path, monkeypatch):
+    # Phase 3 pin-on-launch: aba_preflight resolves current → the CONCRETE releases/<id> sif+env
+    # (not via `current`), so a mid-session promote can't move an already-launched session.
+    sys.path.insert(0, str(ROOT / "install" / "ood"))
+    import aba_preflight
+    share = tmp_path / "share"; monkeypatch.setenv("ABA_SHARE", str(share))
+
+    def _sif(txt):
+        return lambda d: (Path(d) / "aba-slim.sif").write_text(txt)
+    def _env(d):
+        (Path(d) / "aba-venv" / "bin").mkdir(parents=True)
+        (Path(d) / "aba-venv" / "bin" / "python").write_text("py")
+        (Path(d) / "aba-tools").mkdir()
+    R.ensure_component("sif", "A", _sif("A")); R.ensure_component("env", "envA", _env)
+    R.compose_release("relA", {"sif": "A", "env": "envA"}); R.promote("relA")
+
+    env = aba_preflight.resolve_release_image(str(share))
+    assert env["ABA_RELEASE_ID"] == "relA"
+    assert "/releases/relA/" in env["ABA_SIF"] and env["ABA_SIF"].endswith("aba-slim.sif")
+    assert "/releases/relA/" in env["ABA_BASE_DIR"] and env["ABA_BASE_DIR"].endswith("aba-venv")
+    assert "/current/" not in env["ABA_SIF"]                       # concrete → pinned, not via current
+
+    # admin promotes relB mid-session → the ALREADY-resolved env still points at relA (the pin)
+    R.ensure_component("sif", "B", _sif("B"))
+    R.compose_release("relB", {"sif": "B", "env": "envA"}); R.promote("relB")
+    assert "/releases/relA/" in env["ABA_SIF"], "resolved session env must stay pinned to relA"
+    # a NEW session (fresh resolve) picks up relB
+    assert aba_preflight.resolve_release_image(str(share))["ABA_RELEASE_ID"] == "relB"
+    # no versioned layout → {} (caller falls back to static site.yaml image paths)
+    assert aba_preflight.resolve_release_image(str(tmp_path / "nolayout")) == {}
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

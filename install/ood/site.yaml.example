@@ -13,6 +13,10 @@ image:
   sif: /cluster/aba/aba.sif
   # base_dir:  /cluster/aba/base          # slim only — mounted at /opt/aba-venv
   # tools_dir: /cluster/aba/base/tools    # slim only — mounted at /opt/aba-envs/tools
+  # release_root: /cluster/aba            # VERSIONED slim deploy (RELEASE_MODE=1 ./deploy.sh):
+  #   sets it and the launcher IGNORES sif/base_dir/tools_dir above — it pins the session to
+  #   <release_root>/current's release and derives sif/env from it (exports ABA_RELEASE_ID). An
+  #   admin promoting a new release doesn't disturb running sessions. See misc/slim_sif_deploy.md.
 
 # Background-job offload. submitter=slurm lets the agent sbatch long runs as their
 # OWN Slurm jobs (own resources, survive the session); hpc_config maps the agent's
