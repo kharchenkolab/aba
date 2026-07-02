@@ -34,6 +34,15 @@ def _row_to_job(r) -> dict:
 def create_job(job_id: str, kind: str, title: str, focus_entity_id: Optional[str],
                params: dict, project_id: Optional[str] = None) -> dict:
     now = _utcnow()
+    # Pin-on-launch (slim SIF): record the release this job was submitted under so it — and any
+    # Nextflow auto-resume of it — reuse THAT release even if `current` is later repointed
+    # (misc/slim_sif_deploy.md §3). No-op without $ABA_SHARE/ABA_RELEASE_ID → personal/fat installs
+    # persist no release_id and are unaffected.
+    try:
+        from core.release import stamp_release
+        params = stamp_release(params)
+    except Exception:  # noqa: BLE001 — release layer is optional; never block job creation
+        pass
     with _project_conn(project_id) as c:
         c.execute(
             "INSERT INTO jobs (id, kind, title, status, focus_entity_id, params, created_at) "
