@@ -59,13 +59,19 @@ class SlurmSubmitter:
         for _m in project_modules(pid):
             if _m not in mods:
                 mods.append(_m)
-        # Nextflow head job: `module load` the site's nextflow so it's on PATH for
-        # the compute-node head (run_nextflow_code then finds it without conda).
+        # Nextflow head job: get `nextflow` on the compute-node head's PATH (run_nextflow_code then
+        # finds it without conda). A self-installed shared-FS NF (ABA_NEXTFLOW_BIN) is PREPENDED to
+        # PATH; otherwise `module load` the site module. bin-when-set / module-otherwise keeps fat
+        # SIF + personal installs on their module path unchanged (misc/nfcore.md §7d).
+        _nf_path_line = ""
         if kind == "run_nextflow":
-            from core.exec.nextflow import nextflow_config
-            _nfmod = nextflow_config().get("module")
-            if _nfmod and _nfmod not in mods:
-                mods.append(_nfmod)
+            from core.exec.nextflow import nextflow_config, nextflow_bin_dir
+            _nfcfg = nextflow_config()
+            _nf_bin = nextflow_bin_dir(_nfcfg.get("bin"))
+            if _nf_bin:
+                _nf_path_line = f'export PATH="{_nf_bin}:$PATH"\n'
+            elif _nfcfg.get("module") and _nfcfg["module"] not in mods:
+                mods.append(_nfcfg["module"])
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit (active_run_id), not the job's
@@ -88,6 +94,7 @@ class SlurmSubmitter:
             "#!/bin/bash\n"
             f"cd {run_dir}\n"
             f"{load_lines(mods)}"
+            f"{_nf_path_line}"
             f"export PYTHONPATH={_BACKEND_DIR}:$PYTHONPATH\n"
             # -u: unbuffered stdout so slurm_entry's tee'd child output reaches
             # job.log (sbatch -o) live, not only at exit.
