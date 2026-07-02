@@ -15,7 +15,7 @@ from core.exec.cpu import pin_blas_threads as _pin_blas_threads
 _pin_blas_threads()
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
-from fastapi.responses import StreamingResponse, FileResponse, Response
+from fastapi.responses import StreamingResponse, FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -2445,35 +2445,54 @@ class ViewerLaunchIn(BaseModel):
 
 @app.post("/api/viewers/launch")
 def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
-    """Resolve an `external`-mode viewer to a URL to open in a new window
-    (viewers.md §3). Picks the named viewer_id (or the highest-priority
-    external viewer that applies), calls its `open_external` launcher, and
-    returns `{url, prepare_job_id?, label}`. A launcher that isn't
-    registered yet → 501 (declared in YAML but not wired)."""
+    """Start preparing an `external`-mode viewer's data store in the BACKGROUND
+    and return `{job_id, label}` (viewers.md §3). The launch page
+    (GET /viewer-launch) polls /api/viewers/launch/status and redirects to the
+    viewer when ready — so the conversion (e.g. .h5ad → .lstar.zarr) never blocks
+    this request. Errors surface as the job's error (shown on the launch page)."""
     import content.bio  # noqa: F401 — ensure viewer + launcher registrations
     from core.viewers.registry import viewers_for
     from core.viewers.launchers import launch as launch_viewer
+    from core.viewers import prepare
+    from core.config import current_project_id
 
     node = _resolve_files_node(body.entity_id, body.path)
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
-    if body.viewer_id:
-        v = next((x for x in ext if x.id == body.viewer_id), None)
-    else:
-        v = ext[0] if ext else None
+    v = (next((x for x in ext if x.id == body.viewer_id), None) if body.viewer_id
+         else (ext[0] if ext else None))
     if v is None:
         raise HTTPException(404, "no external viewer applies to this file")
-    from core.config import current_project_id
-    try:
-        res = launch_viewer(v.open_external, node, {
+    pid = current_project_id()
+
+    def runner(set_phase):
+        set_phase("Preparing the dataset…")
+        return launch_viewer(v.open_external, node, {
             "entity_id": node.get("entity_id"), "path": body.path,
-            "project_id": current_project_id(),
+            "project_id": pid, "set_phase": set_phase,
         })
-    except KeyError as e:
-        raise HTTPException(501, str(e))
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    return {"url": res.url, "prepare_job_id": res.prepare_job_id,
-            "label": res.label or v.label, "set_local_storage": res.set_local_storage}
+    job_id = prepare.start(runner, label=v.label or v.id)
+    return {"job_id": job_id, "label": v.label or v.id}
+
+
+@app.get("/api/viewers/launch/status")
+def viewers_launch_status(job: str):
+    """Poll a prepare job started by /api/viewers/launch."""
+    from core.viewers import prepare
+    s = prepare.status(job)
+    if s is None:
+        raise HTTPException(404, "no such prepare job")
+    return s
+
+
+@app.get("/viewer-launch")
+def viewer_launch_page():
+    """The ABA-owned loading tab: starts + polls a prepare job and redirects to
+    the viewer when ready (see core/viewers/launch_page). Reuses the SPA's CSS;
+    no-store so it always references the current build's stylesheet."""
+    from core.viewers.launch_page import render
+    dist = Path(os.environ.get("ABA_FRONTEND_DIST")
+                or (Path(__file__).resolve().parent.parent / "frontend" / "dist"))
+    return HTMLResponse(render(dist), headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 # ---- pagoda3 (external viewer) co-hosting — viewers.md §3, misc/pagoda3_integration.md ----
@@ -2820,7 +2839,7 @@ if (_FRONTEND_DIST / "index.html").is_file():
         index.html and let react-router resolve the path in the browser.
         """
         # A miss on an API/artifact/viewer path must 404, not fall through to HTML.
-        if full_path.startswith(("api/", "artifacts/", "pagoda3/", "pagoda3-store/")):
+        if full_path.startswith(("api/", "artifacts/", "pagoda3/", "pagoda3-store/", "viewer-launch")):
             raise HTTPException(404, "not found")
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
