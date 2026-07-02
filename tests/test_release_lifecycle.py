@@ -188,6 +188,78 @@ def test_verify_structural_gate(tmp_path, monkeypatch):
     assert not bad["ok"]
 
 
+# ────────────────── content-addressed components (Phase 1) ──────────────────
+
+def test_ensure_component_dedups(tmp_path, monkeypatch):
+    monkeypatch.setenv("ABA_SHARE", str(tmp_path / "share"))
+    calls = []
+    def builder(d):
+        calls.append(1); (Path(d) / "marker").write_text("x")
+    p1 = R.ensure_component("env", "h1", builder)
+    p2 = R.ensure_component("env", "h1", builder)     # same id → reuse, builder NOT re-run
+    assert p1 == p2 and (p1 / "marker").exists() and len(calls) == 1
+
+
+def test_code_only_upgrade_reuses_env_component(tmp_path, monkeypatch):
+    # THE headline: a code-only upgrade re-links the same (multi-GB) env component — zero copy.
+    share = tmp_path / "share"; monkeypatch.setenv("ABA_SHARE", str(share))
+    R.ensure_component("env", "envH1", lambda d: (Path(d) / "python").write_text("big env"))
+    R.ensure_component("opt", "optH1", lambda d: (Path(d) / "nextflow").write_text("nf"))
+    R.ensure_component("repo", "sha_A", lambda d: (Path(d) / "app.py").write_text("v1"))
+    R.ensure_component("repo", "sha_B", lambda d: (Path(d) / "app.py").write_text("v2"))
+    R.compose_release("2026.07.02-A", repo="sha_A", env="envH1", opt="optH1")
+    R.compose_release("2026.07.02-B", repo="sha_B", env="envH1", opt="optH1")   # code-only bump
+    envs = list((share / "components" / "env").iterdir())
+    assert len(envs) == 1 and envs[0].name == "envH1", "code-only upgrade must NOT copy the env"
+    a = (share / "releases" / "2026.07.02-A" / "env").resolve()
+    b = (share / "releases" / "2026.07.02-B" / "env").resolve()
+    assert a == b == (share / "components" / "env" / "envH1").resolve()          # shared by reference
+    assert R.release_components("2026.07.02-A")["repo"] == "sha_A"
+    assert R.release_components("2026.07.02-B")["repo"] == "sha_B"               # differ only in code
+
+
+def test_hash_files_content_addressed(tmp_path):
+    a = tmp_path / "environment.yml"; a.write_text("deps: [numpy]")
+    b = tmp_path / "r-environment.yml"; b.write_text("r: [seurat]")
+    h1 = R.hash_files([str(a), str(b)])
+    assert h1 == R.hash_files([str(a), str(b)])        # stable
+    a.write_text("deps: [numpy, scipy]")
+    assert R.hash_files([str(a), str(b)]) != h1        # changed lockfile → new component id
+
+
+def test_gc_sweeps_orphaned_components(tmp_path, monkeypatch):
+    share = tmp_path / "share"; monkeypatch.setenv("ABA_SHARE", str(share))
+    for cid, txt in [("envOld", "old"), ("envNew", "new")]:
+        R.ensure_component("env", cid, (lambda t: (lambda d: (Path(d) / "x").write_text(t)))(txt))
+    R.ensure_component("opt", "opt1", lambda d: (Path(d) / "x").write_text("o"))
+    for cid in ("s1", "s2", "s3"):
+        R.ensure_component("repo", cid, (lambda c: (lambda d: (Path(d) / "x").write_text(c)))(cid))
+    R.compose_release("v1", repo="s1", env="envOld", opt="opt1")
+    R.compose_release("v2", repo="s2", env="envNew", opt="opt1")
+    R.compose_release("v3", repo="s3", env="envNew", opt="opt1")
+    R.promote("v1"); R.promote("v2"); R.promote("v3")   # current=v3, prev=v2
+    out = R.gc(keep=1, referenced=())                    # removes v1, then its now-orphaned components
+    assert "v1" in out["removed"]
+    assert "env/envOld" in out["components_removed"] and "repo/s1" in out["components_removed"]
+    assert (share / "components" / "env" / "envNew").exists()          # still pinned by v2,v3
+    assert not (share / "components" / "env" / "envOld").exists()
+
+
+def test_compute_version_tag_else_datesha(tmp_path):
+    import subprocess
+    import datetime
+    repo = tmp_path / "repo"; repo.mkdir()
+    genv = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    def git(*a):
+        subprocess.run(["git", *a], cwd=str(repo), capture_output=True, env=genv)
+    git("init", "-q"); (repo / "f").write_text("x"); git("add", "."); git("commit", "-qm", "init")
+    v = R.compute_version(str(repo), now=datetime.date(2026, 7, 2))
+    assert v.startswith("2026.07.02-") and len(v) > len("2026.07.02-"), v   # date-sha, no tag
+    git("tag", "v1.2.3")
+    assert R.compute_version(str(repo)) == "v1.2.3"                          # a release tag wins
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
