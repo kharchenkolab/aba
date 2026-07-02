@@ -386,14 +386,28 @@ def record_task_count(pipeline, revision, profile, total) -> None:
 def expected_task_count(pipeline, revision, profile):
     """Typical task total for this (pipeline, revision, profile) from a prior completed run, or
     None if we've never finished one. An ESTIMATE (varies with the samplesheet) — the UI caps the
-    bar below 100% until the run is actually done, and it self-corrects as runs complete."""
+    bar below 100% until the run is actually done, and it self-corrects as runs complete.
+
+    Fallback: if the exact (pipeline, revision, profile) key misses, reuse a total learned under a
+    DIFFERENT profile of the same pipeline+revision. The profile mainly changes the input data, not
+    the process graph, so e.g. a `-profile test` run's count is a fine first estimate for a real
+    run — better than a bare spinner. This run then records its own exact key on completion."""
     try:
         p = _task_count_path()
-        if p.exists():
-            return (json.loads(p.read_text()) or {}).get(_tc_key(pipeline, revision, profile))
+        if not p.exists():
+            return None
+        d = json.loads(p.read_text()) or {}
+        exact = d.get(_tc_key(pipeline, revision, profile))
+        if exact:
+            return exact
+        # profile-agnostic: any completed run of the same pipeline+revision. Prefer the largest
+        # (closest to a full run; the UI still caps <100% and self-corrects).
+        pref = f"{(pipeline or '').strip()}|{(revision or '').strip()}|"
+        cands = [v for k, v in d.items()
+                 if k.startswith(pref) and isinstance(v, int) and v > 0]
+        return max(cands) if cands else None
     except Exception:  # noqa: BLE001
-        pass
-    return None
+        return None
 
 
 def nextflow_job_progress(job: dict) -> dict:
