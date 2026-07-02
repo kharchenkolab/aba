@@ -33,7 +33,12 @@ def read_csv_info(input_: dict) -> dict:
         except Exception:
             df = pd.read_csv(path)
         cols = [{"name": c, "dtype": str(df[c].dtype)} for c in df.columns]
-        preview = df.head(5).to_markdown(index=False)
+        # to_markdown() needs the optional `tabulate` package; degrade to a
+        # plain-text preview rather than hard-failing if it's ever missing.
+        try:
+            preview = df.head(5).to_markdown(index=False)
+        except Exception:
+            preview = df.head(5).to_string(index=False)
         return {
             "filename": filename,
             "rows": len(df),
