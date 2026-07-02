@@ -838,6 +838,14 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     except Exception:  # noqa: BLE001
         _nxf_home = str(Path(scratch) / ".nextflow")   # fall back to per-run if the shared dir isn't writable
     env_vars = {"NXF_HOME": _nxf_home}
+    # Nextflow 25.10+/26.x default to the strict v2 config parser, which rejects
+    # `manifest`/`validation` references still used by much of the current nf-core
+    # catalog (e.g. rnaseq 3.21.0 → 6 "is not defined" compile errors; the run dies
+    # before task 1). Pin the legacy parser so those pipelines parse on our modern
+    # engine. This is a *native* Nextflow var, set here alongside NXF_HOME — NOT a new
+    # ABA_NEXTFLOW_* knob (no added config surface); an explicit ambient NXF_SYNTAX_PARSER
+    # still wins if a v2-only pipeline ever needs it.
+    env_vars["NXF_SYNTAX_PARSER"] = os.environ.get("NXF_SYNTAX_PARSER", "v1")
     env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
