@@ -1,0 +1,92 @@
+id: _selftest_session
+title: Runner self-test — a light realistic session (examine/analyze/pin/revise/delete/resume)
+domain: _infra
+gpu: false
+summary: Fast, low-compute arc (tiny CSV + simple plots) used to validate the v2 runner's
+  live-path driving, pin/delete curation, context growth, and prompt-cache behaviour — NOT a
+  science test. Each turn is cheap so the runner mechanics can be exercised end to end.
+data_files: [expr.csv]
+
+steps:
+  - id: s1
+    kind: examine
+    actor: agent
+    prompt: >
+      I have a small gene expression table at DATA_DIR/expr.csv — genes in rows, samples in
+      columns. Take a look and tell me the basic shape: how many genes and samples, and is
+      there any obvious difference between the samples?
+    expect:
+      must_mention: ["60", "6"]
+      context: { msgs_grow: true, cache_breakpoints: true }
+      checks: >
+        Reads the CSV, reports 60 genes x 6 samples, notes samples 4-6 look elevated for a
+        few genes. No fabricated numbers.
+
+  - id: s2
+    kind: analyze
+    actor: agent
+    prompt: >
+      Make a histogram of each gene's mean expression and save it as a PNG figure so I can
+      keep it — show me the saved plot.
+    expect:
+      produces: { figure: 1 }
+      context: { msgs_grow: true, cache_breakpoints: true, cache_read: true }
+      checks: A histogram figure of per-gene mean expression is produced.
+
+  - id: s3
+    kind: pin
+    actor: user
+    target: { from_step: s2, select: figure }
+    expect:
+      state: { pinned_results_min: 1 }
+      checks: The histogram is pinned — a Result entity now exists and shows in the manifest.
+
+  - id: s4
+    kind: revise
+    actor: agent
+    prompt: >
+      The spread is hard to read because of a few huge values. Log-transform the expression
+      first and redo that histogram, saving it as a new PNG figure.
+    expect:
+      produces: { figure: 1 }
+      context: { msgs_grow: true, cache_read: true }
+      checks: A new histogram on log-transformed values (this is a revision of the analysis).
+
+  - id: s5
+    kind: pin
+    actor: user
+    target: { from_step: s4, select: figure }
+    expect:
+      state: { pinned_results_min: 2 }
+      checks: Both histograms are now pinned (two Results on the shelf).
+
+  - id: s6
+    kind: delete
+    actor: user
+    target: { ref: s3 }
+    expect:
+      state: { entity_archived: { ref: s3 }, pinned_results_min: 1 }
+      checks: The first (non-log) pinned histogram Result is archived; the log one remains.
+
+  - id: s7
+    kind: resume
+    actor: agent
+    prompt: >
+      Coming back to this — remind me which figures we've kept so far. Just summarise what's
+      pinned; don't redo anything.
+    expect:
+      context: { cache_breakpoints: true }
+      checks: >
+        After a fresh session re-attached to the same project, the agent's context is
+        rehydrated from the pinned shelf — it should reflect the surviving (log) histogram
+        and not the deleted one. Tests context rebuild + that curation persisted.
+
+expected_overall:
+  planted_truth: >
+    expr.csv = 60 genes x 6 samples (seed 0). 8 genes are ~5x elevated in samples S4-S6.
+    Per-gene mean distribution is right-skewed (lognormal); log-transform makes it roughly
+    symmetric. No biological claim is under test — this fixture validates the RUNNER.
+  notes: >
+    Success = the runner drives 7 steps on the live path without error; s2/s4 each produce a
+    figure; s3/s5 pin them (Results appear); s6 archives the first; cache_read>0 on turns >=2
+    (prompt cache hit); n_msgs grows across agent turns; s7 rehydrates after a session restart.

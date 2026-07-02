@@ -1,0 +1,13 @@
+id: enrichment
+title: Over-representation / pathway enrichment of a gene list
+domain: functional_genomics
+prompt: DATA_DIR/genes.txt has a list of genes that came out of my screen (one per line). What biological
+  processes or pathways are over-represented in this list?
+data_files:
+- genes.txt
+expected:
+  must_mention:
+  - cell cycle
+  must_not: []
+  notes: Genes are canonical cell-cycle/mitosis (CDK1, CCNB1, AURKA, PLK1, …). Enrichment should rank
+    cell cycle / mitosis / nuclear division at top (GO + KEGG via Enrichr/gget).

@@ -1,10 +1,10 @@
 """
-Run a scenario from the misc/scenarios library against the live agent (Haiku),
+Run a scenario from the regtest/scenarios library against the live agent (Haiku),
 stream the transcript, and auto-check expected.must_mention / must_not against
 the agent's text. Detailed per-turn context dumps land in ABA_TURN_LOG_DIR for
 deeper analysis.
 
-    ABA_SCENARIO=enrichment .venv/bin/python -u tests/e2e/run_scenario_library.py
+    ABA_SCENARIO=enrichment .venv/bin/python -u regtest/harness/library_runner.py
 """
 from __future__ import annotations
 import json
@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-LIB = ROOT / "misc" / "scenarios"
+LIB = ROOT / "regtest" / "scenarios"
 PERSIST = Path(os.environ.get("ABA_DISC_HOME", str(Path(tempfile.gettempdir()) / "aba_discovery")))
 os.environ.setdefault("ABA_ENVS_DIR", str(PERSIST / "envs"))
 os.environ.setdefault("ABA_TURN_LOG_DIR", "/tmp/aba_lib_turnlog")

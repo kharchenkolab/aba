@@ -1,0 +1,40 @@
+# Generated scenario data — NOT committed. Regenerate after a fresh clone with:
+#     bash regtest/scenarios/_regen_all.sh
+# These data/ dirs are produced deterministically (fixed seeds) by the committed
+# generators (top-level _make_data.py + each <id>/_make_data.py), and reproduce the
+# planted-truth values in each scenario.yaml byte-for-byte (verified). Only the
+# generators are committed; this keeps the repo lean (~6 MB -> <1 MB).
+#
+# NOT listed here (kept committed, on purpose): survival/ (generator out of sync —
+# v2 added covariates), and the static no-generator scenarios (reproduce_expr,
+# provenance_export, revision_delete, version_revert, _selftest_session).
+
+# per-scenario generators
+alphafold/data/
+atac_peaks/data/
+blast_seq/data/
+cheminformatics/data/
+colocalization/data/
+crispr_guides/data/
+foci_count/data/
+gwas_popstruct/data/
+image_registration/data/
+methylation_dmr/data/
+msa_phylo/data/
+nuclei_count/data/
+protein_domains/data/
+pseudobulk_de/data/
+scrna_qc_clustering/data/
+scvi_integration/data/
+structure_superpose/data/
+variant_annotation/data/
+
+# top-level _make_data.py
+bulk_de/data/
+tpm/data/
+microbiome/data/
+enrichment/data/
+liftover/data/
+
+# forensic bundles (regenerated per run; retention-pruned)
+_runs/

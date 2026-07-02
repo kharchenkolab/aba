@@ -1,7 +1,7 @@
 """
 Tier-2 forensic diagnosis (the on-demand deep-dive).
 
-Given a run's forensic bundle (misc/scenarios/_runs/<scenario>-<ts>/), an Opus
+Given a run's forensic bundle (regtest/scenarios/_runs/<scenario>-<ts>/), an Opus
 agent reads — for each FAILED step — the scenario INTENT (prompt + expected checks
 + planted truth), what the agent ACTUALLY did (response + tools + tool errors +
 rubric), and the EXACT API context the model received that turn (the replayable raw
@@ -9,9 +9,9 @@ request), then root-causes the failure by LAYER (agent_model / recipe / tool /
 context_assembly / harness / scenario_design / data) with evidence + a fix.
 
     ABA_SCENARIO=gwas_popstruct \
-      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u tests/e2e/diagnose_failure.py [step_id]
+      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u regtest/harness/forensic.py [step_id]
     # or point at a bundle directly:
-    BUNDLE=misc/scenarios/_runs/gwas_popstruct-20260629-075855 ... diagnose_failure.py s6
+    BUNDLE=regtest/scenarios/_runs/gwas_popstruct-20260629-075855 ... diagnose_failure.py s6
 
 Diagnoses land in <bundle>/diagnosis/<step>.json.
 """
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LIB = ROOT / "misc" / "scenarios"
+LIB = ROOT / "regtest" / "scenarios"
 CRED_KEYS = ("ABA_LLM_CREDENTIAL", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
              "ABA_HOME", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
 MODEL = os.environ.get("ABA_FORENSIC_MODEL", "claude-opus-4-8")

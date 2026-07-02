@@ -1,0 +1,109 @@
+id: revision_delete
+title: Delete a middle revision from a figure chain (chain re-parenting integrity)
+domain: data_visualization
+expected_overall:
+  planted_truth: >
+    DATA_DIR/expression_timecourse.csv (condition, group, mean_expression, sem; treated rises
+    12->25, control flat). A figure is revised into a linear chain v1->v2->v3->v4. Hard-deleting
+    a MIDDLE revision (v2) is destructive for that one node but must PRESERVE chain integrity:
+    its active child (v3) is re-parented to the grandparent (v1), so the chain stays connected
+    and 3 revisions remain reachable, nothing orphaned, the pinned Result intact.
+    IMPORTANT — version labels are POSITIONAL (list_revisions numbers them version = total-idx,
+    v1 = oldest). So after deleting the middle, the 3 survivors are re-numbered into a CONTIGUOUS
+    v1, v2, v3 (no gap) — NOT "v1, v3, v4". A correct agent report says there are 3 clean
+    contiguous versions with the latest current; it should NOT claim a missing/gap version slot.
+steps:
+  - id: s1
+    kind: examine
+    actor: agent
+    prompt: What's in DATA_DIR?
+    expect:
+      must_mention: ["expression_timecourse"]
+      checks: Lists the timecourse CSV.
+
+  - id: s2
+    kind: analyze
+    actor: agent
+    prompt: Plot mean expression across the timecourse as a bar chart coloured by group, with SEM error bars. Save it.
+    expect:
+      must_mention: ["treated", "control"]
+      produces: {figure: 1}
+      context: {cache_breakpoints: true}
+      checks: A grouped bar chart of the timecourse (v1).
+
+  - id: s3
+    kind: pin
+    actor: user
+    target: {from_step: s2, select: figure}
+    expect:
+      state: {pinned_results_min: 1}
+      checks: v1 pinned as a Result.
+
+  - id: s4
+    kind: modify_figure
+    actor: user
+    target: {ref: s3}
+    modified_code: |
+      import pandas as pd, matplotlib.pyplot as plt
+      d = pd.read_csv(f"{DATA_DIR}/expression_timecourse.csv")
+      c = d['group'].map({'control':'#88CCEE','treated':'#CC6677'})
+      fig, ax = plt.subplots(figsize=(7,4))
+      ax.bar(d['condition'], d['mean_expression'], yerr=d['sem'], color=c)
+      ax.set_ylabel('Mean expression'); ax.set_title('Timecourse (v2)')
+      plt.xticks(rotation=45, ha='right'); plt.tight_layout(); plt.savefig('timecourse.png', dpi=120)
+    expect:
+      checks: v2 (child of v1).
+
+  - id: s5
+    kind: modify_figure
+    actor: user
+    target: {ref: s4}
+    modified_code: |
+      import pandas as pd, matplotlib.pyplot as plt
+      d = pd.read_csv(f"{DATA_DIR}/expression_timecourse.csv")
+      c = d['group'].map({'control':'#88CCEE','treated':'#CC6677'})
+      fig, ax = plt.subplots(figsize=(7,4))
+      ax.barh(d['condition'], d['mean_expression'], xerr=d['sem'], color=c)
+      ax.set_xlabel('Mean expression'); ax.set_title('Timecourse (v3)')
+      plt.tight_layout(); plt.savefig('timecourse.png', dpi=120)
+    expect:
+      checks: v3 (child of v2).
+
+  - id: s6
+    kind: modify_figure
+    actor: user
+    target: {ref: s5}
+    modified_code: |
+      import pandas as pd, matplotlib.pyplot as plt
+      d = pd.read_csv(f"{DATA_DIR}/expression_timecourse.csv")
+      c = d['group'].map({'control':'#88CCEE','treated':'#CC6677'})
+      fig, ax = plt.subplots(figsize=(8,4))
+      ax.bar(d['condition'], d['mean_expression'], yerr=d['sem'], color=c)
+      ax.set_ylabel('Mean expression'); ax.set_title('Timecourse (v4)')
+      for i, v in enumerate(d['mean_expression']): ax.text(i, v, f'{v:.0f}', ha='center', va='bottom')
+      plt.xticks(rotation=45, ha='right'); plt.tight_layout(); plt.savefig('timecourse.png', dpi=120)
+    expect:
+      state: {revisions_min: {ref: s3, n: 4}}
+      checks: v4 (child of v3). The chain for this figure now has 4 revisions.
+
+  - id: s7
+    kind: delete_revision
+    actor: user
+    target: {ref: s4}
+    expect:
+      state: {revision_deleted: true, revisions_min: {ref: s3, n: 3}}
+      checks: >
+        Hard-delete the MIDDLE revision (v2). Its child (v3) must be re-parented to v1 so the
+        chain stays connected (v1 <- v3 <- v4) — still 3 revisions reachable, nothing orphaned.
+
+  - id: s8
+    kind: analyze
+    actor: agent
+    prompt: >
+      I removed one of the intermediate versions of that timecourse figure earlier. Show me the
+      current version history of the figure so I can confirm it's consistent.
+    expect:
+      must_not: ["error", "cannot", "broken", "orphan", "corrupt"]
+      checks: >
+        The agent lists the surviving revision history (3 versions) via list_revisions — coherent,
+        no dangling/broken references to the deleted middle revision.

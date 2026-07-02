@@ -1,0 +1,320 @@
+id: alphafold
+title: AlphaFold per-residue confidence (pLDDT) for human p53 — confident DNA-binding domain vs disordered termini, with a tetramerization-domain twist
+domain: structural_biology
+gpu: false
+summary: >
+  A realistic structural working session on the AlphaFold model of human p53
+  (UniProt P04637): read the predicted model, plot the per-residue confidence
+  (pLDDT) along the sequence and call out which stretches are confidently folded
+  versus likely disordered, pin the profile, then sharpen the read by applying the
+  standard AlphaFold confidence bands — which reveals that the C-terminus is NOT
+  uniformly disordered: a short tetramerization domain is a confidently-folded
+  island inside the otherwise low-confidence tail. The biologist zooms into the
+  folded DNA-binding domain to check the cancer-hotspot residues, then is told the
+  first crude two-zone profile was a dead end, drops that framing, deletes the
+  stale raw-profile pin, restyles the banded profile for the figure, and in a later
+  session resumes to recap what was kept and give the bottom line.
+lifecycle: [revise, drop, resume]
+data_files: [AF-P04637-F1-model_v6.pdb]
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I've got the AlphaFold predicted structure for human p53 sitting in my data
+    folder (it's the model for UniProt P04637). Before I plot anything, just open it
+    and orient me: how long is the chain, and roughly how trustworthy is the
+    prediction overall? AlphaFold writes a per-residue confidence into the model —
+    give me a first read on whether the whole thing is confidently predicted or
+    whether some parts look shaky. No figure yet.
+  expect:
+    must_mention:
+    - P04637
+    - pLDDT
+    must_not:
+    - "I cannot fetch"
+    - "unable to read"
+    - "as an AI"
+    - placeholder
+    context: {cache_breakpoints: true}
+    checks: >
+      Reads the LOCAL AlphaFold model from DATA_DIR (AF-P04637-F1-model_v6.pdb) and
+      recognizes that AlphaFold stores the per-residue pLDDT confidence in the
+      B-factor column. Reports a full-length chain of 393 residues and an overall
+      mean pLDDT around 75 (medium-high overall) but explicitly notes it is NOT
+      uniform — some regions are very high and some are low. No figure this turn, no
+      fabricated values; numbers must come from the file.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now walk along the sequence and show me the confidence profile: residue
+    number on the x-axis, the per-residue confidence on the y-axis, so I can see
+    where the model is sure of itself and where it falls apart. Shade or mark the
+    confidently-folded stretch versus the floppy bits, and save it as a figure I can
+    keep.
+  expect:
+    must_mention:
+    - disordered
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes the real per-residue pLDDT from the model and SAVES a profile figure
+      (pLDDT vs residue number) that visually separates confident from disordered.
+      Correct ground truth from the file: the central DNA-binding domain (~residues
+      94-312) is confidently folded (mean pLDDT ~91, the bulk above 90), while the
+      N-terminal transactivation/proline-rich region (~1-93, mean ~48) and the
+      C-terminal regulatory tail (~363-393, mean ~44) are low-confidence / likely
+      disordered. The figure must convey a high central plateau flanked by low-
+      confidence termini. Real values, not a sketch.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The pLDDT profile from s2 is pinned — a Result entity now exists and shows in
+      the manifest.
+
+- id: s4
+  kind: revise
+  actor: agent
+  prompt: >
+    A flat folded-versus-floppy split is too crude. Redo the profile but colour each
+    residue by AlphaFold's actual confidence categories — the standard very-high /
+    confident / low / very-low bands — instead of a single cutoff. I want to see if
+    the so-called disordered tail is uniformly bad or whether there's any pocket of
+    real confidence hiding in there. Save it as a new figure.
+  expect:
+    must_mention:
+    - tetramerization
+    must_not:
+    - "I cannot"
+    - placeholder
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      A REVISION of the profile that colours residues by AlphaFold's standard pLDDT
+      bands (very high >=90, confident 70-90, low 50-70, very low <50) rather than a
+      single threshold, reusing the already-loaded model. The key new finding it must
+      surface: the C-terminus is NOT uniformly disordered — the tetramerization
+      (oligomerization) domain at roughly residues 323-356 is a confidently-folded
+      island (mean pLDDT ~89, mostly very-high/confident) sitting inside the
+      otherwise very-low-confidence C-terminal tail. So the corrected picture is
+      THREE confident segments worth noting (the big DBD plus the small tet domain),
+      not one. Must not claim the whole C-terminus is disordered. Real banded values.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The band-coloured profile from s4 is pinned too; two Results are now on the
+      shelf (the raw two-zone profile and the banded one).
+
+- id: s6
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now zoom into the folded core — the DNA-binding domain. The cancer mutation
+    hotspots in p53 sit there: residues 175, 248 and 273. I want to know whether the
+    model is actually confident exactly at those positions, because that tells me how
+    much to trust any structural interpretation of mutations there. Give me a
+    zoomed-in figure of the confidence across the DNA-binding domain with those three
+    positions marked, and save it.
+  expect:
+    must_mention:
+    - R273
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {cache_read: true}
+    checks: >
+      Saves a zoomed figure of the pLDDT across the DNA-binding domain (~94-312) with
+      the three hotspot positions marked. Correct ground truth from the file: all
+      three are in the very-high-confidence regime — R175 pLDDT ~96.6, R248 ~97.3,
+      R273 ~98.6 — i.e. the model is essentially maximally confident exactly at the
+      hotspots, so a structural read of mutations there is well supported. Reuses the
+      already-loaded model and the established DBD bounds; real per-residue values.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The DBD-zoom hotspot figure from s6 is pinned; three Results are on the shelf.
+
+- id: s8
+  kind: drop
+  actor: agent
+  prompt: >
+    Let's clean house. That very first profile where I just split everything into one
+    folded block versus floppy ends was misleading — we now know the C-terminus has
+    that confident tetramerization island, so the crude two-zone version actively
+    tells the wrong story. Drop that framing; from here on the banded version is the
+    one that represents what we found. Don't redo anything, just confirm we're off
+    the two-zone picture.
+  expect:
+    must_mention:
+    - tetramerization
+    must_not:
+    - "start over"
+    - "starting from scratch"
+    context: {cache_read: true}
+    checks: >
+      The agent abandons the crude two-zone (folded-vs-disordered) framing and
+      confirms the banded profile is the representative one going forward, explicitly
+      because the C-terminal tetramerization domain is a confident island the
+      two-zone view hid. It must NOT restart the analysis from scratch and must NOT
+      revert to calling the whole C-terminus disordered. A scope/framing correction,
+      not new computation.
+
+- id: s9
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The now-stale crude two-zone profile pinned at s3 is archived (it tells the
+      wrong story after the tet-domain finding). That Result is archived; the banded
+      profile (s5) and the DBD-zoom hotspot figure (s7) remain pinned, leaving two
+      Results on the shelf.
+
+- id: s10
+  kind: revise
+  actor: agent
+  prompt: >
+    Make the banded profile publication-ready. Same data, but use a colourblind-safe
+    palette for the confidence categories, bump up the fonts, and label the three
+    confident regions directly on the plot — the DNA-binding domain and the
+    tetramerization domain as the folded parts, and call out the disordered N- and
+    C-terminal stretches. Save it as a new figure.
+  expect:
+    must_mention:
+    - tetramerization
+    must_not:
+    - "I cannot"
+    - placeholder
+    produces: {figure: 1}
+    context: {cache_read: true}
+    checks: >
+      A RESTYLE of the banded profile from s4 (not a fresh analysis): a new saved
+      figure using the same per-residue pLDDT and the same AlphaFold bands, now with a
+      colourblind-safe palette, larger fonts, and on-plot labels for the confident
+      DNA-binding domain (~94-312) and tetramerization domain (~323-356) plus the
+      disordered N-terminal (~1-93) and C-terminal (~363-393) regions. Must reuse the
+      already-computed values rather than re-deriving, and must keep the tet-domain
+      island visible (consistent with s4).
+
+- id: s11
+  kind: pin
+  actor: user
+  target: {from_step: s10, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The restyled banded profile from s10 is pinned; three Results are on the shelf
+      again (the banded profile s5, the DBD-zoom hotspot figure s7, and the s10
+      restyle).
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this later. Remind me what we kept and give me the bottom line on
+    p53's predicted structure: which parts can I trust and which I can't, and is the
+    model confident where the cancer hotspots are? Just summarize from what's pinned
+    — don't redo any analysis.
+  expect:
+    must_mention:
+    - tetramerization
+    - disordered
+    must_not:
+    - "start over"
+    - "starting from scratch"
+    - "no prior"
+    context: {cache_breakpoints: true}
+    checks: >
+      A closing synthesis after the session is rehydrated from the pinned shelf. The
+      agent should reflect the SURVIVING curated state — the banded profile, the
+      DBD-zoom hotspot figure, and the s10 restyle — and NOT the deleted crude
+      two-zone profile. Correct bottom line: the DNA-binding domain (~94-312) is
+      confidently folded and the small tetramerization domain (~323-356) is a
+      confident island, while the N-terminal (~1-93) and C-terminal (~363-393)
+      regions are low-confidence / likely disordered; the model is very confident
+      exactly at the cancer hotspots R175/R248/R273 (pLDDT ~96-99), so a structural
+      interpretation of mutations there is well supported. Must not redo the
+      analyses, must not claim no prior work, and must not resurrect the two-zone
+      framing.
+
+expected_overall:
+  planted_truth: >
+    Protein: human cellular tumor antigen p53, UniProt P04637, 393 aa (full length).
+    Source: the AlphaFold DB model AF-P04637-F1 (model_v6), pre-staged locally at
+    DATA_DIR/AF-P04637-F1-model_v6.pdb. AlphaFold stores per-residue pLDDT confidence
+    in the PDB B-factor column (constant within a residue).
+
+    Real per-residue pLDDT computed from that file (this is the ground truth):
+      - Overall: mean pLDDT ~75.1, min ~32.8, max ~98.7 — medium-high but very
+        non-uniform.
+      - DNA-binding domain (DBD), residues ~94-312: CONFIDENTLY FOLDED, mean pLDDT
+        ~90.8, ~90% of residues >=70 and the bulk >=90.
+      - N-terminal transactivation + proline-rich region, residues ~1-93: LOW
+        confidence / likely DISORDERED, mean pLDDT ~48.4, ~65% of residues <50
+        (residue 1 ~43).
+      - C-terminal regulatory / basic region, residues ~363-393: LOW confidence /
+        likely DISORDERED, mean pLDDT ~43.5, ~84% of residues <50.
+      - Tetramerization (oligomerization) domain, residues ~323-356: a CONFIDENTLY
+        FOLDED ISLAND inside the otherwise low-confidence C-terminal tail, mean pLDDT
+        ~89.1 (~94% >=70, none <50). This is the twist the single-threshold view
+        hides and the banded view reveals.
+      - Cancer mutation hotspots in the DBD are in the very-high regime: R175 ~96.6,
+        R248 ~97.3, R273 ~98.6.
+    AlphaFold confidence bands used for the banded view: very high >=90, confident
+    70-90, low 50-70, very low <50.
+  notes: >
+    A fully correct end-to-end run is a realistic curated structural session:
+    (s1) examine — reads the LOCAL AlphaFold model, recognizes pLDDT lives in the
+    B-factor column, reports a 393-residue chain with overall mean pLDDT ~75 that is
+    explicitly non-uniform; no figure, no fabrication. (s2) analyze — computes the
+    real per-residue pLDDT and SAVES a profile (pLDDT vs residue) showing the high
+    central DBD plateau (~94-312) flanked by low-confidence disordered termini
+    (~1-93 and ~363-393). (s3) the human PINS it. (s4) revise — recolours by
+    AlphaFold's standard confidence bands and surfaces the key correction: the
+    C-terminus is NOT uniformly disordered — the tetramerization domain (~323-356) is
+    a confident island (mean ~89); SAVES the banded figure. (s5) the human PINS it
+    (two Results). (s6) analyze — zooms into the DBD and SAVES a figure marking the
+    cancer hotspots R175/R248/R273, all in the very-high regime (~96-99 pLDDT), so the
+    model is trustworthy exactly where mutations are interpreted; (s7) the human PINS
+    it (three Results). (s8) drop — told the crude two-zone framing is misleading now
+    that the tet-domain island is known, the agent cleanly DROPS that framing and
+    confirms the banded view is representative, without restarting. (s9) the human
+    DELETES the stale two-zone profile (the s3 pin is archived; the banded profile and
+    the DBD-zoom figure remain — two Results). (s10) revise — RESTYLES the banded
+    profile into a publication-ready, colourblind-safe, labelled figure (DBD + tet
+    domain folded, N/C termini disordered) reusing the same values; (s11) the human
+    PINS the restyle (three Results). (s12) resume — a LATER session rehydrated from
+    the pinned shelf: recaps the surviving figures (banded profile, DBD-zoom, restyle)
+    and gives the bottom line — trust the DBD and the tet domain, distrust the
+    disordered termini, and the model is confident at the hotspots — WITHOUT redoing
+    work, claiming no prior work, or resurrecting the deleted two-zone profile.
+    Fabrication / failure modes to catch: inventing pLDDT values instead of reading
+    the B-factor column, calling the whole C-terminus disordered (missing the tet
+    domain), claiming it cannot read the model, restarting from scratch at resume, or
+    summarizing the deleted two-zone profile at s12 instead of the surviving Results.

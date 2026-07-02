@@ -1,0 +1,24 @@
+id: scvi_integration
+title: Batch integration of two scRNA-seq samples with scVI
+domain: genomics
+prompt: I have two batches of single-cell RNA-seq in DATA_DIR/adata.h5ad — raw counts are in
+  .X and the batch label is in obs['batch'] (batchA, batchB). The two batches don't overlap
+  on a plain UMAP because of batch effects. Please integrate them with scVI, then cluster the
+  integrated latent space and give me a UMAP colored by batch and by cluster so I can check the
+  batches are mixed while the cell populations stay separate.
+data_files:
+- adata.h5ad
+expected:
+  must_mention:
+  - scVI
+  - batch
+  - integrat
+  - UMAP
+  must_not: []
+  notes: >-
+    Live install test for the new single-cell stack: the agent should discover + read the
+    scvi-integration recipe, ensure_capability("scvi-tools") (heavy pip/torch install,
+    materialized into the overlay), set up the AnnData with batch_key="batch", train scVI
+    (few epochs is fine on this toy set), compute the latent rep, neighbors+leiden+UMAP, and
+    report that batches mix while the 3 hidden cell types (cell_type_truth — Tcell/Bcell/Myeloid)
+    stay separable. No fabricated metrics; raw counts (.X) go into scVI, never log/normalized values.
