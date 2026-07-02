@@ -60,4 +60,10 @@ if (BASE) {
   } catch { /* non-DOM env */ }
 }
 
+// For non-fetch consumers (e.g. window.open of a launcher URL, which the fetch
+// shim above doesn't cover): prepend the OOD base to any root-relative path.
+export function withBasePath(u: string): string {
+  return BASE && u.startsWith('/') ? BASE + u : u
+}
+
 export {}
