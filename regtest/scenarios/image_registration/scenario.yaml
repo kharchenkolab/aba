@@ -27,9 +27,6 @@ steps:
     and how badly they're shifted right now — give me a single overlap number for the two as
     they stand so I know my starting point.
   expect:
-    must_mention:
-    - moving
-    - fixed
     must_not:
     - "perfectly aligned"
     - "100% overlap"

@@ -120,14 +120,18 @@ def diff_vs_baseline(scorecard, mode):
     if not base_p.exists():
         return None, []
     base = json.loads(base_p.read_text()).get("scenarios", {})
+    # Mode-aware mech tolerance: Haiku's mechanical must_mention gates jitter ±2 steps
+    # run-to-run (phrasing varies, occasional kernel-hang), so a small dip is noise, not
+    # a regression — Haiku is a COARSE robustness net. Opus is deterministic → strict (0).
+    mech_tol = int(os.environ.get("ABA_REGTEST_MECH_TOL", "2" if mode == "haiku" else "0"))
     regressions = []
     for sid, cur in scorecard["scenarios"].items():
         b = base.get(sid)
         if not b:
             continue                                       # new scenario, not a regression
         if cur["mech_pass"] is not None and b.get("mech_pass") is not None \
-                and cur["mech_pass"] < b["mech_pass"]:
-            regressions.append((sid, f"mech {b['mech_pass']}→{cur['mech_pass']} (of {cur['mech_total']})"))
+                and (b["mech_pass"] - cur["mech_pass"]) > mech_tol:
+            regressions.append((sid, f"mech {b['mech_pass']}→{cur['mech_pass']} (of {cur['mech_total']}, tol {mech_tol})"))
         cr, br = cur.get("rubric_overall"), b.get("rubric_overall")
         if isinstance(cr, (int, float)) and isinstance(br, (int, float)) and (br - cr) > RUBRIC_REGRESSION:
             regressions.append((sid, f"rubric {br}→{cr}"))

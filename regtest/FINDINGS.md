@@ -160,3 +160,22 @@ The 19 sub-full steps are NOT platform regressions — two known classes:
 alphafold / atac_peaks / methylation_dmr / structure_superpose / colocalization /
 pseudobulk_de / variant_annotation, then re-`--accept` to raise the baseline. The
 agent-driven-op fails stay (Haiku-tier) — they belong to the Opus baseline.
+
+## Haiku variance characterized + check-hygiene (2026-07-02)
+Re-seeding exposed that **Haiku mechanical `must_mention` gates jitter ±2–3 steps run-to-run**:
+different brittle phrasing trips each run (f3/"Field 3", Myeloid, moving/fixed, buried, GRCh38…)
+plus occasional intermittent kernel hangs (nuclei_count s11 `TurnTimeout` — H5 caught it, the
+blast_seq/msa flakiness class). So a strict single-run Haiku baseline produces FALSE regressions.
+
+Mitigations applied:
+- **Two rounds of brittle-gate trims (22 gates)**, each verified a false-fail against the sweep
+  bundle replies (agent did it right; the substring/count check was too literal). K1/K2/K3 classes.
+- **Mode-aware mech tolerance** in `sweep.py` (`ABA_REGTEST_MECH_TOL`): Haiku=2 (coarse robustness
+  net — flags only real breakage), Opus=0 (deterministic → strict). Rubric drop > 0.3 always flags.
+- **Best-of composite baseline** (`baselines/haiku.json`): each scenario's ACHIEVABLE mech_pass
+  across runs, so a normal dip doesn't read as a regression. Haiku baseline = 22/26 full, 280/288.
+
+**Takeaway:** Haiku is the COARSE robustness tier (crashes, big drops); **Opus + rubric is the
+precise science-regression signal.** Remaining Haiku sub-fulls are honest: msa_phylo (figure/pin
+Haiku-tier), version_revert (agent-driven revert needs Opus). Persistent kernel-hang under Haiku
+load (nuclei/blast/msa) is an open flakiness item, not a check artifact.
