@@ -2,7 +2,12 @@
   position: fixed; inset: 0;
   background: rgba(15, 23, 42, 0.5);
   z-index: 100;
-  display: flex; align-items: center; justify-content: center;
+  /* Top-anchored, NOT vertically centered: the panel's sections load in async
+     waves (model / account / environment), and a centered modal re-centers on
+     every height change → visible jitter as it fills in. Anchoring the top lets
+     it grow downward smoothly. */
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 8vh 16px; box-sizing: border-box;
 }
 .settings {
   background: var(--bg);
@@ -11,6 +16,7 @@
   max-width: 720px;
   width: 90%;
   max-height: 80vh;
+  overflow-y: auto;              /* tall content scrolls inside the panel, size stays put */
   display: flex; flex-direction: column;
   padding: 22px 24px 18px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
