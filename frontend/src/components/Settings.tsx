@@ -238,10 +238,6 @@ export default function Settings({ onClose }: Props) {
                   </span>
                 </li>
               </ul>
-              <p className="settings__hint">
-                Pipeline workflows are heavy nf-core jobs (variant calling, ChIP/ATAC,
-                methylation, metagenomics…) — they need a cluster + containers to run.
-              </p>
               <label className="settings__select-label" htmlFor="pipe-gate">
                 Suggest pipeline workflows in this workspace:
               </label>
@@ -249,7 +245,7 @@ export default function Settings({ onClose }: Props) {
                 value={env.user_pref === 'soft' ? 'auto' : (env.user_pref || 'auto')}
                 onChange={e => pickGate(e.target.value)}>
                 <option value="auto">Only when they can run here (recommended)</option>
-                <option value="off">Always — even if they need a cluster</option>
+                <option value="off">Always (even where they can't run)</option>
                 <option value="hard">Never</option>
               </select>
               <p className="settings__hint">{envEffectLine(env)}</p>
