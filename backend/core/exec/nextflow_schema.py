@@ -204,7 +204,20 @@ def enrich_plan_steps(steps: list) -> list:
             if schema:
                 s["pipeline"] = pipeline
                 s["revision"] = revision
-                prefilled = params.get("params") or {}
+                # Prefill the launch form. The agent is only told `parameters`
+                # is "a dict of resolved choices", so it commonly emits the
+                # pipeline run-params FLAT beside pipeline/revision (e.g.
+                # {pipeline, revision, input, genome}) rather than nested under
+                # `params`. Accept BOTH: seed from the nested `params`, then fold
+                # in any non-reserved top-level key. Without this the required
+                # `input` renders as an empty field even when the user gave a path.
+                prefilled = dict(params.get("params") or {})
+                _RESERVED = {"pipeline", "revision", "profile", "params",
+                             "execution", "outdir", "work_dir", "timeout_s",
+                             "local_resources", "background"}
+                for _k, _v in params.items():
+                    if _k not in _RESERVED and _k not in prefilled:
+                        prefilled[_k] = _v
                 s["prefilled"] = prefilled
                 # The `test` profile ships its own input data, so `input` is auto-provided just
                 # like `outdir` — showing it as an empty required field misleads users into
@@ -239,20 +252,27 @@ def _type_ok(value, jtype: Optional[str]) -> bool:
     return True
 
 
-def validate_params(schema: dict, params: Optional[dict]) -> dict:
+def validate_params(schema: dict, params: Optional[dict], *,
+                    skip_required: bool = False) -> dict:
     """Validate the agent's ``params`` against the schema. Returns
     {ok, errors, warnings}. Hard ERRORS (block the run): a missing required param,
     a value outside an ``enum``, a clear type mismatch. WARNINGS (proceed): unknown
-    params (pipelines accept custom/extra ones)."""
+    params (pipelines accept custom/extra ones).
+
+    ``skip_required``: don't enforce missing-required params — set when a `-profile test`
+    run is selected, because nf-core test profiles ship their OWN required params (input,
+    etc.) via the profile config, so requiring them on the CLI wrongly blocks a valid test
+    smoke run (type/enum checks on any params the user DID pass still apply)."""
     params = params or {}
     specs = {p["name"]: p for p in parse_params(schema)}
     errors: list[str] = []
     warnings: list[str] = []
 
-    for name, spec in specs.items():
-        if spec["required"] and name not in _AUTO_PROVIDED and name not in params:
-            errors.append(f"missing required param --{name}"
-                          + (f" ({spec['help'][:80]})" if spec["help"] else ""))
+    if not skip_required:
+        for name, spec in specs.items():
+            if spec["required"] and name not in _AUTO_PROVIDED and name not in params:
+                errors.append(f"missing required param --{name}"
+                              + (f" ({spec['help'][:80]})" if spec["help"] else ""))
     for k, v in params.items():
         spec = specs.get(k)
         if spec is None:

@@ -201,6 +201,40 @@ def _read_setting_from_bundle(key: str) -> str:
     return ""
 
 
+# ── User-scope preferences (RUNTIME_DIR is per-user, so this store is too) ────
+# A small JSON of runtime-toggleable user preferences (e.g. discovery.env_gate),
+# distinct from bundle-authored settings.yaml (read-only) and per-project state.
+def _user_settings_path() -> Path:
+    return Path(str(RUNTIME_DIR)) / "user_settings.json"
+
+
+def get_user_pref(key: str, default=None):
+    import json
+    p = _user_settings_path()
+    try:
+        if p.exists():
+            return json.loads(p.read_text()).get(key, default)
+    except Exception:  # noqa: BLE001 — a bad prefs file must never break a turn
+        pass
+    return default
+
+
+def set_user_pref(key: str, value) -> None:
+    """Persist (or clear, when value is None/empty) a user preference."""
+    import json
+    p = _user_settings_path()
+    try:
+        d = json.loads(p.read_text()) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        d = {}
+    if value is None or value == "":
+        d.pop(key, None)
+    else:
+        d[key] = value
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(d, indent=2))
+
+
 def _read_aba_model_from_config_env() -> str:
     """Parse ~/.aba/config.env for ABA_MODEL. Returns '' on any failure.
     Standalone (no aba_installer dep) so the backend can read it without
