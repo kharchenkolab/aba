@@ -463,14 +463,36 @@ def unmet_tools(spec: SkillSpec) -> list[str]:
 def _env_gate_policy() -> str:
     """Effective discovery env-gate policy: 'off' | 'soft' | 'hard'.
 
-    'soft' (default / 'auto') demotes+flags recipes needing a tool that can't run
-    here (a no-op where everything is viable, e.g. a cluster); 'hard' drops them;
-    'off' disables gating. P3 resolves the per-user preference here; today it
-    honors ABA_DISCOVERY_ENV_GATE for deployment/testing, else 'soft'."""
-    v = (os.environ.get("ABA_DISCOVERY_ENV_GATE") or "").strip().lower()
+    'soft' (default / 'auto') demotes recipes needing a tool that can't run here
+    (a no-op where everything is viable, e.g. a cluster); 'hard' drops them; 'off'
+    disables gating. Resolution, highest first: the user preference
+    (`discovery.env_gate`, set via the settings card) → the ABA_DISCOVERY_ENV_GATE
+    deployment/test override → a bundle-authored default → 'auto'."""
+    v = ""
+    try:
+        from core.config import get_user_pref, _read_setting_from_bundle
+        v = (get_user_pref("discovery.env_gate")
+             or os.environ.get("ABA_DISCOVERY_ENV_GATE")
+             or _read_setting_from_bundle("discovery.env_gate")
+             or "")
+    except Exception:  # noqa: BLE001 — never break discovery on a config read
+        v = os.environ.get("ABA_DISCOVERY_ENV_GATE") or ""
+    v = (v or "").strip().lower()
     if v == "auto":
         return "soft"
     return v if v in ("off", "soft", "hard") else "soft"
+
+
+def gate_counts(policy: Optional[str] = None) -> dict:
+    """Effect of the env-gate over the recipe cookbook, for the settings card:
+    how many recipes need a tool that can't run here. Under 'hard' those are
+    hidden; under 'soft' de-prioritized (still findable); under 'off' shown
+    normally. Core (always-on) skills are never gated, so they're excluded."""
+    pol = policy or _env_gate_policy()
+    cookbook = [s for s in list_skills() if s.visibility != "always"]
+    blocked = sum(1 for s in cookbook if unmet_tools(s))
+    return {"policy": pol, "total": len(cookbook),
+            "blocked": blocked, "runnable": len(cookbook) - blocked}
 
 
 def _apply_env_gate(pool: list[SkillSpec], policy: str) -> list[SkillSpec]:
