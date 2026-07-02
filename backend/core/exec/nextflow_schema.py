@@ -239,20 +239,27 @@ def _type_ok(value, jtype: Optional[str]) -> bool:
     return True
 
 
-def validate_params(schema: dict, params: Optional[dict]) -> dict:
+def validate_params(schema: dict, params: Optional[dict], *,
+                    skip_required: bool = False) -> dict:
     """Validate the agent's ``params`` against the schema. Returns
     {ok, errors, warnings}. Hard ERRORS (block the run): a missing required param,
     a value outside an ``enum``, a clear type mismatch. WARNINGS (proceed): unknown
-    params (pipelines accept custom/extra ones)."""
+    params (pipelines accept custom/extra ones).
+
+    ``skip_required``: don't enforce missing-required params — set when a `-profile test`
+    run is selected, because nf-core test profiles ship their OWN required params (input,
+    etc.) via the profile config, so requiring them on the CLI wrongly blocks a valid test
+    smoke run (type/enum checks on any params the user DID pass still apply)."""
     params = params or {}
     specs = {p["name"]: p for p in parse_params(schema)}
     errors: list[str] = []
     warnings: list[str] = []
 
-    for name, spec in specs.items():
-        if spec["required"] and name not in _AUTO_PROVIDED and name not in params:
-            errors.append(f"missing required param --{name}"
-                          + (f" ({spec['help'][:80]})" if spec["help"] else ""))
+    if not skip_required:
+        for name, spec in specs.items():
+            if spec["required"] and name not in _AUTO_PROVIDED and name not in params:
+                errors.append(f"missing required param --{name}"
+                              + (f" ({spec['help'][:80]})" if spec["help"] else ""))
     for k, v in params.items():
         spec = specs.get(k)
         if spec is None:
