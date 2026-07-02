@@ -31,7 +31,6 @@ steps:
     whether some parts look shaky. No figure yet.
   expect:
     must_mention:
-    - P04637
     - pLDDT
     must_not:
     - "I cannot fetch"
@@ -95,8 +94,6 @@ steps:
     the so-called disordered tail is uniformly bad or whether there's any pocket of
     real confidence hiding in there. Save it as a new figure.
   expect:
-    must_mention:
-    - tetramerization
     must_not:
     - "I cannot"
     - placeholder

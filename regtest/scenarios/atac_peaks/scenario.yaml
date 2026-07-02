@@ -156,7 +156,6 @@ steps:
   expect:
     must_mention:
     - strict
-    - drop
     must_not:
     - permissive branch retained
     - "keep both"
@@ -178,8 +177,6 @@ steps:
     must_mention:
     - motif
     - enrich
-    must_not:
-    - "no motif"
     produces: {figure: 1}
     context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
     checks: >

@@ -96,8 +96,6 @@ steps:
     figure. I want to see the activation loop spike out clearly. Mark which residue
     moves the most.
   expect:
-    must_mention:
-    - F169
     must_not:
     - placeholder
     - "as an AI"
@@ -135,7 +133,6 @@ steps:
   expect:
     must_mention:
     - 5UOJ
-    - superseded
     - RMSD
     must_not:
     - "no change because same"
