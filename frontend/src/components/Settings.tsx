@@ -34,13 +34,6 @@ interface EnvState {
   options: string[]
 }
 
-// Card choices (biologist-facing) → the stored env_gate value.
-const GATE_OPTIONS = [
-  { value: 'auto', label: 'Auto', hint: 'match this workspace (recommended)' },
-  { value: 'off', label: 'Always show', hint: "for planning, even where they can't run here" },
-  { value: 'hard', label: 'Hide', hint: 'keep them out of results' },
-]
-
 function envDetail(p: EnvProfile): string {
   const bits = [...p.container_engines]
   if (p.cluster) bits.push('cluster')
@@ -167,22 +160,14 @@ export default function Settings({ onClose }: Props) {
           {!llm ? (
             <div className="settings__empty">Loading…</div>
           ) : (
-            <div className="model-list" role="radiogroup" aria-label="Model">
-              {llm.options.map(o => {
-                const active = o.model === llm.current.model
-                return (
-                  <button
-                    key={o.model} role="radio" aria-checked={active}
-                    className={`model-row ${active ? 'is-active' : ''}`}
-                    disabled={saving} onClick={() => pickModel(o.model)}
-                  >
-                    <span className="model-row__radio" aria-hidden>{active ? '●' : '○'}</span>
-                    <span className="model-row__label">{o.label}</span>
-                    <span className="model-row__id">{o.model}</span>
-                  </button>
-                )
-              })}
-            </div>
+            <select className="settings-select" aria-label="Model" disabled={saving}
+              value={llm.current.model} onChange={e => pickModel(e.target.value)}>
+              {llm.options.map(o => (
+                <option key={o.model} value={o.model}>
+                  {o.label}{o.model ? ` — ${o.model}` : ''}
+                </option>
+              ))}
+            </select>
           )}
         </section>
 
@@ -254,26 +239,19 @@ export default function Settings({ onClose }: Props) {
                 </li>
               </ul>
               <p className="settings__hint">
-                Pipeline workflows are heavy nf-core jobs (variant calling, ChIP/ATAC, methylation,
-                metagenomics…) that need a cluster + containers.
+                Pipeline workflows are heavy nf-core jobs (variant calling, ChIP/ATAC,
+                methylation, metagenomics…) — they need a cluster + containers to run.
               </p>
-              <div className="model-list" role="radiogroup" aria-label="Show pipeline workflows">
-                {GATE_OPTIONS.map(o => {
-                  const cur = env.user_pref === 'soft' ? 'auto' : (env.user_pref || 'auto')
-                  const active = cur === o.value
-                  return (
-                    <button
-                      key={o.value} role="radio" aria-checked={active}
-                      className={`model-row ${active ? 'is-active' : ''}`}
-                      disabled={envSaving} onClick={() => pickGate(o.value)}
-                    >
-                      <span className="model-row__radio" aria-hidden>{active ? '●' : '○'}</span>
-                      <span className="model-row__label">{o.label}</span>
-                      <span className="model-row__id">{o.hint}</span>
-                    </button>
-                  )
-                })}
-              </div>
+              <label className="settings__select-label" htmlFor="pipe-gate">
+                Suggest pipeline workflows in this workspace:
+              </label>
+              <select id="pipe-gate" className="settings-select" disabled={envSaving}
+                value={env.user_pref === 'soft' ? 'auto' : (env.user_pref || 'auto')}
+                onChange={e => pickGate(e.target.value)}>
+                <option value="auto">Only when they can run here (recommended)</option>
+                <option value="off">Always — even if they need a cluster</option>
+                <option value="hard">Never</option>
+              </select>
               <p className="settings__hint">{envEffectLine(env)}</p>
             </>
           )}
