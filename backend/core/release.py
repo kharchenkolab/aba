@@ -305,27 +305,63 @@ def ensure_component(kind: str, cid: str, builder, share: Optional[str] = None) 
     return dest
 
 
-def compose_release(ver: str, *, repo: str, env: str, opt: str,
+def compose_release(version: str, components: dict, *,
                     share: Optional[str] = None, built_at: Optional[str] = None) -> Path:
     """A release = relative symlinks to component versions + a manifest recording which it pins.
-    ~0 bytes; the env is shared by reference across every release pinning the same env id."""
+    `components` is {kind: cid} — e.g. slim uses {sif,env,opt} (code lives in the SIF); a checkout
+    deploy might use {repo,env,opt}. ~0 bytes; a component is shared by reference across every
+    release pinning the same cid (so a code-only upgrade re-links the unchanged env — no copy)."""
     root = share_root(share)
     if not root:
         raise RuntimeError("no $ABA_SHARE")
-    rel = _releases(root) / ver
+    rel = _releases(root) / version
     rel.mkdir(parents=True, exist_ok=True)
-    comps = {"repo": repo, "env": env, "opt": opt}
-    for kind, cid in comps.items():
+    for kind, cid in components.items():
         cp = _components(root) / kind / cid
         link = rel / kind
         if link.is_symlink() or link.exists():
             link.unlink()
         link.symlink_to(os.path.relpath(cp, rel))          # relative → portable if $ABA_SHARE moves
-    manifest = {"version": ver, "components": comps}
+    manifest = {"version": version, "components": dict(components)}
     if built_at:
         manifest["built_at"] = built_at
     (rel / "manifest.json").write_text(json.dumps(manifest))
     return rel
+
+
+def _copy_into(src: str, dest: Path) -> None:
+    """Populate a (fresh, empty) component dir from `src`. A dir → its tree copied in (symlinks
+    preserved); a single file (e.g. aba.sif) → copied under its name."""
+    import shutil
+    p = Path(src)
+    if p.is_dir():
+        shutil.copytree(p, dest, dirs_exist_ok=True, symlinks=True)
+    else:
+        shutil.copy2(p, dest / p.name)
+
+
+def stage_release(version: str, components: "dict[str, tuple[str, str]]", *,
+                  share: Optional[str] = None, do_promote: bool = False,
+                  built_at: Optional[str] = None) -> dict:
+    """DEPLOY-side orchestration (called by deploy.sh). `components` = {kind: (cid, src_path)}:
+    ensure each as a content-addressed component under $ABA_SHARE (copy src → components/kind/cid,
+    **skipping the copy when the cid already exists** — so a code-only upgrade never re-copies the
+    multi-GB env), then compose the release, then optionally promote. Returns what it staged."""
+    root = share_root(share)
+    if not root:
+        raise RuntimeError("no $ABA_SHARE — versioned release staging is slim-deploy only")
+    comp_ids, reused = {}, []
+    for kind, (cid, src) in components.items():
+        existed = component_path(kind, cid, str(root)) is not None
+        ensure_component(kind, cid, (lambda s: (lambda d: _copy_into(s, d)))(src), share=str(root))
+        comp_ids[kind] = cid
+        if existed:
+            reused.append(f"{kind}/{cid}")
+    compose_release(version, comp_ids, share=str(root), built_at=built_at)
+    if do_promote:
+        promote(version, str(root))
+    return {"version": version, "components": comp_ids, "reused": reused,
+            "current": resolve_current(str(root))}
 
 
 def release_components(ver: str, share: Optional[str] = None) -> dict:
@@ -400,6 +436,10 @@ def _cli(argv: "list[str] | None" = None) -> int:
     sub.add_parser("rollback")
     g = sub.add_parser("gc"); g.add_argument("--keep", type=int, default=2)
     b = sub.add_parser("build-mock"); b.add_argument("ver"); b.add_argument("src")
+    s = sub.add_parser("stage")               # deploy-side: stage components + compose + promote
+    s.add_argument("--version", required=True)
+    s.add_argument("--component", action="append", required=True, metavar="kind=cid=src")
+    s.add_argument("--promote", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "list":
         cur = resolve_current()
@@ -422,6 +462,12 @@ def _cli(argv: "list[str] | None" = None) -> int:
         print(json.dumps(gc(keep=a.keep)))
     elif a.cmd == "build-mock":
         print(str(build_mock(a.ver, a.src)))
+    elif a.cmd == "stage":
+        comps = {}
+        for c in a.component:
+            k, cid, src = c.split("=", 2)
+            comps[k] = (cid, src)
+        print(json.dumps(stage_release(a.version, comps, do_promote=a.promote)))
     return 0
 
 
