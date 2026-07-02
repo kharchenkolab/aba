@@ -12,4 +12,4 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for biological data ana
 ## Basic truths (where things live)
 - Knowhows/recipes = `bp-*` skills in the `kharchenkolab/aba-recipe-pack` repo (`recipes/genomics/`); `search_skills` (BM25) indexes frontmatter only, so body-only edits are search-neutral.
 - The system prompt composes bundle scopes system → installation → lab → user (narrowest-wins): universal default rules live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
-- Live install runs from `~/data/aba/install` (code rsync'd from the working tree; recipe pack pulled via `RECIPES_REF`); `aba update` pulls code from `main`.
+- Deployments update via `aba update` (ABA code from `main`) and pull the recipe pack via `RECIPES_REF` — so branch/PR work only ships once it lands on `main` (install paths/hosts are per-deployment, not recorded here).
