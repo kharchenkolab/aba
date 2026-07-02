@@ -99,6 +99,7 @@ the image, and the auto-create policy.
 image:
   sif: /cluster/aba/aba.sif
   # base_dir:  /cluster/aba/base          # slim only
+  # release_root: /cluster/aba            # slim, VERSIONED deploy (see Updating → blue-green)
 jobs:                                     # background-job offload (omit → in-process on the session node)
   submitter: slurm
   hpc_config: /cluster/aba/hpc.yaml
@@ -216,6 +217,32 @@ ABA auto-sizes BLAS/OpenMP threads to the Slurm allocation, no config needed.
 - **Recipes / code / base packages** → rebuild the SIF (step 1) and replace it.
 - **Site-wide recipes or policy** without a rebuild → edit `/cluster/aba/installation`.
 - **A lab's recipes or policy** → edit that lab's `bundle/`.
+
+### Versioned, zero-downtime upgrades (slim, optional)
+
+A slim deploy can run in **release mode**: each deploy stages an immutable, versioned release and
+flips a `current` pointer **atomically**, so upgrades don't disturb running sessions and you can
+roll back instantly. Enable it by setting `image.release_root` in `site.yaml` (to your shared
+`/cluster/aba`) and deploying with `RELEASE_MODE=1`.
+
+Why it matters for a fast-moving deploy: a release is a set of **content-addressed components** (the
+image, the conda/R base, tools). A **code-only** upgrade re-links the *unchanged* base — it does
+**not** re-copy the multi-GB env; the base is restaged only when its package lockfile changes.
+
+Operate releases with the release CLI (run against the deployed backend; site tooling such as
+aba-vbc wraps it as `./aba-release`):
+
+```
+release list              # releases, which is current, and which are pinned by live sessions/jobs
+release verify <ver>      # pre-promote structural check (the gate)
+release promote <ver>     # atomically switch `current` → the new release
+release rollback          # instant revert to the previous release (old tree is still on disk)
+release gc                # remove old releases + components no live session/job still needs
+```
+
+**Sessions pin at launch:** a session — and every job (incl. a resumed Nextflow head) it spawns —
+keeps the release it started on, even if you promote a newer one mid-use. So a promote is safe
+during active work, `-resume` caches stay valid, and only *new* sessions pick up the new `current`.
 
 ## Testing the deployment
 
