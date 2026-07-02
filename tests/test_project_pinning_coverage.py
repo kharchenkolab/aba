@@ -60,6 +60,7 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/projects/{pid}/materialize", "POST"): "explicit pid in path — admin tool",
     # Server-wide admin / global ops — not project-scoped.
     ("/api/settings/credential", "POST"): "server-wide credential — not project-scoped",
+    ("/api/settings/environment", "POST"): "user-scope discovery.env_gate preference — not project-scoped",
     ("/api/admin/backfill-tool-result-thread", "POST"): "global migration script",
     ("/api/admin/purge_orphan_fills", "POST"): "global cleanup",
     ("/api/skills/reload", "POST"): "global skill catalog reload",
