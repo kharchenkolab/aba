@@ -2497,6 +2497,11 @@ class _IsolatedStatic(StaticFiles):
         resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
         resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        # index.html has a stable URL but its content (hashed asset refs) changes
+        # every build — never let the browser heuristically cache it, or it keeps
+        # loading dead asset hashes → blank. Hashed assets stay cacheable.
+        if (resp.headers.get("content-type") or "").startswith("text/html"):
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
         return resp
 
 

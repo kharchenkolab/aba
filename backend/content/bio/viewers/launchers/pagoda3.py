@@ -17,9 +17,18 @@ from pathlib import Path
 from core.viewers.launchers import register_launcher, LaunchResult
 from core.viewers.convert_cache import ensure_derived
 
-# Bump to force re-derivation of every cached store (e.g. after an lstar upgrade
-# that changes the on-disk store layout or the viewer profile).
-LAUNCHER_VERSION = "lstar-sc/0.1.0"
+# Cache version = the installed lstar-sc version, so upgrading it (e.g. 0.1.0 →
+# 0.1.1, which changes the store layout / adds the viewer@0.1 profile) AUTOMATICALLY
+# re-derives every cached store — no manual bump needed. Suffix `+N` here only if
+# THIS launcher's own conversion logic changes independently of lstar.
+def _launcher_version() -> str:
+    try:
+        import importlib.metadata as _md
+        return "lstar-sc/" + _md.version("lstar-sc")
+    except Exception:  # noqa: BLE001
+        return "lstar-sc/unknown"
+
+LAUNCHER_VERSION = _launcher_version()
 _STORE_SUFFIX = ".lstar.zarr"
 
 
