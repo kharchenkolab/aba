@@ -17,6 +17,7 @@ carry a self-consistent image) never set it, so they are entirely unaffected.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -231,7 +232,10 @@ def gc(share: Optional[str] = None, *, keep: int = 2,
             continue
         shutil.rmtree(_releases(root) / ver, ignore_errors=True)
         removed.append(ver)
-    return {"removed": removed, "kept": [v for v in all_rel if v not in removed]}
+    # After removing orphaned RELEASES, sweep the components none of the survivors reference.
+    comp = gc_components(str(root))
+    return {"removed": removed, "kept": [v for v in all_rel if v not in removed],
+            "components_removed": comp["removed"]}
 
 
 def build_mock(ver: str, src: str, share: Optional[str] = None) -> Path:
@@ -248,6 +252,140 @@ def build_mock(ver: str, src: str, share: Optional[str] = None) -> Path:
         link.symlink_to(src)
     (rel / "manifest.json").write_text(f'{{"version": "{ver}", "repo": "{src}"}}')
     return rel
+
+
+# ── content-addressed components (a release is a COMPOSITION, not a copy — misc/slim_sif_deploy.md §1)
+# A release re-links shared, immutable components keyed by content: repo/<git-sha>, env/<lockfile-hash>,
+# opt/<tools-hash>. So a CODE-ONLY upgrade re-links the SAME (multi-GB) env component — zero copy —
+# and the env is rebuilt only when its lockfile actually changes.
+
+def _components(share: Path) -> Path:
+    return share / "components"
+
+
+def component_path(kind: str, cid: str, share: Optional[str] = None) -> Optional[Path]:
+    root = share_root(share)
+    if not root or not cid:
+        return None
+    p = _components(root) / kind / cid
+    return p if p.exists() else None
+
+
+def hash_files(paths: "list[str]") -> str:
+    """Content id for an env/opt component: sha1 over the concatenated lockfile bytes (order-stable).
+    Unchanged lockfiles → same id → dedup (build reuses the existing component)."""
+    h = hashlib.sha1()
+    for p in paths:
+        try:
+            h.update(Path(p).read_bytes())
+        except OSError:
+            h.update(b"\0missing\0")
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
+def ensure_component(kind: str, cid: str, builder, share: Optional[str] = None) -> Path:
+    """Content-addressed build-or-reuse. If `components/<kind>/<cid>` exists → return it (DEDUP: the
+    expensive env compile is skipped when the lockfile hash is unchanged). Else populate a temp dir
+    via builder(tmp) and atomically publish it (rename), so a component is never half-built."""
+    root = share_root(share)
+    if not root:
+        raise RuntimeError("no $ABA_SHARE")
+    dest = _components(root) / kind / cid
+    if dest.exists():
+        return dest                                        # reuse — no rebuild, no copy
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{cid}.building.{os.getpid()}"
+    import shutil
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    builder(tmp)
+    os.replace(tmp, dest)                                  # atomic publish
+    return dest
+
+
+def compose_release(ver: str, *, repo: str, env: str, opt: str,
+                    share: Optional[str] = None, built_at: Optional[str] = None) -> Path:
+    """A release = relative symlinks to component versions + a manifest recording which it pins.
+    ~0 bytes; the env is shared by reference across every release pinning the same env id."""
+    root = share_root(share)
+    if not root:
+        raise RuntimeError("no $ABA_SHARE")
+    rel = _releases(root) / ver
+    rel.mkdir(parents=True, exist_ok=True)
+    comps = {"repo": repo, "env": env, "opt": opt}
+    for kind, cid in comps.items():
+        cp = _components(root) / kind / cid
+        link = rel / kind
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(os.path.relpath(cp, rel))          # relative → portable if $ABA_SHARE moves
+    manifest = {"version": ver, "components": comps}
+    if built_at:
+        manifest["built_at"] = built_at
+    (rel / "manifest.json").write_text(json.dumps(manifest))
+    return rel
+
+
+def release_components(ver: str, share: Optional[str] = None) -> dict:
+    return (read_manifest(ver, share).get("components") or {})
+
+
+def component_referenced(share: Optional[str] = None) -> dict:
+    """{kind: set(cids)} that ANY release pins. Components not here are orphans GC can remove."""
+    refs: dict = {}
+    for ver in list_releases(share):
+        for kind, cid in release_components(ver, share).items():
+            refs.setdefault(kind, set()).add(cid)
+    return refs
+
+
+def gc_components(share: Optional[str] = None) -> dict:
+    """Delete component dirs no surviving release references. Runs AFTER release GC (so removing a
+    release first frees its components). A referenced (still-pinned) component is never touched."""
+    import shutil
+    root = share_root(share)
+    if not root:
+        raise RuntimeError("no $ABA_SHARE")
+    refs = component_referenced(str(root))
+    cdir = _components(root)
+    removed: list = []
+    if not cdir.is_dir():
+        return {"removed": removed}
+    for kind_dir in cdir.iterdir():
+        if not kind_dir.is_dir():
+            continue
+        keep = refs.get(kind_dir.name, set())
+        for comp in kind_dir.iterdir():
+            if comp.name in keep or comp.name.startswith("."):
+                continue
+            shutil.rmtree(comp, ignore_errors=True)
+            removed.append(f"{kind_dir.name}/{comp.name}")
+    return {"removed": removed}
+
+
+def compute_version(repo_dir: str, *, now=None) -> str:
+    """Version id for a build: the git TAG at HEAD if the checkout sits on one (release tags win —
+    per the deploy decision), else `YYYY.MM.DD-<short-sha>` (chronological + code-identifying, no tag
+    needed). Uses `cwd=` not `git -C` (RHEL7 build hosts ship git 1.8.3, which lacks `-C`)."""
+    import subprocess
+
+    def _git(*a):
+        try:
+            return subprocess.run(["git", *a], cwd=str(repo_dir),
+                                  capture_output=True, text=True, timeout=15)
+        except Exception:  # noqa: BLE001
+            return None
+    tag = _git("describe", "--exact-match", "--tags", "HEAD")
+    if tag and tag.returncode == 0 and tag.stdout.strip():
+        return tag.stdout.strip()                          # a release tag → use it verbatim
+    sha_r = _git("rev-parse", "--short", "HEAD")
+    sha = (sha_r.stdout.strip() if sha_r and sha_r.returncode == 0 else "") or "nosha"
+    if now is None:
+        from datetime import date
+        now = date.today()
+    return f"{now.strftime('%Y.%m.%d')}-{sha}"
 
 
 def _cli(argv: "list[str] | None" = None) -> int:
