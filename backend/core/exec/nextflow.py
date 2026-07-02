@@ -105,6 +105,14 @@ def nextflow_config() -> dict:
     # the slurm executor/queue/QOS + singularity, WITHOUT nf-core/configs' stale
     # `process.module` loads. Applied to every run when set.
     config_file = os.environ.get("ABA_NEXTFLOW_CONFIG", cfg.get("config_file"))
+    # Standalone Nextflow on shared FS (slim SIF / cluster-personal) as an ALTERNATIVE to `module`:
+    # a dir (or the launcher path) PREPENDED to the head's PATH so it runs a self-installed NF (e.g.
+    # ≥25.04, past the module's version ceiling). Used ONLY when set → `module` stays the path for
+    # fat SIF / personal installs, which are unaffected. See misc/nfcore.md §7d.
+    bin_ = os.environ.get("ABA_NEXTFLOW_BIN", cfg.get("bin"))
+    # Persistent NXF_HOME (plugins/assets/scm). None → the per-run scratch `.nextflow` (today's
+    # behavior; re-fetches plugins every run). Set it to share plugins across a user's runs.
+    home = os.environ.get("ABA_NEXTFLOW_HOME", cfg.get("home"))
     # JAVA_HOME for the head: modern nf-core pipelines pull plugins (nf-schema) compiled
     # for Java 17+, but a cluster's `nextflow` module may pin an older Java. Point the head
     # at a Java ≥17 here (the run sets JAVA_HOME, which Nextflow honors). None → use whatever
@@ -126,7 +134,17 @@ def nextflow_config() -> dict:
             "singularity_cachedir": cachedir or None,
             "workdir_root": workdir_root or None, "config_file": config_file or None,
             "java_home": java_home or None, "head": head, "local": local,
+            "bin": bin_ or None, "home": home or None,
             "execution": execution}
+
+
+def nextflow_bin_dir(bin_value: Optional[str]) -> Optional[str]:
+    """Directory to PREPEND to PATH for a self-installed Nextflow (ABA_NEXTFLOW_BIN), or None.
+    Accepts the launcher's dir OR the launcher file itself. Shared by the inline head env AND the
+    Slurm head's job.sh — the single source of truth for the module-vs-bin choice."""
+    if not bin_value:
+        return None
+    return os.path.dirname(bin_value) if os.path.isfile(bin_value) else bin_value
 
 
 def merged_profile(caller_profile: Optional[str], site_profiles: list[str]) -> Optional[str]:
@@ -791,12 +809,17 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     # configured, capture its env overlay in-process. Conda-install only off-cluster (no module,
     # not on PATH).
     module_overlay: dict = {}
-    if not shutil.which("nextflow") and cfg.get("module"):
-        try:
-            from core.exec.modules import module_env_overlay
-            module_overlay = module_env_overlay(cfg["module"])
-        except Exception:  # noqa: BLE001
-            module_overlay = {}
+    if not shutil.which("nextflow"):
+        _nf_bin = nextflow_bin_dir(cfg.get("bin"))
+        if _nf_bin:
+            # Self-installed Nextflow on shared FS (slim SIF / personal) — prepend its dir to PATH.
+            module_overlay = {"PATH": _nf_bin + os.pathsep + os.environ.get("PATH", "")}
+        elif cfg.get("module"):
+            try:
+                from core.exec.modules import module_env_overlay
+                module_overlay = module_env_overlay(cfg["module"])
+            except Exception:  # noqa: BLE001
+                module_overlay = {}
     try:
         if shutil.which("nextflow") or module_overlay:
             menv = ex.materialize(Provisioning(), cancel_token=cancel_token)
@@ -806,7 +829,15 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     except Exception as e:  # noqa: BLE001
         return {"error": f"Could not provision nextflow: {e}"}
 
-    env_vars = {"NXF_HOME": str(Path(scratch) / ".nextflow")}
+    # Persistent NXF_HOME (plugins/assets/scm) when configured (shared-FS deploys share plugins
+    # across runs); else the per-run scratch .nextflow (today's behavior). The -resume cache +
+    # work-dir stay per-run (work_dir/cwd), so a persistent NXF_HOME never causes cross-run races.
+    _nxf_home = cfg.get("home") or str(Path(scratch) / ".nextflow")
+    try:
+        Path(_nxf_home).mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        _nxf_home = str(Path(scratch) / ".nextflow")   # fall back to per-run if the shared dir isn't writable
+    env_vars = {"NXF_HOME": _nxf_home}
     env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
