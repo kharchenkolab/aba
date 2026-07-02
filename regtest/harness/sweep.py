@@ -89,6 +89,15 @@ def run_scenario(sid, mode):
     try:
         d = json.loads((rep / "report.json").read_text())
         d["_bundle"] = rep.name
+        # Detect INFRA failures (OAuth token expiry / rate limits / overload) so a long
+        # sweep that outlives the token or hits 429s doesn't bake garbage into a baseline.
+        try:
+            bj = json.loads((rep / "bundle.json").read_text())
+            errs = " ".join(json.dumps(st.get("errors") or []) for st in bj.get("steps", []))
+            d["_infra"] = sum(errs.count(p) for p in
+                              ("OAuthTokenUnavailable", "RateLimitError", "rate_limit", "overloaded_error"))
+        except Exception:
+            d["_infra"] = 0
         return d
     except Exception as e:
         return {"_error": f"report.json unreadable: {e}", "_bundle": rep.name}
@@ -98,13 +107,13 @@ def score_of(rep):
     """Collapse a report.json into the scorecard row."""
     if rep.get("_error"):
         return {"mech_pass": 0, "mech_total": None, "rubric_overall": None,
-                "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle")}
+                "fails": [f"ERROR:{rep['_error']}"], "bundle": rep.get("_bundle"), "infra": 0}
     mech = rep.get("mechanical") or {}
     fails = [f"{r['step']}:{';'.join(r.get('fails') or [])}"
              for r in (rep.get("report") or []) if r.get("verdict") == "FAIL"]
     return {"mech_pass": mech.get("pass"), "mech_total": mech.get("total"),
             "rubric_overall": (rep.get("rubric_mean") or {}).get("overall"),
-            "fails": fails, "bundle": rep.get("_bundle")}
+            "fails": fails, "bundle": rep.get("_bundle"), "infra": rep.get("_infra", 0)}
 
 
 def git_commit():
@@ -208,7 +217,8 @@ def main() -> int:
         row = score_of(rep)
         rows[sid] = row
         mech = f"{row['mech_pass']}/{row['mech_total']}" if row["mech_total"] is not None else "ERR"
-        print(f"      {mech}  rubric={row['rubric_overall']}  fails={len(row['fails'])}", flush=True)
+        tag = f"  ⚠INFRA({row['infra']})" if row.get("infra") else ""
+        print(f"      {mech}  rubric={row['rubric_overall']}  fails={len(row['fails'])}{tag}", flush=True)
 
     scorecard = {
         "meta": {"date": ts, "mode": mode, "commit": git_commit(),
@@ -232,10 +242,25 @@ def main() -> int:
             env = dict(os.environ); env["ABA_SCENARIO"] = sid
             subprocess.run([PY, "-u", str(FORENSIC)], env=env, cwd=str(ROOT))
 
+    infra_scen = [sid for sid, r in rows.items() if r.get("infra")]
+    if infra_scen:
+        print(f"\n[sweep] ⚠ {len(infra_scen)} scenario(s) hit INFRA errors (OAuth expiry / rate limit), "
+              f"NOT science failures — re-run under fresh creds: {infra_scen}")
+
     if args.accept:
         BASELINES.mkdir(parents=True, exist_ok=True)
-        (BASELINES / f"{mode}.json").write_text(json.dumps(scorecard, indent=2))
-        print(f"[sweep] baseline updated: baselines/{mode}.json")
+        bp = BASELINES / f"{mode}.json"
+        prior = json.loads(bp.read_text()).get("scenarios", {}) if bp.exists() else {}
+        clean = {sid: r for sid, r in rows.items() if not r.get("infra")}   # never bake infra failures in
+        merged = dict(prior); merged.update(clean)
+        out = dict(scorecard); out["scenarios"] = merged
+        out["totals"] = {"mech_pass": sum((r.get("mech_pass") or 0) for r in merged.values()),
+                         "mech_total": sum((r.get("mech_total") or 0) for r in merged.values()),
+                         "full_pass": sum(1 for r in merged.values()
+                                          if r.get("mech_total") and r["mech_pass"] == r["mech_total"])}
+        bp.write_text(json.dumps(out, indent=2))
+        skip = f"  (skipped {len(infra_scen)} infra-failed, kept prior/absent)" if infra_scen else ""
+        print(f"[sweep] baseline updated: baselines/{mode}.json{skip}")
 
     t = scorecard["totals"]
     print(f"\n=== sweep {mode}: {t['full_pass']}/{len(scenarios)} scenarios full-pass, "
