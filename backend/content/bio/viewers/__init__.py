@@ -10,3 +10,6 @@ from core.viewers.registry import register_viewers_yaml
 
 _HERE = Path(__file__).parent
 register_viewers_yaml(_HERE / "registry.yaml")
+
+# Register external-viewer launchers (open_external ids referenced in the YAML).
+from content.bio.viewers.launchers import pagoda3 as _pagoda3  # noqa: E402,F401

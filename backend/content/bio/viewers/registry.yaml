@@ -94,6 +94,23 @@ viewers:
     component: PdfViewer
     priority: 5
 
+  # ---------- external launchers ----------
+  # pagoda3 (single-cell explorer). Native .lstar.zarr is a zero-conversion fast
+  # path; .h5ad converts on launch (lstar). See misc/pagoda3_integration.md.
+  - id: pagoda3-lstar
+    extensions: [.lstar.zarr, .lstar.zarr.zip]
+    mode: external
+    open_external: pagoda3_launcher
+    priority: 9
+    label: "Explore in pagoda3"
+
+  - id: pagoda3-anndata
+    extensions: [.h5ad]
+    mode: external
+    open_external: pagoda3_launcher
+    priority: 8
+    label: "Explore in pagoda3"
+
   # ---------- AI viewers (deferred to V4 — registered now so the menu shows them) ----------
   - id: ai-summary
     applies: any

@@ -14,6 +14,7 @@ export interface LaunchResponse {
   url: string
   prepare_job_id: string | null
   label: string | null
+  set_local_storage?: Record<string, string> | null
 }
 
 /** Ask the backend to resolve an external viewer to a URL, then open it in a
@@ -29,6 +30,14 @@ export async function launchExternal(node: FileNode, viewer: ViewerInfo): Promis
   })
   const d = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(d?.detail || `launch failed (${r.status})`)
+  // Seed origin-shared localStorage before opening (e.g. point pagoda3's copilot
+  // at ABA's proxy). Root-relative values get the OOD base prefix; the viewer
+  // window shares this origin, so it reads the same keys.
+  if (d.set_local_storage) {
+    for (const [k, v] of Object.entries(d.set_local_storage as Record<string, string>)) {
+      try { localStorage.setItem(k, v.startsWith('/') ? withBasePath(v) : v) } catch { /* ignore */ }
+    }
+  }
   const url = withBasePath(String(d.url))
   window.open(url, `viewer-${viewer.id}`, 'popup=yes,width=1400,height=900')
   return d as LaunchResponse
