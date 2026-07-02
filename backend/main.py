@@ -2519,6 +2519,65 @@ def pagoda3_store(pid: str, relpath: str):
     return resp
 
 
+# ---- pagoda3 copilot proxy: ABA lends its Anthropic credential ----
+# pagoda3's in-viewer copilot posts to `${proxyBase}/agent/stream` (+ /health).
+# We point it at /pagoda3-api (via localStorage p3-agent-proxy at launch) and
+# proxy to Anthropic using ABA's OWN credential. ABA is the SOLE token renewer
+# (core.llm._oauth_bearer, locked) — pagoda3 never touches ~/.aba/oauth.json,
+# so it can't trigger an aberrant refresh. Mirrors pagoda3/server/proxy.mjs.
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+
+@app.get("/pagoda3-api/health")
+def pagoda3_api_health(provider: str | None = None):
+    from core.llm import anthropic_auth
+    if provider == "openai":
+        return _JSONResponse({"ok": False, "mode": "openai",
+                              "error": "ABA has no local model backend"}, status_code=503)
+    try:
+        a = anthropic_auth()
+        return {"ok": True, "mode": a["mode"], "expires_in": a["expires_in"]}
+    except Exception as e:  # noqa: BLE001
+        return _JSONResponse({"ok": False, "error": str(e)}, status_code=503)
+
+
+@app.post("/pagoda3-api/agent/stream")
+async def pagoda3_api_stream(payload: dict):
+    """Relay pagoda3's copilot turn to Anthropic with ABA's credential, streaming
+    the SSE back. ABA-managed token (single renewer); the viewer just relays."""
+    import httpx
+    from core.llm import anthropic_auth
+    from core.viewers.llm_proxy import build_messages_request, anthropic_headers, ANTHROPIC_URL
+
+    if payload.get("provider") == "openai":
+        return _JSONResponse({"error": "ABA proxies Anthropic only"}, status_code=501)
+    try:
+        auth = anthropic_auth()
+    except Exception as e:  # noqa: BLE001
+        return _JSONResponse({"error": str(e)}, status_code=503)
+
+    out = build_messages_request(payload, auth["mode"])
+    headers = anthropic_headers(auth["mode"], auth["token"])
+
+    client = httpx.AsyncClient(timeout=None)
+    req = client.build_request("POST", ANTHROPIC_URL, headers=headers, json=out)
+    up = await client.send(req, stream=True)
+    if up.status_code >= 400:                       # relay the upstream error verbatim
+        body = await up.aread()
+        await up.aclose(); await client.aclose()
+        return Response(content=body, status_code=up.status_code,
+                        media_type=up.headers.get("content-type", "application/json"))
+
+    async def gen():
+        try:
+            async for chunk in up.aiter_bytes():
+                yield chunk
+        finally:
+            await up.aclose(); await client.aclose()
+
+    return StreamingResponse(gen(), status_code=up.status_code, media_type="text/event-stream")
+
+
 @app.get("/api/files/content")
 def files_content(path: str, download: int = 0):
     """Serve a tree file's RAW BYTES (with content-type) — powers the image

@@ -65,6 +65,7 @@ EXEMPT_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/skills/reload", "POST"): "global skill catalog reload",
     ("/api/run-probe", "POST"): "diagnostic probe — no project ctx",
     ("/api/feedback/client-context", "POST"): "stashes a transient global browser snapshot for bug reports — no project ctx",
+    ("/pagoda3-api/agent/stream", "POST"): "co-hosted pagoda3 copilot proxy — uses ABA's global Anthropic credential, not project-scoped",
     # Body-sourced pid (handler calls _require_project_context(req.project_id) internally).
     # These don't carry the Depends signature but DO pin — call out one-by-one.
     ("/api/chat", "POST"): "body-sourced pid via _require_project_context(req.project_id)",
