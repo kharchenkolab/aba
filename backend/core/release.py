@@ -17,9 +17,18 @@ carry a self-consistent image) never set it, so they are entirely unaffected.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 from typing import Optional
+
+
+def _version_key(ver: str):
+    """Numeric-aware ordering so releases sort by version, not lexically (2024.11 > 2024.9,
+    v10 > v2). Splits into digit / non-digit runs; a mixed key stays stable for date, semver,
+    and sha-suffixed names."""
+    return [(1, int(p)) if p.isdigit() else (0, p) for p in re.split(r"(\d+)", ver) if p]
 
 
 def share_root(share: Optional[str] = None) -> Optional[Path]:
@@ -67,7 +76,77 @@ def list_releases(share: Optional[str] = None) -> list[str]:
     root = share_root(share)
     if not root or not _releases(root).is_dir():
         return []
-    return sorted(p.name for p in _releases(root).iterdir() if p.is_dir())
+    return sorted((p.name for p in _releases(root).iterdir() if p.is_dir()), key=_version_key)
+
+
+def read_manifest(ver: str, share: Optional[str] = None) -> dict:
+    """A release's provenance (version, git sha, env lockfiles, nextflow/jdk versions, build time)
+    — written by `aba release build` (aba-vbc build.sh), read here for `list`/audit. {} if absent."""
+    p = release_path(ver, share)
+    if not p:
+        return {}
+    mf = p / "manifest.json"
+    try:
+        return json.loads(mf.read_text()) if mf.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def compute_referenced(share: Optional[str] = None) -> set:
+    """Release ids that LIVE state pins — the current release + the `release_id` of every
+    running/queued job across all project DBs (e.g. a long Nextflow head pinned to an older
+    release). This is the refcount that makes GC safe against in-flight work: GC must never delete
+    a release something is still using. Best-effort; a scan error just yields fewer refs (GC then
+    protects less, so we ALSO always protect current + the newest `keep`)."""
+    refs: set = set()
+    cur = resolve_current(share)
+    if cur:
+        refs.add(cur)
+    try:
+        from core.config import PROJECTS_DIR
+        import sqlite3
+        if not PROJECTS_DIR.exists():
+            return refs
+        for proj in PROJECTS_DIR.iterdir():
+            db = proj / "project.db"
+            if not proj.is_dir() or not db.exists():
+                continue
+            try:
+                c = sqlite3.connect(db)
+                for (params,) in c.execute(
+                        "SELECT params FROM jobs WHERE status IN ('running','queued')"):
+                    try:
+                        rid = (json.loads(params or "{}") or {}).get("release_id")
+                        if rid:
+                            refs.add(rid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                c.close()
+            except Exception:  # noqa: BLE001
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return refs
+
+
+def verify(ver: str, share: Optional[str] = None) -> dict:
+    """Structural pre-promote gate: a release tree must exist, carry a repo + a manifest with a
+    version, before it can become `current`. Returns {ok, checks, missing}. The LIVE smoke (health
+    200, a tiny run_python, a `-profile test` nextflow) runs on the deploy host against
+    release_path(ver) — this is the on-disk half that's checkable anywhere."""
+    p = release_path(ver, share)
+    checks, missing = {}, []
+    checks["tree_exists"] = bool(p)
+    if not p:
+        return {"ok": False, "checks": checks, "missing": ["release tree"]}
+    checks["has_repo"] = (p / "repo").exists()
+    mf = read_manifest(ver, share)
+    checks["has_manifest"] = bool(mf)
+    checks["manifest_version_matches"] = (mf.get("version") == ver) if mf else False
+    for k, v in checks.items():
+        if not v:
+            missing.append(k)
+    return {"ok": not missing, "checks": checks, "missing": missing}
 
 
 def active_release_id() -> Optional[str]:
@@ -129,18 +208,23 @@ def rollback(share: Optional[str] = None) -> dict:
 
 
 def gc(share: Optional[str] = None, *, keep: int = 2,
-       referenced: "set[str] | tuple[str, ...]" = ()) -> dict:
-    """Delete releases that are neither `current`, the recorded previous, in `referenced` (pinned
-    by a live session/job), nor within the newest `keep`. Never deletes a pinned/current release."""
+       referenced: "set[str] | tuple[str, ...] | None" = None) -> dict:
+    """Delete releases that are neither `current`, the recorded previous, referenced by LIVE state
+    (running/queued jobs — computed automatically when `referenced` is None), nor within the newest
+    `keep`. Never deletes a pinned/current release. Pass an explicit `referenced` to override the
+    live scan (used by tests)."""
     import shutil
     root = share_root(share)
     if not root:
         raise RuntimeError("no $ABA_SHARE")
+    if referenced is None:
+        referenced = compute_referenced(str(root))           # the live refcount
     cur = resolve_current(str(root))
     prev = _prev_file(root).read_text().strip() if _prev_file(root).exists() else None
-    protect = set(referenced) | {cur, prev} - {None}
-    all_rel = list_releases(str(root))
-    protect |= set(all_rel[-keep:]) if keep > 0 else set()   # keep the newest N
+    protect = (set(referenced) | {cur, prev}) - {None}
+    all_rel = list_releases(str(root))                        # version-ordered
+    if keep > 0:
+        protect |= set(all_rel[-keep:])                       # keep the newest N by version
     removed = []
     for ver in all_rel:
         if ver in protect:
@@ -174,16 +258,26 @@ def _cli(argv: "list[str] | None" = None) -> int:
     sub.add_parser("list")
     sub.add_parser("resolve")
     p = sub.add_parser("promote"); p.add_argument("ver")
+    v = sub.add_parser("verify"); v.add_argument("ver")
     sub.add_parser("rollback")
     g = sub.add_parser("gc"); g.add_argument("--keep", type=int, default=2)
     b = sub.add_parser("build-mock"); b.add_argument("ver"); b.add_argument("src")
     a = ap.parse_args(argv)
     if a.cmd == "list":
-        print(json.dumps({"releases": list_releases(), "current": resolve_current()}, indent=2))
+        cur = resolve_current()
+        print(json.dumps({
+            "current": cur, "referenced_by_live": sorted(compute_referenced()),
+            "releases": [{"version": r, "current": r == cur,
+                          "manifest": read_manifest(r) or None} for r in list_releases()],
+        }, indent=2))
     elif a.cmd == "resolve":
         print(json.dumps({"current": resolve_current(), "active": active_release_id()}))
     elif a.cmd == "promote":
         print(json.dumps(promote(a.ver)))
+    elif a.cmd == "verify":
+        r = verify(a.ver)
+        print(json.dumps(r))
+        return 0 if r["ok"] else 1
     elif a.cmd == "rollback":
         print(json.dumps(rollback()))
     elif a.cmd == "gc":
