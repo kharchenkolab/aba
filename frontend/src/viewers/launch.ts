@@ -39,6 +39,8 @@ export async function launchExternal(node: FileNode, viewer: ViewerInfo): Promis
     }
   }
   const url = withBasePath(String(d.url))
-  window.open(url, `viewer-${viewer.id}`, 'popup=yes,width=1400,height=900')
+  // No window features → opens as a new TAB (a features string forces a popup
+  // window). The per-viewer name means re-launching reuses the same tab.
+  window.open(url, `viewer-${viewer.id}`)
   return d as LaunchResponse
 }
