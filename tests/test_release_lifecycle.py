@@ -207,8 +207,8 @@ def test_code_only_upgrade_reuses_env_component(tmp_path, monkeypatch):
     R.ensure_component("opt", "optH1", lambda d: (Path(d) / "nextflow").write_text("nf"))
     R.ensure_component("repo", "sha_A", lambda d: (Path(d) / "app.py").write_text("v1"))
     R.ensure_component("repo", "sha_B", lambda d: (Path(d) / "app.py").write_text("v2"))
-    R.compose_release("2026.07.02-A", repo="sha_A", env="envH1", opt="optH1")
-    R.compose_release("2026.07.02-B", repo="sha_B", env="envH1", opt="optH1")   # code-only bump
+    R.compose_release("2026.07.02-A", {"repo": "sha_A", "env": "envH1", "opt": "optH1"})
+    R.compose_release("2026.07.02-B", {"repo": "sha_B", "env": "envH1", "opt": "optH1"})  # code-only
     envs = list((share / "components" / "env").iterdir())
     assert len(envs) == 1 and envs[0].name == "envH1", "code-only upgrade must NOT copy the env"
     a = (share / "releases" / "2026.07.02-A" / "env").resolve()
@@ -234,15 +234,50 @@ def test_gc_sweeps_orphaned_components(tmp_path, monkeypatch):
     R.ensure_component("opt", "opt1", lambda d: (Path(d) / "x").write_text("o"))
     for cid in ("s1", "s2", "s3"):
         R.ensure_component("repo", cid, (lambda c: (lambda d: (Path(d) / "x").write_text(c)))(cid))
-    R.compose_release("v1", repo="s1", env="envOld", opt="opt1")
-    R.compose_release("v2", repo="s2", env="envNew", opt="opt1")
-    R.compose_release("v3", repo="s3", env="envNew", opt="opt1")
+    R.compose_release("v1", {"repo": "s1", "env": "envOld", "opt": "opt1"})
+    R.compose_release("v2", {"repo": "s2", "env": "envNew", "opt": "opt1"})
+    R.compose_release("v3", {"repo": "s3", "env": "envNew", "opt": "opt1"})
     R.promote("v1"); R.promote("v2"); R.promote("v3")   # current=v3, prev=v2
     out = R.gc(keep=1, referenced=())                    # removes v1, then its now-orphaned components
     assert "v1" in out["removed"]
     assert "env/envOld" in out["components_removed"] and "repo/s1" in out["components_removed"]
     assert (share / "components" / "env" / "envNew").exists()          # still pinned by v2,v3
     assert not (share / "components" / "env" / "envOld").exists()
+
+
+def test_stage_release_copies_composes_promotes(tmp_path, monkeypatch):
+    # The deploy-side orchestrator: copy built artifacts into content-addressed components, compose,
+    # promote. Mirrors what deploy.sh calls (slim uses kinds sif/env/opt).
+    share = tmp_path / "share"; monkeypatch.setenv("ABA_SHARE", str(share))
+    sif = tmp_path / "aba.sif"; sif.write_text("IMAGE-A")
+    env_src = tmp_path / "base"; (env_src / "bin").mkdir(parents=True); (env_src / "bin" / "python").write_text("py")
+    opt_src = tmp_path / "opt"; opt_src.mkdir(); (opt_src / "nextflow").write_text("nf")
+    out = R.stage_release("2026.07.02-A", {
+        "sif": ("codeA", str(sif)), "env": ("envH", str(env_src)), "opt": ("optH", str(opt_src))},
+        do_promote=True)
+    assert out["current"] == "2026.07.02-A" and not out["reused"]
+    # components materialized + release composed through symlinks
+    assert (share / "components" / "sif" / "codeA" / "aba.sif").read_text() == "IMAGE-A"
+    assert (share / "releases" / "2026.07.02-A" / "env" / "bin" / "python").read_text() == "py"
+    assert R.release_components("2026.07.02-A") == {"sif": "codeA", "env": "envH", "opt": "optH"}
+
+
+def test_stage_release_code_only_upgrade_skips_env_copy(tmp_path, monkeypatch):
+    # THE deploy-side win: re-staging with a NEW sif but the SAME env id does NOT re-copy the env.
+    share = tmp_path / "share"; monkeypatch.setenv("ABA_SHARE", str(share))
+    sifA = tmp_path / "a.sif"; sifA.write_text("A")
+    sifB = tmp_path / "b.sif"; sifB.write_text("B")
+    env_src = tmp_path / "base"; env_src.mkdir(); (env_src / "big").write_text("x" * 1000)
+    R.stage_release("relA", {"sif": ("shaA", str(sifA)), "env": ("envH", str(env_src))}, do_promote=True)
+    env_dir = share / "components" / "env" / "envH"
+    mtime_before = (env_dir / "big").stat().st_mtime_ns
+    # code-only upgrade: new sif, SAME env id
+    out = R.stage_release("relB", {"sif": ("shaB", str(sifB)), "env": ("envH", str(env_src))}, do_promote=True)
+    assert "env/envH" in out["reused"], out                    # env was reused, not re-copied
+    assert (env_dir / "big").stat().st_mtime_ns == mtime_before, "env component must NOT be rewritten"
+    assert len(list((share / "components" / "sif").iterdir())) == 2   # two code images
+    assert len(list((share / "components" / "env").iterdir())) == 1   # ONE env, shared
+    assert R.resolve_current() == "relB"
 
 
 def test_compute_version_tag_else_datesha(tmp_path):
