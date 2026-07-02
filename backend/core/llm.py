@@ -349,6 +349,25 @@ class OAuthTokenUnavailable(RuntimeError):
     Caught by guide.py's stream error handler — mapped to a friendly UI toast."""
 
 
+def anthropic_auth() -> dict:
+    """The current Anthropic credential, for PROXYING a co-hosted external
+    viewer's copilot (pagoda3) through ABA. Reuses ABA's single, locked OAuth
+    refresher (_oauth_bearer) — so ABA stays the SOLE renewer of oauth.json and
+    the external viewer never touches the token. Returns
+    {mode: 'oauth'|'apikey', token: str, expires_in: int|None}. Raises
+    OAuthTokenUnavailable in oauth mode with no usable token."""
+    mode = _credential_mode()
+    if mode in ("oauth", "oauth_cc"):
+        tok = _oauth_bearer()
+        if not tok:
+            raise OAuthTokenUnavailable("no usable Claude Code OAuth token for the viewer proxy")
+        store = _load_oauth_store() or {}
+        exp = store.get("expires_at")
+        return {"mode": "oauth", "token": tok,
+                "expires_in": int(exp - time.time()) if exp else None}
+    return {"mode": "apikey", "token": _current_api_key(), "expires_in": None}
+
+
 # Module-level cache for AsyncAnthropic / Anthropic clients. Keyed by
 # (mode, auth_material) so a refreshed OAuth token (which the SDK can't
 # update on a constructed client) just produces a new cache entry —
