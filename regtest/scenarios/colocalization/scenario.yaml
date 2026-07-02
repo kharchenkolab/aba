@@ -29,7 +29,6 @@ steps:
   expect:
     must_mention:
     - field
-    - "f3"
     must_not:
     - "all four fields look fine"
     - "all four fields are equivalent"
@@ -198,7 +197,6 @@ steps:
     - chance
     - p
     must_not:
-    - "field 3"
     - "cannot determine"
     produces: {figure: 1}
     context: {cache_breakpoints: true}

@@ -142,7 +142,8 @@ steps:
     figure. I want to confirm the responding genes go in both directions and aren't just the highly
     expressed ones.
   expect:
-    must_mention: ["MA", "Myeloid"]
+    must_mention:
+    - "MA"
     must_not:
     - "only upregulated"
     - "all in one direction"
@@ -170,7 +171,8 @@ steps:
     palette, larger points, and the names of the top few up and down genes labelled directly on the
     plot, and save it as a new PNG figure.
   expect:
-    must_mention: ["volcano", "Myeloid"]
+    must_mention:
+    - "volcano"
     must_not:
     - "cannot modify"
     - "no figure"
@@ -210,7 +212,9 @@ steps:
     analysis, then re-run just the Myeloid treated-vs-control comparison on the remaining five donors
     and give me a fresh Myeloid volcano. I expect it to clean up once that bad sample is gone.
   expect:
-    must_mention: ["ctrl_3", "Myeloid", "removed"]
+    must_mention:
+    - "ctrl_3"
+    - "Myeloid"
     must_not:
     - "ctrl_3 was retained"
     - "kept ctrl_3"

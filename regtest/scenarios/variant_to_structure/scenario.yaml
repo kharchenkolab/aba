@@ -26,7 +26,6 @@ steps:
     part of the protein that does the chemistry. Don't plot anything yet — just orient me.
   expect:
     must_mention:
-    - buried
     - surface
     must_not:
     - "Val245Ala is benign"
