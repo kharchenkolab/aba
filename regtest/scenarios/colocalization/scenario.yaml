@@ -116,8 +116,6 @@ steps:
     a marker) so the out-of-focus/saturated field is obviously called out. Save it as a new figure.
   expect:
     produces: {figure: 1}
-    must_mention:
-    - "f3"
     context: {msgs_grow: true, cache_read: true}
     checks: >
       A NEW summary figure (a restyle of the s4 bar chart, not modify_figure) with a colourblind

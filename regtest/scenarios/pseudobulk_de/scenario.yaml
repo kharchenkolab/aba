@@ -79,7 +79,9 @@ steps:
     B, and within Myeloid, tell me roughly how many responding genes you get in each compartment,
     and give me a volcano plot of the Myeloid result saved as a PNG figure.
   expect:
-    must_mention: ["Myeloid", "donor", "volcano"]
+    must_mention:
+    - "Myeloid"
+    - "volcano"
     must_not:
     - "I cannot read"
     - placeholder

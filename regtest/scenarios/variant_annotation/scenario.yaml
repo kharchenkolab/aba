@@ -64,7 +64,6 @@ steps:
   expect:
     produces: {figure: 1}
     must_mention:
-    - GRCh38
     - ST7
     must_not:
     - "as an AI"

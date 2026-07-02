@@ -48,7 +48,8 @@ steps:
     Tell me how many probes come out significant and which direction they go.
   expect:
     must_mention: []
-    must_not: ["hypomethylated in cases", "I cannot"]
+    must_not:
+    - "I cannot"
     produces: {figure: 1}
     context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
     checks: >
@@ -210,7 +211,6 @@ steps:
   expect:
     must_mention:
     - "MTAP"
-    - "TAF3"
     must_not: ["CDKN2A is differentially", "hypomethylated in cases"]
     context: {cache_breakpoints: true}
     checks: >

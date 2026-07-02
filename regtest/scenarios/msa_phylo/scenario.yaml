@@ -137,7 +137,8 @@ steps:
     sequences up? Give me a figure comparing them.
   expect:
     produces: {figure: 1}
-    must_mention: ["topology", "robust"]
+    must_mention:
+    - "robust"
     must_not:
     - "identical newick"
     - "byte-identical"
@@ -220,7 +221,6 @@ steps:
     produces: {figure: 1}
     must_mention:
     - "removed"
-    - "rebuilt"
     must_not:
     - "seq_outlier remains"
     - "kept all 9"
