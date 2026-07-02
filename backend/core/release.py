@@ -57,8 +57,8 @@ def resolve_current(share: Optional[str] = None) -> Optional[str]:
         return None
     cur = _current(root)
     try:
-        if cur.is_symlink() or cur.exists():
-            return os.path.basename(os.path.realpath(cur))
+        if cur.is_symlink():                 # `current` is ALWAYS a symlink (promote makes it one);
+            return os.path.basename(os.path.realpath(cur))   # a real dir named `current` isn't valid
     except OSError:
         return None
     return None
