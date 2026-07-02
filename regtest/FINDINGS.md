@@ -140,3 +140,23 @@ reproduce_run = unimplemented feature gap (flag to team). **Verify-don't-assume:
 agent/platform bugs (A7, K4, A2) flipped to test-side or harness on forensic — always trace to
 the data before filing.**
 </content>
+
+
+## regtest Haiku baseline seeded (2026-07-02)
+First full sweep in the new `regtest/` home → `baselines/haiku.json` (commit d6155bd):
+**16/26 scenarios full-pass, 269/288 steps**, under OAuth/Haiku, mechanical-only (no judge).
+This is the regression reference — weekly `sweep.py` now flags any per-scenario DROP from it.
+
+The 19 sub-full steps are NOT platform regressions — two known classes:
+- **Agent-driven provenance ops Haiku can't do** (need Opus, by design): `provenance_export`
+  s4 (`diff_env` not called), `version_revert` s7 (`set_current_revision` not called). These
+  pass at Opus; the Opus baseline (when seeded) will show them green.
+- **Brittle checks** (K1/K2/K3 classes, the same we've trimmed elsewhere): pin-count
+  over-spec (msa_phylo `pinned_results>=N`), lifecycle-ack `must_not`/`must_mention`
+  (`superseded`, `drop`, `hypomethylated`), and Haiku must_mention phrasing variance
+  (`P04637`, `GRCh38`, `donor`, `F169`, `TAF3`, `tetramerization`, `f3`, `topology`, `rebuilt`).
+
+**Backlog (a check-hygiene cycle, not blocking):** trim the brittle gates in msa_phylo /
+alphafold / atac_peaks / methylation_dmr / structure_superpose / colocalization /
+pseudobulk_de / variant_annotation, then re-`--accept` to raise the baseline. The
+agent-driven-op fails stay (Haiku-tier) — they belong to the Opus baseline.
