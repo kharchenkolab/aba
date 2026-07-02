@@ -179,3 +179,20 @@ Mitigations applied:
 precise science-regression signal.** Remaining Haiku sub-fulls are honest: msa_phylo (figure/pin
 Haiku-tier), version_revert (agent-driven revert needs Opus). Persistent kernel-hang under Haiku
 load (nuclei/blast/msa) is an open flakiness item, not a check artifact.
+
+## Opus baseline seed FAILED — OAuth expiry + rate limits (2026-07-02) [OPEN]
+The full Opus sweep (~2–3 h) outlived the OAuth token and hit account rate limits, so
+~5 scenarios cratered on `OAuthTokenUnavailable` / `RateLimitError: 429` — NOT science
+failures (the tell: high rubric + 0 figures + empty replies + zero tool_errors). Affected:
+gwas_popstruct, image_registration, methylation_dmr, microbiome, msa_phylo (± structure_
+superpose partial). The garbage baselines/opus.json was discarded (never committed).
+
+Hardened sweep.py: it now DETECTS infra errors (OAuth/rate/overload) per scenario, EXCLUDES
+them from the baseline on --accept (keeps the prior/absent entry), and flags them for re-run.
+
+**To seed the Opus baseline (needs fresh, longer-lived creds — the deferred Phase 4 concern,
+now concretely justified):** refresh the OAuth token (`claude` once → ~/.claude/.credentials.json),
+make the runner read the FRESH token (not the stale /tmp/aba_8000.env snapshot), and re-run —
+ideally in SMALLER BATCHES to stay under the rate limit, e.g.
+`python regtest/harness/sweep.py --opus --accept --only <8 scenarios>` repeated. The sweep now
+merges clean results into the baseline and skips any that still hit infra errors.
