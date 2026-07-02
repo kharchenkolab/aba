@@ -137,6 +137,57 @@ def test_create_job_pins_release_end_to_end(tmp_path, monkeypatch):
     assert "release_id" not in (j2.get("params") or {})           # personal/fat: no pin
 
 
+# ────────────────── operational-completeness layer ──────────────────
+
+def test_version_ordering_is_numeric_not_lexical(tmp_path, monkeypatch):
+    # 2024.11.0 must sort AFTER 2024.9.0 (lexical would put "11" before "9"); newest = 2025.1.0.
+    monkeypatch.setenv("ABA_SHARE", _setup_share(tmp_path, vers=("2024.9.0", "2024.11.0", "2025.1.0")))
+    assert R.list_releases() == ["2024.9.0", "2024.11.0", "2025.1.0"]
+    for v in ("2024.9.0", "2024.11.0", "2025.1.0"):
+        R.promote(v)
+    out = R.gc(keep=1, referenced=())          # keep only the newest BY VERSION
+    assert out["removed"] == ["2024.9.0"] and R.release_path("2025.1.0"), out   # not the lexical-last
+
+
+def test_read_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv("ABA_SHARE", _setup_share(tmp_path, vers=("v1",)))
+    mf = R.read_manifest("v1")
+    assert mf.get("version") == "v1"           # build_mock wrote a manifest
+    assert R.read_manifest("nope") == {}
+
+
+def test_gc_uses_live_refcount_from_running_jobs(tmp_path, monkeypatch):
+    # GC with NO explicit referenced must still protect a release a RUNNING job pins (the live
+    # refcount) — e.g. a long Nextflow head submitted on an older release.
+    import sqlite3, json as _j
+    from core.config import PROJECTS_DIR
+    monkeypatch.setenv("ABA_SHARE", _setup_share(tmp_path, vers=("v1", "v2", "v3")))
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    pd = PROJECTS_DIR / "prj_live"; pd.mkdir(exist_ok=True)
+    c = sqlite3.connect(pd / "project.db")
+    c.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, kind TEXT, title TEXT, status TEXT, "
+              "focus_entity_id TEXT, params TEXT, log_tail TEXT, error TEXT, created_at TEXT NOT NULL, "
+              "started_at TEXT, finished_at TEXT)")
+    c.execute("INSERT INTO jobs (id,kind,status,params,created_at) VALUES (?,?,?,?,?)",
+              ("job_live", "run_nextflow", "running", _j.dumps({"release_id": "v1"}),
+               "2026-07-02T00:00:00+00:00"))
+    c.commit(); c.close()
+    R.promote("v3")                             # current=v3; a running job still pins v1
+    refs = R.compute_referenced()
+    assert "v1" in refs and "v3" in refs, refs
+    out = R.gc(keep=0)                          # no explicit referenced → live scan
+    assert "v1" not in out["removed"] and R.release_path("v1"), out   # protected by the running job
+    (pd / "project.db").unlink()                # don't leak into later tests' live scan
+
+
+def test_verify_structural_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("ABA_SHARE", _setup_share(tmp_path, vers=("v1",)))
+    r = R.verify("v1")
+    assert r["ok"] and r["checks"]["has_manifest"] and r["checks"]["manifest_version_matches"], r
+    bad = R.verify("v999")                      # unbuilt → not ok
+    assert not bad["ok"]
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
