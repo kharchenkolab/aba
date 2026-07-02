@@ -2470,6 +2470,55 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
     return {"url": res.url, "prepare_job_id": res.prepare_job_id, "label": res.label or v.label}
 
 
+# ---- pagoda3 (external viewer) co-hosting — viewers.md §3, misc/pagoda3_integration.md ----
+# Serve pagoda3's static bundle + its data stores under ABA's OWN origin so the
+# viewer inherits ABA's trust model (no CORS; session/localStorage work) and its
+# SharedArrayBuffer workers get the cross-origin isolation headers they need.
+# Registered here (before the SPA catch-all near end of file) so /pagoda3/* and
+# /pagoda3-store/* match these, not the react-router HTML fallback.
+_PAGODA3_DIST = Path(os.environ.get("ABA_PAGODA3_DIST")
+                     or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
+
+
+class _IsolatedStatic(StaticFiles):
+    """StaticFiles that stamps cross-origin-isolation headers on every
+    response — pagoda3's compute workers use SharedArrayBuffer, which
+    requires COOP: same-origin + COEP: require-corp on the document.
+    (If isolation ever misbehaves, pagoda3's ?noiso=1 falls back to the
+    main thread.)"""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        return resp
+
+
+if (_PAGODA3_DIST / "index.html").is_file():
+    app.mount("/pagoda3", _IsolatedStatic(directory=str(_PAGODA3_DIST), html=True), name="pagoda3")
+
+
+@app.get("/pagoda3-store/{pid}/{relpath:path}")
+def pagoda3_store(pid: str, relpath: str):
+    """Serve one file from a project's pagoda3 data store (a `.lstar.zarr`
+    tree) over HTTP Range. The path is containment-checked to the project's
+    pagoda3/ dir; dotfiles (.zmetadata/.zarray/.zgroup/.zattrs) ARE served —
+    they're the store's own metadata. Same-origin as the bundle so it loads
+    under COEP. Range → 206 is handled by Starlette's FileResponse."""
+    from core.viewers.store_serve import resolve_within
+    from core.config import project_root
+    base = project_root(pid) / "pagoda3"
+    try:
+        f = resolve_within(base, relpath)
+    except ValueError:
+        raise HTTPException(403, "path escapes store root")
+    if not f.is_file():
+        raise HTTPException(404, f"no store file {relpath!r}")
+    resp = FileResponse(str(f))
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    return resp
+
+
 @app.get("/api/files/content")
 def files_content(path: str, download: int = 0):
     """Serve a tree file's RAW BYTES (with content-type) — powers the image
@@ -2700,8 +2749,8 @@ if (_FRONTEND_DIST / "index.html").is_file():
         link like /p/X/runs/e/Y has no file on disk, so we return
         index.html and let react-router resolve the path in the browser.
         """
-        # A miss on an API/artifact path must 404, not fall through to HTML.
-        if full_path.startswith(("api/", "artifacts/")):
+        # A miss on an API/artifact/viewer path must 404, not fall through to HTML.
+        if full_path.startswith(("api/", "artifacts/", "pagoda3/", "pagoda3-store/")):
             raise HTTPException(404, "not found")
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
