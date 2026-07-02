@@ -77,8 +77,13 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
         `description` (one sentence of detail), optional `expected_outputs`
         (filenames/figures this step will produce), optional `skill` (name of
         a recipe the step follows — e.g. `'scrna-qc-clustering'`), and
-        optional `parameters` (a dict of resolved choices). A plain string is
-        accepted and coerced to {title}."""
+        optional `parameters` (a dict of resolved choices). For a pipeline-launch
+        step (skill `'run_nextflow'`), put the concrete run in `parameters` —
+        the pipeline id, revision, AND the actual run params the user supplied,
+        e.g. `{'pipeline': 'nf-core/rnaseq', 'revision': '3.21.0', 'input':
+        '/path/samplesheet.csv', 'genome': 'R64-1-1'}` — so the launch form
+        opens prefilled with the samplesheet path rather than a blank field. A
+        plain string is accepted and coerced to {title}."""
         from content.bio.tools import present_plan as _impl
         return _impl({"steps": steps, "title": title, "summary": summary,
                       "assumptions": assumptions, "rationale": rationale})

@@ -204,7 +204,20 @@ def enrich_plan_steps(steps: list) -> list:
             if schema:
                 s["pipeline"] = pipeline
                 s["revision"] = revision
-                prefilled = params.get("params") or {}
+                # Prefill the launch form. The agent is only told `parameters`
+                # is "a dict of resolved choices", so it commonly emits the
+                # pipeline run-params FLAT beside pipeline/revision (e.g.
+                # {pipeline, revision, input, genome}) rather than nested under
+                # `params`. Accept BOTH: seed from the nested `params`, then fold
+                # in any non-reserved top-level key. Without this the required
+                # `input` renders as an empty field even when the user gave a path.
+                prefilled = dict(params.get("params") or {})
+                _RESERVED = {"pipeline", "revision", "profile", "params",
+                             "execution", "outdir", "work_dir", "timeout_s",
+                             "local_resources", "background"}
+                for _k, _v in params.items():
+                    if _k not in _RESERVED and _k not in prefilled:
+                        prefilled[_k] = _v
                 s["prefilled"] = prefilled
                 # The `test` profile ships its own input data, so `input` is auto-provided just
                 # like `outdir` — showing it as an empty required field misleads users into
