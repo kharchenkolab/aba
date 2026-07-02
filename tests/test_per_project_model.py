@@ -14,7 +14,7 @@ def test_catalog_has_anthropic_models_on_grounded_guide():
     models = llm_models()
     by = {m["model"]: m for m in models}
     assert "claude-haiku-4-5-20251001" in by
-    assert "claude-sonnet-4-6" in by and "claude-opus-4-7" in by
+    assert "claude-sonnet-5" in by and "claude-opus-4-7" in by
     for m in models:
         assert m["spec"] == "grounded_guide"
     assert spec_for_model("claude-opus-4-7") == "grounded_guide"
