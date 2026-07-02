@@ -47,7 +47,9 @@ export function dispatchViewers(node: FileNode, registry: ViewerRegistryEntry[])
     if (v.applies_any) { out.push(v); continue }
     let match = false
     if (entityType && v.entity_types.includes(entityType)) match = true
-    if (ext && v.extensions.some(e => e.toLowerCase() === ext)) match = true
+    // Suffix match so multi-dot extensions (.lstar.zarr) work alongside .h5ad/.png.
+    const nameL = (name || artifact).toLowerCase()
+    if (v.extensions.some(e => nameL.endsWith(e.toLowerCase()))) match = true
     if (v.mime_patterns.length && mimeMatch(ext, v.mime_patterns)) match = true
     if (match) out.push(v)
   }

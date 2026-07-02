@@ -2462,12 +2462,18 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
         v = ext[0] if ext else None
     if v is None:
         raise HTTPException(404, "no external viewer applies to this file")
+    from core.config import current_project_id
     try:
-        res = launch_viewer(v.open_external, node,
-                            {"entity_id": node.get("entity_id"), "path": body.path})
+        res = launch_viewer(v.open_external, node, {
+            "entity_id": node.get("entity_id"), "path": body.path,
+            "project_id": current_project_id(),
+        })
     except KeyError as e:
         raise HTTPException(501, str(e))
-    return {"url": res.url, "prepare_job_id": res.prepare_job_id, "label": res.label or v.label}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return {"url": res.url, "prepare_job_id": res.prepare_job_id,
+            "label": res.label or v.label, "set_local_storage": res.set_local_storage}
 
 
 # ---- pagoda3 (external viewer) co-hosting — viewers.md §3, misc/pagoda3_integration.md ----

@@ -108,7 +108,10 @@ def viewers_for(node: dict[str, Any]) -> list[Viewer]:
         match = False
         if entity_type and entity_type in v.entity_types:
             match = True
-        if ext and ext in (e.lower() for e in v.extensions):
+        # Suffix match (endswith) so multi-dot extensions like `.lstar.zarr`
+        # work alongside single-dot ones (`.h5ad`, `.png`).
+        name_l = (name or artifact).lower()
+        if v.extensions and any(name_l.endswith(e.lower()) for e in v.extensions):
             match = True
         if v.mime_patterns and _mime_match(artifact, name, v.mime_patterns):
             match = True

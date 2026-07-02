@@ -19,10 +19,14 @@ from typing import Any, Callable, Optional
 class LaunchResult:
     """What a launcher hands back. `url` is where to point the new window
     (root-relative or absolute); `prepare_job_id` is set when a background
-    conversion must finish before the data is ready."""
+    conversion must finish before the data is ready; `set_local_storage` is
+    origin-shared localStorage the host should seed before opening (values that
+    start with '/' are OOD-base-prefixed by the frontend) — e.g. pointing
+    pagoda3's copilot at ABA's proxy via `{'p3-agent-proxy': '/pagoda3-api'}`."""
     url: str
     prepare_job_id: Optional[str] = None
     label: Optional[str] = None
+    set_local_storage: Optional[dict] = None
 
 
 # A launcher resolves (node, ctx) -> LaunchResult. `node` is a files-tree node
