@@ -1,0 +1,261 @@
+id: scrna_qc_clustering
+title: Single-sample scRNA-seq QC, clustering, marker annotation — with a stricter-QC revision and a later annotation session
+domain: genomics
+gpu: false
+summary: >
+  Take one PBMC-like scRNA-seq sample of raw counts through standard QC and clustering,
+  pin the QC violins and the clustered UMAP, tighten the mitochondrial cutoff as a
+  revision, drop the superseded UMAP, restyle the marker plot for a figure, and in a
+  later session resume to annotate the recovered clusters with canonical cell-type names.
+lifecycle: [revise, resume]
+data_files:
+- pbmc_like.h5ad
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have a single-cell RNA-seq sample at DATA_DIR/pbmc_like.h5ad — it's raw counts,
+    nothing done to it yet. Before we process anything, just load it and tell me what
+    I'm looking at: how many cells and genes, are the values really raw integer counts,
+    and are there mitochondrial genes in there we can use for QC?
+  expect:
+    must_mention:
+    - mito
+    must_not:
+    - "3 clusters"
+    checks: >
+      Loads the .h5ad and reports 1620 cells x 1200 genes. Confirms .X holds raw integer
+      counts (sparse), not a normalized/log matrix. Notices the mitochondrial genes whose
+      names start with "MT-" (there are 13). Does NOT yet cluster or annotate, and must not
+      read or mention the hidden cell_type_truth obs column. No fabricated numbers.
+    context: {msgs_grow: true, cache_breakpoints: true}
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Compute the standard per-cell QC metrics — number of genes detected, total
+    counts, and the mitochondrial fraction — and give me a figure of their distributions
+    (violin plots) so I can see where to put the cutoffs. Save it so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - mito
+    must_not: []
+    checks: >
+      Computes per-cell QC: n_genes_by_counts, total_counts, and pct_counts_mt from the
+      MT- genes. Produces a SAVED violin/distribution figure of these metrics. The
+      distributions should reveal a clear high-mito tail (the ~180 dead cells sit near
+      ~85% mito) and a low-complexity tail. No thresholds applied yet — this is the
+      diagnostic plot. No fabricated values.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The QC violin figure from s2 is pinned — a Result entity now exists and appears in
+      the manifest/shelf.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    From those distributions, pick sensible thresholds to drop the obviously dead and
+    low-complexity cells, then take the rest through the usual pipeline — normalize,
+    find variable genes, PCA, neighbours, cluster, and lay it out on a UMAP. Show me
+    the UMAP coloured by cluster and tell me how many cells you kept and how many
+    clusters you got.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - cluster
+    - UMAP
+    must_not: []
+    checks: >
+      Applies a first-pass (lenient) QC filter that removes roughly the clearly dead
+      cells (~180, ~11-12%) without deleting a whole population, treating .X as RAW
+      counts. Then a standard pipeline: CP10k + log1p normalize, HVG, PCA, neighbors,
+      Leiden/clustering, UMAP. Produces a SAVED UMAP coloured by cluster and recovers
+      ~3 main clusters. Reports the actual kept-cell count and cluster count from the run
+      (not fabricated). Saves a processed AnnData for reuse. Does not yet hard-assert
+      cell-type identities and never reads cell_type_truth.
+    context: {msgs_grow: true, cache_read: true}
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure, match: umap}
+  expect:
+    state: {pinned_results_min: 2, manifest_contains: []}
+    checks: >
+      The clustered UMAP from s4 is pinned — two Results now on the shelf (QC violins +
+      UMAP).
+
+- id: s6
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now help me get a feel for what these clusters are. Score the usual lineage markers
+    across the clusters and give me a dotplot of the canonical T-cell, B-cell and myeloid
+    genes by cluster, so I can see which cluster lights up for which set. Save the figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - CD3
+    - marker
+    must_not: []
+    checks: >
+      Builds a marker dotplot across clusters for canonical lineage genes — T (CD3D/CD3E/
+      TRAC), B (MS4A1/CD79A/CD79B), myeloid (LYZ/CD14/FCGR3A). With the planted data each
+      marker set is high (~6) in exactly one cluster and ~0.1 elsewhere, so the dotplot
+      should show three clean, disjoint blocks. Produces a SAVED dotplot figure. May note
+      tentative lineage guesses but should frame them as marker-based, and must not read
+      cell_type_truth.
+    context: {msgs_grow: true, cache_read: true}
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The marker dotplot from s6 is pinned — three Results on the shelf.
+
+- id: s8
+  kind: revise
+  actor: agent
+  prompt: >
+    Looking at those QC violins again, I think our mitochondrial cutoff let through some
+    stressed cells. Redo the filtering with a stricter mitochondrial threshold, around
+    10%, then re-run the clustering on that cleaner set and show me the new UMAP. How
+    many cells did we lose compared to before, and do we still see the same populations?
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - mito
+    - cluster
+    must_not: []
+    checks: >
+      Handled as a REVISION of the s4 result — same dataset and pipeline, only the mito
+      threshold tightened to ~10% — not a blind from-scratch project. A 10% mito cutoff
+      removes MORE cells than the lenient first pass (~297 cells / ~18% vs ~12%), because
+      it also drops the ~120 mildly-stressed cells (mito ~12-30%). Re-runs downstream
+      (normalize/HVG/PCA/neighbors/cluster/UMAP) on the stricter cell set and produces a
+      SAVED new UMAP. Reports the new lower cell count and notes it is fewer than before.
+      Critically: STILL ~3 populations — tightening QC must NOT delete a real cell type
+      (T, B, myeloid all survive). Notes the change relative to s4 rather than silently
+      producing an unrelated result.
+    context: {msgs_grow: true, cache_read: true}
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure, match: umap}
+  expect:
+    state: {pinned_results_min: 4, manifest_contains: []}
+    checks: The stricter-QC UMAP from s8 is pinned — the keeper that supersedes the s4 UMAP.
+
+- id: s10
+  kind: delete
+  actor: user
+  target: {ref: s5}
+  expect:
+    state: {entity_archived: {ref: s5}, pinned_results_min: 3}
+    checks: >
+      The original lenient-QC UMAP pinned at s5 is archived — it has been superseded by the
+      stricter-QC UMAP pinned at s9. The dead-end pin is removed; the QC violins, dotplot,
+      and the new UMAP remain on the shelf.
+
+- id: s11
+  kind: analyze
+  actor: agent
+  prompt: >
+    That marker dotplot will go in the figure but it's hard to read — redo it with a
+    colourblind-friendly palette, larger dots and bigger gene labels, and save it as a
+    new figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - marker
+    must_not: []
+    checks: >
+      A RESTYLE of the s6 dotplot — same marker content (T/B/myeloid canonical genes by
+      cluster), redrawn with a colourblind-safe palette and larger dots/labels — produced
+      as a NEW saved figure. The underlying marker structure (three disjoint blocks) is
+      unchanged; only the styling differs.
+    context: {msgs_grow: true, cache_read: true}
+
+- id: s12
+  kind: pin
+  actor: user
+  target: {from_step: s11, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: The restyled dotplot from s11 is pinned (replacing the role of the old dotplot in the figure set).
+
+- id: s13
+  kind: resume
+  actor: agent
+  prompt: >
+    Back again, picking up the single-cell sample we clustered and cleaned up before. I
+    don't want to re-run anything — using the clustering we already have and the marker
+    evidence on the shelf, label each cluster with an actual cell-type name. Which cluster
+    is which lineage?
+  expect:
+    must_mention:
+    - T
+    - B
+    - marker
+    must_not:
+    - re-cluster from scratch
+    checks: >
+      A LATER session that must RESUME the existing project after a restart: the context
+      rehydrates from the pinned shelf (the stricter-QC UMAP and the marker dotplot
+      survive; the deleted lenient UMAP does not). The agent reuses the saved clustering
+      rather than re-running QC/clustering from scratch, inspects the canonical markers per
+      cluster, and maps them to lineages: the cluster expressing CD3D/CD3E/TRAC = T cells;
+      MS4A1/CD79A/CD79B = B cells; LYZ/CD14/FCGR3A = myeloid. With the planted data this
+      mapping is unambiguous (~6 in-type vs ~0.1 out-of-type). Correct end state: the ~3
+      clusters annotated as T cell, B cell, and Myeloid, written back onto the cells. Must
+      NOT fabricate marker evidence, must NOT peek at cell_type_truth, and must NOT silently
+      re-cluster from scratch and lose continuity with the earlier result.
+    context: {cache_breakpoints: true}
+
+expected_overall:
+  planted_truth: >
+    pbmc_like.h5ad is ONE sample: 1620 cells x 1200 genes, raw integer counts in .X
+    (sparse), and the only obs column is cell_type_truth (HIDDEN — for checking only,
+    the agent must never use it). Exactly 3 real populations with disjoint marker
+    programs: T cell (560 cells; CD3D, CD3E, TRAC), B cell (380; MS4A1, CD79A, CD79B),
+    Myeloid (360; LYZ, CD14, FCGR3A). 13 mitochondrial genes named MT-* drive
+    pct_counts_mt. Quality structure: 180 clearly dead/dying cells (~11% of all cells;
+    mito ~85%, ~32 genes) removed by any sane cutoff; 120 mildly stressed cells
+    (mito ~12-30%, slightly low complexity) that pass a lenient cutoff but are removed
+    at a strict ~10% cutoff; and 20 doublets co-expressing the T and myeloid programs.
+    Concrete checkpoints: a lenient first-pass cutoff removes ~180 cells (~11-12%); a
+    strict 10% mito cutoff removes ~297 cells (~18%); all three populations survive
+    either cutoff; marker means are ~6 in-type vs ~0.1 out-of-type so the T/B/Myeloid
+    annotation is unambiguous.
+  notes: >
+    A realistic working session over a single sample. s1: examine — load, report
+    1620 x 1200, confirm raw counts, spot the MT- genes; no clustering yet. s2: compute
+    QC (mito% from MT- genes, n_genes, total counts) and produce a violin figure; s3
+    pins it. s4: lenient first-pass filter (~12% removed), normalize + log1p, HVG, PCA,
+    neighbors, cluster, UMAP — recover ~3 clusters, save processed AnnData and a UMAP
+    figure; s5 pins the UMAP. s6: marker dotplot of canonical T/B/myeloid genes (three
+    disjoint blocks); s7 pins it. s8: REVISE the same project — tighten mito to ~10%,
+    re-run downstream, report the lower cell count (~18% removed now), still ~3 clusters,
+    note the diff vs s4; s9 pins the new UMAP. s10: DELETE the superseded s5 UMAP pin.
+    s11: RESTYLE the dotplot (colourblind palette, bigger dots) as a new figure; s12
+    pins it. s13: a later session RESUMES the project, the shelf rehydrates (new UMAP +
+    dotplot present, deleted UMAP gone), and the agent annotates the 3 clusters as T cell
+    / B cell / Myeloid from the markers WITHOUT re-clustering. Throughout: no fabricated
+    numbers, raw counts go into normalization (not pre-normalized values), and
+    cell_type_truth is never read.

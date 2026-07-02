@@ -14,13 +14,13 @@ Two modes (see ABA_SCENARIO_MODEL):
   - unset  -> Haiku: HARNESS-STRESS test (Haiku errs a lot; shakes out runner robustness)
   - <opus> -> SCIENCE test (are the recipes/tools good enough to solve the problem)
 
-Forensic bundle (kept, NOT checked in): misc/scenarios/_runs/<scenario>-<ts>/ holds the
+Forensic bundle (kept, NOT checked in): regtest/scenarios/_runs/<scenario>-<ts>/ holds the
 replayable raw requests, turn-context sidecars, the per-step transcript+verdict+judge,
 the project DB + artifacts, and bundle.json (step -> files navigation) for a later
 Opus-1M forensic agent to root-cause failures.
 
     ABA_SCENARIO=_selftest_session \
-      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u tests/e2e/run_scenario_v2.py
+      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u regtest/harness/runner.py
 """
 from __future__ import annotations
 import base64
@@ -36,7 +36,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-LIB = ROOT / "misc" / "scenarios"
+LIB = ROOT / "regtest" / "scenarios"
 SCENARIO = os.environ.get("ABA_SCENARIO", "_selftest_session")
 _TS = time.strftime("%Y%m%d-%H%M%S", time.localtime())
 RUN = LIB / "_runs" / f"{SCENARIO}-{_TS}"
@@ -445,12 +445,12 @@ def main() -> int:
     if not spec.get("steps"):
         print(f"{SCENARIO} is v1 (no steps) — use run_scenario_library.py"); return 2
     src = LIB / SCENARIO / "data"
-    # Scenario data/ is generated, not committed (see misc/scenarios/_regen_all.sh).
+    # Scenario data/ is generated, not committed (see regtest/scenarios/_regen_all.sh).
     # On a fresh clone it won't exist yet — point the user at the regen step instead
     # of a confusing empty-DATA_DIR run. Non-fatal (some scenarios fetch their data).
     if not src.is_dir() or not any(src.iterdir()):
         print(f"[note] {SCENARIO}/data is empty — if this scenario uses local data, run "
-              f"`bash misc/scenarios/_regen_all.sh` first (data is generated, not committed).")
+              f"`bash regtest/scenarios/_regen_all.sh` first (data is generated, not committed).")
 
     import content.bio  # noqa
     import content.bio.lifecycle.registry  # noqa

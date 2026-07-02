@@ -1,0 +1,299 @@
+id: pseudobulk_de
+title: Per-cell-type treatment-response DE from a 6-donor scRNA cohort via pseudobulk — sample PCA, Myeloid volcano + MA, a mean-vs-sum revise, and an outlier-donor delete
+domain: genomics
+gpu: false
+summary: >
+  A realistic working session on a multi-sample single-cell RNA-seq cohort (3 control + 3 treated
+  donors, with T/B/Myeloid labels). The biologist examines the cohort, builds a donor-level
+  pseudobulk and looks at a sample PCA (which exposes a prep-failure donor), runs replicate-aware
+  per-cell-type DE and inspects the Myeloid hits with a volcano and an MA plot, pins the keepers,
+  revises the aggregation from mean to summed counts, restyles the volcano, then deletes the outlier
+  donor ctrl_3 (and its now-stale PCA pin) and re-runs Myeloid for a cleaner result before recapping.
+data_files:
+- cohort.h5ad
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have single-cell RNA-seq from six donors in DATA_DIR/cohort.h5ad — three are controls
+    (ctrl_1, ctrl_2, ctrl_3) and three got the treatment (treated_1, treated_2, treated_3). The
+    cell-type calls (T, B, and Myeloid) are in obs along with the donor and the condition labels,
+    and the raw counts are in the matrix. Before we do any statistics, just take a look and tell me
+    the basic layout: how many cells and genes, how the cells break down by donor and by cell type,
+    and whether each donor contributes all three cell types.
+  expect:
+    must_mention:
+    - "Myeloid"
+    - "ctrl_3"
+    - "treated"
+    must_not:
+    - "I cannot read"
+    - placeholder
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Reads the AnnData and reports the layout from the actual file: 2500 cells x 800 genes, six
+      donors (three control, three treated), three cell types (T, B, Myeloid), with every donor
+      contributing all three types (~420 cells/donor). No fabricated numbers, no analysis yet —
+      this is just orientation on the cohort.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Let's first sanity-check the samples before any differential testing. Collapse each donor's
+    cells into a donor-level pseudobulk profile (treating the donors as the replicates), then make a
+    PCA of those donor profiles coloured by condition and labelled with the donor names, and save it
+    as a PNG figure so I can keep it. Does any donor look like an outlier?
+  expect:
+    must_mention: ["ctrl_3", "PCA"]
+    must_not:
+    - "all donors cluster tightly"
+    - "no outlier"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Builds a donor-level pseudobulk (one profile per donor, aggregated from the raw counts) and
+      produces a saved sample-PCA figure of the six donor profiles. The PCA must visibly separate
+      ctrl_3 from the other five donors (ctrl_3 is a planted prep-failure outlier sitting far out on
+      PC1), and the agent should call ctrl_3 out as the apparent outlier rather than claiming the
+      donors all cluster together. This is the sample-level QC figure.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: The donor-pseudobulk sample-PCA figure from s2 is pinned — a Result entity now exists and shows in the manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now the real question: for each cell type separately, which genes respond to the treatment?
+    Keep treating the donors as the replicates rather than the individual cells, so the statistics
+    aren't fooled by how many cells each donor happens to have. Run the comparison within T, within
+    B, and within Myeloid, tell me roughly how many responding genes you get in each compartment,
+    and give me a volcano plot of the Myeloid result saved as a PNG figure.
+  expect:
+    must_mention: ["Myeloid", "donor", "volcano"]
+    must_not:
+    - "I cannot read"
+    - placeholder
+    - "per-cell Wilcoxon was used as the primary test"
+    - "started a brand new project"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Runs a replicate-aware pseudobulk DE per cell type (DESeq2 / edgeR / pydeseq2 / limma-voom on
+      the donor-level pseudobulk), contrasting treated vs control with the DONOR as the statistical
+      unit (n=3 vs 3) — NOT a per-cell Wilcoxon/t-test (the pseudoreplication the prompt warns
+      against). Correct biology: the treatment effect is confined to the MYELOID compartment —
+      Myeloid returns on the order of dozens-to-~100 significant genes in a MIX of up and down
+      directions, while T and B return essentially none (~0, sporadic noise). Produces a saved
+      Myeloid volcano figure. Reports a concrete per-cell-type DE count derived from the run and does
+      not fabricate gene names or invent hits in T/B.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure, match: volcano}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: The Myeloid volcano from s4 is pinned — two Results are now on the shelf (sample PCA + Myeloid volcano).
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    One thing about how you collapsed the cells per donor — I want the donor profiles to be the SUM
+    of the raw counts across that donor's cells, not the average. Redo the pseudobulk that way and
+    re-run the same Myeloid comparison, then give me the updated treatment-response genes and an
+    updated Myeloid volcano figure.
+  expect:
+    must_mention: ["sum", "Myeloid", "updated"]
+    must_not:
+    - "started a brand new project"
+    - "mean is equivalent to sum"
+    - "no need to re-run"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A REVISION of the existing analysis, not a from-scratch restart: the agent changes ONLY the
+      pseudobulk aggregation (from mean/average to summed raw counts) and re-runs the same downstream
+      Myeloid DE, updating the existing result/provenance rather than spawning an unrelated new
+      project. Summed counts are the statistically correct input for count-based DE (DESeq2/edgeR
+      model library size from the totals), so the revised run is at least as clean as s4: Myeloid
+      still returns a mixed up/down hit list of comparable size, T and B still ~none. Produces a new
+      Myeloid volcano figure and acknowledges it updated the prior result. It must not claim the
+      switch makes no difference without re-running, nor silently keep the mean-based numbers.
+
+- id: s7
+  kind: analyze
+  actor: agent
+  prompt: >
+    For the summed-count Myeloid result, give me an MA plot too — mean expression on the x-axis and
+    log2 fold-change on the y-axis, with the significant genes highlighted — and save it as a PNG
+    figure. I want to confirm the responding genes go in both directions and aren't just the highly
+    expressed ones.
+  expect:
+    must_mention: ["MA", "Myeloid"]
+    must_not:
+    - "only upregulated"
+    - "all in one direction"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Produces a saved MA plot of the Myeloid pseudobulk DE (mean expression vs log2 fold-change,
+      significant genes highlighted). The plot should show significant genes in BOTH directions
+      (the planted effect is ~56 up / ~44 down) spread across the expression range, not confined to
+      the most highly expressed genes. A new figure distinct from the volcano.
+
+- id: s8
+  kind: pin
+  actor: user
+  target: {from_step: s7, select: figure, match: ma}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The Myeloid MA plot from s7 is pinned — three Results on the shelf now.
+
+- id: s9
+  kind: analyze
+  actor: agent
+  prompt: >
+    The Myeloid volcano is a bit hard to read for a presentation. Redo it with a colourblind-friendly
+    palette, larger points, and the names of the top few up and down genes labelled directly on the
+    plot, and save it as a new PNG figure.
+  expect:
+    must_mention: ["volcano", "Myeloid"]
+    must_not:
+    - "cannot modify"
+    - "no figure"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A RESTYLE of the Myeloid volcano: the agent re-plots the same summed-count Myeloid DE result
+      with a colourblind-friendly palette, larger points, and direct gene-name labels on the top
+      up/down hits, saving it as a NEW figure (not editing the file in place, not refusing). The
+      underlying statistics are unchanged — only the presentation differs.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure, match: volcano}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: The restyled presentation volcano from s9 is pinned — four Results on the shelf.
+
+- id: s11
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The original six-donor sample-PCA pinned in s3 is archived — it still includes the bad ctrl_3
+      donor and is about to be superseded, so the human drops it from the shelf. Three Results remain
+      (the Myeloid volcano, the MA plot, and the restyled volcano).
+
+- id: s12
+  kind: drop
+  actor: agent
+  prompt: >
+    That sample PCA confirmed it — ctrl_3 is sitting way off on its own, and it's a known prep
+    failure on our end, the library is bad. Drop donor ctrl_3 completely from the dataset and the
+    analysis, then re-run just the Myeloid treated-vs-control comparison on the remaining five donors
+    and give me a fresh Myeloid volcano. I expect it to clean up once that bad sample is gone.
+  expect:
+    must_mention: ["ctrl_3", "Myeloid", "removed"]
+    must_not:
+    - "ctrl_3 was retained"
+    - "kept ctrl_3"
+    - "no change after removing"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      The agent removes donor ctrl_3 entirely — drops its cells from the working dataset and stops
+      using its pseudobulk profile, so ctrl_3 no longer influences downstream results (not merely a
+      per-cell filter while stale ctrl_3-containing artifacts linger). It then re-runs the
+      treated-vs-control Myeloid DE on the remaining FIVE donors (ctrl_1, ctrl_2, treated_1,
+      treated_2, treated_3 — now n=2 control vs n=3 treated) and produces a fresh Myeloid volcano
+      figure. Because ctrl_3 was a real outlier inflating control-group variance, removing it should
+      TIGHTEN the control group and yield a CLEANER, generally LARGER Myeloid hit list closer to the
+      planted ~100 (still mixed up/down) — a noticeably stronger result than the all-six-donor run.
+      It must confirm ctrl_3 is gone, report the updated Myeloid count, and not fabricate the
+      improvement or quietly keep ctrl_3 in the comparison.
+
+- id: s13
+  kind: pin
+  actor: user
+  target: {from_step: s12, select: figure, match: volcano}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: The cleaned five-donor Myeloid volcano from s12 is pinned — back to four Results (MA, two earlier volcanos, and the new five-donor volcano).
+
+- id: s14
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this later — remind me where we landed. Which figures have we kept, what's the
+    headline Myeloid result, and did removing ctrl_3 actually help? Just summarise from what's
+    pinned; don't re-run anything.
+  expect:
+    must_mention: ["Myeloid", "ctrl_3"]
+    must_not:
+    - "no pinned"
+    - "nothing was kept"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context rehydrates from the
+      pinned shelf. It should recap that the surviving pinned figures are the Myeloid volcano(s) and
+      MA plot (the summed-count and the five-donor versions), NOT the deleted six-donor sample PCA;
+      that the treatment response is Myeloid-specific (mixed up/down, ~dozens-to-~100 genes) with T
+      and B clean; and that removing the prep-failure donor ctrl_3 tightened the controls and gave a
+      cleaner/larger Myeloid hit list. Tests context rebuild + that the curation (pins kept, PCA
+      deleted) persisted across the restart. No re-running.
+
+expected_overall:
+  planted_truth: >
+    cohort.h5ad: 2500 cells x 800 genes, raw integer counts in .X (CSR sparse, ~95% zero).
+    obs columns: donor (ctrl_1, ctrl_2, ctrl_3, treated_1, treated_2, treated_3), condition
+    (control for ctrl_*, treated for treated_*), cell_type (T / B / Myeloid). ~420 cells per donor
+    split across the three types (T 1064, Myeloid 795, B 641 cells overall). A treatment effect is
+    planted ONLY in the Myeloid compartment: exactly 100 genes shift between control and treated
+    donors, mixed direction (56 up / 44 down at seed 0), |log2FC| ~1.6-2.4, jittered per treated
+    donor so it is a genuine donor-level effect that survives pseudobulk aggregation. T and B cells
+    carry NO condition effect (noise only) — a correct per-cell-type pseudobulk DE finds ~100 hits in
+    Myeloid (both directions) and ~0 in T and B. The exact 100 Myeloid DE gene names and their planted
+    log2FC are recorded in data/truth.json. ctrl_3 is a deliberate PREP-FAILURE outlier: every ctrl_3
+    cell (all cell types) carries a global library shift (~0.45x fewer counts; per-donor mean total
+    ~182 vs ~289-326 for the others) plus an aberrant per-gene multiplicative profile, so on a
+    donor-level pseudobulk PCA ctrl_3 sits far from the other five (PC1 ~+37 vs ~-7.5 for everyone
+    else). With all six donors a crude pseudobulk DE recovers only ~30 Myeloid hits because ctrl_3
+    inflates control-group variance; removing ctrl_3 lifts that to ~75-100 Myeloid hits with
+    essentially no T/B hits — so the s12 delete produces a visibly cleaner, larger Myeloid result.
+    (A proper DESeq2/edgeR run with dispersion shrinkage recovers more of the 100 than the crude check
+    at every stage.) Switching aggregation from mean to summed counts (s6) does not change the
+    biological conclusion: summed counts are the correct count-DE input, so Myeloid stays a mixed
+    up/down hit list of comparable size with T/B clean.
+  notes: >
+    A fully correct 14-step session: s1 orients on the cohort (2500 x 800, 6 donors, 3 cell types, all
+    types present per donor). s2 builds a donor-level pseudobulk and produces a sample PCA that exposes
+    ctrl_3 as the outlier; s3 pins it. s4 runs a donor-replicate pseudobulk DE per cell type — NOT a
+    per-cell test — finding the response is Myeloid-specific (~dozens-to-100 mixed up/down genes, T and
+    B clean) and produces a Myeloid volcano; s5 pins it. s6 REVISES only the aggregation (mean ->
+    summed counts) and re-runs the same DE in place, updating the existing result/provenance and a new
+    volcano — Myeloid stays comparable, T/B clean. s7 adds a Myeloid MA plot (significant genes in both
+    directions across the expression range); s8 pins it. s9 RESTYLES the Myeloid volcano (colourblind
+    palette, larger points, top genes labelled) into a new figure; s10 pins it. s11 DELETES the stale
+    six-donor sample-PCA pin (it contains the bad donor). s12 DROPS donor ctrl_3 from the data and
+    artifacts so it stops influencing anything, re-runs Myeloid on the remaining five donors, and gets
+    a cleaner/larger Myeloid hit list closer to the planted 100 with a fresh volcano; s13 pins it. s14
+    resumes after a session restart and recaps the surviving pinned figures (volcanos + MA, not the
+    deleted PCA) and the headline (Myeloid-specific response, cleaner after ctrl_3 removal). No
+    pseudoreplicated per-cell test as the primary analysis, no fabricated gene names or DE counts, no
+    invented hits in T/B, the mean->sum switch handled as an in-place revision, and ctrl_3 genuinely
+    removed (not just masked) before the final Myeloid comparison.

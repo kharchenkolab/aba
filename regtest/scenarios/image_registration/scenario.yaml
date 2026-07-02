@@ -1,0 +1,287 @@
+id: image_registration
+title: Register a misaligned microscopy image to a reference, then branch rigid / affine / deformable to decide which model truly aligns the pair
+domain: bioimaging
+gpu: false
+summary: >
+  A working session: a biologist examines a misaligned acquisition against its reference,
+  registers moving -> fixed and quantifies the before/after overlap with saved overlay and
+  checkerboard figures, then forks the project into three separate alignment-model branches
+  (rigid / affine / deformable) on the SAME pair, compares the similarity metric across them,
+  restyles the winning figure, prunes a superseded early result, and comes back to confirm
+  the deformable model is the keeper (the pair carries a local non-rigid warp that only a
+  deformable model can remove).
+lifecycle: [branch]
+data_files:
+- fixed.tif
+- moving.tif
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I imaged the same sample field twice and the second acquisition came out misaligned
+    relative to the first. The reference is at DATA_DIR/fixed.tif and the misaligned one is
+    at DATA_DIR/moving.tif. Before doing anything heavy, just load both, tell me their size
+    and how badly they're shifted right now — give me a single overlap number for the two as
+    they stand so I know my starting point.
+  expect:
+    must_mention:
+    - moving
+    - fixed
+    must_not:
+    - "perfectly aligned"
+    - "100% overlap"
+    - "RMSD 0"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Loads both 256x256 single-channel TIFFs, confirms they are the same size, and reports a
+      baseline similarity for the unregistered pair (normalized cross-correlation ~0.59, or an
+      equivalent correlation/MI/MSE expressed honestly). It should describe the pair as clearly
+      misaligned and NOT claim they already line up. The baseline number must be computed from
+      the images, not invented.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    OK, now line the second image up onto the reference and show me the improvement. Estimate a
+    transform that maps the moving image onto the fixed one, resample it, and give me a figure
+    that overlays the two before-and-after so I can see the alignment — and tell me the overlap
+    number after registration next to the baseline.
+  expect:
+    must_mention:
+    - before
+    - after
+    must_not:
+    - "perfectly aligned"
+    - "100% overlap"
+    - "RMSD 0"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Runs an image-registration workflow (SimpleITK is the natural choice), estimates a
+      moving->fixed transform, resamples moving onto the fixed grid, and reports a similarity
+      metric BOTH before (~0.59 NCC) and after, where after is MEASURABLY higher (a sensible
+      global registration lifts NCC to ~0.7+). Saves a registered image and a before/after
+      overlay figure. Does not claim perfect alignment (a residual local warp remains for any
+      single global transform). Numbers computed from the images, not fabricated.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The before/after overlay figure from s2 is pinned — a Result entity now exists and is
+      visible in the thread manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    An overlay can hide a lot. Give me a checkerboard view of the registered result against the
+    reference — alternating tiles from each image — so I can spot anywhere the alignment is
+    still off. Save it as a figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Produces a checkerboard composite (alternating tiles of fixed and the registered moving)
+      and saves it as a figure. A correct checkerboard shows features continuous across most tile
+      boundaries but reveals residual misalignment in the warped quadrant (the local non-rigid
+      distortion a single global transform cannot fully remove). Reuses the s2 registration rather
+      than re-registering from scratch.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The checkerboard figure is pinned — there are now two Results on the shelf (overlay +
+      checkerboard).
+
+- id: s6
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Before I trust this I want to know which class of alignment is actually appropriate. Start a
+    clean line of work for the most restrictive option: only allow rotation and shift, nothing
+    else. Register the same fixed/moving pair under that restriction and report the overlap number
+    and an overlay figure for it.
+  expect:
+    must_mention:
+    - rigid
+    must_not:
+    - "perfectly aligned"
+    - "100% overlap"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      In a fresh branch/thread, registers the SAME fixed.tif / moving.tif pair with a RIGID model
+      (rotation + translation only — Euler2D), reports its converged similarity (~0.71 NCC, clearly
+      above the ~0.59 baseline but not the best achievable), and saves an overlay figure. This is
+      the first of three model branches; it must be its own line of work, not a number reused from s2.
+
+- id: s7
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Now a separate line of work for a looser model: on top of rotation and shift, also allow the
+    image to stretch and shear. Register the same pair under that model, report its overlap number,
+    and give me an overlay figure for it too.
+  expect:
+    must_mention:
+    - affine
+    must_not:
+    - "perfectly aligned"
+    - "100% overlap"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      In a second, separate branch/thread, registers the SAME pair with an AFFINE model (adds
+      anisotropic scale + shear on top of rigid), reports its converged similarity (~0.78 NCC,
+      typically edging out rigid), and saves an overlay figure. Genuinely separate from the rigid
+      branch — its own result and figure, not a reused number.
+
+- id: s8
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Last line of work: allow the image to bend locally — a non-rigid model that can warp different
+    regions by different amounts. Register the same pair that way, report the overlap number, and
+    save an overlay figure. Then, looking across all three lines of work, tell me which model lines
+    the two images up best and why.
+  expect:
+    must_mention:
+    - deformable
+    must_not:
+    - "rigid is best"
+    - "all three are equivalent"
+    - "no difference between"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      In a third, separate branch/thread, registers the SAME pair with a DEFORMABLE / non-rigid
+      model (B-spline or similar local warp, sensibly primed from the global fit), reports its
+      converged similarity (~0.80 NCC), and saves an overlay figure. Compares all three converged
+      metrics (rigid ~0.71, affine ~0.78, deformable ~0.80) and concludes DEFORMABLE is best
+      BECAUSE the pair carries a residual LOCAL non-rigid warp in one quadrant that no single
+      global (rigid/affine) transform can remove — not merely "more parameters always wins". All
+      three beat the ~0.59 baseline; the three numbers come from three real registrations.
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The deformable-branch overlay (the winning model) is pinned, bringing the shelf to three
+      active Results.
+
+- id: s10
+  kind: revise
+  actor: agent
+  prompt: >
+    That deformable overlay is the one I'll show people, but the colours are hard to read. Redo it
+    with a colourblind-friendly two-colour scheme (e.g. magenta/green), make the registered image
+    and the reference clearly distinguishable, and save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Re-renders the deformable-branch overlay with a colourblind-friendly two-channel colour
+      scheme (e.g. magenta/green false-colour for reference vs registered moving) and saves it as a
+      NEW figure. This is a restyle of the existing deformable result — it should reuse that
+      registered image, not re-run the registration, and the alignment shown must be the same
+      deformable result (~0.80 NCC).
+
+- id: s11
+  kind: pin
+  actor: user
+  target: {from_step: s10, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The restyled colourblind-friendly deformable overlay is pinned — four active Results now.
+
+- id: s12
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The early global-pass overlay pinned at s3 is archived — it is superseded by the per-model
+      branch comparison and the restyled deformable keeper. Three Results remain active (s2's
+      checkerboard, s8's deformable overlay, s10's restyled overlay).
+
+- id: s13
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this project. Don't re-run anything — just remind me where we landed: which
+    alignment model we picked and why, what the overlap went from and to, and which figures we've
+    kept on the shelf.
+  expect:
+    must_mention:
+    - deformable
+    must_not:
+    - "fabricat"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project DB, the agent's context rehydrates from
+      the pinned shelf. It should recall that the DEFORMABLE model won (because of the residual local
+      non-rigid warp), summarize the honest before/after (~0.59 baseline -> ~0.80 deformable NCC), and
+      list the surviving pinned figures (the checkerboard, the deformable overlay, and its restyled
+      colourblind version) WITHOUT the deleted early global overlay and WITHOUT re-running anything or
+      claiming perfect alignment.
+
+expected_overall:
+  planted_truth: >
+    fixed.tif and moving.tif are 256x256 uint8 single-channel images. moving is fixed pushed through
+    a KNOWN composed transform: moving = local_warp( affine( rigid( fixed ) ) ), with
+      rigid:      rotation +8 deg, translation (tx=+10, ty=-7) px;
+      affine:     anisotropic scale (1.06, 0.95) + shear 0.04 rad;
+      deformable: a smooth LOCAL Gaussian-blob displacement field, peak ~7 px, sigma 26 px,
+                  centred at (x=170, y=90) (one quadrant only).
+    Because the distortion is rigid + affine + a LOCAL non-rigid warp, similarity recovers in stages
+    and only a deformable model removes the local warp. Validated with SimpleITK 2D registration
+    (Euler2D / Affine(2) / B-spline, Mattes MI, 2-level pyramid, affine primed from rigid, deformable
+    primed from affine) measuring normalized cross-correlation (NCC, higher = better):
+      unregistered NCC ~= 0.59
+      rigid         NCC ~= 0.71
+      affine        NCC ~= 0.78   (usually > rigid; can be ~equal to rigid on a poorly-tuned run)
+      deformable    NCC ~= 0.80   (DECISIVELY the best in every validation trial)
+    The robust, decisive planted claim is: DEFORMABLE achieves the highest similarity, and all three
+    models improve over the unregistered baseline. The exact rigid-vs-affine gap is small and the
+    intermediate ordering rigid <= affine is the typical converged result, not a knife-edge guarantee.
+  notes: >
+    A fully correct end-to-end session:
+    (s1) loads both 256x256 TIFFs and reports the unregistered baseline (~0.59 NCC) honestly, calling
+    the pair misaligned.
+    (s2) registers moving->fixed with a global transform, reports before (~0.59) and a clearly higher
+    after, and saves a before/after overlay figure (pinned at s3).
+    (s4) produces a checkerboard composite revealing residual misalignment in the warped quadrant
+    (pinned at s5), reusing s2's registration.
+    (s6/s7/s8) fork THREE separate branches/threads (rigid / affine / deformable) on the SAME pair,
+    each with its own result + overlay figure, reporting comparable NCC (rigid ~0.71, affine ~0.78,
+    deformable ~0.80), and conclude DEFORMABLE is best BECAUSE of the residual local non-rigid warp a
+    global transform cannot remove — not just because it has more degrees of freedom. The deformable
+    overlay is pinned at s9.
+    (s10) restyles the deformable overlay into a colourblind-friendly magenta/green figure (reusing the
+    registration, not re-running it), pinned at s11.
+    (s12) archives the early global-pass overlay (s3) as superseded; the checkerboard, deformable
+    overlay, and restyled overlay survive.
+    (s13) after a session restart, recaps from the rehydrated pinned shelf: deformable won (local warp),
+    ~0.59 -> ~0.80 NCC, surviving figures listed, deleted one absent, nothing re-run.
+    Fabrication guards: no "perfectly aligned"/"100% overlap"/"RMSD 0"/"perfect"; metrics must be
+    computed from the images; the three branch numbers must come from three real registrations, not one.

@@ -1,0 +1,19 @@
+id: bulk_de
+title: Bulk RNA-seq differential expression with a batch covariate (R/DESeq2)
+domain: transcriptomics
+prompt: I have a bulk RNA-seq count table at DATA_DIR/counts.csv (genes × samples) and a sample sheet
+  DATA_DIR/samples.csv with a `condition` column (control vs treated) and a `batch` column. Using DESeq2
+  in R, find the genes differentially expressed between treated and control while controlling for batch,
+  and show me the top hits.
+data_files:
+- counts.csv
+- samples.csv
+expected:
+  must_mention:
+  - DESeq2
+  - batch
+  - condition
+  must_not: []
+  notes: 'Design ~ batch + condition. Truth: 150 planted DE genes (69 up / 81 down) on a negative-binomial
+    sim. Agent should read deseq2-r, install DESeq2 (conda binary), report a sensible DE count in BOTH
+    directions, not just up. No fabrication of counts.'

@@ -1,0 +1,163 @@
+id: survival
+title: Survival association — Kaplan–Meier, log-rank, and a covariate-adjusted Cox model
+domain: clinical_stats
+gpu: false
+summary: >
+  A realistic clinical-stats session on a patient cohort: examine the clinical table,
+  split overall survival by EGFR expression with Kaplan–Meier curves and a log-rank test,
+  pin the keeper, then move past the crude split to a covariate-adjusted Cox model
+  (forest plot), restyle it, retire the now-superseded unadjusted result, and resume.
+data_files:
+- clinical.csv
+
+steps:
+  - id: s1
+    kind: examine
+    actor: agent
+    prompt: >
+      I have a clinical cohort table at DATA_DIR/clinical.csv — one row per patient with a
+      follow-up time, an event flag, a tumour marker reading, and a few patient
+      characteristics. Take a look and tell me what's in it: how many patients, how many had
+      the event versus were censored, and what other patient variables I have to work with.
+    expect:
+      must_mention: ["EGFR"]
+      context: { cache_breakpoints: true }
+      checks: >
+        Reads the CSV and reports a 200-patient cohort with a follow-up time and a binary
+        event/censoring flag (roughly 60% had the event), the EGFR_expression marker, and
+        the patient covariates age, sex and tumour stage. No fabricated columns or counts.
+
+  - id: s2
+    kind: analyze
+    actor: agent
+    prompt: >
+      Split the patients into high versus low marker groups at the median EGFR reading and
+      compare their overall survival. Draw the two survival curves on one plot and run the
+      formal test of whether the curves differ — save it as a figure I can keep, and tell me
+      which group does worse and whether the difference is statistically significant.
+    expect:
+      must_mention: ["EGFR", "worse"]
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Produces a Kaplan–Meier figure with two curves (high vs low EGFR, split at the
+        median ~7.7) and reports a log-rank test. Correct direction: the HIGH-EGFR group
+        has worse/shorter survival, and the difference is significant (log-rank p well below
+        0.05, ~1e-6). A real p-value from the data, not invented.
+
+  - id: s3
+    kind: pin
+    actor: user
+    target: { from_step: s2, select: figure }
+    expect:
+      state: { pinned_results_min: 1 }
+      checks: The Kaplan–Meier / log-rank figure is pinned — a Result entity now shows in the manifest.
+
+  - id: s4
+    kind: analyze
+    actor: agent
+    prompt: >
+      Before I trust that split, I'm worried the marker just tracks how advanced the disease
+      is. Show me how EGFR relates to the other patient characteristics — especially tumour
+      stage — and how the at-risk numbers fall off over time in each group. Give me a figure
+      that lets me judge whether stage could be confounding the survival difference.
+    expect:
+      must_mention: ["EGFR", "stage"]
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Produces a figure relating EGFR to covariates (notably tumour stage — they are
+        positively associated, corr ~0.4) and/or an at-risk table over time. Recognises that
+        higher EGFR co-occurs with higher stage, so stage is a plausible confounder of the
+        crude KM difference. This motivates the adjusted model in the next step.
+
+  - id: s5
+    kind: revise
+    actor: agent
+    prompt: >
+      Right — so I can't take the raw split at face value. Re-do the survival analysis as a
+      proper multivariable model that puts EGFR alongside age, sex and tumour stage at the
+      same time, so I can read off the marker's effect with the others held constant. Give me
+      a forest-style figure of the hazard ratios with their confidence intervals, and tell me
+      whether EGFR still predicts worse survival once stage is accounted for.
+    expect:
+      must_mention: ["EGFR", "stage"]
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Fits a covariate-adjusted Cox proportional-hazards model (EGFR + age + sex + stage)
+        and produces a forest plot of hazard ratios with confidence intervals. Correct
+        result: EGFR's hazard ratio attenuates from the crude ~1.6 toward ~1.4 once stage is
+        included, but stays above 1 and significant (p ~1e-3) — EGFR remains an independent
+        predictor of worse survival after adjustment. Stage is itself associated with hazard.
+
+  - id: s6
+    kind: pin
+    actor: user
+    target: { from_step: s5, select: figure }
+    expect:
+      state: { pinned_results_min: 2 }
+      checks: The adjusted-Cox forest plot is pinned — two Results are now on the shelf.
+
+  - id: s7
+    kind: revise
+    actor: agent
+    prompt: >
+      That forest plot is the one for the paper. Clean it up: order the variables from
+      strongest to weakest effect, draw the no-effect reference line, and label each row with
+      its hazard ratio and interval so it reads on its own. Save it as a new figure.
+    expect:
+      must_mention: ["EGFR"]
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Restyles the SAME adjusted-Cox forest plot (no new model fit) — sorted by effect
+        size, an HR=1 reference line, per-row HR and CI labels. Same numbers as s5, just a
+        publication-ready presentation.
+
+  - id: s8
+    kind: delete
+    actor: user
+    target: { ref: s3 }
+    expect:
+      state: { entity_archived: { ref: s3 }, pinned_results_min: 1 }
+      checks: >
+        The unadjusted Kaplan–Meier result pinned at s3 is now superseded by the adjusted
+        model, so it is archived. The forest plot Result remains pinned.
+
+  - id: s9
+    kind: resume
+    actor: agent
+    prompt: >
+      Coming back to write this up — remind me what we concluded about EGFR and survival and
+      which figure we're keeping for it. Just summarise from what's pinned; don't refit
+      anything.
+    expect:
+      must_mention: ["EGFR"]
+      context: { cache_breakpoints: true }
+      checks: >
+        After a fresh session re-attached to the same project, the context is rehydrated from
+        the pinned shelf — it should reflect the surviving adjusted-Cox forest plot (EGFR an
+        independent predictor of worse survival after adjusting for stage) and NOT re-assert
+        the retired crude KM split as the headline result. Tests context rebuild + that the
+        deletion persisted across a restart.
+
+expected_overall:
+  planted_truth: >
+    clinical.csv = 200 patients (seed 0), columns time, event, EGFR_expression, age, sex,
+    stage; ~58% had the event. Truth: hazard rises with EGFR, so HIGH EGFR = WORSE/shorter
+    overall survival. Median EGFR split ≈ 7.7; log-rank p ≈ 1.8e-6 (highly significant), high
+    group has more and earlier events. EGFR is positively correlated with tumour stage
+    (r ≈ 0.40), so stage partially confounds the crude split. In a covariate-adjusted Cox
+    model (EGFR + age + sex + stage) the EGFR hazard ratio attenuates from ~1.63 (crude) to
+    ~1.43 but stays > 1 and significant (p ≈ 1e-3) — EGFR remains an independent predictor of
+    worse survival after adjustment; stage also carries hazard.
+  notes: >
+    A fully correct session: s1 reports the real cohort shape and covariates; s2 makes a KM
+    plot split at the median and reports a significant log-rank with HIGH EGFR doing worse;
+    s3 pins it; s4 surfaces the EGFR–stage association (confounding concern) with a figure;
+    s5 fits the adjusted Cox model and shows a forest plot where EGFR's HR shrinks but stays
+    significant after adjusting for stage; s6 pins it; s7 restyles that same forest plot
+    (no refit); s8 archives the now-superseded unadjusted KM pin; s9 rehydrates after a
+    restart and reports the adjusted conclusion from the surviving figure. cache_read > 0 on
+    turns ≥ 2; s2/s4/s5/s7 each produce a figure; curation (pins + delete) persists into s9.

@@ -1,0 +1,193 @@
+id: microbiome
+title: 16S microbiome — alpha diversity by group, then beta diversity / ordination
+domain: microbiome
+gpu: false
+summary: >
+  A realistic 16S working session on a local OTU table: examine the feature table and
+  metadata, compute alpha diversity per sample and compare the two groups with a boxplot
+  + a group test, pin the keeper, then branch to beta diversity (Bray-Curtis PCoA), restyle
+  the ordination, drop a dead-end, and resume to review the pinned shelf. All local
+  (numpy/scipy/scikit-bio); no network.
+data_files:
+- otu.csv
+- meta.csv
+
+steps:
+  - id: s1
+    kind: examine
+    actor: agent
+    prompt: >
+      I have a 16S study: DATA_DIR/otu.csv is a feature table with taxa in rows and samples
+      in columns, and DATA_DIR/meta.csv labels each sample as healthy or disease. Before we
+      do anything fancy, just look at both files and orient me — how many taxa and how many
+      samples, how the samples split across the two groups, and whether the per-sample counts
+      look comparable or wildly uneven.
+    expect:
+      must_mention: ["healthy", "disease"]
+      context: { cache_breakpoints: true }
+      checks: >
+        Loads both tables, reports 80 taxa x 20 samples and a 10/10 healthy vs disease split,
+        and comments on sequencing depth / per-sample totals (uneven library sizes are
+        expected). No fabricated numbers.
+
+  - id: s2
+    kind: analyze
+    actor: agent
+    prompt: >
+      Let's start with within-sample diversity. For each sample compute alpha diversity —
+      both how rich it is and how even it is — then draw me a boxplot comparing the two
+      groups side by side and save it as a figure. Does one group look more diverse?
+    expect:
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Computes a richness metric (observed taxa) and an evenness/diversity metric (Shannon)
+        per sample, makes a grouped boxplot (healthy vs disease) saved as a figure, and reads
+        off that disease samples are clearly LOWER in diversity than healthy.
+
+  - id: s3
+    kind: analyze
+    actor: agent
+    prompt: >
+      That gap looks real — back it up with a statistic. The groups are small and I don't want
+      to assume the values are normally distributed, so use a rank-based two-group comparison
+      and give me the p-value for the diversity difference.
+    expect:
+      must_mention: ["healthy", "disease"]
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Runs a Mann-Whitney / Wilcoxon rank-sum test on the Shannon (and/or observed) values
+        between the two groups, reports a significant p-value (~2e-4, well under 0.05), and
+        concludes disease has significantly lower alpha diversity.
+
+  - id: s4
+    kind: pin
+    actor: user
+    target: { from_step: s2, select: figure }
+    expect:
+      state: { pinned_results_min: 1 }
+      checks: The alpha-diversity boxplot is pinned — a Result entity now exists and shows in the manifest.
+
+  - id: s5
+    kind: revise
+    actor: agent
+    prompt: >
+      One thing bugs me about that diversity comparison: richness is sensitive to how deeply
+      each sample was sequenced, and our depths are uneven. Redo the richness estimate in a
+      depth-aware way so it's a fairer comparison, and remake the boxplot as a new figure.
+      Does the conclusion hold up?
+    expect:
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Addresses depth sensitivity (rarefaction to a common depth, or a depth-robust richness
+        estimate), remakes the grouped boxplot as a new figure, and confirms the conclusion is
+        unchanged — disease is still lower. This is a revision of the alpha-diversity analysis.
+
+  - id: s6
+    kind: branch
+    actor: agent
+    new_thread: true
+    prompt: >
+      Now switch from within-sample to between-sample structure. Build a sample-by-sample
+      Bray-Curtis dissimilarity from the (relative) abundances, run an ordination on it, and
+      plot the samples in the first two ordination axes coloured by group, saved as a figure.
+      Do the two groups separate?
+    expect:
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true }
+      checks: >
+        Converts counts to relative abundance, computes a Bray-Curtis distance matrix, runs a
+        PCoA (principal coordinates / classical MDS), and plots samples on the first two axes
+        coloured by group as a saved figure. Notes that the groups separate (PC1 splits
+        healthy vs disease).
+
+  - id: s7
+    kind: pin
+    actor: user
+    target: { from_step: s6, select: figure }
+    expect:
+      state: { pinned_results_min: 2 }
+      checks: The ordination figure is pinned — a second Result is on the shelf.
+
+  - id: s8
+    kind: modify_figure
+    actor: agent
+    prompt: >
+      The ordination scatter is hard to read — make the two groups easy to tell apart with a
+      clear colour for each, drop a confidence ellipse or convex hull around each group, label
+      the axes with the percent variance each explains, and add a legend. Same data, just a
+      cleaner version.
+    expect:
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Restyles the PCoA scatter (distinct per-group colours, per-group ellipse/hull, axis
+        labels with percent variance explained, legend) without changing the underlying
+        ordination — a presentation revision of the s6 figure.
+
+  - id: s9
+    kind: analyze
+    actor: agent
+    prompt: >
+      Quick tangent before I forget — collapse everything to phylum-ish level by just summing
+      all taxa per sample and plot total reads per sample as a bar chart. Save it.
+    expect:
+      produces: { figure: 1 }
+      context: { cache_breakpoints: true, cache_read: true }
+      checks: >
+        Produces a per-sample total-read bar chart (a depth/library-size sanity plot). This is
+        an exploratory side plot that will be discarded.
+
+  - id: s10
+    kind: pin
+    actor: user
+    target: { from_step: s9, select: figure }
+    expect:
+      state: { pinned_results_min: 3 }
+      checks: The library-size bar chart is pinned (third Result), so it can later be deleted.
+
+  - id: s11
+    kind: drop
+    actor: user
+    target: { ref: s10 }
+    expect:
+      state: { entity_archived: { ref: s10 }, pinned_results_min: 2 }
+      checks: >
+        The library-size bar chart was a tangent — its pinned Result is archived. The two
+        diversity figures (alpha boxplot, beta ordination) remain on the shelf.
+
+  - id: s12
+    kind: resume
+    actor: agent
+    prompt: >
+      Coming back to wrap this up. Without recomputing anything, remind me which figures we
+      kept and what the headline result was — within-sample diversity and between-sample
+      structure — so I can drop them straight into the methods note.
+    expect:
+      context: { cache_breakpoints: true }
+      checks: >
+        After a fresh session re-attached to the same project, context is rehydrated from the
+        pinned shelf. The agent should reference the surviving alpha-diversity boxplot and the
+        beta-diversity ordination (not the deleted library-size bar chart), and restate the
+        headline: disease has significantly lower alpha diversity and the groups separate in
+        the ordination.
+
+expected_overall:
+  planted_truth: >
+    otu.csv = 80 taxa x 20 samples; meta.csv = 10 healthy + 10 disease. Alpha diversity is
+    markedly LOWER in disease: observed richness ~66.6 (healthy) vs ~24.6 (disease); Shannon
+    ~3.76 vs ~2.06; Mann-Whitney p ~= 2e-4 (significant, well under 0.05) for both metrics.
+    Beta diversity: a Bray-Curtis PCoA separates the groups — PC1 splits healthy from disease
+    (group difference along PC1 p ~= 2e-4). The depth-aware (rarefied) richness redo leaves
+    the conclusion unchanged.
+  notes: >
+    A fully correct session: s1 reports 80 taxa x 20 samples and the 10/10 split; s2 produces
+    an alpha-diversity boxplot showing disease lower; s3 confirms with a rank-based test
+    (significant, disease lower); s4 pins the boxplot; s5 redoes richness depth-aware and the
+    conclusion holds, producing a new figure; s6 branches to a Bray-Curtis PCoA figure with
+    visible group separation; s7 pins it; s8 restyles the ordination (colours, ellipses, axis
+    variance labels, legend) same data; s9 makes a throwaway library-size bar chart; s10 pins
+    it; s11 deletes that tangent; s12 resumes after a restart and recalls only the two surviving
+    diversity figures plus the headline. Cache reads on turns >=2; figures harvested regardless
+    of save path.

@@ -1,0 +1,316 @@
+id: msa_phylo
+title: Ortholog protein family — alignment, phylogenetic tree, conservation, and cleaning a bad sequence
+domain: protein
+gpu: false
+summary: >
+  A realistic phylogenetics session on a set of cross-species ortholog protein
+  sequences: examine the set, align them and build a tree, profile the most
+  conserved positions, test whether the tree topology is robust to the choice of
+  aligner (a second thread with a different alignment method), restyle the
+  conservation figure for publication, then detect and remove a non-ortholog
+  outlier sequence — archiving the stale contaminated tree and rebuilding a clean
+  alignment + tree on the real orthologs only.
+lifecycle: [branch, delete]
+data_files:
+- orthologs.fasta
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I pulled together a set of protein sequences at DATA_DIR/orthologs.fasta that
+    are supposed to be the same gene across about eight species. Before I do
+    anything with them, just take a look at the file for me — how many sequences
+    are there, how long are they, and does anything jump out as not belonging with
+    the rest?
+  expect:
+    must_mention: []
+    must_not:
+    - "I cannot"
+    - "no sequences"
+    - "unable to read"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Reads the FASTA and reports 9 sequences. Eight are ~104-105 aa and look like
+      a coherent family; one sequence (id `seq_outlier`) stands out — it is much
+      longer (134 aa) and clearly different in composition. The agent should flag
+      seq_outlier as suspicious / possibly not the same gene, WITHOUT yet having
+      aligned anything. No fabricated counts or lengths (there really are 9 records;
+      eight at 104-105 aa, one at 134 aa).
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Line them all up against each other and build me a tree showing how the
+    sequences relate. Save the tree as a figure so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["tree"]
+    must_not:
+    - "I cannot align"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Builds a multiple sequence alignment with a real aligner (MAFFT/MUSCLE via
+      subprocess, or a Biopython PairwiseAligner / Bio.Align fallback) over all 9
+      sequences, constructs a phylogenetic tree (NJ on a protein distance model
+      such as BLOSUM62, or an ML tool), and renders it to a SAVED figure. The eight
+      true orthologs should cluster in a way that tracks species phylogeny (mammals
+      together; tuna/fish basal) and `seq_outlier` should sit on a long aberrant
+      branch far from the rest. No fabricated branch lengths or topology.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The all-9 tree figure is pinned — a Result entity now exists on the shelf and
+      appears in the thread manifest. This is the FIRST (still outlier-contaminated)
+      tree; it will later be archived once the dataset is cleaned.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now show me which positions are the most conserved across all of these. Give me
+    a figure of the conservation along the alignment so I can see where the
+    invariant regions are.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["conserved"]
+    must_not:
+    - "I cannot"
+    - "no alignment"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes a per-column conservation profile over the alignment and renders it
+      as a SAVED figure (a conservation/entropy track or a sequence logo). The most
+      conserved region should correspond to the absolutely-conserved CXXCH
+      heme-attachment motif near the N-terminus (the cysteine pair + histidine,
+      around human residues 14-18 / "C..CH"), invariant across all true orthologs.
+      Note: at this stage seq_outlier is still in the alignment, so it depresses
+      conservation and inserts gappy columns. No fabricated motif or column claims.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The conservation figure is pinned as a second Result. The shelf now holds the
+      all-9 tree (s3) and the conservation profile (s5).
+
+- id: s6
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Before I trust that tree I want to know if the branching pattern is just an
+    artifact of how the sequences were lined up. In a separate fresh line of
+    analysis, line them up again but with a different lining-up method, then build
+    the tree the same way as before. Save that tree as a figure too.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["tree"]
+    must_not:
+    - "I cannot"
+    - "same file"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      In a NEW thread (a forked branch of the analysis), re-aligns the SAME 9
+      sequences with a DIFFERENT alignment method than s2 (e.g. MUSCLE if s2 used
+      MAFFT, or a different MAFFT strategy / a Biopython alternative), then rebuilds
+      the tree with the same downstream method, and renders it to a SAVED figure.
+      This is an alternative-aligner branch, not a re-run of the identical command.
+
+- id: s7
+  kind: analyze
+  actor: agent
+  prompt: >
+    Put the two trees side by side and tell me honestly: does the branching pattern
+    come out the same either way, or does it change depending on how I lined the
+    sequences up? Give me a figure comparing them.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["topology", "robust"]
+    must_not:
+    - "identical newick"
+    - "byte-identical"
+    - "I cannot compare"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      COMPARES the two trees (the s2/s3 tree and the s6 branch tree) and reports
+      whether the topology is robust to the aligner choice, rendering a comparison
+      figure (e.g. the two trees side by side or a tanglegram). Expected finding:
+      the qualitative topology is stable — mammals cluster, tuna is basal, and
+      crucially `seq_outlier` lands on a long aberrant branch in BOTH — even if
+      minor branch-length / ordering details differ. Must distinguish "topology"
+      (robust) from exact branch lengths (may vary); must NOT claim the two trees
+      are byte-identical and must NOT invent a Robinson-Foulds number without
+      actually computing the comparison.
+
+- id: s8
+  kind: pin
+  actor: user
+  target: {from_step: s7, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The two-aligner comparison figure is pinned as a third Result, documenting
+      that the topology is robust to the aligner choice.
+
+- id: s9
+  kind: revise
+  actor: agent
+  prompt: >
+    That conservation plot is going into a figure for the paper. Redo it with a
+    colourblind-friendly palette, bigger labels, and clearly mark the most
+    conserved motif on it. Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["conserved"]
+    must_not:
+    - "I cannot"
+    - "no figure"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Re-renders the conservation figure (a RESTYLE of the s4 plot) with a
+      colourblind-safe palette, larger labels, and an explicit annotation of the
+      most conserved motif (the CXXCH heme-attachment motif / N-terminal cysteine
+      pair + histidine). This is a NEW saved figure derived from the same
+      conservation analysis, not a re-computation of new biology. The annotated
+      motif must match the real invariant region, not a fabricated location.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The restyled, publication-ready conservation figure is pinned as a fourth
+      Result alongside the earlier one.
+
+- id: s11
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The user archives the FIRST tree Result (the all-9, outlier-contaminated tree
+      pinned at s3) because it is about to be superseded by a clean rebuild. After
+      the delete it is no longer an active Result; the conservation figures and the
+      comparison figure remain on the shelf.
+
+- id: s12
+  kind: revise
+  actor: agent
+  prompt: >
+    You were right that `seq_outlier` isn't really the same gene — it's not lining
+    up with the rest and it's dragging the whole analysis around. Drop it from the
+    set for good and rebuild the alignment and the tree on just the real ones, so I
+    get a clean picture. Save the rebuilt tree as a figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - "removed"
+    - "rebuilt"
+    must_not:
+    - "seq_outlier remains"
+    - "kept all 9"
+    - "cannot remove"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Actually REMOVES seq_outlier from the working set (the dataset drops from 9
+      to 8 records) and rebuilds the alignment AND the tree from scratch on the
+      remaining true orthologs, rendering the rebuilt tree to a SAVED figure. The
+      deletion must propagate: the long outlier branch is GONE, the alignment is
+      tighter (fewer gap-only / poorly-aligned columns now the 134-aa non-homolog
+      is removed), and the conserved CXXCH motif and other invariant columns stand
+      out more cleanly. The agent confirms the count is now 8 and that seq_outlier
+      is absent from the rebuilt artifacts. Must NOT merely hide/grey the outlier
+      while leaving it in the alignment, and must NOT fabricate the post-removal
+      tree without re-running.
+
+- id: s13
+  kind: pin
+  actor: user
+  target: {from_step: s12, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The clean, rebuilt 8-ortholog tree is pinned. The shelf again holds four
+      active Results — the conservation profile (s5), the aligner-comparison (s8),
+      the restyled conservation figure (s10), and now the clean tree (s13) — while
+      the original contaminated tree (s3) stays archived.
+
+- id: s14
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this after a break — remind me where we landed. Which figures
+    have we kept, is the outlier gone from the final tree, and did the tree shape
+    hold up regardless of how we lined the sequences up? Just summarise from what's
+    saved; don't redo anything.
+  expect:
+    must_mention: []
+    must_not:
+    - "seq_outlier remains"
+    - "still 9"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project DB, the agent's context
+      is rehydrated from the pinned shelf. It should recap: the final tree is built
+      on 8 true orthologs with seq_outlier removed; the conservation profile
+      highlights the CXXCH heme motif; and the topology was robust to the aligner
+      choice (mammals cluster, tuna basal in both). It should reflect the SURVIVING
+      pinned Results (clean tree, conservation, comparison) and NOT resurrect the
+      archived contaminated all-9 tree. Tests that curation (the s11 delete and the
+      s12 rebuild) persisted across the restart. Should not re-run analyses.
+
+expected_overall:
+  planted_truth: >
+    The file orthologs.fasta holds 9 REAL UniProt sequences. Eight are genuine
+    cytochrome c (somatic) orthologs, one per species — human (P99999), mouse
+    (P62897), rat (P62898), bovine (P62894), pig (P62895), horse (P00004),
+    elephant seal (P00012), and skipjack tuna (P00025) — each ~104-105 aa and
+    sharing 80-91% pairwise identity (mammals ~88-91%, tuna ~81% to human),
+    so they form a clean tree that tracks the species phylogeny (mammals group
+    together; the tuna/fish lineage is basal/outgroup). The 9th sequence, written
+    under the neutral id `seq_outlier`, is the PLANTED OUTLIER: human cytochrome b5
+    (CYB5A, UniProt P00167) — a different heme-binding protein with NO homology to
+    cytochrome c, only ~22% identity to the orthologs, 134 aa long, and it LACKS the
+    cytochrome c CXXCH heme-attachment motif. In any alignment it aligns poorly and
+    in any tree it falls on a long aberrant branch. The diagnostic conserved feature
+    of the true family is the absolutely-conserved CXXCH heme-attachment motif near
+    the N-terminus — the cysteine pair + histidine at human residues 14, 17 and 18
+    (the "CSQCH"/"CAQCH" stretch, 1-based residues 15-19) — invariant across all
+    eight orthologs and absent in the outlier.
+  notes: >
+    A fully correct end-to-end session: (s1) reads the file and reports 9 sequences,
+    eight at ~104-105 aa plus one 134-aa oddity (seq_outlier), flagging it before
+    any alignment. (s2) aligns all 9 with a real aligner and builds + renders a
+    tree where the orthologs cluster by species phylogeny and seq_outlier is on a
+    long branch; (s3) pins that tree. (s4) computes a conservation profile and
+    renders it, naming the CXXCH heme motif / N-terminal cysteine-pair region as the
+    most conserved; (s5) pins it. (s6) forks a NEW thread, re-aligns the same 9 with
+    a DIFFERENT aligner and rebuilds the tree; (s7) compares the two trees and
+    concludes the topology (mammal/fish split, outlier long branch) is robust to the
+    aligner choice without claiming byte-identity or inventing a metric; (s8) pins
+    the comparison. (s9) restyles the conservation figure for publication
+    (colourblind palette, annotated CXXCH motif) and (s10) pins it. (s11) the user
+    archives the original outlier-contaminated tree (s3). (s12) the agent drops
+    seq_outlier so the dataset is 8, rebuilds alignment + tree on the real orthologs
+    only — long branch gone, tighter alignment, CXXCH and other invariant columns
+    clearer — and confirms count=8; (s13) pins the clean tree. (s14) after a session
+    restart the agent recaps from the surviving pinned shelf: 8-ortholog clean tree,
+    outlier removed, robust topology — without resurrecting the archived all-9 tree
+    or re-running. Throughout: real sequences, real alignment columns, real branch
+    lengths, real conservation — no fabricated motifs, identities, topologies, or
+    comparison numbers.

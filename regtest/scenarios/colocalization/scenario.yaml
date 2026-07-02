@@ -1,0 +1,250 @@
+id: colocalization
+title: Two-channel colocalization across fields, with a bad field dropped and a significance check
+domain: bioimaging
+gpu: false
+summary: Quantify Pearson/Manders colocalization of two markers inside cells across four fields, exclude one out-of-focus/saturated field, restyle the summary figure, delete the dead field's results, and come back later to test whether the coloc is above chance.
+lifecycle: [delete, resume]
+data_files:
+- coloc/f1_ch1.tif
+- coloc/f1_ch2.tif
+- coloc/f2_ch1.tif
+- coloc/f2_ch2.tif
+- coloc/f3_ch1.tif
+- coloc/f3_ch2.tif
+- coloc/f4_ch1.tif
+- coloc/f4_ch2.tif
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have four two-channel fields of fluorescence microscopy in DATA_DIR/coloc/ — each field is
+    a pair of TIFFs, the two channels saved as *_ch1.tif and *_ch2.tif (so f1_ch1.tif / f1_ch2.tif
+    are the two channels of field 1, and so on). The two channels are two markers stained in the
+    same cells. Before I quantify anything, just take a look at the four fields for me: what's the
+    image size and bit depth, roughly how bright is each field, and does any field look like it was
+    acquired badly — out of focus, or over-exposed/saturated?
+  expect:
+    must_mention:
+    - field
+    - "f3"
+    must_not:
+    - "all four fields look fine"
+    - "all four fields are equivalent"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Reads the eight TIFFs and reports the basic acquisition properties: 384x384 pixels, 16-bit
+      (uint16) images. Inspecting intensities/histograms, it should flag field 3 as anomalous —
+      a large fraction of its pixels sit at the sensor maximum (~27% clipped at 65535 vs ~0.1% in
+      the other three fields) and it looks blurry/out of focus (its bright foreground spreads over
+      roughly twice the area of the good fields). f1, f2, f4 look like normal in-focus, unsaturated
+      acquisitions. No fabricated numbers; the saturation/focus read must come from the actual pixels.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now quantify the overlap of the two markers inside the cells, field by field. For each field,
+    segment the cell foreground (don't just use the whole image — background will inflate things),
+    then compute Pearson's r and the Manders M1 and M2 coefficients inside the cells. Give me a
+    per-field table, and plot a per-field colocalization scatter (ch1 vs ch2 intensity inside the
+    mask, one small panel per field) and save it as a figure so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - Pearson
+    - Manders
+    must_not:
+    - "all four fields agree"
+    - "consistent across all fields"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      For EACH of the four fields it (a) loads both channel TIFFs, (b) segments/thresholds the
+      foreground (e.g. Otsu/Li per channel) so metrics are computed INSIDE the cells, and (c)
+      reports Pearson's r plus Manders M1 and M2. It produces a per-field table AND a saved figure
+      with a colocalization scatter per field (ch1 vs ch2 intensity within the mask). The three good
+      fields (f1, f2, f4) cluster: in-cell Pearson ~0.5-0.7 (intersection ~0.67-0.69), Manders M1
+      ~0.6-0.8. Field 3 is an outlier — its M2 collapses toward 0 and its scatter looks degenerate
+      (saturation plateau pinned at the sensor max), so the scatter panel for f3 should look visibly
+      different from the other three. No fabricated coefficients; values come from the real pixels.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The per-field colocalization scatter panel is pinned — a Result entity now exists and shows
+      in the project manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now give me a summary across the fields: a bar chart of the per-field Pearson r (and, if
+    it fits, the Manders M1) with one bar per field, so I can see at a glance how the four fields
+    compare. Save it as a figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - field
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Produces a saved summary bar chart with one bar per field for the in-cell Pearson r (optionally
+      a grouped/second series for Manders M1), reusing the per-field numbers from s2 (it must NOT
+      silently recompute different values for f1/f2/f4). The three good fields should sit at a similar
+      height and field 3 should stand apart (its Pearson diverges and/or its M2 is near zero). No
+      fabricated bars.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: The summary bar chart is pinned — two Results are now on the shelf.
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    That summary bar is a bit plain and it's hard to tell the bad field from the good ones. Redo it
+    with a colourblind-friendly palette, larger labels, and colour field 3's bar differently (or add
+    a marker) so the out-of-focus/saturated field is obviously called out. Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - "f3"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A NEW summary figure (a restyle of the s4 bar chart, not modify_figure) with a colourblind
+      palette, larger text, and field 3 visually distinguished (different colour / annotation) as the
+      flagged outlier. The underlying numbers are unchanged from s2/s4 — only the presentation
+      changes. This is the agent-turn figure restyle.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The restyled summary bar is pinned — three Results on the shelf (two summaries + the scatter).
+
+- id: s8
+  kind: delete
+  actor: user
+  target: {ref: s5}
+  expect:
+    state: {entity_archived: {ref: s5}, pinned_results_min: 2}
+    checks: >
+      The original plain summary bar (pinned at s5) is archived now that the restyled version at s7
+      supersedes it. The restyled summary and the per-field scatter remain pinned.
+
+- id: s9
+  kind: drop
+  actor: agent
+  prompt: >
+    Field 3 was acquired out of focus and the detector was saturated — that's why its numbers are off.
+    Drop it from the dataset entirely and recompute the across-field summary using only the three good
+    fields (f1, f2, f4). Give me the cleaned three-field summary as a saved figure.
+  expect:
+    produces: {figure: 1}
+    must_mention: []
+    must_not:
+    - "all four fields"
+    - "including field 3"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A genuine removal of field 3 from the working dataset, not just hiding it in a printout — the
+      f3 inputs / per-field f3 results should be dropped so downstream steps no longer see them, and
+      the project state should reflect a three-field dataset. It then recomputes and SAVES a summary
+      figure over f1/f2/f4 only. The cleaned summary is tighter (Pearson ~0.6-0.7, Manders M1 ~0.7)
+      and contains no f3 contribution. The surviving fields' per-field values must be unchanged from
+      s2 (no silent re-segmentation / re-numbering). No fabrication.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The cleaned three-field summary is pinned (back to three live Results: per-field scatter,
+      restyled four-field bar, and the cleaned three-field summary).
+
+- id: s11
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The per-field scatter panel pinned at s3 still contains field 3 (the dead field), so it is
+      archived now that the dataset is three fields. The restyled bar and the cleaned three-field
+      summary remain pinned. This is the second curation deletion — removing a stale result tied to
+      the excluded field.
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this after a break — for the cleaned-up set of fields, is the colocalization I'm
+    seeing actually above chance, or could it just be that both channels happen to be bright in the
+    same cells? Do a quick randomization or Costes-style check to put a number on it, and show me a
+    figure of the observed value against the null distribution. First, remind me what we kept pinned.
+  expect:
+    must_mention:
+    - chance
+    - p
+    must_not:
+    - "field 3"
+    - "cannot determine"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the context is rehydrated from the pinned
+      shelf: the agent should recall the surviving pinned results (the restyled bar + the cleaned
+      three-field summary) and NOT the deleted per-field scatter, and must reuse the cleaned three-field
+      dataset (it must NOT re-introduce field 3 or restart from four fields). It then runs a
+      significance test against a null where the spatial relationship between channels is broken — e.g.
+      within-mask pixel/block randomization of one channel, or a Costes-style scramble — compares the
+      observed in-cell Pearson (~0.67) to the null (centred on ~0, sd ~0.01), reports a p-value/z-score
+      (well above chance, e.g. p<0.01 / many SD above the null mean), and saves a figure of the observed
+      value vs the null distribution. The conclusion must come from the agent's own computed null, not
+      asserted without a test. No fabricated p-values.
+
+expected_overall:
+  planted_truth: >
+    Four 384x384 two-channel fields (uint16 TIFFs) under coloc/. Foreground is synthetic cells; the
+    two channels share a tunable fraction of their in-cell texture (latent correlation 0.82) with ch2
+    additionally having "absent" patches inside cells, so the planted in-cell colocalization in the
+    three GOOD fields (f1, f2, f4) is: Pearson ~0.67-0.69 on the both-channels-positive (intersection)
+    region (~0.50-0.63 on the full cell mask), Manders M1 ~0.64-0.80 (mean ~0.71), M2 ~0.96.
+    Field 3 is the deliberate BAD field: acquired out of focus (heavy Gaussian blur, sigma 12, so its
+    segmented foreground area is ~0.38 of the frame vs ~0.17 for the good fields) and over-exposed
+    (gain pushed so ~27% of pixels clip at 65535, vs ~0.1% in the good fields). Its coefficients are
+    clear outliers (M2 collapses to ~0; Pearson diverges from the good-field cluster), and it must be
+    excluded. After deleting f3, the three-field summary is Pearson ~0.6-0.7 / M1 ~0.7. A within-mask
+    randomization (Costes-style) of the cleaned set gives observed r ~0.67 vs a null centred on ~0
+    (sd ~0.01), i.e. p ~0.005 with 200 permutations — colocalization is well above chance. Seeds are
+    fixed (master seed 0, deterministic per-field seeds) so these values are stable.
+  notes: >
+    A fully correct end-to-end session: (s1) inspect the four fields and flag f3 as out of focus +
+    saturated from the actual pixels (384x384 uint16; ~27% saturated in f3). (s2) per-channel
+    foreground segmentation + in-cell Pearson/Manders for all four fields, a per-field table, and a
+    saved per-field coloc scatter where f3's panel looks degenerate. (s3) pin that scatter. (s4) a
+    saved summary bar of per-field coloc with f3 standing apart; (s5) pin it. (s6) restyle that bar
+    (colourblind palette, larger labels, f3 called out) as a NEW figure and (s7) pin it; (s8) delete
+    the superseded plain bar. (s9) a REAL drop of field 3 from the data/artifacts/project state and a
+    recomputed, saved three-field summary that excludes it while leaving the surviving fields' numbers
+    unchanged; (s10) pin it; (s11) delete the now-stale per-field scatter that still held f3. (s12)
+    resume the cleaned project — context rehydrates from the surviving pinned shelf — and run a
+    within-mask randomization/Costes test with a saved observed-vs-null figure showing the coloc is far
+    above chance (tiny p / many SD above null). Failure modes to catch: whole-image Pearson reported as
+    the only answer (background inflation), field 3 kept in the average or merely hidden rather than
+    deleted, the surviving fields silently re-numbered/re-derived, restarting from four fields in s12,
+    deleted results re-surfacing after resume, or any fabricated coefficients / p-values not derived
+    from the actual pixels.

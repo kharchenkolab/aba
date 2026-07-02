@@ -1,0 +1,219 @@
+id: tpm
+title: Counts -> TPM normalization, the expression distribution, TPM-vs-CPM, and top-expressed genes (transcriptomics)
+domain: transcriptomics
+gpu: false
+summary: >
+  A realistic RNA-seq normalization session on a small bulk count matrix. The biologist examines raw
+  counts and gene lengths, converts counts to TPM (length + depth normalization) and looks at the
+  per-gene expression distribution, pins it, then revises by log-transforming and comparing TPM to a
+  length-naive CPM to see what length normalization changes, restyles that comparison for a figure,
+  pulls out the top-expressed genes as a table plus figure, deletes the now-superseded raw-scale
+  distribution, and comes back later to recap. Fully local — compute-bound, no network.
+lifecycle: [revise, delete, resume]
+data_files:
+- counts.csv
+- lengths.csv
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have a small bulk RNA-seq experiment. The raw counts (genes in rows, samples in columns) are at
+    DATA_DIR/counts.csv and the length of each gene is at DATA_DIR/lengths.csv. Before I normalize
+    anything, just take a look and tell me the basic layout: how many genes and how many samples, that
+    the two files line up on the same genes, and roughly how the gene lengths and the per-sample
+    sequencing depths look. Don't normalize yet — I just want to know what we're working with.
+  expect:
+    must_mention: ["counts", "length"]
+    must_not: ["I cannot read", "placeholder"]
+    context: {cache_breakpoints: true}
+    checks: >
+      Reads counts.csv and lengths.csv from the actual files and reports the layout: 1000 genes x 4
+      samples (s0, s1, s2, s3), with the lengths file covering the same 1000 genes so the two align.
+      It should give a sense of the gene lengths (hundreds to a few thousand nt, median ~1700) and of
+      the per-sample total counts (the depths differ between samples, which is exactly why depth
+      normalization is needed). No fabricated numbers, and it should NOT have computed TPM yet — this
+      is orientation only.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now turn these raw counts into TPM so the genes are comparable across samples — correct for both
+    how long each gene is and how deeply each sample was sequenced. Then give me a single figure
+    showing the distribution of per-gene expression once it's in TPM, so I can see the overall shape,
+    and save it as a PNG I can keep. As a sanity check, does each sample's TPM add up the way it should?
+  expect:
+    must_mention: ["TPM"]
+    must_not: ["I cannot read", "placeholder", "counts are already normalized"]
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes TPM correctly: divide each gene's count by its length (length-normalized rate, e.g. per
+      kilobase), THEN scale each sample so its values sum to 1e6 — i.e. length normalization first,
+      then per-sample depth scaling. The sanity check must confirm every sample's TPM column sums to
+      1,000,000 (a defining property of TPM). It produces a saved figure of the per-gene expression
+      distribution (a histogram/density of per-gene mean TPM, or per-sample distributions) — which is
+      strongly right-skewed (most genes low, a long high tail). It must not confuse the order of
+      operations (depth-then-length is wrong) nor claim the raw counts are already comparable.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: The TPM expression-distribution figure from s2 is pinned — a Result entity now exists and shows in the manifest.
+
+- id: s4
+  kind: revise
+  actor: agent
+  prompt: >
+    Two things about that distribution. First, the long tail makes it hard to read on a linear axis,
+    so log-transform the TPM values before plotting. Second, I want to know how much the gene-length
+    correction actually mattered — so also compute a depth-only normalization that ignores gene length
+    (just scale each sample's raw counts to a per-million total) and put the two on the same figure so
+    I can compare them. Save it as a new PNG, and tell me which genes change rank the most between the
+    length-aware and the length-naive versions.
+  expect:
+    must_mention:
+    - "TPM"
+    - "CPM"
+    must_not: ["length makes no difference", "identical to TPM", "no genes change"]
+    produces: {figure: 1}
+    context: {cache_read: true}
+    checks: >
+      A REVISION of the s2 analysis, not a restart: it re-plots the SAME TPM values on a log scale and
+      adds the length-naive depth-only normalization (CPM = scale raw counts per sample to 1e6, no
+      length division) on the same figure for comparison. Correct conclusion: length normalization
+      genuinely changes the ranking — SHORT, deeply-sequenced genes get promoted by TPM relative to
+      CPM. Concretely GENE0098 and GENE0488 (both short, ~650-810 nt vs a ~1700 nt median) rank in the
+      TPM top-10 but fall out of the CPM top-10, while some long genes the length-naive CPM over-ranks
+      drop under TPM. It must NOT claim length makes no difference or that TPM and CPM are equivalent.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: The log-scale TPM-vs-CPM comparison figure from s4 is pinned — two Results on the shelf now.
+
+- id: s6
+  kind: analyze
+  actor: agent
+  prompt: >
+    That comparison panel is going into a slide. Redo it with a colourblind-friendly palette, larger
+    fonts and a clear legend distinguishing the length-aware from the length-naive normalization, and
+    label the few genes that move the most between the two. Save it as a new PNG figure — same numbers,
+    just presentation-ready.
+  expect:
+    must_mention: ["TPM", "CPM"]
+    must_not: ["cannot modify", "no figure to restyle"]
+    produces: {figure: 1}
+    context: {cache_read: true}
+    checks: >
+      A RESTYLE of the s4 comparison figure into a new saved figure: same underlying TPM-vs-CPM numbers,
+      only the presentation changes (colourblind-friendly palette, larger fonts, clear length-aware vs
+      length-naive legend, the most-shifted genes labelled). It must not refuse, must not edit the old
+      file in place, and must not recompute different statistics — only the styling differs.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The restyled presentation comparison figure from s6 is pinned — three Results on the shelf.
+
+- id: s8
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now the headline result: using the TPM values, give me the ten genes with the highest average
+    expression across the four samples, as a ranked table, and a bar chart of those top genes saved as
+    a PNG figure. These are the most abundant transcripts in the experiment.
+  expect:
+    must_mention: ["TPM", "GENE0392", "GENE0271"]
+    must_not: ["I cannot", "placeholder"]
+    produces: {figure: 1, table: 1}
+    context: {cache_read: true}
+    checks: >
+      Ranks genes by MEAN TPM across the four samples and returns the top ten. The correct ordered list
+      is GENE0392, GENE0271, GENE0101, GENE0098, GENE0051, GENE0488, GENE0330, GENE0643, GENE0817,
+      GENE0382 (GENE0392 and GENE0271 the clear top two). It presents this as a ranked table AND a saved
+      bar-chart figure of the top genes. The ranking must come from TPM (not raw counts or CPM); the two
+      length-promoted short genes GENE0098 and GENE0488 should appear here, consistent with the s4
+      comparison. No fabricated gene names.
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: The top-expressed-genes bar chart from s8 is pinned — four Results on the shelf now.
+
+- id: s10
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The original raw-scale TPM distribution pinned at s3 is archived — it is superseded by the
+      log-scale comparison figure (s5), so the human drops it from the shelf. Three Results remain (the
+      log TPM-vs-CPM comparison, the restyled presentation version, and the top-genes bar chart).
+
+- id: s11
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this later — remind me where we landed. Which figures have we kept, what did the
+    length correction change versus a length-naive normalization, and what were the top-expressed genes?
+    Just summarise from what's pinned; don't recompute anything.
+  expect:
+    must_mention: ["TPM", "GENE0392"]
+    must_not: ["no pinned", "nothing was kept", "length makes no difference"]
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context rehydrates from the
+      pinned shelf. It should recap the surviving pinned figures (the log-scale TPM-vs-CPM comparison,
+      the restyled presentation version, and the top-genes bar chart) and NOT the deleted raw-scale
+      distribution; that gene-length normalization changed the ranking relative to length-naive CPM
+      (promoting short genes like GENE0098/GENE0488); and that the most abundant transcripts are led by
+      GENE0392 and GENE0271. Tests context rebuild + that the curation (three pins kept, the s3 pin
+      deleted) persisted across the restart. No recomputation.
+
+expected_overall:
+  planted_truth: >
+    counts.csv = 1000 genes (GENE0000..GENE0999) x 4 samples (s0, s1, s2, s3) of raw integer counts;
+    lengths.csv gives each gene's length in nt (median ~1735 nt) over the same 1000 genes. TPM is
+    computed by dividing each gene's count by its length (per-kb rate) and then scaling each sample to
+    1e6 — so every sample's TPM column sums to exactly 1,000,000. By mean TPM across the four samples the
+    top 10 genes are, in order: GENE0392, GENE0271, GENE0101, GENE0098, GENE0051, GENE0488, GENE0330,
+    GENE0643, GENE0817, GENE0382. The length correction genuinely changes the ranking versus a
+    length-naive CPM (raw counts scaled per sample to 1e6 with no length division): four short genes
+    enter the TPM top-10 that are NOT in the CPM top-10 — GENE0098 (656 nt), GENE0488 (811 nt),
+    GENE0643 (725 nt), GENE0817 (874 nt), all well below the ~1735 nt median — while four long-ish genes
+    the length-naive CPM over-ranks (GENE0456, GENE0508, GENE0533, GENE0993) fall out of the TPM top-10.
+    The per-gene mean-TPM distribution is strongly right-skewed (lognormal-like), so a log transform
+    makes it readable. Per-sample raw total counts differ between s0..s3, which is why depth scaling is
+    required in addition to length normalization.
+  notes: >
+    A fully correct 11-step session: (s1) examine -> 1000 genes x 4 samples, lengths cover the same
+    genes, depths differ. (s2) compute TPM the right way (length normalization THEN per-sample scaling
+    to 1e6, columns sum to 1,000,000) and produce a saved per-gene TPM distribution figure (right-skewed);
+    (s3) pin it. (s4) REVISE: log-transform the same TPM values and overlay a length-naive CPM for
+    comparison, reporting that length normalization changes the ranking — short genes GENE0098/GENE0488
+    enter the TPM top-10 but not the CPM top-10; (s5) pin the comparison. (s6) RESTYLE that comparison
+    into a presentation figure (colourblind palette, larger fonts, clear legend, shifted genes labelled),
+    same numbers; (s7) pin it. (s8) rank by mean TPM and return the top-10 (GENE0392, GENE0271, GENE0101,
+    GENE0098, GENE0051, GENE0488, GENE0330, GENE0643, GENE0817, GENE0382) as a table plus a saved bar
+    chart; (s9) pin it. (s10) DELETE the superseded raw-scale distribution pinned at s3, leaving three
+    keepers. (s11) after a session restart, recap the surviving pinned figures and findings from
+    rehydrated state, omitting the deleted distribution. Fabrication red flags: depth-then-length order,
+    claiming raw counts are already comparable, TPM columns not summing to 1e6, claiming length
+    normalization changes nothing / TPM equals CPM, ranking the top genes by raw counts or CPM instead of
+    TPM, fabricated gene names, or recalling the deleted raw-scale distribution after the restart.

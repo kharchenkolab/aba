@@ -1,0 +1,9 @@
+condition,group,mean_expression,sem
+Ctrl_0h,control,12.4,0.6
+Ctrl_6h,control,13.1,0.5
+Ctrl_12h,control,11.8,0.7
+Ctrl_24h,control,12.9,0.4
+Treat_0h,treated,12.6,0.5
+Treat_6h,treated,18.3,0.9
+Treat_12h,treated,22.7,1.1
+Treat_24h,treated,25.4,1.3
