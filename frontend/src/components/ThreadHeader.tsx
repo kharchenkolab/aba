@@ -8,7 +8,6 @@
 import { useState } from 'react'
 import type { Entity } from '../types'
 import { AgentGlyph } from './icons'
-import SpecPicker from './SpecPicker'
 import './ThreadHeader.css'
 
 interface OQ { id: string; text: string; status: string; source?: string; answer?: string }
@@ -100,12 +99,6 @@ export default function ThreadHeader({ thread, onChange, onSwitchThread, onOpenF
           <button key={s} className={`brief__lc ${lifecycle === s ? 'is-on' : ''}`} onClick={() => patch({ lifecycle: s })}>{s}</button>
         ))}
       </div>
-
-      <SpecPicker
-        pinned={(meta.spec as string | undefined) ?? null}
-        onChange={async (next) => { await patch({ spec: next }) }}
-      />
-
 
       <div className="brief__oqs">
         <div className="brief__oqs-label">Open questions <span className="brief__count">{openCount}</span></div>

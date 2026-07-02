@@ -204,7 +204,12 @@ def run_nextflow(input_: dict, ctx: dict | None = None) -> dict:
                                  f"deployment runs {_inst} — it will likely fail at startup.")
     _schema = _ns.fetch_schema(pipeline, revision)
     if _schema:
-        _v = _ns.validate_params(_schema, input_.get("params") or {})
+        # A `-profile test` run ships its own required params (input, etc.) via the profile config,
+        # so don't hard-fail on them being absent from the CLI (the launch-form path already hides
+        # input for test — this is the equivalent for a direct run_nextflow call).
+        _prof = str(input_.get("profile") or "")
+        _is_test = any(t.strip() == "test" for t in _prof.split(","))
+        _v = _ns.validate_params(_schema, input_.get("params") or {}, skip_required=_is_test)
         _pre_warnings = _v.get("warnings") or []
         if not _v["ok"]:
             return {"status": "invalid_params", "pipeline": pipeline, "revision": revision,

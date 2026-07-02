@@ -199,6 +199,16 @@
   font-size: 10px;
   margin-left: 2px;
 }
+/* Plain markdown links in chat. The global reset (tokens.css) sets
+   `a { color: inherit; text-decoration: none }`, so without this a link reads
+   as ordinary text. Give it the accent colour + a clear underline. */
+.msg-link {
+  color: var(--accent, #4a90e2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg-link:hover { text-decoration-thickness: 2px; }
+
 .msg-text strong { font-weight: 600; }
 .msg-text table { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
 .msg-text th, .msg-text td { border: 1px solid var(--panel-bd); padding: 3px 8px; text-align: left; }
