@@ -248,6 +248,32 @@ export default function App() {
       .catch(() => {})
   }
   useEffect(() => { refreshCurrent() }, [])
+  // A viewer launch tab (/viewer-launch) reports a failed conversion back to ABA
+  // — route it into the bug-report composer (same flow as the header bug button),
+  // prefilled with the error so Guide can diagnose it.
+  useEffect(() => {
+    const reportViewerError = (c: { viewer?: string; file?: string; error?: string }) => {
+      setFocusedId('workspace')
+      setPrefill(
+        `I'd like to report a bug to the ABA team — opening a viewer failed.\n\n` +
+        `Viewer: ${c?.viewer ?? '?'}\nFile: ${c?.file ?? '?'}\nError: ${c?.error ?? '?'}\n\n`)
+    }
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== location.origin) return
+      const d = e.data as { type?: string; context?: Record<string, string> }
+      if (d && d.type === 'aba:viewer-error') reportViewerError(d.context || {})
+    }
+    window.addEventListener('message', onMsg)
+    try {                                   // no-opener fallback: ?report=<json>
+      const rp = new URLSearchParams(location.search).get('report')
+      if (rp) {
+        reportViewerError(JSON.parse(rp))
+        const u = new URL(location.href); u.searchParams.delete('report')
+        history.replaceState(null, '', u.toString())
+      }
+    } catch { /* ignore malformed */ }
+    return () => window.removeEventListener('message', onMsg)
+  }, [])
   // Phase 4.6: prime the entity-type catalog once on app mount so
   // subsequent lookups in shell components (EntityMenu, etc.) hit
   // the cache instead of falling back to the legacy hardcoded set.

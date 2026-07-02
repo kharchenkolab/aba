@@ -63,36 +63,21 @@ export default function FileCanvas({ node, onFocus, onClose }: Props) {
  *  opens the external viewer (pagoda3, cellxgene, …) in a new window, plus
  *  download. Conversion, when needed, happens server-side behind the launch. */
 function ExternalLaunch({ node, viewer, resp }: { node: FileNode; viewer: ViewerInfo; resp: ViewersResponse }) {
-  const [pending, setPending] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  async function open() {
-    setPending(true); setErr(null)
-    try {
-      await launchExternal(node, viewer)
-    } catch (e) {
-      setErr(String(e))
-    } finally {
-      setPending(false)
-    }
-  }
-
+  // launchExternal opens ABA's loading tab, which prepares the store and then
+  // redirects itself to the viewer (progress + errors live in that tab).
   return (
     <article className="viewer viewer--external">
       <header className="viewer__head"><span className="viewer__path">{node.path || node.name}</span></header>
       <div className="viewer__body" style={{ padding: 18, maxWidth: 720 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <button className="viewer__action viewer__action--primary" onClick={open} disabled={pending}>
-            {pending ? '… preparing' : `↗ ${viewer.label}`}
+          <button className="viewer__action viewer__action--primary" onClick={() => launchExternal(node, viewer)}>
+            ↗ {viewer.label}
           </button>
           {resp.download_url && (
             <a className="viewer__action" href={resp.download_url} download>⬇ Download</a>
           )}
         </div>
-        <p style={{ color: 'var(--text-3)', marginTop: 10, fontSize: 13 }}>
-          Opens in a new window.
-        </p>
-        {err && <div className="viewer__error" style={{ marginTop: 12 }}>{err}</div>}
+        <p style={{ color: 'var(--text-3)', marginTop: 10, fontSize: 13 }}>Opens in a new tab.</p>
       </div>
     </article>
   )
@@ -144,7 +129,7 @@ function NoViewerFallback({ node, resp }: { node: FileNode; resp: ViewersRespons
           )}
           {externals.map(v => (
             <button key={v.id} className="viewer__action"
-              onClick={() => { launchExternal(node, v).catch(e => setAiErr(String(e))) }}>
+              onClick={() => launchExternal(node, v)}>
               ↗ {v.label}
             </button>
           ))}
