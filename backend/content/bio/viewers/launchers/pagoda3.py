@@ -38,7 +38,7 @@ def _launcher_version() -> str:
 # prep.ts is TypeScript, so it needs node >= 22 (env node may be older); if none
 # is found, prep is skipped and we serve the un-prepped store.
 _PREP_ENABLED = os.getenv("ABA_PAGODA3_PREP", "1").lower() in ("1", "true", "yes", "on")
-LAUNCHER_VERSION = _launcher_version() + ("+prep2" if _PREP_ENABLED else "")
+LAUNCHER_VERSION = _launcher_version() + ("+prep3" if _PREP_ENABLED else "")
 _STORE_SUFFIX = ".lstar.zarr"
 _ZIP_SUFFIX = ".lstar.zarr.zip"
 
@@ -80,25 +80,31 @@ def _detect_grouping(store: Path) -> "str | None":
 
 def _try_viewer_prep(store: Path) -> None:
     """Best-effort viewer@0.1 via pagoda3's prep.ts. Preps a COPY and swaps on
-    success, so a failed/partial prep never leaves a broken served store."""
+    success, so a failed/partial prep never leaves a broken served store. Prefers
+    raw counts; if the store has none (e.g. a processed .h5ad with only scaled/
+    lognorm matrices) falls back to basis=lognorm so it's still optimized
+    (approximately) rather than showing pagoda3's 'not viewer-optimized' banner.
+    Both failing → keep the clean un-prepped store."""
     import subprocess
     node, script = _node_bin(), _prep_script()
     grouping = _detect_grouping(store)
     if not node or not script.exists() or not grouping:
         return
     prepped = store.parent / (store.name + ".prep")
-    shutil.rmtree(prepped, ignore_errors=True)
-    try:
-        shutil.copytree(store, prepped)
-        r = subprocess.run([node, str(script), str(prepped), grouping], capture_output=True, timeout=1800)
-    except Exception:  # noqa: BLE001
+    for extra in ([], ["basis=lognorm"]):     # raw counts first; then approximate from lognorm
         shutil.rmtree(prepped, ignore_errors=True)
-        return
-    if r.returncode == 0:                              # swap the optimized store in
-        shutil.rmtree(store, ignore_errors=True)
-        prepped.rename(store)
-    else:                                              # crash / skip → keep clean un-prepped
-        shutil.rmtree(prepped, ignore_errors=True)
+        try:
+            shutil.copytree(store, prepped)
+            r = subprocess.run([node, str(script), str(prepped), grouping, *extra],
+                               capture_output=True, timeout=1800)
+        except Exception:  # noqa: BLE001
+            shutil.rmtree(prepped, ignore_errors=True)
+            return
+        if r.returncode == 0:                 # swap the optimized store in
+            shutil.rmtree(store, ignore_errors=True)
+            prepped.rename(store)
+            return
+    shutil.rmtree(prepped, ignore_errors=True)  # both failed → keep clean un-prepped
 
 
 def _convert_h5ad(src: Path, out: Path) -> None:
