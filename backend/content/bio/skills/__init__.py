@@ -34,7 +34,8 @@ def register_from_bundle(*, clear: bool = False) -> dict[str, int]:
             spec = _spec_from_parsed(
                 sk.frontmatter, sk.body,
                 source_path=str(sk.path.parent if sk.is_folder else sk.path),
-                default_domain=sk.domain, visibility=sk.visibility, layer=sk.source_scope)
+                default_domain=sk.domain, visibility=sk.visibility,
+                layer=sk.source_scope, kind=sk.kind)
         except ValueError as e:
             print(f"[skills] skip {sk.path}: {e}", flush=True)
             continue
