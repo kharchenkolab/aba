@@ -60,6 +60,11 @@ class Skill:
     # skills/recipes/<domain>/… (empty otherwise; frontmatter `domain:` can win
     # downstream in the live SkillSpec).
     domain: str = ""
+    # Content tier for retrieval: 'recipe' (executable how-to, discovered from a
+    # scope's skills/ tree) vs 'knowhow' (broad decision guide, from knowhow/).
+    # Directory-derived, NEVER from frontmatter — so a draft's inert
+    # `kind: knowhow_draft` can't mislabel the tier.
+    kind: str = "recipe"
 
 
 @dataclass
@@ -362,22 +367,47 @@ def _skill_tier(rel_parts: tuple) -> tuple[str, str]:
     return vis, dom
 
 
-def _discover_skills(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
-    """Walk a scope's skills/ tree (recursively, following symlinks). Recognizes
-    folder skills (<dir>/SKILL.md) and flat skills (<name>.md); visibility +
-    domain come from the tier subdir (_skill_tier). The recursive walk is what
-    lets the system scope expose the tiered library (skills/core/,
-    skills/recipes/<domain>/, skills/vendor_skills/<pkg>/) as well as a simple
-    bundle's flat skills/<name>.md."""
+def _read_skill_fm(path: Path, scope: ScopeBundle,
+                   provenance: Provenance) -> tuple[dict, str] | None:
+    """Read + parse one skill file's frontmatter, or return None (skip) with a
+    LOUD provenance warning. `_parse_frontmatter` is lenient — it returns {} for
+    BOTH 'no frontmatter' and 'malformed YAML'. A malformed-YAML file would then
+    become a nameless Skill that dies far downstream as a misleading 'missing
+    name' skip. We catch it here: a file that opens a `---` fence but yields an
+    empty mapping has broken frontmatter (e.g. an unquoted `key: value` colon in
+    a description) — flag it so a broken skill never silently vanishes."""
+    try:
+        text = path.read_text()
+    except Exception as e:
+        provenance.warnings.append(f"{scope.name}: unreadable {path}: {e}")
+        return None
+    fm, body = _parse_frontmatter(text)
+    if text.lstrip().startswith("---") and not fm:
+        provenance.warnings.append(
+            f"{scope.name}: malformed/empty frontmatter — skill dropped "
+            f"(check for an unquoted ':' in a value): {path}")
+        return None
+    return fm, body
+
+
+def _discover_skill_tree(root: Path, scope: ScopeBundle, provenance: Provenance,
+                         *, kind: str, tier_of, skip=None) -> list[Skill]:
+    """Walk one markdown-skill tree (recursively, following symlinks). Recognizes
+    folder skills (<dir>/SKILL.md) and flat skills (<name>.md). `tier_of(rel_parts,
+    fm) -> (visibility, domain)` decides the tier per path; `skip(path) -> bool`
+    excludes files (e.g. refsources/ + REVIEW_LOGs in the knowhow tree). `kind`
+    stamps the retrieval tier on every Skill from this tree."""
     import os as _os
-    skills_dir = scope.path / "skills"
-    if not skills_dir.is_dir():
+    if not root.is_dir():
         return []
     all_md: list[Path] = []
-    for dp, _dn, fns in _os.walk(skills_dir, followlinks=True):
+    for dp, _dn, fns in _os.walk(root, followlinks=True):
         for fn in fns:
             if fn.endswith(".md"):
-                all_md.append(Path(dp) / fn)
+                p = Path(dp) / fn
+                if skip and skip(p):
+                    continue
+                all_md.append(p)
     all_md.sort()
     found: list[Skill] = []
     consumed: set[Path] = set()        # folder-skill dirs (internals aren't standalone)
@@ -385,16 +415,15 @@ def _discover_skills(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
 
     for skill_md in [f for f in all_md if f.name == "SKILL.md"]:
         folder = skill_md.parent
-        try:
-            fm, body = _parse_frontmatter(skill_md.read_text())
-        except Exception as e:
-            provenance.warnings.append(f"{scope.name}: unreadable {skill_md}: {e}")
+        parsed = _read_skill_fm(skill_md, scope, provenance)
+        if parsed is None:
             continue
+        fm, body = parsed
         name = _skill_canonical_name(skill_md, fm, is_folder=True)
-        vis, dom = _skill_tier(skill_md.relative_to(skills_dir).parts)
+        vis, dom = tier_of(skill_md.relative_to(root).parts, fm)
         found.append(Skill(name=name, path=skill_md, body=body, frontmatter=fm,
                            source_scope=scope.name, is_folder=True,
-                           visibility=vis, domain=dom))
+                           visibility=vis, domain=dom, kind=kind))
         consumed.add(folder)
         folder_names.add(name)
 
@@ -403,19 +432,51 @@ def _discover_skills(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
             continue
         if any(f.is_relative_to(d) for d in consumed):
             continue                    # a folder skill's internal .md (references/…)
-        try:
-            fm, body = _parse_frontmatter(f.read_text())
-        except Exception as e:
-            provenance.warnings.append(f"{scope.name}: unreadable {f}: {e}")
+        parsed = _read_skill_fm(f, scope, provenance)
+        if parsed is None:
             continue
+        fm, body = parsed
         name = _skill_canonical_name(f, fm, is_folder=False)
         if name in folder_names:
             continue
-        vis, dom = _skill_tier(f.relative_to(skills_dir).parts)
+        vis, dom = tier_of(f.relative_to(root).parts, fm)
         found.append(Skill(name=name, path=f, body=body, frontmatter=fm,
                            source_scope=scope.name, is_folder=False,
-                           visibility=vis, domain=dom))
+                           visibility=vis, domain=dom, kind=kind))
     return found
+
+
+def _discover_skills(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
+    """Walk a scope's skills/ tree. Visibility + domain come from the tier subdir
+    (_skill_tier). The recursive walk is what lets the system scope expose the
+    tiered library (skills/core/, skills/recipes/<domain>/, skills/vendor_skills/
+    <pkg>/) as well as a simple bundle's flat skills/<name>.md."""
+    return _discover_skill_tree(
+        scope.path / "skills", scope, provenance, kind="recipe",
+        tier_of=lambda rel_parts, _fm: _skill_tier(rel_parts))
+
+
+def _discover_knowhow(scope: ScopeBundle, provenance: Provenance) -> list[Skill]:
+    """Walk a scope's knowhow/ tree as the ADVICE tier (broad decision guides).
+    Every entry is retrieval-gated ('local') and tagged kind='knowhow'; domain
+    comes from frontmatter. `knowhow/refsources/` (reference-source YAML, consumed
+    by _compose_refsources) and REVIEW_LOG notes are NOT skills."""
+    kdir = scope.path / "knowhow"
+
+    def _skip(p: Path) -> bool:
+        try:
+            parts = p.relative_to(kdir).parts
+        except ValueError:
+            return True
+        if parts and parts[0] == "refsources":
+            return True
+        return "REVIEW_LOG" in p.name
+
+    def _tier(_rel_parts, fm) -> tuple[str, str]:
+        return "local", str((fm or {}).get("domain") or "").strip()
+
+    return _discover_skill_tree(kdir, scope, provenance, kind="knowhow",
+                                tier_of=_tier, skip=_skip)
 
 
 def _compose_skills(chain: list[ScopeBundle],
@@ -430,7 +491,10 @@ def _compose_skills(chain: list[ScopeBundle],
     for s in reversed(chain):
         if not s.present:
             continue
-        for skill in _discover_skills(s, provenance):
+        # skills/ (recipes) BEFORE knowhow/ so a same-named recipe wins the
+        # in-scope collision (first-seen wins below) — e.g. a `bulk_rnaseq_de`
+        # recipe shadows a knowhow draft of the same name.
+        for skill in _discover_skills(s, provenance) + _discover_knowhow(s, provenance):
             # agents filter
             agents = skill.frontmatter.get("agents") if skill.frontmatter else None
             if isinstance(agents, list) and agents:
