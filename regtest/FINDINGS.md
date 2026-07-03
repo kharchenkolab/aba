@@ -196,3 +196,21 @@ make the runner read the FRESH token (not the stale /tmp/aba_8000.env snapshot),
 ideally in SMALLER BATCHES to stay under the rate limit, e.g.
 `python regtest/harness/sweep.py --opus --accept --only <8 scenarios>` repeated. The sweep now
 merges clean results into the baseline and skips any that still hit infra errors.
+
+## Opus baseline SEEDED cleanly (2026-07-02, after main merge) [RESOLVED]
+Re-ran the full Opus sweep on a fresh OAuth token (~3.2 h window) against merged main
+(commit 87134c9) — **no infra failures this run** (the hardening + fresh token held).
+`baselines/opus.json`: **15/26 full-pass, 258/288 steps**, 26 scenarios, 0 infra-skipped.
+
+Key confirmations:
+- **Agent-driven provenance ops pass at Opus**: version_revert 8/8, provenance_export 4/4
+  (diff_env + set_current_revision) — they genuinely needed the Opus tier (Haiku can't).
+- Perfect science on cheminformatics/gwas/survival/reproduce_expr/revision_delete (rubric 3.0).
+- msa_phylo 13/14 at Opus (vs 8-9 at Haiku) — the Haiku sub-full was model-tier, not a defect.
+
+**Opus check-hygiene backlog (future round):** sub-full scenarios whose HIGH rubric confirms
+the mech fails are brittle, not science — crispr_guides 9/11 (rubric 3.0!), structure_superpose
+11/12 (2.86), variant_annotation 5/12 (2.71), + nuclei_count 7/13 (2.0, also the kernel-hang
+class), foci_count, methylation_dmr, pseudobulk_de, variant_to_structure, image_registration,
+scrna_qc, msa_phylo. Same K1/K2/K3 pattern as the Haiku pass. Both baselines now committed;
+the regtest system is fully operational (Haiku coarse robustness net + Opus precise signal).
