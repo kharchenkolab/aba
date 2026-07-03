@@ -557,10 +557,25 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
           </a>
         )
       }
+      // Artifact links (reports, downloadable outputs) get the SAME small
+      // button-look as inline-code file links, so they read as an openable
+      // artifact rather than plain prose. A named file downloads; an HTML
+      // report (no download name) opens in a new tab. Drop a leading "Open "
+      // verb — the pill's ↗ already signals "opens".
+      if (isArtifact) {
+        const label = (typeof props.children === 'string' && props.children.startsWith('Open '))
+          ? props.children.slice(5) : props.children
+        return (
+          <a className="msg-filelink msg-filelink--file" href={href} title={props.title}
+             target="_blank" download={downloadName} rel="noreferrer"><code>{label}</code></a>
+        )
+      }
+      // Plain links: the global reset strips colour + underline, so they look
+      // like text. Give them a link class (underline + accent). External http
+      // links open in a new tab.
       return (
-        <a href={href} title={props.title}
-           target={isArtifact ? '_blank' : undefined}
-           download={downloadName}
+        <a className="msg-link" href={href} title={props.title}
+           target={(href || '').startsWith('http') ? '_blank' : undefined}
            rel="noreferrer">{props.children}</a>
       )
     },

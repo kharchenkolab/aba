@@ -46,3 +46,6 @@ misc/acquisition_research/
 
 # setuptools build dir from `pip install install/core/helper`
 install/core/helper/build/
+cont
+eval/
+.venv
