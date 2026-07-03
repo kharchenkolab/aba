@@ -83,3 +83,12 @@ dependencies:
       - python-dotenv
       - pypdfium2
       - pillow
+
+      # ── viewer data layer ──────────────────────────────────────────────
+      # lstar-sc: L* model + Zarr interchange for single-cell (import name is
+      # `lstar`; the bare `lstar` on PyPI is an UNRELATED automata library —
+      # always install `lstar-sc`). Powers the pagoda3 viewer's .h5ad →
+      # .lstar.zarr conversion (misc/pagoda3_integration.md). Ships a compiled
+      # C++ core: prebuilt wheels exist for macOS arm64 (cp312); on other
+      # platforms pip builds from source (cmake + pybind11 — cmake is above).
+      - lstar-sc
