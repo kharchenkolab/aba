@@ -1,0 +1,61 @@
+id: background_env_integrity
+title: A background job runs in the conda env, not a module-shadowed one
+domain: technical
+gpu: false
+requires: slurm
+summary: >
+  Regression guard for the prj_6d986f40 background-job environment poisoning. An
+  ensure_capability cluster module for a python PACKAGE (scanpy/...-python-3.6.6) once got
+  recorded into modules.json and `module load`ed into EVERY background Slurm job, dragging in
+  Python 3.6.6 / numpy 1.17.3 and shadowing the conda env's numpy 2.4 — so every background job
+  died on `import numpy` (numpy.core._multiarray_umath). This exercises the whole fix end-to-end
+  through the real Slurm submitter: the agent provisions scanpy (A: pip libs never record a
+  module), then submits a small BACKGROUND job importing numpy + scanpy, which must run CLEAN in
+  the conda env (returncode 0, modern numpy) — not the poisoned one (C self-heal + B job-python
+  sanitize + the numpy canary all backstop it). Requires ABA_BATCH_SUBMITTER=slurm so the real
+  job.sh module-load path is exercised (a local job never module-loads, so it can't test this).
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    Make sure scanpy is available in this workspace before we do anything heavier.
+  expect:
+    must_mention: ["scanpy"]
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Submit a small BACKGROUND job (background=true; it can be trivial) that does
+    `import numpy, scanpy` and prints their versions. I want to confirm the background /
+    Slurm compute environment is healthy before running anything expensive.
+  expect:
+    tools_used: [run_python]
+    background_job:
+      ok: true                                  # ran clean: status done, returncode 0, no error
+      stdout_contains: ["numpy"]                # actually imported + printed
+      stdout_absent: ["_multiarray_umath", "1.17.3"]   # the poisoned-numpy symptom must NOT appear
+    checks: >
+      The backgrounded job must complete successfully in the CONDA env — modern numpy imports and
+      its version prints. It would FAIL (returncode 1, ImportError numpy.core._multiarray_umath,
+      numpy 1.17.3) if a python-toolchain cluster module were module-loaded into the job and
+      shadowed the env — the exact prj_6d986f40 failure. `modules.json` should carry no
+      python-toolchain module (scanpy is satisfied in the conda env, not via a module).
+
+expected_overall:
+  planted_truth: >
+    The ground truth is the background compute contract: a background job runs on the same conda
+    env the interactive kernel uses. scanpy (a pip library present in the base env) must not cause
+    a python-toolchain module to be recorded/loaded, and even if one were, the job's python env is
+    sanitized so it can't be shadowed. A green run means numpy imports cleanly at its modern
+    version inside the async job.
+  notes: >
+    End-to-end guard for A (ensure_capability doesn't record a module for a pip lib) + C (never
+    record/job-load a python-toolchain module; project_modules self-heals) + B (job.sh clears
+    PYTHONHOME + overwrites PYTHONPATH after module load) + the slurm_entry numpy canary. Fails if
+    any layer regresses such that a background job's env gets poisoned. Skipped unless the Slurm
+    submitter is active (a local background job never module-loads, so it can't reproduce the bug).

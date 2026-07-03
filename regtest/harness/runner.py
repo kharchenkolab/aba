@@ -161,9 +161,12 @@ def consume(stream, cap: dict) -> None:
             cap["tools"].append(ev.get("name") or ev.get("tool") or "?")
         elif t == "tool_result":
             r = ev.get("result") or {}
-            if isinstance(r, dict) and r.get("returncode") not in (None, 0):
-                cap["tool_errors"].append({"tool": ev.get("name"), "rc": r.get("returncode"),
-                                           "stderr": str(r.get("stderr", ""))[:400]})
+            if isinstance(r, dict):
+                if r.get("job_id"):                    # a backgrounded run_python/run_r job
+                    cap.setdefault("jobs", []).append(r["job_id"])
+                if r.get("returncode") not in (None, 0):
+                    cap["tool_errors"].append({"tool": ev.get("name"), "rc": r.get("returncode"),
+                                               "stderr": str(r.get("stderr", ""))[:400]})
         elif t == "usage":
             cap["usage"] = {k: ev.get(k) for k in ("input", "output", "cache_read", "cache_write")}
         elif t == "entity_registered":
@@ -174,7 +177,7 @@ def consume(stream, cap: dict) -> None:
 
 def drive_turn(client, pid, tid, text, resume_answer="Yes, go ahead.") -> dict:
     cap = {"run_id": None, "text": [], "tools": [], "entities": [], "usage": {},
-           "kinds": {}, "tool_errors": [], "errors": [], "resume_hops": 0}
+           "kinds": {}, "tool_errors": [], "errors": [], "resume_hops": 0, "jobs": []}
     # H5: a read-timeout on the SSE stream so a turn that goes SILENT (wedged exec
     # emitting no events) unblocks iter_lines() on its own rather than leaking the
     # worker thread. Best-effort — the wall-clock call_with_timeout guard is the
@@ -257,6 +260,41 @@ def resolve_target(tgt: dict, produced: dict, created: dict) -> dict:
     return {"artifact": a}
 
 
+# ---------- background jobs (async: submitted this turn, finish later) ----------
+def await_jobs(client, job_ids, timeout_s: float) -> list[dict]:
+    """Poll each background job to a terminal state, then read its result from disk.
+    Returns [{job_id, status, returncode, error, stdout, ok}] — `ok` = ran clean
+    (status 'done', no error, returncode 0). Lets a scenario assert an async local/
+    Slurm job actually SUCCEEDED in the right environment, not just that it was
+    submitted (the prj_6d986f40 background-env-poisoning guard)."""
+    # The AUTHORITATIVE completion signal is the job's result.json on disk (written by
+    # slurm_entry when the code finishes) — the job-store `status` lags (poll-loop
+    # reconciliation), so we don't gate on it. Break as soon as the result appears
+    # (or the store reports a hard failure); `ok` is derived from the result.
+    FAILED = {"failed", "cancelled", "cancel", "error"}
+    out = []
+    for jid in job_ids:
+        status, deadline, res, done = None, time.time() + timeout_s, {}, False
+        while time.time() < deadline:
+            try:
+                status = (client.get(f"/api/jobs/{jid}").json() or {}).get("status")
+            except Exception:
+                status = None
+            for h in glob.glob(str(RUN / "**" / jid / "result.json"), recursive=True):
+                try:
+                    res = json.load(open(h)); done = True; break
+                except Exception:
+                    pass
+            if done or status in FAILED:
+                break
+            time.sleep(3)
+        rc, err = res.get("returncode"), res.get("error")
+        out.append({"job_id": jid, "status": status, "returncode": rc, "error": err,
+                    "stdout": res.get("stdout") or "",
+                    "ok": done and err is None and rc in (None, 0)})
+    return out
+
+
 # ---------- mechanical checks ----------
 def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produced_arts) -> list[str]:
     fails = []
@@ -274,6 +312,23 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
     for t in (exp.get("tools_not_used") or []):   # advice/lightweight turns must NOT execute
         if t in (cap.get("tools") or []):
             fails.append(f"tool_used_unexpectedly:{t} (used={cap.get('tools')})")
+    bj = exp.get("background_job")                 # await + assert an async job's OUTCOME
+    if bj is not None:
+        results = await_jobs(client, cap.get("jobs") or [],
+                             float(os.environ.get("ABA_JOB_WAIT_S", "300")))
+        if not results:
+            fails.append("background_job: no background job was submitted this turn")
+        else:
+            summ = [{k: r.get(k) for k in ("job_id", "status", "returncode", "error")} for r in results]
+            if bj.get("ok") and not any(r["ok"] for r in results):
+                fails.append(f"background_job.ok: no job ran clean ({summ})")
+            joined = " ".join((r.get("stdout") or "") for r in results).lower()
+            for s in (bj.get("stdout_contains") or []):
+                if s.lower() not in joined:
+                    fails.append(f"background_job.stdout_contains:{s!r} (stdout={joined[:200]!r})")
+            for s in (bj.get("stdout_absent") or []):
+                if s.lower() in joined:
+                    fails.append(f"background_job.stdout_absent:{s!r} present ({summ})")
     for k, n in (exp.get("produces") or {}).items():
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
@@ -447,6 +502,15 @@ def main() -> int:
     spec = yaml.safe_load((LIB / SCENARIO / "scenario.yaml").read_text())
     if not spec.get("steps"):
         print(f"{SCENARIO} is v1 (no steps) — use run_scenario_library.py"); return 2
+    # A scenario can require a specific submitter (e.g. `requires: slurm` to exercise
+    # the real job.sh module-load path). Skip cleanly when it's not the active one —
+    # a local-submitter background job wouldn't test what the scenario is guarding.
+    req = (spec.get("requires") or "").strip().lower()
+    if req == "slurm":
+        from core.jobs.submitter import submitter_name
+        if submitter_name() != "slurm":
+            print(f"[skip] {SCENARIO} requires the Slurm submitter (set ABA_BATCH_SUBMITTER=slurm); "
+                  f"active submitter is '{submitter_name()}'."); return 0
     src = LIB / SCENARIO / "data"
     # Scenario data/ is generated, not committed (see regtest/scenarios/_regen_all.sh).
     # On a fresh clone it won't exist yet — point the user at the regen step instead

@@ -37,6 +37,7 @@ id: <kebab_id>                 # == dir name
 title: <one line>
 domain: genomics | protein | bioimaging | ...
 gpu: false
+requires: slurm                # optional — skip the scenario unless this submitter is active
 summary: <one sentence>
 data_files: [ ... ]            # staged into DATA_DIR at start
 make_data: _make_data.py       # optional deterministic generator (seed=0)
@@ -82,6 +83,11 @@ expected_overall:
 - **tools** — `tools_used: [name, …]` (the turn must invoke each) / `tools_not_used: [name, …]`
   (the turn must NOT invoke any). Use `tools_not_used: [run_python, run_r]` to keep an advice /
   lightweight turn compute-free AND to assert the agent answered *without* executing.
+- **background job** — `background_job: {ok: true, stdout_contains: […], stdout_absent: […]}`.
+  Awaits any run_python/run_r job the turn submitted with `background=true` to a terminal state
+  (poll `/api/jobs/{id}`, then read its result), then asserts on its OUTCOME — ran clean, stdout
+  has / lacks substrings — not merely that it was submitted. Pair with `requires: slurm` so the
+  real Slurm `job.sh` path (module load + python-env sanitize) is exercised.
 - **produces** — `{figure: n, table: n}` ≥ counts from the turn's run-artifacts.
 - **state** (queried after the step via manifest + entities):
   `pinned_results_min`, `manifest_contains` / `manifest_not_contains`,
