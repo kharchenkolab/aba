@@ -386,14 +386,28 @@ def record_task_count(pipeline, revision, profile, total) -> None:
 def expected_task_count(pipeline, revision, profile):
     """Typical task total for this (pipeline, revision, profile) from a prior completed run, or
     None if we've never finished one. An ESTIMATE (varies with the samplesheet) — the UI caps the
-    bar below 100% until the run is actually done, and it self-corrects as runs complete."""
+    bar below 100% until the run is actually done, and it self-corrects as runs complete.
+
+    Fallback: if the exact (pipeline, revision, profile) key misses, reuse a total learned under a
+    DIFFERENT profile of the same pipeline+revision. The profile mainly changes the input data, not
+    the process graph, so e.g. a `-profile test` run's count is a fine first estimate for a real
+    run — better than a bare spinner. This run then records its own exact key on completion."""
     try:
         p = _task_count_path()
-        if p.exists():
-            return (json.loads(p.read_text()) or {}).get(_tc_key(pipeline, revision, profile))
+        if not p.exists():
+            return None
+        d = json.loads(p.read_text()) or {}
+        exact = d.get(_tc_key(pipeline, revision, profile))
+        if exact:
+            return exact
+        # profile-agnostic: any completed run of the same pipeline+revision. Prefer the largest
+        # (closest to a full run; the UI still caps <100% and self-corrects).
+        pref = f"{(pipeline or '').strip()}|{(revision or '').strip()}|"
+        cands = [v for k, v in d.items()
+                 if k.startswith(pref) and isinstance(v, int) and v > 0]
+        return max(cands) if cands else None
     except Exception:  # noqa: BLE001
-        pass
-    return None
+        return None
 
 
 def nextflow_job_progress(job: dict) -> dict:
@@ -838,6 +852,14 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     except Exception:  # noqa: BLE001
         _nxf_home = str(Path(scratch) / ".nextflow")   # fall back to per-run if the shared dir isn't writable
     env_vars = {"NXF_HOME": _nxf_home}
+    # Nextflow 25.10+/26.x default to the strict v2 config parser, which rejects
+    # `manifest`/`validation` references still used by much of the current nf-core
+    # catalog (e.g. rnaseq 3.21.0 → 6 "is not defined" compile errors; the run dies
+    # before task 1). Pin the legacy parser so those pipelines parse on our modern
+    # engine. This is a *native* Nextflow var, set here alongside NXF_HOME — NOT a new
+    # ABA_NEXTFLOW_* knob (no added config surface); an explicit ambient NXF_SYNTAX_PARSER
+    # still wins if a v2-only pipeline ever needs it.
+    env_vars["NXF_SYNTAX_PARSER"] = os.environ.get("NXF_SYNTAX_PARSER", "v1")
     env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]

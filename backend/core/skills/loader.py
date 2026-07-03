@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Any
 
+import os
 import yaml
 
 
@@ -449,24 +450,92 @@ def _index():
     return _INDEX
 
 
+def unmet_tools(spec: SkillSpec) -> list[str]:
+    """Which of a recipe's declared `requires_tools` can't run in THIS
+    environment (via core.exec.compute_env.tool_viable). Empty = runnable here."""
+    try:
+        from core.exec.compute_env import tool_viable
+    except Exception:  # noqa: BLE001 — never break discovery on an import hiccup
+        return []
+    return [t for t in (spec.requires_tools or ()) if not tool_viable(t)]
+
+
+def _env_gate_policy() -> str:
+    """Effective discovery env-gate policy: 'off' | 'soft' | 'hard'.
+
+    'soft' (default / 'auto') demotes recipes needing a tool that can't run here
+    (a no-op where everything is viable, e.g. a cluster); 'hard' drops them; 'off'
+    disables gating. Resolution, highest first: the user preference
+    (`discovery.env_gate`, set via the settings card) → the ABA_DISCOVERY_ENV_GATE
+    deployment/test override → a bundle-authored default → 'auto'."""
+    v = ""
+    try:
+        from core.config import get_user_pref, _read_setting_from_bundle
+        v = (get_user_pref("discovery.env_gate")
+             or os.environ.get("ABA_DISCOVERY_ENV_GATE")
+             or _read_setting_from_bundle("discovery.env_gate")
+             or "")
+    except Exception:  # noqa: BLE001 — never break discovery on a config read
+        v = os.environ.get("ABA_DISCOVERY_ENV_GATE") or ""
+    v = (v or "").strip().lower()
+    if v == "auto":
+        return "soft"
+    return v if v in ("off", "soft", "hard") else "soft"
+
+
+def gate_counts(policy: Optional[str] = None) -> dict:
+    """Effect of the env-gate over the recipe cookbook, for the settings card:
+    how many recipes need a tool that can't run here. Under 'hard' those are
+    hidden; under 'soft' de-prioritized (still findable); under 'off' shown
+    normally. Core (always-on) skills are never gated, so they're excluded."""
+    pol = policy or _env_gate_policy()
+    cookbook = [s for s in list_skills() if s.visibility != "always"]
+    blocked = sum(1 for s in cookbook if unmet_tools(s))
+    return {"policy": pol, "total": len(cookbook),
+            "blocked": blocked, "runnable": len(cookbook) - blocked}
+
+
+def _apply_env_gate(pool: list[SkillSpec], policy: str) -> list[SkillSpec]:
+    """Reorder/drop by environment fit. 'off' → unchanged; 'soft' → runnable-here
+    first then blocked (still reachable, demoted); 'hard' → blocked dropped.
+    Stable within each group, so BM25 relevance order is preserved."""
+    if policy == "off":
+        return pool
+    runnable, blocked = [], []
+    for s in pool:
+        (blocked if unmet_tools(s) else runnable).append(s)
+    if policy == "hard":
+        return runnable
+    return runnable + blocked
+
+
 def search_skills(query: str, *, limit: int = GATED_TOP_K,
-                  domain: Optional[str] = None) -> list[SkillSpec]:
+                  domain: Optional[str] = None,
+                  env_gate: Optional[str] = None) -> list[SkillSpec]:
     """Intent-ranked skills (BM25), optionally filtered to one `domain` (the
     flat facet). Empty/whitespace query → first `limit` (within the domain, if
     given) — a stable default slice, not a relevance claim. Names that no longer
-    resolve are skipped (registry mutated under us)."""
+    resolve are skipped (registry mutated under us).
+
+    Results are environment-gated: recipes needing a tool that can't run here
+    (e.g. `run_nextflow` on a laptop) are demoted+flagged ('soft', default),
+    dropped ('hard'), or left alone ('off'). Pass `env_gate` to override the
+    resolved policy (tests); else `_env_gate_policy()` decides."""
     dom = (domain or "").strip().lower()
+    policy = (env_gate or _env_gate_policy())
 
     def _ok(s: SkillSpec) -> bool:
         return not dom or s.domain.lower() == dom
 
     q = (query or "").strip()
     if not q:
-        return [s for s in list_skills() if _ok(s)][:limit]
-    # Over-fetch then domain-filter so the cap still yields `limit` matches.
-    hits = _index().search(q, limit=limit if not dom else max(limit * 5, 25))
-    out = [_REGISTRY[i] for i, _ in hits if i in _REGISTRY and _ok(_REGISTRY[i])]
-    return out[:limit]
+        pool = [s for s in list_skills() if _ok(s)]
+        return _apply_env_gate(pool, policy)[:limit]
+    # Over-fetch (generously) then domain-filter + env-gate, so the cap still
+    # yields `limit` even when 'hard' drops blocked recipes or 'soft' demotes them.
+    hits = _index().search(q, limit=max(limit * 5, 25))
+    pool = [_REGISTRY[i] for i, _ in hits if i in _REGISTRY and _ok(_REGISTRY[i])]
+    return _apply_env_gate(pool, policy)[:limit]
 
 
 def recipes_for_capability(cap: str) -> list[str]:
@@ -551,6 +620,9 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None,
     all_skills = list_skills()
     core = [s for s in all_skills if s.visibility == "always"]
     cookbook = [s for s in all_skills if s.visibility != "always"]
+    # Environment gate the in-prompt catalog: drop recipes needing an unavailable
+    # tool under 'hard', demote them under 'soft'. Core skills are never gated.
+    cookbook = _apply_env_gate(cookbook, _env_gate_policy())
 
     want_core = tier in ("all", "core")
     want_recipes = tier in ("all", "recipes")

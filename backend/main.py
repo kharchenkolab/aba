@@ -1196,6 +1196,42 @@ def settings_credential_set(req: CredentialRequest):
         raise HTTPException(400, str(e))
 
 
+class EnvGateRequest(BaseModel):
+    # auto (default) | off (Always show) | hard (Hide) | soft ; "" reverts to default
+    env_gate: str = ""
+
+
+@app.get("/api/settings/environment")
+def settings_environment_get():
+    """Backs the Settings → Analysis environment card: what this workspace can
+    run (detected), the effective recipe-visibility policy, and its effect."""
+    from core.exec.compute_env import env_profile
+    from core.skills.loader import gate_counts, _env_gate_policy
+    from core.config import get_user_pref
+    policy = _env_gate_policy()
+    return {
+        "profile": env_profile(),
+        "policy": policy,                                   # off | soft | hard (resolved)
+        "user_pref": get_user_pref("discovery.env_gate") or "auto",
+        "counts": gate_counts(policy),
+        "options": ["auto", "off", "hard"],                 # card: Auto / Always / Hide
+    }
+
+
+@app.post("/api/settings/environment")
+def settings_environment_set(req: EnvGateRequest):
+    """Set the user's recipe-visibility preference (user scope). Empty string
+    reverts to auto/default. Takes effect on the next discovery call."""
+    from core.config import set_user_pref
+    from core.skills.loader import gate_counts, _env_gate_policy
+    v = (req.env_gate or "").strip().lower()
+    if v and v not in ("auto", "off", "soft", "hard"):
+        raise HTTPException(400, f"env_gate must be auto|off|soft|hard, got {v!r}")
+    set_user_pref("discovery.env_gate", v)                  # "" clears the pin
+    policy = _env_gate_policy()
+    return {"ok": True, "policy": policy, "counts": gate_counts(policy)}
+
+
 @app.post("/api/threads")
 def threads_create(req: ThreadRequest, _pid: str = Depends(require_project)):
     from core.graph.threads import create_thread

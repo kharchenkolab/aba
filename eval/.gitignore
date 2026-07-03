@@ -1,4 +1,0 @@
-# Generated synthetic datasets — reproducible from scenarios/data/gen.py
-scenarios/data/*.csv
-# Eval run outputs (logs, screenshots, scores)
-runs/

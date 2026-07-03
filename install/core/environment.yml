@@ -44,6 +44,7 @@ dependencies:
   - scikit-learn
   - h5py
   - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
+  - tabulate        # pandas.DataFrame.to_markdown() backend (ctx_read + describe tools)
 
   # ── single-cell bio stack (the agent imports these in Python kernels) ──
   - anndata>=0.10
