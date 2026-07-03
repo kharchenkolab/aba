@@ -2529,16 +2529,17 @@ def viewers_download(
     _pid: str = Depends(require_project),
 ):
     """Download an external viewer's prepared data store as a single STORED
-    (uncompressed, range-readable) `.lstar.zarr.zip` (viewers.md §3).
+    (uncompressed, byte-range-readable) `.lstar.zarr.zip` (viewers.md §3).
 
     Reuses the SAME cached store the viewer opens (the launcher's ensure_derived
-    cache), so after viewing this is instant. The frontend routes here THROUGH
-    the /viewer-launch progress page (action=download) so the one-time conversion
-    still runs in the background prepare job, not this request; a direct hit on an
-    unprepared store falls back to preparing it inline."""
+    cache). The packed `.zip` is itself CACHED beside the store (packed once,
+    atomically swapped, re-packed only when the store is re-derived) and served
+    with `FileResponse` — so it supports HTTP Range (Accept-Ranges/206): a
+    resumable download, and a valid range-read source a `.zip`-aware viewer can
+    open directly (no per-request re-zip). The frontend routes here THROUGH the
+    /viewer-launch progress page (action=download) so the one-time store
+    conversion runs in the background prepare job, not this request."""
     import content.bio  # noqa: F401 — ensure viewer + launcher registrations
-    import tempfile
-    from starlette.background import BackgroundTask
     from core.viewers.registry import viewers_for
     from core.viewers.launchers import launch as launch_viewer
     from core.viewers.store_serve import zip_store_stored
@@ -2557,13 +2558,15 @@ def viewers_download(
     store = Path(res.store_path) if res.store_path else None
     if not store or not store.is_dir():
         raise HTTPException(409, "this viewer has no downloadable store")
-    stem = (store.name[:-len(".lstar.zarr")] if store.name.endswith(".lstar.zarr")
-            else store.stem)
-    tmpdir = Path(tempfile.mkdtemp(prefix="lstar_dl_"))
-    archive = zip_store_stored(store, tmpdir / f"{stem}.lstar.zarr.zip")
+    # Stable cached .zip beside the store; re-pack only if missing or older than
+    # the store (ensure_derived rewrites the whole dir on re-derive → newer mtime).
+    zip_path = store.with_name(store.name + ".zip")   # <name>.lstar.zarr.zip
+    if not zip_path.exists() or zip_path.stat().st_mtime < store.stat().st_mtime:
+        tmp = zip_path.with_name(zip_path.name + ".tmp")
+        zip_store_stored(store, tmp)
+        tmp.replace(zip_path)                          # atomic publish
     return FileResponse(
-        str(archive), media_type="application/zip", filename=archive.name,
-        background=BackgroundTask(lambda: shutil.rmtree(tmpdir, ignore_errors=True)),
+        str(zip_path), media_type="application/zip", filename=zip_path.name,
     )
 
 
