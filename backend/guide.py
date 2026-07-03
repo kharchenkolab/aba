@@ -925,17 +925,23 @@ async def stream_response(
                 if (name == "run_python" and isinstance(tool_input, dict)
                         and tool_input.get("background")):
                     from core import projects as _projects
+                    from content.bio.tools.run_exec import bg_submit_kwargs
                     _pid = _projects.current() or "default"
                     _arid_ctx = {"thread_id": str(store_tid), "active_run_id": None}
                     dispatch("on_background_job_submit", _arid_ctx)
+                    # Thread the agent's resource estimate (est_gpu/cores/mem/runtime),
+                    # execution target, isolated env, and an estimate-sized timeout —
+                    # via the SAME helper the non-intercept run_python path uses. Before
+                    # this, the intercept dropped the estimate, so a GPU-flagged job
+                    # (est_gpu=true) couldn't be GPU-placed (prj_6d986f40).
                     job = submit_python_job(
                         code=tool_input.get("code", ""),
                         title=tool_input.get("title") or "Background analysis",
                         focus_entity_id=focus_entity_id,
-                        timeout_s=int(tool_input.get("timeout_s") or 300),
                         project_id=str(_pid),
                         thread_id=str(store_tid),
                         run_id=_arid_ctx.get("active_run_id"),
+                        **bg_submit_kwargs(tool_input, _pid),
                     )
                     return {
                         "job_id": job["id"],

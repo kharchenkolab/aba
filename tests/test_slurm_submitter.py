@@ -172,6 +172,32 @@ def _write_cfg() -> Path:
     return p
 
 
+def _write_cfg_gpu() -> Path:
+    p = Path(tempfile.mktemp(suffix=".yaml"))
+    p.write_text(
+        "partitions:\n"
+        "  - {name: cpu, max_cores: 32, max_mem_gb: 256, max_walltime_h: 72, gpu: false}\n"
+        "  - {name: gpu, max_cores: 16, max_mem_gb: 128, max_walltime_h: 24, gpu: true}\n"
+        "defaults: {cores: 1, mem_gb: 4, walltime_h: 4}\n")
+    return p
+
+
+def test_submit_gpu_estimate_requests_gpu(slurm, monkeypatch):
+    """A GPU estimate (est_gpu → estimate.gpu) must reach the submitter and produce
+    --gres=gpu:1 on a GPU partition — the placement that prj_6d986f40's dropped est_gpu
+    prevented. Guards the whole estimate→resources→sbatch GPU path."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    args_file = Path(tempfile.mktemp())
+    monkeypatch.setenv("FAKE_ARGS_FILE", str(args_file))
+    monkeypatch.setenv("ABA_HPC_CONFIG", str(_write_cfg_gpu()))
+    pid = projects.create_project("slurm-gpu")["id"]
+    job = _mk_job(pid, estimate={"cores": 4, "mem_gb": 16, "runtime_min": 30, "gpu": True})
+    SlurmSubmitter().submit(job)
+    args = args_file.read_text()
+    assert "--gres=gpu:1" in args, args
+    assert "--partition=gpu" in args, args
+
+
 def test_poll_pending_then_done(slurm, monkeypatch):
     from core.jobs.slurm_submitter import SlurmSubmitter
     monkeypatch.setenv("FAKE_SBATCH_SENTINEL", "0")     # submit WITHOUT writing sentinel
