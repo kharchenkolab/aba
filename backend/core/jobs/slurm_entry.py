@@ -34,6 +34,21 @@ def main() -> int:
     elif kind == "run_r":                    # isolated R env = its lib first on .libPaths()
         result = run_r_code(spec["code"], env=spec.get("env"), **kw)
     else:                                    # isolated python env = its own python, standalone
+        # Env canary (prj_6d986f40): a base-env python job must have a working numpy
+        # (it ships in the base scientific stack). If `import numpy` fails, a loaded
+        # cluster module has shadowed the conda env — fail LOUDLY + actionably here
+        # rather than with a cryptic ImportError deep in the user's code. Isolated
+        # envs (spec.env set) are self-contained, so skip the canary there.
+        if not spec.get("env"):
+            from core.exec.env_integrity import verify_python_imports
+            _ok, _detail = verify_python_imports(["numpy"])
+            if not _ok:
+                result = {"error": "background-job Python environment is broken: `import numpy` "
+                                   "failed — a loaded cluster module likely shadows the conda env "
+                                   "(check the project's modules / job.sh). Detail: " + _detail}
+                with open(spec["result_path"], "w") as f:
+                    json.dump(result, f, default=str)
+                return 1
         result = run_python_code(spec["code"], env=spec.get("env"), **kw)
     with open(spec["result_path"], "w") as f:
         json.dump(result, f, default=str)
