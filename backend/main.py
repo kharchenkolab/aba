@@ -2521,6 +2521,52 @@ def viewers_launch_status(job: str):
     return s
 
 
+@app.get("/api/viewers/download")
+def viewers_download(
+    entity_id: str | None = None,
+    path: str | None = None,
+    viewer_id: str | None = None,
+    _pid: str = Depends(require_project),
+):
+    """Download an external viewer's prepared data store as a single STORED
+    (uncompressed, range-readable) `.lstar.zarr.zip` (viewers.md §3).
+
+    Reuses the SAME cached store the viewer opens (the launcher's ensure_derived
+    cache), so after viewing this is instant. The frontend routes here THROUGH
+    the /viewer-launch progress page (action=download) so the one-time conversion
+    still runs in the background prepare job, not this request; a direct hit on an
+    unprepared store falls back to preparing it inline."""
+    import content.bio  # noqa: F401 — ensure viewer + launcher registrations
+    import tempfile
+    from starlette.background import BackgroundTask
+    from core.viewers.registry import viewers_for
+    from core.viewers.launchers import launch as launch_viewer
+    from core.viewers.store_serve import zip_store_stored
+    from core.config import current_project_id
+
+    node = _resolve_files_node(entity_id, path)
+    ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
+    v = (next((x for x in ext if x.id == viewer_id), None) if viewer_id
+         else (ext[0] if ext else None))
+    if v is None:
+        raise HTTPException(404, "no external viewer applies to this file")
+    pid = current_project_id()
+    res = launch_viewer(v.open_external, node, {
+        "entity_id": node.get("entity_id"), "path": path, "project_id": pid,
+    })
+    store = Path(res.store_path) if res.store_path else None
+    if not store or not store.is_dir():
+        raise HTTPException(409, "this viewer has no downloadable store")
+    stem = (store.name[:-len(".lstar.zarr")] if store.name.endswith(".lstar.zarr")
+            else store.stem)
+    tmpdir = Path(tempfile.mkdtemp(prefix="lstar_dl_"))
+    archive = zip_store_stored(store, tmpdir / f"{stem}.lstar.zarr.zip")
+    return FileResponse(
+        str(archive), media_type="application/zip", filename=archive.name,
+        background=BackgroundTask(lambda: shutil.rmtree(tmpdir, ignore_errors=True)),
+    )
+
+
 @app.get("/viewer-launch")
 def viewer_launch_page():
     """The ABA-owned loading tab: starts + polls a prepare job and redirects to

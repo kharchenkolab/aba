@@ -173,6 +173,9 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         label="Explore in pagoda3",
         # Origin-shared with the pagoda3 window → its copilot proxies through ABA.
         set_local_storage={"p3-agent-proxy": "/pagoda3-api"},
+        # The prepared .lstar.zarr on disk — the download endpoint packs THIS
+        # (cache-shared with viewing) into a STORED .lstar.zarr.zip.
+        store_path=str(store),
     )
 
 
