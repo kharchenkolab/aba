@@ -75,25 +75,31 @@ export default function Settings({ onClose }: Props) {
   const [credBusy, setCredBusy] = useState(false)
   const [credMsg, setCredMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
-  const loadLlm = useCallback(async () => {
-    try {
-      const r = await fetch('/api/settings/llm')
-      if (r.ok) setLlm(await r.json()); else setErr('Could not load model settings.')
-    } catch { setErr('Could not load model settings.') }
-  }, [])
-  const loadCred = useCallback(async () => {
-    try {
-      const r = await fetch('/api/settings/credential')
-      if (r.ok) { const d: CredStatus = await r.json(); setCred(d); setEditing(!d.valid) }
-    } catch { /* ignore */ }
-  }, [])
   const loadEnv = useCallback(async () => {
     try {
       const r = await fetch('/api/settings/environment')
       if (r.ok) setEnv(await r.json())
     } catch { /* ignore */ }
   }, [])
-  useEffect(() => { loadLlm(); loadCred(); loadEnv() }, [loadLlm, loadCred, loadEnv])
+
+  // Load all three sections in PARALLEL and commit their state together, so the
+  // panel renders once at its final size instead of growing/re-centering in
+  // three staggered async waves — that staggered fill was the open-time jitter.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const [l, c, e] = await Promise.all([
+        fetch('/api/settings/llm').then(r => (r.ok ? r.json() : null)).catch(() => null),
+        fetch('/api/settings/credential').then(r => (r.ok ? r.json() : null)).catch(() => null),
+        fetch('/api/settings/environment').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      ])
+      if (cancelled) return
+      if (l) setLlm(l); else setErr('Could not load model settings.')
+      if (c) { const d = c as CredStatus; setCred(d); setEditing(!d.valid) }
+      if (e) setEnv(e)
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   async function pickGate(value: string) {
     const cur = env?.user_pref === 'soft' ? 'auto' : (env?.user_pref || 'auto')
