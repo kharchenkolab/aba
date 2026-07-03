@@ -254,6 +254,7 @@ def search_skills_tool(input_: dict) -> dict:
     limit = input_.get("limit") or 8
     hits = search_skills(q, limit=int(limit), domain=input_.get("domain"))
     skills, any_blocked = [], False
+    any_knowhow = any(getattr(s, "kind", "recipe") == "knowhow" for s in hits)
     for s in hits:
         unmet = unmet_tools(s)          # tools this recipe needs that can't run here
         if unmet:
@@ -274,6 +275,12 @@ def search_skills_tool(input_: dict) -> dict:
         })
     note = ("Each result is a SKILL — invoke it via its `invoke_with` value "
             "(which calls the `Skill` tool). The `name` alone is NOT a callable tool.")
+    if any_knowhow:
+        note += (" Results are typed by `kind`: `recipe` = a runnable procedure; "
+                 "`knowhow` = a decision guide (which method / why — not a runnable "
+                 "workflow). For a specific execution request, bind the recipe; for an "
+                 "open method-choice question, read the knowhow first; when both appear, "
+                 "the knowhow explains the choice that the recipe executes.")
     if any_blocked:
         note += (" Results with `runnable_here: false` describe the right approach but "
                  "need a tool that can't run in this environment (see `unmet_tools`, "
