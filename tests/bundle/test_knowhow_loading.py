@@ -147,6 +147,18 @@ def test_spec_projection_threads_kind():
     assert spec.kind == "knowhow"
 
 
+def test_knowhow_ignores_requires_tools():
+    """A knowhow is READ, not executed — declared requires_tools (drafts inherit
+    [WebFetch, Read]) must be dropped, else the read gate refuses to open it with
+    'tools_unavailable'. Recipes keep requires_tools."""
+    from core.skills.loader import _spec_from_parsed
+    fm = {"name": "k", "requires_tools": ["WebFetch", "Read"]}
+    know = _spec_from_parsed(fm, "body", visibility="local", kind="knowhow")
+    assert know.requires_tools == (), f"knowhow kept requires_tools: {know.requires_tools}"
+    rec = _spec_from_parsed(dict(fm, name="r"), "body", visibility="local", kind="recipe")
+    assert rec.requires_tools == ("WebFetch", "Read"), "recipe must keep requires_tools"
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_knowhow_files_load_as_local_knowhow_skills,

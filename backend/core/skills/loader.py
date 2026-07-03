@@ -139,7 +139,13 @@ def _spec_from_parsed(fm: dict, body: str, source_path: str = "", *,
     name = (fm.get("name") or "").strip()
     if not name:
         raise ValueError(f"skill {source_path or '?'} missing required `name`")
-    req = fm.get("requires_tools") or ()
+    # A knowhow is READ, not executed — its body is advice, not a procedure. A
+    # `requires_tools` on a knowhow (drafts often inherit [WebFetch, Read] from how
+    # they were authored) would make the read gate (content/bio/tools/ctx_read)
+    # refuse to open it with "tools_unavailable" when those tools aren't active
+    # this turn — silently hiding the decision guide from the agent. Knowhows gate
+    # on nothing; ignore any declared requires_tools for kind='knowhow'.
+    req = () if kind == "knowhow" else (fm.get("requires_tools") or ())
     if isinstance(req, str):
         req = (req,)
     prod = fm.get("produces") or ()
