@@ -79,6 +79,9 @@ expected_overall:
 
 ## Checks (`expect:`)
 - **text** — `must_mention` / `must_not` (coarse substring gates on the agent reply).
+- **tools** — `tools_used: [name, …]` (the turn must invoke each) / `tools_not_used: [name, …]`
+  (the turn must NOT invoke any). Use `tools_not_used: [run_python, run_r]` to keep an advice /
+  lightweight turn compute-free AND to assert the agent answered *without* executing.
 - **produces** — `{figure: n, table: n}` ≥ counts from the turn's run-artifacts.
 - **state** (queried after the step via manifest + entities):
   `pinned_results_min`, `manifest_contains` / `manifest_not_contains`,
