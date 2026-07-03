@@ -34,6 +34,7 @@ import ClaimView from './ClaimView'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
 import type { FileNode } from '../viewers/types'
+import ExternalViewerActions from '../components/ExternalViewerActions'
 import UploadDrop from '../platform/UploadDrop'
 // RevisionChevrons (floating overlay) is deprecated 2026-06-07. The
 // new RevisionStrip lives in ResultView's MemberPanel (below the figure,
@@ -346,6 +347,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: Foc
       {preview?.kind === 'error' && (
         <div className="focus__placeholder">preview error: {preview.error}</div>
       )}
+      <ExternalViewerActions entity={entity} />
       <DatasetFiles entity={entity} onFocus={onFocus} onChatResult={onChatResult}
                     onChange={onChange} projectId={projectId} />
     </div>

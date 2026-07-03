@@ -104,6 +104,8 @@
 .focus__type--table    { background: #e0e7ff; color: #3730a3; }
 
 .focus__actions { margin-left: auto; display: flex; gap: 6px; }
+/* External-viewer launch buttons on a focus card (ExternalViewerActions). */
+.focus__viewer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
 .focus__promote {
   margin-left: auto;
   padding: 5px 12px;
