@@ -10,6 +10,6 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for biological data ana
 - use short git commit messages with no signature
 
 ## Basic truths (where things live)
-- Knowhows/recipes = `bp-*` skills in the `kharchenkolab/aba-recipe-pack` repo (`recipes/genomics/`); `search_skills` (BM25) indexes frontmatter only, so body-only edits are search-neutral.
-- The system prompt composes bundle scopes system → installation → lab → user (narrowest-wins): universal default rules live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
-- Deployments update via `aba update` (ABA code from `main`) and pull the recipe pack via `RECIPES_REF` — so branch/PR work only ships once it lands on `main` (install paths/hosts are per-deployment, not recorded here).
+- Recipes + know-how (references) live in the `kharchenkolab/aba-recipe-pack` repo: `recipes/<domain>/` (executable `bp-*`/named recipes) and `knowhow/` (advisory method/decision + reference docs). They're brought in at install / `aba update` into `$ABA_HOME/installation/` — that deployed copy is what the server reads; the repo is the source, so edit + PR there (branch work ships once it lands on `main`, pulled via `RECIPES_REF`). `search_skills` (BM25) indexes frontmatter only, so body-only edits are search-neutral.
+- System prompts / rules compose bundle scopes system → installation → lab → user (narrowest-wins): universal always-on rules (e.g. `behavior.md`) live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
+- Deployments update via `aba update` (ABA code from `main`); install paths/hosts are per-deployment, not recorded here.
