@@ -68,6 +68,23 @@ describe('Message — PDF chat-render path', () => {
     expect(a!.getAttribute('download')).toBe('umap_leiden.pdf')
   })
 
+  it('viewer-launch links render as a new-tab pill button (open_viewer)', () => {
+    const blocks: Block[] = [
+      { type: 'text',
+        text: '[Explore in pagoda3](/viewer-launch?viewer=pagoda3-anndata&project=p1&entity=ds_9)' },
+    ]
+    const m: Msg = { id: 'm4', role: 'assistant', blocks }
+    const { container } = render(
+      <Message message={m} entities={[]} pinnedFigureIds={new Set()} keptKeys={new Set()} />
+    )
+    const a = container.querySelector('a[href*="/viewer-launch"]') as HTMLAnchorElement | null
+    expect(a).not.toBeNull()
+    expect(a!.className).toContain('msg-filelink')     // pill look, like artifact links
+    expect(a!.getAttribute('target')).toBe('_blank')   // always a new tab
+    expect(a!.querySelector('code')?.textContent).toBe('Explore in pagoda3')
+    expect(a!.hasAttribute('download')).toBe(false)    // it's a launcher, not a file
+  })
+
   it('markdown non-artifact links get no download attr; external http opens in a new tab', () => {
     const blocks: Block[] = [
       { type: 'text',
