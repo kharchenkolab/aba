@@ -56,6 +56,7 @@ from .feedback import (    # noqa: F401, E402
     read_client_context_impl,
     stash_client_context,
 )
+from .viewers import open_viewer_impl    # noqa: F401, E402
 from .plan_etc import (    # noqa: F401, E402
     create_scenario,
     present_plan,

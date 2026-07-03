@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { prepareAssistantText } from '../markdown/prepareAssistantText'
+import { withBasePath } from '../oodBase'
 import type { DisplayMessage, Block, Entity } from '../types'
 import { AgentAvatar } from '../components/icons'
 import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
@@ -555,6 +556,17 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
             </svg>
             {props.children}
           </a>
+        )
+      }
+      // Viewer-launch links (open_viewer tool): same pill look as artifact
+      // links, always a new tab. /viewer-launch is NOT in the fetch auto-patch
+      // list, so OOD-base-prefix it explicitly (mirrors viewers/launch.ts).
+      if ((props.href || '').startsWith('/viewer-launch')) {
+        const label = (typeof props.children === 'string' && props.children.startsWith('Open '))
+          ? props.children.slice(5) : props.children
+        return (
+          <a className="msg-filelink msg-filelink--file" href={withBasePath(props.href || '')}
+             title={props.title} target="_blank" rel="noreferrer"><code>{label}</code></a>
         )
       }
       // Artifact links (reports, downloadable outputs) get the SAME small
