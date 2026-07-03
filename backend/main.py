@@ -2122,6 +2122,7 @@ def skills_list():
             "layer": s.layer,              # provenance: which scope contributed it
             "visibility": s.visibility,    # 'always' (core tier) | 'local'
             "domain": s.domain,
+            "kind": s.kind,                # 'recipe' (executable) | 'knowhow' (advice)
         }
         for s in list_skills()
     ]
