@@ -18,12 +18,20 @@ function currentProjectId(): string {
 }
 
 /** Open the ABA loading tab for an external viewer. Synchronous (opens on the
- *  click gesture); the loading page does the launch + poll + redirect. */
-export function launchExternal(node: FileNode, viewer: ViewerInfo): void {
+ *  click gesture); the loading page does the launch + poll + redirect.
+ *
+ *  `action`: 'view' (default) redirects to the viewer once ready; 'download'
+ *  prepares the same store, then streams it back as a STORED `.lstar.zarr.zip`.
+ *  Both route through /viewer-launch so the one-time conversion runs in the
+ *  background prepare job (with progress), not a blocking request. */
+export function launchExternal(node: FileNode, viewer: ViewerInfo,
+                               opts?: { action?: 'view' | 'download' }): void {
+  const download = opts?.action === 'download'
   const params = new URLSearchParams({ viewer: viewer.id, project: currentProjectId() })
   if (viewer.label) params.set('label', viewer.label)
+  if (download) params.set('action', 'download')
   if (node.path) params.set('path', node.path)
   else if (node.entity_id) params.set('entity', node.entity_id)
   const url = withBasePath('/viewer-launch') + '?' + params.toString()
-  window.open(url, `viewer-${viewer.id}`)   // new tab
+  window.open(url, `viewer-${viewer.id}${download ? '-dl' : ''}`)   // new tab
 }

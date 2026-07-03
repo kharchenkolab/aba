@@ -73,8 +73,12 @@ function ExternalLaunch({ node, viewer, resp }: { node: FileNode; viewer: Viewer
           <button className="viewer__action viewer__action--primary" onClick={() => launchExternal(node, viewer)}>
             ↗ {viewer.label}
           </button>
+          <button className="viewer__action" title="Pack the viewer store into one .lstar.zarr.zip"
+                  onClick={() => launchExternal(node, viewer, { action: 'download' })}>
+            ⬇ .lstar.zarr.zip
+          </button>
           {resp.download_url && (
-            <a className="viewer__action" href={resp.download_url} download>⬇ Download</a>
+            <a className="viewer__action" href={resp.download_url} download>⬇ Original file</a>
           )}
         </div>
         <p style={{ color: 'var(--text-3)', marginTop: 10, fontSize: 13 }}>Opens in a new tab.</p>

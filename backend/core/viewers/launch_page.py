@@ -102,9 +102,13 @@ _HTML = r"""<!doctype html>
                    entity_id: q.get("entity") || undefined };
     var project = q.get("project") || "";
     var label = q.get("label") || "";
+    var action = q.get("action") || "view";        // 'view' | 'download'
+    var isDownload = action === "download";
+    var verb = isDownload ? "Preparing" : "Opening";
     var t0 = Date.now(), pollTimer = null;
     var $ = function (id) { return document.getElementById(id); };
-    if (label) { $("vl-title").textContent = "Opening " + label + "…"; }
+    if (label) { $("vl-title").textContent = verb + " " + label + "…"; }
+    if (isDownload) { document.title = "Preparing download…"; }
 
     function withBase(u) { return (BASE && u && u.charAt(0) === "/") ? BASE + u : u; }
     function api(p) { return withBase("/api" + p); }
@@ -132,10 +136,20 @@ _HTML = r"""<!doctype html>
       fetch(api("/viewers/launch/status?job=" + encodeURIComponent(jobId)))
         .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("status " + r.status)); })
         .then(function (s) {
-          if (s.label && !label) { label = s.label; $("vl-title").textContent = "Opening " + label + "…"; }
+          if (s.label && !label) { label = s.label; $("vl-title").textContent = verb + " " + label + "…"; }
           if (s.phase) { $("vl-phase").textContent = s.phase; }
           tick();
           if (s.status === "ready" && s.url) {
+            if (isDownload) {                       // stream the prepared store back as .lstar.zarr.zip
+              var dq = new URLSearchParams({ viewer_id: params.viewer_id, project_id: project });
+              if (params.path) dq.set("path", params.path);
+              else if (params.entity_id) dq.set("entity_id", params.entity_id);
+              $("vl-phase").textContent = "Ready — downloading…";
+              location.href = api("/viewers/download?" + dq.toString());
+              $("vl-title").textContent = "Download started";
+              $("vl-phase").textContent = "Your .lstar.zarr.zip is downloading — you can close this tab.";
+              return;
+            }
             if (s.set_local_storage) {
               try { Object.keys(s.set_local_storage).forEach(function (k) {
                 var v = s.set_local_storage[k]; localStorage.setItem(k, (v && v.charAt(0) === "/") ? withBase(v) : v);
@@ -165,7 +179,7 @@ _HTML = r"""<!doctype html>
         .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
         .then(function (res) {
           if (!res.ok) { showError(res.d && res.d.detail || "Launch failed."); return; }
-          if (res.d.label) { label = res.d.label; $("vl-title").textContent = "Opening " + label + "…"; }
+          if (res.d.label) { label = res.d.label; $("vl-title").textContent = verb + " " + label + "…"; }
           poll(res.d.job_id);
         })
         .catch(function (e) { showError(String(e && e.message || e)); });

@@ -34,4 +34,25 @@ describe('launchExternal', () => {
     expect(qs.get('entity')).toBe('res_1')
     expect(qs.get('path')).toBeNull()
   })
+
+  it('adds action=download (+ a distinct tab name) for the download variant', () => {
+    window.history.pushState({}, '', '/p/prj_abc/files')
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+
+    launchExternal({ kind: 'file', name: 'x.lstar.zarr', path: 'work/x.lstar.zarr' } as FileNode,
+                   viewer, { action: 'download' })
+
+    const qs = new URLSearchParams(String(openSpy.mock.calls[0][0]).split('?')[1])
+    expect(qs.get('action')).toBe('download')
+    expect(qs.get('viewer')).toBe('pagoda3-lstar')
+    expect(openSpy.mock.calls[0][1]).toBe('viewer-pagoda3-lstar-dl')   // separate from the view tab
+  })
+
+  it('omits action for the default view variant', () => {
+    window.history.pushState({}, '', '/p/prj_abc/files')
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    launchExternal({ kind: 'file', name: 'x.lstar.zarr', path: 'work/x.lstar.zarr' } as FileNode, viewer)
+    const qs = new URLSearchParams(String(openSpy.mock.calls[0][0]).split('?')[1])
+    expect(qs.get('action')).toBeNull()
+  })
 })

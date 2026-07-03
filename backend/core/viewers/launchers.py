@@ -22,11 +22,15 @@ class LaunchResult:
     conversion must finish before the data is ready; `set_local_storage` is
     origin-shared localStorage the host should seed before opening (values that
     start with '/' are OOD-base-prefixed by the frontend) — e.g. pointing
-    pagoda3's copilot at ABA's proxy via `{'p3-agent-proxy': '/pagoda3-api'}`."""
+    pagoda3's copilot at ABA's proxy via `{'p3-agent-proxy': '/pagoda3-api'}`.
+    `store_path` is the absolute path of the prepared on-disk store (when the
+    launcher materializes one) — lets the download endpoint pack that same
+    cached store into a `.lstar.zarr.zip` without re-deriving it."""
     url: str
     prepare_job_id: Optional[str] = None
     label: Optional[str] = None
     set_local_storage: Optional[dict] = None
+    store_path: Optional[str] = None
 
 
 # A launcher resolves (node, ctx) -> LaunchResult. `node` is a files-tree node
