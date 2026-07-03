@@ -2546,6 +2546,12 @@ def pagoda3_store(pid: str, relpath: str):
         raise HTTPException(404, f"no store file {relpath!r}")
     resp = FileResponse(str(f))
     resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    # A store's URL is stable (source-path hash) but its CONTENT changes when it's
+    # re-derived (version bump / prep). Without revalidation the browser mixes a
+    # stale .zmetadata with fresh chunks → garbage ("stars"). no-cache = keep it
+    # but revalidate every read (FileResponse's etag/mtime → cheap 304s when
+    # unchanged, fresh bytes after a re-derive).
+    resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
