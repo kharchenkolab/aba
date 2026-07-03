@@ -68,7 +68,7 @@ describe('Message — PDF chat-render path', () => {
     expect(a!.getAttribute('download')).toBe('umap_leiden.pdf')
   })
 
-  it('markdown non-artifact links get no download attr', () => {
+  it('markdown non-artifact links get no download attr; external http opens in a new tab', () => {
     const blocks: Block[] = [
       { type: 'text',
         text: '[Anthropic docs](https://docs.anthropic.com/x)' },
@@ -80,6 +80,7 @@ describe('Message — PDF chat-render path', () => {
     const a = container.querySelector('a[href*="anthropic.com"]') as HTMLAnchorElement | null
     expect(a).not.toBeNull()
     expect(a!.hasAttribute('download')).toBe(false)
-    expect(a!.getAttribute('target')).toBeNull()
+    // External http links open in a new tab (keeps the chat session alive).
+    expect(a!.getAttribute('target')).toBe('_blank')
   })
 })
