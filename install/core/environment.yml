@@ -92,4 +92,10 @@ dependencies:
       # .lstar.zarr conversion (misc/pagoda3_integration.md). Ships a compiled
       # C++ core: prebuilt wheels exist for macOS arm64 (cp312); on other
       # platforms pip builds from source (cmake + pybind11 — cmake is above).
-      - lstar-sc
+      # Floor at 0.1.4: earlier releases predate the single-file .lstar.zarr.zip
+      # (STORED, range-readable) support + the store-format the current pagoda3
+      # expects, and 0.1.2 also shipped the macOS-arm64 dup-libomp SIGSEGV.
+      # NOTE: 0.1.4 is not on PyPI yet — until it lands, dev/deploys must install
+      # lstar from the `lstar` repo main (pip install <lstar-checkout>); this pin
+      # will only resolve from PyPI once 0.1.4 is published.
+      - lstar-sc>=0.1.4

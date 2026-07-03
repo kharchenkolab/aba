@@ -30,8 +30,13 @@ def test_zip_is_stored_and_has_top_level_arcnames(tmp_path):
         assert "axes/.zarray" in names
         assert "axes/0" in names
         # STORED, not DEFLATE → range-readable
-        for info in z.infolist():
+        infos = z.infolist()
+        for info in infos:
             assert info.compress_type == zipfile.ZIP_STORED
+        # metadata (.z*) first so a range reader hits the manifest early
+        # (matches lstar's canonical _pack_stored_zip ordering).
+        import os as _os
+        assert _os.path.basename(infos[0].filename).startswith(".z"), infos[0].filename
         # content round-trips
         assert z.read(".zattrs") == b'{"axes": ["cells", "genes"]}'
 
