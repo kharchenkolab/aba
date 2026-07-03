@@ -264,6 +264,7 @@ def search_skills_tool(input_: dict) -> dict:
             # the first visible field shapes its next action.
             "invoke_with": f'Skill(skill="{s.name}")',
             "name":        s.name,
+            "kind":        s.kind,        # 'recipe' (executable) | 'knowhow' (decision guide)
             "description": s.description,
             "when_to_use": s.when_to_use,
             "domain":      s.domain,

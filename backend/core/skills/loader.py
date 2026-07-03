@@ -89,6 +89,11 @@ class SkillSpec:
     # source_scope from the bundle projection in content/bio/skills). Surfaced
     # in /api/skills so operators see which scope each recipe came from.
     layer:          str = "system"
+    # Retrieval tier: 'recipe' (executable how-to, from a scope's skills/ tree)
+    # vs 'knowhow' (broad decision guide, from knowhow/). Directory-derived by
+    # the bundle projection — NOT read from frontmatter. Lets search present +
+    # (later) rank the advice tier distinctly from executable recipes.
+    kind:           str = "recipe"
 
 
 _SPLIT = "---"
@@ -130,7 +135,7 @@ def _agents_allows_aba(fm: dict) -> bool:
 
 def _spec_from_parsed(fm: dict, body: str, source_path: str = "", *,
                       default_domain: str = "", visibility: str = "local",
-                      layer: str = "system") -> SkillSpec:
+                      layer: str = "system", kind: str = "recipe") -> SkillSpec:
     name = (fm.get("name") or "").strip()
     if not name:
         raise ValueError(f"skill {source_path or '?'} missing required `name`")
@@ -178,6 +183,7 @@ def _spec_from_parsed(fm: dict, body: str, source_path: str = "", *,
         allowed_tools=tuple(str(t).strip() for t in at if str(t).strip()),
         version=str(fm.get("version") or "").strip(),
         layer=layer,
+        kind=kind,
     )
 
 
