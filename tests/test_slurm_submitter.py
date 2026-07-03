@@ -129,6 +129,23 @@ def test_submit_stores_slurm_id(slurm):
     assert "resources" in after["params"]
 
 
+def test_job_sh_sanitizes_python_env(slurm):
+    """job.sh must clear PYTHONHOME and OVERWRITE PYTHONPATH (not prepend) so a
+    module-loaded ancient Python can't shadow the conda env the job runs on
+    (the prj_6d986f40 numpy incident)."""
+    import re
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-sanitize")["id"]
+    job = _mk_job(pid)
+    sub = SlurmSubmitter()
+    sub.submit(job)
+    job_sh = (sub._run_dir(job) / "job.sh").read_text()
+    assert "unset PYTHONHOME" in job_sh, job_sh
+    m = re.search(r"export PYTHONPATH=\S+", job_sh)
+    assert m and ":$PYTHONPATH" not in m.group(0), \
+        f"PYTHONPATH must be overwritten, not prepended: {m.group(0) if m else None}"
+
+
 def test_submit_passes_resource_flags(slurm, monkeypatch):
     from core.jobs.slurm_submitter import SlurmSubmitter
     args_file = Path(tempfile.mktemp())
