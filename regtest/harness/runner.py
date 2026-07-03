@@ -271,6 +271,9 @@ def run_checks(step, cap, cmetrics, prev_msgs, client, pid, tid, created, produc
     for t in (exp.get("tools_used") or []):   # the agent actually invoked this tool this turn
         if t not in (cap.get("tools") or []):
             fails.append(f"tool_not_used:{t} (used={cap.get('tools')})")
+    for t in (exp.get("tools_not_used") or []):   # advice/lightweight turns must NOT execute
+        if t in (cap.get("tools") or []):
+            fails.append(f"tool_used_unexpectedly:{t} (used={cap.get('tools')})")
     for k, n in (exp.get("produces") or {}).items():
         got = sum(1 for a in produced_arts if a.get("kind") == k)
         if got < n:
