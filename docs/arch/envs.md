@@ -89,6 +89,12 @@ from its *library* needs, and lives in a different tier:
   the copied `environment.yml` at `create-env` (single source — no duplicate GPU env file). A
   CUDA torch is a **superset**: it uses a GPU when present and falls back to CPU on the login
   node / CPU jobs, so one base serves both. Non-GPU deployments (laptops) build the CPU base.
+  The base is **built on the GPU-less login node** (there is no build-time access to a GPU
+  node): conda-forge `pytorch=*=cuda*` builds require the `__cuda` virtual package, which
+  micromamba only detects from a host driver, so `create-env` exports `CONDA_OVERRIDE_CUDA`
+  (default 12.4; `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
+  selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). The build is node-independent;
+  the actual GPU is confirmed at job time (verify-at-use).
 - **Non-torch GPU frameworks → overlays / isolated envs** (jax[cuda], RAPIDS) — the library
   axis, not the base.
 
