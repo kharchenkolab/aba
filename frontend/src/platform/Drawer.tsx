@@ -732,7 +732,7 @@ function NextflowProgressBlock({ job }: { job: JobInfo }) {
  *  the chat's tool-line "script" + "output" affordances so a background
  *  run feels like its synchronous run_python sibling — same content,
  *  same toggles, different host. */
-function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean }) {
+export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean }) {
   const [showCode, setShowCode] = useState(false)
   // Output pane defaults to open IF there's something to show — surfaces
   // log_tail / error without an extra click. Mirrors the failed-tool
