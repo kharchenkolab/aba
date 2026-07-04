@@ -233,7 +233,14 @@ class MaterializingExecutor:
                   "installing UNCONSTRAINED (numpy-drift guard off)", flush=True)
         _where = "project overlay" if target != PYLIB_DIR else "shared overlay"
         progress.emit(f"pip: installing {', '.join(packages)} into the {_where}…", phase="pip")
-        base_cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target), *_cflag]
+        # --prefer-binary: prefer a prebuilt wheel over a newer sdist. On an old system
+        # toolchain (e.g. cluster GCC 4.8.5) source-building a package — or its numpy
+        # build-dep — fails; if ANY version ships a wheel, use it instead of building the
+        # sdist-only latest. (scikit-misc: 0.5.2 is sdist-only, 0.5.1 has a manylinux
+        # wheel → this picks 0.5.1 and installs cleanly.) Falls back to sdist only when
+        # no wheel exists at all.
+        base_cmd = [sys.executable, "-m", "pip", "install", "--prefer-binary",
+                    "--prefix", str(target), *_cflag]
         proc = run_cancellable([*base_cmd, *packages], timeout_s=900, cancel_token=cancel_token)
         # §11.4: `pip --prefix` reuses base deps (fast) but UNINSTALLS the base copy
         # when a requested version differs — which the read-only base blocks. When
