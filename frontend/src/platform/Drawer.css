@@ -228,6 +228,7 @@
 }
 .jobs__pre--code { /* dark style is now the default — kept as a class for future overrides */ }
 .jobs__pre--err  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; max-height: 160px; }
+.jobs__pre--muted { color: #7f849c; font-style: italic; }  /* queued/running placeholder before any output */
 .jobs__error { display: flex; flex-direction: column; gap: 3px; }
 
 /* Cancel action — shown in the expanded detail panel for queued/running jobs. */
