@@ -30,10 +30,10 @@ def test_cpu_is_noop(tmp_path):
 def test_cuda_injects_pin_before_pip_section(tmp_path):
     y = tmp_path / "environment.yml"
     y.write_text(BASE.read_text())
-    _run(y, "cuda", "12.4")
+    _run(y, "cuda", "11.8")
     lines = y.read_text().splitlines()
     assert "  - pytorch-gpu" in lines, "CUDA base must pin pytorch-gpu"
-    assert "  - cuda-version=12.4" in lines, "ABA_CUDA_VERSION must be pinned when set"
+    assert "  - cuda-version=11.8" in lines, "ABA_CUDA_VERSION must be pinned when set"
     gi = next(i for i, l in enumerate(lines) if "pytorch-gpu" in l)
     pi = next(i for i, l in enumerate(lines) if l.strip() == "- pip:")
     assert gi < pi, "pytorch-gpu must be a CONDA dependency (before the pip: section)"

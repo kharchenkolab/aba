@@ -92,9 +92,11 @@ from its *library* needs, and lives in a different tier:
   The base is **built on the GPU-less login node** (there is no build-time access to a GPU
   node): conda-forge `pytorch=*=cuda*` builds require the `__cuda` virtual package, which
   micromamba only detects from a host driver, so `create-env` exports `CONDA_OVERRIDE_CUDA`
-  (default 12.4; `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
-  selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). The build is node-independent;
-  the actual GPU is confirmed at job time (verify-at-use).
+  (default `11.8`; `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
+  selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). `11.8` is the widest-compat
+  default: it runs on any driver ≥450.80 and covers GPUs sm_60 (P100)…sm_90 (H100), so it
+  survives older-driver / Pascal-Volta clusters where a `12.x` runtime would fail. The build is
+  node-independent; the actual GPU is confirmed at job time (verify-at-use).
 - **Non-torch GPU frameworks → overlays / isolated envs** (jax[cuda], RAPIDS) — the library
   axis, not the base.
 
@@ -140,3 +142,22 @@ toggle). The base spec (`environment.yml`) lives in the repo.
   is no importable route today: conda provisioning targets the CLI tools env (PATH only), so
   a conda-forge *library* isn't importable by `run_python`. (Planned: a conda path that lands
   the lib in an importable layer, pinned to the base numpy ABI.)
+
+- **Heterogeneous cluster: the install node isn't the compute node.** Install/build runs on
+  the CPU login node, but the software runs on partition-specific hardware (GPU, big-mem, a
+  different CPU microarch). Today we sidestep this for the *solve* — conda artifacts are
+  prebuilt and declarative, so `CONDA_OVERRIDE_CUDA` lets the login node *assert* the target's
+  capability without being there — and per-job `gpu_capability_ok` verifies at run time. Two
+  things genuinely need a target node and are only partially covered:
+  - **Install-time verify.** We assert `__cuda` at build; we don't yet *confirm at install*
+    that the built CUDA runtime actually initializes on the GPU partition (driver new enough).
+    Planned: a post-`create-env` step that `sbatch`es a one-shot `torch.cuda.is_available()`
+    probe to each GPU partition class (from `hpc.yaml`) and **fails loud** on a mismatch
+    (e.g. built `cuda126` but the driver caps at 12.4 → rebuild with `ABA_CUDA_VERSION=…`),
+    instead of deferring the discovery to the first GPU job. (`aba doctor` gets the same probe.)
+    NB: such a job must write results to **shared FS**, not node-local `/tmp`.
+  - **Build-on-target.** For artifacts that must compile against the node's actual CUDA/driver
+    or CPU arch (source-only wheels, `-march=native`, CUDA extensions like flash-attn), the
+    login-node build is wrong hardware. Provisioning would dispatch the build *into a job* on
+    the target partition (via the existing `slurm_submitter`) and cache the wheel per
+    node-class. Not built today; the wheel/pkg cache would key by partition class.
