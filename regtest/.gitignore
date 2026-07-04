@@ -1,0 +1,4 @@
+# regtest local artifacts (not committed)
+reports/
+# shared-FS package-install cache for scenario runs (see runner.py bootstrap_env; F6)
+.envs_cache/

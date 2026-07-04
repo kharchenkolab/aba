@@ -105,6 +105,12 @@ def context_line() -> str:
         gpu = f", {e['node_gpus']} GPU" if e.get("node_gpus") else ""
         line = (f"Compute environment: {e.get('mode', 'local')} — this node "
                 f"{e.get('node_cores')} cores / {e.get('node_mem_gb')} GB{gpu}")
+        # Accelerator readiness — only surfaced when a GPU is in the picture. Tells the
+        # agent whether a GPU step will actually accelerate or silently fall back to CPU.
+        if "gpu_usable" in e:
+            line += (". GPU usable (CUDA stack)" if e["gpu_usable"]
+                     else f". WARNING: GPU present but NOT usable — {e.get('gpu_usable_reason', '')}; "
+                          "a GPU step runs on CPU, so prefer CPU sizing or tell the user")
         wt = e.get("walltime_remaining_min")
         if wt is not None:
             line += f", ~{round(wt / 60, 1)}h walltime left"
@@ -179,6 +185,20 @@ def _build_compute_env() -> dict:
             except Exception:  # noqa: BLE001
                 env["partitions"], env["partitions_source"] = [], "none"
         env["user_access"] = sl.user_access()
+    # Accelerator readiness: is a GPU both PRESENT and USABLE by our stack? A GPU node
+    # is useless if the base torch is CPU-only (the scVI-on-CPU incident: right node,
+    # idle GPU). Present = a local GPU or a gpu partition; usable = torch is a CUDA
+    # build (node-independent — see torch_cuda_build). The agent weighs gpu_usable, not
+    # just "a GPU exists," when placing a GPU step.
+    gpu_present = bool(env["node_gpus"]) or any(p.get("gpu") for p in env.get("partitions") or [])
+    if gpu_present:
+        from core.exec.env_integrity import torch_cuda_build
+        _cuda = torch_cuda_build()
+        env["gpu_usable"] = _cuda is not None
+        env["gpu_usable_reason"] = (
+            f"CUDA torch ({_cuda})" if _cuda else
+            "base torch is CPU-only — a GPU step would fall back to CPU (admin: set "
+            "ABA_ACCELERATOR=cuda in config.env + rebuild the env)")
     return env
 
 

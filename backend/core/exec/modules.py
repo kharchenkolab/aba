@@ -23,7 +23,12 @@ import time
 from pathlib import Path
 
 # Env vars a `module load` typically mutates that matter for executing tools.
-_PATH_VARS = ("PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "CPATH",
+# PYTHONPATH / PYTHONHOME are deliberately EXCLUDED: a module's Python path would
+# shadow the conda env's site-packages (the prj_6d986f40 numpy incident), and the
+# whole module contract here is "binaries only, never a module's Python libs" (see
+# kernel_env_snippet / module_env_overlay, and the Slurm job's post-`module load`
+# python sanitize in SlurmSubmitter). Only binary/library search paths are captured.
+_PATH_VARS = ("PATH", "LD_LIBRARY_PATH", "CPATH",
               "LIBRARY_PATH", "PKG_CONFIG_PATH", "MANPATH")
 _SCALAR_VARS = ("CUDA_HOME",)
 _SAFE_MODULE = re.compile(r"^[A-Za-z0-9_./+-]+$")          # guards shell interpolation
@@ -239,7 +244,13 @@ def load_lines(mods: list[str]) -> str:
     """Bash prologue that loads `mods` in a non-login Slurm job script: source the
     module init (job.sh is not a login shell, so `module` is undefined), then
     `module load`. Returns '' when inactive, no mods, or no init — so injecting it
-    is always safe. Unsafe names are dropped (guards shell interpolation)."""
+    is always safe. Unsafe names are dropped (guards shell interpolation).
+
+    NOTE: a raw `module load` brings the module's FULL env, including its own Python
+    if it has one. A caller that then runs the conda-env python (the Slurm job script)
+    MUST sanitize the interpreter env afterward — clear PYTHONHOME + reset PYTHONPATH —
+    so a module's Python can't shadow the env (the prj_6d986f40 incident; see
+    SlurmSubmitter.submit)."""
     if not mods or not modules_active():
         return ""
     init = _init_script()
@@ -250,6 +261,19 @@ def load_lines(mods: list[str]) -> str:
 
 
 # ── per-project module set (job-path scope: background jobs load these) ───────
+# A module whose NAME bundles a Python toolchain (e.g.
+# 'scanpy/1.4.4-foss-2018b-python-3.6.6', 'Python/3.6.6') carries its OWN Python.
+# `module load`ed into a background job that runs the conda-env python, it shadows
+# the env's site-packages (the prj_6d986f40 numpy-1.17.3 incident). Such modules are
+# never recorded or job-loaded: pip libraries live in the conda env, and a binary
+# tool never needs a python-toolchain module.
+_PY_MODULE_RE = re.compile(r"(?:^|[-/])python[-/_]?\d", re.I)
+
+
+def _is_python_module(module_full: str) -> bool:
+    return bool(module_full) and bool(_PY_MODULE_RE.search(module_full))
+
+
 def _project_modules_file(project_id: str) -> Path:
     from core.data.workspace import _project_work_root
     return _project_work_root(str(project_id or "default")) / "modules.json"
@@ -260,6 +284,8 @@ def record_project_module(project_id: str, module_full: str) -> None:
     `module load` it — `ensure_capability` records here, `SlurmSubmitter` reads it.
     No-op off-cluster / for an unsafe name."""
     if not module_full or not _SAFE_MODULE.match(module_full) or not modules_active():
+        return
+    if _is_python_module(module_full):     # never job-load a python-toolchain module (shadows the conda env)
         return
     f = _project_modules_file(project_id)
     try:
@@ -278,11 +304,14 @@ def record_project_module(project_id: str, module_full: str) -> None:
 
 def project_modules(project_id: str) -> list[str]:
     """Modules recorded for a project's background jobs (deduped, sorted). [] if
-    none — a pure file read, safe to call anywhere (the submitter unions it in)."""
+    none — a pure file read, safe to call anywhere (the submitter unions it in).
+    Self-heals: any python-toolchain module recorded before the guard existed is
+    dropped here, so it never gets job-loaded (it would shadow the conda env)."""
     try:
-        return sorted(set(json.loads(_project_modules_file(project_id).read_text())))
+        mods = sorted(set(json.loads(_project_modules_file(project_id).read_text())))
     except Exception:  # noqa: BLE001
         return []
+    return [m for m in mods if not _is_python_module(m)]
 
 
 def module_env_overlay(full_module: str, base_env: dict | None = None) -> dict:

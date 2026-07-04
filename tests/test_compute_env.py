@@ -54,3 +54,16 @@ def test_context_line(monkeypatch):
         "mode": "local", "node_cores": 4, "node_mem_gb": 16, "node_gpus": 0})
     l2 = ce.context_line()
     assert "local" in l2 and "background=True only" in l2 and "partitions" not in l2
+
+
+def test_context_line_gpu_usable(monkeypatch):
+    """The per-turn cue tells the agent whether a GPU step will actually accelerate."""
+    import core.exec.compute_env as ce
+    base = {"mode": "slurm", "node_cores": 8, "node_mem_gb": 32, "node_gpus": 0,
+            "partitions": [{"partition": "gpu", "cpus_per_node": 32, "gpu": True, "wait": "idle"}]}
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: {**base, "gpu_usable": True})
+    assert "GPU usable" in ce.context_line()
+    monkeypatch.setattr(ce, "compute_env", lambda *a, **k: {
+        **base, "gpu_usable": False, "gpu_usable_reason": "base torch is CPU-only — a GPU step would fall back to CPU"})
+    warn = ce.context_line()
+    assert "NOT usable" in warn and "CPU-only" in warn

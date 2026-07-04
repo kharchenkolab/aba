@@ -209,6 +209,21 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   fi
   write_cfg ABA_BATCH_SUBMITTER slurm
   echo "-- cluster-personal: ABA_BATCH_SUBMITTER=slurm, runtime=$RUNTIME_DIR --"
+  # Deployment-conditional base (docs/arch/envs.md): pick the CUDA torch build iff GPU
+  # compute exists (a gpu partition), unless the admin pinned ABA_ACCELERATOR. Persist to
+  # config.env (runtime reads it for gpu_usable) + export so create-env's
+  # inject-accelerator.sh builds the matching base. Admin override: set ABA_ACCELERATOR
+  # (+ optional ABA_CUDA_VERSION) before running, or edit config.env + rebuild the env.
+  if [ -n "${ABA_ACCELERATOR:-}" ]; then
+    ACCEL="$ABA_ACCELERATOR"                                   # explicit override wins
+  elif command -v sinfo >/dev/null 2>&1 && sinfo -h -o '%G' 2>/dev/null | grep -qiE 'gpu'; then
+    ACCEL="cuda"                                              # a gpu partition exists
+  else
+    ACCEL="cpu"
+  fi
+  write_cfg ABA_ACCELERATOR "$ACCEL"; export ABA_ACCELERATOR="$ACCEL"
+  [ -n "${ABA_CUDA_VERSION:-}" ] && write_cfg ABA_CUDA_VERSION "$ABA_CUDA_VERSION"
+  echo "-- accelerator: ABA_ACCELERATOR=$ACCEL ($([ "$ACCEL" = cuda ] && echo 'CUDA torch base' || echo 'CPU-only torch base')) --"
   if command -v sinfo >/dev/null 2>&1; then
     # The runtime discovers partitions + QOS + account LIVE (sinfo + sacctmgr) at
     # submit time, so no hpc.yaml is written by default. Show what it detects;

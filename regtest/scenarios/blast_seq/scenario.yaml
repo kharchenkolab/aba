@@ -1,0 +1,233 @@
+id: blast_seq
+title: Identify an unknown protein sequence from a pre-run similarity search
+domain: sequence_analysis
+gpu: false
+summary: >
+  A realistic protein-identification session over an unannotated sequence plus a
+  similarity search that was already run for it. The biologist examines the
+  mystery sequence and the table of top hits, identifies the protein and its
+  organism of origin, plots the identity/coverage profile of the hits (figure),
+  pins it, then drills into the diagnostic sequence feature of the identified
+  protein (the chromophore tripeptide), restyles that feature figure for the
+  paper, retires a hit that turned out to be a synthetic-construct duplicate
+  rather than a natural homolog, and comes back later to recap what was kept.
+lifecycle: [revise, delete, resume]
+data_files:
+- mystery.fasta
+- blast_hits.tsv
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I pulled a protein sequence out of an old file with no annotation —
+    DATA_DIR/mystery.fasta. A colleague already ran a similarity search on it for
+    me and left the top hits in DATA_DIR/blast_hits.tsv. Before I draw any
+    conclusions, just take a look at both: how long is the sequence, and what do
+    the top hits look like? Don't run any new search — read what's there.
+  expect:
+    must_mention:
+    - Aequorea
+    must_not:
+    - "I cannot"
+    - "no hits"
+    - "unable to read"
+    context: {cache_breakpoints: true}
+    checks: >
+      Reads BOTH files. Reports the query is a single ~238-aa protein and reads
+      the provided hit table: the top hit is an exact (100% identity, full
+      coverage, e-value 0.0) match to green fluorescent protein from Aequorea
+      victoria (accession P42212), with a descending ladder of GFP-family
+      homologs below it. The agent should be reasoning over the SUPPLIED hits, not
+      launching a fresh BLAST. No fabricated accessions or counts (there really
+      are 6 hits; the top is P42212 at 100%).
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Based on that, what is this protein and what organism is it from? And give me
+    a figure of the top hits showing how percent identity and coverage fall off
+    down the list, so I can see how strong the match is versus the more distant
+    relatives. Save it so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - fluorescent
+    - Aequorea
+    must_not:
+    - "I cannot"
+    - "could not identify"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Identifies the protein as green fluorescent protein (GFP) from the jellyfish
+      Aequorea victoria (UniProt P42212), justified by the 100%-identity / full-
+      coverage / e-value-0.0 top hit. Renders a SAVED figure of the top hits — a
+      bar/scatter of percent identity and query coverage per hit — showing the
+      exact top match, a tight cluster of close Aequorea-family homologs in the
+      high-80s to 90s percent identity, and the distant anthozoan relative
+      (Anemonia sulcata, ~24% identity, e-value ~1e-9) dropping off at the bottom.
+      Values must come from the table, not invented.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The identity/coverage hit-profile figure is pinned — a Result entity now
+      exists on the shelf and appears in the thread manifest. This documents the
+      identification (GFP / Aequorea victoria / P42212).
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now that we know what it is, confirm it from the sequence itself rather than
+    just trusting the hit list. This protein is famous for a short stretch in the
+    middle that forms its business end — find that signature region in our
+    sequence, tell me where it sits, and make me a figure marking it along the
+    sequence.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - chromophore
+    must_not:
+    - "I cannot"
+    - "not found"
+    - "no such motif"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Locates the chromophore-forming tripeptide in the actual query sequence —
+      Ser-Tyr-Gly at residues 65-67 (the wild-type avGFP chromophore; note it is
+      S65, not the S65T of EGFP) — and renders a SAVED figure marking that
+      position along the sequence (e.g. a sequence track / domain cartoon with the
+      chromophore highlighted near the middle of the ~238-aa protein). This is an
+      independent sequence-level confirmation of the identification, not a re-run
+      of the search. The motif position must be the real one (65-67), not
+      fabricated.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The chromophore-location figure is pinned as a second Result. The shelf now
+      holds the hit-profile (s3) and the chromophore feature figure (s5).
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    That chromophore figure is going into a talk. Redo it cleaner: a
+    colourblind-friendly palette, bigger labels, the whole length of the protein
+    shown to scale, and the signature residues called out by name and number.
+    Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - chromophore
+    must_not:
+    - "I cannot"
+    - "no figure"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Re-renders the chromophore figure (a RESTYLE of the s4 plot) with a
+      colourblind-safe palette, larger labels, the full 238-aa length to scale,
+      and the signature residues named and numbered (Ser65-Tyr66-Gly67). This is a
+      NEW saved figure derived from the same finding, not new biology. The labelled
+      residues must match the real chromophore (65-67), not a fabricated location.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The restyled, talk-ready chromophore figure is pinned as a third Result
+      alongside the hit-profile and the original chromophore figure.
+
+- id: s8
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The user archives the FIRST pinned figure — the s3 hit-profile. The reason:
+      one of the rows it leans on (the 98.7%-identity "EGFP" entry) is a synthetic
+      construct, an engineered S65T variant rather than a natural homolog, so the
+      raw hit ladder over-states how many independent organisms carry this protein
+      and the figure is being set aside in favour of the sequence-level evidence.
+      After the delete it is no longer an active Result; the two chromophore
+      figures remain on the shelf.
+
+- id: s9
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this after a break — remind me where we landed. What did we
+    decide this protein is and what organism is it from, what's the signature
+    feature we confirmed in the sequence, and which figures did we keep? Just
+    summarise from what's saved; don't redo anything.
+  expect:
+    must_mention:
+    - Aequorea
+    - chromophore
+    must_not:
+    - "still searching"
+    - "unidentified"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project DB, the agent's
+      context is rehydrated from the pinned shelf. It should recap: the protein is
+      green fluorescent protein (GFP) from Aequorea victoria (UniProt P42212),
+      confirmed at the sequence level by the Ser65-Tyr66-Gly67 chromophore
+      tripeptide near the middle of the 238-aa chain; and the surviving pinned
+      figures are the chromophore-location figure and its restyled version, while
+      the original hit-profile figure was archived because it leaned on a synthetic
+      EGFP-construct row. It should NOT resurrect the archived hit-profile or
+      re-run the analysis. Tests that the identification, the feature confirmation,
+      and the s8 curation all persisted across the restart.
+
+expected_overall:
+  planted_truth: >
+    DATA_DIR/mystery.fasta is a single 238-aa protein: green fluorescent protein
+    (GFP) from the jellyfish Aequorea victoria, UniProt P42212. It is the
+    wild-type sequence (chromophore-forming tripeptide Ser65-Tyr66-Gly67 — i.e.
+    S65, not the S65T of EGFP). DATA_DIR/blast_hits.tsv is the top of a protein
+    similarity search run ONCE at build time and committed (no live search at run
+    time): 6 real GFP-family hits in descending identity — P42212 (Aequorea
+    victoria, 100% identity, 100% coverage, e-value 0.0, the exact match); an
+    enhanced S65T "EGFP" SYNTHETIC CONSTRUCT at 98.7% (engineered, not a natural
+    organism); Aequorea coerulescens (92%) and Aequorea macrodactyla (87.4%) close
+    natural homologs; Clytia gregaria clavGFP (53.6%) a more distant cnidarian
+    GFP; and Anemonia sulcata reef-coral FP (24.1% identity, e-value ~1e-9), a
+    distant anthozoan relative at the edge of significance. The diagnostic
+    sequence feature is the chromophore tripeptide at residues 65-67.
+  notes: >
+    A fully correct end-to-end session, all of it reasoning over LOCAL pre-staged
+    data (no network): (s1) reads both files, reports a ~238-aa query and reads the
+    supplied hit table, naming the P42212 / Aequorea victoria top hit without
+    launching a new search. (s2) identifies the protein as GFP from Aequorea
+    victoria (P42212) from the exact top hit, and renders a SAVED identity/coverage
+    figure of the hits showing the perfect top match, the close Aequorea-family
+    cluster, and the distant Anemonia relative falling off; (s3) pins it. (s4)
+    confirms the call from the sequence itself by locating the Ser65-Tyr66-Gly67
+    chromophore tripeptide at residues 65-67 and rendering a SAVED feature figure;
+    (s5) pins it. (s6) restyles that chromophore figure for a talk (colourblind
+    palette, full length to scale, residues named/numbered) and (s7) pins it. (s8)
+    the user archives the original hit-profile figure because it leaned on the
+    synthetic EGFP-construct row, which over-states the natural homolog count.
+    (s9) after a session restart the agent recaps from the surviving pinned shelf —
+    GFP / Aequorea victoria / P42212, confirmed by the residue-65-67 chromophore,
+    with the two chromophore figures kept and the hit-profile archived — without
+    resurrecting it or re-running. Throughout: real accessions, real identities
+    from the table, the real chromophore position — nothing fabricated, and never a
+    live BLAST.

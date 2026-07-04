@@ -1,0 +1,211 @@
+{
+  "meta": {
+    "date": "20260702-102921",
+    "mode": "haiku",
+    "commit": "3bf73bd",
+    "agent_model": "claude-haiku-4-5",
+    "n_scenarios": 26,
+    "note": "best-of composite across Haiku runs (achievable per scenario)"
+  },
+  "scenarios": {
+    "_selftest_session": {
+      "mech_pass": 7,
+      "mech_total": 7,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "_selftest_session-20260702-045452"
+    },
+    "alphafold": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "alphafold-20260702-102959"
+    },
+    "atac_peaks": {
+      "mech_pass": 14,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "atac_peaks-20260702-103151"
+    },
+    "blast_seq": {
+      "mech_pass": 9,
+      "mech_total": 9,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "blast_seq-20260702-051314"
+    },
+    "cheminformatics": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "cheminformatics-20260702-051417"
+    },
+    "colocalization": {
+      "mech_pass": 11,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [
+        "s6:missing_mention:'f3'"
+      ],
+      "bundle": "colocalization-20260702-051719"
+    },
+    "crispr_guides": {
+      "mech_pass": 11,
+      "mech_total": 11,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "crispr_guides-20260702-052006"
+    },
+    "foci_count": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "foci_count-20260702-052320"
+    },
+    "gwas_popstruct": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "gwas_popstruct-20260702-053510"
+    },
+    "image_registration": {
+      "mech_pass": 13,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "image_registration-20260702-053951"
+    },
+    "methylation_dmr": {
+      "mech_pass": 13,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "methylation_dmr-20260702-113310"
+    },
+    "microbiome": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "microbiome-20260702-055504"
+    },
+    "msa_phylo": {
+      "mech_pass": 9,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [
+        "s7:produces[figure]>=1 but got 0",
+        "s8:pinned_results>=3 but 2",
+        "s10:pinned_results>=4 but 3",
+        "s11:pinned_results>=3 but 2",
+        "s13:pinned_results>=4 but 3"
+      ],
+      "bundle": "msa_phylo-20260702-113825"
+    },
+    "nuclei_count": {
+      "mech_pass": 13,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "nuclei_count-20260702-060543"
+    },
+    "protein_domains": {
+      "mech_pass": 11,
+      "mech_total": 11,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "protein_domains-20260702-061625"
+    },
+    "provenance_export": {
+      "mech_pass": 4,
+      "mech_total": 4,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "provenance_export-20260702-120128"
+    },
+    "pseudobulk_de": {
+      "mech_pass": 13,
+      "mech_total": 14,
+      "rubric_overall": null,
+      "fails": [
+        "s4:missing_mention:'donor'"
+      ],
+      "bundle": "pseudobulk_de-20260702-062019"
+    },
+    "reproduce_expr": {
+      "mech_pass": 7,
+      "mech_total": 7,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "reproduce_expr-20260702-062500"
+    },
+    "revision_delete": {
+      "mech_pass": 8,
+      "mech_total": 8,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "revision_delete-20260702-062602"
+    },
+    "scrna_qc_clustering": {
+      "mech_pass": 13,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "scrna_qc_clustering-20260702-062628"
+    },
+    "structure_superpose": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "structure_superpose-20260702-122132"
+    },
+    "survival": {
+      "mech_pass": 9,
+      "mech_total": 9,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "survival-20260702-064241"
+    },
+    "tpm": {
+      "mech_pass": 11,
+      "mech_total": 11,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "tpm-20260702-064439"
+    },
+    "variant_annotation": {
+      "mech_pass": 12,
+      "mech_total": 12,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "variant_annotation-20260702-123039"
+    },
+    "variant_to_structure": {
+      "mech_pass": 13,
+      "mech_total": 13,
+      "rubric_overall": null,
+      "fails": [],
+      "bundle": "variant_to_structure-20260702-064902"
+    },
+    "version_revert": {
+      "mech_pass": 7,
+      "mech_total": 8,
+      "rubric_overall": null,
+      "fails": [
+        "s7:superseded>=2 but 0"
+      ],
+      "bundle": "version_revert-20260702-070226"
+    }
+  },
+  "totals": {
+    "mech_pass": 280,
+    "mech_total": 288,
+    "full_pass": 22
+  }
+}

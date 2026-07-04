@@ -72,9 +72,13 @@ def test_lean_mode_drops_heavy_blocks_and_dynamic_tail():
     # Dynamic block is skills_recipes only, which is in _LEAN_DROP →
     # the second (uncached) system block is empty in lean.
     assert dynamic == "", repr(dynamic)
-    # Spot-check the must-drop set is encoded.
-    assert {"skills_recipes", "recipe_arm", "declared_recipes",
+    # Spot-check the must-drop set is encoded. NOTE: `declared_recipes` is
+    # deliberately NOT dropped in lean (build.py pins it — recipes the agent
+    # named on present_plan must survive), so it is intentionally absent here.
+    assert {"skills_recipes", "recipe_arm",
             "highlighting", "data_orientation"} <= _LEAN_DROP
+    assert "declared_recipes" not in _LEAN_DROP, \
+        "declared_recipes must stay in lean (pinned plan recipes) — see build.py"
 
 
 def test_lean_mode_swaps_behavior_to_slim():
@@ -82,15 +86,17 @@ def test_lean_mode_swaps_behavior_to_slim():
     size; lean forces behavior_slim.md regardless of arm. Detect via
     content fingerprint rather than file path (the block emits a
     distinguishable opening line in slim vs full)."""
-    from content.bio.prompts.build import build_system, _prompt, _bundle_rule_text
+    from content.bio.prompts.build import build_system, _bundle_rule_text
     full_stable, _ = build_system(
         _TOOLS, role="primary", intent="x",
         ctx={"thread_id": "t"}, mode="full")
     lean_stable, _ = build_system(
         _TOOLS, role="primary", intent="x",
         ctx={"thread_id": "t"}, mode="lean")
-    behavior_full = _bundle_rule_text("behavior.md")   # full behavior lives in system_bundle now
-    behavior_slim = _prompt("behavior_slim.md")
+    # Both behavior variants now live in the system_bundle (rules/), not the prompts
+    # dir — read them the same way the block does (_bundle_rule_text).
+    behavior_full = _bundle_rule_text("behavior.md")
+    behavior_slim = _bundle_rule_text("behavior_slim.md")
     # behavior_slim should appear in lean output; behavior (full) should NOT.
     # Pick a marker from the FULL file that ISN'T in slim.
     full_only_markers = [ln for ln in behavior_full.splitlines()

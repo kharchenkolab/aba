@@ -1,0 +1,311 @@
+id: foci_count
+title: Counting DNA-damage foci per nucleus across two conditions (microscopy)
+domain: bioimaging
+gpu: false
+summary: >
+  A realistic microscopy working session: examine a control vs treated gamma-H2AX
+  foci dataset, segment nuclei and count foci per nucleus, build a foci overlay and
+  a foci-per-nucleus boxplot, pin the keepers, tune spot-detection sensitivity and
+  re-count (faint foci recovered), restyle the boxplot for a figure, drop the
+  superseded version, survive an imaging-library blob-detection API change without
+  the counts drifting, then come back and recap.
+lifecycle: [revise, version_change]
+data_files:
+- foci/ctrl_dapi.tif
+- foci/ctrl_foci.tif
+- foci/treated_dapi.tif
+- foci/treated_foci.tif
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I ran a DNA-damage assay and imaged two samples, a control and a treated one.
+    For each sample there are two images in DATA_DIR/foci/: a nuclear stain channel
+    and a damage-marker channel where damage shows up as small bright spots inside
+    the nuclei. The files are ctrl_dapi.tif / ctrl_foci.tif for the control and
+    treated_dapi.tif / treated_foci.tif for the treated sample. Before we count
+    anything, just open them up and tell me what I'm working with: the image
+    dimensions, roughly how many nuclei you can see in each sample, and whether the
+    damage channel of the treated sample visibly has more spots than the control.
+  expect:
+    must_mention:
+    - control
+    - treated
+    - nucle
+    must_not:
+    - "I cannot read"
+    - "unable to open"
+    - placeholder
+    - "as an AI"
+    checks: >
+      Reads all four 16-bit TIFFs and reports the basics WITHOUT yet doing the full
+      count: each image is 440x440; both samples have roughly a dozen nuclei
+      (~12 each, on a rough grid) in the DAPI channel; the treated damage channel
+      visibly has many more bright spots than the control. No fabricated numbers, and
+      it must actually read pixel data rather than refusing. A quick look figure is
+      fine but not required at this examine stage.
+    context: {msgs_grow: true, cache_breakpoints: true}
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now do the real count: segment the nuclei from the nuclear-stain channel,
+    find the bright damage spots in the other channel, and assign each spot to the
+    nucleus it falls inside, ignoring the speckles that sit outside any nucleus. Give
+    me the number of foci per nucleus for each sample, and plot me a figure showing
+    the detected spots overlaid on the nuclei for both conditions so I can sanity-
+    check the detection by eye. Save that overlay as a figure I can keep.
+  expect:
+    must_mention:
+    - control
+    - treated
+    - nucle
+    must_not:
+    - "I cannot"
+    - "unable to open"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    checks: >
+      Segments nuclei from *_dapi.tif (Gaussian smooth + Otsu + connected components)
+      and finds 12 nuclei in BOTH conditions; detects bright spots in *_foci.tif (a
+      blob/LoG detector or local-maxima peak finding, ideally after a tophat
+      background subtraction) and KEEPS ONLY spots that fall inside a nucleus mask,
+      excluding the out-of-nucleus speckles. Reports foci-per-nucleus: control ~2 and
+      treated clearly higher (~8-12; an under-counting first pass at ~8 is acceptable
+      here, the revise step refines it). Produces an OVERLAY figure (detected spots
+      marked on the nuclei for both conditions). Must NOT fabricate counts or claim it
+      cannot read the images.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The spot-overlay figure from s2 is pinned — a Result entity now exists on the
+      shelf and shows in the manifest.
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now summarise the comparison: give me a boxplot of foci per nucleus, control
+    versus treated, with each nucleus as a point, and run a quick test of whether the
+    treated sample has significantly more foci per nucleus. Save the boxplot as a
+    figure.
+  expect:
+    must_mention:
+    - control
+    - treated
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    checks: >
+      Reuses the per-nucleus counts from s2 (12 nuclei per condition) and produces a
+      BOXPLOT of foci/nucleus for control vs treated, with the individual nuclei
+      shown as points. Runs a simple two-group test (e.g. Mann-Whitney / t-test) and
+      reports that treated has significantly more foci per nucleus than control. The
+      direction must be correct (treated >> control); the effect is large and
+      unambiguous. No fabricated p-value or counts.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The control-vs-treated boxplot from s4 is pinned too — two Results are now on
+      the shelf (the overlay and the boxplot).
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    Looking at the treated overlay more closely, I think some of the real but fainter
+    spots are being missed, and a few bright specks that aren't actually inside nuclei
+    may still be sneaking in. Make the spot detection a bit more sensitive to the
+    faint real foci while still rejecting the out-of-nucleus junk, then re-count on
+    the same images and give me the updated per-nucleus numbers and a refreshed
+    boxplot. I want this as a revision of what we already have, not a brand-new
+    project, and tell me what you changed.
+  expect:
+    must_mention:
+    - control
+    - treated
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    checks: >
+      A REVISION of the s2/s4 analysis on the SAME data, not a fresh project: lowers
+      the detection threshold / raises sensitivity so faint foci are recovered, while
+      keeping the nucleus-mask restriction (and a minimum spot separation) so
+      out-of-nucleus speckles stay excluded and close foci aren't double-counted.
+      After tuning, per-nucleus means converge to the planted truth: control ~2.2 and
+      treated ~12 (treated within roughly +/-1.5 of 12, clearly above the ~8 a
+      conservative detector gave). Nuclei stay at 12 per condition. Produces a
+      refreshed boxplot figure and states WHAT changed (e.g. the threshold value) and
+      that faint foci are now picked up while non-nuclear speckles remain excluded.
+      Must NOT silently keep the old counts or fabricate the improvement.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The refreshed (sensitivity-tuned) boxplot from s6 is pinned — three Results are
+      now on the shelf.
+- id: s8
+  kind: delete
+  actor: user
+  target: {ref: s5}
+  expect:
+    state: {entity_archived: {ref: s5}, pinned_results_min: 2}
+    checks: >
+      The original (pre-tuning) boxplot pinned at s5 is now superseded by the s6
+      revision, so it is archived. The overlay (s3) and the tuned boxplot (s7) remain
+      active — two Results survive.
+- id: s9
+  kind: analyze
+  actor: agent
+  prompt: >
+    This tuned boxplot is the one going in the figure. Redo it cleaned up for
+    presentation: a colourblind-friendly palette, larger point and axis-label sizes,
+    the two conditions clearly labelled control and treated, and the foci-per-nucleus
+    numbers annotated on each box. Save it as a new figure.
+  expect:
+    must_mention:
+    - control
+    - treated
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    checks: >
+      A RESTYLE of the tuned s6 boxplot producing a NEW figure (not a re-analysis):
+      same per-nucleus data (control ~2.2, treated ~12, 12 nuclei each) re-plotted
+      with a colourblind palette, bigger fonts/points, clear control/treated labels,
+      and the per-nucleus means annotated. The numbers must match the tuned counts;
+      no new science, no fabricated values.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The presentation-styled boxplot from s9 is pinned — three Results active again
+      (overlay, tuned boxplot, styled boxplot).
+- id: s11
+  kind: version_change
+  actor: agent
+  prompt: >
+    Heads up: our analysis environment got upgraded and the imaging library we use
+    for the spot detection changed in the new version — one of the detection settings
+    got renamed and another behaves a little differently than before. I don't want
+    the foci numbers to silently shift because of that. Make sure the detection still
+    runs correctly under the new version and confirm the per-nucleus counts are still
+    consistent with what we had after the tuning.
+  expect:
+    must_mention:
+    - control
+    - treated
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    checks: >
+      A genuine package/API version change for the blob/peak detector (renamed or
+      changed threshold argument, changed return shape, or a removed keyword for
+      blob_log / peak_local_max). The agent inspects the installed version /
+      signature, adapts the call to the new API so detection runs without error, then
+      RE-RUNS the s6-tuned analysis and VERIFIES the per-nucleus counts are stable:
+      control still ~2 and treated still ~12, 12 nuclei per condition — i.e. the
+      upgrade did not move the result. It must explicitly state the counts are
+      consistent (reproduced) with the prior tuned result, ideally calling out the
+      specific API difference it handled. Must NOT claim consistency without
+      re-running, must NOT just reuse the old cached numbers, and must NOT fabricate.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this later — remind me where we landed. Which figures did we keep,
+    what are the final foci-per-nucleus numbers for control and treated, and what's
+    the bottom-line conclusion about whether the treatment increased DNA damage? Just
+    summarise from what's pinned; don't re-run the analysis.
+  expect:
+    must_mention:
+    - control
+    - treated
+    must_not:
+    - "I cannot"
+    - placeholder
+    - "as an AI"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is
+      rehydrated from the pinned shelf: it should recall the surviving keepers (the
+      spot overlay, the tuned boxplot, and the presentation-styled boxplot) and the
+      final tuned numbers (control ~2.2, treated ~12 foci per nucleus, 12 nuclei
+      each), conclude that the treatment clearly increased DNA damage (~5-6x more
+      foci per nucleus), and note the result was stable across the sensitivity tuning
+      and the library upgrade. It should NOT resurrect the deleted pre-tuning boxplot
+      and should NOT re-run the whole analysis. Tests context rebuild + that the
+      curation (pins + the s8 delete) persisted.
+expected_overall:
+  planted_truth: >
+    Two conditions, each a 440x440 two-channel field saved as paired 16-bit TIFFs
+    (*_dapi.tif = nuclear channel, *_foci.tif = foci channel), seed=0.
+    NUCLEI: exactly 12 nuclei per condition (24 total), each a blurred disk
+    (radius 34 px) on a jittered 4x4 grid; both conditions segment to 12 nuclei.
+    FOCI (small Gaussian blobs, sigma 1.6 px, planted only INSIDE nuclei, with a
+    >=7 px minimum center-to-center separation so they stay individually
+    resolvable):
+      - control: 26 foci total across 12 nuclei -> mean ~2.17 foci/nucleus
+        (5 of them are faint, the rest bright).
+      - treated: 143 foci total across 12 nuclei -> mean ~11.92 foci/nucleus
+        (45 faint, the rest bright).
+    Roughly one third of each nucleus's foci are FAINT (amplitude ~1500 vs ~5200
+    for bright) and are missed by a default/too-conservative detector, so a naive
+    first pass under-counts the treated sample to ~8/nucleus. Each condition also
+    has bright, sharp BACKGROUND SPECKLES (14 in control, 18 in treated; amplitude
+    ~4800, sigma ~0.7) placed anywhere in the field — most fall OUTSIDE nuclei and
+    are not foci; a detector that does not mask to nuclei over-counts. Exact
+    per-nucleus counts, speckle centers, and faint/bright splits are recorded in
+    data/foci/ground_truth.json (for the judge only; not referenced by prompts).
+    Correctly tuned detection (background subtraction + nucleus masking + an
+    appropriate threshold) recovers control ~2.2 and treated ~12 per nucleus; the
+    treated/control increase is ~5-6x and unambiguous.
+  notes: >
+    A fully correct end-to-end session: (s1) examine the four TIFFs and report
+    440x440, ~12 nuclei each, treated visibly spottier — without fabricating counts;
+    (s2) segment nuclei (12 each), detect foci and restrict to inside nuclei, report
+    control ~2 vs treated ~8-12 per nucleus, and produce a spot-overlay figure;
+    (s3) pin the overlay; (s4) produce a control-vs-treated foci/nucleus boxplot with
+    a significance test (treated >> control) and (s5) pin it; (s6) REVISE the SAME
+    project by raising detection sensitivity so faint foci are recovered while
+    non-nuclear speckles stay excluded -> counts converge to control ~2.2 and treated
+    ~12 per nucleus, refreshed boxplot, parameter change noted; (s7) pin the tuned
+    boxplot; (s8) DELETE the now-superseded pre-tuning boxplot (s5); (s9) RESTYLE the
+    tuned boxplot for presentation (colourblind palette, bigger fonts, annotated
+    means) as a new figure and (s10) pin it; (s11) handle the imaging-library API
+    change (renamed/altered threshold arg or changed return shape for the blob/peak
+    detector), re-run under the new version, and confirm the per-nucleus counts are
+    unchanged (control ~2, treated ~12, 12 nuclei each) so the upgrade did not move
+    the result; (s12) after a session restart, recap the surviving pinned figures and
+    the final numbers and conclude the treatment increased DNA damage ~5-6x. Throughout:
+    raw pixel data is actually read and counted, spots outside nuclei are excluded,
+    curation (pins + the s8 delete) persists across the resume, and no counts or
+    statistics are fabricated.

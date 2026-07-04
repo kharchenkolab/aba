@@ -129,6 +129,23 @@ def test_submit_stores_slurm_id(slurm):
     assert "resources" in after["params"]
 
 
+def test_job_sh_sanitizes_python_env(slurm):
+    """job.sh must clear PYTHONHOME and OVERWRITE PYTHONPATH (not prepend) so a
+    module-loaded ancient Python can't shadow the conda env the job runs on
+    (the prj_6d986f40 numpy incident)."""
+    import re
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-sanitize")["id"]
+    job = _mk_job(pid)
+    sub = SlurmSubmitter()
+    sub.submit(job)
+    job_sh = (sub._run_dir(job) / "job.sh").read_text()
+    assert "unset PYTHONHOME" in job_sh, job_sh
+    m = re.search(r"export PYTHONPATH=\S+", job_sh)
+    assert m and ":$PYTHONPATH" not in m.group(0), \
+        f"PYTHONPATH must be overwritten, not prepended: {m.group(0) if m else None}"
+
+
 def test_submit_passes_resource_flags(slurm, monkeypatch):
     from core.jobs.slurm_submitter import SlurmSubmitter
     args_file = Path(tempfile.mktemp())
@@ -153,6 +170,32 @@ def _write_cfg() -> Path:
         "  - {name: long, max_cores: 32, max_mem_gb: 256, max_walltime_h: 72, gpu: false}\n"
         "defaults: {cores: 1, mem_gb: 4, walltime_h: 4}\n")
     return p
+
+
+def _write_cfg_gpu() -> Path:
+    p = Path(tempfile.mktemp(suffix=".yaml"))
+    p.write_text(
+        "partitions:\n"
+        "  - {name: cpu, max_cores: 32, max_mem_gb: 256, max_walltime_h: 72, gpu: false}\n"
+        "  - {name: gpu, max_cores: 16, max_mem_gb: 128, max_walltime_h: 24, gpu: true}\n"
+        "defaults: {cores: 1, mem_gb: 4, walltime_h: 4}\n")
+    return p
+
+
+def test_submit_gpu_estimate_requests_gpu(slurm, monkeypatch):
+    """A GPU estimate (est_gpu → estimate.gpu) must reach the submitter and produce
+    --gres=gpu:1 on a GPU partition — the placement that prj_6d986f40's dropped est_gpu
+    prevented. Guards the whole estimate→resources→sbatch GPU path."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    args_file = Path(tempfile.mktemp())
+    monkeypatch.setenv("FAKE_ARGS_FILE", str(args_file))
+    monkeypatch.setenv("ABA_HPC_CONFIG", str(_write_cfg_gpu()))
+    pid = projects.create_project("slurm-gpu")["id"]
+    job = _mk_job(pid, estimate={"cores": 4, "mem_gb": 16, "runtime_min": 30, "gpu": True})
+    SlurmSubmitter().submit(job)
+    args = args_file.read_text()
+    assert "--gres=gpu:1" in args, args
+    assert "--partition=gpu" in args, args
 
 
 def test_poll_pending_then_done(slurm, monkeypatch):
@@ -305,3 +348,18 @@ def test_submit_spec_carries_env(slurm):
     rd = get_job(job["id"], project_id=pid)["params"]["run_dir"]
     spec = json.loads((Path(rd) / "job_spec.json").read_text())
     assert spec["env"] == "myenv"
+
+
+def test_submit_spec_carries_gpu_request(slurm):
+    """The job spec records whether a GPU was requested (estimate.gpu) so slurm_entry
+    can preflight torch.cuda on the compute node (no silent CPU fallback on an idle GPU)."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-gpuflag")["id"]
+    gjob = _mk_job(pid, estimate={"gpu": True, "cores": 4, "mem_gb": 16, "runtime_min": 30})
+    SlurmSubmitter().submit(gjob)
+    rd = get_job(gjob["id"], project_id=pid)["params"]["run_dir"]
+    assert json.loads((Path(rd) / "job_spec.json").read_text())["gpu"] is True
+    cjob = _mk_job(pid, estimate={"cores": 2})
+    SlurmSubmitter().submit(cjob)
+    rd2 = get_job(cjob["id"], project_id=pid)["params"]["run_dir"]
+    assert json.loads((Path(rd2) / "job_spec.json").read_text())["gpu"] is False

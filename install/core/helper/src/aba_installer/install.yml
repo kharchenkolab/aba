@@ -66,6 +66,10 @@ steps:
       # Prefer an explicit override, then the env.yml from the cloned repo
       # (the common case — setup.command already cloned it), then a URL fetch.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/core/environment.yml" ]; then cp "$REPO_DIR/aba/install/core/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment.yml}"; fi'
+      # Deployment-conditional base: when config.env declares ABA_ACCELERATOR=cuda, inject
+      # the GPU torch pin so scvi-tools resolves the CUDA build (else conda-forge picks the
+      # CPU-only default and GPU jobs silently run on CPU). No-op for a CPU deployment.
+      - 'if [ -f "$REPO_DIR/aba/install/core/inject-accelerator.sh" ]; then bash "$REPO_DIR/aba/install/core/inject-accelerator.sh" "$ABA_HOME/environment.yml"; fi'
       # Idempotent + self-healing. Marker is env/bin/uvicorn (pip-installed at
       # the very end) so a half-built env from an interrupted prewarm is NOT
       # mistaken for complete — we wipe and rebuild it (the package cache makes
@@ -75,7 +79,22 @@ steps:
       # priority keeps the solver from exploring lower-priority channels for
       # packages conda-forge already satisfies — a large solve speedup (and the
       # correct, deterministic resolution). micromamba 2.x does not default to it.
-      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # CONDA_OVERRIDE_CUDA (cuda base only): the install/build node has no GPU, so
+      # micromamba can't detect the `__cuda` virtual package from a driver — and
+      # every conda-forge `pytorch=*=cuda*` build requires `__cuda`. Without the
+      # override the solver rejects all CUDA builds and backtracks to non-existent
+      # ancient ones ("Could not solve"). Spoofing __cuda lets a GPU-less node build
+      # the GPU base; its value also selects the CUDA major (12.x → cuda12x build,
+      # 11.8 → cuda118). Node-independent: the actual GPU is verified at job time
+      # (gpu_capability_ok in slurm_entry). Admin override: ABA_CUDA_VERSION.
+      # Default 11.8 (cuda118) is the widest-compatibility choice: runs on any driver
+      # >= 450.80 and covers GPUs sm_60 (P100) .. sm_90 (H100). A 12.x runtime needs a
+      # driver supporting CUDA 12 (>= R525); it does run on an older 12.x driver via CUDA
+      # minor-version compatibility (verified: cuda126 works on our R535/CUDA-12.2 P100
+      # nodes) but not on R450-R520 clusters. 11.8 keeps the widest driver floor and
+      # avoids depending on minor-version compat. Set ABA_CUDA_VERSION=12 for the newer
+      # runtime on a R525+ cluster; a future install-time probe will auto-pick.
+      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
     remediation: |
       The conda solve/build failed — usually a network/channel hiccup or low

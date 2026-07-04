@@ -587,6 +587,27 @@ def _background_timeout_s(input_: dict, est_min: float) -> int:
     return max(60, min(base, BACKGROUND_MAX_TIMEOUT_S))
 
 
+def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
+    """The submit_python_job kwargs a BACKGROUND run_python must carry beyond
+    code/title/ids/run_id: the agent's resource ESTIMATE (so a Slurm deployment can
+    size the partition/QoS and pick a GPU node), the EXECUTION target, the isolated
+    ENV, and an estimate-sized TIMEOUT. Shared by run_python() below AND guide.py's
+    background-submit intercept, so NEITHER path drops the placement estimate — the
+    est_gpu-silently-dropped-on-the-intercept bug (prj_6d986f40): the agent passed
+    est_gpu=true but the intercept never forwarded it, so the job couldn't be
+    GPU-placed."""
+    est_min = float(input_.get("estimated_runtime_min") or 0)
+    est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
+           "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
+    env = input_.get("env")
+    if env is None:
+        from core.exec.isolated_env import get_active_env
+        env = get_active_env(str(project_id), "python")
+    env_name = None if _is_default_env(env) else str(env).strip()
+    return {"estimate": est, "execution": input_.get("execution"),
+            "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -646,21 +667,15 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     if choice.location == "background":
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
-        # HPC sizing (ondemand.md P6): carry the agent's estimate so a Slurm
-        # deployment can pick a partition/QoS + cpus/mem/walltime. Harmless to the
-        # local submitter (it ignores it). `env_name` (an isolated env, already
-        # ensure_env_built above) is carried so the job runs IN that env — the
-        # background executor / slurm_entry activate it (standalone, its own python).
-        est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
-               "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
-        # Background jobs get a timeout sized from the estimate, NOT the
-        # interactive 300s/30-min ceiling that `timeout_s` (above) carries.
-        bg_timeout_s = _background_timeout_s(input_, est_min)
+        # Carry the agent's estimate + execution + isolated env + estimate-sized
+        # timeout so a Slurm deployment can size partition/QoS + pick a GPU node.
+        # bg_submit_kwargs is the SINGLE source shared with guide.py's background
+        # intercept — neither path drops the placement estimate.
         job = submit_python_job(code, title=input_.get("title") or "Background analysis",
                                 focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                                timeout_s=bg_timeout_s, project_id=str(project_id),
-                                thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                                estimate=est, env=env_name, execution=input_.get("execution"))
+                                project_id=str(project_id), thread_id=str(thread_id),
+                                run_id=active_run_id(str(thread_id)),
+                                **bg_submit_kwargs(input_, project_id))
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",

@@ -1,0 +1,354 @@
+id: variant_annotation
+title: Reconcile a pre-annotated clinical VCF, catch a genome-build mix-up mid-study, and curate the tumour-board list
+domain: genomics
+gpu: false
+summary: >
+  A realistic variant-annotation session on ~24 real, well-documented variants
+  (BRCA1 / TP53 / CFTR / EGFR) in a tiny VCF that arrived WITH its consequence
+  annotations already run. The collaborator ran a variant-effect predictor on the
+  build the header declared (GRCh38) and shipped the call table alongside the VCF.
+  The agent examines the file, charts impact classes and a per-gene breakdown from
+  the provided GRCh38 table, pins the figures - then the core facility reveals the
+  file was on the WRONG build (declared GRCh38 but the coordinates are GRCh37) and
+  sends a corrected re-export WITH a fresh GRCh37 call table. The agent re-reads the
+  corrected annotations (conclusions shift - the genes were scrambled on GRCh38),
+  retires the now-wrong figure, restyles the corrected chart for the report, narrows
+  to high-impact truncating variants in the two tumour-suppressor genes for the
+  tumour board, and comes back later to confirm the curated shelf survived.
+  ALL annotation is read from small LOCAL tables shipped with the VCF - no per-variant
+  REST at run time; the science is reasoning over the provided call tables.
+data_files:
+- variants.vcf
+- vep_grch38.tsv
+- variants_grch37.vcf
+- vep_grch37.tsv
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    A collaborator sent me a small variant call file at DATA_DIR/variants.vcf from a panel
+    of cancer-related and disease genes, plus the consequence table they already ran
+    alongside it at DATA_DIR/vep_grch38.tsv. Before we do anything heavy, just take a look
+    at the VCF and tell me what's in it - how many variants, which genes and chromosomes
+    they sit on, and what genome build the file says it's on. Don't dig into the
+    consequences yet, I just want to know what we're holding.
+  expect:
+    must_mention:
+    - GRCh38
+    - BRCA1
+    - TP53
+    must_not:
+    - "as an AI"
+    - "I cannot access"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Reads the VCF and reports the basic shape: 24 variants across 4 genes
+      (BRCA1, TP53, CFTR, EGFR) on chromosomes 7 and 17, and that the header declares
+      ##reference=GRCh38. It should also notice each row carries a submitter GENE= tag.
+      No fabricated counts; it should NOT yet dig into the provided consequence table
+      (that's the next turn). Reads local files only - no network annotation.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now bring in the consequence calls they shipped in DATA_DIR/vep_grch38.tsv - these were
+    run against the build the header declares. For each variant pull its predicted gene,
+    functional consequence and impact class (high / moderate / low), and give me a bar chart
+    of how many variants fall in each impact class, saved as a figure I can keep. While
+    you're at it, sanity-check the gene assignments against the submitter's GENE= tags - do
+    they actually agree?
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - ST7
+    must_not:
+    - "as an AI"
+    - "hypothetical variant"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      The agent joins the VCF to the provided GRCh38 call table, classifies impact, and
+      produces an impact-class bar chart figure. CRITICAL: the provided GRCh38 calls are the
+      build-mismatched ones - the predicted genes are a scrambled set (ST7, EIF4A1, ELDR,
+      KRTAP9 clusters, CD68, intergenic), NOT the submitter's BRCA1/TP53/CFTR/EGFR. A correct
+      agent reports the GRCh38 table as-is for the chart but flags that the predicted genes
+      do NOT match the GENE= tags (e.g. CFTR-tagged rows land in ST7; BRCA1-tagged rows land
+      in KRTAP9 clusters) - an early hint something is off. The bar chart reflects the
+      provided GRCh38 impact distribution; no fabricated counts; reads the local table only.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The GRCh38 impact-class bar chart is pinned - a Result entity now exists and shows in
+      the manifest. (This figure is on the wrong build; it will be retired later.)
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Stick with the same GRCh38 calls for now and give me a second figure: a per-gene summary
+    showing, for each predicted gene the variants landed in, how many of its variants are
+    high / moderate / low impact. Save it as its own figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - ST7
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A per-gene summary figure (e.g. a stacked/grouped bar per gene by impact class),
+      reusing the provided GRCh38 table rather than re-deriving. On GRCh38 the predicted
+      genes are the scrambled set (ST7, EIF4A1, ELDR, KRTAP9 clusters, CD68, intergenic),
+      NOT a clean BRCA1/TP53/CFTR/EGFR breakdown - a correct agent's per-gene figure reflects
+      that mismatch. No fabricated gene assignments.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The per-gene impact-summary figure from s4 is pinned — a second Result on the shelf
+      (s4's figure was previously orphaned, throwing the downstream pin counts off by one).
+
+- id: s6
+  kind: version_change
+  actor: agent
+  stage: [variants_grch37.vcf, vep_grch37.tsv]
+  prompt: >
+    The core facility just got back to me - they apologise, the coordinates were never
+    lifted over, so that file is actually on the OLDER assembly (hg19 / GRCh37), not the
+    current one. I've put their corrected re-export at DATA_DIR/variants_grch37.vcf (same
+    variants, build label fixed) and their re-run consequence table at
+    DATA_DIR/vep_grch37.tsv. Please switch to the corrected GRCh37 calls and redo the impact
+    bar chart. I want to know specifically which variants change their verdict now that
+    they're on the right coordinates - which genes they snap back to and which consequences
+    flip - and what the corrected impact distribution looks like. Save the new bar chart as
+    a figure.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - GRCh37
+    - stop_gained
+    - frameshift
+    - CFTR
+    must_not:
+    - "results are unchanged"
+    - "no changes"
+    - "identical to before"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      The crux. The agent must switch to the provided GRCh37 call table (DATA_DIR/vep_grch37.tsv)
+      and must NOT silently reuse the GRCh38 results from s2. On the correct GRCh37 build the
+      genes snap back to the submitter's intended set (BRCA1/TP53/CFTR/EGFR) and the
+      consequences resolve to the documented biology: HIGH-impact truncating calls
+      (CFTR G542X stop_gained, TP53 R342* stop_gained, BRCA1 5266dupC frameshift_variant),
+      CFTR F508del as an inframe_deletion (moderate by VEP impact), plus a body of missense
+      and synonymous calls - all in the intended genes. It must explicitly reconcile which
+      variants changed verdict between builds (essentially ALL of them change gene and/or
+      consequence - e.g. CFTR G542X goes intron_variant(ST7) -> stop_gained(CFTR);
+      TP53 R342* goes 3_prime_UTR(EIF4A1) -> stop_gained(TP53); EGFR variants go intron/
+      intergenic -> missense/synonymous(EGFR)). Treat this as a build correction / version
+      change of the SAME project, using the prior GRCh38 calls as the comparison baseline.
+      The new bar chart shows the corrected GRCh37 impact distribution. The agent must not
+      claim the results were unchanged. Reads the local GRCh37 table only - no network.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The corrected (GRCh37) impact bar chart is pinned - now three Results on the shelf.
+
+- id: s8
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The original GRCh38 impact bar chart (pinned at s3) is on the wrong build and now
+      misleading, so it is archived. Two correct figures remain: the s4 per-gene summary
+      (kept for now) and the s6 corrected impact chart.
+
+- id: s9
+  kind: revise
+  actor: agent
+  prompt: >
+    The corrected impact bar chart is going into a report. Redo it cleanly: order the bars
+    high -> moderate -> low, use a colourblind-friendly palette, label each bar with its
+    count, and give it a clear title. Save it as a new figure. Don't re-annotate - just
+    restyle the chart you made from the corrected GRCh37 calls.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A restyled version of the corrected (GRCh37) impact bar chart - same underlying GRCh37
+      counts, just a report-quality redraw (impact-ordered bars, colourblind palette, count
+      labels, title). This is a figure restyle that produces a NEW figure, not a re-analysis;
+      the numbers must not change. Reuses the s6 GRCh37 calls; no re-annotation.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The restyled report-quality impact chart is pinned (back to three Results).
+
+- id: s11
+  kind: revise
+  actor: agent
+  prompt: >
+    Now using the corrected GRCh37 calls, narrow down to the variants I'll actually take to
+    the tumour board: the ones that are BOTH high-impact (truncating - a gained stop or a
+    frameshift) AND sit in one of the two big tumour-suppressor genes, BRCA1 or TP53. Drop
+    everything else and give me that short final list, with the rsID and protein change for
+    each.
+  expect:
+    must_mention:
+    - TP53
+    - BRCA1
+    - frameshift
+    - rs397516436
+    - rs80357906
+    must_not:
+    - CFTR
+    - EGFR
+    - "no high-impact"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A filter / intersection over the corrected (GRCh37) table, reusing it rather than
+      re-deriving. The correct answer is exactly TWO variants: TP53 R342* (stop_gained,
+      chr17:7577022 G>A, rs397516436) and BRCA1 5266dupC (frameshift_variant, chr17:41209080
+      G>GC, rs80357906). It must EXCLUDE the HIGH-impact CFTR variant (G542X stop_gained)
+      because CFTR is not in the requested tumour-suppressor pair, exclude CFTR F508del
+      (inframe_deletion is not a truncating high-impact call), and exclude all missense/
+      synonymous variants even in BRCA1/TP53 (e.g. TP53 R175H, BRCA1 M1775R are pathogenic
+      missense but NOT truncating, so they are out). Reporting any CFTR/EGFR variant or any
+      missense as part of this final set is wrong. Presented as a short curated 2-variant
+      list suitable for a tumour board.
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this project later - remind me what we've got on the shelf. Which figures
+    are pinned, what build are they on, and what was the final tumour-board variant list?
+    Just summarise from what's saved; don't re-run the annotation.
+  expect:
+    must_mention:
+    - GRCh37
+    - TP53
+    - BRCA1
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is
+      rehydrated from the pinned shelf. It should reflect the SURVIVING figures - the s4
+      per-gene summary, the s6 corrected GRCh37 impact chart, and the s9 restyled report
+      chart - and the final 2-variant tumour-board list (TP53 R342*, BRCA1 5266dupC), and
+      should NOT resurrect the deleted GRCh38 impact chart from s3. Tests context rebuild +
+      that the build correction and curation persisted. It must not re-run the full
+      annotation.
+
+expected_overall:
+  planted_truth: >
+    DATA_DIR/variants.vcf holds 24 REAL variants in BRCA1, TP53, CFTR, EGFR. The header
+    declares ##reference=GRCh38 but the POSITIONS are actually GRCh37 (hg19) coordinates - this
+    mismatch is the planted trap. The consequence calls are PRE-STAGED as small local tables
+    shipped with the VCF (no per-variant REST at run time):
+      DATA_DIR/vep_grch38.tsv - calls if the positions are read as GRCh38 (the WRONG build the
+        header declares); the predicted genes are scrambled.
+      DATA_DIR/vep_grch37.tsv - calls on the correct GRCh37 build; clean panel biology.
+    DATA_DIR/variants_grch37.vcf is the corrected re-export: the SAME 24 positions with the
+    header fixed to ##reference=GRCh37 (staged at s6 together with vep_grch37.tsv). Both call
+    tables were generated ONCE at build time by _fetch_vep.py against the Ensembl VEP REST API
+    (rest.ensembl.org and grch37.rest.ensembl.org) on 2026-06-29 and COMMITTED; the scenario
+    RUN reads them locally and never calls VEP. Each table has columns:
+    variant_id, chrom, pos, ref, alt, gene, consequence, impact. Format below is
+    rsID gene proteinLabel : CORRECT call on GRCh37  ||  WRONG call if read as GRCh38
+    (gene + consequence + VEP impact).
+
+    HIGH impact (VEP IMPACT=HIGH) on the correct GRCh37 build - 3 variants:
+      rs74597325  CFTR  G542X    : CFTR stop_gained HIGH        || ST7 intron_variant MODIFIER
+      rs397516436 TP53  R342*    : TP53 stop_gained HIGH        || EIF4A1 3_prime_UTR_variant MODIFIER
+      rs80357906  BRCA1 5266dupC : BRCA1 frameshift_variant HIGH|| KRTAP9-12P upstream_gene_variant MODIFIER
+    Pathogenic but NOT VEP-HIGH (inframe deletion = MODERATE by VEP impact):
+      rs113993960 CFTR  F508del  : CFTR inframe_deletion MODERATE || ST7 intron_variant MODIFIER
+    MODERATE / missense on GRCh37 (the F508del above plus the missense calls):
+      rs28934578 TP53 R175H : TP53 missense_variant MODERATE || EIF4A1 stop_gained HIGH   [pathogenic]
+      rs28934576 TP53 R273H : TP53 missense_variant MODERATE || EIF4A1 missense_variant   [pathogenic]
+      rs11540652 TP53 R248Q : TP53 missense_variant MODERATE || EIF4A1 3_prime_UTR_variant[pathogenic]
+      rs41293463 BRCA1 M1775R: BRCA1 missense_variant MODERATE || (.) intergenic_variant  [pathogenic]
+      rs121434568 EGFR L858R : EGFR missense_variant MODERATE || ELDR upstream_gene_variant[cancer driver]
+      rs121913428 EGFR T790M : EGFR missense_variant MODERATE || ELDR intron_variant       [resistance]
+      rs75527207 CFTR G551D  : CFTR missense_variant MODERATE || ST7 intron_variant        [pathogenic gating]
+      rs78655421 CFTR R117H  : CFTR missense_variant MODERATE || ST7 intron_variant        [pathogenic, variable]
+      rs1042522  TP53 P72R   : TP53 missense_variant MODERATE || CD68 5_prime_UTR_variant  [common]
+      rs1799966  BRCA1 S1613G: BRCA1 missense_variant MODERATE || KRTAP9-2 upstream_gene_variant [common]
+      rs16941    BRCA1 E1038G: BRCA1 missense_variant MODERATE || (.) intergenic_variant   [common]
+      rs16942    BRCA1 K1183R: BRCA1 missense_variant MODERATE || KRTAP9-8 downstream_gene_variant [common]
+      rs1799950  BRCA1 Q356R : BRCA1 missense_variant MODERATE || KRTAP9-4 upstream_gene_variant [common]
+      rs2227983  EGFR R521K  : EGFR missense_variant MODERATE || (.) intergenic_variant    [common]
+      rs213950   CFTR V470M  : CFTR missense_variant MODERATE || ST7 intron_variant        [common]
+    LOW / synonymous on GRCh37 (VEP IMPACT=LOW):
+      rs1050171  EGFR Q787Q  : EGFR synonymous_variant LOW || ELDR intron_variant
+      rs1799949  BRCA1 S694S : BRCA1 synonymous_variant LOW || KRTAP9-4 upstream_gene_variant
+      rs1800372  TP53 synon  : TP53 synonymous_variant LOW || EIF4A1 missense_variant
+      rs2293347  EGFR D994D  : EGFR synonymous_variant LOW || (.) intergenic_variant
+    MODIFIER / non-coding on GRCh37:
+      rs1625895  TP53 intronic: TP53 non_coding_transcript_exon_variant MODIFIER || EIF4A1 splice_region_variant LOW
+
+    Impact distribution on the correct GRCh37 build (by VEP IMPACT): 3 HIGH, 16 MODERATE,
+    4 LOW, 1 MODIFIER. On the WRONG GRCh38 read it collapses to mostly MODIFIER with the
+    genes scrambled into ST7 / EIF4A1 / ELDR / CD68 / KRTAP9 clusters / intergenic - the
+    impact distribution and per-gene breakdown do NOT match the clean GRCh37 set.
+
+    Step answers:
+      s1: 24 variants, genes BRCA1/TP53/CFTR/EGFR, chroms 7 and 17, header says GRCh38; each
+         row has a GENE= submitter tag. No consequence dig yet.
+      s2/s4 (provided GRCh38 table, the WRONG build): the predicted genes are scrambled
+         (ST7, EIF4A1, ELDR, CD68, KRTAP9 clusters, intergenic) and do NOT match the GENE=
+         tags; the impact distribution and per-gene breakdown do NOT match the clean set.
+         A correct agent charts the provided GRCh38 table honestly and flags the gene mismatch.
+      s6 (provided GRCh37 table, the correct build): genes snap back to BRCA1/TP53/CFTR/EGFR;
+         3 HIGH (CFTR G542X, TP53 R342*, BRCA1 5266dupC) + CFTR F508del inframe_deletion +
+         15 other missense + 4 synonymous + 1 non-coding; essentially every variant changes
+         gene and/or consequence between the two builds - the agent must enumerate the changes
+         and not claim "no change".
+      s9: a report-quality RESTYLE of the s6 corrected chart - same counts, no numeric change.
+      s11 (high-impact truncating AND in BRCA1/TP53): exactly TWO variants ->
+         TP53 R342* (rs397516436, stop_gained) and BRCA1 5266dupC (rs80357906,
+         frameshift_variant). CFTR G542X is high-impact but excluded (not BRCA1/TP53);
+         CFTR F508del is excluded (inframe_deletion, not truncating); all missense excluded.
+      s12: recap from the shelf - surviving pinned figures (s4 per-gene, s6 corrected impact,
+         s9 restyled), final 2-variant list, all on GRCh37; the deleted GRCh38 chart is gone.
+  notes: >
+    NETWORK BUDGET: this scenario is compute/reasoning-bound, NOT network-bound. Both VEP
+    call tables are fetched ONCE at build time (_fetch_vep.py) and committed under data/; the
+    scenario run is fully local (read VCF + provided TSV tables), no per-turn REST. A fully
+    correct end-to-end run is reasoning over the provided annotations as a scientist who
+    already ran the predictor would. Arc: s1 examine the VCF (counts/genes/build only). s2
+    join the provided GRCh38 calls and chart impact classes - reporting the build-mismatched
+    result honestly and flagging that the predicted genes disagree with the GENE= tags. s4 a
+    per-gene summary reusing those GRCh38 calls. s3/s5 the human pins both. s6 the build-
+    correction version_change: a corrected GRCh37 re-export AND its GRCh37 call table are
+    staged, the agent switches to the GRCh37 calls, redraws the impact chart, and explicitly
+    reconciles what changed vs s2 - treated as a revision of the same project, reusing the
+    prior GRCh38 calls as the baseline. s7 pin the corrected chart; s8 the human DELETES the
+    now-wrong GRCh38 chart (s3). s9 a figure RESTYLE of the corrected chart for the report
+    (new figure, same counts); s10 pin it. s11 a revise that filters the corrected calls to
+    HIGH-impact truncating AND gene in {BRCA1,TP53} -> exactly 2 variants. s12 resume:
+    rehydrate from the curated shelf and recap (surviving figures, build, final list) without
+    re-running. Fabrication failure modes to catch: inventing consequences from the rsID/GENE=
+    tags instead of reading the provided table; claiming s6 results are identical to s2;
+    including CFTR/EGFR or any missense/inframe in the s11 cancer-gene high-impact truncating
+    list; resurrecting the deleted GRCh38 chart at s12.

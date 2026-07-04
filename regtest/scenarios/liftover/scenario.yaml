@@ -1,0 +1,14 @@
+id: liftover
+title: Coordinate liftover hg19 → hg38
+domain: genomics
+prompt: I have some genomic positions in the old hg19 assembly in DATA_DIR/positions.bed. Convert them
+  to the current hg38 coordinates.
+data_files:
+- positions.bed
+expected:
+  must_mention:
+  - hg38
+  must_not: []
+  notes: 4 real hg19 intervals (APOE/EGFR/BRCA1/KRAS). Expect successful conversion, chromosome preserved,
+    positions shifted ~0.3–0.5 Mb (e.g. APOE chr19:45.41M → ~44.91M). Must not fabricate — if a position
+    is unmapped, say so.

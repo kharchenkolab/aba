@@ -1,0 +1,311 @@
+id: cheminformatics
+title: Drug physicochemical profiling and Lipinski rule-of-five — imatinib vs atorvastatin, restyle, drop a wrong conclusion, then resume with a clean reference
+domain: cheminformatics
+gpu: false
+summary: >
+  A realistic medicinal-chemistry triage session over a small local table of drug SMILES.
+  The chemist examines the table, computes the physicochemical profile (MW, logP, TPSA,
+  H-bond donors/acceptors) and Lipinski rule-of-five status for imatinib (which PASSES
+  despite being a bulky kinase inhibitor), pins it, then branches to compare imatinib
+  against atorvastatin (which FAILS the rule of five on two counts: MW > 500 and logP > 5).
+  The comparison figure is restyled with the rule-of-five cutoffs drawn on, and pinned.
+  The chemist then catches themselves about to write atorvastatin off purely for failing
+  the rule and DROPS that wrong conclusion (atorvastatin is a blockbuster ORAL statin --
+  the rule of five is a guideline, not a filter), deletes the now-superseded un-styled
+  comparison, and in a LATER session RESUMES to add a small clean reference compound
+  (aspirin) to anchor the property scale, restyling and pinning that profile before a
+  closing recap from the pinned shelf.
+lifecycle: [branch, drop, resume]
+data_files: [drugs.csv]
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I've got a little table of candidate compounds at DATA_DIR/drugs.csv -- each row is a
+    drug name, a rough class, and its structure as a SMILES string. Before we do anything,
+    just read it in and tell me what's there: how many compounds, what they are, and
+    confirm the structures actually parse into valid molecules. Don't compute properties or
+    plot anything yet -- I just want to know the file is sane.
+  expect:
+    must_mention:
+    - imatinib
+    - atorvastatin
+    must_not:
+    - "cannot parse"
+    - "invalid structure"
+    - "as an AI"
+    - placeholder
+    context: {cache_breakpoints: true}
+    checks: >
+      Reads drugs.csv and reports 5 compounds (imatinib, atorvastatin, aspirin, caffeine,
+      ibuprofen) with their classes, and confirms every SMILES parses into a valid molecule
+      (RDKit MolFromSmiles returns a non-None mol for all five). This is the orienting turn:
+      no descriptors computed, no figure expected. No fabricated compounds and no claim the
+      structures cannot be parsed.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Let's start with imatinib. Work out its core physicochemical profile from the structure
+    -- molecular weight, lipophilicity (logP), polar surface area, and the hydrogen-bond
+    donor and acceptor counts -- and tell me whether it satisfies Lipinski's rule of five.
+    Give me a figure of its property profile that I can keep, with the rule-of-five status
+    called out.
+  expect:
+    must_mention:
+    - imatinib
+    - Lipinski
+    must_not:
+    - "fails the rule"
+    - "violates Lipinski"
+    - "cannot compute"
+    - "as an AI"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes imatinib's descriptors from its SMILES with RDKit and saves a property-profile
+      figure. Correct ground truth: MW ~493.6, logP ~4.6, TPSA ~86, HBD 2, HBA 7. All four
+      Lipinski criteria are satisfied (MW < 500, logP < 5, HBD <= 5, HBA <= 10) -> 0
+      violations -> imatinib PASSES the rule of five, even though it is a fairly large kinase
+      inhibitor sitting close to the MW and logP limits. Numbers must come from the structure,
+      not memory; must NOT report imatinib as failing.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The imatinib property-profile figure from s2 is pinned -- a Result entity now exists and
+      shows in the manifest.
+
+- id: s4
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Now bring in atorvastatin alongside imatinib and compare the two head to head on the same
+    physicochemical axes -- molecular weight, logP, polar surface area, donors and acceptors --
+    and tell me how each one stacks up against Lipinski's rule of five. Give me a single figure
+    that puts the two compounds side by side so I can see where they differ.
+  expect:
+    must_mention:
+    - imatinib
+    - atorvastatin
+    - Lipinski
+    must_not:
+    - "atorvastatin passes"
+    - "both pass"
+    - "no violations for atorvastatin"
+    - "cannot compute"
+    - placeholder
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes atorvastatin's descriptors and compares them with imatinib's in a single saved
+      side-by-side figure. Correct ground truth for atorvastatin: MW ~558.7, logP ~6.3, TPSA
+      ~112, HBD 4, HBA 4 -> it VIOLATES the rule of five on TWO counts (MW > 500 AND logP > 5)
+      -> atorvastatin FAILS the rule of five (more than one violation), in contrast to imatinib
+      which passes. The figure must convey that atorvastatin is heavier and substantially more
+      lipophilic than imatinib. Must NOT report atorvastatin as passing or as having no
+      violations.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The imatinib-vs-atorvastatin comparison figure from s4 is pinned too; two Results are now
+      on the shelf (the imatinib profile and the comparison).
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    That comparison is the one I'll show, but it's hard to read what's over the line. Redo it
+    with a colourblind-friendly palette and bigger labels, and draw the rule-of-five cutoffs
+    right on the plot -- the molecular-weight limit and the logP limit as reference lines -- so
+    it's obvious at a glance which property of which compound crosses a threshold. Save it as a
+    new figure.
+  expect:
+    must_mention:
+    - atorvastatin
+    must_not:
+    - "cannot restyle"
+    - "cannot redo"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      A RESTYLE of the comparison from s4 (not a fresh analysis): a new saved figure reusing the
+      already-computed descriptors for imatinib and atorvastatin, with a colourblind-friendly
+      palette, larger labels, and the rule-of-five thresholds (MW = 500, logP = 5) drawn as
+      reference lines. The styling must make clear that atorvastatin crosses BOTH the MW and the
+      logP cutoffs while imatinib stays just under them. Same underlying numbers as s4, publication-ready.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The restyled comparison figure from s6 is pinned; three Results are now on the shelf (the
+      imatinib profile, the original comparison, and the restyled comparison).
+
+- id: s8
+  kind: drop
+  actor: agent
+  prompt: >
+    Hold on -- I was about to write atorvastatin off our list just because it fails the rule of
+    five. That's the wrong call and I don't want that conclusion carried forward. Atorvastatin is
+    one of the best-selling oral drugs ever, so clearly failing the rule of five on molecular
+    weight and logP doesn't mean a compound can't be an oral drug. Drop that "discard it for
+    failing Lipinski" reasoning and reframe: the rule is a rough guideline, not a hard filter.
+  expect:
+    must_mention:
+    - atorvastatin
+    must_not:
+    - "atorvastatin is not a viable drug"
+    - "atorvastatin cannot be an oral drug"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      The agent abandons the WRONG CONCLUSION that failing the rule of five disqualifies
+      atorvastatin. It must KEEP the correct factual finding (atorvastatin does violate the rule
+      of five on MW and logP) while explicitly retracting the "therefore discard it" inference,
+      acknowledging that atorvastatin is a successful approved ORAL drug and that Lipinski's rule
+      is a guideline/flag, not a pass/fail filter. It must NOT silently keep recommending
+      atorvastatin be dropped, and must NOT flip to claiming atorvastatin actually passes the rule.
+
+- id: s9
+  kind: delete
+  actor: user
+  target: {ref: s5}
+  expect:
+    state: {entity_archived: {ref: s5}, pinned_results_min: 1}
+    checks: >
+      The original un-styled comparison pinned at s5 is now superseded by the restyled,
+      cutoff-annotated version from s6, so the human archives it. That Result is archived; the
+      imatinib profile (s3) and the restyled comparison (s7) remain pinned, leaving two Results
+      on the shelf.
+
+- id: s10
+  kind: resume
+  actor: agent
+  prompt: >
+    Picking this back up later. Quick recap first -- which figures did we keep, and where did
+    imatinib and atorvastatin land on the rule of five? Then add a small, well-behaved reference
+    compound so the property scale has an anchor at the low end: profile aspirin the same way --
+    molecular weight, logP, polar surface area, donors and acceptors, and its rule-of-five status
+    -- and give me a figure of its profile. Don't redo imatinib or atorvastatin from scratch.
+  expect:
+    must_mention:
+    - aspirin
+    must_not:
+    - "no prior"
+    - "start over"
+    - "starting from scratch"
+    - "discard atorvastatin"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true}
+    checks: >
+      A LATER session: after a fresh app re-attached to the same project, the agent RESUMES and
+      recalls the kept state from the pinned shelf -- the imatinib profile (passes) and the
+      restyled imatinib-vs-atorvastatin comparison (atorvastatin fails MW and logP but is a valid
+      oral drug) -- rather than re-deriving everything. New work: compute aspirin's descriptors
+      and save a profile figure. Correct ground truth for aspirin: MW ~180.2, logP ~1.3, TPSA
+      ~63.6, HBD 1, HBA 3 -> 0 violations -> PASSES, a small clean low-end anchor. Must not claim
+      there is no prior work, must not restart, and must not resurrect the "discard atorvastatin"
+      conclusion. Aspirin's numbers must come from the structure.
+
+- id: s11
+  kind: pin
+  actor: user
+  target: {from_step: s10, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The aspirin profile figure from s10 is pinned; three Results are on the shelf again (the
+      imatinib profile, the restyled comparison, and the new aspirin profile).
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Let's wrap up. From just what we've kept, give me the bottom line: which of these compounds
+    satisfy Lipinski's rule of five and which don't, and what's the takeaway about using the rule
+    for triage. Summarise from what's pinned -- don't recompute anything.
+  expect:
+    must_mention:
+    - imatinib
+    - atorvastatin
+    - aspirin
+    must_not:
+    - "start over"
+    - "starting from scratch"
+    - "discard atorvastatin"
+    - "atorvastatin passes"
+    context: {cache_breakpoints: true}
+    checks: >
+      A closing synthesis after the session is rehydrated from the pinned shelf. It should reflect
+      the surviving curated state -- the imatinib profile, the restyled comparison, and the aspirin
+      profile -- and NOT the deleted un-styled comparison. Correct bottom line: imatinib and aspirin
+      PASS the rule of five (0 violations each); atorvastatin FAILS it (MW > 500 and logP > 5, 2
+      violations) yet is a successful oral drug -- so the rule of five is a useful flag for likely
+      oral bioavailability, not a hard accept/reject filter. Must not redo the analyses, must not
+      claim no prior work, must not say atorvastatin passes, and must not re-introduce the "discard
+      atorvastatin" conclusion.
+
+expected_overall:
+  planted_truth: >
+    data/drugs.csv is a LOCAL table of 5 drugs with canonical SMILES (no network). Descriptors are
+    computed with RDKit (Descriptors.MolWt, Crippen.MolLogP, rdMolDescriptors.CalcTPSA,
+    Lipinski.NumHDonors / NumHAcceptors). Lipinski rule of five: a violation is MW > 500, logP > 5,
+    HBD > 5, or HBA > 10; a compound passes with at most one violation.
+      * imatinib (kinase inhibitor, C29H31N7O): MW 493.62, logP 4.59, TPSA 86.3, HBD 2, HBA 7 ->
+        0 violations -> PASSES (it sits just under both the MW=500 and logP=5 limits despite being
+        a bulky kinase inhibitor).
+      * atorvastatin (statin, C33H35FN2O5): MW 558.65, logP 6.31, TPSA 111.8, HBD 4, HBA 4 ->
+        2 violations (MW > 500 AND logP > 5) -> FAILS the rule of five. It is nonetheless one of
+        the best-selling ORAL drugs ever -- the planted teaching point: Lipinski's rule is a
+        guideline/flag, not a hard pass/fail filter, and a real oral drug can violate it.
+      * aspirin (NSAID, C9H8O4): MW 180.16, logP 1.31, TPSA 63.6, HBD 1, HBA 3 -> 0 violations ->
+        PASSES (small clean low-end anchor).
+      * caffeine (C8H10N4O2): MW 194.19, logP -1.03, HBD 0, HBA 3 -> PASSES; ibuprofen (C13H18O2):
+        MW 206.28, logP 3.07, HBD 1, HBA 1 -> PASSES. (Present in the table; context only.)
+    Values above are RDKit reference numbers; the agent should land within rounding of them and the
+    qualitative pass/fail must be exactly: imatinib PASS, atorvastatin FAIL, aspirin PASS.
+  notes: >
+    A fully correct end-to-end run is a realistic medicinal-chemistry triage session:
+    (s1) examine -- reads drugs.csv, reports 5 compounds and confirms all SMILES parse to valid
+    molecules; no descriptors, no figure. (s2) analyze -- computes imatinib's descriptors from its
+    SMILES (MW ~493.6, logP ~4.6, TPSA ~86, HBD 2, HBA 7), concludes it PASSES Lipinski (0
+    violations), and SAVES a property-profile figure. (s3) the human PINS it. (s4) branch (new
+    thread) -- brings in atorvastatin, computes its descriptors (MW ~558.7, logP ~6.3, HBD 4,
+    HBA 4), concludes it FAILS the rule on two counts (MW > 500 and logP > 5) versus imatinib's
+    pass, and SAVES a side-by-side comparison figure. (s5) the human PINS the comparison (two
+    Results). (s6) revise -- RESTYLES the comparison (colourblind palette, larger labels, MW=500
+    and logP=5 cutoff lines drawn on) reusing the same descriptors, saving a new figure; (s7) the
+    human PINS the restyle (three Results). (s8) drop -- the chemist retracts the WRONG CONCLUSION
+    that atorvastatin should be discarded for failing the rule; the agent keeps the factual
+    violation finding but reframes the rule as a guideline, not a filter, acknowledging
+    atorvastatin is a successful oral drug -- without flipping to "it passes". (s9) the human
+    DELETES the now-superseded un-styled comparison (s5 archived; imatinib profile and restyled
+    comparison remain). (s10) resume -- a LATER session: the agent RESUMES, recaps the kept state
+    (imatinib passes, atorvastatin fails-but-valid), then ADDS aspirin as a low-end anchor (MW
+    ~180, logP ~1.3, 0 violations -> PASS) and SAVES its profile figure; (s11) the human PINS it
+    (three Results). (s12) resume -- closing synthesis from the pinned shelf: imatinib and aspirin
+    PASS, atorvastatin FAILS yet is a real oral drug, so the rule of five is a triage flag rather
+    than a hard filter; reflects the surviving curated Results, not the deleted comparison.
+    Fabrication / failure modes to catch: inventing MW/logP/TPSA values, reporting imatinib as
+    failing or atorvastatin as passing, claiming the SMILES cannot be parsed, re-introducing the
+    "discard atorvastatin" conclusion after the drop, restarting from scratch at resume, or
+    summarizing the deleted un-styled comparison at s12 instead of the surviving curated Results.
