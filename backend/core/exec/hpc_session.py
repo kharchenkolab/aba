@@ -85,9 +85,14 @@ def aba_allocation_capacity() -> dict:
         used = _running_inline_cores()          # don't oversubscribe with concurrent inline jobs
     except Exception:  # noqa: BLE001
         used = 0.0
+    try:
+        from core.exec.compute_env import node_gpus as _node_gpus
+        gpus = _node_gpus()                      # GPUs visible here = usable by an inline job
+    except Exception:  # noqa: BLE001
+        gpus = 0
     return {"inline_ok": inline_ok, "cores": max(1, cores),
             "mem_gb": _cap_mem_gb(s.get("alloc_mem")), "inline_used_cores": used,
-            "submitter": submitter, "on_slurm": bool(s.get("on_slurm"))}
+            "gpus": gpus, "submitter": submitter, "on_slurm": bool(s.get("on_slurm"))}
 
 
 def job_hpc_info(job: dict) -> dict:

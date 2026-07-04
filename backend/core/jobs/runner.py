@@ -214,7 +214,8 @@ def _bg_submission(execution: str | None, estimate: dict | None) -> tuple[str, s
     if (execution or "").lower() not in ("local", "auto"):
         return "slurm", None
     from core.exec.hpc_session import aba_allocation_capacity
-    heaviest = {"cpus": (estimate or {}).get("cores"), "mem_gb": (estimate or {}).get("mem_gb")}
+    heaviest = {"cpus": (estimate or {}).get("cores"), "mem_gb": (estimate or {}).get("mem_gb"),
+                "gpu": (estimate or {}).get("gpu")}
     return resolve_submission_target(execution.lower(), heaviest, aba_allocation_capacity())
 
 
@@ -329,6 +330,10 @@ def resolve_submission_target(requested: str, heaviest: dict | None, capacity: d
         return "inline", "local submitter — runs in ABA's process"
     if not capacity.get("inline_ok"):
         return "slurm", "ABA is on a login node (not in a compute allocation) — using Slurm"
+    # A GPU job must not run inline on a GPU-less allocation (it would silently fall to
+    # CPU). Route to Slurm so the submitter picks a GPU partition from estimate.gpu.
+    if (heaviest or {}).get("gpu") and not capacity.get("gpus"):
+        return "slurm", "needs a GPU ABA's allocation lacks — using Slurm (GPU partition)"
     cap_c, cap_m = capacity.get("cores"), capacity.get("mem_gb")
     used_c = capacity.get("inline_used_cores") or 0          # cores already committed to running inline jobs
     avail_c = (cap_c - used_c) if cap_c else cap_c

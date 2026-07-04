@@ -81,15 +81,25 @@ def set_compute_env(env: dict | None) -> None:
 
 
 # ── execution block (we study the DECISION, not the compute) ──────────────────
-_STUB = {"n": 0, "facts": ""}
+_STUB = {"n": 0, "facts": "", "gave_facts": False}
 
 
 def _stub_run(input_, ctx=None):
-    # Return the scenario's data facts as stdout so the agent's inspection cell
-    # "succeeds" (it can verify adata/files and proceed to the placement decision)
-    # without real data. We capture the DECISION (tool args), not the compute.
+    # Return the scenario's data facts ONCE (the agent's first inspection verifies the
+    # object), then silent success for later prep/compute calls. Returning the same
+    # facts string on EVERY call makes a careful agent detect a fake execution layer
+    # and halt — so give facts once, then empty (a step that "ran, no output").
     _STUB["n"] += 1
-    return {"status": "ok", "returncode": 0, "stdout": _STUB["facts"], "stderr": "",
+    code = (input_.get("code") or "") if isinstance(input_, dict) else ""
+    inspecting = len(code) < 700 and any(
+        k in code for k in ("print", "shape", "value_counts", "repr(", ".obs", "exists",
+                            ".head", "unique", "dtype", "n_obs", "info("))
+    if inspecting and not _STUB["gave_facts"]:
+        _STUB["gave_facts"] = True
+        out = _STUB["facts"]
+    else:
+        out = ""
+    return {"status": "ok", "returncode": 0, "stdout": out, "stderr": "",
             "plots": [], "tables": [], "files": [], "execution_mode": "session"}
 
 
@@ -177,6 +187,7 @@ def run():
             continue
         set_compute_env(sc["compute_env"])
         _STUB["facts"] = sc.get("data_facts", "")
+        _STUB["gave_facts"] = False
         ctx_line = CE.context_line()
         pid = client.post("/api/projects", json={"name": f"plc-{sc['name']}"}).json()["id"]
         client.post(f"/api/projects/{pid}/open")
