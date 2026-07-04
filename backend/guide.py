@@ -537,16 +537,13 @@ async def stream_response(
     # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
     # Empty when no MCP server is configured/connected.
     #
-    # Lean spec optimization (2026-06-20): when prompt_mode == "lean" we
-    # ask the gateway to render compact descriptions (first-paragraph
-    # 1-liners) for all tools EXCEPT the priority set. The agent can
-    # call any tool — only the catalog prefix shrinks. The priority
-    # set lives HERE (not in YAML) because membership is a runtime
-    # tuning concern, not a spec-author concern: the right list is
-    # whichever tools are most often called per turn, which we adjust
-    # as we learn from real sessions.
-    lean_catalog = bool(spec and spec.prompt_mode in ("lean", "lean_small",
-                                                       "standard"))
+    # Tool-catalog presentation is governed by the spec's prompt_mode through the
+    # single-source policy (core.runtime.mcp.presentation): each mode decides
+    # docstring detail + whether input_schema param prose is kept. The agent can
+    # call any tool in every mode — only prose shrinks; the calling contract is
+    # identical. The priority set (tools whose FULL docstring survives a 'summary'
+    # mode) lives HERE, not in YAML, because membership is a runtime tuning concern
+    # (the most-called tools per turn), adjusted as we learn from real sessions.
     _PRIORITY_TOOLS: tuple[str, ...] = (
         "run_python", "run_r",
         "Skill", "search_skills",
@@ -557,8 +554,8 @@ async def stream_response(
     try:
         from core.runtime.mcp import list_tools as mcp_list_tools
         mcp_tools = mcp_list_tools(
-            compact=lean_catalog,
-            priority_tools=(_PRIORITY_TOOLS if lean_catalog else ()),
+            mode=(spec.prompt_mode if spec else "full"),
+            priority_tools=_PRIORITY_TOOLS,
         )
         active_tools.extend(t for t in mcp_tools if t["name"] not in disabled)
     except Exception:  # noqa: BLE001

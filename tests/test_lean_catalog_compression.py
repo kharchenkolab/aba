@@ -115,9 +115,8 @@ def test_compact_mode_shrinks_total_catalog():
 
 
 def test_compact_mode_preserves_input_schema_exactly():
-    """The parameter contract is semantic — compaction MUST NOT touch
-    `input_schema`. If we ever broke this the agent would call tools
-    with the wrong arg shape silently."""
+    """Legacy `compact=` bool path: it summarizes docstrings but must NOT touch
+    `input_schema` (param prose kept) — back-compat for un-migrated callers."""
     import content.bio  # noqa: F401
     _bootstrap_aba_core()
     from core.runtime.mcp.gateway import list_tools
@@ -125,7 +124,39 @@ def test_compact_mode_preserves_input_schema_exactly():
     lean = {t["name"]: t for t in list_tools(compact=True)}
     for name in full:
         assert full[name]["input_schema"] == lean[name]["input_schema"], (
-            f"compact mode mutated input_schema for {name!r}")
+            f"legacy compact mutated input_schema for {name!r}")
+
+
+def test_policy_modes_preserve_calling_contract_across_tiers():
+    """THE guard against silent platform-wide erosion: across prompt_modes the
+    calling CONTRACT (input_schema minus prose) is identical — only prose differs.
+    `standard` (production) KEEPS param prose; `lean` DROPS it (its own budget).
+    A tier's budget tweak can never change what another tier's agent can call."""
+    import content.bio  # noqa: F401
+    _bootstrap_aba_core()
+    from core.runtime.mcp.gateway import list_tools
+    from core.runtime.mcp.presentation import strip_schema_prose
+    std = {t["name"]: t for t in list_tools(mode="standard", priority_tools=("run_python",))}
+    lean = {t["name"]: t for t in list_tools(mode="lean", priority_tools=("run_python",))}
+    assert set(std) == set(lean), "modes must expose the same tools"
+    for name in std:
+        std_props = std[name]["input_schema"].get("properties", {})
+        lean_props = lean[name]["input_schema"].get("properties", {})
+        # Property NAMES + required list are the contract — must be byte-identical.
+        # (Catches a stripper that drops a param literally named "title"/"description".)
+        assert set(std_props) == set(lean_props), (
+            f"{name}: param names differ across modes — contract broken "
+            f"(std-lean={set(std_props) - set(lean_props)})")
+        assert std[name]["input_schema"].get("required") \
+            == lean[name]["input_schema"].get("required"), f"{name}: required differs"
+        # lean is exactly standard with prose stripped.
+        assert lean[name]["input_schema"] == strip_schema_prose(std[name]["input_schema"]), (
+            f"lean schema for {name!r} is not standard-minus-prose")
+    # standard keeps param prose (pydantic titles on every param); lean drops it.
+    rp_std = std["run_python"]["input_schema"].get("properties", {})
+    rp_lean = lean["run_python"]["input_schema"].get("properties", {})
+    assert any("title" in v for v in rp_std.values()), "standard must keep param prose"
+    assert not any("title" in v for v in rp_lean.values()), "lean must drop param prose"
 
 
 def test_priority_tools_keep_full_descriptions():
