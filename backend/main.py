@@ -1638,6 +1638,20 @@ def jobs_get(job_id: str):
     return j
 
 
+@app.post("/api/jobs/{job_id}/archive")
+def jobs_archive(job_id: str):
+    """Dismiss a terminal job from the Jobs list (soft archive — provenance kept; the job
+    is still fetchable by id). Refuses an active (queued/running) job — cancel it first."""
+    j = get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id} not found")
+    from core.graph.jobs import archive_job
+    ok = archive_job(job_id, project_id=(j.get("params") or {}).get("project_id"))
+    if not ok:
+        raise HTTPException(409, "job is active or already dismissed (cancel a running job first)")
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}/hpc")
 def jobs_hpc(job_id: str):
     """Live scheduler info for a Slurm-submitted job (state/node/elapsed/cores) —

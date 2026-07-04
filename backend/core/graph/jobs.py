@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from core.graph._schema import _conn, _project_conn, _utcnow
+from core.graph._schema import _conn, _project_conn, _utcnow, _column_exists
 
 
 def _row_to_job(r) -> dict:
@@ -60,17 +60,78 @@ def get_job(job_id: str, project_id: Optional[str] = None) -> Optional[dict]:
 
 
 def list_jobs(limit: int = 50, project_id: Optional[str] = None,
-              statuses: Optional[list[str]] = None) -> list[dict]:
-    q = "SELECT * FROM jobs"
+              statuses: Optional[list[str]] = None,
+              include_archived: bool = False) -> list[dict]:
+    wheres: list[str] = []
     args: list = []
-    if statuses:
-        q += " WHERE status IN (" + ",".join("?" * len(statuses)) + ")"
-        args.extend(statuses)
-    q += " ORDER BY created_at DESC LIMIT ?"
-    args.append(limit)
     with _project_conn(project_id) as c:
+        # Defensive: per-project DBs are opened without running init_db's migrations
+        # (_project_conn just connects), so an older DB may lack archived_at. Only filter
+        # on it when present — never let the Jobs list 500 on an un-migrated project DB.
+        if not include_archived and _column_exists(c, "jobs", "archived_at"):
+            wheres.append("archived_at IS NULL")
+        if statuses:
+            wheres.append("status IN (" + ",".join("?" * len(statuses)) + ")")
+            args.extend(statuses)
+        q = "SELECT * FROM jobs"
+        if wheres:
+            q += " WHERE " + " AND ".join(wheres)
+        q += " ORDER BY created_at DESC LIMIT ?"
+        args.append(limit)
         rows = c.execute(q, args).fetchall()
     return [_row_to_job(r) for r in rows]
+
+
+# Terminal states a job can be dismissed / auto-retained from.
+_TERMINAL = ("done", "failed", "cancelled")
+
+
+def _ensure_archived_col(c) -> bool:
+    """Self-heal: add jobs.archived_at on THIS connection's DB if missing (per-project DBs
+    aren't migrated by _project_conn). Callers that write archived_at use this first."""
+    if _column_exists(c, "jobs", "archived_at"):
+        return True
+    try:
+        c.execute("ALTER TABLE jobs ADD COLUMN archived_at TEXT")
+        c.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def archive_job(job_id: str, project_id: Optional[str] = None) -> bool:
+    """Soft-hide a job from list_jobs (provenance preserved; get_job still returns it).
+    Only terminal jobs are archivable — refuse to hide an active (queued/running) one."""
+    with _project_conn(project_id) as c:
+        if not _ensure_archived_col(c):
+            return False
+        r = c.execute("SELECT status, archived_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if r is None or r["status"] not in _TERMINAL or r["archived_at"] is not None:
+            return False
+        c.execute("UPDATE jobs SET archived_at = ? WHERE id = ?", (_utcnow(), job_id))
+        c.commit()
+    return True
+
+
+def prune_terminal_jobs(project_id: Optional[str] = None, keep: int = 30) -> int:
+    """Auto-retention: archive terminal jobs beyond the `keep` most-recent (per project),
+    so the Jobs list can't grow unbounded. Active jobs and the newest `keep` terminal ones
+    are untouched. Returns the number archived."""
+    with _project_conn(project_id) as c:
+        if not _ensure_archived_col(c):
+            return 0
+        rows = c.execute(
+            "SELECT id FROM jobs WHERE status IN ('done','failed','cancelled') "
+            "AND archived_at IS NULL ORDER BY created_at DESC LIMIT -1 OFFSET ?",
+            (keep,),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            now = _utcnow()
+            c.executemany("UPDATE jobs SET archived_at = ? WHERE id = ?",
+                          [(now, i) for i in ids])
+            c.commit()
+    return len(ids)
 
 
 def update_job(job_id: str, project_id: Optional[str] = None, **fields) -> None:

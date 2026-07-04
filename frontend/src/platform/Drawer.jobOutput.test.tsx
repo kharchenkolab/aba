@@ -53,3 +53,35 @@ describe('JobDetailPanel — Output pane', () => {
     expect(container.textContent).toMatch(/no captured input\/output/i)
   })
 })
+
+describe('JobDetailPanel — Dismiss vs Cancel', () => {
+  const btns = (c: HTMLElement) => [...c.querySelectorAll('button')].map(b => b.textContent || '').join('|')
+  const dismissBtn = (c: HTMLElement) =>
+    [...c.querySelectorAll('button')].find(b => /Dismiss/.test(b.textContent || '')) as HTMLElement | undefined
+
+  it('terminal job → Dismiss, not Cancel', () => {
+    const { container } = render(<JobDetailPanel job={job('done')} detail={detail({ status: 'done' })} loading={false} />)
+    expect(btns(container)).toMatch(/Dismiss/)
+    expect(btns(container)).not.toMatch(/Cancel job/)
+  })
+
+  it('running job → Cancel, not Dismiss', () => {
+    const { container } = render(<JobDetailPanel job={job('running')} detail={detail({ status: 'running' })} loading={false} />)
+    expect(btns(container)).toMatch(/Cancel job/)
+    expect(btns(container)).not.toMatch(/Dismiss/)
+  })
+
+  it('Dismiss POSTs to /api/jobs/{id}/archive', () => {
+    const calls: string[] = []
+    const orig = global.fetch
+    global.fetch = ((u: unknown, o: { method?: string } = {}) => {
+      calls.push(`${String(u)} ${o.method || 'GET'}`)
+      return Promise.resolve({ ok: true }) as unknown as Promise<Response>
+    }) as unknown as typeof fetch
+    try {
+      const { container } = render(<JobDetailPanel job={job('failed')} detail={detail({ status: 'failed' })} loading={false} />)
+      fireEvent.click(dismissBtn(container)!)
+    } finally { global.fetch = orig }
+    expect(calls.some(c => /\/api\/jobs\/job_x\/archive POST/.test(c))).toBe(true)
+  })
+})
