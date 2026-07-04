@@ -1,0 +1,46 @@
+id: gpu_job_completion
+title: A GPU-requested background job lands on a GPU node and actually uses CUDA
+domain: technical
+gpu: true
+requires: slurm
+summary: >
+  Positive end-to-end guard for the deployment-conditional CUDA base + gpu_usable cue + GPU
+  routing. On an ABA_ACCELERATOR=cuda deployment with a GPU partition, the agent (seeing the
+  gpu_usable cue) must submit a background job with est_gpu so Slurm places it on the GPU
+  partition, where torch reports CUDA available (True) + a device name — NOT a silent CPU
+  fallback and NOT the verify-at-use preflight error. Complements background_env_integrity
+  (env health) and the preflight negative path (a GPU job on a non-GPU node fails fast).
+  Requires ABA_BATCH_SUBMITTER=slurm + a usable GPU partition (skipped otherwise).
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Before we run anything heavy on the GPU, submit a tiny BACKGROUND job to confirm the GPU
+    compute path is healthy: it should import torch and print, on their own lines,
+    "cuda_available: <True/False>" and, if available, "device: <gpu name>". Keep it trivial.
+  expect:
+    tools_used: [run_python]
+    background_job:
+      ok: true                                    # job completed clean on its node
+      stdout_contains: ["cuda_available: True"]   # torch saw a usable GPU on the node it landed on
+      stdout_absent: ["cuda_available: False", "no usable GPU is visible"]  # no CPU fallback / preflight error
+    checks: >
+      The agent must recognize a usable GPU exists (the gpu_usable cue) and submit the job with
+      est_gpu=True so Slurm routes it to the GPU partition; the job then runs on a GPU node and
+      reports CUDA available True + a device name. A CPU-only placement (cuda_available: False),
+      the verify-at-use preflight error, or running it inline/local would all be regressions of
+      the GPU chain.
+
+expected_overall:
+  planted_truth: >
+    The base is a CUDA torch build (ABA_ACCELERATOR=cuda / version.cuda set) and a GPU partition
+    exists, so a GPU-requested background job MUST land on a GPU node and see CUDA available.
+  notes: >
+    Positive counterpart to the verify-at-use preflight (which guards the negative path). Guards
+    the whole chain end-to-end through the live agent: gpu_usable cue → est_gpu placement → GPU
+    partition → CUDA torch actually used. If this fails while the preflight passes, the break is
+    in routing/placement or the cue, not the env.

@@ -680,8 +680,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
             "note": f"Submitted as background job {job['id']} ({choice.rationale}). "
-                    f"It runs in a FRESH process (no interactive state); I'll continue "
-                    f"when it finishes.",
+                    f"It runs in a FRESH process (no interactive state). You'll be resumed "
+                    f"automatically when it finishes, and the user can watch its live output "
+                    f"in the Jobs panel meanwhile — so end your turn here rather than polling "
+                    f"its status.",
         }
 
     # Interactive persistent kernel — the default. State persists across calls
@@ -868,8 +870,10 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
             "note": f"Submitted as background R job {job['id']} ({choice.rationale}). "
-                    f"Runs in a FRESH process (load inputs from disk); figures register "
-                    f"on completion.",
+                    f"Runs in a FRESH process (load inputs from disk); figures register on "
+                    f"completion. You'll be resumed automatically when it finishes, and the "
+                    f"user can watch its live output in the Jobs panel meanwhile — so end your "
+                    f"turn here rather than polling its status.",
         }
 
     # Synchronous isolated R env (not backgrounded) — the one-shot in the env.

@@ -8,6 +8,35 @@ import { readSSEStream } from './lib/sseReader'
 
 type RawMsg = { id?: number; role: string; content: unknown[]; ts?: string }
 
+/** Reconcile the polled /api/jobs response into the jobs state. `fresh` is the
+ *  server's authoritative current list, so a job that dropped out of it (dismissed
+ *  → archived, or aged past the limit) must be REMOVED — the old merge only ever
+ *  added/updated, so a dismissed job's row never disappeared and "Dismiss" hung.
+ *  We keep queued/running jobs the poll may have momentarily missed OR that were
+ *  just added optimistically by the SSE 'job_submitted' handler before the first poll. */
+export function reconcileJobs(
+  prev: JobInfo[],
+  fresh: Array<{ id: string; status: string; title?: string; created_at?: string }>,
+): JobInfo[] {
+  const byId = new Map<string, JobInfo>(prev.map(j => [j.id, j]))
+  const freshIds = new Set(fresh.map(j => j.id))
+  for (const j of fresh) {
+    const existing = byId.get(j.id)
+    byId.set(j.id, {
+      id: j.id,
+      status: j.status || 'queued',
+      title: j.title,
+      t: existing?.t ?? (j.created_at ? Date.parse(j.created_at) : Date.now()),
+    })
+  }
+  for (const [id, j] of Array.from(byId.entries())) {
+    if (!freshIds.has(id) && j.status !== 'queued' && j.status !== 'running') {
+      byId.delete(id)  // gone from the server (archived / aged out) and not active → drop the row
+    }
+  }
+  return Array.from(byId.values())
+}
+
 /** Coerce a model-supplied plan `steps` value to a clean string[] — the model
  *  sometimes returns a single string (or other shape) instead of an array. */
 function asSteps(x: unknown): string[] {
@@ -258,19 +287,7 @@ export function useChat(
         if (!r.ok || cancelled) return
         const fresh = await r.json() as Array<{ id: string; status: string; title?: string; created_at?: string }>
         if (cancelled) return
-        setJobs(prev => {
-          const byId = new Map(prev.map(j => [j.id, j]))
-          for (const j of fresh) {
-            const existing = byId.get(j.id)
-            byId.set(j.id, {
-              id: j.id,
-              status: j.status || 'queued',
-              title: j.title,
-              t: existing?.t ?? (j.created_at ? Date.parse(j.created_at) : Date.now()),
-            })
-          }
-          return Array.from(byId.values())
-        })
+        setJobs(prev => reconcileJobs(prev, fresh))
       } catch (_) { /* swallow */ }
       // Continuation-attach probe — runs in the same tick so we don't
       // double our background traffic. Only fires when we're NOT already

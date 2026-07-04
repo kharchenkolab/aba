@@ -99,7 +99,12 @@ def bootstrap_env() -> None:
     # points at OUR staged data, and the whole project state lands in the bundle.
     os.environ["ABA_RUNTIME_DIR"] = str(RUN)
     os.environ["ABA_DB_PATH"] = str(RUN / "live.db")
-    os.environ.setdefault("ABA_ENVS_DIR", "/tmp/aba_discovery/envs")  # cached installs, NOT in bundle
+    # ENVS_DIR must be SHARED-FS, not node-local /tmp: a `requires: slurm` scenario that
+    # provisions an overlay (pip) package installs it on the SUBMIT node, but the background
+    # Slurm job runs on a DIFFERENT node — node-local /tmp is empty there → ModuleNotFoundError
+    # (finding F6). A shared-FS cache also shares installs across nodes/runs. Kept outside
+    # _runs/ so retention-pruning can't reap it, and gitignored, so still out of the bundle.
+    os.environ.setdefault("ABA_ENVS_DIR", str(ROOT / "regtest" / ".envs_cache"))
     os.environ["ABA_TURN_LOG_DIR"] = str(RUN / "turnlog")
     os.environ["ABA_RAW_REQUEST_DIR"] = str(RUN / "rawreq")
     if os.environ.get("ABA_SCENARIO_MODEL"):

@@ -228,6 +228,7 @@
 }
 .jobs__pre--code { /* dark style is now the default — kept as a class for future overrides */ }
 .jobs__pre--err  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; max-height: 160px; }
+.jobs__pre--muted { color: #7f849c; font-style: italic; }  /* queued/running placeholder before any output */
 .jobs__error { display: flex; flex-direction: column; gap: 3px; }
 
 /* Cancel action — shown in the expanded detail panel for queued/running jobs. */
@@ -241,6 +242,14 @@
 .jobs__cancel:hover:not(:disabled) { background: #fef2f2; border-color: #f87171; }
 .jobs__cancel:disabled { opacity: 0.6; cursor: default; }
 .jobs__cancel-err { font-size: 10.5px; color: #c0392b; }
+/* Dismiss — a muted (non-destructive) sibling of Cancel for terminal jobs. */
+.jobs__dismiss {
+  align-self: flex-start;
+  background: none; border: 1px solid var(--border, #d1d5db); border-radius: 3px;
+  padding: 2px 9px; font: inherit; font-size: 10.5px; color: var(--text-3, #6b7280); cursor: pointer;
+}
+.jobs__dismiss:hover:not(:disabled) { background: var(--tree-active-bg, #f3f4f6); color: var(--text-1, #111827); }
+.jobs__dismiss:disabled { opacity: 0.6; cursor: default; }
 
 /* ---------- Env tab (layered Python + R envs) ---------- */
 .env-tab { display: flex; flex-direction: column; gap: 6px; }
