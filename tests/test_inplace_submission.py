@@ -27,8 +27,9 @@ from core.jobs.runner import resolve_submission_target  # noqa: E402
 from core.jobs.submitter import get_submitter_for  # noqa: E402
 
 
-def _cap(submitter="slurm", inline_ok=True, cores=8, mem_gb=32.0):
-    return {"submitter": submitter, "inline_ok": inline_ok, "cores": cores, "mem_gb": mem_gb}
+def _cap(submitter="slurm", inline_ok=True, cores=8, mem_gb=32.0, gpus=0):
+    return {"submitter": submitter, "inline_ok": inline_ok, "cores": cores,
+            "mem_gb": mem_gb, "gpus": gpus}
 
 
 def test_local_submitter_always_inline():
@@ -61,6 +62,25 @@ def test_exceeds_mem_falls_back_to_slurm():
 def test_no_heaviest_estimate_runs_inline():
     t, _ = resolve_submission_target("local", None, _cap())
     assert t == "inline"                        # nothing known to exceed → in-place
+
+
+def test_gpu_job_without_local_gpu_falls_back_to_slurm():
+    """A GPU job (execution=local/auto) on a GPU-less allocation must route to Slurm —
+    NOT run inline on CPU. The submitter then picks a GPU partition from estimate.gpu."""
+    t, r = resolve_submission_target("local", {"cpus": 4, "mem_gb": 16, "gpu": True},
+                                     _cap(cores=8, mem_gb=32, gpus=0))
+    assert t == "slurm" and "GPU" in r
+    t2, r2 = resolve_submission_target("auto", {"cpus": 4, "mem_gb": 16, "gpu": True},
+                                       _cap(cores=8, mem_gb=32, gpus=0))
+    assert t2 == "slurm" and "GPU" in r2
+
+
+def test_gpu_job_with_local_gpu_runs_inline():
+    """When ABA's allocation HAS a GPU, a GPU job runs in-place on it (the local-GPU
+    fast path — no queue)."""
+    t, _ = resolve_submission_target("local", {"cpus": 4, "mem_gb": 16, "gpu": True},
+                                     _cap(cores=8, mem_gb=32, gpus=1))
+    assert t == "inline"
 
 
 def test_unknown_mem_capacity_ignored():

@@ -66,23 +66,26 @@ SCENARIOS = [
         "expected": ("Run inline USING the local GPU (local mode + a GPU is present, 128GB). "
                      "Not background (no cluster to submit to)."),
     },
-    # 4 — small cluster, this login node is tiny, a big CPU partition is idle: background it.
+    # 4 — small cluster, this login node is tiny, a big CPU partition is idle: background a
+    #     CPU-heavy step that exceeds the login node (no GPU needed).
     {
-        "name": "small_cluster_star_align",
+        "name": "small_cluster_cpu_heavy",
         "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 4,
                         "node_mem_gb": 16, "node_gpus": 0, "walltime_remaining_min": 480,
                         "partitions": [{"partition": "compute", "cpus_per_node": 32,
                                         "gpu": False, "wait": "idle - available now"}],
                         **_CLUSTER},
-        "prompt": ("I have 12 bulk RNA-seq FASTQ pairs staged. Align them with STAR against the "
-                   "mouse genome (build the index if needed) and give me the gene-count matrix."),
-        "data_facts": ("DATA_DIR: 24 files — sample01_R1.fastq.gz, sample01_R2.fastq.gz, ... "
-                       "sample12_R1.fastq.gz, sample12_R2.fastq.gz (~35M read pairs each). "
-                       "Mouse GRCm39 FASTA + GTF present."),
-        "approve": ("Go ahead and run the full alignment now. The FASTQs and the GRCm39 "
-                    "reference are in DATA_DIR."),
-        "expected": ("Background to the compute partition (STAR needs ~16 cores / ~40GB — more "
-                     "than this 4c/16GB login node). est_cores/est_mem set."),
+        "prompt": ("`adata` (about 800,000 cells, 15 samples) is loaded and saved to "
+                   "/tmp/data/adata.h5ad (raw counts, batch key `sample`). Run scrublet "
+                   "doublet detection per sample, then a full neighbors + Leiden clustering. "
+                   "It's CPU-heavy — roughly 16 cores and ~50 GB, about half an hour."),
+        "data_facts": ("AnnData object with n_obs x n_vars = 800000 x 20000\n"
+                       "    obs: 'sample' (15 categories)\n    X: raw integer counts\n"
+                       "    on disk: /tmp/data/adata.h5ad"),
+        "approve": _APPROVE_ADATA,
+        "expected": ("Background to the compute partition (needs ~16 cores / ~50GB — more than "
+                     "this 4c/16GB login node; CPU-only, no GPU). background + est_cores/est_mem, "
+                     "NOT est_gpu."),
     },
     # 5 — THE tradeoff: GPU queue is busy (~3h), but THIS node has a local GPU the job fits.
     {
