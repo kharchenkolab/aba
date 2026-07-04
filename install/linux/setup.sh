@@ -224,6 +224,17 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   write_cfg ABA_ACCELERATOR "$ACCEL"; export ABA_ACCELERATOR="$ACCEL"
   [ -n "${ABA_CUDA_VERSION:-}" ] && write_cfg ABA_CUDA_VERSION "$ABA_CUDA_VERSION"
   echo "-- accelerator: ABA_ACCELERATOR=$ACCEL ($([ "$ACCEL" = cuda ] && echo 'CUDA torch base' || echo 'CPU-only torch base')) --"
+  # Build-on-a-GPU-node nudge: we're about to build a CUDA base, but if THIS install host has
+  # no visible GPU, building is smoother from a GPU-compatible node — conda detects the GPU
+  # (__cuda) directly and you can confirm torch.cuda on the spot. Installing from here still
+  # works (create-env spoofs __cuda via CONDA_OVERRIDE_CUDA); this is just an easier-path hint.
+  if [ "$ACCEL" = cuda ] && ! { command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; }; then
+    echo "!! NOTE: GPU partition(s) detected, but this installer is running on a NON-GPU node."
+    echo "   Building the CUDA base is easier from a GPU-compatible node — consider re-running"
+    echo "   the installer inside an interactive GPU allocation, e.g.:"
+    echo "       srun -p <gpu-partition> --gres=gpu:1 --pty bash     # then re-run this installer"
+    echo "   (It still works from here — the build spoofs the GPU via CONDA_OVERRIDE_CUDA.)"
+  fi
   if command -v sinfo >/dev/null 2>&1; then
     # The runtime discovers partitions + QOS + account LIVE (sinfo + sacctmgr) at
     # submit time, so no hpc.yaml is written by default. Show what it detects;
