@@ -66,6 +66,10 @@ steps:
       # Prefer an explicit override, then the env.yml from the cloned repo
       # (the common case — setup.command already cloned it), then a URL fetch.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/core/environment.yml" ]; then cp "$REPO_DIR/aba/install/core/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment.yml}"; fi'
+      # Deployment-conditional base: when config.env declares ABA_ACCELERATOR=cuda, inject
+      # the GPU torch pin so scvi-tools resolves the CUDA build (else conda-forge picks the
+      # CPU-only default and GPU jobs silently run on CPU). No-op for a CPU deployment.
+      - 'if [ -f "$REPO_DIR/aba/install/core/inject-accelerator.sh" ]; then bash "$REPO_DIR/aba/install/core/inject-accelerator.sh" "$ABA_HOME/environment.yml"; fi'
       # Idempotent + self-healing. Marker is env/bin/uvicorn (pip-installed at
       # the very end) so a half-built env from an interrupted prewarm is NOT
       # mistaken for complete — we wipe and rebuild it (the package cache makes
