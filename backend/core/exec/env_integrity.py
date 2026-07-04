@@ -183,6 +183,18 @@ def env_selfcheck(*, python_exe: Optional[str] = None) -> dict:
         checks["numpy_present"] = {"ok": True, "detail": f"numpy=={_md.version('numpy')}"}
     except Exception as e:  # noqa: BLE001
         checks["numpy_present"] = {"ok": False, "detail": f"numpy not resolvable: {e}"}
+    # Accelerator consistency: a deployment that DECLARES a CUDA base (ABA_ACCELERATOR=
+    # cuda, config.env) must actually have a CUDA-build torch — else GPU jobs silently
+    # run on CPU on idle GPUs. Only checked when cuda is declared (a CPU deployment
+    # legitimately has CPU-only torch).
+    import os as _os
+    if (_os.environ.get("ABA_ACCELERATOR") or "").strip().lower() == "cuda":
+        _cuda = torch_cuda_build()
+        checks["accelerator_cuda"] = {
+            "ok": _cuda is not None,
+            "detail": (f"torch CUDA build {_cuda}" if _cuda else
+                       "ABA_ACCELERATOR=cuda but torch is CPU-only — GPU jobs would run on CPU "
+                       "(rebuild the env)")}
     return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
@@ -208,6 +220,19 @@ def gpu_capability_ok() -> tuple[Optional[bool], str]:
                        f"(version.cuda={torch.version.cuda}, cuda.is_available()=False)")
     except Exception as e:  # noqa: BLE001
         return False, f"torch.cuda probe errored: {e}"
+
+
+def torch_cuda_build() -> Optional[str]:
+    """The CUDA version torch was BUILT against (`torch.version.cuda`), or None if torch
+    is a CPU-only build / not importable. Node-INDEPENDENT (a property of the build, not
+    of runtime GPU visibility) — so ABA on a CPU login node can tell whether a GPU JOB on
+    a compute node would be able to use the GPU, WITHOUT a GPU here. This is what backs
+    the compute_env `gpu_usable` hint; the on-node `gpu_capability_ok` is the verify-at-use."""
+    try:
+        import torch  # noqa
+        return torch.version.cuda
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")

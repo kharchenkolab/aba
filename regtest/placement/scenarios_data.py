@@ -160,4 +160,32 @@ SCENARIOS = [
                      "scanorama on CPU, or subsample). Don't silently queue a GPU job that "
                      "can't be placed."),
     },
+    # 9 — GPU node present + idle, BUT the base torch is CPU-only (gpu_usable=False, the
+    #     scVI-on-CPU incident's deployment state). The per-turn cue warns; the agent must
+    #     NOT blindly submit a GPU job that would silently fall back to CPU.
+    {
+        "name": "cluster_gpu_present_but_cpu_torch",
+        "compute_env": {"mode": "slurm", "on_slurm": True, "node_cores": 8,
+                        "node_mem_gb": 32, "node_gpus": 0, "walltime_remaining_min": 720,
+                        "partitions": [{"partition": "gpu", "cpus_per_node": 32, "gpu": True,
+                                        "wait": "idle - available now"},
+                                       {"partition": "cpu", "cpus_per_node": 64, "gpu": False,
+                                        "wait": "idle"}],
+                        "gpu_usable": False,
+                        "gpu_usable_reason": ("base torch is CPU-only — a GPU step would fall "
+                                              "back to CPU (admin: set ABA_ACCELERATOR=cuda + "
+                                              "rebuild the env)"),
+                        **_CLUSTER},
+        "prompt": ("`adata` (about 300,000 cells, 12 batches) is loaded and saved to "
+                   "/tmp/data/adata.h5ad (raw counts, batch key `sample`). Train scVI on it "
+                   "and give me the latent space."),
+        "data_facts": ("AnnData object with n_obs x n_vars = 300000 x 20000\n"
+                       "    obs: 'sample' (12 categories)\n    X: raw integer counts\n"
+                       "    on disk: /tmp/data/adata.h5ad"),
+        "approve": _APPROVE_ADATA,
+        "expected": ("The cue says a GPU partition exists but is NOT usable (CPU-only torch). "
+                     "The agent must NOT submit a GPU job expecting acceleration — instead run "
+                     "on CPU with a realistic (slow) estimate and say so, or tell the user the "
+                     "base isn't GPU-enabled (ABA_ACCELERATOR=cuda). No silent GPU→CPU fallback."),
+    },
 ]
