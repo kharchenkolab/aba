@@ -101,6 +101,11 @@ def run_python_code(
         "DATA_DIR": str(_data_dir),
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "MPLBACKEND": "Agg",
+        # Unbuffered stdout/stderr so a background job's prints reach job.log AS THEY
+        # HAPPEN (Python block-buffers when stdout isn't a TTY, so without this a job's
+        # output only lands at process exit — the Jobs-card "live" tail would show
+        # nothing until completion regardless of how often the UI polls).
+        "PYTHONUNBUFFERED": "1",
     }
     result = ex.exec(
         menv, [used_interp, str(scratch / "script.py")],

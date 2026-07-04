@@ -738,7 +738,7 @@ export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail:
   // log_tail / error without an extra click. Mirrors the failed-tool
   // behavior in the chat (which auto-reveals the error pane).
   const hasOutput = !!(detail?.log_tail || detail?.error)
-  const [showOut, setShowOut] = useState(true)
+  const [showOut, setShowOut] = useState(false)  // collapsed by default, like the code pane
   // Cancel: only queued/running jobs are cancellable. Confirm via a modal, then
   // POST /api/jobs/{id}/cancel; the row status updates on the next /api/jobs poll.
   const cancellable = job.status === 'queued' || job.status === 'running'
