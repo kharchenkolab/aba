@@ -13,6 +13,8 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for biological data ana
 - Knowhows/recipes = `bp-*` skills in the `kharchenkolab/aba-recipe-pack` repo (`recipes/genomics/`); `search_skills` (BM25) indexes frontmatter only, so body-only edits are search-neutral.
 - The system prompt composes bundle scopes system → installation → lab → user (narrowest-wins): universal default rules live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
 - Deployments update via `aba update` (ABA code from `main`) and pull the recipe pack via `RECIPES_REF` — so branch/PR work only ships once it lands on `main` (install paths/hosts are per-deployment, not recorded here).
+- Architecture docs: `docs/arch/` — a succinct, code-cited doc per subsystem (index in `docs/arch/README.md`); `misc/*.md` are the design/evolution logs behind them.
+- Consult the relevant `docs/arch/` doc before touching a subsystem; keep it true — update it + its **Known gaps** at any change that materially alters that part.
 
 ## Change discipline for shared agent inputs (tool catalog, prompts, context)
 These are cross-cutting inputs to EVERY agent decision — a change has platform-wide blast radius and erodes quality silently if made structurally. So:
