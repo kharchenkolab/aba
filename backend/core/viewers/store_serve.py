@@ -26,29 +26,28 @@ def resolve_within(base: Path, relpath: str) -> Path:
     return target
 
 
-def zip_store_stored(store_dir: Path, dest: Path) -> Path:
-    """Pack a `.lstar.zarr` store DIRECTORY into a STORED (uncompressed) zip at
-    `dest` — the "quick download" of a viewer store as one file.
+def zip_store_dir(store_dir: Path, dest: Path, arc_root: str) -> Path:
+    """Pack a `.lstar.zarr` store DIRECTORY into a zip that unpacks to a FOLDER
+    `<arc_root>/…` — the download deliverable.
 
-    STORED (not DEFLATE) on purpose: an uncompressed zip is HTTP-range-readable,
-    so the downloaded `.lstar.zarr.zip` re-opens directly in pagoda3 / lstar
-    without unpacking (pagoda3's ZipStore issues one Range per chunk; a DEFLATE
-    entry would defeat that and is rejected on read). Arcnames are relative to the
-    store root (top-level `.zattrs`/`axes`/`fields`).
-
-    Entry order mirrors lstar's canonical `_pack_stored_zip`: zarr metadata
-    (`.z*` — `.zmetadata`/`.zgroup`/`.zarray`/`.zattrs`) FIRST so a range reader
-    hits the manifest early, then the rest sorted — deterministic, byte-stable."""
+    We hand back the *regular directory* `.lstar.zarr` (not lstar's single-file
+    STORED `.lstar.zarr.zip`): a directory store loads much faster in pagoda3
+    (parallel chunk fetches vs one-range-at-a-time into a packed file) and stays
+    updatable. The zip is just a transport container — every entry is nested under
+    `arc_root` (e.g. `pbmc3k.lstar.zarr/…`), so unzipping recreates the directory
+    store. DEFLATE (chunks are already codec-compressed, so this mostly shrinks
+    the JSON metadata) and deterministic order for a byte-stable archive."""
     import os
     import zipfile
     store_dir = store_dir.resolve()
+    root = arc_root.rstrip("/")
     entries: list[tuple[str, Path]] = []
-    for root, _dirs, files in os.walk(store_dir):
+    for dp, _dirs, files in os.walk(store_dir):
         for fn in files:
-            fp = Path(root) / fn
-            entries.append((fp.relative_to(store_dir).as_posix(), fp))
-    entries.sort(key=lambda e: (not os.path.basename(e[0]).startswith(".z"), e[0]))
-    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as z:
+            fp = Path(dp) / fn
+            entries.append((f"{root}/{fp.relative_to(store_dir).as_posix()}", fp))
+    entries.sort(key=lambda e: e[0])
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as z:
         for arc, fp in entries:
             z.write(fp, arc)
     return dest

@@ -2528,21 +2528,23 @@ def viewers_download(
     viewer_id: str | None = None,
     _pid: str = Depends(require_project),
 ):
-    """Download an external viewer's prepared data store as a single STORED
-    (uncompressed, byte-range-readable) `.lstar.zarr.zip` (viewers.md §3).
+    """Download an external viewer's prepared data store as the regular directory
+    `.lstar.zarr`, delivered as a zip that unpacks to a `<name>.lstar.zarr/` FOLDER
+    (viewers.md §3).
 
-    Reuses the SAME cached store the viewer opens (the launcher's ensure_derived
-    cache). The packed `.zip` is itself CACHED beside the store (packed once,
-    atomically swapped, re-packed only when the store is re-derived) and served
-    with `FileResponse` — so it supports HTTP Range (Accept-Ranges/206): a
-    resumable download, and a valid range-read source a `.zip`-aware viewer can
-    open directly (no per-request re-zip). The frontend routes here THROUGH the
-    /viewer-launch progress page (action=download) so the one-time store
-    conversion runs in the background prepare job, not this request."""
+    We hand back the directory store (not lstar's single-file STORED
+    `.lstar.zarr.zip`): a directory loads much faster in the viewer and stays
+    updatable; the zip is only a transport container (folder at its root). Reuses
+    the SAME cached store the viewer opens (the launcher's ensure_derived cache);
+    the packed archive is CACHED beside the store (packed once, atomically
+    swapped, re-packed only when the store is re-derived) and served with
+    `FileResponse` (resumable). The frontend routes here THROUGH the /viewer-launch
+    progress page (action=download) so the one-time store conversion runs in the
+    background prepare job, not this request."""
     import content.bio  # noqa: F401 — ensure viewer + launcher registrations
     from core.viewers.registry import viewers_for
     from core.viewers.launchers import launch as launch_viewer
-    from core.viewers.store_serve import zip_store_stored
+    from core.viewers.store_serve import zip_store_dir
     from core.config import current_project_id
 
     node = _resolve_files_node(entity_id, path)
@@ -2558,15 +2560,20 @@ def viewers_download(
     store = Path(res.store_path) if res.store_path else None
     if not store or not store.is_dir():
         raise HTTPException(409, "this viewer has no downloadable store")
-    # Stable cached .zip beside the store; re-pack only if missing or older than
+    # Clean folder name (drop the cache tag): the archive unpacks to <stem>.lstar.zarr/
+    stem = (store.name[:-len(".lstar.zarr")] if store.name.endswith(".lstar.zarr")
+            else store.stem)
+    stem = stem.rsplit("-", 1)[0] if "-" in stem else stem   # strip the -<hash8> tag
+    folder = f"{stem}.lstar.zarr"
+    # Stable cached archive beside the store; re-pack only if missing or older than
     # the store (ensure_derived rewrites the whole dir on re-derive → newer mtime).
-    zip_path = store.with_name(store.name + ".zip")   # <name>.lstar.zarr.zip
+    zip_path = store.with_name(store.name + ".dl.zip")
     if not zip_path.exists() or zip_path.stat().st_mtime < store.stat().st_mtime:
         tmp = zip_path.with_name(zip_path.name + ".tmp")
-        zip_store_stored(store, tmp)
+        zip_store_dir(store, tmp, folder)
         tmp.replace(zip_path)                          # atomic publish
     return FileResponse(
-        str(zip_path), media_type="application/zip", filename=zip_path.name,
+        str(zip_path), media_type="application/zip", filename=f"{folder}.zip",
     )
 
 
