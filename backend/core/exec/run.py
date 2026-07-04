@@ -217,8 +217,18 @@ def run_r_code(
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "ABA_PYTHON": sys.executable,  # let R shell out to Python if needed
     }
+    r_cmd = [str(rscript), "--vanilla", str(scratch / "script.R")]
+    # R block-buffers stdout to a pipe (no PYTHONUNBUFFERED equivalent), so a background R
+    # job's prints wouldn't reach run.log until it exits — the Jobs-card live tail would sit
+    # empty until completion. `stdbuf -oL` forces line-buffered stdio → live streaming (Item 2).
+    # Only for streaming (background) runs; best-effort (skip if stdbuf is unavailable).
+    if stream:
+        import shutil as _sh
+        _stdbuf = _sh.which("stdbuf")
+        if _stdbuf:
+            r_cmd = [_stdbuf, "-oL", *r_cmd]
     result = ex.exec(
-        env, [str(rscript), "--vanilla", str(scratch / "script.R")],
+        env, r_cmd,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars, stream=stream,
     )

@@ -756,6 +756,22 @@ export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail:
     } finally { setCancelling(false) }
   }
 
+  // Dismiss: hide a TERMINAL job from the list via POST /api/jobs/{id}/archive. Soft archive
+  // (provenance kept, still fetchable by id), so no confirm modal. The row drops on the next
+  // /api/jobs poll (list_jobs excludes archived); leave the button in its pending state until then.
+  const dismissable = job.status === 'done' || job.status === 'failed' || job.status === 'cancelled'
+  const [dismissing, setDismissing] = useState(false)
+  const [dismissErr, setDismissErr] = useState<string | null>(null)
+  const doDismiss = async () => {
+    setDismissing(true); setDismissErr(null)
+    try {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/archive`, { method: 'POST' })
+      if (!r.ok) throw new Error(`dismiss failed (${r.status})`)
+    } catch (e) {
+      setDismissErr(e instanceof Error ? e.message : 'dismiss failed'); setDismissing(false)
+    }
+  }
+
   if (!detail && loading) {
     return <div className="jobs__detail jobs__detail--loading">loading…</div>
   }
@@ -784,6 +800,15 @@ export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail:
           <button type="button" className="jobs__cancel" disabled={cancelling}
                   onClick={() => setConfirming(true)}>
             {cancelling ? 'cancelling…' : 'Cancel job'}
+          </button>
+        </div>
+      )}
+      {dismissable && (
+        <div className="jobs__actions jobs__actions--right">
+          {dismissErr && <span className="jobs__cancel-err">{dismissErr}</span>}
+          <button type="button" className="jobs__dismiss" disabled={dismissing}
+                  onClick={doDismiss} title="Hide this job from the list (kept for provenance)">
+            {dismissing ? 'dismissing…' : 'Dismiss'}
           </button>
         </div>
       )}

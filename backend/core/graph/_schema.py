@@ -303,6 +303,10 @@ def init_db():
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+        # archived_at: a dismissed / auto-retained job (set, not deleted, so provenance
+        # is preserved). list_jobs hides these; get_job by id still returns them.
+        if not _column_exists(c, "jobs", "archived_at"):
+            c.execute("ALTER TABLE jobs ADD COLUMN archived_at TEXT")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS events (
