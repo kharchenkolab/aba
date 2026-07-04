@@ -120,6 +120,33 @@ def doctor() -> int:
         except Exception:  # noqa: BLE001
             chk("Slurm reachable (sinfo)", False, "check SLURM env / `module load slurm`")
 
+    # Accelerator: if GPU compute exists (a gpu partition) or a CUDA base is declared,
+    # the built base torch MUST be a CUDA build — else GPU jobs silently run on CPU on an
+    # idle allocated GPU (the scVI-on-CPU incident; see docs/arch/envs.md).
+    cfg_txt = cfg.read_text() if cfg.exists() else ""
+    declared_cuda = "ABA_ACCELERATOR=cuda" in cfg_txt
+    gpu_partition = False
+    if shutil.which("sinfo"):
+        try:
+            g = subprocess.run(["sinfo", "-h", "-o", "%G"], capture_output=True, text=True, timeout=8)
+            gpu_partition = "gpu" in (g.stdout or "").lower()
+        except Exception:  # noqa: BLE001
+            pass
+    if declared_cuda or gpu_partition:
+        envpy = home / "env" / "bin" / "python"
+        cuda_build = None
+        if envpy.exists():
+            try:
+                r = subprocess.run([str(envpy), "-c", "import torch; print(torch.version.cuda or '')"],
+                                   capture_output=True, text=True, timeout=30)
+                cuda_build = (r.stdout or "").strip() or None
+            except Exception:  # noqa: BLE001
+                pass
+        chk(f"GPU torch build (declared={'cuda' if declared_cuda else 'auto'}, gpu partition="
+            f"{'yes' if gpu_partition else 'no'})", cuda_build is not None,
+            "GPU present but base torch is CPU-only — set ABA_ACCELERATOR=cuda in config.env "
+            "and rebuild the env (GPU jobs would otherwise run on CPU)")
+
     print(f"\n{'✓ all checks passed' if fails == 0 else f'✗ {fails} issue(s) — see the fixes above'}", flush=True)
     return 0 if fails == 0 else 1
 
