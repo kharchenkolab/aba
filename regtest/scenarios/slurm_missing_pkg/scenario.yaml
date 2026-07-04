@@ -1,0 +1,47 @@
+id: slurm_missing_pkg
+title: The agent provisions a non-base package into the batch env so a Slurm job runs clean
+domain: technical
+gpu: false
+requires: slurm
+summary: >
+  Error-avoidance / resolution guard for the "env error in a Slurm job" class (PK's ask: can the
+  agent resolve a missing dependency for a background job?). A background Slurm job needs a Python
+  package that is NOT in the immutable base (Levenshtein). The agent must ensure_capability it
+  (pip → project overlay, --prefer-binary wheel, ABI-anchored) so the BACKGROUND job imports and
+  uses it cleanly — a fresh Slurm process must see the overlay-provisioned package. If the agent
+  fails to provision (or the overlay isn't on the job's path), the job dies on ImportError. The
+  deterministic ground truth (Levenshtein distance of the two strings = 1) also guards against
+  fabrication. Requires ABA_BATCH_SUBMITTER=slurm so the real job.sh path is exercised.
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: analyze
+  actor: agent
+  prompt: >
+    Run a small BACKGROUND job that uses the Levenshtein package to compute the edit distance
+    between the two DNA strings "ACGTACGT" and "ACGTTCGT", and print it on its own line as
+    "edit_distance: <n>". I want to confirm we can provision and use an extra Python package
+    inside the batch/Slurm environment.
+  expect:
+    tools_used: [ensure_capability, run_python]
+    background_job:
+      ok: true                                 # ran clean in the batch env
+      stdout_contains: ["edit_distance: 1"]    # deterministic ground truth (one substitution) — no fabrication
+      stdout_absent: ["ModuleNotFoundError", "No module named"]  # the missing-dep failure must NOT appear
+    checks: >
+      The agent must recognize Levenshtein is not in the base and ensure_capability it (pip into
+      the project overlay), then submit a BACKGROUND job that imports it and computes the distance
+      (= 1). The fresh Slurm process must pick up the overlay-provisioned package. A
+      ModuleNotFoundError, an inline (non-background) run, or a fabricated distance are regressions.
+
+expected_overall:
+  planted_truth: >
+    Levenshtein distance of ACGTACGT vs ACGTTCGT is exactly 1 (single substitution at position 5).
+    Levenshtein is not a base package, so the run only succeeds if the agent provisioned it AND the
+    overlay is visible to the background Slurm job.
+  notes: >
+    Tests the provisioning → overlay → background-job-sees-overlay contract for a NON-base pip lib
+    (background_env_integrity covers a base lib, scanpy; this covers a freshly-provisioned one).
+    Directly answers "can the agent resolve a missing dependency for a Slurm job?".
