@@ -87,7 +87,12 @@ steps:
       # the GPU base; its value also selects the CUDA major (12.x → cuda12x build,
       # 11.8 → cuda118). Node-independent: the actual GPU is verified at job time
       # (gpu_capability_ok in slurm_entry). Admin override: ABA_CUDA_VERSION.
-      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-12.4}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # Default 11.8 (cuda118) is the widest-compatibility choice: runs on any driver
+      # >= 450.80 (incl. older cluster drivers) and covers GPUs sm_60 (P100) .. sm_90
+      # (H100). A higher default breaks on clusters with older drivers or Pascal/Volta
+      # GPUs (e.g. cuda126 needs ~R560 + drops sm_60). Set ABA_CUDA_VERSION=12 on a
+      # modern-only cluster; a future install-time probe will auto-pick from the driver.
+      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
     remediation: |
       The conda solve/build failed — usually a network/channel hiccup or low
