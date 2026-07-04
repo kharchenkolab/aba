@@ -75,13 +75,51 @@ shared path.
   pins `PYTHONPATH` so a cluster module can't shadow the interpreter (see
   `misc/deferred_jobs.md`, the prj_6d986f40 incident).
 
+## GPU / accelerator (target hardware)
+
+A step's *hardware-variant* need (a CUDA build of torch vs the CPU build) is a distinct axis
+from its *library* needs, and lives in a different tier:
+
+- **Hardware variant → the base, chosen at install** (deployment-conditional). `torch` comes
+  in transitively via `scvi-tools`; conda-forge's default is the **CPU-only** build. A GPU
+  deployment builds a **CUDA** base instead. The decision is one toggle in
+  `$ABA_HOME/config.env` — `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) —
+  written by `install/linux/setup.sh` (auto-detects a `gpu` Slurm partition; admin-overridable)
+  and applied by `install/core/inject-accelerator.sh`, which injects a `pytorch-gpu` pin into
+  the copied `environment.yml` at `create-env` (single source — no duplicate GPU env file). A
+  CUDA torch is a **superset**: it uses a GPU when present and falls back to CPU on the login
+  node / CPU jobs, so one base serves both. Non-GPU deployments (laptops) build the CPU base.
+- **Non-torch GPU frameworks → overlays / isolated envs** (jax[cuda], RAPIDS) — the library
+  axis, not the base.
+
+**Certainty across nodes = discover-once + verify-at-use** (ABA runs on a CPU login node; a
+job runs on a GPU node ABA can't observe):
+- **`gpu_usable`** (`compute_env`) — a *node-independent* readiness hint in the agent's
+  per-turn cue: a GPU is present (local or a `gpu` partition) **and** the base torch is a CUDA
+  build (`torch_cuda_build` = `torch.version.cuda`, a property of the build, not of runtime
+  GPU visibility). If a GPU exists but the base is CPU-only, the cue **warns** so the agent
+  runs on CPU / tells the user instead of submitting a job that silently falls back.
+- **Verify-at-use** (`slurm_entry`) — a GPU-requested job (`estimate.gpu`) is preflighted on
+  the compute node via `gpu_capability_ok()`; if no usable GPU, it **fails fast** rather than
+  training on CPU on an idle allocated GPU (the scVI-on-CPU incident: right placement, CPU base).
+- **`env_selfcheck` invariant + `aba doctor`** — a deployment declaring `ABA_ACCELERATOR=cuda`
+  must have a CUDA-build torch; a CPU-only base is flagged at startup / by `doctor`, which
+  names the fix (set the toggle + rebuild the env).
+
+**Config topology (no floating vars):** the accelerator toggle is a `config.env` line
+(installer-written, admin-editable), exactly like `ABA_BATCH_SUBMITTER`. `hpc.yaml` stays
+compute-topology (its `gpu: true` partitions are *detection input*, not a second home for the
+toggle). The base spec (`environment.yml`) lives in the repo.
+
 ## Key implementation references
 
 | Where | What |
 |---|---|
 | `core/config.py` | `RUNTIME_DIR`, `ENVS_DIR` (mutable-state roots + resolution) |
 | `core/exec/materialize.py` | `materialize()` dispatch (pip/conda); `_pip_install` (overlay + constraints); `_conda_install` (tools env); `PYLIB_DIR`, `project_pylib_dir` |
-| `core/exec/env_integrity.py` | ABI anchor (`abi_anchor_constraints`), base freeze (`ensure_base_constraints`, `_freeze_pins`), `env_selfcheck`, `self_heal_base`/`repair_base`/`base_health`, `verify_python_imports` |
+| `core/exec/env_integrity.py` | ABI anchor (`abi_anchor_constraints`), base freeze (`ensure_base_constraints`, `_freeze_pins`), `env_selfcheck`, `gpu_capability_ok`/`torch_cuda_build`, `self_heal_base`/`repair_base`/`base_health`, `verify_python_imports` |
+| `core/jobs/slurm_entry.py` | background-job entry; GPU verify-at-use preflight + numpy canary |
+| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base: `ABA_ACCELERATOR` (config.env) → CPU vs CUDA torch pin |
 | `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
 | `backend/kernels/…` (run_python preamble) | assembles the run's `sys.path`: base + project overlay |
