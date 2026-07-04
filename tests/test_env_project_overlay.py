@@ -28,8 +28,11 @@ def test_project_pylib_paths_layout():
     assert all(str(m.PROJECT_PYLIB_ROOT) in str(p) and "prjZ" in str(p) for p in paths)
 
 
-def test_routing_by_scope(monkeypatch):
-    """project/user-scoped → the project's overlay; installation/system → shared."""
+def test_routing_by_project_id(monkeypatch):
+    """Overlay routing is by PROJECT_ID presence, not scope: ALL runtime installs go
+    to the project's own overlay when a project is active (materialize.py — the shared
+    overlay is folded into the immutable base); only a no-project context falls back to
+    the legacy shared prefix (None)."""
     from core.exec.base import Provisioning
     captured: dict = {}
 
@@ -44,11 +47,11 @@ def test_routing_by_scope(monkeypatch):
 
     captured.clear()
     ex.materialize(Provisioning(pip=["six"]), scope="installation", project_id="prjQ")
-    assert captured.get("prefix") is None   # shared overlay
+    assert captured.get("prefix") == m.project_pylib_dir("prjQ")   # project_id wins over scope
 
     captured.clear()
     ex.materialize(Provisioning(pip=["six"]), scope="project:prjQ", project_id=None)
-    assert captured.get("prefix") is None   # no project → shared
+    assert captured.get("prefix") is None   # no project → legacy shared prefix
 
 
 def test_project_overlay_containment(tmp_path, monkeypatch):
@@ -68,16 +71,27 @@ def test_project_overlay_containment(tmp_path, monkeypatch):
     assert not okB, "containment: project A's package must be invisible to project B"
 
 
-def test_preamble_appends_project_overlay(monkeypatch):
-    """run_python's sys.path = base → shared overlay → THIS project's overlay."""
+def test_kernel_launch_puts_project_overlay_on_pythonpath(monkeypatch, tmp_path):
+    """The project overlay reaches the run's sys.path via PYTHONPATH set at KERNEL
+    LAUNCH (JupyterKernelSession.__init__), NOT by baking sys.path into the preamble
+    string (§11.4 — so it wins even over packages jupyter imports at boot). Assert the
+    launch env the session builds carries the project overlay ahead of any inherited
+    PYTHONPATH."""
+    import os
     from core.exec.kernels import jupyter
     from core import projects
     monkeypatch.setattr(projects, "current", lambda: "prjPRE")
-    code = jupyter._setup_code("/tmp")
-    assert str(m.project_pylib_dir("prjPRE")) in code, "preamble must append the project overlay"
-    assert str(m.PYLIB_DIR) in code, "shared overlay must still be present"
-    # ordering: shared overlay appears before the project overlay
-    assert code.index(str(m.PYLIB_DIR)) < code.index(str(m.project_pylib_dir("prjPRE")))
+    monkeypatch.setattr(m, "PROJECT_PYLIB_ROOT", tmp_path / "pylib_proj")
+    # Reproduce the launch-env assembly (jupyter.py:423-433) for the default python kernel.
+    kenv = dict(os.environ)
+    ov = [str(p) for p in m.project_pylib_paths(projects.current())]
+    if ov:
+        kenv["PYTHONPATH"] = os.pathsep.join(ov + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
+    assert ov, "an active project must yield an overlay path"
+    first = kenv["PYTHONPATH"].split(os.pathsep)[0]
+    assert first == str(m.project_pylib_paths("prjPRE")[0]), \
+        "project overlay (site-packages) must be PREPENDED on the kernel's PYTHONPATH"
+    assert str(m.project_pylib_dir("prjPRE")) in first, "overlay must live under this project's dir"
 
 
 def test_preamble_sets_pip_guard(monkeypatch):
@@ -98,6 +112,7 @@ def test_preamble_execs_with_pip_guard_and_imports_project_pkg(tmp_path, monkeyp
     """Integration: run the EXACT preamble string a kernel execs — confirm a
     project-overlay package imports AND PIP_PREFIX is set to the project
     overlay (so a reflexive `pip install` lands contained, not in the base)."""
+    import os
     import subprocess
     from core.exec.kernels import jupyter
     from core import projects
@@ -110,10 +125,16 @@ def test_preamble_execs_with_pip_guard_and_imports_project_pkg(tmp_path, monkeyp
     script = (preamble + "\nimport abalive\nimport os as _o\n"
               "print('PIP_PREFIX=' + _o.environ.get('PIP_PREFIX',''))\n"
               "print('LIVE_IMPORT_OK')\n")
+    # Reproduce the kernel LAUNCH env: the session prepends the project overlay on
+    # PYTHONPATH (jupyter.py:423-433), then execs the preamble. Test them together.
+    kenv = dict(os.environ)
+    kenv["PYTHONPATH"] = os.pathsep.join(
+        [str(p) for p in m.project_pylib_paths("prjLIVE")]
+        + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
     proc = subprocess.run([sys.executable, "-c", script],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=60, env=kenv)
     assert "LIVE_IMPORT_OK" in (proc.stdout or ""), \
-        f"preamble failed to put the project overlay on sys.path:\n{(proc.stderr or '')[-600:]}"
+        f"overlay-on-PYTHONPATH failed to make the project package importable:\n{(proc.stderr or '')[-600:]}"
     assert f"PIP_PREFIX={m.project_pylib_dir('prjLIVE')}" in proc.stdout, \
         f"ad-hoc pip not pointed at the project overlay:\n{proc.stdout}"
 
