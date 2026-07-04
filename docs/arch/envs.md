@@ -45,9 +45,11 @@ importable Python libraries (see Known gaps).
 
 Agent calls `ensure_capability(name)` → resolves a capability record → `materialize()`
 dispatches by provisioning kind:
-- **pip** → installs into the project overlay via `pip --prefix`, **constrained to the
-  ABI anchor** (numpy pinned to the base version). Two-phase: fast `--prefix`, then an
-  `--ignore-installed` retry if the read-only base blocks an override.
+- **pip** → installs into the project overlay via `pip --prefix`, **`--prefer-binary`**
+  (use a prebuilt wheel over a newer sdist — never source-build on an old system toolchain
+  when a wheel exists for some version), **constrained to the ABI anchor** (numpy pinned to
+  the base version). Two-phase: fast `--prefix`, then an `--ignore-installed` retry if the
+  read-only base blocks an override.
 - **conda** → micromamba into the shared tools env (CLI tools on PATH).
 
 The **ABI anchor** is the crux of pip safety: `abi_anchor_constraints()` pins numpy to the
@@ -87,12 +89,10 @@ shared path.
 
 ## Known gaps
 
-- **No importable conda-forge Python-library path.** conda provisioning targets the CLI
-  tools env (PATH only). A Python *library* available only as a prebuilt conda-forge binary
-  (e.g. `scikit-misc` when its pip build needs a newer toolchain than the host) has no route
-  into the importable env; it's forced through pip and fails to source-build on old
-  toolchains. (Planned: a conda path that lands the lib importable, pinned to the base numpy
-  ABI.)
-- **Old system toolchains.** A pip source-build (no wheel for the platform/Python) needs the
-  host compiler; on an old cluster GCC this fails. The ABI anchor prevents *numpy* rebuilds;
-  the library's own extensions still need a wheel or the conda path above.
+- **Packages with NO wheel at all.** `--prefer-binary` + the ABI anchor handle the common
+  old-toolchain case (a wheel exists for *some* version, or numpy would be rebuilt). But a
+  package that ships **only** an sdist for this platform/Python still source-builds and can
+  fail on an old cluster GCC. For such a library available prebuilt on **conda-forge**, there
+  is no importable route today: conda provisioning targets the CLI tools env (PATH only), so
+  a conda-forge *library* isn't importable by `run_python`. (Planned: a conda path that lands
+  the lib in an importable layer, pinned to the base numpy ABI.)
