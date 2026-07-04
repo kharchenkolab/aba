@@ -55,12 +55,12 @@ export default function ExternalViewerActions({ entity, className }: { entity: E
           ↗ {v.label}
         </button>
       ))}
-      {/* Download the regular directory .lstar.zarr (a zip that unpacks to a
-          <name>.lstar.zarr/ folder — fast to load + updatable). Reuses the
-          viewer's cached store, so it's quick after a view. */}
-      <button className="focus__promote" title="Download the .lstar.zarr store (a zip that unpacks to a folder; opens a new tab)"
+      {/* Download lstar's single-file .lstar.zarr.zip (STORED, produced by lstar;
+          re-opens directly in pagoda3/lstar). Reuses the viewer's cached store, so
+          it's quick after a view. */}
+      <button className="focus__promote" title="Download as a single .lstar.zarr.zip (opens a new tab)"
               onClick={() => launchExternal(node, externals[0], { action: 'download' })}>
-        ⬇ Download .lstar.zarr
+        ⬇ Download .lstar.zarr.zip
       </button>
     </div>
   )

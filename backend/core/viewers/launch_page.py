@@ -147,7 +147,7 @@ _HTML = r"""<!doctype html>
               $("vl-phase").textContent = "Ready — downloading…";
               location.href = api("/viewers/download?" + dq.toString());
               $("vl-title").textContent = "Download started";
-              $("vl-phase").textContent = "Your .lstar.zarr is downloading (a zip that unpacks to a folder) — you can close this tab.";
+              $("vl-phase").textContent = "Your .lstar.zarr.zip is downloading — you can close this tab.";
               return;
             }
             if (s.set_local_storage) {
