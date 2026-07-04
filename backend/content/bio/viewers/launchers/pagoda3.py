@@ -114,6 +114,22 @@ def _convert_h5ad(src: Path, out: Path) -> None:
         _try_viewer_prep(out)   # best-effort viewer@0.1 via pagoda3 prep.ts (WASM)
 
 
+def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:
+    """Pack the directory store into lstar's canonical single-file STORED
+    `.lstar.zarr.zip` — produced BY lstar (its exact format: STORED, metadata
+    first, range-readable) so a downloaded archive re-opens identically in
+    pagoda3 / lstar. Falls back to the equivalent generic STORED pack only if this
+    lstar build lacks the packer. (View + the internal cache stay the directory
+    `.lstar.zarr` — faster to load, updatable; the zip is for download/transport.)"""
+    try:
+        from lstar.zarr_io import _pack_stored_zip
+    except Exception:  # noqa: BLE001 — older lstar without the single-file packer
+        from core.viewers.store_serve import zip_store_stored
+        zip_store_stored(Path(store_dir), Path(dest))
+        return
+    _pack_stored_zip(str(store_dir), str(dest))
+
+
 def _copy_store(src: Path, out: Path) -> None:
     """Native store already a directory — copy the tree into the served cache."""
     shutil.copytree(src, out)
@@ -174,8 +190,9 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         # Origin-shared with the pagoda3 window → its copilot proxies through ABA.
         set_local_storage={"p3-agent-proxy": "/pagoda3-api"},
         # The prepared .lstar.zarr on disk — the download endpoint packs THIS
-        # (cache-shared with viewing) into a STORED .lstar.zarr.zip.
+        # (cache-shared with viewing) into lstar's single-file STORED .lstar.zarr.zip.
         store_path=str(store),
+        download_packer=_pack_download,
     )
 
 

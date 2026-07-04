@@ -1,11 +1,11 @@
-"""zip_store_dir (core/viewers/store_serve.py) — packs a .lstar.zarr store DIR
-into a zip that unpacks to a `<name>.lstar.zarr/` FOLDER (the download deliverable
-= the regular directory store, not lstar's single-file STORED format). See
-misc/pagoda3_integration.md."""
+"""zip_store_stored (core/viewers/store_serve.py) — the generic FALLBACK packer
+for the download deliverable: a STORED single-file `.lstar.zarr.zip` (contents at
+the zip root). The pagoda3 launcher normally delegates to lstar's own packer; this
+guards the equivalent core fallback. See misc/pagoda3_integration.md."""
 import zipfile
 from pathlib import Path
 
-from core.viewers.store_serve import zip_store_dir
+from core.viewers.store_serve import zip_store_stored
 
 
 def _make_store(root: Path) -> Path:
@@ -18,43 +18,32 @@ def _make_store(root: Path) -> Path:
     return store
 
 
-def test_unpacks_to_a_named_folder(tmp_path):
+def test_single_file_stored_contents_at_root(tmp_path):
     store = _make_store(tmp_path)
-    out = zip_store_dir(store, tmp_path / "out.zip", "sample.lstar.zarr")
+    out = zip_store_stored(store, tmp_path / "out.lstar.zarr.zip")
     assert out.is_file()
     with zipfile.ZipFile(out) as z:
         names = z.namelist()
-        # every entry nested under the clean folder name → unzips to a directory
-        assert all(n.startswith("sample.lstar.zarr/") for n in names), names
-        assert "sample.lstar.zarr/.zattrs" in names
-        assert "sample.lstar.zarr/axes/.zarray" in names
-        assert "sample.lstar.zarr/axes/0" in names
-        # content round-trips
-        assert z.read("sample.lstar.zarr/.zattrs") == b'{"axes": ["cells", "genes"]}'
+        # single-file store: metadata + chunks at the ROOT (not nested in a folder)
+        assert ".zattrs" in names and "axes/.zarray" in names and "axes/0" in names
+        assert not any(n.startswith("sample") for n in names)
+        # metadata (.z*) first so a range reader hits the manifest early
+        import os as _os
+        assert _os.path.basename(z.infolist()[0].filename).startswith(".z")
+        assert z.read(".zattrs") == b'{"axes": ["cells", "genes"]}'
 
 
-def test_is_deflate_compressed(tmp_path):
-    # DEFLATE (a transport container the user unpacks), not the STORED single-file
-    # hosting format — the point of switching to the regular directory store.
+def test_all_stored_not_deflate(tmp_path):
+    # STORED keeps entries byte-range-readable inside the single file (the point
+    # of the .lstar.zarr.zip format); a DEFLATE entry would defeat range reads.
     store = _make_store(tmp_path)
-    out = zip_store_dir(store, tmp_path / "out.zip", "sample.lstar.zarr")
+    out = zip_store_stored(store, tmp_path / "out.lstar.zarr.zip")
     with zipfile.ZipFile(out) as z:
-        assert all(i.compress_type == zipfile.ZIP_DEFLATED for i in z.infolist())
-
-
-def test_extraction_yields_a_working_directory_store(tmp_path):
-    store = _make_store(tmp_path)
-    out = zip_store_dir(store, tmp_path / "out.zip", "sample.lstar.zarr")
-    dest = tmp_path / "unpacked"
-    with zipfile.ZipFile(out) as z:
-        z.extractall(dest)
-    d = dest / "sample.lstar.zarr"
-    assert d.is_dir()
-    assert (d / ".zattrs").is_file() and (d / "axes" / "0").is_file()
+        assert all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist())
 
 
 def test_deterministic(tmp_path):
     store = _make_store(tmp_path)
-    a = zip_store_dir(store, tmp_path / "a.zip", "sample.lstar.zarr").read_bytes()
-    b = zip_store_dir(store, tmp_path / "b.zip", "sample.lstar.zarr").read_bytes()
+    a = zip_store_stored(store, tmp_path / "a.zip").read_bytes()
+    b = zip_store_stored(store, tmp_path / "b.zip").read_bytes()
     assert a == b

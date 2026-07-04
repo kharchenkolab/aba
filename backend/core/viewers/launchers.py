@@ -25,12 +25,16 @@ class LaunchResult:
     pagoda3's copilot at ABA's proxy via `{'p3-agent-proxy': '/pagoda3-api'}`.
     `store_path` is the absolute path of the prepared on-disk store (when the
     launcher materializes one) — lets the download endpoint pack that same
-    cached store into a `.lstar.zarr.zip` without re-deriving it."""
+    cached store without re-deriving it. `download_packer(store_dir, dest)` lets a
+    launcher supply its OWN packaging for that download (e.g. pagoda3 delegates to
+    lstar's canonical single-file STORED `.lstar.zarr.zip` writer) — keeping the
+    generic endpoint and `core` free of format specifics."""
     url: str
     prepare_job_id: Optional[str] = None
     label: Optional[str] = None
     set_local_storage: Optional[dict] = None
     store_path: Optional[str] = None
+    download_packer: Optional[Callable[[Any, Any], None]] = None
 
 
 # A launcher resolves (node, ctx) -> LaunchResult. `node` is a files-tree node
