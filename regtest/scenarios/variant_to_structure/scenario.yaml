@@ -1,0 +1,309 @@
+id: variant_to_structure
+title: Map two missense variants onto PAH structure, drop a sequencing artifact, then resume with conservation + functional-site context
+domain: protein
+gpu: false
+summary: >
+  A working session on two missense variants in human phenylalanine hydroxylase (PAH):
+  fetch the catalytic-domain structure, locate residues 245 and 274, and judge functional
+  impact from burial (SASA/RSA) and active-site proximity (distance to the catalytic iron
+  and the BH4 cofactor). The biologist pins a burial plot and a structure figure, then
+  learns the second variant was a sequencing artifact and DROPS it (deleting the now-stale
+  two-variant burial plot), refocuses the structure figure on the surviving variant, and in
+  a LATER session RESUMES to add ortholog conservation and functional-site/ligand context
+  for the kept variant, restyling and pinning the conservation figure.
+lifecycle: [drop, resume]
+data_files: []
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I've got two missense variants in the PAH gene (phenylalanine hydroxylase) from a
+    patient panel: p.Val245Ala and p.Lys274Glu. Can you pull up the 3D structure of the
+    protein and find exactly where each of these two residues sits? I want a first read on
+    whether each one is buried in the core or out on the surface, and how close it is to the
+    part of the protein that does the chemistry. Don't plot anything yet — just orient me.
+  expect:
+    must_mention:
+    - surface
+    must_not:
+    - "Val245Ala is benign"
+    - "Lys274Glu is more damaging"
+    - "no structure"
+    - "could not find a structure"
+    - "as an AI"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      The agent must FETCH a real 3D structure of human PAH — the canonical route is the RCSB
+      experimental catalytic-domain structure PDB 1J8U (which contains the catalytic non-heme
+      iron FE2 and the tetrahydrobiopterin cofactor, HET code H4B / BH4), reachable at
+      https://files.rcsb.org/download/1J8U.pdb ; an AlphaFold model for UniProt P00439 is an
+      acceptable alternative. It must locate residue 245 and residue 274 in that structure
+      (PAH/UniProt numbering == PDB 1J8U numbering, no offset) and give a first read grounded
+      in the coordinates: Val245 is essentially fully buried and lines the active-site /
+      cofactor pocket, whereas Lys274 is solvent-exposed on the surface and far from the
+      active site. No fabricated numbers; this is the orienting turn, no figure expected yet.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now quantify the burial. Compute the solvent accessibility for residue 245 and residue
+    274 and give me a figure that shows, side by side, how buried each one is — relative
+    solvent accessibility on a 0-to-1 scale is fine. Save it as a PNG so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention: []
+    must_not:
+    - "cannot compute"
+    - "as an AI"
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      The agent computes a real burial measure (Shrake-Rupley SASA -> relative solvent
+      accessibility, e.g. Tien 2013 max-ASA normalization) from the fetched coordinates and
+      produces a saved bar/scatter figure comparing residue 245 and residue 274. Correct
+      ground truth: Val245 RSA ~0.00 (deeply buried), Lys274 RSA ~0.42 (surface-exposed). The
+      figure must show 245 essentially fully buried and 274 substantially exposed. Numbers
+      must come from the structure, not memory.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The two-variant burial/RSA comparison figure produced in s2 is pinned — a Result entity
+      now exists and shows in the manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now show me where these two residues actually are in the fold relative to the
+    business end of the enzyme. Give me a figure of the structure with residue 245 and
+    residue 274 highlighted, and also mark the catalytic iron and the bound cofactor so I can
+    see how close each variant is to them. Save it as a PNG.
+  expect:
+    produces: {figure: 1}
+    must_mention: []
+    must_not:
+    - "no ligand"
+    - "no cofactor"
+    - "cannot locate"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A saved structural figure that highlights residues 245 and 274 and marks the
+      active-site landmarks (the catalytic iron FE2 and the BH4 / H4B cofactor). This can be a
+      rendered 3D view or a derived spatial plot (e.g. a 2D projection, or a per-residue
+      distance-to-active-site plot) as long as it visually conveys that 245 is adjacent to the
+      cofactor pocket (~3.5 A to BH4, ~9.8 A to the iron) while 274 is distal (~16 A to the
+      iron, ~18 A to BH4). Distances must be derived from the fetched coordinates, not
+      fabricated.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The structure/active-site figure from s4 is pinned too; two Results are now on the shelf
+      (the burial comparison and the structural view).
+
+- id: s6
+  kind: drop
+  actor: agent
+  prompt: >
+    Quick correction on this — the p.Lys274Glu call came back as a sequencing artifact, it's
+    not a real variant in this patient. Drop it entirely and just focus on Val245Ala from
+    here on. Going forward this isn't a two-variant comparison anymore.
+  expect:
+    must_mention: []
+    must_not: []
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      The agent abandons the Lys274Glu line: it acknowledges 274 as a sequencing artifact and
+      stops carrying it. The working scope going forward should reflect only Val245Ala — no
+      further burial/impact reasoning about 274, no "comparison of the two variants" framing.
+      It must NOT silently keep treating this as a two-variant analysis and must NOT flip to
+      calling 274 the important one. It confirms the drop and reframes to the single surviving
+      variant without re-deriving everything from scratch.
+
+- id: s7
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 1}
+    checks: >
+      The pinned two-variant burial/RSA comparison (s3) is now stale because 274 was dropped,
+      so the human archives it. That Result is archived; the structural figure (s5) remains
+      pinned, leaving one Result on the shelf.
+
+- id: s8
+  kind: revise
+  actor: agent
+  prompt: >
+    Redo that structure figure now that it's just the one variant — highlight only residue
+    245, keep the iron and the cofactor marked, and give it a cleaner colourblind-friendly
+    palette with a clear label. Save it as a new PNG.
+  expect:
+    produces: {figure: 1}
+    must_mention: []
+    must_not: []
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A REVISION / restyle of the structural figure: a new saved figure that highlights only
+      residue 245 (not 274) against the active-site landmarks (iron + BH4 cofactor), with a
+      colourblind-friendly palette and a clear label. It should reuse the already-fetched
+      structure and the established Val245 placement rather than re-deriving from zero, and it
+      must not re-introduce residue 274.
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The restyled single-variant structural figure from s8 is pinned; two Results are on the
+      shelf again (the original s5 structural figure plus the new V245-only restyle).
+
+- id: s10
+  kind: resume
+  actor: agent
+  prompt: >
+    Picking this back up after a break — we're on the Val245Ala variant. First remind me what
+    we already established about residue 245 and which structure we used, then add two new
+    things: is residue 245 conserved across species orthologs of PAH, and how does its
+    conservation compare around the protein? Pull orthologs, line them up, and give me a
+    figure of the conservation across the alignment with position 245 marked. Save it.
+  expect:
+    produces: {figure: 1}
+    must_mention:
+    - conserved
+    must_not:
+    - "no prior"
+    - "start over"
+    - "starting from scratch"
+    context: {cache_breakpoints: true}
+    checks: >
+      This is a LATER session: after a fresh app re-attached to the same DB, the agent must
+      RESUME and reuse what it already established for Val245Ala (the residue identity, its
+      deep burial, the active-site proximity, and which structure was fetched — 1J8U / P00439)
+      rather than re-deriving the variant analysis from zero. New work: fetch PAH orthologs
+      across vertebrate species (canonical SwissProt-reviewed sequences from UniProt for human
+      plus several others, e.g. mouse, rat, bovine, etc.), align them, compute per-position
+      conservation, and produce a saved conservation figure with position 245 marked. Correct
+      finding: Val245 (and the active-site / biopterin-binding region around it) is HIGHLY
+      conserved across orthologs. Must not re-introduce variant 274, must not claim there is
+      no prior work, and must not restart from scratch. Conservation must be grounded in
+      actually fetched and aligned sequences.
+
+- id: s11
+  kind: revise
+  actor: agent
+  prompt: >
+    That conservation figure is a bit busy. Redo it with a colourblind-safe colour scheme and
+    bigger fonts, and zoom the view to a window around residue 245 so the conservation right
+    at the variant position is easy to read. Save it as a new PNG.
+  expect:
+    produces: {figure: 1}
+    must_mention: []
+    must_not:
+    - "cannot"
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A RESTYLE of the conservation figure from s10 (not a fresh analysis): a new saved figure
+      using the same alignment/conservation it already computed, with a colourblind-safe
+      palette, larger fonts, and the view zoomed to a window centered on residue 245. It must
+      reuse the prior alignment rather than re-aligning everything, and the conservation it
+      shows at position 245 must remain high (consistent with s10).
+
+- id: s12
+  kind: pin
+  actor: user
+  target: {from_step: s11, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The restyled conservation figure from s11 is pinned; three Results are now on the shelf
+      (the s5 structural figure, the s8 V245-only restyle, and the s11 conservation restyle).
+
+- id: s13
+  kind: resume
+  actor: agent
+  prompt: >
+    Let's wrap up. Pull together what we know about Val245Ala from everything we've kept —
+    burial, active-site/cofactor context, and conservation — and tell me the bottom line on
+    whether this variant is likely functionally damaging. Just summarize from what's pinned;
+    don't redo any analysis.
+  expect:
+    must_mention:
+    - conserved
+    must_not:
+    - "start over"
+    - "starting from scratch"
+    context: {cache_breakpoints: true}
+    checks: >
+      A closing synthesis after the session is rehydrated from the pinned shelf. The agent
+      should reflect the surviving curated state — the V245-only structural figure and the
+      conservation figure — and NOT the deleted two-variant burial plot or variant 274. It
+      ties the three lines together: Val245 is deeply buried, lines the BH4 cofactor pocket
+      near the catalytic iron, and is highly conserved across orthologs, so p.Val245Ala is the
+      more likely functionally damaging variant. It must not redo the analyses, must not claim
+      no prior work, and must not re-introduce 274.
+
+expected_overall:
+  planted_truth: >
+    Gene: human phenylalanine hydroxylase (PAH), UniProt P00439 (452 aa; UniProt numbering ==
+    legacy clinical numbering == PDB 1J8U chain A numbering, no offset). Structure used: RCSB
+    PDB 1J8U (catalytic domain, residues ~118-424) which contains the catalytic non-heme iron
+    (FE2) and the tetrahydrobiopterin cofactor (HET code H4B / BH4); AlphaFold model for
+    P00439 is an acceptable alternative source.
+
+    Variant X = p.Val245Ala (c.734T>C): REAL, documented PATHOGENIC PKU variant (ClinGen PAH
+    Expert Panel; one of the more common BH4-responsive variants). Structural context measured
+    from 1J8U with a Shrake-Rupley SASA + Tien(2013) max-ASA normalization: Val245 relative
+    solvent accessibility ~0.00 (deeply BURIED), min-atom distance ~3.5 A to the BH4 cofactor
+    and ~9.8 A to the catalytic iron — i.e. it lines the active-site / biopterin-binding pocket.
+    Highly conserved across vertebrate PAH orthologs. => the MORE LIKELY DAMAGING variant.
+
+    Variant Y = p.Lys274Glu (K274E): REAL, documented BENIGN polymorphism (enzyme activity
+    indistinguishable from wild-type; ~4% of African-American PAH alleles). Structural context
+    from 1J8U: Lys274 relative solvent accessibility ~0.42 (SURFACE-EXPOSED), min-atom distance
+    ~16.4 A to the iron and ~18.3 A to BH4 — a solvent-exposed charge swap far from the active
+    site. => the MORE LIKELY BENIGN / tolerated variant. In this session 274 is later revealed
+    to be a sequencing artifact and dropped entirely.
+
+    (Reference RSA/distance values, recomputed here from a live 1J8U download with Bio.PDB
+     ShrakeRupley + Tien max-ASA:  V245 RSA 0.000, Fe 9.82 A, BH4 3.49 A;  K274 RSA 0.417,
+     Fe 16.43 A, BH4 18.27 A.  Catalytic His285/His290/Glu330 coordinate the iron as a sanity
+     check on the active-site location.)
+  notes: >
+    A fully correct end-to-end run is a realistic curated working session:
+    (s1) examine — discovers it needs a 3D structure, fetches a real PAH structure (PDB 1J8U
+    via RCSB, or AlphaFold P00439), maps residues 245 and 274, and gives a first read: Val245
+    buried + near the cofactor pocket, Lys274 surface + distal. No figure yet, no fabrication.
+    (s2) analyze — computes real burial (SASA -> RSA) and SAVES a figure comparing 245 (~0.00,
+    buried) and 274 (~0.42, exposed). (s3) the human PINS it. (s4) analyze — SAVES a structural
+    figure highlighting 245 and 274 with the catalytic iron and BH4 cofactor marked, conveying
+    245 adjacent to the cofactor (~3.5 A) and 274 distal (~16 A); (s5) the human PINS it (two
+    Results). (s6) drop — told 274 is a sequencing artifact, the agent cleanly DROPS Lys274Glu
+    and narrows scope to Val245Ala only, without restarting. (s7) the human DELETES the now-stale
+    two-variant burial plot (the s3 pin is archived; the structural figure remains). (s8) revise
+    — restyles the structural figure to a single-variant, colourblind-friendly view of 245 only
+    (no 274); (s9) the human PINS the restyle. (s10) resume — a LATER session: the agent
+    RESUMES, recalls the established Val245 result + which structure was used, then ADDS ortholog
+    conservation (fetch + align PAH across vertebrates -> position 245 is highly conserved) and
+    SAVES a conservation figure with 245 marked. (s11) revise — RESTYLES that conservation figure
+    (colourblind palette, bigger fonts, zoomed to a window around 245) reusing the same
+    alignment; (s12) the human PINS the restyle (three Results). (s13) resume — a closing
+    synthesis from the pinned shelf: Val245 is buried + lines the cofactor pocket near the iron +
+    highly conserved => the more likely damaging variant; reflects the surviving curated state,
+    not the deleted plot or variant 274. Fabrication / failure modes to catch: inventing SASA or
+    distances, claiming no structure exists, declaring 274 the damaging one, re-introducing 274
+    after the drop, restarting from scratch at resume, or summarizing the deleted two-variant
+    plot at s13 instead of the surviving curated Results.

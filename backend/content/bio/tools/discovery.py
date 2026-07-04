@@ -254,6 +254,7 @@ def search_skills_tool(input_: dict) -> dict:
     limit = input_.get("limit") or 8
     hits = search_skills(q, limit=int(limit), domain=input_.get("domain"))
     skills, any_blocked = [], False
+    any_knowhow = any(getattr(s, "kind", "recipe") == "knowhow" for s in hits)
     for s in hits:
         unmet = unmet_tools(s)          # tools this recipe needs that can't run here
         if unmet:
@@ -274,6 +275,12 @@ def search_skills_tool(input_: dict) -> dict:
         })
     note = ("Each result is a SKILL — invoke it via its `invoke_with` value "
             "(which calls the `Skill` tool). The `name` alone is NOT a callable tool.")
+    if any_knowhow:
+        note += (" Results are typed by `kind`: `recipe` = a runnable procedure; "
+                 "`knowhow` = a decision guide (which method / why — not a runnable "
+                 "workflow). For a specific execution request, bind the recipe; for an "
+                 "open method-choice question, read the knowhow first; when both appear, "
+                 "the knowhow explains the choice that the recipe executes.")
     if any_blocked:
         note += (" Results with `runnable_here: false` describe the right approach but "
                  "need a tool that can't run in this environment (see `unmet_tools`, "
@@ -701,21 +708,27 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     if not name:
         return {"error": "name is required"}
     _ct = (ctx or {}).get("cancel_token")
+    from core.catalog import resolve_capability
+    cap = resolve_capability(name)
     # Cluster module provider (prefer:first, job-path scope): does a cluster module
-    # satisfy this tool by exact name? resolve() matches only an exact module name,
-    # so pip libraries never match and fall through. Record it now so the project's
-    # background Slurm jobs `module load` it; the branches below read `_mod` (conda
-    # still builds for in-process; an uncatalogued tool like cellranger is
-    # module-only — see the not_found path). No-op off a cluster.
+    # satisfy this tool by exact name? ONLY for CLI/binary tools — NEVER for a pip
+    # library. `resolve()` matches any exact-name Lmod module, and on some clusters a
+    # python PACKAGE is exposed as a module (e.g. `scanpy/1.4.4-...-python-3.6.6`)
+    # that drags in its OWN ancient Python; recording it makes every background job
+    # `module load` it and shadow the conda env's numpy (the prj_6d986f40 incident).
+    # Pip libraries are satisfied in the conda env, so skip the module for them and
+    # keep it only for catalogued CLI tools + uncatalogued binaries (cellranger, …).
     _mod = None
+    _is_pip_lib = bool((cap or {}).get("provisioning", {}).get("pip")) or \
+        (cap or {}).get("archetype") == "library"
     try:
         from core.exec import modules as _modprov
-        if _modprov.modules_active():
+        if _modprov.modules_active() and not _is_pip_lib:
             _mod = _modprov.resolve(name)
             if _mod:
                 from core import projects as _projects
                 _modprov.record_project_module(_projects.current(), _mod)
-                # B: make the tool usable IN-PROCESS now — prepend the module's
+                # make the tool usable IN-PROCESS now — prepend the module's binary
                 # env-delta to the live kernel so run_python subprocesses find its
                 # binary (no background job / restart needed just to load it).
                 _snip = _modprov.kernel_env_snippet(_mod)
@@ -727,8 +740,6 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                         _s.execute(_snip, timeout_s=20)
     except Exception:  # noqa: BLE001
         _mod = None
-    from core.catalog import resolve_capability
-    cap = resolve_capability(name)
     if not cap:
         if _mod:
             # Uncatalogued but a cluster module provides it (e.g. cellranger):

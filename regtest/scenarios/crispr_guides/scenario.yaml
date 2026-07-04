@@ -1,0 +1,261 @@
+id: crispr_guides
+title: CRISPR knockout guide design — SpCas9 guides from the real BRCA1 CDS
+domain: genome_engineering
+gpu: false
+summary: >
+  A realistic SpCas9 knockout-guide design session against the genuine human
+  BRCA1 coding sequence: read the CDS, scan it for 20 nt protospacers next to an
+  NGG PAM and design a first candidate set, plot where the guides fall along the
+  gene and profile their GC content, then pin the keepers. The biologist then
+  tightens the criteria (stricter GC window, guides biased to the 5' coding
+  region so a frameshift hits early), restyles the position map for a lab
+  document, and finally discards a weak first-pass set — coming back later to
+  recap from the saved shelf. Off-target risk is acknowledged as needing a
+  dedicated specificity tool; guide sequences are never fabricated.
+lifecycle: [revise, delete, resume]
+data_files:
+- BRCA1_cds.fasta
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I want to knock out the human gene BRCA1 with CRISPR and I've put its coding
+    sequence at DATA_DIR/BRCA1_cds.fasta. Before we design anything, just read the
+    file and tell me what I'm working with — how long the coding sequence is, that
+    it really is a clean in-frame reading frame, and roughly where in the gene
+    would be a sensible place to aim a knockout cut.
+  expect:
+    must_mention: ["BRCA1"]
+    must_not:
+    - "I cannot"
+    - "unable to read"
+    - "no sequence"
+    context: {cache_breakpoints: true}
+    checks: >
+      Reads the FASTA and reports the real BRCA1 CDS: 5592 nt, a clean in-frame
+      ORF (multiple of 3, starts ATG, ends on a stop), ~1863 coding codons. It
+      should reason like a knockout designer — an early cut (5' / N-terminal coding
+      region) is generally preferable so an indel frameshift truncates most of the
+      protein — without yet having designed any guides. No fabricated length and
+      no invented guide sequences at this stage.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now design me a first set of candidate knockout guides from this
+    sequence. I'm using ordinary SpCas9, so each guide should be a 20-letter
+    target sitting right next to the usual PAM, and please throw out anything with
+    a lousy GC balance or a long run of T's that would kill transcription. Then
+    draw me a map of where each candidate lands along the coding sequence and save
+    it so I can keep it.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["BRCA1"]
+    must_not:
+    - "I cannot design"
+    - "off-target free"
+    - "guaranteed specific"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Scans the REAL CDS for 20 nt protospacers immediately 5' of an NGG PAM
+      (both strands is best practice; + strand alone is acceptable), filters on
+      GC content (~40-70%) and rejects poly-T (TTTT) runs, and reports a handful
+      of candidate guides whose sequences are GENUINE substrings of the BRCA1 CDS
+      (or its reverse complement) — never fabricated. There are plenty: ~167
+      passing protospacers on the + strand alone (252 raw NGG sites), and ~140
+      more on the - strand. Renders and SAVES a position map of the candidate cut
+      sites along the CDS. Should note that this is a sequence-level design only
+      and that real off-target / specificity scoring needs a dedicated tool
+      (e.g. an aligner-based off-target search) — must NOT claim the guides are
+      off-target-free or "guaranteed specific".
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The first-pass guide position map is pinned — a Result entity now exists on
+      the shelf and appears in the thread manifest. This is the broad first set;
+      it will later be superseded by a stricter design.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Before I trust these, show me the GC balance across the candidates — I want to
+    see the spread, not just take your word that they're in range. Give me a
+    figure of the GC distribution of the guides you just designed and save it.
+  expect:
+    produces: {figure: 1}
+    must_mention: ["GC"]
+    must_not:
+    - "I cannot"
+    - "no guides"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes the GC fraction of each candidate protospacer from s2 and renders
+      a SAVED figure of the distribution (histogram or similar). The distribution
+      must lie within the stated filter window (all candidates between ~40% and
+      ~70% GC, since that was the filter); the bulk should cluster in the middle.
+      Real per-guide GC values from the actual sequences, not invented.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The GC distribution figure is pinned as a second Result. The shelf now holds
+      the first-pass position map (s3) and the GC profile (s5).
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    This first pass is too loose. Tighten it up: only keep guides with a GC
+    fraction between 45 and 60 percent, and bias the selection toward the front of
+    the gene — I'd rather the cut land early in the coding region so a frameshift
+    knocks out most of the protein. Redesign on those rules and give me an updated
+    position map saved as a new figure.
+  expect:
+    produces: {figure: 1}
+    must_not:
+    - "I cannot"
+    - "no candidates"
+    - "off-target free"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      RE-RUNS the design with a stricter GC window (45-60%) and prioritises guides
+      in the 5' / early coding region, producing a NEW, smaller, higher-quality set
+      whose sequences are still real substrings of the BRCA1 CDS. There are still
+      plenty available under the tighter rules (~110 on the + strand, ~99 on the -
+      strand pass GC 45-60%), and several fall in the first ~500 nt for an early
+      cut. Renders and SAVES an updated position map showing the tightened set
+      skewed toward the 5' end. This is a revision of the s2 design, not new
+      biology and not fabricated guides; still acknowledges off-target scoring is
+      a separate step.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The tightened, 5'-biased position map is pinned as a third Result alongside
+      the first-pass map (s3) and the GC profile (s5).
+
+- id: s8
+  kind: revise
+  actor: agent
+  prompt: >
+    That tightened map is going into my lab's design doc. Redo it for
+    presentation: a colourblind-friendly palette, bigger axis labels, mark the
+    start codon end of the gene clearly, and label each chosen guide. Save it as a
+    new figure — same guides, just make it readable.
+  expect:
+    produces: {figure: 1}
+    must_not:
+    - "I cannot"
+    - "no figure"
+    - "different guides"
+    context: {cache_breakpoints: true, cache_read: true}
+    checks: >
+      RESTYLES the s6 position map for publication — colourblind-safe palette,
+      larger labels, the 5' / start-codon end marked, and the selected guides
+      labelled — WITHOUT changing the underlying guide set (same tightened guides
+      from s6, same real positions). A new SAVED figure that is a re-render of the
+      same analysis, not a recomputation and not a new guide design.
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The publication-ready restyled map is pinned as a fourth Result. The shelf
+      now holds the first-pass map (s3), the GC profile (s5), the tightened map
+      (s7), and the restyled map (s9).
+
+- id: s10
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The user archives the FIRST-PASS guide position map (pinned at s3) — the
+      loose, unfocused set — now that the tightened 5'-biased design and its
+      restyled version have superseded it. After the delete it is no longer an
+      active Result; the GC profile, the tightened map, and the restyled map
+      remain on the shelf.
+
+- id: s11
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this after a break — remind me where we landed on the BRCA1
+    guides. Which design did we settle on, what were the rules behind it, and is
+    there anything still outstanding before I'd actually order these? Just
+    summarise from what's saved; don't redesign anything.
+  expect:
+    must_mention: ["BRCA1"]
+    must_not:
+    - "I cannot"
+    - "off-target free"
+    - "guaranteed specific"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project DB, the agent's
+      context is rehydrated from the pinned shelf. It should recap the SURVIVING
+      design: the tightened guide set (GC 45-60%, biased to the 5' coding region
+      for an early frameshift), its restyled lab-doc map, and the GC profile —
+      and should NOT resurrect the archived first-pass map. Crucially it should
+      flag what is still outstanding: off-target / specificity scoring with a
+      dedicated tool before ordering, since that was never done here. Should not
+      redesign or re-run, and must not claim the guides are off-target-free.
+
+expected_overall:
+  planted_truth: >
+    BRCA1_cds.fasta is the REAL human BRCA1 coding sequence — Ensembl MANE Select
+    transcript ENST00000357654, fetched once at build time. It is 5592 nt long, a
+    clean in-frame ORF: a multiple of 3 (1864 codons including the stop, ~1863
+    coding codons), it starts with ATG and ends on a stop codon (TGA). Scanning
+    for SpCas9 sites (20 nt protospacer immediately 5' of an NGG PAM) yields 252
+    raw NGG protospacers on the + strand and 239 on the - strand. Applying the
+    first-pass quality filter (GC 40-70%, no TTTT poly-T run) leaves 167 on the +
+    strand and 140 on the - strand. Tightening to GC 45-60% leaves 110 on the +
+    strand and 99 on the - strand — still ample — and several pass-filter guides
+    fall in the first 500 nt (an early-cut, 5'-biased subset exists). Every valid
+    guide MUST be an exact substring of this CDS (for + strand guides) or of its
+    reverse complement (for - strand guides); any guide that is not is fabricated.
+    Off-target specificity cannot be judged from this single CDS — it requires a
+    dedicated genome-wide off-target search tool.
+  notes: >
+    A fully correct end-to-end session: (s1) reads the CDS and reports 5592 nt, a
+    clean ATG-to-stop in-frame ORF, and reasons that an early (5') cut is best for
+    a knockout — no guides invented yet. (s2) designs a first candidate set of
+    real 20 nt + NGG protospacers drawn from the actual sequence, filtered on GC
+    40-70% and no poly-T, renders and saves a position map, and flags that
+    off-target scoring is a separate dedicated step (never claims the guides are
+    specific/off-target-free); (s3) pins that map. (s4) plots the GC distribution
+    of those candidates (all within 40-70%) and (s5) pins it. (s6) revises the
+    design with a stricter GC window (45-60%) biased to the 5' coding region,
+    producing a smaller higher-quality set of still-real guides and a new 5'-skewed
+    position map; (s7) pins it. (s8) restyles that map for the lab doc — same
+    guides, colourblind palette, labelled, 5' end marked — and (s9) pins the
+    restyled version. (s10) the user archives the loose first-pass map (s3). (s11)
+    after a session restart the agent recaps from the surviving shelf: the
+    tightened 5'-biased set and its restyled map are the keeper, the first-pass map
+    is gone, and off-target/specificity validation with a dedicated tool is still
+    outstanding before ordering. Throughout: real CDS, real protospacer substrings,
+    real GC values, honest about off-target — no fabricated guide sequences, GC
+    numbers, or specificity claims.

@@ -812,16 +812,25 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
           {showCode && <pre className="jobs__pre jobs__pre--code">{code}</pre>}
         </div>
       )}
-      {hasOutput && (
+      {(hasOutput || job.status === 'queued' || job.status === 'running') && (
         <div className="jobs__section">
           <button type="button" className="jobs__toggle" onClick={() => setShowOut(s => !s)}>
             {showOut ? '▾ output' : '▸ output'}
-            <span className="jobs__toggle-meta">{(out || err).length} chars</span>
+            <span className="jobs__toggle-meta">
+              {out ? `${out.length} chars` : (job.status === 'queued' ? 'queued' : job.status === 'running' ? 'live' : '')}
+            </span>
           </button>
-          {showOut && out && <pre className="jobs__pre">{out}</pre>}
+          {/* Show output when present; otherwise, for a queued/running job, a live placeholder so
+              the affordance exists BEFORE the job emits (the panel refreshes every 4s — see the
+              fetchDetail interval). Prevents a silent/queued job from looking like it has no output. */}
+          {showOut && (out
+            ? <pre className="jobs__pre">{out}</pre>
+            : <pre className="jobs__pre jobs__pre--muted">{job.status === 'queued'
+                ? '(queued — no output until a node picks up the job; this updates live)'
+                : '(running — waiting for the first output…)'}</pre>)}
         </div>
       )}
-      {!code && !out && !err && (
+      {!code && !out && !err && job.status !== 'queued' && job.status !== 'running' && (
         <div className="jobs__detail-hint">(no captured input/output — this job may not have been a run_python)</div>
       )}
     </div>

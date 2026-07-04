@@ -53,7 +53,12 @@ class SlurmSubmitter:
 
         # Cluster module provider: the modules this project resolved (recorded by
         # ensure_capability) get `module load`ed in the login-less job script.
-        # project_modules() is [] off-cluster, so this is a safe no-op there.
+        # project_modules() filters python-toolchain modules (they'd shadow the conda
+        # env) and is [] off-cluster, so this is a safe no-op there. The Python
+        # interpreter env is sanitized AFTER the load (below) so no module — even one
+        # the name filter misses — can shadow the conda env's Python (the prj_6d986f40
+        # incident), while the module's PATH/LD_LIBRARY_PATH/JAVA_HOME/etc. for tools
+        # are preserved.
         from core.exec.modules import load_lines, project_modules
         mods = list(params.get("modules") or [])
         for _m in project_modules(pid):
@@ -82,6 +87,10 @@ class SlurmSubmitter:
             "run_id": params.get("run_id") or job["id"],
             "timeout_s": int(params.get("timeout_s") or 600),
             "result_path": str(result_path), "env": params.get("env"),
+            # Did the agent request a GPU? slurm_entry uses this to preflight torch.cuda
+            # on the compute node — so a GPU job can't silently fall to CPU on an idle
+            # allocated GPU (the scVI-on-CPU incident).
+            "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": mods,                              # provenance (cluster module provider)
             # Nextflow passthrough (None for python/r jobs).
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
@@ -95,7 +104,14 @@ class SlurmSubmitter:
             f"cd {run_dir}\n"
             f"{load_lines(mods)}"
             f"{_nf_path_line}"
-            f"export PYTHONPATH={_BACKEND_DIR}:$PYTHONPATH\n"
+            # Sanitize the Python interpreter env AFTER `module load`: a cluster module
+            # can set PYTHONHOME or prepend its own (ancient) PYTHONPATH, which would
+            # shadow the conda env this job runs on (the prj_6d986f40 numpy incident).
+            # Clear PYTHONHOME and OVERWRITE PYTHONPATH with just the backend (dropping
+            # any module-injected entries) — the env's python then uses its own stdlib +
+            # site-packages. Module PATH/LD_LIBRARY_PATH/JAVA_HOME/… for tools stay.
+            "unset PYTHONHOME\n"
+            f"export PYTHONPATH={_BACKEND_DIR}\n"
             # -u: unbuffered stdout so slurm_entry's tee'd child output reaches
             # job.log (sbatch -o) live, not only at exit.
             f"{sys.executable} -u -m core.jobs.slurm_entry {spec_path}\n"

@@ -1,0 +1,89 @@
+id: reproduce_expr
+title: Reproduce a TPM analysis from its record (provenance / memory-wipe recovery)
+domain: transcriptomics
+expected_overall:
+  planted_truth: >
+    DATA_DIR/counts.csv (genes x samples) + DATA_DIR/lengths.csv (gene lengths). TPM =
+    divide each count by gene length, then scale each sample to 1e6. The computation is
+    fully DETERMINISTIC (no seed) so reproduction must give the SAME result. Top-10 genes
+    by mean TPM: GENE0392, GENE0271, GENE0101, GENE0098, GENE0051, GENE0488, GENE0330,
+    GENE0643, GENE0817, GENE0382 (top two always appear). reproduce_from_exec re-runs the
+    stored exec code in the CURRENT env; on the same box env_drift is false. CPM (s7) is
+    library-size scaling WITHOUT the length divide, so long highly-counted genes drop and
+    short ones rise relative to TPM.
+steps:
+  - id: s1
+    kind: examine
+    actor: agent
+    prompt: What data do I have in DATA_DIR?
+    expect:
+      must_mention: ["counts", "lengths"]
+      checks: Lists counts.csv + lengths.csv.
+
+  - id: s2
+    kind: analyze
+    actor: agent
+    prompt: >
+      Convert these raw counts to TPM and show me the 10 genes with the highest mean TPM.
+      Save a barplot of those top genes.
+    expect:
+      must_mention: ["TPM", "GENE0392", "GENE0271"]
+      must_not: ["cannot", "as an AI"]
+      produces: {figure: 1}
+      context: {cache_breakpoints: true}
+      checks: >
+        Correct length-then-library normalization; GENE0392/GENE0271 at the top; a barplot
+        of the top-10 saved. No fabricated values.
+
+  - id: s3
+    kind: pin
+    actor: user
+    target: {from_step: s2, select: figure}
+    expect:
+      state: {pinned_results_min: 1}
+      checks: The top-genes barplot is pinned as a Result so it can be reproduced later.
+
+  - id: s4
+    kind: reproduce
+    actor: user
+    target: {ref: s3}
+    expect:
+      state: {reproduced: true, env_drift: false}
+      checks: >
+        Reproducing the pinned result re-runs its stored exec in the current env. The
+        computation is deterministic and the box is unchanged, so it succeeds with no
+        environment drift.
+
+  - id: s5
+    kind: resume
+    expect:
+      checks: Fresh session — simulates coming back later with no chat memory (memory wipe).
+
+  - id: s6
+    kind: analyze
+    actor: agent
+    prompt: >
+      I'm back after a while and I don't have our earlier chat. Can you reproduce that TPM
+      top-genes analysis from its saved record and confirm the same genes still come out on
+      top?
+    expect:
+      must_mention: ["GENE0392", "GENE0271"]
+      must_not: ["no record", "cannot reproduce", "start over", "don't have", "lost"]
+      checks: >
+        The agent recovers the provenance (reproduce_from_exec on the pinned result, or
+        re-derives from its exec record) and confirms the SAME top genes — recall grounded
+        in the record, not a fresh guess and not fabrication.
+
+  - id: s7
+    kind: revise
+    actor: agent
+    prompt: >
+      Now redo it as CPM (counts per million, no length normalization) instead, and tell me
+      which genes move into or out of the top 10 compared with TPM.
+    expect:
+      must_mention: ["CPM"]
+      must_not: ["identical to TPM", "no genes change", "length makes no difference"]
+      produces: {figure: 1}
+      checks: >
+        CPM = per-sample library-size scaling WITHOUT dividing by length, so the top-10
+        differs from TPM; a sensible statement of which genes change rank.

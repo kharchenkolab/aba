@@ -1,0 +1,255 @@
+id: methylation_dmr
+title: DNA-methylation differential analysis — volcano, DMR heatmap, probe re-annotation, and region collapsing (genomics)
+domain: genomics
+gpu: false
+summary: >
+  A realistic differential-methylation session: examine an array beta-value matrix, find the
+  differentially methylated CpG positions between cases and controls (volcano), visualise them as a
+  DMR heatmap, re-annotate the hits after the probe manifest is updated, restyle the volcano for a
+  figure, prune a stale figure, then branch to collapse the positions into regions at two distance
+  thresholds and compare.
+lifecycle: [version_change, branch]
+data_files:
+- betas.csv
+- groups.csv
+- manifest.csv
+- manifest_v2.csv
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have DNA-methylation array data for 20 samples — 10 cases and 10 controls. The beta values
+    (probes in rows, samples in columns) are at DATA_DIR/betas.csv and the group for each sample is
+    at DATA_DIR/groups.csv. Before any statistics, just take a look and tell me the basic shape:
+    how many probes and samples, that the groups split 10 and 10, and whether anything stands out
+    between cases and controls.
+  expect:
+    must_mention:
+    - "case"
+    - "control"
+    must_not: ["I cannot", "I can't"]
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Reads betas.csv and groups.csv, reports 3000 probes x 20 samples, confirms the split is
+      10 cases vs 10 controls, and notes that most probes look similar between groups while a
+      small set looks elevated in cases. No fabricated numbers; no statistics claimed yet.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now find the CpG positions that are differentially methylated between the cases and the
+    controls. Run a proper per-probe two-group comparison across all the probes, correct for
+    multiple testing, and give me a volcano plot — effect size (the case-minus-control beta
+    difference) on the x-axis against significance on the y-axis — saved as a figure I can keep.
+    Tell me how many probes come out significant and which direction they go.
+  expect:
+    must_mention: []
+    must_not:
+    - "I cannot"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Agent runs a per-probe two-group test (e.g. Welch t-test / Mann-Whitney / per-CpG linear
+      model) across all 3000 probes and applies multiple-testing correction (BH FDR or Bonferroni)
+      — NOT raw p-values as final. It reports on the order of ~50 differentially methylated probes
+      (acceptable ~48-55; exactly 50 if combining significance with |delta-beta|>0.1, or under
+      Bonferroni p<0.05), and states they are ALL HYPERmethylated in cases (positive delta-beta,
+      mean beta higher in cases). The volcano figure shows the planted DM probes as a clean cloud
+      of large positive effect at high significance, well separated from the background near
+      delta-beta=0. No fabricated counts; the count and direction come from the data.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: The volcano plot is pinned — a Result entity now exists and shows in the manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good — keep working with just those differentially methylated probes. Draw me a heatmap of
+    their beta values across all 20 samples, with the cases and controls grouped together, so I can
+    see the methylation block. Save it as a figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Agent subsets the beta matrix to the ~50 DM probes from s2 and draws a heatmap of probes x
+      samples with cases and controls grouped (samples ordered or annotated by group). The case
+      columns should be visibly higher (hypermethylated block) than the control columns. A
+      rows-are-probes, columns-are-samples heatmap is the expected artifact.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: The DM heatmap is pinned too — two Results on the shelf now (volcano + heatmap).
+
+- id: s6
+  kind: version_change
+  actor: agent
+  stage: [manifest_v2.csv]
+  prompt: >
+    Quick correction — the probe-to-gene annotation we were implicitly using is out of date. The
+    updated mapping of probes to genomic position and gene is at DATA_DIR/manifest_v2.csv; some
+    probes were remapped to different coordinates and different genes in this version. Take the
+    differentially methylated probes you found and re-annotate them with this updated mapping, then
+    tell me which gene assignments changed versus what we had before.
+  expect:
+    must_mention: ["MTAP", "TAF3", "CDKN2A", "GATA3"]
+    must_not: ["no genes changed", "annotations are unchanged"]
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      Agent reuses the DM probe set from s2 and re-annotates it against manifest_v2.csv, comparing
+      the v1 annotation (manifest.csv) against v2 and reporting the CHANGED assignments: the CDKN2A
+      block of DM probes is now mapped to MTAP (15 probes) and one GATA3 sub-cluster is now mapped
+      to TAF3 (12 probes); the other GATA3 sub-cluster and the MLH1 block are UNCHANGED. So the DM
+      positions now span genes {GATA3, MLH1, MTAP, TAF3} — CDKN2A no longer present — with 27 of
+      the 50 DM probes re-assigned (CDKN2A->MTAP, GATA3->TAF3). It must NOT keep the stale CDKN2A
+      label as if unchanged and must NOT claim nothing changed.
+
+- id: s7
+  kind: analyze
+  actor: agent
+  prompt: >
+    Redo that DM heatmap, but this time annotate the rows by their updated gene from the new
+    mapping and group the probes by gene, so I can see which methylation block belongs to which
+    gene under the corrected annotation. Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A new heatmap of the same ~50 DM probes, now with rows grouped/annotated by the v2 gene
+      labels {GATA3, MLH1, MTAP, TAF3} (not CDKN2A). This is a re-render of the heatmap using the
+      re-annotation from s6, still showing the hypermethylated-in-cases block.
+
+- id: s8
+  kind: revise
+  actor: agent
+  prompt: >
+    Let's make the volcano publication-ready. Redo it with a colourblind-friendly palette, larger
+    points, the significant hypermethylated probes highlighted, and the affected genes labelled.
+    Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A NEW volcano figure (a restyle of s2): colourblind-safe palette, larger markers, the ~50
+      significant hyper probes highlighted, and gene labels from the v2 annotation. Same underlying
+      statistics as s2 — only the styling/labels change. This is a fresh saved figure, not an edit
+      of the old one.
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The restyled publication volcano is pinned (third Result on the shelf).
+
+- id: s10
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The original draft volcano (pinned at s3) is archived now that the restyled one is the
+      keeper; the heatmap (s5) and the restyled volcano (s9) remain pinned.
+
+- id: s11
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Now I want to group those differentially methylated positions into regions, but I'm not sure
+    how aggressively to merge nearby probes. Try it two ways in parallel — one where probes within
+    1 kb of each other are merged into the same region, and another where probes within 5 kb are
+    merged — using each probe's chromosome and position and merging only within a chromosome. Then
+    give me a single figure comparing how many regions each threshold produces, and tell me the two
+    counts.
+  expect:
+    must_mention:
+    - "region"
+    must_not:
+    - "same number of regions"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      In a forked thread, the agent collapses the ~50 DM positions two ways using per-probe
+      (chrom, pos) coordinates: gap <= 1 kb and gap <= 5 kb, merging only within a chromosome. The
+      two thresholds give DIFFERENT region counts — 7 regions at 1 kb (the DMRs split into their
+      sub-clusters) versus 3 regions at 5 kb (each DMR stays whole) — and a figure (e.g. a bar
+      chart) compares the two counts. It must report 7 vs 3 and note the looser 5 kb threshold
+      merges sub-clusters that 1 kb keeps separate. It must NOT report the same count for both.
+
+- id: s12
+  kind: pin
+  actor: user
+  target: {from_step: s11, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The 1 kb-vs-5 kb region-count comparison figure is pinned (back to three keepers).
+
+- id: s13
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this project later — remind me what we've kept. Summarise the figures that are
+    pinned and the key findings (how many DM probes, the direction, which genes after the
+    re-annotation, and the region counts at the two thresholds). Don't recompute anything; just
+    recall from what's saved.
+  expect:
+    must_mention:
+    - "MTAP"
+    must_not: ["CDKN2A is differentially", "hypomethylated in cases"]
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context rehydrates from
+      the pinned shelf: it should recall the surviving pinned figures (DM heatmap, restyled
+      publication volcano, and region-comparison) and NOT the deleted draft volcano, and summarise
+      the findings — ~50 DM probes all hypermethylated in cases, DM genes now {GATA3, MLH1, MTAP,
+      TAF3} after re-annotation, and 7 regions at 1 kb vs 3 regions at 5 kb. Tests that curation
+      (pins + the s10 delete + the v2 re-annotation) persisted across a restart.
+
+expected_overall:
+  planted_truth: >
+    betas.csv is 3000 CpG probes x 20 samples (10 case: case_01..case_10, 10 control:
+    ctrl_01..ctrl_10). Exactly 50 probes are planted as differentially methylated, ALL
+    HYPERmethylated in cases (+~0.30 beta, delta-beta range 0.27-0.33; background |delta-beta|
+    <= 0.04). The 50 DM probes are cg0000001..cg0000050. Under Bonferroni p<0.05 exactly 50 come
+    out (all hyper, 0 false positives); under BH FDR q<0.05 ~52 come out (2 expected FDR false
+    positives), and combining BH with |delta-beta|>0.1 gives exactly 50. The 50 DM probes cluster
+    into 3 DMRs in manifest.csv: GATA3 (chr10, 25 probes, 2 sub-clusters), CDKN2A (chr9, 15
+    probes, 3 sub-clusters), MLH1 (chr3, 10 probes, 2 sub-clusters); sub-clusters within a DMR
+    are 2.5 kb apart, probes within a sub-cluster ~120 bp apart. manifest_v2.csv remaps a defined
+    subset: all 15 CDKN2A probes -> gene MTAP (chr9 ~21.80 Mb) and the 12-probe GATA3 sub-cluster
+    DMR_A.2 -> gene TAF3 (chr10 ~7.95 Mb); the 13-probe GATA3 sub-cluster DMR_A.1 (stays GATA3)
+    and all 10 MLH1 probes are unchanged. So 27 of the 50 DM probes change gene assignment v1->v2,
+    and the DM gene set goes from {CDKN2A, GATA3, MLH1} to {GATA3, MLH1, MTAP, TAF3}.
+    Collapsing the 50 DM positions by genomic distance: <=5 kb -> 3 regions; <=1 kb -> 7 regions.
+  notes: >
+    A fully correct end-to-end session: (s1) examine -> 3000 probes x 20 samples, 10 vs 10, DM set
+    looks elevated in cases. (s2) per-probe two-group test + multiple-testing correction -> ~50 DM
+    probes, all hypermethylated in cases, shown on a saved volcano plot; (s3) pin it. (s4) DM-probe
+    heatmap with cases/controls grouped showing the hyper block; (s5) pin it. (s6) re-annotate the
+    SAME DM set against manifest_v2 and report CDKN2A->MTAP (15) and GATA3->TAF3 (12) as the changed
+    assignments, DM genes now {GATA3, MLH1, MTAP, TAF3}, never reusing the stale CDKN2A label.
+    (s7) re-render the heatmap with the v2 gene labels. (s8) restyle the volcano (colourblind
+    palette, bigger points, gene labels) as a new figure; (s9) pin the restyle; (s10) delete the
+    original s3 volcano so only the keepers remain. (s11) fork a branch collapsing DM positions at
+    <=1 kb and <=5 kb -> 7 vs 3 regions with a comparison figure and an explicit note that the
+    counts differ; (s12) pin it. (s13) after a session restart, recap the surviving pinned figures
+    and findings from rehydrated state, omitting the deleted volcano and CDKN2A. Fabrication red
+    flags: hypomethylation in cases, an exact count with no test run, claiming the v2 manifest
+    changed nothing, claiming both distance thresholds give the same region count, or recalling the
+    deleted draft volcano / CDKN2A as a current DM gene after the restart.

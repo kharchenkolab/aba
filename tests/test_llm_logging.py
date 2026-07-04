@@ -151,10 +151,22 @@ def test_dump_has_cache_control_on_stable_system():
         asyncio.run(_open_and_close(ctx))
         dump = _load_one_dump(dump_dir)
         assert isinstance(dump["system"], list), "system must be structured-list form"
-        # First system block is the stable prefix and carries the
-        # cache_control marker; subsequent blocks (dynamic tail) do not.
-        assert dump["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert dump["system"][0]["text"] == "STABLE-SYS-PREFIX"
+        # The stable prefix carries the cache_control marker; the dynamic tail does not.
+        # Assert on PRESENCE, not index 0: in oauth_cc credential mode a Claude Code
+        # marker block is prepended as system[0] WITHOUT cache_control (a byte-exact
+        # server gate), so the stable prefix isn't always the first block. Exactly one
+        # system block (the stable prefix) must carry the ephemeral marker.
+        sys_blocks = dump["system"]
+        cc = [b for b in sys_blocks if b.get("cache_control") == {"type": "ephemeral"}]
+        assert len(cc) == 1, (
+            f"exactly one system block (the stable prefix) must carry cache_control; "
+            f"got {len(cc)} of {len(sys_blocks)} blocks")
+        # and the dynamic tail (the last block, when a tail exists) must NOT carry it.
+        if len(sys_blocks) > 1:
+            assert sys_blocks[-1].get("cache_control") != {"type": "ephemeral"}
+        # The cache-controlled block IS the stable prefix (find it by the marker, not
+        # by index 0 — a CC marker may sit at index 0 in oauth_cc mode).
+        assert cc[0]["text"] == "STABLE-SYS-PREFIX"
         # Dynamic tail is present but uncached — sanity-check both.
         assert any(b["text"] == "DYN-TAIL" for b in dump["system"])
         assert all("cache_control" not in b

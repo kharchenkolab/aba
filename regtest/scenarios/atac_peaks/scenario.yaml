@@ -1,0 +1,286 @@
+id: atac_peaks
+title: ATAC-seq peak calling, permissive-vs-strict branch comparison, drop, and CTCF-motif enrichment over a chr1 window
+domain: genomics
+gpu: false
+summary: >
+  A working session over a 200 kb chr1 ATAC-seq window: examine the fragments, build a
+  coverage track and call accessible peaks, look at the peak-width distribution, then fork
+  the project into a permissive vs a strict peak set as two branches and compare the counts.
+  Abandon the noisy permissive branch and, on the surviving strict peaks, pull the underlying
+  sequence and test for an over-represented transcription-factor motif (CTCF-like), restyling
+  and curating the motif logo before coming back to recap.
+lifecycle: [branch, drop]
+data_files:
+- fragments.bed
+- reference.fa
+- genes.bed
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have ATAC-seq fragments from an experiment in DATA_DIR/fragments.bed — it's chrom,
+    start, end for each sequenced fragment over a window of chr1. There's also the reference
+    sequence for that window in DATA_DIR/reference.fa and some gene models in
+    DATA_DIR/genes.bed. Before we call anything, just take a look and orient me: how many
+    fragments are there, what genomic interval do they span, and how many genes are in the
+    gene file?
+  expect:
+    must_mention:
+    - chr1
+    must_not:
+    - "I cannot read"
+    - "placeholder"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      The agent reads the three files and reports the basic shape: ~7460 fragments spanning
+      roughly chr1:1,000,000-1,200,000 (a 200 kb window), and 5 gene models (GENEA-GENEE).
+      It should NOT call peaks yet — just describe what's there. No fabricated counts or
+      coordinates.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Build a per-base coverage track by piling up the fragments across the window, and from
+    that call the accessible regions (the open-chromatin peaks). For each peak tell me its
+    coordinates and which gene it sits in or is nearest to. Plot the coverage across the
+    window with the called peaks marked, and save it as a figure I can keep.
+  expect:
+    must_mention:
+    - peak
+    - GENE
+    must_not:
+    - "I cannot read"
+    - "placeholder"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      The agent builds a coverage/pileup over chr1:1,000,000-1,200,000 and calls discrete
+      peaks (a coverage-threshold + merge approach or a peak caller is fine). At a reasonable
+      cutoff it finds roughly 5-8 peaks at the planted loci (centers near 1,012,000 /
+      1,038,000 / 1,061,000 / 1,090,000 / 1,123,000, plus possibly the weaker 1,148,000 /
+      1,171,000 / 1,195,000), assigns each to its nearest gene (deep peaks -> GENEA, GENEB,
+      GENEC twice, GENED), and reports real coordinates. The saved figure is a coverage track
+      across the window with peaks marked. No invented genes or base positions.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The coverage-track figure from s2 is pinned — a Result entity now exists and shows in
+      the manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now I want a sense of how wide these accessible regions are. Take the peaks you just
+    called and plot a histogram of their widths in base pairs, and save it as a figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A histogram of the called peaks' widths (in bp) is produced and saved. Widths should be
+      on the order of a few hundred bp to ~1 kb given the ~600 bp planted pileups; this is a
+      new analysis building on the s2 peak set, not a redo of the coverage track.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The peak-width histogram is also pinned — two Results on the shelf now (coverage track +
+      width histogram).
+
+- id: s6
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    I'm not sure how aggressive to be about what counts as a real peak, so let's explore the
+    lenient option on its own. In this line of work, be permissive: lower the coverage cutoff
+    so we also keep the weaker accessible regions. Recall the peaks the same way as before but
+    with that permissive threshold, tell me how many peaks you get, and which genes they hit.
+  expect:
+    must_mention:
+    - permissive
+    must_not:
+    - "I cannot read"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      A new (forked) thread that revisits the peak calling with a PERMISSIVE cutoff. The
+      permissive setting recovers all 8 planted loci (~8 peaks, including the shallow ones near
+      1,148,000 / 1,171,000 / 1,195,000), hitting GENEA-GENEE. The count (~8) should be tied to
+      the lower cutoff actually used, and this should be a separate analysis line from the main
+      thread.
+
+- id: s7
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Now the conservative option, kept separate from the permissive one: be strict — only keep
+    the clearly strong, deep accessible regions. Call the peaks at that strict threshold, tell
+    me how many you get and which genes they map to, and contrast that with the permissive
+    count from the other line.
+  expect:
+    must_mention:
+    - strict
+    - permissive
+    must_not:
+    - "same number"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      A second forked thread that calls peaks at a STRICT cutoff, recovering only the 5 deep
+      loci (L1-L5: ~1,012,000 / 1,038,000 / 1,061,000 / 1,090,000 / 1,123,000), i.e. ~5 peaks
+      mapping to GENEA, GENEB, GENEC (x2), GENED. It contrasts ~5 strict vs ~8 permissive — the
+      two counts MUST differ and be tied to the cutoffs. Permissive and strict are two distinct,
+      separately addressable analysis lines, not just two numbers in one reply.
+
+- id: s8
+  kind: drop
+  actor: agent
+  prompt: >
+    Comparing the two, the permissive version is too noisy — those extra shallow regions are
+    not convincing. Let's abandon the permissive line entirely and keep only the strict
+    5-peak set going forward. Confirm we're dropping the permissive version and proceeding on
+    the strict peaks only.
+  expect:
+    must_mention:
+    - strict
+    must_not:
+    - permissive branch retained
+    - "keep both"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      The agent abandons/drops the permissive branch so it no longer influences downstream
+      work and continues only from the strict (5-peak) branch. It should NOT keep building on
+      the permissive line or silently merge the two; the dropped 3 weak loci must not leak into
+      what follows.
+
+- id: s9
+  kind: analyze
+  actor: agent
+  prompt: >
+    On just the strict peaks, pull the underlying genomic sequence from the reference and
+    check whether there's a transcription-factor binding motif that shows up much more than
+    you'd expect by chance. If you find one, show me its sequence logo and save it as a figure.
+  expect:
+    must_mention:
+    - motif
+    - enrich
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      The agent extracts the sequence under the 5 strict peaks from reference.fa and tests for
+      an over-represented motif (de-novo discovery, a PWM/consensus scan, or a known-motif
+      enrichment test). It recovers the planted ~19 bp GC-rich CTCF-like consensus
+      CCGCGCCCCCTGGTGGCAG, which occurs once in each of the 5 strict peaks and essentially
+      never in background — a clear, significant enrichment. The saved figure is a sequence
+      logo of that motif. It must not claim a motif it did not find, nor report enrichment
+      driven by the dropped weak peaks.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The motif sequence logo from s9 is pinned — a third Result is on the shelf (coverage
+      track, width histogram, motif logo).
+
+- id: s11
+  kind: revise
+  actor: agent
+  prompt: >
+    That logo is a bit hard to read for a figure panel. Redo the motif logo with a
+    colourblind-friendly nucleotide palette, larger axis labels, and the position numbers
+    shown, and save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A new, restyled version of the same motif logo (colourblind palette, larger labels,
+      position numbers) is produced and saved as a separate figure. It should depict the same
+      enriched CTCF-like motif, not a different one — this is a presentation restyle of the s9
+      logo.
+
+- id: s12
+  kind: pin
+  actor: user
+  target: {from_step: s11, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The restyled motif logo is pinned too — four Results now on the shelf.
+
+- id: s13
+  kind: delete
+  actor: user
+  target: {ref: s10}
+  expect:
+    state: {entity_archived: {ref: s10}, pinned_results_min: 3}
+    checks: >
+      The original (un-restyled) motif logo Result pinned at s10 is archived, leaving the
+      restyled logo as the keeper. Three Results remain active (coverage track, width
+      histogram, restyled logo).
+
+- id: s14
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this project — remind me where we landed. Which peak set did we keep, what
+    did we conclude about the motif, and which figures are still pinned? Just summarise from
+    what's saved; don't rerun anything.
+  expect:
+    must_mention:
+    - strict
+    - motif
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is rehydrated
+      from the pinned shelf. It should recall that we kept the strict 5-peak set (permissive
+      was dropped), that the strict peaks carry an enriched CTCF-like motif, and that the
+      surviving pinned figures are the coverage track, the peak-width histogram, and the
+      restyled motif logo (NOT the deleted original logo). Tests context rebuild + that the
+      branch drop and the curation persisted across a restart.
+
+expected_overall:
+  planted_truth: >
+    Window: chr1:1,000,000-1,200,000 (200 kb; BED 0-based half-open). fragments.bed has 7460
+    fragments: 8 planted accessible loci with graded pileup depth plus ~4000 diffuse background
+    fragments. Locus centers and peak heights (max per-bp coverage): L1 1,012,000 (~381),
+    L2 1,038,000 (~282), L3 1,061,000 (~268), L4 1,090,000 (~216), L5 1,123,000 (~204) are the
+    five DEEP/STRONG loci; L6 1,148,000 (~72), L7 1,171,000 (~49), L8 1,195,000 (~38) are the three
+    SHALLOW/WEAK loci. Genome-wide median coverage is ~2. A permissive cutoff (coverage ~>8-25)
+    recovers all 8 loci (8 peaks); a strict cutoff (coverage ~>80-150) recovers only L1-L5 (5 peaks);
+    L7/L8 already drop out by cutoff ~30, so the 5-vs-8 split is wide and unambiguous. The CTCF-like
+    consensus CCGCGCCCCCTGGTGGCAG (19 bp, GC-rich) is planted once in each of the 5 STRONG loci and
+    appears exactly 5 times total in reference.fa (zero background occurrences) — enriched only in the
+    strict peak set. Nearest-gene (by TSS): L1->GENEA, L2->GENEB, L3->GENEC (TSS), L4->GENEC (gene
+    body), L5->GENED (TSS), L6->GENED (body), L7->GENEE (TSS), L8->GENEE (body). genes.bed: GENEA
+    1,011,500-1,018,000; GENEB 1,037,600-1,044,000; GENEC 1,060,500-1,092,000; GENED 1,122,500-
+    1,150,000; GENEE 1,170,500-1,198,000 (all +).
+  notes: >
+    A fully correct session: s1 orients on the data (7460 fragments, 200 kb window, 5 genes) without
+    calling peaks. s2 builds a pileup, calls ~5-8 peaks at the planted loci, assigns each to its
+    nearest gene, and saves a coverage-track figure (pinned at s3). s4 plots and saves the peak-width
+    histogram (pinned at s5). s6 forks a PERMISSIVE branch (8 peaks, all loci) and s7 forks a STRICT
+    branch (5 deep peaks), reporting the differing counts tied to the cutoffs as two separate analysis
+    lines. s8 DROPS the permissive branch so it stops contributing to downstream state. s9, on the 5
+    strict peaks only, extracts the underlying sequence and recovers the planted ~19 bp GC-rich
+    CTCF-like motif as significantly enriched over background, saving a sequence logo (pinned at s10).
+    s11 restyles that logo into a publication-ready panel (pinned at s12); s13 deletes the original
+    s10 logo, leaving the restyled one. s14, after a session restart, recaps from the pinned shelf:
+    strict 5-peak set kept, permissive dropped, enriched CTCF-like motif, and the three surviving
+    pinned figures. No fabricated peak coordinates, gene names, peak counts, or motif claims; the
+    strict result must not be contaminated by the dropped permissive/weak peaks.

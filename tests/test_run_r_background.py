@@ -84,15 +84,30 @@ def test_run_r_background_flag_routes_to_queue():
     assert fresh["kind"] == "run_r"
 
 
-def test_run_r_estimated_runtime_above_threshold_routes_to_queue():
-    """High estimated_runtime_min triggers background routing without an
-    explicit `background=True`."""
-    pid = _fresh_project("route-r-est")
+def test_run_r_high_estimate_does_not_auto_background_in_local_mode():
+    """The router REPLACED the old 'estimated_runtime_min >= threshold -> background'
+    heuristic (core/exec/router.py): in LOCAL mode a high estimate runs INLINE (raise
+    timeout_s), it does NOT auto-route to the queue. Backgrounding is explicit
+    (background=True) or, on Slurm, driven by resource/walltime pressure. Force local
+    mode so this is deterministic regardless of the ambient compute environment."""
+    import os
+    from core.exec import compute_env as _ce
+    _fresh_project("route-r-est")
     from content.bio.tools.run_exec import run_r
-    res = run_r({"code": 'cat("noop\\n")', "estimated_runtime_min": 15.0},
-                ctx={"thread_id": "thr_est"})
-    assert res.get("status") == "submitted", \
-        f"expected background routing for est_min=15, got {res}"
+    prev = os.environ.get("ABA_BATCH_SUBMITTER")
+    os.environ["ABA_BATCH_SUBMITTER"] = "local"
+    _ce._CACHE.update(ts=0.0, env=None)          # bust the 20s compute-env cache
+    try:
+        res = run_r({"code": 'cat("noop\\n")', "estimated_runtime_min": 15.0},
+                    ctx={"thread_id": "thr_est"})
+    finally:
+        if prev is None:
+            os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        else:
+            os.environ["ABA_BATCH_SUBMITTER"] = prev
+        _ce._CACHE.update(ts=0.0, env=None)
+    assert res.get("status") != "submitted", \
+        f"local mode must NOT auto-background on estimated_runtime_min alone, got {res}"
 
 
 def test_run_r_short_estimate_stays_synchronous():

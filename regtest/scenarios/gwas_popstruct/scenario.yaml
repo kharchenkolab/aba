@@ -1,0 +1,272 @@
+id: gwas_popstruct
+title: GWAS with population stratification — QC, structure, and confounded vs corrected association
+domain: genomics
+gpu: false
+summary: >
+  A 400-individual, 1000-SNP cohort with two hidden subpopulations and a phenotype driven
+  by 2 causal SNPs plus a population offset. Across a realistic multi-turn session the
+  biologist QCs the genotypes, discovers the structure by PCA (PCA scatter), comes back
+  later to run an association (Manhattan + QQ), recognizes the resulting inflation as
+  population-structure confounding, and revises the scan with principal-component
+  covariates — keeping the two causal SNPs, dropping the structure-driven false positives,
+  and discarding the naive result.
+data_files:
+- genotypes.csv
+- pheno.csv
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have genotype calls for a cohort at DATA_DIR/genotypes.csv — rows are individuals,
+    columns are SNPs, coded 0/1/2 for the number of copies of the minor allele (some cells
+    are blank where the call failed). The matching quantitative phenotype is in
+    DATA_DIR/pheno.csv. Before I do anything statistical with it, just take a first look:
+    how big is the cohort, how many SNPs, roughly how much missingness is there, and does
+    the phenotype look sensible? Don't run any tests yet.
+  expect:
+    must_mention: []
+    must_not: ["no population structure", "homogeneous cohort"]
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Loads both files and reports the basic shape: 400 individuals x 1000 SNPs, a single
+      quantitative phenotype column plus a population-label column in pheno.csv, genotypes
+      coded 0/1/2 with scattered missing cells. It should note there is some missingness
+      (a few bad SNPs and a few bad individuals) without yet running QC. No fabricated
+      numbers; it does not yet claim anything about structure.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Run the standard genotype quality checks on this data — per-individual and per-SNP
+    call rate, minor-allele frequency, and whether the sites behave like they should given
+    their allele frequencies — and drop whatever fails. Tell me the concrete pass/fail
+    counts, and give me a figure summarising the QC distributions so I can see where the
+    cutoffs land.
+  expect:
+    must_mention:
+    - "MAF"
+    must_not: []
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Performs real genotype QC on the loaded matrix: per-individual call rate (~5
+      individuals fail a ~95% threshold), per-SNP call rate (~6 SNPs fail), minor-allele
+      frequency filtering (~15 monomorphic/rare SNPs dropped), and a Hardy–Weinberg /
+      excess-heterozygosity check that drops the ~8 bad sites. It reports concrete pass/fail
+      counts (net ~958-979 SNPs and ~395 individuals retained, depending on exact thresholds)
+      and saves a QC figure (e.g. histograms of call rate / MAF / HWE with the cutoffs
+      marked). It must derive QC from the genotypes themselves, not from the pop_truth column.
+
+- id: s3
+  kind: analyze
+  actor: agent
+  prompt: >
+    Now I want to know whether this is one homogeneous group or whether there's hidden
+    structure. Using the SNPs that passed QC, do an unsupervised look at how the individuals
+    relate to each other and plot the result as a figure — colour the points by whatever
+    grouping falls out of the data.
+  expect:
+    must_mention: ["structure", "PC1"]
+    must_not: ["homogeneous cohort", "no population structure"]
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Runs PCA (or an equivalent unsupervised embedding) on the QC-passed genotype matrix
+      and produces a PC1-vs-PC2 scatter. It reports the cohort is NOT homogeneous: there are
+      TWO clear subpopulations cleanly separated along PC1 (PC1 captures the between-group
+      axis; the split is very strong, |corr(PC1, group)| ~ 0.99). The two clusters must be
+      discovered from the genotypes, NOT by reading pop_truth as the answer. The scatter is
+      the artifact a later step pins.
+
+- id: s4
+  kind: pin
+  actor: user
+  target: {from_step: s3, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The PCA structure scatter is pinned — a Result entity now exists and shows in the
+      manifest. This is the evidence of structure the biologist wants to keep.
+
+- id: s5
+  kind: resume
+  actor: agent
+  prompt: >
+    Picking this back up from before — now I want the actual association. Take the SNPs that
+    passed your quality filtering earlier and test each one for association with the
+    phenotype, then give me a genome-wide plot of the results across all SNPs and tell me
+    which ones cross genome-wide significance.
+  expect:
+    must_mention: ["rs_causal_1", "rs_causal_2", "genome-wide"]
+    must_not: ["re-run QC from scratch", "no population structure"]
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      A LATER session resuming the same project. The agent must REUSE the QC-passed SNP set /
+      individuals (and ideally the structure it already found) rather than re-deriving QC from
+      the raw file — reusing prior state is the point of the resume. It runs a per-SNP
+      association of phenotype on genotype dosage WITHOUT correcting for structure (a naive
+      single-marker scan), applies a genome-wide / Bonferroni threshold (alpha/M ~ 5e-5), and
+      produces a Manhattan plot. The correct outcome is an INFLATED hit list: ~100+ significant
+      SNPs that include the two true causal SNPs (rs_causal_1, rs_causal_2) but also a large
+      cloud of rs_struct_### structure SNPs (false positives). It should report the causal SNPs
+      among the hits and may already flag the count as suspiciously large. No fabricated p-values.
+
+- id: s6
+  kind: analyze
+  actor: agent
+  prompt: >
+    That looks like a lot of hits. Before I trust any of them, show me a QQ plot of the
+    p-values from that scan against what we'd expect by chance, and give me the genomic
+    inflation factor.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Produces a QQ plot of the naive scan's p-values with the y=x null line, and computes a
+      genomic inflation factor lambda_GC that is clearly > 1 (substantial inflation). It should
+      interpret the early lift-off of the observed quantiles and the high lambda as evidence
+      the test is confounded — consistent with the population structure found earlier leaking
+      into the association. No fabricated lambda value; it comes from the actual p-value set.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s5, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The naive Manhattan plot is pinned (now two Results on the shelf: the PCA scatter and
+      the naive Manhattan). This naive result is the one that will later be discarded.
+
+- id: s8
+  kind: revise
+  actor: agent
+  prompt: >
+    Right — that many genome-wide-significant SNPs for one trait, plus that inflation, means
+    the structure you found is leaking into the test. Redo the association the right way:
+    account for the main axes of ancestry from the structure analysis when you test each SNP,
+    and give me a new genome-wide plot. If the first pass was basically just structure, throw
+    that naive result out — I only want to keep the corrected one going forward.
+  expect:
+    must_mention:
+    - "rs_causal_1"
+    - "rs_causal_2"
+    must_not: ["both analyses are valid", "keep both"]
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      REVISE: redoes the SAME association as a revision of the step-5 scan, now including the
+      top genotype principal components (~2 PCs capturing the between-population axis) as
+      covariates in each per-SNP model, and produces a new corrected Manhattan plot. The
+      corrected scan collapses the inflated list to essentially the two true causal SNPs
+      (rs_causal_1 strongest, p~1e-17; rs_causal_2 next, p~1e-13) with ZERO rs_struct_###
+      structure SNPs and at most one weak incidental SNP near threshold — the inflation is
+      gone (lambda back near 1). It explicitly attributes the earlier inflation to the two
+      populations differing in BOTH allele frequency and mean phenotype (confounding). The
+      prompt also asks to discard the naive pass; the agent should treat the corrected scan as
+      the result going forward and not present the naive list as co-valid. No fabricated numbers.
+
+- id: s9
+  kind: analyze
+  actor: agent
+  prompt: >
+    This corrected plot is the one going in the figure. Redo it cleaner for the manuscript:
+    use a colourblind-friendly palette, draw the genome-wide significance line clearly, and
+    label the two SNPs that pass so a reader can find them. Save it as a new figure.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A RESTYLE of the corrected Manhattan as a NEW figure: a colourblind-friendly palette, a
+      clearly drawn genome-wide significance threshold line, and text labels on the two passing
+      SNPs (rs_causal_1, rs_causal_2). Same underlying corrected statistics as s8 — only the
+      presentation changes. This is the publication-ready keeper.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The polished, labelled corrected Manhattan is pinned (three Results now: PCA scatter,
+      naive Manhattan, and the publication corrected Manhattan).
+
+- id: s11
+  kind: delete
+  actor: user
+  target: {ref: s7}
+  expect:
+    state: {entity_archived: {ref: s7}, pinned_results_min: 2}
+    checks: >
+      The naive Manhattan Result pinned at s7 is archived — the confounded, structure-driven
+      scan is dropped so it no longer counts as a finding. The PCA scatter and the corrected
+      publication Manhattan remain on the shelf.
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to wrap this up — remind me what we've actually kept and what the final story
+    is: which figures are still pinned, and which SNPs are the real associations. Just
+    summarise from what's saved; don't rerun anything.
+  expect:
+    must_mention: ["rs_causal_1", "rs_causal_2"]
+    must_not: []
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is rehydrated
+      from the pinned shelf. It should recall the surviving Results — the PCA structure scatter
+      and the PC-corrected Manhattan — and NOT the deleted naive Manhattan, summarising the
+      final story: two subpopulations split on PC1, naive association was confounded/inflated,
+      and the PC-corrected scan leaves exactly the two causal SNPs (rs_causal_1, rs_causal_2)
+      with the rs_struct structure SNPs gone. Tests context rebuild + that the curation
+      (pins + the delete) persisted across the restart.
+
+expected_overall:
+  planted_truth: >
+    Cohort: 400 individuals (POP_A=200, POP_B=200), 1000 SNPs coded 0/1/2, generated with
+    fixed seed=0. Two subpopulations with differing allele frequencies → on genotype PCA, PC1
+    cleanly splits POP_A vs POP_B (|corr(PC1, population)| ≈ 0.99; two clusters; PC1 is by far
+    the dominant ancestry axis). Hidden true population label is in pheno.csv column `pop_truth`
+    (POP_A/POP_B) — it is the answer key for structure, and a correct analysis must recover
+    structure from the genotypes (PCA), not by trusting that column.
+    Phenotype = 10 + 1.5*(g_causal1 + g_causal2) + 4.0*[pop==POP_B] + N(0,2). Exactly TWO truly
+    causal SNPs, named rs_causal_1 and rs_causal_2, with the SAME per-allele effect (1.5) in both
+    populations and near-equal frequency across populations (so structure correction does NOT
+    explain them away). A population offset of +4.0 on POP_B is the CONFOUNDER.
+    120 high-Fst "structure" SNPs named rs_struct_### differ strongly in frequency between the
+    populations; they have NO causal effect but track PC1, so a naive uncorrected test flags them.
+    QC blemishes deliberately planted: ~15 monomorphic/low-MAF SNPs, ~8 excess-heterozygosity
+    (HWE-violating) SNPs, ~6 low-call-rate SNPs, ~5 low-call-rate individuals. After standard QC
+    ≈ 958-979 SNPs and ≈ 395 individuals remain (exact count depends on thresholds); both causal
+    SNPs survive QC.
+    Verified outcome (numpy/scipy OLS, Bonferroni α/M ≈ 5e-5): NAIVE scan → ~100-110 significant
+    SNPs = the 2 causal + ~100 rs_struct false positives, with genomic inflation lambda_GC well
+    above 1; PC-CORRECTED scan (top 2 PCs as covariates) → just rs_causal_1 (p≈7e-18) and
+    rs_causal_2 (p≈5e-14), zero rs_struct, at most one weak incidental SNP at the threshold, and
+    lambda_GC back near 1.
+  notes: >
+    A fully correct end-to-end session: (s1) examine — report 400 individuals x 1000 SNPs, some
+    missingness, sensible phenotype, no premature structure claim. (s2) QC the genotypes with
+    real call-rate/MAF/HWE filters, report concrete pass/fail counts and a QC figure. (s3) PCA on
+    QC-passed genotypes → PCA scatter showing TWO subpopulations split on PC1, discovered from
+    genotypes not pop_truth; (s4) pin that scatter. (s5) RESUME a later session, REUSE the
+    QC-passed set, run an uncorrected per-SNP association → Manhattan with an inflated
+    genome-wide-significant list containing the 2 causal SNPs plus dozens of rs_struct SNPs;
+    (s6) QQ plot + high lambda_GC confirm inflation; (s7) pin the naive Manhattan. (s8) REVISE:
+    recognise the inflation as confounding by structure, add the top PCs as covariates so the scan
+    collapses to the 2 causal SNPs with the structure false positives gone, and treat the naive
+    pass as discarded. (s9) RESTYLE the corrected Manhattan into a colourblind, labelled,
+    publication figure; (s10) pin it. (s11) DELETE the naive Manhattan pin so the confounded
+    result no longer persists. (s12) RESUME again and recap from the surviving pinned shelf — PCA
+    scatter + corrected Manhattan, the 2 causal SNPs, no rs_struct. Failure modes to catch:
+    calling the cohort homogeneous; using pop_truth as the structure label or regression covariate
+    by name; not reusing prior QC on resume; fabricating p-values, hit counts, or lambda; keeping
+    the naive result alongside the corrected one instead of dropping/deleting it; the s12 recap
+    still mentioning the deleted naive result or rs_struct hits.

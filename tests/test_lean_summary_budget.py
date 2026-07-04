@@ -175,9 +175,11 @@ def _measure_static_tokens(spec_name: str) -> tuple[int, int, int]:
         pass
     spec = get_agent_spec(spec_name)
     assert spec is not None, f"{spec_name!r} not registered"
-    is_lean = spec.prompt_mode == "lean"
-    tools_all = list_tools(compact=is_lean,
-                           priority_tools=(_PRIORITY_TOOLS if is_lean else ()))
+    # Measure the REAL policy the agent gets for its prompt_mode (single-source
+    # ToolPresentationPolicy), not a legacy compact bool — so the budget reflects
+    # what the lean agent actually receives (lean drops input_schema param prose;
+    # standard/full keep it). See core.runtime.mcp.presentation.
+    tools_all = list_tools(mode=spec.prompt_mode, priority_tools=_PRIORITY_TOOLS)
     tools = filter_tools_by_allowlist(tools_all, spec.tool_allowlist)
     stable, dyn = build_system(
         tools, role=spec.manifest_role or "primary",

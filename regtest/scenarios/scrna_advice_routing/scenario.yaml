@@ -1,0 +1,121 @@
+id: scrna_advice_routing
+title: scRNA method-choice advice is grounded in the knowhows, and execution intent routes to the recipe
+domain: technical
+gpu: false
+summary: >
+  A TECHNICAL scenario (platform behaviour, not a biology outcome) that bundles a whole class of
+  skill-routing behaviours into one lightweight, no-data, NO-EXECUTION session. A biologist asks a
+  spread of scRNA-seq method-choice questions, then signals intent to run one. It asserts: (1)
+  ADVICE questions are grounded in the reframed decision knowhows (integration / normalization /
+  doublet / DE methodology) rather than the model's parametric prior — proving the advice tier is
+  discoverable AND invocable (knowhows carry no requires_tools, so the read gate can't block them)
+  AND actually read; (2) an EXECUTION intent routes to the runnable recipe (tiering); and (3) NONE
+  of it triggers execution — every turn asserts `tools_not_used: [run_python, run_r]`, so the
+  scenario stays compute-free and also guards that the agent answers advice without running code.
+  (The heavy path — actually training scVI + the GPU-placement decision — is exercised by the
+  `scvi_integration` scenario, where a `placement:` assertion will be added once resource
+  determination is plumbed from the recipe and the harness can capture the execution lane.)
+lifecycle: []
+data_files: []
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I've got several scRNA-seq samples from different donors, and when I plot them the cells split
+    by donor instead of by cell type. What are my options for integrating them, and how would I
+    choose between them? Just talk me through it — don't run anything.
+  expect:
+    must_mention: ["Harmony", "scVI", "Seurat"]
+    must_not: []
+    tools_not_used: [run_python, run_r]
+    checks: >
+      Grounded in scrna-integration-decision: integration is SITUATIONAL with no single default —
+      names the primary methods (Harmony, Seurat, scVI/scANVI) and ideally the situational
+      alternatives (LIGER, Conos, BBKNN), tying the choice to dataset size / shared-vs-unique
+      populations / label availability. FAILS if it gives one hard default from its prior
+      ("just use Harmony") or drops the situational framing.
+
+- id: s2
+  kind: examine
+  actor: agent
+  prompt: >
+    For normalizing this 10x data, is scran a good choice?
+  expect:
+    must_mention: ["total"]
+    must_not: []
+    tools_not_used: [run_python, run_r]
+    checks: >
+      Grounded in scrna-normalization-decision: for UMI counts total-count (shifted-log) is the
+      typical default and usually enough; scran is NOT recommended as a default (special-case tool,
+      not the go-to). Variance stabilization → SCTransform / pagoda2 F-residuals; covariate
+      regression → SCTransform / GLM-PCA. FAILS (the pre-fix behaviour) if it recommends scran as a
+      good default from its parametric prior.
+
+- id: s3
+  kind: examine
+  actor: agent
+  prompt: >
+    Do I need to deal with doublets, and if so how should I handle them?
+  expect:
+    must_mention: ["doublet"]
+    must_not: []
+    tools_not_used: [run_python, run_r]
+    checks: >
+      Grounded in scrna-doublet-detection: the two-mode framing — thorough (keep through the first
+      pass, score+mark with a caller, remove in a LATER round) vs pragmatic (a sane-default caller
+      before strict QC) — and the ordering rule that doublets are scored BEFORE strict QC so
+      upper-count filtering doesn't silently drop heterotypic doublets.
+
+- id: s4
+  kind: examine
+  actor: agent
+  prompt: >
+    I want to compare gene expression between two treatment conditions across my donors. Should I
+    just run a Wilcoxon test across all the cells?
+  expect:
+    must_mention: ["pseudobulk"]
+    must_not: []
+    tools_not_used: [run_python, run_r]
+    checks: >
+      Grounded in scrna-de-methodology: cross-condition contrasts use PSEUDOBULK (aggregate per
+      sample → DESeq2/edgeR), NOT per-cell Wilcoxon across all cells (per-cell treats cells as
+      independent → inflated FPR; Squair 2021). Per-cell Wilcoxon is for within-sample cluster
+      markers.
+
+- id: s5
+  kind: examine
+  actor: agent
+  prompt: >
+    OK, I'll probably go with scVI. Before I commit — is there a ready-made workflow in here that
+    would run the integration, and what does it do? I don't want to run anything yet, just tell me
+    what's available.
+  expect:
+    must_mention: ["scvi-integration"]
+    must_not: []
+    tools_not_used: [run_python, run_r]
+    checks: >
+      TIERING — an execution intent routes to the runnable RECIPE, not another method essay. The
+      agent should surface/name the `scvi-integration` recipe (reading it is fine) and describe
+      what it runs (setup batch_key, train scVI on raw counts, latent embedding → neighbors/UMAP),
+      rather than re-opening the method-choice comparison — and WITHOUT starting the run (the user
+      said not to). Proves specific "run it" intent lands on the recipe tier while s1–s4 landed on
+      the knowhow tier.
+
+expected_overall:
+  planted_truth: >
+    No data is staged; the ground truth is behavioural. Advice questions (s1–s4) must reflect the
+    lab's decision knowhows — which hold non-textbook-default positions (no single integration
+    default; scran demoted; doublet two-mode + score-before-QC; pseudobulk for cross-condition DE)
+    — the execution intent (s5) must route to the runnable recipe, and NO turn may execute code.
+    An agent answering from its parametric prior typically fails the advice steps (recommends
+    scran, asserts one integration default, endorses per-cell Wilcoxon); a broken tier answers s5
+    with another essay instead of naming the recipe.
+  notes: >
+    Regression guard for the skill-routing class — the advice (knowhow) tier reaching + being read
+    by the agent, and execution intent landing on the recipe tier — kept deliberately compute-free
+    (`tools_not_used: [run_python, run_r]` on every turn). It would have FAILED yesterday while
+    knowhows declared requires_tools:[WebFetch,Read] (read gate → tools_unavailable → agent
+    answered from prior and recommended scran). must_mention gates are coarse floors; the per-step
+    `checks` carry the real grader judgement.

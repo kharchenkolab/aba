@@ -26,7 +26,39 @@ so both reach their intended teardown.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+# Per-parameter descriptions for the placement estimate. These reach the model as
+# JSON-schema `description`s (FastMCP/Pydantic), i.e. AT THE DECISION POINT, in
+# addition to the tool docstring. The tool-presentation policy decides delivery per
+# tier: `standard`/`full` KEEP them (the production agent gets the guidance); the
+# budget-bound `lean` tiers DROP them (recoverable via describe_tool). Shared by
+# run_python + run_r. See misc/tool_presentation.md.
+_D_BACKGROUND = (
+    "Run ASYNC in a fresh process instead of the interactive kernel. On a cluster this "
+    "is an sbatch job; use it when the step needs more cores/mem/GPU than this node has, "
+    "may exceed the session's remaining walltime, or is much faster on Slurm. A background "
+    "run cannot see interactive objects — it loads inputs from disk and writes outputs to disk.")
+_D_EST_RT = (
+    "Rough wall-clock estimate in MINUTES. Sizes the background job's timeout (~2x this) and "
+    "informs the partition/QoS choice. NOT an auto-background trigger.")
+_D_EST_CORES = (
+    "Peak CPU cores the step needs. Drives the Slurm partition/QoS and the local-vs-Slurm "
+    "routing decision. Leave unset only for a genuinely small step (treated as ~1 core).")
+_D_EST_MEM = (
+    "Peak RAM in GB the step needs. Drives partition/QoS and routing — a value larger than "
+    "this node's memory routes the job to Slurm.")
+_D_EST_GPU = (
+    "Set True for any GPU workload: deep learning (torch/JAX), scVI/scANVI/scArches, RAPIDS/"
+    "CUDA, etc. On a cluster this selects a GPU node/partition. Left False (the default) the "
+    "job is placed on CPU — so a GPU step that omits this runs slowly on CPU or fails.")
+_D_EXECUTION = (
+    "With background=True only: 'slurm' (default on a cluster) queues an sbatch job; 'local' "
+    "runs it in ABA's own allocation with no queue wait, good when it fits here; 'auto' decides "
+    "from the estimate.")
 
 
 def register_run_exec_tools(mcp: FastMCP) -> None:
@@ -37,15 +69,15 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def run_python(code: str,
                    timeout_s: int | None = None,
-                   background: bool = False,
-                   estimated_runtime_min: float | None = None,
-                   est_cores: int | None = None,
-                   est_mem_gb: int | None = None,
-                   est_gpu: bool = False,
+                   background: Annotated[bool, Field(description=_D_BACKGROUND)] = False,
+                   estimated_runtime_min: Annotated[float | None, Field(description=_D_EST_RT)] = None,
+                   est_cores: Annotated[int | None, Field(description=_D_EST_CORES)] = None,
+                   est_mem_gb: Annotated[int | None, Field(description=_D_EST_MEM)] = None,
+                   est_gpu: Annotated[bool, Field(description=_D_EST_GPU)] = False,
                    fresh: bool = False,
                    title: str | None = None,
                    env: str | None = None,
-                   execution: str | None = None,
+                   execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
                    aba_ctx_id: str | None = None) -> dict:
         """Run Python in the project's scratch workspace. State persists
         across calls within a thread (interactive kernel); pass
@@ -113,14 +145,14 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def run_r(code: str,
               timeout_s: int | None = None,
-              background: bool = False,
-              estimated_runtime_min: float | None = None,
-              est_cores: int | None = None,
-              est_mem_gb: int | None = None,
-              est_gpu: bool = False,
+              background: Annotated[bool, Field(description=_D_BACKGROUND)] = False,
+              estimated_runtime_min: Annotated[float | None, Field(description=_D_EST_RT)] = None,
+              est_cores: Annotated[int | None, Field(description=_D_EST_CORES)] = None,
+              est_mem_gb: Annotated[int | None, Field(description=_D_EST_MEM)] = None,
+              est_gpu: Annotated[bool, Field(description=_D_EST_GPU)] = False,
               title: str | None = None,
               env: str | None = None,
-              execution: str | None = None,
+              execution: Annotated[str | None, Field(description=_D_EXECUTION)] = None,
               aba_ctx_id: str | None = None) -> dict:
         """Execute R in the thread's persistent R (IRkernel) session.
         Shares the working dir with run_python so the two can hand

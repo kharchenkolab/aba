@@ -1,0 +1,287 @@
+id: nuclei_count
+title: Count and measure nuclei in a 2-channel fluorescence field, split touching nuclei, then compare a learning-based segmenter
+domain: bioimaging
+gpu: false
+summary: >
+  A realistic nuclear-segmentation working session on a synthetic DAPI + marker
+  fluorescence field: examine the two channels, segment and count nuclei with an
+  overlay figure, measure each nucleus's size and two-channel intensity and marker
+  status with a histogram, then REVISE to split touching nuclei with watershed and
+  drop debris so the count converges to the true 42, restyle the overlay for a
+  colourblind-friendly figure, prune the stale first-pass pin, and finally BRANCH to
+  a learning-based segmenter and compare it head-to-head with the classical pipeline.
+data_files:
+- nuclei_dapi.tif
+- nuclei_marker.tif
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I have a two-channel fluorescence image of cultured cells. DATA_DIR/nuclei_dapi.tif
+    is the nuclear stain (DAPI) and DATA_DIR/nuclei_marker.tif is a marker channel imaged
+    from the same field. Before we do anything quantitative, just open both channels and
+    tell me what we're working with -- the image size and bit depth, roughly how bright the
+    nuclei are versus background, and whether the marker channel looks like it splits the
+    cells into a positive and a negative population.
+  expect:
+    must_mention:
+    - nuclei
+    - marker
+    must_not:
+    - "could not read"
+    - "unable to load"
+    - "no nuclei"
+    checks: >
+      The agent loads both 16-bit TIFFs (512x512), reports the size and bit depth, and gives
+      an honest first look: nuclei are clearly above the autofluorescence background in DAPI,
+      and the marker channel looks bimodal -- a subset of nuclei carry strong marker signal
+      while the rest are at background. No segmentation or final count yet; this is just
+      orientation. No fabricated numbers -- anything quantitative must come from the pixels.
+    context: {msgs_grow: true, cache_breakpoints: true}
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now segment the nuclei in the DAPI channel and count them, and give me a figure
+    that overlays the detected nucleus boundaries on the DAPI image so I can eyeball how well
+    it did. Save it as a PNG I can keep.
+  expect:
+    must_mention:
+    - nuclei
+    must_not:
+    - "no nuclei"
+    - "unable to load"
+    produces: {figure: 1}
+    checks: >
+      A straightforward segment-and-label pass on DAPI (background smoothing + a threshold such
+      as Otsu, fill holes, drop tiny specks, label connected components) and a saved overlay
+      figure showing the detected boundaries on the DAPI image. With a plain threshold-and-label
+      approach (no splitting of touching objects) it UNDER-splits the 3 touching pairs; an
+      unfiltered naive count also picks up ~4 tiny debris specks, so the honest first-pass count
+      lands around 39-43 -- NOT yet the true 42. The agent should NOT claim exactly 42 here
+      unless it already split touching nuclei. The overlay should visibly show a few merged
+      blobs where pairs touch.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The first-pass segmentation overlay is pinned -- a Result entity now exists and shows in
+      the manifest. (This is the un-split, first-pass figure; later we'll supersede it.)
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    For each detected nucleus, measure its area in pixels and its mean brightness in both the
+    DAPI and the marker channel, and tell me how many are marker-positive. Then show me a
+    figure with the distribution of nucleus sizes and a second panel of the per-nucleus marker
+    intensity so I can see where the positive/negative cutoff sits. Save it.
+  expect:
+    must_mention:
+    - marker
+    must_not:
+    - "unable to load"
+    - "no nuclei"
+    produces: {figure: 1}
+    checks: >
+      A per-nucleus measurement table (area + mean DAPI + mean marker per object) and a saved
+      figure: a size histogram and a marker-intensity histogram/scatter. The marker distribution
+      should be clearly bimodal with a gap, and marker-positivity derived against a cutoff in
+      that gap should give ~15 positive. Because touching pairs are still merged at this point,
+      the size distribution shows a few oversized blobs (the fused pairs) at the high end. Counts
+      and intensities must come from the actual image, not invented.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The size + marker-intensity figure is pinned as a second Result. Two figures now on the
+      shelf: the first-pass overlay and the size/intensity distributions.
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    The count looks low -- when I eyeball the overlay some of the nuclei are clearly touching
+    and getting merged into one blob, and a couple of tiny bright specks are being counted that
+    aren't real nuclei. Go back to that segmentation and separate the touching ones, and ignore
+    anything smaller than about 50 pixels as debris. Then recount, update the per-nucleus
+    measurements, and give me a fresh overlay showing the split boundaries.
+  expect:
+    must_mention:
+    - touching
+    must_not:
+    - "43 nuclei"
+    produces: {figure: 1}
+    checks: >
+      This is a REVISION of the s2/s4 result, not a from-scratch unrelated analysis: same image
+      and channels, updated segmentation and provenance. The agent introduces a splitting step
+      for touching objects (distance-transform watershed with local-maxima seeds, or equivalent)
+      and applies a >=50 px size filter to drop the debris specks. After this the count must
+      converge to EXACTLY 42, and the new overlay shows the previously-merged pairs now drawn as
+      two objects each. The per-nucleus table is recomputed on the split labels; marker-positive
+      count should stay ~15. The agent should explain WHY the count rose (touching pairs split)
+      and WHY debris was removed -- it must not silently keep the old 39/43 number.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The corrected (watershed-split, debris-filtered) overlay is pinned as a third Result --
+      this is the keeper segmentation that recovers the true 42.
+
+- id: s8
+  kind: analyze
+  actor: agent
+  prompt: >
+    That overlay is the one I'll use in a talk, but the colours are hard to tell apart and the
+    outlines are thin. Redo it with a colourblind-friendly palette -- colour each nucleus outline
+    by whether it's marker-positive or marker-negative, use thicker outlines and a clear legend,
+    and save it as a new PNG.
+  expect:
+    produces: {figure: 1}
+    must_not:
+    - "no nuclei"
+    checks: >
+      A RESTYLE of the corrected overlay into a presentation-quality figure: same 42 split
+      nuclei, but outlines coloured by marker status (positive vs negative) with a colourblind-safe
+      palette, thicker strokes, and a legend. ~15 outlines should be in the positive colour. This
+      is a new figure derived from the s6 result, not a new segmentation.
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+
+- id: s9
+  kind: pin
+  actor: user
+  target: {from_step: s8, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The colourblind-friendly, marker-coloured overlay is pinned as a fourth Result -- the
+      figure intended for the talk.
+
+- id: s10
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 3}
+    checks: >
+      The stale FIRST-PASS overlay (pinned at s3, before splitting) is archived -- it has been
+      superseded by the corrected overlay and the restyled figure. The other three pins (size/
+      intensity distributions, corrected overlay, restyled overlay) remain on the shelf.
+
+- id: s11
+  kind: branch
+  actor: agent
+  new_thread: true
+  prompt: >
+    Before I trust this count I want a sanity check with a completely different method. In a
+    separate line of analysis, run a modern learning-based nucleus segmenter on the same DAPI
+    image, count what it finds, and compare it head-to-head with the watershed result we already
+    have -- do the two methods agree on the count, and do they find the same nuclei in the same
+    places? Give me a side-by-side comparison figure and save it.
+  expect:
+    must_mention:
+    - compar
+    - agree
+    must_not:
+    - "exactly the same algorithm"
+    - "cannot install"
+    produces: {figure: 1}
+    checks: >
+      The agent creates a parallel BRANCH (the classical watershed result stays intact; the
+      learning-based segmenter is the alternative) rather than overwriting the corrected result.
+      It discovers and installs a CPU-runnable deep-learning nucleus segmenter via the environment's
+      capability mechanism (the runtime installs it; it is not pre-bundled) and runs it on
+      nuclei_dapi.tif -- 512x512 so CPU inference is fine. It then COMPARES the two segmentations:
+      the counts should be close to each other and to the true 42 (a learning-based model should
+      also split the touching pairs and find ~42), with a per-nucleus agreement check
+      (centroid matching / IoU / matched-object count) showing high overlap. The saved figure is a
+      side-by-side of the two segmentations. Honest reporting of any disagreement is fine;
+      fabricated identical results are not.
+    context: {msgs_grow: true, cache_breakpoints: true}
+
+- id: s12
+  kind: pin
+  actor: user
+  target: {from_step: s11, select: figure}
+  expect:
+    state: {pinned_results_min: 4}
+    checks: >
+      The classical-vs-learning side-by-side comparison figure is pinned. Four Results remain on
+      the shelf (the first-pass overlay was deleted at s10).
+
+- id: s13
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this project later. Remind me where we landed: what's our final nucleus count,
+    how many are marker-positive, and which figures we've kept -- and did the two segmentation
+    methods agree? Just summarise from what's pinned; don't rerun anything.
+  expect:
+    must_mention: []
+    must_not:
+    - "43 nuclei"
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is rehydrated
+      from the pinned shelf. It should recap the final count of 42 nuclei with ~15 marker-positive,
+      list the surviving figures (size/intensity distributions, corrected watershed overlay,
+      colourblind marker-coloured overlay, classical-vs-learning comparison) and NOT the deleted
+      first-pass overlay, and state that the learning-based segmenter agreed with the classical
+      watershed count. Tests context rebuild + that the curation (4 surviving pins, one archived)
+      persisted across the restart. It must not redo the analysis or quote the stale 39/43 count.
+
+expected_overall:
+  planted_truth: >
+    The field contains EXACTLY 42 nuclei (seed=0). Six of them form 3 touching pairs whose disks
+    physically overlap, so a single global threshold fuses each pair into one blob: a naive
+    threshold-and-label count without splitting and without a size filter sees 43 objects (36
+    isolated nuclei + 3 fused pairs + 4 sub-nucleus debris specks of ~9-13 px); with a >=50 px
+    size filter but still no splitting it sees 39; only watershed (or a learning-based segmenter)
+    that splits the touching pairs AND a size filter recovers the true 42. Of the 42 nuclei,
+    EXACTLY 15 are marker-positive: per-nucleus mean marker intensity is sharply bimodal
+    (negatives <=0.08, positives >=0.30 of the channel's dynamic range; planted cutoff 0.18),
+    so 15 sit above and 27 below the cutoff. Nucleus radii range ~7-16 px (areas ~130-940 px,
+    measured areas 164-800 px), debris areas ~9-13 px. Per-nucleus centroids, radii, areas, DAPI
+    peak and marker status are recorded in data/ground_truth.csv (not referenced by any prompt;
+    for the judge only).
+  notes: >
+    A fully correct end-to-end session: (s1) examines both 16-bit 512x512 TIFFs and orients --
+    nuclei above background in DAPI, marker channel bimodal -- without committing to a count yet.
+    (s2) segments DAPI and saves an overlay figure with an HONEST first-pass count (~39-43, not
+    yet 42, touching pairs visibly merged); pinned at s3. (s4) measures per-nucleus area + two-
+    channel intensity, reports ~15 marker-positive, and saves a size + marker-intensity figure
+    showing the bimodal gap; pinned at s5. (s6) REVISES the SAME result by adding watershed
+    splitting of touching objects and a >=50 px debris filter, converging the count to exactly 42
+    and updating the per-nucleus table while keeping ~15 marker-positive, explained as a revision
+    (not a blind redo); the corrected overlay is pinned at s7. (s8) RESTYLES that overlay into a
+    colourblind-friendly, marker-status-coloured presentation figure with thicker outlines and a
+    legend (~15 positive); pinned at s9. (s10) DELETES the now-stale first-pass overlay pin from
+    s3. (s11) BRANCHes (new thread): installs and runs a CPU learning-based nucleus segmenter on
+    the same image as a parallel alternative, gets a count close to 42, and quantitatively compares
+    it to the classical watershed result (count agreement + per-nucleus centroid/IoU matching) in a
+    side-by-side figure pinned at s12, keeping both branches available. (s13) RESUMEs after a
+    restart and recaps from the pinned shelf: 42 nuclei, ~15 marker-positive, the four surviving
+    figures (not the deleted first-pass overlay), and that the two methods agreed. Failure modes to
+    catch: claiming exactly 42 in s2 without splitting; reporting 39 or 43 as the final count in s6
+    or s13; doing s6/s11 as disconnected fresh analyses instead of a revision/branch; refusing the
+    learning-based method ("cannot install"); fabricating counts/intensities/agreement instead of
+    computing them; or a recap that still lists the deleted first-pass overlay or quotes the stale
+    count after the restart.

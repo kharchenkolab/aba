@@ -1,0 +1,367 @@
+id: structure_superpose
+title: Superposing two conformational states of p38 kinase, swapping in a re-refined deposition, focusing on the binding pocket, and curating the figures
+domain: protein
+gpu: false
+summary: >
+  A realistic structural-comparison session: fetch two crystal structures of p38
+  MAP kinase in two conformational states, superpose them and report the overall
+  backbone RMSD plus the mobile regions (activation-loop / DFG), render the
+  superposition and a per-residue RMSD profile and pin them; when told the
+  unliganded entry was superseded by a re-refined deposition, swap it in and
+  re-check whether anything changes; restyle the per-residue profile and prune the
+  stale one; then restrict the comparison to the residues lining the BIRB-796
+  pocket; finally come back later and recap what was kept.
+lifecycle: [version_change, revise]
+data_files: []
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I'm looking at p38 MAP kinase caught in two different shapes. One is the plain
+    unliganded enzyme, PDB 1P38. The other is the enzyme with the drug BIRB-796
+    bound, PDB 1KV2 — that compound is supposed to push the kinase into a different
+    conformation. Before we do anything quantitative, just pull both structures down
+    and tell me what we're working with: how many residues, how many chains, what
+    the resolution is, and whether the bound compound is actually present in the
+    1KV2 coordinates. Don't superpose anything yet — I just want to know the two
+    files are sane.
+  expect:
+    must_mention:
+    - 1P38
+    - 1KV2
+    - BIRB-796
+    must_not:
+    - "I cannot fetch"
+    - "unable to download"
+    - "as an AI"
+    - placeholder
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      Actually FETCHES both coordinate files from RCSB (files.rcsb.org) and parses
+      them — does not hand-wave. Reports that each is a single chain (chain A), 1P38
+      ~351 modeled residues (apo, DFG-in), 1KV2 ~325 residues with the BIRB-796
+      ligand actually present in the coordinates (HET code B96, 39 atoms). Confirms
+      the two files are intact before any superposition. No fabricated counts and no
+      claim it cannot retrieve the structures.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now lay one structure on top of the other, fit them on the common
+    backbone, and give me a single overall number for how different the two
+    backbones are. Render the two chains superposed so I can see it — save that as a
+    figure I can keep — and tell me which parts of the protein actually move between
+    the two states.
+  expect:
+    must_mention:
+    - RMSD
+    must_not:
+    - "I cannot fetch"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Builds a residue-to-residue correspondence over the shared chain (match by
+      residue number, ~325 common CA), superposes on the CA / backbone atoms, and
+      reports a single overall CA RMSD of roughly 1.4 Angstrom (acceptable ~1.2-1.6),
+      NOT near-zero and NOT a huge >5 value. Saves a figure that renders the two
+      chains superposed. Identifies the mobile regions, which must include the
+      activation-loop / DFG region (D168-F169-G170; F169 the single largest mover at
+      ~6-7 A — the classic BIRB-796 DFG-out flip), plus the glycine-rich loop /
+      N-lobe beta-sheet (~res 28-39) and the N-terminal strands (~res 5-17). The bulk
+      of the fold is conserved. No fabricated RMSD or residue list.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: >
+      The superposition render from s2 is pinned — a Result entity now exists and
+      shows in the manifest.
+
+- id: s4
+  kind: analyze
+  actor: agent
+  prompt: >
+    The single number hides where the motion is. Walk along the chain and plot the
+    per-residue backbone displacement between the two fitted structures — residue
+    number on the x-axis, how far each residue moved on the y-axis — and save it as a
+    figure. I want to see the activation loop spike out clearly. Mark which residue
+    moves the most.
+  expect:
+    must_not:
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      Computes per-residue CA displacement under the s2 fit and saves a profile
+      figure (displacement vs residue number). The activation-loop / DFG region
+      stands out as the dominant peak; F169 (the Phe of the D168-F169-G170 DFG motif)
+      is called out as the single largest mover at ~6-7 Angstrom, with secondary
+      peaks in the N-lobe (~res 28-39) and N-terminal strands (~res 5-17). Real
+      computed values, not a sketch.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: >
+      The per-residue displacement profile from s4 is pinned — two Results now on the
+      shelf (the superposition render and the profile).
+
+- id: s6
+  kind: version_change
+  actor: agent
+  prompt: >
+    Quick correction from our structural collaborator: the unliganded entry I gave
+    you, 1P38, has actually been obsoleted — the PDB replaced it with a re-refined
+    version, 5UOJ, and that's the one we should be citing now. Can you redo the
+    comparison using the updated structure instead of the old 1P38, and tell me
+    whether the overall difference or the conclusion about which regions move
+    actually changes at all? I want to know if it matters that we were on the old
+    coordinates.
+  expect:
+    must_mention:
+    - 5UOJ
+    - RMSD
+    must_not:
+    - "no change because same"
+    - "I cannot fetch"
+    - "unable to download"
+    - placeholder
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A genuine UPSTREAM VERSION CHANGE. The agent FETCHES the NEW entry 5UOJ and
+      re-runs the superposition of 5UOJ against 1KV2 — it does NOT silently reuse the
+      s2 result computed from 1P38 and does NOT keep using 1P38. Ideally it VERIFIES
+      the supersession (notes 1P38 is obsolete / replaced_by 5UOJ) rather than taking
+      it on faith. Reports the new overall CA RMSD (~1.40 Angstrom, essentially
+      unchanged: within a few hundredths of the s2 number, delta about -0.04 A) and
+      confirms the mobile regions are the SAME (activation loop / DFG dominant, plus
+      N-lobe and N-terminal strands). Reconciles with s2 by stating the small delta
+      rather than reporting in isolation. Correct conclusion: the re-refinement does
+      NOT change the story — 1P38 and 5UOJ differ by only ~0.2-0.25 A from each other,
+      so the DFG-out change versus the BIRB-796 structure holds either way. Produces a
+      figure (re-rendered superposition or refreshed profile on the 5UOJ fit). Must
+      NOT fabricate the new RMSD and must NOT assert "no change" without re-fetching
+      and re-superposing.
+
+- id: s7
+  kind: analyze
+  actor: agent
+  prompt: >
+    That per-residue plot is the one I'll put in the figure, but it's hard to read.
+    Redo it from the updated 5UOJ-vs-1KV2 fit using a colourblind-friendly palette
+    and larger markers, shade the activation-loop region as a band, and label the DFG
+    residues D168-F169-G170 right on the peak. Save it as a new figure.
+  expect:
+    must_mention:
+    - F169
+    - DFG
+    must_not:
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A RESTYLE of the per-residue displacement profile, computed from the s6
+      5UOJ-vs-1KV2 fit (not the old 1P38 fit), saved as a NEW figure with a
+      colourblind-friendly palette, larger markers, a shaded activation-loop band, and
+      the D168-F169-G170 DFG residues labelled on the dominant peak. Same underlying
+      science as s4 (F169 the top mover ~6-7 A) but a publication-ready presentation
+      on the updated coordinates.
+
+- id: s8
+  kind: pin
+  actor: user
+  target: {from_step: s7, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The restyled, 5UOJ-based per-residue profile from s7 is pinned — three Results
+      now on the shelf (superposition render, original profile, restyled profile).
+
+- id: s9
+  kind: delete
+  actor: user
+  target: {ref: s5}
+  expect:
+    state: {entity_archived: {ref: s5}, pinned_results_min: 2}
+    checks: >
+      The original per-residue profile pinned at s5 (the old 1P38-based,
+      un-restyled one) is archived now that the restyled 5UOJ-based version from s7
+      supersedes it. The superposition render (s3) and the restyled profile (s8)
+      remain pinned.
+
+- id: s10
+  kind: revise
+  actor: agent
+  prompt: >
+    One more thing on this same comparison. The whole-chain number is dominated by
+    those flexible loops, but what I actually care about for the drug work is the
+    pocket itself. Narrow the comparison down to just the residues that line the
+    BIRB-796 binding site — everything within about 5 Angstrom of the bound compound —
+    and give me the RMSD over only those pocket residues, instead of over the entire
+    chain. Plot the pocket residues' displacements too, and save that figure.
+  expect:
+    must_mention:
+    - pocket
+    - RMSD
+    - BIRB-796
+    must_not:
+    - "no ligand"
+    - "cannot identify the binding site"
+    - placeholder
+    - "as an AI"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A REVISION of the same 5UOJ-vs-1KV2 comparison (not a new project): the agent
+      keeps the superposition and CHANGES THE SCOPE of the RMSD to the binding-site
+      residues only. Locates the bound ligand BIRB-796 (HET code B96, 39 atoms) in
+      1KV2, selects the chain-A residues with any atom within ~5 Angstrom of that
+      ligand (about 29 pocket residues: hinge ~104-111, gatekeeper region ~104/107,
+      catalytic/DFG-side ~166-169), and computes the RMSD over only that residue
+      subset, saving a per-residue displacement figure for the pocket. The pocket
+      RMSD should be ~1.5-1.9 Angstrom (depending on whether the fit is re-done on the
+      pocket or scored under the global fit) — moderately perturbed, clearly smaller
+      than the activation-loop-driven whole-chain spread, because BIRB-796 reshapes
+      the pocket as it forces DFG-out. Must identify the pocket from the actual ligand
+      contacts (not a hand-waved list) and must NOT claim there is no ligand or that
+      the site cannot be found.
+
+- id: s11
+  kind: pin
+  actor: user
+  target: {from_step: s10, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: >
+      The pocket-residue displacement figure from s10 is pinned — three Results on the
+      shelf again (superposition render, restyled whole-chain profile, pocket profile).
+
+- id: s12
+  kind: resume
+  actor: agent
+  prompt: >
+    Coming back to this a few days later. Remind me where we landed: which figures did
+    we keep, what overall RMSD are we quoting for the apo-vs-BIRB-796 comparison, which
+    deposition is it based on, and what was the pocket-only number? Just summarise from
+    what's pinned — don't recompute anything.
+  expect:
+    must_mention:
+    - 5UOJ
+    - RMSD
+    - pocket
+    must_not:
+    - "I cannot fetch"
+    - placeholder
+    - "as an AI"
+    context: {cache_breakpoints: true}
+    checks: >
+      After a fresh session re-attached to the same project, the agent's context is
+      rehydrated from the pinned shelf. It should recap the three surviving figures
+      (the superposition render, the restyled per-residue profile, and the pocket
+      profile), quote the overall CA RMSD ~1.40 A based on the updated 5UOJ deposition
+      (not the obsolete 1P38), and the pocket-only RMSD ~1.5-1.9 A — and should NOT
+      mention the deleted original profile as a kept figure. Tests context rebuild +
+      that the curation (version swap, restyle, prune) persisted across a restart.
+
+expected_overall:
+  planted_truth: >
+    No data is committed; all coordinates are REAL PDB entries fetched at run time
+    from RCSB (files.rcsb.org). The science is the BIRB-796 "DFG-out" conformational
+    change of p38-alpha MAP kinase. Entries (all verified to resolve over HTTP):
+      * 1P38 = mouse p38-alpha, unliganded ("apo", DFG-in), single chain A, ~351
+        modeled residues. OFFICIALLY OBSOLETE: removed by RCSB on 2017-02-22 and
+        replaced_by 5UOJ. (It is still downloadable via the normal RCSB download URL,
+        but data.rcsb.org core-entry/holdings APIs report it as removed/superseded.)
+      * 5UOJ = the re-refinement that SUPERSEDES 1P38 — same protein, same apo state,
+        100% identical sequence to 1P38 over the shared residues; ~343 modeled
+        residues. This is the "updated structure" for the version_change step.
+      * 1KV2 = human p38-alpha in complex with BIRB-796 (HET code B96, 39 atoms),
+        the canonical DFG-OUT inhibitor complex; single chain A, ~325 modeled
+        residues. 1P38/5UOJ (mouse, UniProt P47811) and 1KV2 (human, UniProt Q16539)
+        are 99.4% identical in sequence and share residue numbering, so they
+        superpose cleanly by residue number — they are effectively the same protein
+        (this cross-species detail is honest-disclosure, see notes).
+    Measured ground truth (computed with a CA-based superposition, displacement
+    threshold 2.0 A, continuous-region run >=3 residues):
+      - s2  1P38 (apo) vs 1KV2 (BIRB-796): 325 common CA, OVERALL CA RMSD = 1.44 A.
+        Mobile runs (>2 A): N-terminal strands ~res 5-17, glycine-rich loop / N-lobe
+        beta-sheet ~res 28-39, and the activation-loop / DFG region. Top per-residue
+        CA displacements: F169 (the Phe of the D168-F169-G170 DFG motif) ~6.6 A;
+        residues ~34, ~198, ~15, ~197, ~14, ~13, ~33 in the 3.5-5 A range. The DFG
+        Phe is the single largest mover — the textbook DFG-out flip induced by
+        BIRB-796.
+      - s6 (version_change)  5UOJ (re-refined apo) vs 1KV2: 325 common CA, OVERALL
+        CA RMSD = 1.40 A (delta vs s2 = -0.04 A; effectively identical). Same mobile
+        regions (DFG/activation loop dominant, plus N-lobe and N-terminal strands).
+        Direct 1P38-vs-5UOJ superposition = ~0.25 A, i.e. the re-refinement barely
+        moved the backbone, so the conformational conclusion is unchanged.
+      - s10 (revise)  pocket = chain-A residues within 5.0 A of BIRB-796 (B96) in
+        1KV2 = 29 residues: [30, 38, 51, 52, 53, 67, 70, 71, 74, 75, 78, 83, 84,
+        104, 105, 106, 107, 108, 109, 110, 111, 141, 146, 148, 157, 166, 167, 168,
+        169] (hinge ~104-111, catalytic/DFG-side ~166-169). Pocket-restricted CA
+        RMSD = ~1.67 A when the superposition is re-fit on the pocket residues, or
+        ~1.84 A when the pocket residues are scored under the global fit. Either way
+        the pocket is moderately perturbed (~1.5-1.9 A), not perfectly conserved,
+        because BIRB-796 remodels the pocket as it forces DFG-out.
+  notes: >
+    HONEST FRAMING of the version_change: this uses a REAL RCSB supersession. 1P38
+    was genuinely obsoleted and replaced by the re-refined entry 5UOJ (verifiable:
+    data.rcsb.org/rest/v1/holdings/removed/1P38 reports id_codes_replaced_by =
+    ["5UOJ"], remove_date 2017-02-22). It is a re-refinement of the SAME crystal /
+    same apo state, not a different experiment — exactly the "use the updated entry
+    your collaborator now prefers" situation, and it is a real supersession rather
+    than a re-labeled alternate. One real-world wrinkle, disclosed deliberately: the
+    apo entries (1P38/5UOJ) are MOUSE p38-alpha (UniProt P47811) while the BIRB-796
+    complex (1KV2) is HUMAN p38-alpha (UniProt Q16539); the two are 99.4% identical
+    and share residue numbering, so they superpose cleanly and the comparison is
+    biologically valid — a careful agent may note the species detail, but it is not
+    required to.
+    A fully correct end-to-end session over the 12 steps:
+    s1 — fetches and parses 1P38 and 1KV2 from the PDB and inventories them (chains,
+    residue counts, that BIRB-796/B96 is actually in the 1KV2 coordinates) WITHOUT
+    superposing yet. No fabricated counts, no refusal.
+    s2 — superposes 1P38 vs 1KV2 on the common backbone, reports overall CA RMSD
+    ~1.4 A, saves a superposition render, and names the activation-loop / DFG region
+    (F169 the top mover) plus the N-lobe glycine-rich loop as the mobile parts,
+    attributing the change to the BIRB-796 DFG-out conformation.
+    s3 — user pins the superposition render (Result #1).
+    s4 — computes and plots the per-residue CA displacement profile, with the
+    activation-loop spike and F169 as the largest mover; saves the profile figure.
+    s5 — user pins the profile (Result #2).
+    s6 — version_change: treats the supersession as an upstream version change,
+    fetches the NEW entry 5UOJ (ideally verifying 1P38 is obsolete / replaced_by
+    5UOJ), re-superposes 5UOJ vs 1KV2, reports ~1.40 A, reconciles with s2 (delta
+    ~-0.04 A, same mobile regions), concludes the re-refinement does not change the
+    story, and produces a refreshed figure on the 5UOJ fit. Does NOT keep using 1P38.
+    s7 — restyle: redraws the per-residue profile from the 5UOJ fit with a
+    colourblind palette, larger markers, a shaded activation-loop band, and the DFG
+    residues labelled; saves it as a NEW figure (same science, publication-ready).
+    s8 — user pins the restyled profile (Result #3).
+    s9 — user deletes the original s5 profile pin (the stale 1P38-based one), leaving
+    the superposition render and the restyled profile pinned.
+    s10 — revise: focuses the SAME 5UOJ-vs-1KV2 comparison to the pocket, identifies
+    BIRB-796 (B96) in 1KV2, selects the ~29 chain-A residues within 5 A of it, reports
+    a pocket-only RMSD (~1.5-1.9 A) over that residue set — distinct from and smaller
+    than the activation-loop-driven whole-chain spread — and saves a pocket-residue
+    displacement figure.
+    s11 — user pins the pocket figure.
+    s12 — resume: after a session restart re-attached to the same DB, recaps from the
+    pinned shelf only — the three surviving figures, the overall ~1.40 A based on
+    5UOJ, the pocket ~1.5-1.9 A — and does not resurrect the deleted profile.
+    Throughout: real coordinates are fetched and parsed, the superposition is actually
+    computed, and no RMSD value, residue, or ligand is fabricated.

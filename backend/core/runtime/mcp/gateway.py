@@ -201,8 +201,9 @@ def _compact_description(text: str) -> str:
     return head[:200]
 
 
-def list_tools(compact: bool = False,
-               priority_tools: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+def list_tools(mode: str | None = None,
+               priority_tools: tuple[str, ...] = (),
+               *, compact: bool | None = None) -> list[dict[str, Any]]:
     """Tool schemas in Anthropic wire shape (name, description,
     input_schema), one entry per MCP-exposed tool across all CONNECTED
     servers. Disconnected/dead servers contribute nothing.
@@ -216,12 +217,24 @@ def list_tools(compact: bool = False,
     `aba_core:Skill` — preserving the model's existing tool catalog and
     every downstream reference to tool names by bare key.
 
-    `compact=True` runs each description through `_compact_description`
-    UNLESS the tool's name is in `priority_tools` — that two-tier shape
-    is the "lean catalog" optimization (prj_a6f40e94 2026-06-20). The
-    `input_schema` is NEVER compacted; parameter contracts are
-    semantic, not prose. Calls to the same compacted tool work
-    identically — only the catalog prefix shrinks."""
+    PRESENTATION POLICY. `mode` is an AgentSpec.prompt_mode; it selects a
+    ToolPresentation from the single-source policy (core.runtime.mcp.presentation)
+    that decides two PROSE knobs: docstring (full vs 1-line summary, priority tools
+    always full) and param_prose (keep vs drop `description`/`title` in input_schema).
+    The calling CONTRACT (names/types/required/enum/default) is NEVER altered — calls
+    to a tool work identically in every mode; only prose shrinks. Legacy `compact=`
+    (bool) is still accepted for un-migrated callers — it maps to summary docstrings
+    with param prose KEPT (the pre-policy behavior). Full param text is always
+    recoverable via `describe_tool`."""
+    from core.runtime.mcp.presentation import (
+        ToolPresentation, presentation_for, strip_schema_prose)
+    if mode is not None:
+        pres = presentation_for(mode)
+    elif compact is not None:
+        pres = ToolPresentation(docstring=("summary" if compact else "full"),
+                                param_prose="keep")
+    else:
+        pres = presentation_for("full")
     keep_full = frozenset(priority_tools)
     out: list[dict[str, Any]] = []
     for h in _handles.values():
@@ -233,12 +246,15 @@ def list_tools(compact: bool = False,
         for t in h.tools:
             name = t.raw_name if strip else t.name
             desc = t.description or ""
-            if compact and name not in keep_full:
+            schema = t.input_schema
+            if pres.docstring == "summary" and name not in keep_full:
                 desc = _compact_description(desc)
+            if pres.param_prose == "drop":
+                schema = strip_schema_prose(schema)
             out.append({
                 "name":         name,
                 "description":  desc,
-                "input_schema": t.input_schema,
+                "input_schema": schema,
             })
     return out
 

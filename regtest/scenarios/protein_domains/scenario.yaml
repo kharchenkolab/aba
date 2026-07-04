@@ -1,0 +1,288 @@
+id: protein_domains
+title: Domain architecture of a multi-domain membrane receptor — wrong isoform caught and corrected to canonical, restyled, then mapped to disease mutations
+domain: protein
+gpu: false
+summary: >
+  A realistic session on a multi-domain membrane receptor: identify the protein from its
+  sequence, lay out its domain architecture (signal peptide, transmembrane segment,
+  functional domains) and draw a domain diagram, realise the wrong isoform was handed over
+  and re-annotate the canonical form (comparing the two), restyle the keeper figure, prune
+  the dead-end diagram, then — picking the project back up later — map known disease
+  mutations onto the domain map. All annotation runs LOCALLY off a pre-staged precomputed
+  feature record (no live domain scan), so the session is compute/reasoning-bound.
+lifecycle: [revise, resume]
+data_files:
+- protein.fasta
+- protein_canonical.fasta
+- uniprot_P00533_features.json
+make_data: _make_data.py
+
+steps:
+- id: s1
+  kind: examine
+  actor: agent
+  prompt: >
+    I pulled a protein sequence out of one of our annotation runs and saved it at
+    DATA_DIR/protein.fasta. I'm honestly not sure what it is. Earlier I'd already pulled the
+    matching reference record for our best hit and dumped its precomputed feature table next
+    to it at DATA_DIR/uniprot_P00533_features.json — start/end positions for the signal
+    peptide, the extracellular and cytoplasmic regions, the membrane-spanning segment, the
+    functional domains, and a catalogue of known variants. Using the sequence plus that
+    feature table, can you figure out what protein this is, and then walk me through THIS
+    sequence's domain architecture — is there a signal peptide, where does it sit in the
+    membrane, what are the functional domains along the chain, and roughly where does each
+    piece start and end? Just describe it for now, no plot yet.
+  expect:
+    must_mention:
+    - EGFR
+    - signal peptide
+    - extracellular
+    must_not:
+    - "kinase domain 712-979"
+    - "I cannot determine"
+    - "unable to identify"
+    context: {msgs_grow: true, cache_breakpoints: true}
+    checks: >
+      The agent should IDENTIFY the sequence as human EGFR (epidermal growth factor
+      receptor) from the sequence itself by matching it against the provided reference
+      feature record (the FASTA header is anonymized — "query_isoform" — so it must not just
+      read a name off the defline; the reference record's gene/protein name plus a
+      sequence/length match is the legitimate basis). It must then annotate THIS sequence's
+      architecture against the LOCAL evidence (the provided feature table), not the
+      canonical receptor's textbook coordinates from memory. The grounded finding: this is a
+      NON-CANONICAL / truncated 705-aa isoform. Residues ~1-627 match the canonical
+      extracellular region (signal peptide ~1-24 and the ligand-binding L / cysteine-rich
+      furin-like ectodomain), then it diverges into a unique ~78-residue C-terminal tail
+      (628-705) and STOPS. Correct behaviour: report the signal peptide and extracellular
+      domains, and note this isoform appears to LACK a transmembrane helix and LACKS the
+      intracellular tyrosine-kinase domain — i.e. a secreted/soluble truncated form, not the
+      full-length receptor. Coordinates should be derived from the sequence + feature table
+      (signal peptide near 1-24; divergence near residue 628; total length 705). It must NOT
+      need a live domain scan — everything required is on disk. RED FLAG: reciting the
+      canonical TM (646-668) and kinase (712-979) coordinates as if present here — those
+      positions are past the end of this 705-aa isoform.
+
+- id: s2
+  kind: analyze
+  actor: agent
+  prompt: >
+    Good. Now draw me a domain diagram of this sequence — a horizontal track of the protein
+    with the signal peptide, the extracellular region, and that divergent C-terminal tail
+    laid out to scale along the residue axis, labelled with their approximate start/end
+    positions. Save it as a PNG figure so I can keep it.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_breakpoints: true, cache_read: true}
+    checks: >
+      A saved domain-diagram figure for the 705-aa isoform: a to-scale residue track showing
+      the signal peptide (~1-24), the extracellular receptor region, and the unique divergent
+      tail (~628-705), with the chain ending at 705. It should NOT show a transmembrane helix
+      or a kinase domain (those are absent from this isoform). Coordinates on the figure should
+      match what was described in s1.
+
+- id: s3
+  kind: pin
+  actor: user
+  target: {from_step: s2, select: figure}
+  expect:
+    state: {pinned_results_min: 1}
+    checks: The isoform domain diagram is pinned — a Result entity now exists and shows in the manifest.
+
+- id: s4
+  kind: revise
+  actor: agent
+  prompt: >
+    Ugh — I think I handed you the wrong sequence. That was a minor isoform from the run. The
+    one I actually care about is the full-length canonical form; I've put it at
+    DATA_DIR/protein_canonical.fasta. It's the same protein, so the feature table you already
+    have at DATA_DIR/uniprot_P00533_features.json applies to it directly (those coordinates
+    are on the canonical form). Redo the domain architecture for this one and draw the same
+    kind of domain diagram, saved as a new PNG. Importantly, tell me explicitly what's
+    different between this canonical form and the isoform we just looked at.
+  expect:
+    must_mention:
+    - kinase
+    - differ
+    must_not:
+    - "no difference"
+    - "same architecture"
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      This is a REVISION of the SAME project, not a fresh unrelated analysis: the agent should
+      re-annotate the canonical 1210-aa EGFR using the SAME local feature table, draw its
+      domain diagram, and explicitly COMPARE to the s1/s2 isoform, building on prior context
+      rather than starting over with no memory. Correct canonical architecture (from the
+      provided feature record, landing on the known boundaries): signal peptide 1-24;
+      extracellular ligand-binding/receptor region (~25-645); a SINGLE transmembrane helix
+      646-668; cytoplasmic tyrosine-kinase domain 712-979; C-terminal regulatory tail to 1210.
+      The key DIFFERENCE it must surface: the canonical form is the full-length single-pass
+      receptor (1210 aa) WITH the TM helix and intracellular kinase domain, whereas the s1
+      isoform (705 aa) shared only the extracellular region (identical through ~residue 627)
+      then diverged into a short unique tail — NO TM anchor, NO kinase domain. Saying "no
+      difference" / "identical" is wrong. The new domain diagram should now show the full
+      track with TM and kinase domains present.
+
+- id: s5
+  kind: pin
+  actor: user
+  target: {from_step: s4, select: figure}
+  expect:
+    state: {pinned_results_min: 2}
+    checks: The canonical domain diagram is now pinned too — two Results on the shelf (isoform + canonical).
+
+- id: s6
+  kind: revise
+  actor: agent
+  prompt: >
+    That canonical diagram is the one for the grant figure, but it's hard to read. Redo it with
+    a colourblind-friendly palette, larger domain labels, and the residue positions printed on
+    each domain (signal peptide, extracellular region, transmembrane helix, kinase domain,
+    C-terminal tail). Save it as a new PNG.
+  expect:
+    produces: {figure: 1}
+    context: {msgs_grow: true, cache_read: true}
+    checks: >
+      A RESTYLE of the canonical domain diagram: same canonical architecture (signal peptide
+      1-24, extracellular ~25-645, TM 646-668, kinase 712-979, C-terminal tail to 1210) but
+      a new, more legible figure — colourblind-safe colours, bigger labels, residue ranges
+      printed on each domain. This is a fresh figure, not a re-derivation of the biology.
+
+- id: s7
+  kind: pin
+  actor: user
+  target: {from_step: s6, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The restyled grant-quality canonical diagram is pinned — three Results now (isoform + plain canonical + restyled canonical).
+
+- id: s8
+  kind: delete
+  actor: user
+  target: {ref: s3}
+  expect:
+    state: {entity_archived: {ref: s3}, pinned_results_min: 2}
+    checks: >
+      The s1 isoform domain diagram (pinned at s3) was a dead end once we moved to the canonical
+      protein — it is archived. The two canonical diagrams (plain + restyled) remain pinned.
+
+- id: s9
+  kind: resume
+  actor: agent
+  prompt: >
+    Picking this back up after a couple of weeks. Stay on the canonical protein we settled on —
+    not the truncated isoform. Quick orientation for the grant figure: that same feature table
+    at DATA_DIR/uniprot_P00533_features.json also lists the known variants for this protein —
+    which of its domains actually carry the disease-associated ones? Point me at the domain(s)
+    that are the mutation hotspots with a couple of representative examples, and then draw the
+    canonical domain diagram again with those mutation positions marked on it. Save that as a PNG.
+  expect:
+    must_mention:
+    - kinase
+    - lung
+    must_not:
+    - "no known"
+    - "no disease"
+    - "no pathogenic"
+    produces: {figure: 1}
+    context: {cache_breakpoints: true}
+    checks: >
+      A RESUME after a session restart: the later session must reuse the canonical architecture
+      settled on in s4/s6 (not silently revert to the s1 isoform or re-derive everything blindly),
+      drawing on the rehydrated pinned shelf. The agent should read the variant catalogue in the
+      LOCAL feature record (no live ClinVar/variant sweep — the variants are already on disk),
+      map them onto the domain map, and report that the mutation hotspot is the intracellular
+      PROTEIN TYROSINE-KINASE DOMAIN (~712-979), driven by non-small-cell LUNG cancer activating
+      mutations. Representative, checkable examples from the staged record (all in the kinase
+      domain): L858R (exon 21), T790M (gatekeeper resistance, exon 20), G719S/G719A/G719C
+      (exon 18), exon-19 in-frame deletions around E746-A750 — all inside the kinase domain. The
+      produced figure should be the canonical domain diagram with these mutation positions marked
+      (e.g. lollipops/ticks clustered over the kinase domain). Honest scoping expected: a
+      representative pointer, not an exhaustive list; ground the examples in the provided record
+      rather than reciting unverified. Fabricated residue numbers or non-real EGFR variants fail.
+
+- id: s10
+  kind: pin
+  actor: user
+  target: {from_step: s9, select: figure}
+  expect:
+    state: {pinned_results_min: 3}
+    checks: The disease-mutation domain map is pinned — three active Results (plain canonical, restyled canonical, mutation map).
+
+- id: s11
+  kind: resume
+  actor: agent
+  prompt: >
+    Last thing before I close out for today — just remind me which figures we've kept for this
+    protein and what each one shows. Don't redo any analysis, just summarise what's on the shelf.
+  expect:
+    must_mention:
+    - canonical
+    - kinase
+    context: {cache_breakpoints: true}
+    checks: >
+      A final recap after re-attaching to the same project. The agent's context should be
+      rehydrated from the pinned shelf and reflect exactly the surviving Results: the two
+      canonical domain diagrams (plain + restyled) and the disease-mutation map — and NOT the
+      deleted s1 isoform diagram. It should describe each kept figure in terms of the canonical
+      EGFR architecture and the kinase-domain mutation hotspot, without re-running anything.
+
+expected_overall:
+  planted_truth: >
+    Both sequences are real human EGFR (epidermal growth factor receptor, UniProt P00533),
+    fetched from UniProt and committed with anonymized FASTA headers (sequences are byte-for-byte
+    the real records; only the deflines were replaced so step 1 is a genuine identification task).
+      * protein.fasta            = EGFR isoform 3 (P00533-3), 705 aa. NON-CANONICAL.
+      * protein_canonical.fasta  = EGFR canonical isoform 1 (P00533-1), 1210 aa.
+      * uniprot_P00533_features.json = UniProt's PRECOMPUTED feature record for P00533, pulled
+        ONCE at build time and committed locally (a curated, ~16 KB slice: the architecture
+        skeleton + the natural/disease variant catalogue). This is the network-budget fix — the
+        whole session annotates from this local file, so NO live domain scan (e.g. InterProScan)
+        and NO per-variant REST is ever needed; the test is compute/reasoning-bound.
+    Canonical domain architecture (UniProt feature coordinates, 1-based; all present in the
+    local feature record):
+      - Signal peptide:               1-24
+      - Extracellular receptor region: ~25-645 (ligand-binding L1/L2 + furin-like cysteine-rich
+        ectodomain; this is where the ligand binds)
+      - Transmembrane helix:          646-668 (single pass)
+      - Protein tyrosine-kinase domain: 712-979 (cytoplasmic)
+      - C-terminal regulatory/autophosphorylation tail: ~980-1210
+    Isoform difference (the s1 vs s4 truth): isoform 3 is IDENTICAL to the canonical sequence
+    for residues 1-627 (the entire extracellular region, incl. the signal peptide), then DIVERGES
+    at residue 628 into a unique 78-residue C-terminal tail and ends at residue 705. Consequently
+    the isoform LACKS the transmembrane helix (646-668), the entire intracellular kinase domain
+    (712-979), and the C-terminal tail — it is a truncated/soluble extracellular form, NOT a
+    single-pass receptor. Trap: residues exist at positions 646-705 in the isoform, but they are
+    an alternative reading-frame tail, NOT the canonical TM helix; claiming the TM helix or kinase
+    domain is present in the isoform is fabrication.
+    Disease-mutation truth (s9): the local feature record lists 40 natural variants, of which 28
+    fall fully inside the intracellular tyrosine-kinase domain (712-979) — the activating/
+    resistance hotspots of non-small-cell lung cancer. Real representative examples (all in the
+    kinase domain, all present in the staged record): G719S/G719A/G719C (exon 18), exon-19
+    in-frame deletions around E746-A750, T790M (exon 20 gatekeeper resistance mutation), L858R
+    (exon 21, the most common activating mutation). These residue numbers are verifiable against
+    the committed file (and against ClinVar/UniProt).
+  notes: >
+    A fully correct end-to-end run (11 steps), all LOCAL — no live domain scan, no per-variant REST:
+    s1 — identifies the protein as human EGFR by matching the sequence to the provided reference
+    feature record, annotates THIS sequence's architecture from the LOCAL feature table, and
+    reports the isoform as a truncated EGFR with the extracellular region but NO TM helix and NO
+    kinase domain, with sequence-derived coordinates and no fabricated boundaries.
+    s2 — draws a to-scale domain diagram of the 705-aa isoform (signal peptide, extracellular
+    region, divergent tail) and saves it as a figure; s3 pins it.
+    s4 — revises the SAME project for the canonical 1210-aa sequence using the SAME local feature
+    record, lands on signal peptide 1-24 / TM 646-668 / kinase 712-979, draws the canonical domain
+    diagram, and explicitly contrasts it with the s1 isoform (full-length single-pass receptor WITH
+    TM+kinase vs. truncated extracellular-only isoform), building on existing context rather than
+    redoing from zero; s5 pins the canonical diagram.
+    s6 — RESTYLES the canonical diagram (colourblind palette, larger labels, residue ranges on each
+    domain) into a new, grant-quality figure; s7 pins it.
+    s8 — deletes the now-obsolete s1 isoform diagram (the dead end), leaving the two canonical
+    diagrams pinned.
+    s9 — RESUMES after a session restart on the canonical protein, reads the variant catalogue in
+    the LOCAL feature record, points to the kinase domain (712-979) as the lung-cancer mutation
+    hotspot with real representative examples (L858R, T790M, G719x, exon-19 deletions), and draws
+    the canonical domain diagram with those mutation positions marked; s10 pins it.
+    s11 — RESUMES once more for a recap: lists exactly the surviving pinned figures (two canonical
+    diagrams + the mutation map), correctly omitting the deleted isoform diagram, without re-running.
+    No fabricated coordinates, isoform claims, or variant identifiers anywhere.
