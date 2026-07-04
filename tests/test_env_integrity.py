@@ -125,6 +125,39 @@ def test_gpu_capability_ok_maps_torch_state(monkeypatch):
     assert ok is None
 
 
+def test_torch_cuda_build_reports_build(monkeypatch):
+    """torch_cuda_build reflects the BUILD (version.cuda), node-independently — None for
+    a CPU-only build or absent torch (the login-node signal for whether a GPU JOB could
+    use the GPU)."""
+    import sys
+    import types
+    import core.exec.env_integrity as ei
+    monkeypatch.setitem(sys.modules, "torch",
+                        types.SimpleNamespace(version=types.SimpleNamespace(cuda="12.4")))
+    assert ei.torch_cuda_build() == "12.4"
+    monkeypatch.setitem(sys.modules, "torch",
+                        types.SimpleNamespace(version=types.SimpleNamespace(cuda=None)))
+    assert ei.torch_cuda_build() is None
+    monkeypatch.setitem(sys.modules, "torch", None)   # not importable
+    assert ei.torch_cuda_build() is None
+
+
+def test_env_selfcheck_accelerator_invariant(tmp_path, monkeypatch):
+    """When the deployment declares ABA_ACCELERATOR=cuda, env_selfcheck flags a CPU-only
+    torch base (the scVI-on-CPU root cause); with no declaration, it doesn't check."""
+    import core.exec.env_integrity as ei
+    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
+    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
+    monkeypatch.setenv("ABA_ACCELERATOR", "cuda")
+    monkeypatch.setattr(ei, "torch_cuda_build", lambda: None)          # CPU-only base
+    rep = ei.env_selfcheck()
+    assert rep["checks"]["accelerator_cuda"]["ok"] is False and not rep["ok"]
+    monkeypatch.setattr(ei, "torch_cuda_build", lambda: "12.4")        # CUDA base
+    assert ei.env_selfcheck()["checks"]["accelerator_cuda"]["ok"] is True
+    monkeypatch.delenv("ABA_ACCELERATOR", raising=False)               # not declared → not checked
+    assert "accelerator_cuda" not in ei.env_selfcheck()["checks"]
+
+
 def test_env_selfcheck_reports_anchor_armed(tmp_path, monkeypatch):
     """The standard env self-check catches the silent ABI-anchor-OFF state the deep
     base-health check misses — the invariant a dev run should hold before it trusts
