@@ -101,6 +101,11 @@ def run_python_code(
         "DATA_DIR": str(_data_dir),
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "MPLBACKEND": "Agg",
+        # Unbuffered stdout/stderr so a background job's prints reach job.log AS THEY
+        # HAPPEN (Python block-buffers when stdout isn't a TTY, so without this a job's
+        # output only lands at process exit — the Jobs-card "live" tail would show
+        # nothing until completion regardless of how often the UI polls).
+        "PYTHONUNBUFFERED": "1",
     }
     result = ex.exec(
         menv, [used_interp, str(scratch / "script.py")],
@@ -212,8 +217,18 @@ def run_r_code(
         "ARTIFACTS_DIR": str(ARTIFACTS_DIR),
         "ABA_PYTHON": sys.executable,  # let R shell out to Python if needed
     }
+    r_cmd = [str(rscript), "--vanilla", str(scratch / "script.R")]
+    # R block-buffers stdout to a pipe (no PYTHONUNBUFFERED equivalent), so a background R
+    # job's prints wouldn't reach run.log until it exits — the Jobs-card live tail would sit
+    # empty until completion. `stdbuf -oL` forces line-buffered stdio → live streaming (Item 2).
+    # Only for streaming (background) runs; best-effort (skip if stdbuf is unavailable).
+    if stream:
+        import shutil as _sh
+        _stdbuf = _sh.which("stdbuf")
+        if _stdbuf:
+            r_cmd = [_stdbuf, "-oL", *r_cmd]
     result = ex.exec(
-        env, [str(rscript), "--vanilla", str(scratch / "script.R")],
+        env, r_cmd,
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,
         env_vars=env_vars, stream=stream,
     )

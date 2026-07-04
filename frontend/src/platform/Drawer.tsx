@@ -530,6 +530,9 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   // Status pill filter (null = all) + free-text filter (for longer lists).
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // Optimistically-dismissed ids: hide a row the instant its archive succeeds, instead of
+  // waiting up to 5s for the next /api/jobs poll to drop it. The poll then makes it permanent.
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set())
 
   // Re-fetch the detail panel for a running job each poll tick so log_tail
   // updates while the agent watches. Done in the same place that pulls it
@@ -577,6 +580,7 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   const filter = (statusFilter && counts[statusFilter]) ? statusFilter : null
   const q = query.trim().toLowerCase()
   const list = sorted.filter(j =>
+    !dismissedIds.has(j.id) &&
     (!filter || j.status === filter) &&
     (!q || (j.title || '').toLowerCase().includes(q) || j.id.toLowerCase().includes(q)))
   return (
@@ -620,7 +624,8 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
               <span className="jobs__title">{j.title || j.id}</span>
               <span className="jobs__time">{fmtTime(j.t)}</span>
             </button>
-            {open && <JobDetailPanel job={j} detail={d} loading={!!detailLoading[j.id]} />}
+            {open && <JobDetailPanel job={j} detail={d} loading={!!detailLoading[j.id]}
+                                     onDismissed={() => setDismissedIds(s => new Set(s).add(j.id))} />}
           </div>
         )
       })}
@@ -732,13 +737,13 @@ function NextflowProgressBlock({ job }: { job: JobInfo }) {
  *  the chat's tool-line "script" + "output" affordances so a background
  *  run feels like its synchronous run_python sibling — same content,
  *  same toggles, different host. */
-function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean }) {
+export function JobDetailPanel({ job, detail, loading, onDismissed }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean; onDismissed?: () => void }) {
   const [showCode, setShowCode] = useState(false)
   // Output pane defaults to open IF there's something to show — surfaces
   // log_tail / error without an extra click. Mirrors the failed-tool
   // behavior in the chat (which auto-reveals the error pane).
   const hasOutput = !!(detail?.log_tail || detail?.error)
-  const [showOut, setShowOut] = useState(true)
+  const [showOut, setShowOut] = useState(false)  // collapsed by default, like the code pane
   // Cancel: only queued/running jobs are cancellable. Confirm via a modal, then
   // POST /api/jobs/{id}/cancel; the row status updates on the next /api/jobs poll.
   const cancellable = job.status === 'queued' || job.status === 'running'
@@ -754,6 +759,23 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
     } catch (e) {
       setCancelErr(e instanceof Error ? e.message : 'cancel failed')
     } finally { setCancelling(false) }
+  }
+
+  // Dismiss: hide a TERMINAL job from the list via POST /api/jobs/{id}/archive. Soft archive
+  // (provenance kept, still fetchable by id), so no confirm modal. The row drops on the next
+  // /api/jobs poll (list_jobs excludes archived); leave the button in its pending state until then.
+  const dismissable = job.status === 'done' || job.status === 'failed' || job.status === 'cancelled'
+  const [dismissing, setDismissing] = useState(false)
+  const [dismissErr, setDismissErr] = useState<string | null>(null)
+  const doDismiss = async () => {
+    setDismissing(true); setDismissErr(null)
+    try {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/archive`, { method: 'POST' })
+      if (!r.ok) throw new Error(`dismiss failed (${r.status})`)
+      onDismissed?.()  // hide the row immediately; the next /api/jobs poll makes it permanent
+    } catch (e) {
+      setDismissErr(e instanceof Error ? e.message : 'dismiss failed'); setDismissing(false)
+    }
   }
 
   if (!detail && loading) {
@@ -787,6 +809,15 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
           </button>
         </div>
       )}
+      {dismissable && (
+        <div className="jobs__actions jobs__actions--right">
+          {dismissErr && <span className="jobs__cancel-err">{dismissErr}</span>}
+          <button type="button" className="jobs__dismiss" disabled={dismissing}
+                  onClick={doDismiss} title="Hide this job from the list (kept for provenance)">
+            {dismissing ? 'dismissing…' : 'Dismiss'}
+          </button>
+        </div>
+      )}
       {confirming && (
         <ConfirmDialog
           title="Cancel this job?"
@@ -812,16 +843,25 @@ function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDet
           {showCode && <pre className="jobs__pre jobs__pre--code">{code}</pre>}
         </div>
       )}
-      {hasOutput && (
+      {(hasOutput || job.status === 'queued' || job.status === 'running') && (
         <div className="jobs__section">
           <button type="button" className="jobs__toggle" onClick={() => setShowOut(s => !s)}>
             {showOut ? '▾ output' : '▸ output'}
-            <span className="jobs__toggle-meta">{(out || err).length} chars</span>
+            <span className="jobs__toggle-meta">
+              {out ? `${out.length} chars` : (job.status === 'queued' ? 'queued' : job.status === 'running' ? 'live' : '')}
+            </span>
           </button>
-          {showOut && out && <pre className="jobs__pre">{out}</pre>}
+          {/* Show output when present; otherwise, for a queued/running job, a live placeholder so
+              the affordance exists BEFORE the job emits (the panel refreshes every 4s — see the
+              fetchDetail interval). Prevents a silent/queued job from looking like it has no output. */}
+          {showOut && (out
+            ? <pre className="jobs__pre">{out}</pre>
+            : <pre className="jobs__pre jobs__pre--muted">{job.status === 'queued'
+                ? '(queued — no output until a node picks up the job; this updates live)'
+                : '(running — waiting for the first output…)'}</pre>)}
         </div>
       )}
-      {!code && !out && !err && (
+      {!code && !out && !err && job.status !== 'queued' && job.status !== 'running' && (
         <div className="jobs__detail-hint">(no captured input/output — this job may not have been a run_python)</div>
       )}
     </div>

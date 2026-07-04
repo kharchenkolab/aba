@@ -214,3 +214,11 @@ the mech fails are brittle, not science — crispr_guides 9/11 (rubric 3.0!), st
 class), foci_count, methylation_dmr, pseudobulk_de, variant_to_structure, image_registration,
 scrna_qc, msa_phylo. Same K1/K2/K3 pattern as the Haiku pass. Both baselines now committed;
 the regtest system is fully operational (Haiku coarse robustness net + Opus precise signal).
+
+## 2026-07-04/05 autonomous QA + Jobs-card pass — open items for review
+Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the actionable items:
+- **[HIGH] SIF/OOD build ignores ABA_ACCELERATOR** — `install/sif/build.sh` (fat+slim) + aba-vbc's `build.sh` build the env with a plain `micromamba create -f environment.yml`; no `inject-accelerator.sh` / `CONDA_OVERRIDE_CUDA`. aba-vbc deploys via SIF, so a GPU deploy there silently gets a CPU base. Needs container build-arg plumbing + a SIF build to verify (untestable on the personal install).
+- **[HIGH] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local. Live instance is fine (shared). `aba doctor` now warns; a hard startup assertion would be stronger.
+- **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
+- **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.
+- **Shipped this pass (on main, live):** deployment-conditional CUDA base (live instance rebuilt cuda118, scVI-on-GPU fixed) + install docs (aba + aba-vbc); regtest scenarios gpu_job_completion + slurm_missing_pkg; runner ENVS_DIR→shared; `aba doctor` oauth_cc-cred + node-local-ENVS_DIR checks; Jobs-card: live output (queued/running placeholder + live run.log tail + PYTHONUNBUFFERED), deferred-submit note points at the panel, R bg jobs stream live, job archive/dismiss + auto-retention(keep=30), and the Dismiss-hang fix (reconcileJobs prunes archived jobs from the poll).

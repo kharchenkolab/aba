@@ -708,6 +708,13 @@ async def _finalize_job(job: dict, result_obj: dict, lookup_pid: str | None,
         })
     update_job(job_id, project_id=lookup_pid, status="done", log_tail=log_tail,
                finished_at=_utcnow())
+    # Auto-retention: cap the visible terminal jobs per project so the list can't grow
+    # unbounded (archives, doesn't delete — provenance kept). Best-effort.
+    try:
+        from core.graph.jobs import prune_terminal_jobs
+        prune_terminal_jobs(project_id=lookup_pid, keep=30)
+    except Exception:  # noqa: BLE001
+        pass
     _settle_job_deferred(job_id, lookup_pid)
     try:
         from core.jobs.continuation import enqueue_continuation
