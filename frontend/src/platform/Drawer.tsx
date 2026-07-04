@@ -530,6 +530,9 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   // Status pill filter (null = all) + free-text filter (for longer lists).
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // Optimistically-dismissed ids: hide a row the instant its archive succeeds, instead of
+  // waiting up to 5s for the next /api/jobs poll to drop it. The poll then makes it permanent.
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set())
 
   // Re-fetch the detail panel for a running job each poll tick so log_tail
   // updates while the agent watches. Done in the same place that pulls it
@@ -577,6 +580,7 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
   const filter = (statusFilter && counts[statusFilter]) ? statusFilter : null
   const q = query.trim().toLowerCase()
   const list = sorted.filter(j =>
+    !dismissedIds.has(j.id) &&
     (!filter || j.status === filter) &&
     (!q || (j.title || '').toLowerCase().includes(q) || j.id.toLowerCase().includes(q)))
   return (
@@ -620,7 +624,8 @@ export function JobsTab({ jobs }: { jobs: JobInfo[] }) {
               <span className="jobs__title">{j.title || j.id}</span>
               <span className="jobs__time">{fmtTime(j.t)}</span>
             </button>
-            {open && <JobDetailPanel job={j} detail={d} loading={!!detailLoading[j.id]} />}
+            {open && <JobDetailPanel job={j} detail={d} loading={!!detailLoading[j.id]}
+                                     onDismissed={() => setDismissedIds(s => new Set(s).add(j.id))} />}
           </div>
         )
       })}
@@ -732,7 +737,7 @@ function NextflowProgressBlock({ job }: { job: JobInfo }) {
  *  the chat's tool-line "script" + "output" affordances so a background
  *  run feels like its synchronous run_python sibling — same content,
  *  same toggles, different host. */
-export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean }) {
+export function JobDetailPanel({ job, detail, loading, onDismissed }: { job: JobInfo; detail: JobDetail | undefined; loading: boolean; onDismissed?: () => void }) {
   const [showCode, setShowCode] = useState(false)
   // Output pane defaults to open IF there's something to show — surfaces
   // log_tail / error without an extra click. Mirrors the failed-tool
@@ -767,6 +772,7 @@ export function JobDetailPanel({ job, detail, loading }: { job: JobInfo; detail:
     try {
       const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/archive`, { method: 'POST' })
       if (!r.ok) throw new Error(`dismiss failed (${r.status})`)
+      onDismissed?.()  // hide the row immediately; the next /api/jobs poll makes it permanent
     } catch (e) {
       setDismissErr(e instanceof Error ? e.message : 'dismiss failed'); setDismissing(false)
     }

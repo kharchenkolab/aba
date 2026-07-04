@@ -71,17 +71,22 @@ describe('JobDetailPanel — Dismiss vs Cancel', () => {
     expect(btns(container)).not.toMatch(/Dismiss/)
   })
 
-  it('Dismiss POSTs to /api/jobs/{id}/archive', () => {
+  it('Dismiss POSTs to /api/jobs/{id}/archive and calls onDismissed on success (instant hide)', async () => {
     const calls: string[] = []
+    let dismissed = false
     const orig = global.fetch
     global.fetch = ((u: unknown, o: { method?: string } = {}) => {
       calls.push(`${String(u)} ${o.method || 'GET'}`)
       return Promise.resolve({ ok: true }) as unknown as Promise<Response>
     }) as unknown as typeof fetch
     try {
-      const { container } = render(<JobDetailPanel job={job('failed')} detail={detail({ status: 'failed' })} loading={false} />)
+      const { container } = render(
+        <JobDetailPanel job={job('failed')} detail={detail({ status: 'failed' })} loading={false}
+                        onDismissed={() => { dismissed = true }} />)
       fireEvent.click(dismissBtn(container)!)
+      await new Promise(r => setTimeout(r, 0))   // let the async archive POST resolve
     } finally { global.fetch = orig }
     expect(calls.some(c => /\/api\/jobs\/job_x\/archive POST/.test(c))).toBe(true)
+    expect(dismissed).toBe(true)                 // row is hidden immediately, not after the 5s poll
   })
 })
