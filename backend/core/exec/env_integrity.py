@@ -98,16 +98,62 @@ def abi_anchor_path() -> Path:
     return Path(ENVS_DIR) / "abi-anchor.txt"
 
 
-def abi_anchor_constraints(*, force: bool = False) -> Optional[Path]:
+def _anchor_pins_from_metadata(python_exe: Optional[str] = None) -> list[str]:
+    """Pin the ABI-anchor packages to their INSTALLED versions, read from package
+    metadata. Robust to how the package was delivered: a conda-forge / local-wheel
+    install renders in `pip freeze` as ``numpy @ file:///…`` (NOT ``numpy==2.4.6``),
+    which _freeze_pins drops as an invalid constraint — so on a conda scientific base
+    the freeze carries no numpy and the anchor would be empty. Metadata knows the
+    version either way. In-process (python_exe=None) reads THIS interpreter (== the
+    base that overlay installs target, since materialize pip-installs with
+    sys.executable); a python_exe reads that interpreter's metadata via subprocess."""
+    if python_exe and python_exe != sys.executable:
+        try:
+            code = ("import importlib.metadata as m,json;"
+                    "print(json.dumps({n:(m.version(n)) for n in %r}))" % (list(_ABI_ANCHOR),))
+            proc = subprocess.run([python_exe, "-c", code], capture_output=True,
+                                  text=True, timeout=30)
+            vers = json.loads(proc.stdout) if proc.returncode == 0 else {}
+        except Exception:  # noqa: BLE001
+            vers = {}
+        return [f"{n}=={v}" for n, v in vers.items() if v]
+    import importlib.metadata as _md
+    pins = []
+    for name in _ABI_ANCHOR:
+        try:
+            pins.append(f"{name}=={_md.version(name)}")
+        except Exception:  # noqa: BLE001 — anchor pkg not importable here; skip it
+            pass
+    return pins
+
+
+def _file_has_anchor_pin(path: Path) -> bool:
+    """True iff the cached anchor file actually pins an anchor package (guards against
+    a STALE/empty cache written before the anchor could be resolved)."""
+    try:
+        lines = path.read_text().splitlines()
+    except Exception:  # noqa: BLE001
+        return False
+    return any("==" in ln and ln.split("==")[0].strip().lower() in _ABI_ANCHOR
+               for ln in lines)
+
+
+def abi_anchor_constraints(*, force: bool = False,
+                           python_exe: Optional[str] = None) -> Optional[Path]:
     """Small constraint pinning only the ABI-anchor packages (numpy) to their base
     versions — used for project-overlay installs so an override can't shadow-break
-    the compiled stack (§11.4). Falls back to None if numpy can't be read."""
+    the compiled stack (§11.4). Reads the version from live package METADATA (robust
+    to conda/local-wheel installs), falling back to the base-freeze extraction; None
+    only if the anchor truly can't be resolved. Revalidates a cached file so a stale
+    empty anchor is regenerated."""
     out = abi_anchor_path()
-    if out.exists() and not force:
+    if out.exists() and not force and _file_has_anchor_pin(out):
         return out
-    base = ensure_base_constraints()
-    pins = [ln.strip() for ln in (base.read_text().splitlines() if base and base.exists() else [])
-            if ln.split("==")[0].strip().lower() in _ABI_ANCHOR]
+    pins = _anchor_pins_from_metadata(python_exe)
+    if not pins:                                   # legacy ==-pinned deployments
+        base = ensure_base_constraints(python_exe=python_exe)
+        pins = [ln.strip() for ln in (base.read_text().splitlines() if base and base.exists() else [])
+                if "==" in ln and ln.split("==")[0].strip().lower() in _ABI_ANCHOR]
     if not pins:
         return None
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -115,21 +161,64 @@ def abi_anchor_constraints(*, force: bool = False) -> Optional[Path]:
     return out
 
 
+def env_selfcheck(*, python_exe: Optional[str] = None) -> dict:
+    """Fast, structured check of the env-layering invariants a run should hold before
+    it trusts the stack — and it ARMS the ABI anchor as a side effect (idempotent).
+
+    Complements self_heal_base(): that verifies the base dependency CLOSURE (pip check
+    + deep import) but NOT the guard config. This catches the SILENT failure that the
+    deep check misses — the ABI-anchor (numpy pin) being unresolved, which on a conda
+    scientific base (pip freeze renders numpy as ``@ file://`` → dropped by the
+    freeze-based anchor) leaves overlay installs UNCONSTRAINED and lets pip rebuild
+    numpy (the GCC-too-old provisioning failures). Returns {ok, checks:{name:{ok,detail}}}."""
+    checks: dict = {}
+    anchor = abi_anchor_constraints(python_exe=python_exe)   # resolves + writes (arms) the pin
+    armed = bool(anchor and _file_has_anchor_pin(anchor))
+    checks["abi_anchor_armed"] = {
+        "ok": armed,
+        "detail": (anchor.read_text().strip() if armed
+                   else "ABI-anchor (numpy) pin UNRESOLVED — overlay installs run UNCONSTRAINED")}
+    try:
+        import importlib.metadata as _md
+        checks["numpy_present"] = {"ok": True, "detail": f"numpy=={_md.version('numpy')}"}
+    except Exception as e:  # noqa: BLE001
+        checks["numpy_present"] = {"ok": False, "detail": f"numpy not resolvable: {e}"}
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
+
+
 _PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
 
 
 def _freeze_pins(python_exe: Optional[str] = None) -> Optional[list[str]]:
-    """`pip freeze` of an interpreter → clean ``name==version`` lines (drops
-    editable/URL/VCS entries that are invalid as constraints). None on failure."""
+    """Installed distributions of an interpreter as clean ``name==version`` constraint
+    lines. Uses ``importlib.metadata`` (NOT ``pip freeze``): a conda-forge / local-wheel
+    install — which pip freeze renders as ``name @ file://…``, an INVALID constraint that
+    the old ``==``-only filter silently dropped — is still pinned by version. On a conda
+    scientific base that drop meant numpy/scipy/scanpy vanished from the pins, turning the
+    numpy-drift guard off. Metadata knows name+version regardless of install form. Editable/
+    versionless dists are skipped (no usable pin). None on failure."""
+    import json
     exe = python_exe or sys.executable
+    code = (
+        "import importlib.metadata as m, json\n"
+        "seen={}\n"
+        "for d in m.distributions():\n"
+        "    n=(d.metadata.get('Name') or '').strip()\n"
+        "    v=(d.version or '').strip()\n"
+        "    if n and v: seen.setdefault(n.lower(), f'{n}=={v}')\n"
+        "print(json.dumps(sorted(seen.values())))\n"
+    )
     try:
-        proc = subprocess.run([exe, "-m", "pip", "freeze"],
-                              capture_output=True, text=True, timeout=120)
+        proc = subprocess.run([exe, "-c", code], capture_output=True, text=True, timeout=120)
     except Exception:  # noqa: BLE001
         return None
-    if proc.returncode != 0:
+    if proc.returncode != 0 or not proc.stdout.strip():
         return None
-    lines = [ln for ln in (proc.stdout or "").splitlines() if _PIN_RE.match(ln)]
+    try:
+        pins = json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001
+        return None
+    lines = [ln for ln in pins if _PIN_RE.match(ln)]     # keep only valid constraint lines
     return lines or None
 
 
@@ -653,6 +742,20 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
     site = _base_site_dir()
     if not site.exists():
         return {"skipped": "no-base"}
+    # Env self-check (cheap, ALWAYS runs — even when the deep base verify below is
+    # skipped): arm + verify the ABI-anchor guard. This is the invariant the deep
+    # closure check does NOT cover; a silently-off anchor let unconstrained overlay
+    # installs rebuild numpy (the conda '@ file://' base case).
+    try:
+        sc = env_selfcheck()
+        if sc["ok"]:
+            log("[startup] env self-check ok — ABI anchor armed (" +
+                sc["checks"]["abi_anchor_armed"]["detail"] + ")")
+        else:
+            bad = {k: v["detail"] for k, v in sc["checks"].items() if not v["ok"]}
+            log(f"[startup] ENV SELF-CHECK PROBLEM: {bad}")
+    except Exception as e:  # noqa: BLE001 — a check must never block startup
+        log(f"[startup] env self-check errored (non-fatal): {e}")
     if base_is_readonly_fs():
         log("[startup] base on read-only filesystem (immutable image) — skipping deep verify")
         return {"skipped": "readonly_fs"}

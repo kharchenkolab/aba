@@ -74,6 +74,45 @@ def test_ensure_base_constraints_pins_numpy(tmp_path, monkeypatch):
     assert all(re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*==", ln) for ln in lines if ln.strip())
 
 
+def test_abi_anchor_pins_numpy_from_metadata(tmp_path, monkeypatch):
+    """The ABI anchor pins numpy from live METADATA — robust to a conda/local-wheel
+    base where `pip freeze` renders numpy as `numpy @ file://…` (the regression: that
+    `@`-form was dropped, the pin came up empty, and the numpy-drift guard was OFF —
+    letting overlay installs rebuild numpy, which fails on an old system toolchain)."""
+    import core.exec.env_integrity as ei
+    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
+    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
+    p = ei.abi_anchor_constraints(force=True)
+    assert p is not None and p.exists(), "anchor must resolve numpy from metadata"
+    assert any(ln.lower().startswith("numpy==") for ln in p.read_text().splitlines())
+
+
+def test_abi_anchor_regenerates_stale_empty_cache(tmp_path, monkeypatch):
+    """A stale/empty cached anchor file must be revalidated + regenerated (not
+    returned as-is), else a once-empty anchor pins nothing forever."""
+    import core.exec.env_integrity as ei
+    ap = tmp_path / "abi.txt"
+    monkeypatch.setattr(ei, "abi_anchor_path", lambda: ap)
+    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
+    ap.write_text("# stale, no pin\n")
+    p = ei.abi_anchor_constraints()               # NOT force — must detect stale + regen
+    assert p is not None
+    assert any(ln.lower().startswith("numpy==") for ln in p.read_text().splitlines())
+
+
+def test_env_selfcheck_reports_anchor_armed(tmp_path, monkeypatch):
+    """The standard env self-check catches the silent ABI-anchor-OFF state the deep
+    base-health check misses — the invariant a dev run should hold before it trusts
+    the stack."""
+    import core.exec.env_integrity as ei
+    monkeypatch.setattr(ei, "abi_anchor_path", lambda: tmp_path / "abi.txt")
+    monkeypatch.setattr(ei, "base_constraints_path", lambda: tmp_path / "c.txt")
+    rep = ei.env_selfcheck()
+    assert rep["ok"], rep
+    assert rep["checks"]["abi_anchor_armed"]["ok"]
+    assert rep["checks"]["numpy_present"]["ok"]
+
+
 def test_constraints_block_conflicting_install(tmp_path):
     """Proof the guard works: with numpy pinned high, requesting an old numpy
     must FAIL the resolve instead of silently downgrading the shared base."""
