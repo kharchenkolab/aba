@@ -133,6 +133,47 @@ user=$USER` lists your valid accounts/QOS.)
 > `aba hpc-config` **overwrites** an existing `hpc.yaml` (it's an explicit snapshot
 > of the live probe) — back up a hand-edited file before regenerating.
 
+## GPU / accelerator (the torch base) — optional
+
+The bio stack's `torch` (pulled in by `scvi-tools`) ships in two flavours — a
+**CPU-only** build and a **CUDA** build — and which one lands in the base environment is
+fixed **at install time**. `--cluster-personal` chooses for you: it runs `sinfo`, and if
+your cluster has a **GPU partition** it sets `ABA_ACCELERATOR=cuda` (a CUDA torch base),
+otherwise `cpu`. A CUDA base is a *superset* — it uses a GPU when the job lands on one and
+falls back to CPU on the login node — so one base serves both GPU and CPU work.
+
+Two lines in `$ABA_HOME/config.env` control this (installer-written, admin-editable —
+exactly like `ABA_BATCH_SUBMITTER`):
+
+```
+ABA_ACCELERATOR=cuda      # cpu | cuda — build the CPU-only or the CUDA torch base
+ABA_CUDA_VERSION=11.8     # optional — the CUDA runtime major to build (11.8 or 12)
+```
+
+**Override the auto-detection** by exporting `ABA_ACCELERATOR` (and optionally
+`ABA_CUDA_VERSION`) *before* running `setup.sh`, or by editing `config.env` and rebuilding
+the base environment afterwards. The CUDA base **builds on the GPU-less login node** — the
+installer exports `CONDA_OVERRIDE_CUDA` (default `11.8`) so the conda solver accepts the
+CUDA torch build even with no GPU present; the real GPU is confirmed when a job runs.
+
+**Which CUDA version?** Match it to your GPU nodes' **driver**, not to a specific card:
+
+| Set | CUDA runtime | Needs driver | Covers |
+|---|---|---|---|
+| *(default)* `11.8` | `cuda118` | ≥ 450.80 (very old) | GPUs sm_60 (P100) … sm_90 (H100) |
+| `12` | `cuda12x` | ≥ R525 (runs on older 12.x via minor-version compat; **not** R450–R520) | uniformly modern-driver clusters |
+
+`11.8` is the **widest-compatibility** default and the safe floor — keep it unless your
+cluster is uniformly on a **modern (≥R525) driver**, in which case `ABA_CUDA_VERSION=12`
+builds the newer runtime.
+
+**Check it:** `aba doctor` flags the dangerous mismatch — a GPU partition present but a
+**CPU-only** torch base — and names the fix (set `ABA_ACCELERATOR=cuda` in `config.env` and
+rebuild the env). At run time the agent also gets a `gpu_usable` readiness cue, and GPU jobs
+are preflighted on the compute node so they **fail fast** instead of silently training on CPU.
+
+> Full design and rationale: **`docs/arch/envs.md`** → *GPU / accelerator (target hardware)*.
+
 ## Launch and reach it
 
 ABA is light, so a **login node** is usually fine. If your cluster discourages

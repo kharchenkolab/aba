@@ -42,6 +42,12 @@ under `~/.aba` and adds an `aba` launcher.
 > so a missing/old system Python rarely blocks you. To use a specific interpreter
 > instead, point it there: `ABA_PYTHON=/path/to/python ./install/linux/setup.sh`.
 
+> **Have an NVIDIA GPU?** A plain Linux install builds a **CPU-only** torch base (the
+> GPU auto-detection only runs for the `--cluster-personal` profile). To build the
+> **CUDA** base instead, set `ABA_ACCELERATOR=cuda` (optionally `ABA_CUDA_VERSION=11.8`
+> or `12`, matched to your driver) before running `setup.sh`. See the *GPU / accelerator*
+> section of [cluster_personal.md](cluster_personal.md) and `docs/arch/envs.md`.
+
 ### Where your data lives
 
 By default everything is under `~/.aba`. The *runtime* — your projects, data,
