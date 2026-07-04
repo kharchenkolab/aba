@@ -186,6 +186,30 @@ def env_selfcheck(*, python_exe: Optional[str] = None) -> dict:
     return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
+def gpu_capability_ok() -> tuple[Optional[bool], str]:
+    """Can a GPU workload actually use a GPU in THIS interpreter? (via torch.cuda).
+    Returns (ok, detail):
+      True  — a usable CUDA GPU is visible;
+      False — torch is present but sees NO usable GPU (a CPU-only build, or a CUDA
+              build with no runtime/driver on this node) — a GPU job would silently
+              run on CPU on an idle allocated GPU (the scVI-on-CPU incident);
+      None  — torch isn't importable → not a torch GPU job, so don't judge it.
+    The verify-at-use boundary: certainty about a remote node's accelerator can only
+    be had ON that node, so this runs where the job runs (slurm_entry) and also backs
+    the compute_env `gpu_usable` hint + the env_selfcheck invariant."""
+    try:
+        import torch  # noqa
+    except Exception:  # noqa: BLE001 — no torch → not a torch-GPU job
+        return None, "torch not importable"
+    try:
+        if torch.cuda.is_available():
+            return True, f"torch {torch.__version__}, cuda {torch.version.cuda}"
+        return False, (f"torch {torch.__version__} sees no usable GPU "
+                       f"(version.cuda={torch.version.cuda}, cuda.is_available()=False)")
+    except Exception as e:  # noqa: BLE001
+        return False, f"torch.cuda probe errored: {e}"
+
+
 _PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
 
 

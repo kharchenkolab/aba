@@ -100,6 +100,31 @@ def test_abi_anchor_regenerates_stale_empty_cache(tmp_path, monkeypatch):
     assert any(ln.lower().startswith("numpy==") for ln in p.read_text().splitlines())
 
 
+def test_gpu_capability_ok_maps_torch_state(monkeypatch):
+    """The GPU verify-at-use signal: torch sees a GPU → True; torch present but no
+    usable GPU (CPU-only build — the scVI-on-CPU incident) → False; torch absent →
+    None (not a torch GPU job)."""
+    import sys
+    import types
+    import core.exec.env_integrity as ei
+    fake = types.SimpleNamespace(
+        __version__="2.9.0",
+        version=types.SimpleNamespace(cuda="12.4"),
+        cuda=types.SimpleNamespace(is_available=lambda: True))
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    ok, _ = ei.gpu_capability_ok()
+    assert ok is True
+    # CPU-only build: version.cuda is None and cuda.is_available() is False → the incident
+    fake.version.cuda = None
+    fake.cuda.is_available = lambda: False
+    ok, detail = ei.gpu_capability_ok()
+    assert ok is False and "is_available()=False" in detail
+    # torch not importable → not judged
+    monkeypatch.setitem(sys.modules, "torch", None)
+    ok, _ = ei.gpu_capability_ok()
+    assert ok is None
+
+
 def test_env_selfcheck_reports_anchor_armed(tmp_path, monkeypatch):
     """The standard env self-check catches the silent ABI-anchor-OFF state the deep
     base-health check misses — the invariant a dev run should hold before it trusts
