@@ -94,9 +94,11 @@ from its *library* needs, and lives in a different tier:
   micromamba only detects from a host driver, so `create-env` exports `CONDA_OVERRIDE_CUDA`
   (default `11.8`; `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
   selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). `11.8` is the widest-compat
-  default: it runs on any driver ≥450.80 and covers GPUs sm_60 (P100)…sm_90 (H100), so it
-  survives older-driver / Pascal-Volta clusters where a `12.x` runtime would fail. The build is
-  node-independent; the actual GPU is confirmed at job time (verify-at-use).
+  default: it runs on any driver ≥450.80 and covers GPUs sm_60 (P100)…sm_90 (H100). A `12.x`
+  runtime needs a CUDA-12 driver (≥R525); it *does* run on an older 12.x driver via CUDA
+  minor-version compatibility (verified: cuda126 runs on our R535/CUDA-12.2 P100 nodes), but
+  not on R450–R520 clusters — so `11.8` keeps the widest driver floor without relying on
+  minor-version compat. The build is node-independent; the real GPU is confirmed at job time.
 - **Non-torch GPU frameworks → overlays / isolated envs** (jax[cuda], RAPIDS) — the library
   axis, not the base.
 
