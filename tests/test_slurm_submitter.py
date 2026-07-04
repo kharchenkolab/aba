@@ -348,3 +348,18 @@ def test_submit_spec_carries_env(slurm):
     rd = get_job(job["id"], project_id=pid)["params"]["run_dir"]
     spec = json.loads((Path(rd) / "job_spec.json").read_text())
     assert spec["env"] == "myenv"
+
+
+def test_submit_spec_carries_gpu_request(slurm):
+    """The job spec records whether a GPU was requested (estimate.gpu) so slurm_entry
+    can preflight torch.cuda on the compute node (no silent CPU fallback on an idle GPU)."""
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-gpuflag")["id"]
+    gjob = _mk_job(pid, estimate={"gpu": True, "cores": 4, "mem_gb": 16, "runtime_min": 30})
+    SlurmSubmitter().submit(gjob)
+    rd = get_job(gjob["id"], project_id=pid)["params"]["run_dir"]
+    assert json.loads((Path(rd) / "job_spec.json").read_text())["gpu"] is True
+    cjob = _mk_job(pid, estimate={"cores": 2})
+    SlurmSubmitter().submit(cjob)
+    rd2 = get_job(cjob["id"], project_id=pid)["params"]["run_dir"]
+    assert json.loads((Path(rd2) / "job_spec.json").read_text())["gpu"] is False

@@ -87,6 +87,10 @@ class SlurmSubmitter:
             "run_id": params.get("run_id") or job["id"],
             "timeout_s": int(params.get("timeout_s") or 600),
             "result_path": str(result_path), "env": params.get("env"),
+            # Did the agent request a GPU? slurm_entry uses this to preflight torch.cuda
+            # on the compute node — so a GPU job can't silently fall to CPU on an idle
+            # allocated GPU (the scVI-on-CPU incident).
+            "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": mods,                              # provenance (cluster module provider)
             # Nextflow passthrough (None for python/r jobs).
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
