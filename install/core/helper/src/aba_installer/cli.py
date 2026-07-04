@@ -96,10 +96,16 @@ def doctor() -> int:
         "re-run import-recipes, or `aba update`")
     chk("launcher (bin/aba)", (home / "bin" / "aba").exists(), "re-run install-launcher")
     cfg = home / "config.env"
-    cred_ok = cfg.exists() and any(k in cfg.read_text() for k in
-                                   ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL"))
-    chk("credential (config.env)", cred_ok,
-        "set one: `aba auth --api-key sk-ant-…` or the OAuth flow")
+    # Credentials: config.env (apikey/oauth) OR the Claude-Code subscription OAuth that ABA
+    # auto-uses (oauth_cc). A personal install commonly has NO cred in config.env and relies on
+    # $CLAUDE_CODE_OAUTH_TOKEN / ~/.claude/.credentials.json — accept either (finding F7: the
+    # config.env-only check false-failed on a working oauth_cc instance).
+    cred_ok = (cfg.exists() and any(k in cfg.read_text() for k in
+                                    ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL"))) \
+        or bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")) \
+        or (Path.home() / ".claude" / ".credentials.json").exists()
+    chk("credential (config.env or Claude OAuth)", cred_ok,
+        "set one: `aba auth --api-key sk-ant-…`, the OAuth flow, or a `claude` subscription login")
     # Backend health (best-effort; not a hard failure if the user hasn't started it).
     try:
         import urllib.request
@@ -146,6 +152,20 @@ def doctor() -> int:
             f"{'yes' if gpu_partition else 'no'})", cuda_build is not None,
             "GPU present but base torch is CPU-only — set ABA_ACCELERATOR=cuda in config.env "
             "and rebuild the env (GPU jobs would otherwise run on CPU)")
+
+    # Provisioning dir must be SHARED across nodes when offloading to Slurm: a background
+    # job runs on a different node than the submitter, so a package ensure_capability'd into
+    # a node-local overlay (/tmp, /dev/shm, node-local scratch) is invisible to the job —
+    # it dies on ModuleNotFoundError with no obvious cause (finding F6b, 2026-07).
+    if "ABA_BATCH_SUBMITTER=slurm" in cfg_txt:
+        import re as _re
+        _me = _re.search(r"ABA_ENVS_DIR=(\S+)", cfg_txt)
+        _mr = _re.search(r"ABA_RUNTIME_DIR=(\S+)", cfg_txt)
+        _envs = (_me.group(1) if _me else (_mr.group(1) + "/envs" if _mr else str(home / "runtime" / "envs"))).strip("\"'")
+        _node_local = _envs.startswith(("/tmp", "/dev/shm", "/localscratch", "/scratch-local"))
+        chk("provisioning dir on shared storage (Slurm)", not _node_local,
+            f"ENVS_DIR is node-local ({_envs}) — a background Slurm job on another node can't see "
+            "ensure_capability'd packages; point ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage")
 
     print(f"\n{'✓ all checks passed' if fails == 0 else f'✗ {fails} issue(s) — see the fixes above'}", flush=True)
     return 0 if fails == 0 else 1
