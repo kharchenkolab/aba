@@ -368,22 +368,24 @@ def test_6H_in_tool_ctx_handles_missing_progress_q():
         pop_ctx(cid)
 
 
-def test_6G_six_plan_etc_tools_registered():
-    """Phase 6.G: present_plan, ask_clarification, create_scenario,
-    write_memory, restart_kernel, run_nextflow."""
+def test_6G_plan_etc_tools_registered():
+    """Phase 6.G: present_plan, ask_clarification, write_memory, restart_kernel,
+    run_nextflow. (create_scenario was removed from the catalog 2026-06-06 — see
+    plan_etc.py; it is intentionally NOT expected here.)"""
     g = _fresh_gateway()
     from content.bio.mcp_servers.aba_core import make_server
     out = g["register"]("aba_core", make_server)
     expected = {
         "aba_core:present_plan",
         "aba_core:ask_clarification",
-        "aba_core:create_scenario",
         "aba_core:write_memory",
         "aba_core:restart_kernel",
         "aba_core:run_nextflow",
     }
     actual = set(out["tools"])
     assert expected.issubset(actual), f"missing: {expected - actual}"
+    assert "aba_core:create_scenario" not in actual, \
+        "create_scenario was removed 2026-06-06 and must not reappear in the catalog"
     assert len(actual) >= 44, f"expected >=44 tools, got {len(actual)}"
     g["shutdown"]()
 
