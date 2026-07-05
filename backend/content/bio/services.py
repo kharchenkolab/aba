@@ -42,5 +42,22 @@ def _host_tool_names():
     return names or None
 
 
+def _plan_orientation_preamble(project_id: str, thread_id: str) -> str:
+    """Workspace-orientation block for a just-presented plan: canonical dataset
+    paths + prior-run files reachable from the new Run's cwd, so the agent uses
+    real paths on its first run_python instead of guessing. Composes bio's own
+    run-workspace privates — the orchestrator (guide) asks for this through the
+    ``core/services`` seam instead of importing them (modularity_audit3 Item 1)."""
+    from content.bio.tools.run_exec import _prior_run_files_preamble, _run_scratch_cwd
+    from content.bio.lifecycle.runs import active_run_id
+    pid, tid = str(project_id), str(thread_id)
+    return _prior_run_files_preamble(
+        pid, tid,
+        current_run_id=active_run_id(tid),
+        cwd=_run_scratch_cwd(pid, tid),
+    )
+
+
 register_service("language_sniffer", _language_sniffer)
 register_service("host_tool_names", _host_tool_names)
+register_service("plan_orientation_preamble", _plan_orientation_preamble)
