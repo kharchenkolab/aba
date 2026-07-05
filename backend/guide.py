@@ -302,7 +302,8 @@ def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
     bundle primary_spec → "guide". A2/A3: guide is spec-driven (model + role only); the
     loop body stays in stream_response. Returns (spec, spec_name, guide_model)."""
     from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
-    from core.config import current_model_for_project, current_project_id
+    from core.config import current_model_for_project
+    from core.projects import current_project_id
     from core.llm_catalog import spec_for_model
     # Thread's pinned spec only if a real thread id was passed; "default" is a
     # sentinel the chat handler may not have materialized yet — no side effects here.

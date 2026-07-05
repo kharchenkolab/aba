@@ -85,7 +85,8 @@ async def datasets_create(req: dict | None = None, _pid: str = Depends(require_p
     """Create an empty directory-shaped dataset entity. Body:
     {name?, project_id?}. The dataset folder is created on disk so
     subsequent upload-folder?append_to= calls can drop files into it."""
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.web.deps import _pin_or_412
     body = req or {}
     _pin_or_412(body.get("project_id"))
@@ -114,7 +115,8 @@ async def upload_folder(
     the folder layout. If `append_to=<dataset_id>`, files are appended
     to that existing dataset; the dataset's size/file_count/layout_hint
     are refreshed. Returns the (created or updated) entity."""
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.web.deps import _pin_or_412
     _pin_or_412(project_id)
     if not files:

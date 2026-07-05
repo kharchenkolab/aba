@@ -257,8 +257,8 @@ def _resolve_view_path(path: str):
         return None
     if p.is_absolute():
         return p if p.exists() else None
-    from core.config import (current_project_id, project_work_dir,
-                             project_artifacts_dir, project_data_dir)
+    from core.config import project_work_dir, project_artifacts_dir, project_data_dir
+    from core.projects import current_project_id
     pid = current_project_id()
     for base in (project_work_dir(pid), project_artifacts_dir(pid),
                  project_data_dir(pid)):

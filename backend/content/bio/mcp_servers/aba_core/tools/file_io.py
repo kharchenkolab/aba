@@ -141,8 +141,8 @@ def register_file_io_tools(mcp: FastMCP) -> None:
         import fnmatch, os
         from datetime import datetime, timezone
         from pathlib import Path
-        from core.config import (current_project_id, project_data_dir,
-                                  project_work_dir, ARTIFACTS_DIR)
+        from core.config import project_data_dir, project_work_dir, ARTIFACTS_DIR
+        from core.projects import current_project_id
         # The project resolution uses the request-pinned current project
         # (#18, see chat handler) — no need for aba_ctx_id, but accept
         # it so the dispatcher's hidden-arg injection doesn't break us.
