@@ -61,6 +61,10 @@ dependencies:
   # ── heavy frameworks the recipe library uses — pre-built so the agent
   #    doesn't re-provision them on first use. ────────────────────────────
   - r-seurat
+  - r-presto            # Seurat's FindMarkers/FindAllMarkers auto-uses presto's
+                        #   fast Wilcoxon (presto::wilcoxauc); without it Seurat
+                        #   falls back to a slow looping base-R Wilcoxon (>10 min
+                        #   on a small dataset vs <1 s). Ship it WITH Seurat.
   - bioconductor-singlecellexperiment
   - bioconductor-deseq2
   - bioconductor-edger
