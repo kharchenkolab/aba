@@ -350,3 +350,15 @@ def _on_job_complete_register_artifacts(ctx: dict) -> None:
 
 
 _register_hook("on_job_complete", _on_job_complete_register_artifacts, priority=10)
+
+
+def _on_entity_renamed_recompute_display(ctx: dict) -> None:
+    """An entity's display_path is title-derived, so a rename must recompute it
+    (else the Files tree / breadcrumbs go stale). The platform entities PATCH route
+    fires `on_entity_renamed` instead of importing bio's display module — Item 2A.4
+    inversion (ctx: {entity_id})."""
+    from content.bio.graph.display import recompute_display_path
+    recompute_display_path(ctx["entity_id"])
+
+
+_register_hook("on_entity_renamed", _on_entity_renamed_recompute_display, priority=10)
