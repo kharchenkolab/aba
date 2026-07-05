@@ -112,12 +112,23 @@ viewers:
     label: "Explore in pagoda3"
 
   # .h5mu (MuData / multimodal) — converted via the same lstar CLI (mudata pkg is
-  # in the base env). Seurat/SCE/pagoda2/conos `.rds` are added in P2 (need R).
+  # in the base env).
   - id: pagoda3-mudata
     extensions: [.h5mu]
     mode: external
     open_external: pagoda3_launcher
     priority: 8
+    label: "Explore in pagoda3"
+
+  # .rds — Seurat / SingleCellExperiment / pagoda2 / conos, via lstar's R bridge
+  # ($LSTAR_RSCRIPT). NB: `.rds` is AMBIGUOUS — not every .rds is single-cell — so
+  # a non-single-cell object fails the conversion and surfaces a clean launch error
+  # (the agent's proactive offer is driven by recipe context, not this extension).
+  - id: pagoda3-rds
+    extensions: [.rds]
+    mode: external
+    open_external: pagoda3_launcher
+    priority: 7
     label: "Explore in pagoda3"
 
   # ---------- AI viewers (deferred to V4 — registered now so the menu shows them) ----------
