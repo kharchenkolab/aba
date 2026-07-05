@@ -206,7 +206,7 @@ the next turn with no restart.
 | `core/llm.py` | provider seam: `_RealStream` (3 cache breakpoints, raw dump), credential modes, client cache |
 | `core/llm_catalog.py` | the model→spec catalog behind the per-project model selector |
 | `core/runtime/{history_prep,llm_errors}.py` | history canonicalization; transient-error classification + friendly messages |
-| `main.py` (`/api/chat`, `/api/turns/*`) | chat entry, reconnect stream, resume, deferred-result webhook, cancel |
+| `main.py` (`/api/chat`, `/api/turns/*/resume`, `/tool_result`) | the Reasoning-plane HTTP entries that call `guide.stream_response` — stay at the composition root (core/ must not import guide). The turn *read/stream* routes (list/get/`/stream`) moved to `core/web/routers/turns.py` (Item 2A.3) |
 
 ## Known gaps
 
