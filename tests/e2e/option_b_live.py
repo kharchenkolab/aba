@@ -45,8 +45,11 @@ os.environ["ABA_RUNTIME_DIR"] = str(_TMP)
 os.environ["ARTIFACTS_DIR"] = str(_TMP / "artifacts")
 os.environ["ABA_WORK_DIR"]  = str(_TMP / "work")
 os.environ["DATA_DIR"]      = str(_TMP / "data")
-# Live envs overlay so the kernel has matplotlib etc.
-os.environ.setdefault("ABA_ENVS_DIR", "/workspace/aba-runtime/envs")
+# Live envs overlay so the kernel has matplotlib etc. To exercise a REAL built
+# overlay, `export ABA_ENVS_DIR=<a live install's runtime/envs>` before running
+# (setdefault respects it); otherwise falls back to the isolated tmp (no overlay)
+# so this script stays portable — no hardcoded /workspace (finding F: /workspace tests).
+os.environ.setdefault("ABA_ENVS_DIR", str(_TMP / "envs"))
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))

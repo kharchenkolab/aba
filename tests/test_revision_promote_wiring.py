@@ -31,7 +31,7 @@ os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 # Honour a shell-supplied envs dir (this box); default to the CI path.
-os.environ.setdefault("ABA_ENVS_DIR", "/workspace/aba-runtime/envs")
+os.environ.setdefault("ABA_ENVS_DIR", str(Path(_tmp) / "envs"))
 sys.path.insert(0, str(ROOT / "backend"))
 
 from core.graph._schema import init_db                       # noqa: E402

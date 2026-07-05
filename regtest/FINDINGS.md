@@ -5,14 +5,19 @@ Living defect/friction register produced by the scenario test passes (runner:
 per distinct finding; carried across passes so we don't re-discover.
 
 ## 2026-07-06 (Item 2B)
-- **[MED] ~19 test files hardcode `ABA_ENVS_DIR="/workspace/aba-runtime/envs"`** — e.g.
-  test_focus_change_marker/test_focus_trailer/test_annotation_note_ephemeral +
-  test_exec_records_*/test_revisions_*/test_harvest_* etc. On a box without `/workspace`
-  (the CLIP cluster) these raise `PermissionError: /workspace` at import, so they can't run
-  standalone OR under pytest here. Fix: per-test `str(Path(_tmp)/"envs")` like the other dirs.
-  (Several also need the bio pack registered + figure-artifact fixtures, which only conftest/
-  pytest provide — so they're pytest-only regardless.) Same class as the regtest hardcoded-path
-  finding. Batch-fixable with a sed once someone can run pytest to confirm they still pass.
+- **[MED → RESOLVED 2026-07-05] ~19 test files hardcode `ABA_ENVS_DIR="/workspace/aba-runtime/envs"`** —
+  actual count **21** (20 unit tests + `e2e/option_b_live.py`). `ABA_ENVS_DIR` was the ONE dir left
+  un-tmp-ized (every sibling — RUNTIME_DIR/ARTIFACTS/WORK/DATA — was `str(Path(_tmp)/…)`), a copy-paste
+  template artifact. `config.py:316` mkdir's `ENVS_DIR/jupyter` at import → `PermissionError: /workspace`
+  on any box without it → the module can't load, standalone OR under pytest (the module-level assignment
+  also overrode conftest's tmp-runtime). FIX: tmp-ized to `str(Path(_tmp)/"envs")` in the 20 unit tests
+  (safe — ENVS_DIR is the growth overlay, base is `sys.executable`; these tests don't provision);
+  `option_b_live.py` now `setdefault`s to the tmp (operator can `export ABA_ENVS_DIR=<real>` for a live
+  overlay). REGRESSION GUARD: `tests/test_no_workspace_hardcode.py` (standalone) fails on any dir-env-var
+  pinned to `/workspace`. VERIFIED: 21/21 import past config-mkdir with **0 PermissionError**;
+  test_exec_records_stage2 + test_preview_helper pass standalone. (test_revisions_http's `make_revision`
+  check fails on a ZMQ port collision — a real kernel spawn racing the co-located live server's kernel
+  pool on this shared node, orthogonal to the path fix.)
 - **[LOW] The "stable" system-prompt prefix isn't byte-stable across restarts** — surfaced
   while building the turn-context golden guard (`tests/test_turn_context_golden.py`): the
   assembled `system` prompt renders some set/dict-derived segment(s) in hash order, so its

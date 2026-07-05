@@ -24,7 +24,7 @@ os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(Path(_tmp) / "data")
 # Keep the LIVE pylib overlay (torch/scvi live there) even though runtime is isolated.
-os.environ["ABA_ENVS_DIR"] = "/workspace/aba-runtime/envs"
+os.environ["ABA_ENVS_DIR"] = str(Path(_tmp) / "envs")
 # Poison the parent env: this is exactly what makes a kernel single-core if the
 # fix isn't there. The kernel must override it.
 os.environ["OMP_NUM_THREADS"] = "1"
