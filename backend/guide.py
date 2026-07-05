@@ -253,6 +253,44 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
             f"a different entity.]")
 
 
+# The priority set (tools whose FULL docstring survives a 'summary' mode) lives HERE,
+# not in YAML, because membership is a runtime tuning concern (the most-called tools
+# per turn), adjusted as we learn from real sessions.
+_PRIORITY_TOOLS: tuple[str, ...] = (
+    "run_python", "run_r",
+    "Skill", "search_skills",
+    "present_plan", "ask_clarification",
+    "register_dataset", "list_data_files", "find_files",
+    "ensure_capability", "describe_tool",
+)
+
+
+def _assemble_active_tools(tools_all: list, spec) -> list:
+    """The capability set offered this turn (Item 2B extraction of the inline
+    tool-catalog assembly). Pack tools minus disabled, plus MCP-served tools
+    (prefixed 'server:tool', rendered per `spec.prompt_mode` via the single-source
+    presentation policy — only prose shrinks per mode; the calling contract is
+    identical, see .claude/CLAUDE.md), filtered to the spec's tool_allowlist
+    (a no-op for the Guide's ('*',) allowlist). Disabled tools are neither offered
+    nor advertised. Gateway failure never blocks normal dispatch."""
+    from core.graph.tool_settings import get_disabled_tools
+    from core.runtime.agent import filter_tools_by_allowlist
+    disabled = get_disabled_tools()
+    active = [t for t in tools_all if t["name"] not in disabled]
+    try:
+        from core.runtime.mcp import list_tools as mcp_list_tools
+        mcp_tools = mcp_list_tools(
+            mode=(spec.prompt_mode if spec else "full"),
+            priority_tools=_PRIORITY_TOOLS,
+        )
+        active.extend(t for t in mcp_tools if t["name"] not in disabled)
+    except Exception:  # noqa: BLE001
+        pass    # gateway failure must never block normal tool dispatch
+    if spec is not None:
+        active = filter_tools_by_allowlist(active, spec.tool_allowlist)
+    return active
+
+
 async def stream_response(
     user_text: str,
     *,
@@ -526,42 +564,8 @@ async def stream_response(
             history[-1] = {**last,
                            "content": [{"type": "text", "text": note}, *list(last["content"])]}
 
-    # Capability set for this turn (disabled tools are neither offered nor
-    # advertised). A3: also pass through the spec's tool_allowlist so the
-    # capabilities list and the tools sent to the LLM match the agent's
-    # declared role. For the Guide (allowlist ('*',)) this is a no-op.
-    from core.graph.tool_settings import get_disabled_tools
-    from core.runtime.agent import filter_tools_by_allowlist
-    disabled = get_disabled_tools()
-    active_tools = [t for t in _tools_all if t["name"] not in disabled]
-    # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
-    # Empty when no MCP server is configured/connected.
-    #
-    # Tool-catalog presentation is governed by the spec's prompt_mode through the
-    # single-source policy (core.runtime.mcp.presentation): each mode decides
-    # docstring detail + whether input_schema param prose is kept. The agent can
-    # call any tool in every mode — only prose shrinks; the calling contract is
-    # identical. The priority set (tools whose FULL docstring survives a 'summary'
-    # mode) lives HERE, not in YAML, because membership is a runtime tuning concern
-    # (the most-called tools per turn), adjusted as we learn from real sessions.
-    _PRIORITY_TOOLS: tuple[str, ...] = (
-        "run_python", "run_r",
-        "Skill", "search_skills",
-        "present_plan", "ask_clarification",
-        "register_dataset", "list_data_files", "find_files",
-        "ensure_capability", "describe_tool",
-    )
-    try:
-        from core.runtime.mcp import list_tools as mcp_list_tools
-        mcp_tools = mcp_list_tools(
-            mode=(spec.prompt_mode if spec else "full"),
-            priority_tools=_PRIORITY_TOOLS,
-        )
-        active_tools.extend(t for t in mcp_tools if t["name"] not in disabled)
-    except Exception:  # noqa: BLE001
-        pass    # gateway failure must never block normal tool dispatch
-    if spec is not None:
-        active_tools = filter_tools_by_allowlist(active_tools, spec.tool_allowlist)
+    # Capability set for this turn — assembled by the module-level helper (Item 2B).
+    active_tools = _assemble_active_tools(_tools_all, spec)
 
     guide_role = spec.manifest_role if spec else "primary"
     manifest = build_manifest(
