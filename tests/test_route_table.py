@@ -83,6 +83,24 @@ def _declared_routes() -> set[str]:
     return routes
 
 
+def test_no_duplicate_route_declarations():
+    """No (METHOD, path) may be declared in more than one route file. A route
+    left behind in main.py while ALSO added to a router (the 2A.3 extraction
+    near-miss) would otherwise register twice and silently shadow — the set-based
+    snapshot can't see it, so guard it explicitly."""
+    seen: dict[str, str] = {}
+    dups: list[str] = []
+    for py in _route_files():
+        for r in _routes_in(py):
+            if r in seen:
+                dups.append(f"{r}  (in {seen[r]} AND {py.relative_to(ROOT)})")
+            else:
+                seen[r] = str(py.relative_to(ROOT))
+    if dups:
+        _fail("route(s) declared in >1 file (extraction left a duplicate?):\n" +
+              "\n".join(f"  {d}" for d in dups))
+
+
 def _load_golden() -> set[str]:
     if not GOLDEN.exists():
         return set()
@@ -121,3 +139,5 @@ if __name__ == "__main__":
     else:
         test_route_table_matches_golden()
         print(f"PASS test_route_table_matches_golden ({len(_load_golden())} routes)")
+        test_no_duplicate_route_declarations()
+        print("PASS test_no_duplicate_route_declarations")
