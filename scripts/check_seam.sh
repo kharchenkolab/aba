@@ -6,6 +6,7 @@
 #   1. backend/core/ must not import from backend/content/.
 #   2. backend/core/ must not name bio entity types by literal.
 #   3. backend/core/ must not import any bio-named module.
+#   4. backend/core/ must not import the orchestrator (guide).
 #
 # Escape hatch: `# noqa: seam` on the offending line (justify in PR).
 
@@ -40,6 +41,14 @@ fi
 BIO_MODS='advisors|registry|orientation|scenarios|promote|proposals|knowhow|conditioning'
 if grep -rnE "^(from|import) ($BIO_MODS)\b" "$CORE" --include='*.py' 2>/dev/null | grep -v "# noqa: seam"; then
   fail "backend/core/ imports a bio-named module"
+fi
+
+# 4. core/ (Compute) must not import the orchestrator (guide, Reasoning). A finished job
+# re-enters the loop through core/reasoning_port (guide registers the handler at startup),
+# NOT via `from guide import ...`. This edge previously slipped past rules 1-3 because guide
+# is neither under core/ nor a bio-named module (modularity_audit3 Item 1).
+if grep -rnE "^[[:space:]]*(from|import)[[:space:]]+guide([[:space:].]|$)" "$CORE" --include='*.py' 2>/dev/null | grep -v "# noqa: seam"; then
+  fail "backend/core/ imports the orchestrator (guide) — re-enter via core/reasoning_port instead"
 fi
 
 echo "seam OK"
