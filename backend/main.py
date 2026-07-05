@@ -1595,12 +1595,61 @@ def jobs_worker_status():
     return worker_status()
 
 
+def _live_job_log_tail(project_id: str | None, job_id: str, max_bytes: int = 4000) -> str | None:
+    """Live tail of a RUNNING job's stdout. The DB `log_tail` and `run.log` are
+    written only at finalize, so a running job would show NOTHING in the Jobs card
+    until it ends. A Slurm job streams stdout unbuffered to `run_dir/job.log` (its
+    `-o` file) — read that tail so the card updates live. Falls back to run.log."""
+    if not project_id or not job_id:
+        return None
+    try:
+        from core.config import project_work_dir
+        d = project_work_dir(project_id) / job_id
+        log = d / "job.log"
+        if not log.exists():
+            log = d / "run.log"
+        if not log.exists():
+            return None
+        size = log.stat().st_size
+        with log.open("rb") as f:
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        if size > max_bytes:                       # drop a partial first line
+            nl = text.find("\n")
+            if nl >= 0:
+                text = text[nl + 1:]
+        return text.strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/api/jobs/{job_id}")
 def jobs_get(job_id: str):
     j = get_job(job_id)
     if not j:
         raise HTTPException(404, f"job {job_id} not found")
+    # A running/queued job's DB log_tail is empty (it's only written at finalize), so serve
+    # the LIVE job.log tail — else the Jobs card's output pane stays blank until completion.
+    if j.get("status") in ("running", "queued"):
+        live = _live_job_log_tail((j.get("params") or {}).get("project_id"), job_id)
+        if live:
+            j["log_tail"] = live
     return j
+
+
+@app.post("/api/jobs/{job_id}/archive")
+def jobs_archive(job_id: str):
+    """Dismiss a terminal job from the Jobs list (soft archive — provenance kept; the job
+    is still fetchable by id). Refuses an active (queued/running) job — cancel it first."""
+    j = get_job(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id} not found")
+    from core.graph.jobs import archive_job
+    ok = archive_job(job_id, project_id=(j.get("params") or {}).get("project_id"))
+    if not ok:
+        raise HTTPException(409, "job is active or already dismissed (cancel a running job first)")
+    return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/hpc")

@@ -242,6 +242,14 @@
 .jobs__cancel:hover:not(:disabled) { background: #fef2f2; border-color: #f87171; }
 .jobs__cancel:disabled { opacity: 0.6; cursor: default; }
 .jobs__cancel-err { font-size: 10.5px; color: #c0392b; }
+/* Dismiss — a muted (non-destructive) sibling of Cancel for terminal jobs. */
+.jobs__dismiss {
+  align-self: flex-start;
+  background: none; border: 1px solid var(--border, #d1d5db); border-radius: 3px;
+  padding: 2px 9px; font: inherit; font-size: 10.5px; color: var(--text-3, #6b7280); cursor: pointer;
+}
+.jobs__dismiss:hover:not(:disabled) { background: var(--tree-active-bg, #f3f4f6); color: var(--text-1, #111827); }
+.jobs__dismiss:disabled { opacity: 0.6; cursor: default; }
 
 /* ---------- Env tab (layered Python + R envs) ---------- */
 .env-tab { display: flex; flex-direction: column; gap: 6px; }
