@@ -1639,7 +1639,7 @@ def jobs_get(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/archive")
-def jobs_archive(job_id: str):
+def jobs_archive(job_id: str, _pid: str = Depends(require_project)):
     """Dismiss a terminal job from the Jobs list (soft archive — provenance kept; the job
     is still fetchable by id). Refuses an active (queued/running) job — cancel it first."""
     j = get_job(job_id)
