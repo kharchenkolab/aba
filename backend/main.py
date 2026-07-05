@@ -113,6 +113,12 @@ def serve_artifact(pid: str, name: str):
 from content.bio.web import router as _bio_router
 app.include_router(_bio_router)
 
+# Domain-neutral platform routers extracted from main.py (Item 2A.3) — see
+# core/web/routers/. Reasoning-plane entries (chat/resume/tool_result) stay
+# inline below since they import guide (core/ must not).
+from core.web.routers import admin as _admin_routes
+app.include_router(_admin_routes.router)
+
 
 # Startup/shutdown lifecycle → lifespan.py (Item 2A.2). Composition-root
 # level (wires content: R base, display backfill, aba_core MCP server), so
@@ -1849,38 +1855,7 @@ def turn_cancel(run_id: str, req: ResumeRequest):
             "fallback_run_id": fallback_run_id, "active": active}
 
 
-@app.get("/api/admin/mcp")
-def admin_mcp_status():
-    """Per-server health, tool counts, last error — drawer can show
-    'MCP: 2/3 servers up'."""
-    from core.runtime.mcp import status
-    return status()
-
-
-@app.get("/api/admin/tool_stats")
-def admin_tool_stats(days: int = 30):
-    """Per-tool aggregates: invocation count, ok/error/rejected/deferred
-    breakdown, average + max duration. Window defaults to 30 days."""
-    from core.runtime.tool_telemetry import stats
-    return stats(days=days)
-
-
-@app.get("/api/admin/tool_invocations")
-def admin_tool_invocations(limit: int = 50, tool_name: str | None = None):
-    """Raw recent invocations for debugging."""
-    from core.runtime.tool_telemetry import recent_invocations
-    return recent_invocations(limit=limit, tool_name=tool_name)
-
-
-@app.post("/api/admin/purge_orphan_fills")
-def admin_purge_orphan_fills():
-    """One-shot cleanup for the buggy-reaper duplication: removes user
-    messages whose content is entirely orphan-fill tool_results. Safe to
-    call repeatedly (no-op on a clean DB). Uses the backend's own
-    connection so it doesn't violate the never-touch-live-DB rule."""
-    from core.runtime.checkpoint import purge_orphan_fill_messages
-    n = purge_orphan_fill_messages()
-    return {"touched": n}
+# Admin/diagnostics routes → core/web/routers/admin.py (Item 2A.3).
 
 
 # ----- Skills (B2 read API) -----
