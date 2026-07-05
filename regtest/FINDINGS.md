@@ -287,7 +287,10 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
   slurm_submitter.py:117), so the **base venv** must be on shared FS too — which means **a fat SIF cannot offload
   to Slurm at all** (its baked in-image base is unreachable by the bare job → fires under a `slurm` submitter);
   Slurm needs a slim SIF (base on shared FS) or a native shared install, and fat is single-node/local-submitter
-  only. Remaining gap: no SIF-aware *deploy-time* probe (native-install only).
+  only. Both checks are `on_slurm`-aware: `high` on a bare submit node (every job offloads → fails), `warning`
+  when ABA is inside a Slurm allocation (in-alloc jobs run INLINE and work; only beyond-allocation offload fails —
+  the aba-vbc fat+OOD case). aba-vbc docs (site.yaml + INSTALL.md) updated to note fat=inline / slim=offload.
+  Remaining gap: no SIF-aware *deploy-time* probe (native-install only).
 - **[MED → RESOLVED 2026-07-05] regtest harness portability** — `_regen_all.sh` + `placement/study.py`
   hardcoded `/home/pkharchenko/...` venvs, and `study.py`/`analyze.py` coupled a literal `/tmp/aba_placement_study`
   path across two files; a fresh box (or aba-vbc, running the sweep against a VBC deployment) couldn't run it
