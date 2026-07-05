@@ -1277,8 +1277,25 @@ def viewer_launch_page():
 # SharedArrayBuffer workers get the cross-origin isolation headers they need.
 # Registered here (before the SPA catch-all near end of file) so /pagoda3/* and
 # /pagoda3-store/* match these, not the react-router HTML fallback.
-_PAGODA3_DIST = Path(os.environ.get("ABA_PAGODA3_DIST")
-                     or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
+def _resolve_pagoda3_dist() -> Path:
+    """Where the pagoda3 viewer bundle lives. First existing wins:
+      1. $ABA_PAGODA3_DIST (explicit override)
+      2. $ABA_HOME/vendor/pagoda3/dist  — where the installer's fetch-pagoda3-dist
+         step drops the pre-built v0.1.0 release bundle (deploy default)
+      3. ~/pagoda/pagoda3/web/dist      — dev checkout
+    Returns the override (or the deploy default) even if absent, so the mount
+    guard below reports "not present" against the expected location."""
+    env = os.environ.get("ABA_PAGODA3_DIST")
+    if env:
+        return Path(env)
+    home = Path(os.environ.get("ABA_HOME") or Path.home() / ".aba")
+    for cand in (home / "vendor" / "pagoda3" / "dist",
+                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
+        if (cand / "index.html").is_file():
+            return cand
+    return home / "vendor" / "pagoda3" / "dist"
+
+_PAGODA3_DIST = _resolve_pagoda3_dist()
 
 
 class _IsolatedStatic(StaticFiles):
