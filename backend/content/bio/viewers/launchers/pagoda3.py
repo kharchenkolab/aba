@@ -140,9 +140,23 @@ def _try_viewer_prep(store: Path) -> None:
     shutil.rmtree(prepped, ignore_errors=True)  # both failed → keep clean un-prepped
 
 
-def _convert_h5ad(src: Path, out: Path) -> None:
-    import lstar
-    lstar.convert_anndata(str(src), str(out))
+def _convert_any(src: Path, out: Path) -> None:
+    """Convert any lstar-supported source into a `.lstar.zarr` directory store via
+    the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
+    the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
+    conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
+    regardless of the temp path's `.building` suffix (the CLI detects format by
+    extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP)."""
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "").strip()[-600:]
+        raise RuntimeError(
+            f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
     if _PREP_ENABLED:
         _try_viewer_prep(out)   # best-effort viewer@0.1 via pagoda3 prep.ts (WASM)
 
@@ -210,7 +224,7 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     elif name.endswith(_STORE_SUFFIX):
         convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
     else:
-        convert, suffix = _convert_h5ad, None            # .h5ad etc → convert
+        convert, suffix = _convert_any, None             # .h5ad / .h5mu / .rds → convert (lstar CLI)
     stem = src.name[:-len(suffix)] if suffix else src.stem
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
