@@ -218,10 +218,14 @@ the next turn with no restart.
   `turn.py` and `agent.py` both flag the full state-machine extraction (an
   `Agent(spec).run()` driving off `TurnState`) as deferred to a later pass. Treat
   the loop body as as-built inline code, not a clean object.
-- **The loop carries a real compute coupling.** `guide.py:27` imports the concrete
-  `submit_python_job` from `core.jobs.runner`, and `core/jobs/continuation.py`
-  imports `stream_response` back — a two-way Reasoning↔Compute edge, not a clean
-  seam. Background-job dispatch and the plan-orientation preamble also reach into
+- **The loop carries a one-way compute coupling (down-edge only).** The
+  Compute→Reasoning *up*-edge is dissolved: a finished job re-enters through
+  `core/reasoning_port` (guide registers the handler at import), so
+  `core/jobs/continuation.py` no longer imports `stream_response` — enforced by
+  `check_seam.sh` rule 4 (modularity_audit3 Item 1, Phase 1). What remains is the
+  *down*-edge: `guide.py:27` still imports the concrete `submit_python_job` from
+  `core.jobs.runner` (should submit through an interface — Item 1 / Phase 2b).
+  Background-job dispatch and the plan-orientation preamble also reach into
   `content.bio.*` directly (guide.py:812, 839, 925), and a few bio-shaped type
   literals persist (`"result"`, `("figure","view")` at guide.py:179/593). The
   content-pack seam holds for tools/prompts/hooks but is not yet total here.
