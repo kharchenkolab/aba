@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
-from content.bio.graph.result_members import add_result_member, remove_result_member, update_result_member, reorder_result_members
+from content.bio.graph.result_members import update_result_member
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
 from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
@@ -38,18 +38,8 @@ from core.runtime.content_pack import set_active_pack as _set_active_pack
 _set_active_pack(_BIO_PACK)
 _BIO_PACK.register_hooks()
 
-from content.bio.lifecycle.promote import (
-    promote_figure_to_result,
-    promote_results_to_finding,
-    add_result_to_finding,
-    remove_result_from_finding,
-)
-from content.bio.lifecycle.scenarios import create_scenario_variant
-from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
-from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status, reject_all_pending_suggestions
-from content.bio.lifecycle.adaptive import append_to_policy, run_probe
+from content.bio.lifecycle.adaptive import run_probe
 from content.bio.graph.figure_history import figure_history
-from core.graph.audit import list_events
 from core.graph.jobs import list_jobs, get_job
 from core.jobs.runner import start_worker, cancel_job
 
