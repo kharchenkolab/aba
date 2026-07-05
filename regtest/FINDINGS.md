@@ -5,6 +5,14 @@ Living defect/friction register produced by the scenario test passes (runner:
 per distinct finding; carried across passes so we don't re-discover.
 
 ## 2026-07-06 (Item 2B)
+- **[MED] ~19 test files hardcode `ABA_ENVS_DIR="/workspace/aba-runtime/envs"`** — e.g.
+  test_focus_change_marker/test_focus_trailer/test_annotation_note_ephemeral +
+  test_exec_records_*/test_revisions_*/test_harvest_* etc. On a box without `/workspace`
+  (the CLIP cluster) these raise `PermissionError: /workspace` at import, so they can't run
+  standalone OR under pytest here. Fix: per-test `str(Path(_tmp)/"envs")` like the other dirs.
+  (Several also need the bio pack registered + figure-artifact fixtures, which only conftest/
+  pytest provide — so they're pytest-only regardless.) Same class as the regtest hardcoded-path
+  finding. Batch-fixable with a sed once someone can run pytest to confirm they still pass.
 - **[LOW] The "stable" system-prompt prefix isn't byte-stable across restarts** — surfaced
   while building the turn-context golden guard (`tests/test_turn_context_golden.py`): the
   assembled `system` prompt renders some set/dict-derived segment(s) in hash order, so its
