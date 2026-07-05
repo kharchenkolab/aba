@@ -40,6 +40,20 @@ async def on_startup():
         _reap_orphan_kernels()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
+    # Startup self-checks (core/runtime/selfcheck) — register the platform checks
+    # and run them once so degraded config (e.g. a node-local ENVS_DIR under a Slurm
+    # submitter, finding F6b) is LOUD in the log AND on /api/health + the admin
+    # drawer, instead of surfacing later as a cryptic in-job ModuleNotFoundError.
+    # Non-fatal by design (loud-but-boot); the install-time gate is the hard stop.
+    try:
+        from core.runtime import selfcheck
+        from core.exec.env_integrity import check_envs_dir_shared
+        selfcheck.register("envs_dir_shared", check_envs_dir_shared)
+        for _r in selfcheck.run():
+            if not _r["ok"]:
+                print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] selfcheck failed (non-fatal): {e}")
     # Base self-heal + immutability (env_refactor.md) and isolated-env GC, run in
     # the BACKGROUND so startup-to-ready isn't blocked. self_heal_base skips the
     # ~9s deep verify entirely when the base is unchanged (fingerprint stamp) or

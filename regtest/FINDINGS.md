@@ -258,7 +258,20 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
   keeping in mind for the OOD apptainer launch on shared CBE GPU nodes — a launch that lands on such a node
   fails opaquely; the OOD job owns its own scratch so it's lower-risk, but a retry/`--exclude` or a preflight
   `apptainer exec true` smoke-check would harden it.
-- **[HIGH] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local. Live instance is fine (shared). `aba doctor` now warns; a hard startup assertion would be stronger.
+- **[HIGH → RESOLVED 2026-07-05] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on
+  another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local
+  (dies on `ModuleNotFoundError`, no obvious cause). Two-layer fix, both **empirical** (mount fstype via
+  `/proc/self/mountinfo`, not path-prefix — catches the default `/workspace` trap the old heuristic missed):
+  (1) **Install-time strong gate** (`aba doctor`, `cli.py`): under a Slurm submitter, fail if ENVS_DIR's fstype
+  is node-local OR neither `ABA_RUNTIME_DIR`/`ABA_ENVS_DIR` is set; **plus a definitive probe** — write a token
+  under ENVS_DIR, `sbatch` a one-shot job that reads it from a compute node and reports via a shared channel
+  (HOME); a genuine MISSING hard-fails (best-effort/skippable via `ABA_SKIP_ENVS_PROBE` so a busy scheduler
+  doesn't block install). (2) **Runtime loud-but-boot safety net** for post-install drift: a startup
+  self-check (`core/runtime/selfcheck.py` registry + `env_integrity.check_envs_dir_shared`) runs on boot,
+  logs `[startup] SELFCHECK HIGH: …`, and surfaces on **`/api/health`** (`degraded`+`warnings[]`, monitorable;
+  `ok` stays liveness) and **`/api/admin/selfcheck`** (diagnostics drawer) — no hard exit (that's the
+  installer's job). Guards: `tests/test_selfcheck.py` (11, standalone) + installer fstype tests. NB the
+  reusable self-check registry is the substrate for future boot checks (GPU base, base integrity), not just this one.
 - **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
 - **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
 - **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.

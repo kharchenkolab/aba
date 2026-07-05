@@ -729,6 +729,77 @@ def base_is_readonly_fs() -> bool:
         return False
 
 
+# ─── ENVS_DIR must be shared-FS under Slurm (finding F6b, HIGH) ────────────────
+# A package ensure_capability'd into ENVS_DIR/pylib is added to every run's
+# sys.path. Under a Slurm submitter the run happens on ANOTHER node, so if
+# ENVS_DIR is node-local the job dies on ModuleNotFoundError with no obvious
+# cause. We classify by ACTUAL mount fstype (not path prefix), so the default
+# `/workspace` trap and non-standard local mounts are caught too.
+_SHARED_FS = {"nfs", "nfs4", "lustre", "gpfs", "beegfs", "beegfs_nodev", "fhgfs",
+              "cephfs", "ceph", "glusterfs", "fuse.glusterfs", "smb3", "cifs",
+              "panfs", "pvfs2", "orangefs", "9p", "afs"}
+_LOCAL_FS = {"tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
+             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay"}
+
+
+def _fs_type_for_path(path) -> "str | None":
+    """Filesystem type backing ``path`` via /proc/self/mountinfo (longest
+    mount-point-prefix match). None if unreadable (non-Linux / no procfs)."""
+    try:
+        real = os.path.realpath(str(path))
+        best_mp, best_fstype = "", None
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                try:
+                    pre, post = line.split(" - ", 1)
+                    mp = pre.split()[4]                 # mount point
+                    fstype = post.split()[0]            # fs type (after " - ")
+                except (ValueError, IndexError):
+                    continue
+                if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) >= len(best_mp):
+                    best_mp, best_fstype = mp, fstype
+        return best_fstype
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def envs_dir_fs_kind() -> "tuple[str, str]":
+    """``(kind, detail)`` for the filesystem under ENVS_DIR. ``kind`` ∈
+    {'shared','node_local','unknown'} — empirical (mount fstype), so it catches
+    the `/workspace`-is-node-local trap that a path-prefix check misses."""
+    from core.exec.materialize import ENVS_DIR
+    p = str(ENVS_DIR)
+    fstype = _fs_type_for_path(p)
+    if fstype is None:
+        return "unknown", f"could not determine fs type for {p}"
+    if fstype in _SHARED_FS:
+        return "shared", f"{p} on {fstype} (shared)"
+    if fstype in _LOCAL_FS:
+        return "node_local", f"{p} on {fstype} (node-local)"
+    return "unknown", f"{p} on {fstype} (fs type not classified)"
+
+
+def check_envs_dir_shared() -> dict:
+    """Self-check (see selfcheck.py): under a Slurm submitter ENVS_DIR must be on
+    shared storage. Fires only for the 'slurm' submitter — a local submitter runs
+    jobs on this same node, so node-local is fine."""
+    from core.jobs.submitter import submitter_name
+    if submitter_name() != "slurm":
+        return {"ok": True, "severity": "info", "detail": "local submitter — ENVS_DIR sharing N/A"}
+    kind, detail = envs_dir_fs_kind()
+    if kind == "shared":
+        return {"ok": True, "severity": "info", "detail": detail}
+    if kind == "node_local":
+        return {"ok": False, "severity": "high",
+                "detail": (f"ENVS_DIR looks node-local ({detail}); a background Slurm job on another "
+                           "node can't see ensure_capability'd packages — point "
+                           "ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage.")}
+    return {"ok": False, "severity": "warning",
+            "detail": (f"ENVS_DIR shared-ness unverified ({detail}); if node-local, background Slurm "
+                       "jobs will fail to import provisioned packages. Confirm shared storage or run "
+                       "the install-time probe (aba doctor).")}
+
+
 def _base_stamp_path() -> Path:
     """Where the 'base verified' stamp lives — under the mutable runtime root, NOT
     the (read-only) base. Independent per install / per OOD tenant."""
