@@ -4,6 +4,17 @@ Living defect/friction register produced by the scenario test passes (runner:
 `regtest/harness/runner.py`; forensic: `regtest/harness/forensic.py`). One row
 per distinct finding; carried across passes so we don't re-discover.
 
+## 2026-07-06 (Item 2B)
+- **[LOW] The "stable" system-prompt prefix isn't byte-stable across restarts** — surfaced
+  while building the turn-context golden guard (`tests/test_turn_context_golden.py`): the
+  assembled `system` prompt renders some set/dict-derived segment(s) in hash order, so its
+  bytes differ across processes (PYTHONHASHSEED) at identical length. Within one server
+  process it's stable (caching works during a session), but each **restart** gets a new hash
+  seed → the `cache_control: ephemeral` stable prefix hashes differently → one prompt-cache
+  MISS on the first turn after every restart. Minor cost. Fix-at-source: sort the set-derived
+  segment in the system-prompt assembly (would also let the golden drop its normalize/sort +
+  PYTHONHASHSEED pin). Not chased now — needs locating the exact segment.
+
 **Cycle:** Sweep (Haiku, broad — no fixing) → Triage (refresh this register; rank by
 severity×frequency) → **Deep-dive** (forensic, *verify root cause against the run*) →
 **Fix** (test-infra first, then ABA core→recipes→agent; each gated by a re-run) →
