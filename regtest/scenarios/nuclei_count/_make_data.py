@@ -30,7 +30,7 @@ PLANTED TRUTH
     over-counting; these are NOT part of the 42.
 
 Run with the scenario venv:
-  /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+  "" _make_data.py
 """
 
 import os

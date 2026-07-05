@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Deterministic data generator for the `gwas_popstruct` scenario.
 
-Run:  /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+Run:  "" _make_data.py
 
 Builds a small GWAS-style cohort with a PLANTED, checkable truth:
 
