@@ -236,7 +236,28 @@ the regtest system is fully operational (Haiku coarse robustness net + Opus prec
 
 ## 2026-07-04/05 autonomous QA + Jobs-card pass — open items for review
 Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the actionable items:
-- **[HIGH] SIF/OOD build ignores ABA_ACCELERATOR** — `install/sif/build.sh` (fat+slim) + aba-vbc's `build.sh` build the env with a plain `micromamba create -f environment.yml`; no `inject-accelerator.sh` / `CONDA_OVERRIDE_CUDA`. aba-vbc deploys via SIF, so a GPU deploy there silently gets a CPU base. Needs container build-arg plumbing + a SIF build to verify (untestable on the personal install).
+- **[HIGH → RESOLVED 2026-07-05] SIF/OOD build ignores ABA_ACCELERATOR** — was: `install/sif/build.sh` +
+  aba-vbc's `build.sh` built the env with a plain `micromamba create -f environment.yml` (no
+  `inject-accelerator.sh` / `CONDA_OVERRIDE_CUDA`), so an aba-vbc GPU SIF deploy silently got a CPU torch base.
+  FIX (aba `eb6322a`, aba-vbc `cf7e9d9`): the fat-profile venv create now mirrors the installer — copy
+  `environment.yml` → `inject-accelerator.sh` → export `CONDA_OVERRIDE_CUDA=$ABA_CUDA_VERSION` when
+  `ABA_ACCELERATOR=cuda` → `micromamba create --channel-priority strict`; the fat image records
+  `org.aba.accelerator`/`org.aba.cuda_version` in `%labels`. aba-vbc passes the knobs through (`versions.env`)
+  and applies the same inject to its own slim base. VERIFIED on-cluster (not just structurally):
+  built the fat SIF with `ABA_ACCELERATOR=cuda ABA_CUDA_VERSION=11.8` **on the login node** *and* **on a real
+  GPU node** (`clip-g1-1`, job 148980, full `--profile fat` rc=0 — compute nodes reach conda-forge, unprivileged
+  apptainer build works, CUDA venv + R base build on-node). Baked venv = `torch 2.5.1.post303, built-against
+  cuda 11.8` (a CUDA build, not CPU); labels `org.aba.accelerator=cuda`. Runtime gold-standard on `clip-g2-1`
+  (V100): `apptainer exec --nv` → `torch.cuda.is_available()=True`, real CUDA matmul, `scvi 1.4.3 / scanpy 1.12.2`
+  import — `F1-GPU-VERIFY: PASS`.
+- **[LOW, ops — not a code defect] CBE g-node `apptainer exec` can fail on stale scratch-bind hook** — on
+  `clip-g1-1` a compiled-in apptainer mount hook tried to bind 6 orphaned `/scratch-cbe/jobtmp/clip-g1-1/<id>`
+  dirs (root-owned, absent — not in the live jobtmp listing) → `FATAL: mount source doesn't exist`, before the
+  container even starts. Not env-driven (`env -i` didn't clear it) and not in `apptainer.conf` (stock: only
+  localtime/hosts); a broken-node condition. Workaround: `--exclude` the node (a clean g-node runs fine). Worth
+  keeping in mind for the OOD apptainer launch on shared CBE GPU nodes — a launch that lands on such a node
+  fails opaquely; the OOD job owns its own scratch so it's lower-risk, but a retry/`--exclude` or a preflight
+  `apptainer exec true` smoke-check would harden it.
 - **[HIGH] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local. Live instance is fine (shared). `aba doctor` now warns; a hard startup assertion would be stronger.
 - **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
 - **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
