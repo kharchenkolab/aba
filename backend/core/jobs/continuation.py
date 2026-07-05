@@ -467,15 +467,22 @@ async def _fire(job: dict, project_id: str, thread_id: str) -> None:
     run_id = turn_executor.new_run_id()
     started_at = datetime.now(timezone.utc).isoformat()
 
-    # Lazy-import guide.py so this module can be imported without dragging
-    # the whole agent loop into a context that doesn't need it (tests).
-    from guide import stream_response
-    body_gen = stream_response(
-        cont_text,
-        focus_entity_id=focus_entity_id,
-        thread_id=thread_id,
-        run_id=run_id,
-    )
+    # Re-enter the agent loop through the reasoning-plane PORT — core must NOT import the
+    # orchestrator (`guide`). The guide registers its handler at startup; here we only ask
+    # the port for the turn body generator (modularity_audit3 Item 1; core/reasoning_port).
+    # An unregistered port is a startup wiring bug: log it LOUD but don't crash the worker.
+    from core.reasoning_port import run_continuation
+    try:
+        body_gen = run_continuation(
+            cont_text,
+            focus_entity_id=focus_entity_id,
+            thread_id=thread_id,
+            run_id=run_id,
+        )
+    except Exception as e:  # noqa: BLE001 — mandatory port; surface loudly, keep the worker alive
+        print(f"[continuation] PORT ERROR — continuation DROPPED for job {job.get('id')}: {e}",
+              file=sys.stderr, flush=True)
+        return
     turn_executor.start_turn(
         run_id=run_id,
         thread_id=thread_id,

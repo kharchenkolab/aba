@@ -1343,3 +1343,21 @@ async def stream_response(
         # processes/connections. The TurnSink is closed by the executor's
         # `_drain` finally (turn_executor.py); we don't touch it here.
         _cancel.release(turn.run_id)
+
+
+# --- Reasoning-plane continuation port ---------------------------------------------------
+# Register this module's turn loop as the continuation handler so a finished background job
+# can re-enter the agent loop WITHOUT core importing guide — dissolving the core.jobs→guide
+# up-edge (modularity_audit3 Item 1; see core/reasoning_port.py + docs/arch/jobs-and-hpc.md).
+# Registered at import: main.py imports guide before startup(), so the port is live before
+# reconcile_jobs / the worker / the Slurm poll loop can fire any continuation.
+from core.reasoning_port import register_continuation as _register_continuation
+
+
+def _continuation_turn_body(cont_text, *, focus_entity_id, thread_id, run_id):
+    """The reasoning-plane continuation handler: hand core.jobs the turn body generator."""
+    return stream_response(cont_text, focus_entity_id=focus_entity_id,
+                           thread_id=thread_id, run_id=run_id)
+
+
+_register_continuation(_continuation_turn_body)
