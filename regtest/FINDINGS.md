@@ -18,15 +18,18 @@ per distinct finding; carried across passes so we don't re-discover.
   test_exec_records_stage2 + test_preview_helper pass standalone. (test_revisions_http's `make_revision`
   check fails on a ZMQ port collision — a real kernel spawn racing the co-located live server's kernel
   pool on this shared node, orthogonal to the path fix.)
-- **[LOW] The "stable" system-prompt prefix isn't byte-stable across restarts** — surfaced
-  while building the turn-context golden guard (`tests/test_turn_context_golden.py`): the
-  assembled `system` prompt renders some set/dict-derived segment(s) in hash order, so its
-  bytes differ across processes (PYTHONHASHSEED) at identical length. Within one server
-  process it's stable (caching works during a session), but each **restart** gets a new hash
-  seed → the `cache_control: ephemeral` stable prefix hashes differently → one prompt-cache
-  MISS on the first turn after every restart. Minor cost. Fix-at-source: sort the set-derived
-  segment in the system-prompt assembly (would also let the golden drop its normalize/sort +
-  PYTHONHASHSEED pin). Not chased now — needs locating the exact segment.
+- **[LOW → RESOLVED (not reproducible) 2026-07-05] The "stable" system-prompt prefix wasn't
+  byte-stable across restarts** — logged while building the turn-context golden. Investigated
+  empirically: assembled the FULL cached prefix (33085-char system block **+ all 80 tool defs,
+  name+description+input_schema**) in subprocesses under PYTHONHASHSEED 0/1/2/3 → **byte-identical
+  every pairing**. The set/dict-in-hash-order nondeterminism is gone — intervening refactors of
+  exactly this path (Item 2B guide setup-phase extraction, tool-presentation single-sourcing)
+  determinized it. No source fix needed. Locked in with two guards: (a) NEW
+  `tests/test_cache_prefix_determinism.py` assembles the prefix under two hash seeds and asserts
+  byte-identical (would have caught the original finding + any future set rendered into the prefix);
+  (b) `tests/test_turn_context_golden.py` HARDENED — dropped the sort-normalization (now hashes the
+  raw masked system, catching reordering) and added an **ordered** tool-name check (guards tool
+  order, which the sort was hiding). Golden regenerated; both pass.
 
 **Cycle:** Sweep (Haiku, broad — no fixing) → Triage (refresh this register; rank by
 severity×frequency) → **Deep-dive** (forensic, *verify root cause against the run*) →
