@@ -359,7 +359,8 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
     learns the plot FAILED (point-of-use guardrail)."""
     scratch = Path(scratch)
     plots, tables, files, warnings = [], [], [], []
-    from core.config import current_project_id, project_artifacts_dir
+    from core.config import project_artifacts_dir
+    from core.projects import current_project_id
     # `project_id` is passed by the background/Slurm runners, where the ambient
     # current_project_id() is the no-project `_workspace` fallback (the compute
     # node never bound the project) — using it would bucket artifacts under

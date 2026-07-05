@@ -247,7 +247,7 @@ def _resolve_view_path(path: str):
     # /artifacts/... URL → disk, via the same mapper the entity branch uses.
     if path.startswith("/artifacts/"):
         try:
-            from main import _artifact_url_to_path
+            from core.web.artifacts import _artifact_url_to_path
             d = _artifact_url_to_path(path)
         except Exception:  # noqa: BLE001
             d = None
@@ -257,8 +257,8 @@ def _resolve_view_path(path: str):
         return None
     if p.is_absolute():
         return p if p.exists() else None
-    from core.config import (current_project_id, project_work_dir,
-                             project_artifacts_dir, project_data_dir)
+    from core.config import project_work_dir, project_artifacts_dir, project_data_dir
+    from core.projects import current_project_id
     pid = current_project_id()
     for base in (project_work_dir(pid), project_artifacts_dir(pid),
                  project_data_dir(pid)):
@@ -977,7 +977,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                 return {"error": f"entity {entity_id} has no artifact_path "
                                  f"(type={ent_type})"}
             try:
-                from main import _artifact_url_to_path
+                from core.web.artifacts import _artifact_url_to_path
                 disk = _artifact_url_to_path(ap_url) if ap_url.startswith("/artifacts/") else None
             except Exception:  # noqa: BLE001
                 disk = None

@@ -371,7 +371,8 @@ def _adopt_into_data_dir(src: str) -> tuple[str, bool]:
     returned empty, and the agent reported "no dataset registered" — same
     bug-shape as the 2026-05-31 bundle fix."""
     import os, shutil, threading
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     target_data = project_data_dir(current_project_id())
     src = os.path.abspath(src)
     dest = os.path.join(str(target_data), os.path.basename(src.rstrip("/")) or "dataset")
@@ -419,7 +420,8 @@ def _resolve_dataset_path(path: str, ctx: dict | None) -> str:
     pattern to fail with "Nothing to register"."""
     import os
     from core.config import DATA_DIR
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     if os.path.isabs(path):
         return os.path.normpath(path)        # also collapses `./` segments
     cands = [os.path.normpath(os.path.join(b, path)) for b in _scratch_bases(ctx)]
@@ -446,7 +448,8 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
     Returns (bundle_path, present_paths, missing_paths). Hardlinks when on the
     same filesystem; copies otherwise. Numeric suffix on collision."""
     import os, re, shutil
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     pid = current_project_id() or "default"
     data_dir = project_data_dir(pid)
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (title or "dataset")).strip("_") or "dataset"
@@ -471,8 +474,8 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from core.config import DATA_DIR
-    from core.config import (WORK_DIR, current_project_id, project_data_dir,
-                             project_work_dir)
+    from core.config import WORK_DIR, project_data_dir, project_work_dir
+    from core.projects import current_project_id
     # Per-project equivalents of DATA_DIR / WORK_DIR — what the agent actually
     # sees via os.environ. The module-level constants are workspace-level
     # (resolved once at import) and miss in any real install. Used for the

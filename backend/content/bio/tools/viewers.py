@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     import content.bio  # noqa: F401 — ensure viewer + launcher registrations
     from core.viewers.registry import viewers_for
-    from core.config import current_project_id
+    from core.projects import current_project_id
     from core.graph.entities import get_entity
 
     entity_id = (params.get("entity_id") or "").strip() or None

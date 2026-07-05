@@ -79,7 +79,8 @@ async def upload_external_result(
     from another tool) as a first-class Result wrapping the upload."""
     from content.bio.lifecycle.promote import pin_evidence
     from content.bio.proposals.scheduler import evaluate_thread
-    from core.config import current_project_id, project_artifacts_dir
+    from core.config import project_artifacts_dir
+    from core.projects import current_project_id
     if not file.filename:
         raise HTTPException(400, "filename missing")
     pid = current_project_id()
@@ -110,7 +111,8 @@ async def result_upload_evidence(
     """Result-page Add-evidence: upload a file and append it as a NEW
     member of this existing Result. Interpretation is NOT regenerated."""
     from content.bio.lifecycle.promote import pin_evidence
-    from core.config import current_project_id, project_artifacts_dir
+    from core.config import project_artifacts_dir
+    from core.projects import current_project_id
     r = _result_or_404(rid)
     if not file.filename:
         raise HTTPException(400, "filename missing")
@@ -185,7 +187,8 @@ def home_summary(project_id: str | None = None):
 @router.post("/api/sample-project")
 def sample_project(_pid: str = Depends(require_project)):
     """One-click sample: register the bundled cells.csv as a dataset."""
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     src = Path(__file__).resolve().parents[4] / "data" / "cells.csv"
     if not src.exists():
         raise HTTPException(500, "sample data missing")

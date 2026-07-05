@@ -365,12 +365,6 @@ def project_artifacts_dir(pid: str) -> Path:
     return p
 
 
-def current_project_id() -> str:
-    """The active project's id, or '_workspace' as the workspace-level fallback.
-    Used by code paths that need a project context but the caller didn't supply
-    one (e.g. uploads landing in the active project, kernel WORK_DIR injection)."""
-    try:
-        from core import projects   # noqa: PLC0415 — circular if hoisted
-        return projects.current() or "_workspace"
-    except Exception:
-        return "_workspace"
+# current_project_id moved to core.projects (burn-down #1 — config is a leaf,
+# must not import projects).
+

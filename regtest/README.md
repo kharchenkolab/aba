@@ -55,6 +55,23 @@ ABA_SCENARIO=tpm ABA_SCENARIO_MODEL=claude-opus-4-8 python regtest/harness/runne
 ABA_SCENARIO=tpm python regtest/harness/forensic.py [step]   # forensic on a failed step
 ```
 
+### Portability — a fresh box, or the sweep against another deployment
+
+Nothing is hardcoded to a specific home; a fresh checkout (or **aba-vbc**, running the
+sweep against a VBC deployment) sets the vars it needs — all overridable:
+
+| var | what | default |
+|---|---|---|
+| `ABA_LIVE_ENV` | NUL-separated `k=v` creds file (`ABA_LLM_CREDENTIAL`/`ABA_HOME`/…) the runner sources | `/tmp/aba_8000.env` |
+| `ABA_SCENARIO_VENV` | python for the data generators — needs rdkit/skimage/Bio/anndata/tifffile | repo `.venv` → `$ABA_HOME/env` → `$PYTHON` → `python3` |
+| `ABA_RUNTIME_VENV` | python for the scanpy generators + fallback | same resolution |
+| `ABA_ENVS_DIR` | provisioning overlay (MUST be shared-FS under a `slurm` submitter — see envs.md) | `regtest/.envs_cache` (runner) |
+| `ABA_PLACEMENT_STUDY_DIR` | placement-study output; `study.py` + `analyze.py` share this one var | `$TMPDIR/aba_placement_study` |
+| `ABA_SCENARIO` / `ABA_SCENARIO_MODEL` | which scenario / model tier | `_selftest_session` / Haiku |
+
+`_regen_all.sh` **fails loud with guidance** if no python with the scenario deps is found
+(rather than silently FAILing every generator).
+
 ## Cost tiers & cadence
 - **Weekly → Haiku breadth** (`sweep.py`): cheap; catches robustness + gross regressions.
 - **Monthly / on-demand → Opus science** (`sweep.py --opus`): rubric-level quality.

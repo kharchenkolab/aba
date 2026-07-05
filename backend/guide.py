@@ -253,65 +253,60 @@ def _build_focus_trailer(focus_entity_id: str) -> str | None:
             f"a different entity.]")
 
 
-async def stream_response(
-    user_text: str,
-    *,
-    focus_entity_id: str = WORKSPACE_ID,
-    focus_member_id: str | None = None,
-    thread_id: str = "default",
-    annotation_image: str | None = None,
-    annotation_note: str | None = None,
-    attachments: list[dict] | None = None,
-    retry: bool = False,
-    plan_entity_id: str | None = None,
-    run_id: str | None = None,
-    spec_override: str | None = None,
-) -> AsyncGenerator[dict, None]:
-    """
-    Append user message to the workspace thread, run the Guide loop, yield
-    event dicts. See aba_arch2.md §2.3 for the focus context model.
+# The priority set (tools whose FULL docstring survives a 'summary' mode) lives HERE,
+# not in YAML, because membership is a runtime tuning concern (the most-called tools
+# per turn), adjusted as we learn from real sessions.
+_PRIORITY_TOOLS: tuple[str, ...] = (
+    "run_python", "run_r",
+    "Skill", "search_skills",
+    "present_plan", "ask_clarification",
+    "register_dataset", "list_data_files", "find_files",
+    "ensure_capability", "describe_tool",
+)
 
-    `retry=True` regenerates the reply for the existing last turn without
-    appending a new user message — used after a transient API failure, where
-    the user turn was already persisted but no assistant reply was produced.
 
-    `run_id` should be allocated by the caller (via core.runtime.turn_executor.
-    new_run_id()) so the TurnSink can be created upfront and subscribers can
-    attach before the body starts emitting. If omitted (callers that don't
-    care about pre-allocation), one is generated internally.
+def _assemble_active_tools(tools_all: list, spec) -> list:
+    """The capability set offered this turn (Item 2B extraction of the inline
+    tool-catalog assembly). Pack tools minus disabled, plus MCP-served tools
+    (prefixed 'server:tool', rendered per `spec.prompt_mode` via the single-source
+    presentation policy — only prose shrinks per mode; the calling contract is
+    identical, see .claude/CLAUDE.md), filtered to the spec's tool_allowlist
+    (a no-op for the Guide's ('*',) allowlist). Disabled tools are neither offered
+    nor advertised. Gateway failure never blocks normal dispatch."""
+    from core.graph.tool_settings import get_disabled_tools
+    from core.runtime.agent import filter_tools_by_allowlist
+    disabled = get_disabled_tools()
+    active = [t for t in tools_all if t["name"] not in disabled]
+    try:
+        from core.runtime.mcp import list_tools as mcp_list_tools
+        mcp_tools = mcp_list_tools(
+            mode=(spec.prompt_mode if spec else "full"),
+            priority_tools=_PRIORITY_TOOLS,
+        )
+        active.extend(t for t in mcp_tools if t["name"] not in disabled)
+    except Exception:  # noqa: BLE001
+        pass    # gateway failure must never block normal tool dispatch
+    if spec is not None:
+        active = filter_tools_by_allowlist(active, spec.tool_allowlist)
+    return active
 
-    The yielded dicts are the *payloads* — SSE wire framing happens in
-    core.runtime.turn_sink.stream_from_sink (which embeds the seq from the
-    sink). Callers running the body via turn_executor.start_turn never
-    consume this generator directly; the executor's _drain does the pushing.
-    """
-    _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
-    def sse(obj: dict) -> dict:
-        # The name is retained for diff-friendliness; the function no longer
-        # formats SSE wire frames — it just live-logs and returns the payload.
-        _live_log_event(turn.run_id, obj, _dtbuf)
-        return obj
 
-    # Wave 2 A.3: the content pack is the single seam to bio. Cache the
-    # accessors per-turn — calling pack methods is cheap but the dict
-    # lookup beats re-fetching.
-    pack = active_pack()
-    _prompts = pack.prompts()
-    _tools_all = pack.tools()
-    _exec_tool = pack.execute_tool()
-    session_id = pack.new_session_id()
-    turn_index = 0
-    # A2: Guide is now spec-driven. The YAML at bio/advisors/guide.yaml
-    # declares the model + role + halt/streaming flags. Full loop-body
-    # extraction into Agent.run() is deferred; for now the spec is
-    # consulted for model + role only, while the loop body stays here.
+def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
+    """Resolve the agent spec + model for this turn (Item 2B extraction).
+
+    Model precedence (resolved PER PROJECT at the turn boundary, not import time, so
+    the Settings model selector takes effect next turn without a restart): env override
+    > the project's selected model > config.env > bundle default > snapshot. The SPEC
+    follows the chosen model via the install-wide catalog unless a request/thread
+    override pins it: request_override → thread.metadata.spec → catalog[model].spec →
+    bundle primary_spec → "guide". A2/A3: guide is spec-driven (model + role only); the
+    loop body stays in stream_response. Returns (spec, spec_name, guide_model)."""
     from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
-    from core.config import current_model_for_project, current_project_id
+    from core.config import current_model_for_project
+    from core.projects import current_project_id
     from core.llm_catalog import spec_for_model
-    # Look up the thread's pinned spec only if a real thread id was
-    # passed; "default" is a sentinel the chat handler may not have
-    # materialized yet, and we don't want to introduce side effects
-    # here.
+    # Thread's pinned spec only if a real thread id was passed; "default" is a
+    # sentinel the chat handler may not have materialized yet — no side effects here.
     thread_spec: str | None = None
     if thread_id and thread_id != "default":
         try:
@@ -319,17 +314,7 @@ async def stream_response(
             thread_spec = get_thread_spec(thread_id)
         except Exception:                                    # noqa: BLE001
             thread_spec = None
-    # Resolve the primary MODEL first, PER PROJECT, at the turn boundary (not
-    # import time) so the Settings model selector takes effect on the next turn
-    # without a backend restart. Precedence: env override > the project's
-    # selected model > config.env > bundle default_model > snapshot. See
-    # core.config.current_model_for_project.
-    _pid = current_project_id()
-    guide_model = current_model_for_project(_pid)
-    # The SPEC follows the chosen model via the install-wide catalog
-    # (llm_catalog), unless a request/thread override pins it. Precedence:
-    #   request_override → thread.metadata.spec → catalog[model].spec →
-    #   bundle primary_spec → "guide".
+    guide_model = current_model_for_project(current_project_id())
     spec_name = resolve_spec_for_turn(
         request_override=spec_override, thread_spec=thread_spec,
         project_default=spec_for_model(guide_model))
@@ -341,37 +326,18 @@ async def stream_response(
         spec = get_agent_spec(spec_name)
     if not guide_model and spec:
         guide_model = spec.model
+    return spec, spec_name, guide_model
 
-    # Turn checkpointing (Pass E): create a Turn row at the start; update
-    # state through transitions; mark DONE/FAILED at the end. Lets resume-
-    # after-restart see what was in flight.
-    turn = Turn(
-        run_id=run_id or gen_run_id(),
-        session_id=session_id,
-        turn_index=0,
-        agent_spec_name=spec_name,
-        state=TurnState.GENERATING,
-        focus_entity_id=focus_entity_id,
-        thread_id=thread_id,
-        plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
-    )
 
-    # Per-turn cancellation token. Acquired here, released in the
-    # finally block at the very end of stream_response. Any tool that
-    # might run for a perceptible duration (subprocess, MCP call, etc.)
-    # registers an interrupter against this token via tool_ctx; the
-    # /api/turns/{id}/cancel endpoint fires them all.
-    from core.runtime import cancellation as _cancel
-    cancel_token = _cancel.acquire(turn.run_id)
-    # Threads are real lines of inquiry: the Guide reasons within the current
-    # thread, not the whole project firehose. "default" resolves to (and
-    # materializes) the project's default thread entity.
-    store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
-    # C-1: the per-Turn sink is allocated by core.runtime.turn_executor.
-    # start_turn BEFORE this body runs, so subscribers can attach before
-    # any event is emitted. We don't create or close it here — the
-    # executor's _drain owns the sink lifecycle.
-
+def _assemble_turn_history(*, user_text, attachments, focus_entity_id, store_tid,
+                           retry, annotation_note, annotation_image):
+    """Persist the user's turn (unless retry) and assemble the EFFECTIVE in-memory
+    history for this call (Item 2B extraction). Reads persisted history, then applies
+    the ephemeral, NON-persisted injections in order: framing note, thread title/
+    question seed (this one persists), focus-change marker, focus trailer, vision
+    image, and attachment context note. Returns the mutated history list. Behavior is
+    guarded by test_focus_change_marker / test_focus_trailer / test_annotation_note_
+    ephemeral + the golden-context guard + a live turn."""
     if not retry:
         # PERSIST ONLY the user's actual text. The annotation note (a
         # system-generated framing hint authored by the frontend, e.g.
@@ -526,42 +492,129 @@ async def stream_response(
             history[-1] = {**last,
                            "content": [{"type": "text", "text": note}, *list(last["content"])]}
 
-    # Capability set for this turn (disabled tools are neither offered nor
-    # advertised). A3: also pass through the spec's tool_allowlist so the
-    # capabilities list and the tools sent to the LLM match the agent's
-    # declared role. For the Guide (allowlist ('*',)) this is a no-op.
-    from core.graph.tool_settings import get_disabled_tools
-    from core.runtime.agent import filter_tools_by_allowlist
-    disabled = get_disabled_tools()
-    active_tools = [t for t in _tools_all if t["name"] not in disabled]
-    # P3 #1 — append tools served by MCP servers (prefixed 'server:tool').
-    # Empty when no MCP server is configured/connected.
-    #
-    # Tool-catalog presentation is governed by the spec's prompt_mode through the
-    # single-source policy (core.runtime.mcp.presentation): each mode decides
-    # docstring detail + whether input_schema param prose is kept. The agent can
-    # call any tool in every mode — only prose shrinks; the calling contract is
-    # identical. The priority set (tools whose FULL docstring survives a 'summary'
-    # mode) lives HERE, not in YAML, because membership is a runtime tuning concern
-    # (the most-called tools per turn), adjusted as we learn from real sessions.
-    _PRIORITY_TOOLS: tuple[str, ...] = (
-        "run_python", "run_r",
-        "Skill", "search_skills",
-        "present_plan", "ask_clarification",
-        "register_dataset", "list_data_files", "find_files",
-        "ensure_capability", "describe_tool",
-    )
+    return history
+
+
+def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
+                         prompt_ctx, sidebar_text, focus_text, thread_text):
+    """Assemble the turn's system prompt (Item 2B). Returns (system, dynamic_sys):
+    `system` = project sidebar + focus + thread preambles + the pack's STABLE system
+    block (sent at the transport layer with cache_control: ephemeral); `dynamic_sys` =
+    the pack's per-turn tail (the BM25 recipes slice) plus the live compute-env line
+    (mode + node capacity + Slurm landscape). The two-block split (CC-convergence
+    Phase 4) keeps per-turn intent changes from invalidating the ~26K stable prefix."""
+    import time as _time
+    _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
+    _t0 = _time.perf_counter()
+    stable_sys, dynamic_sys = prompts["system"](
+        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
+        mode=(spec.prompt_mode if spec else "full"))
+    if _debug_timing:
+        print(f"[guide-timing] prompt_assembly={(_time.perf_counter()-_t0)*1000:.0f}ms "
+              f"sys_chars={len(stable_sys or '') + len(dynamic_sys or '')}", flush=True)
+    # Auto-surface the compute environment into the per-turn dynamic block so the
+    # agent plans placement with current facts (20s-cached; empty on a bare box).
     try:
-        from core.runtime.mcp import list_tools as mcp_list_tools
-        mcp_tools = mcp_list_tools(
-            mode=(spec.prompt_mode if spec else "full"),
-            priority_tools=_PRIORITY_TOOLS,
-        )
-        active_tools.extend(t for t in mcp_tools if t["name"] not in disabled)
+        from core.exec.compute_env import context_line as _compute_line
+        _cl = _compute_line()
+        if _cl:
+            dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
     except Exception:  # noqa: BLE001
-        pass    # gateway failure must never block normal tool dispatch
-    if spec is not None:
-        active_tools = filter_tools_by_allowlist(active_tools, spec.tool_allowlist)
+        pass
+    system = sidebar_text + focus_text + thread_text + stable_sys
+    return system, dynamic_sys
+
+
+async def stream_response(
+    user_text: str,
+    *,
+    focus_entity_id: str = WORKSPACE_ID,
+    focus_member_id: str | None = None,
+    thread_id: str = "default",
+    annotation_image: str | None = None,
+    annotation_note: str | None = None,
+    attachments: list[dict] | None = None,
+    retry: bool = False,
+    plan_entity_id: str | None = None,
+    run_id: str | None = None,
+    spec_override: str | None = None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Append user message to the workspace thread, run the Guide loop, yield
+    event dicts. See aba_arch2.md §2.3 for the focus context model.
+
+    `retry=True` regenerates the reply for the existing last turn without
+    appending a new user message — used after a transient API failure, where
+    the user turn was already persisted but no assistant reply was produced.
+
+    `run_id` should be allocated by the caller (via core.runtime.turn_executor.
+    new_run_id()) so the TurnSink can be created upfront and subscribers can
+    attach before the body starts emitting. If omitted (callers that don't
+    care about pre-allocation), one is generated internally.
+
+    The yielded dicts are the *payloads* — SSE wire framing happens in
+    core.runtime.turn_sink.stream_from_sink (which embeds the seq from the
+    sink). Callers running the body via turn_executor.start_turn never
+    consume this generator directly; the executor's _drain does the pushing.
+    """
+    _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
+    def sse(obj: dict) -> dict:
+        # The name is retained for diff-friendliness; the function no longer
+        # formats SSE wire frames — it just live-logs and returns the payload.
+        _live_log_event(turn.run_id, obj, _dtbuf)
+        return obj
+
+    # Wave 2 A.3: the content pack is the single seam to bio. Cache the
+    # accessors per-turn — calling pack methods is cheap but the dict
+    # lookup beats re-fetching.
+    pack = active_pack()
+    _prompts = pack.prompts()
+    _tools_all = pack.tools()
+    _exec_tool = pack.execute_tool()
+    session_id = pack.new_session_id()
+    turn_index = 0
+    # A2: Guide is spec-driven (model + role); resolve spec + model at the turn
+    # boundary via the module-level helper (Item 2B). Loop body stays inline.
+    spec, spec_name, guide_model = _resolve_turn_spec(thread_id, spec_override)
+
+    # Turn checkpointing (Pass E): create a Turn row at the start; update
+    # state through transitions; mark DONE/FAILED at the end. Lets resume-
+    # after-restart see what was in flight.
+    turn = Turn(
+        run_id=run_id or gen_run_id(),
+        session_id=session_id,
+        turn_index=0,
+        agent_spec_name=spec_name,
+        state=TurnState.GENERATING,
+        focus_entity_id=focus_entity_id,
+        thread_id=thread_id,
+        plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
+    )
+
+    # Per-turn cancellation token. Acquired here, released in the
+    # finally block at the very end of stream_response. Any tool that
+    # might run for a perceptible duration (subprocess, MCP call, etc.)
+    # registers an interrupter against this token via tool_ctx; the
+    # /api/turns/{id}/cancel endpoint fires them all.
+    from core.runtime import cancellation as _cancel
+    cancel_token = _cancel.acquire(turn.run_id)
+    # Threads are real lines of inquiry: the Guide reasons within the current
+    # thread, not the whole project firehose. "default" resolves to (and
+    # materializes) the project's default thread entity.
+    store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
+    # C-1: the per-Turn sink is allocated by core.runtime.turn_executor.
+    # start_turn BEFORE this body runs, so subscribers can attach before
+    # any event is emitted. We don't create or close it here — the
+    # executor's _drain owns the sink lifecycle.
+
+    # Persist the user turn + assemble the effective in-memory history (ephemeral
+    # injections: framing note, focus marker/trailer, vision, attachments) — Item 2B.
+    history = _assemble_turn_history(
+        user_text=user_text, attachments=attachments,
+        focus_entity_id=focus_entity_id, store_tid=store_tid, retry=retry,
+        annotation_note=annotation_note, annotation_image=annotation_image)
+    # Capability set for this turn — assembled by the module-level helper (Item 2B).
+    active_tools = _assemble_active_tools(_tools_all, spec)
 
     guide_role = spec.manifest_role if spec else "primary"
     manifest = build_manifest(
@@ -594,32 +647,12 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
-    import time as _time
+    # Assemble the system prompt (stable block + dynamic tail) — Item 2B helper.
+    system, dynamic_sys = _build_system_prompt(
+        _prompts, active_tools, spec, guide_role, eff_intent, prompt_ctx,
+        sidebar_text, focus_text, thread_text)
+    import time as _time   # per-iteration timing in the loop below
     _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
-    _t_prompt_begin = _time.perf_counter()
-    stable_sys, dynamic_sys = _prompts["system"](
-        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
-        mode=(spec.prompt_mode if spec else "full"))
-    _t_prompt_done = _time.perf_counter()
-    if _debug_timing:
-        print(f"[guide-timing] prompt_assembly={(_t_prompt_done-_t_prompt_begin)*1000:.0f}ms "
-              f"sys_chars={len(stable_sys or '') + len(dynamic_sys or '')}",
-              flush=True)
-    # CC-convergence Phase 4 (cache split): system is sent as TWO blocks at the
-    # transport layer — the stable prefix (cache_control: ephemeral) plus the
-    # uncached dynamic tail (the BM25 recipes slice). Per-turn intent changes
-    # only invalidate the small tail, not the 26K stable prefix.
-    # Auto-surface the compute environment (mode + node capacity + live Slurm
-    # landscape) into the per-turn dynamic block, so the agent plans placement
-    # with current facts. Cheap (20s-cached); empty on a bare local box error.
-    try:
-        from core.exec.compute_env import context_line as _compute_line
-        _cl = _compute_line()
-        if _cl:
-            dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
-    except Exception:  # noqa: BLE001
-        pass
-    system = sidebar_text + focus_text + thread_text + stable_sys
     # The user-message reminder injection (the 'reminder-only catalog' variant)
     # is OFF by default after the 2026-06-02 Haiku+Sonnet study showed both
     # models reject reminder-only catalogs (Haiku can't find them, Sonnet

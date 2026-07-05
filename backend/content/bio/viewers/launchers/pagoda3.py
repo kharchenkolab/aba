@@ -255,7 +255,8 @@ def _resolve_source(node: dict, pid: str) -> Path:
 
 
 def launch(node: dict, ctx: dict) -> LaunchResult:
-    from core.config import project_root, current_project_id
+    from core.config import project_root
+    from core.projects import current_project_id
     pid = ctx.get("project_id") or current_project_id()
     # Reported to the launch page's poller so the user sees which step is running
     # (convert / optimize / unpack) rather than a static spinner. Only fires when

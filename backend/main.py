@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
-from content.bio.graph.result_members import add_result_member, remove_result_member, update_result_member, reorder_result_members
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
 from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
@@ -38,18 +37,6 @@ from core.runtime.content_pack import set_active_pack as _set_active_pack
 _set_active_pack(_BIO_PACK)
 _BIO_PACK.register_hooks()
 
-from content.bio.lifecycle.promote import (
-    promote_figure_to_result,
-    promote_results_to_finding,
-    add_result_to_finding,
-    remove_result_from_finding,
-)
-from content.bio.lifecycle.scenarios import create_scenario_variant
-from content.bio.advisors.runner import skeptic_review, explorer_suggest, stylist_review
-from core.graph.audit import list_advisor_notes, set_advisor_note_status, list_context_suggestions, update_context_suggestion_status, reject_all_pending_suggestions
-from content.bio.lifecycle.adaptive import append_to_policy, run_probe
-from content.bio.graph.figure_history import figure_history
-from core.graph.audit import list_events
 from core.graph.jobs import list_jobs, get_job
 from core.jobs.runner import start_worker, cancel_job
 
@@ -78,75 +65,21 @@ async def _value_error_to_422(_request, exc: ValueError):
     )
 
 
-# Project-context pinning middleware (#17, supersedes the Phase-B
-# BaseHTTPMiddleware version). Every request carrying `?project_id=<pid>` or
-# `X-Project-Id: <pid>` is pinned to that project for the request's duration by
-# BINDING A CONTEXTVAR (projects.bind) — not by mutating the process-global
-# DB_PATH. This isolates concurrent requests for different projects from each
-# other (the old version's set_current() mutated a shared global, so two tabs —
-# or the frontend polling two open projects — raced; that same global is what
-# corrupted streaming turns in #15).
-#
-# It MUST be a pure-ASGI middleware, not @app.middleware("http")
-# (BaseHTTPMiddleware): the latter runs the endpoint in a separate anyio task,
-# so a contextvar set in it does NOT propagate to the handler. A pure-ASGI
-# middleware runs the app in the SAME context, and Starlette's threadpool for
-# sync `def` handlers copies that context — so both async and sync handlers see
-# the binding. `_conn()` already prefers the bound path (#15).
-#
-# Body-sourced project_id (chat: req.project_id in the JSON body) is NOT
-# visible in the ASGI scope, so chat still pins via _require_project_context in
-# its handler; its background turn then re-binds the captured project (#15).
-def _pid_from_scope(scope) -> str | None:
-    from urllib.parse import parse_qs
-    qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
-    pid = (qs.get("project_id") or [None])[0]
-    if pid:
-        return pid
-    for k, v in scope.get("headers") or []:
-        if k == b"x-project-id":
-            return v.decode("latin-1") or None
-    return None
-
-
-class _ProjectPinMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http":
-            return await self.app(scope, receive, send)
-        from core import projects as _projects
-        pid = _pid_from_scope(scope)
-        if not pid or _projects.SINGLE:
-            return await self.app(scope, receive, send)
-        with _projects.bind(pid):
-            _projects.ensure_opened(pid)
-            await self.app(scope, receive, send)
-
-
-app.add_middleware(_ProjectPinMiddleware)
+# Project-context pinning middleware (#17) — moved to core/web/middleware.py
+# (Item 2A.2). Pins each request's project via a contextvar bind so concurrent
+# requests for different projects don't race the process-global DB_PATH.
+from core.web.middleware import ProjectPinMiddleware
+app.add_middleware(ProjectPinMiddleware)
 
 import threading
 
 # Per-project artifacts (post 2026-05-31 reorg) live under
 # projects/<pid>/artifacts/<name>. The URL scheme is /artifacts/<pid>/<name> —
 # served by the route handler below. Legacy single-dir mount removed.
-def _artifact_url_to_path(url: str) -> Path | None:
-    """Resolve an `/artifacts/...` URL stored in an entity record to a disk path.
-    Returns None if the URL doesn't match the expected shape or escapes a project
-    boundary. Single source of truth for URL→file mapping across handlers."""
-    if not url or not url.startswith("/artifacts/"):
-        return None
-    parts = url[len("/artifacts/"):].split("/")
-    if len(parts) == 2 and parts[0] and parts[1] and ".." not in parts[0] and ".." not in parts[1]:
-        # New per-project shape: /artifacts/<pid>/<name>
-        from core.config import project_artifacts_dir
-        return project_artifacts_dir(parts[0]) / parts[1]
-    if len(parts) == 1 and parts[0] and ".." not in parts[0]:
-        # Legacy workspace-level fallback: /artifacts/<name>
-        return ARTIFACTS_DIR / parts[0]
-    return None
+# _artifact_url_to_path moved to core/web/artifacts.py (Item 2A.1) so content code
+# imports it from core, not up from main; re-exported here for back-compat
+# (tests/regtest still do `from main import _artifact_url_to_path`).
+from core.web.artifacts import _artifact_url_to_path  # noqa: F401
 
 
 @app.get("/artifacts/{pid}/{name}")
@@ -167,352 +100,47 @@ def serve_artifact(pid: str, name: str):
 from content.bio.web import router as _bio_router
 app.include_router(_bio_router)
 
-
-@app.on_event("startup")
-async def startup():
-    from core import projects
-    projects.init()          # picks/creates the active project + init_db
-    start_worker()
-    # Recover sys.executable FIRST if the launcher left it '' (bare argv[0] in
-    # os.execve) — an empty interpreter silently poisons every subprocess that
-    # falls back to it (base self-heal pip, run_python, materialize), surfacing as
-    # `PermissionError: [Errno 13] Permission denied: ''`. Must run before
-    # anything spawns a subprocess (incl. the reaper + base self-heal below).
-    try:
-        from core.exec.env_integrity import ensure_sys_executable
-        ensure_sys_executable()
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] sys.executable recovery failed (non-fatal): {e}")
-    # Orphan-kernel reaper — SIGKILL any kernels left behind by a prior
-    # uvicorn that didn't run our shutdown handler (forced kill / crash /
-    # SIGKILL during dev bouncing). Called explicitly here (not lazily on
-    # first get_pool()) so the cleanup happens BEFORE any user load.
-    try:
-        from core.exec.kernels.pool import _reap_orphan_kernels
-        _reap_orphan_kernels()
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] orphan kernel reap failed (non-fatal): {e}")
-    # Base self-heal + immutability (env_refactor.md) and isolated-env GC, run in
-    # the BACKGROUND so startup-to-ready isn't blocked. self_heal_base skips the
-    # ~9s deep verify entirely when the base is unchanged (fingerprint stamp) or
-    # on a read-only image (SIF/OOD) — both the steady state — and only does the
-    # full deep verify + repair-from-lock + refreeze when the base actually
-    # changed. The kernel-spawn path's import failures still get caught + repaired
-    # post-hoc by env_root_cause, covering the brief first-boot window.
-    async def _bg_base_maintenance():
-        def _work():
-            try:
-                from core.exec.env_integrity import self_heal_base
-                self_heal_base()
-            except Exception as e:  # noqa: BLE001
-                import traceback as _tb
-                print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
-            # §11.6 lazy GC: reclaim built bytes of long-idle isolated envs (their
-            # spec/lock stays, so next use rebuilds transparently).
-            try:
-                from core.exec.isolated_env import gc_isolated_envs
-                gc = gc_isolated_envs()
-                if gc:
-                    print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
-            except Exception as e:  # noqa: BLE001
-                print(f"[startup] isolated-env GC failed (non-fatal): {e}")
-        await asyncio.to_thread(_work)
-    asyncio.create_task(_bg_base_maintenance())
-    # Capture the asyncio loop so worker-thread producers
-    # (auto_interpret, background jobs) can push events to the
-    # /api/notifications SSE channel.
-    from core.runtime import notifications as _notif
-    _notif.set_loop(asyncio.get_event_loop())
-
-    # Background-provision the curated shared R base (r_base.yaml: Seurat,
-    # DESeq2/limma/edger/apeglm, tidyverse, cairo, Rcpp*). When everything
-    # is already in the tools env, this completes in ~500ms (two
-    # `micromamba list --json` calls, no solve). When the env is missing a
-    # package, the solve + install runs in this thread — backend stays
-    # responsive throughout. Daemon thread = dies with the process; never
-    # blocks startup.
-    def _provision_r_base_bg():
-        import time as _t
-        try:
-            from content.bio.capabilities import provision_r_base
-            t0 = _t.perf_counter()
-            provision_r_base()
-            dt = _t.perf_counter() - t0
-            if dt > 5:
-                print(f"[r_base] provisioned curated shared R base in {dt:.0f}s", flush=True)
-            else:
-                print(f"[r_base] curated shared R base already provisioned ({dt*1000:.0f}ms)", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"[r_base] provision failed (non-fatal — agent can still per-project install): {e}", flush=True)
-    threading.Thread(target=_provision_r_base_bg, name="r_base_provision", daemon=True).start()
-    # Pass-E follow-up: any Turn rows in GENERATING/EXECUTING_TOOLS/
-    # SUMMARIZING state are from a process that didn't survive; they
-    # cannot be resumed (stream + tool dispatch are in-memory). Mark
-    # them FAILED so the UI doesn't show stale "in-flight" turns.
-    try:
-        from core.runtime.checkpoint import reap_stale_turns
-        n = reap_stale_turns()
-        if n:
-            print(f"[startup] reaped {n} stale Turn row(s) from previous process")
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] reap_stale_turns failed: {e}")
-    # F3: backfill display_path for any entity created before the column
-    # existed (or before bio's layout computers were registered).
-    try:
-        from content.bio.graph.display import backfill_missing_display_paths
-        n = backfill_missing_display_paths()
-        if n:
-            print(f"[startup] backfilled display_path for {n} entit{'y' if n == 1 else 'ies'}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] display_path backfill failed: {e}")
-
-    # P3 #1 — bring up the MCP gateway. Empty config = no-op for stdio
-    # servers. Phase 6.A also registers the in-process `aba_core` server
-    # so bio's own tools flow through the same channel as external
-    # stdio servers (see misc/phase6_mcp_wrapping.md). 6.A registers
-    # zero tools today; subsequent sub-phases populate clusters.
-    try:
-        from core.runtime.mcp import (
-            start_all as start_mcp, status as mcp_status,
-            register_inprocess_server,
-        )
-        from pathlib import Path
-        start_mcp(Path(__file__).parent / "content" / "bio" / "mcp" / "servers.yaml")
-        try:
-            from content.bio.mcp_servers.aba_core import make_server as make_aba_core
-            # WU-1: expose_in_catalog=True so aba_core IS the agent's
-            # tool catalog (TOOL_SCHEMAS is pruned). strip_prefix_in_catalog
-            # =True so tools show as `Skill`/`run_python`/... rather than
-            # `aba_core:Skill` — preserves build.py gate keys + behavior_slim
-            # references + existing recipe text without a coordinated rename.
-            register_inprocess_server(
-                "aba_core", make_aba_core,
-                expose_in_catalog=True,
-                strip_prefix_in_catalog=True,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"[startup] aba_core in-process server failed: {e}")
-        s = mcp_status()
-        n_up = sum(1 for srv in s["servers"] if srv["state"] == "connected")
-        n_tot = len(s["servers"])
-        if n_tot:
-            print(f"[startup] MCP gateway: {n_up}/{n_tot} servers connected")
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] MCP gateway init failed: {e}")
-
-    # C-2: kick off the TurnSink TTL sweeper. Runs every hour, deletes
-    # JSONL files older than 7d (`turn_events/*.jsonl`) and evicts
-    # closed sinks older than 1h from the in-memory registry. One
-    # sweep_once() at startup catches anything stale from the previous
-    # process; the background loop keeps it tidy going forward.
-    try:
-        import asyncio as _asyncio
-        from core.runtime import turn_sink as _ts
-        first = _ts.sweep_once()
-        if first["sinks_evicted"] or first["files_deleted"]:
-            print(f"[startup] turn_sink sweep: {first}")
-        _asyncio.create_task(_ts.sweep_forever(), name="turn_sink_sweeper")
-    except Exception as e:  # noqa: BLE001
-        print(f"[startup] turn_sink sweeper init failed: {e}")
+# Domain-neutral platform routers extracted from main.py (Item 2A.3) — see
+# core/web/routers/. Reasoning-plane entries (chat/resume/tool_result) stay
+# inline below since they import guide (core/ must not).
+from core.web.routers import admin as _admin_routes
+app.include_router(_admin_routes.router)
+from core.web.routers import jobs as _jobs_routes
+app.include_router(_jobs_routes.router)
+from core.web.routers import settings as _settings_routes
+app.include_router(_settings_routes.router)
+from core.web.routers import memory as _memory_routes
+app.include_router(_memory_routes.router)
+from core.web.routers import threads as _threads_routes
+app.include_router(_threads_routes.router)
+from core.web.routers import projects as _projects_routes
+app.include_router(_projects_routes.router)
+from core.web.routers import turns as _turns_routes
+app.include_router(_turns_routes.router)
+from core.web.routers import misc as _misc_routes
+app.include_router(_misc_routes.router)
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    """Cancel any in-flight Turn tasks before the worker exits.
-
-    C-1 spawns the agent loop as a background asyncio task via
-    turn_executor.start_turn — without this hook, uvicorn's `--reload`
-    SIGTERM hangs indefinitely because the task is awaiting a thread-pool
-    future (run_in_executor) that Python can't interrupt. We fire the
-    cancel token (which the loop checks at every iteration boundary) so
-    each task gets a chance to commit its in-progress state and exit
-    cleanly, then give them a brief window. Anything still pending after
-    that gets task.cancel() as a hard stop. The startup reaper will mark
-    any survivors FAILED on next boot, so we don't leak Turn rows."""
-    import asyncio
-    from core.runtime import turn_sink, cancellation
-
-    def _kill_owned_kernels():
-        # SIGKILL all owned kernel subprocesses. atexit doesn't fire on SIGTERM,
-        # and a signal-handler-in-worker is unreliable; the FastAPI shutdown
-        # lifecycle IS invoked on uvicorn graceful exits, so we shoot the kernels
-        # here. Prevents the orphan/zombie accumulation PK observed.
-        try:
-            from core.exec.kernels import get_pool
-            import os, signal
-            pids = get_pool().owned_kernel_pids()
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            if pids:
-                print(f"[shutdown] SIGKILLed {len(pids)} owned kernel subprocess(es)")
-        except Exception as e:  # noqa: BLE001
-            print(f"[shutdown] kernel cleanup failed (non-fatal): {e}")
-
-    rids = turn_sink.active_ids()
-    # 1. Fire cancel tokens — co-operative shutdown if the loop is at an
-    #    iteration boundary or inside a cancellable tool.
-    if rids:
-        print(f"[shutdown] cancelling {len(rids)} in-flight Turn task(s): {rids}")
-        for rid in rids:
-            tok = cancellation.get(rid)
-            if tok is not None:
-                try: tok.cancel(reason="backend shutdown")
-                except Exception: pass    # noqa: BLE001
-    # 2. Kill kernels BEFORE awaiting the tasks. A turn wedged in a kernel exec
-    #    (run_in_executor — uninterruptible from Python; the cancel token only
-    #    lands at iteration boundaries) unblocks ONLY when its kernel dies. Killing
-    #    kernels first lets the exec's kernel_dead watchdog fail-fast so the task
-    #    can actually finish in the grace window — otherwise the await below hangs
-    #    forever and uvicorn never exits (the orphaned, spinning-worker incident).
-    #    Always reap, even with no active turns, so idle kernels don't leak.
-    _kill_owned_kernels()
-    # 3. Give the tasks a short grace to land now that their kernels are gone.
-    if rids:
-        tasks = [s._task for s in (turn_sink.get(rid) for rid in rids)
-                 if s is not None and s._task is not None and not s._task.done()]
-        if tasks:
-            try:
-                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True),
-                                       timeout=3.0)
-            except asyncio.TimeoutError:
-                print(f"[shutdown] {sum(1 for t in tasks if not t.done())} task(s) "
-                      f"didn't honor cancel — forcing task.cancel()")
-                # 4. Hard cancel — the next startup's reaper will tidy the DB.
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-    _kill_owned_kernels()   # 5. belt + braces — reap any kernel started since
+# Startup/shutdown lifecycle → lifespan.py (Item 2A.2). Composition-root
+# level (wires content: R base, display backfill, aba_core MCP server), so
+# it lives beside main.py, not under core/.
+from lifespan import register_lifecycle as _register_lifecycle
+_register_lifecycle(app)
 
 
 # ---------- Projects ----------
 
-class ProjectRequest(BaseModel):
-    name: str = ""
-
-
-@app.get("/api/projects")
-def projects_list():
-    from core import projects
-    return projects.list_projects()
-
-
-@app.get("/api/projects/current")
-def projects_current():
-    from core import projects
-    return {"current": projects.current()}
-
-
-@app.get("/api/env")
-def api_env(project_id: str | None = None):
-    """The layered Python + R environments with their packages — backs the
-    (i)-drawer Env tab. Python via dist-info scan (fast); R via one Rscript
-    (~2s). Read-only."""
-    from core import projects
-    from core.exec.env_integrity import env_layers
-    return env_layers(project_id or projects.current())
-
-
-@app.post("/api/projects")
-def projects_create(req: ProjectRequest):
-    from core import projects
-    return projects.create_project(req.name)
-
-
-@app.post("/api/projects/{pid}/open")
-def projects_open(pid: str):
-    from core import projects
-    projects.set_current(pid)
-    return {"current": projects.current()}
-
-
-@app.patch("/api/projects/{pid}")
-def projects_rename(pid: str, req: ProjectRequest):
-    from core import projects
-    projects.rename_project(pid, req.name)
-    return {"ok": True}
-
-
-@app.delete("/api/projects/{pid}")
-def projects_delete(pid: str):
-    from core import projects
-    projects.delete_project(pid)
-    return {"current": projects.current()}
-
-
-@app.get("/api/projects/{pid}/recovery-report")
-def projects_recovery_report(pid: str):
-    """The most recent recovery_report.json for this project, or null if
-    the project hasn't been imported via aba-recover (i.e. it was created
-    here and has no compatibility issues to surface)."""
-    from core.config import project_root
-    from pathlib import Path
-    rp = project_root(pid) / "recovery_report.json"
-    if not rp.exists():
-        return None
-    try:
-        import json as _json
-        return _json.loads(rp.read_text())
-    except Exception:
-        return None
-
-
-@app.post("/api/projects/{pid}/verify-recovery")
-def projects_verify_recovery(pid: str, depth: str = "full"):
-    """On-demand drift check from the project ⋯ menu's
-    'Verify recovery archive' button (recovery.md § 10.0)."""
-    from core.recovery.drift import compute_drift
-    from core.config import project_root
-    rep = compute_drift(project_root(pid), depth=depth)
-    return rep.to_dict()
+# Project-lifecycle + /api/env routes → core/web/routers/projects.py (Item 2A.3).
 
 
 # ---------- Bundle ----------
 
-@app.get("/api/bundle/state")
-def bundle_state(reload: bool = False):
-    """Active EffectiveBundle snapshot for admin/diagnostic UI.
-
-    `?reload=true` forces a re-resolution (drops the module-level cache)
-    so admins can pick up a freshly-edited site.yaml or env change without
-    restarting the backend."""
-    from core.bundle.active import get_bundle, get_resolution, reload_bundle
-    from core.bundle.cli import _state_dict
-    eb = reload_bundle() if reload else get_bundle()
-    return _state_dict(get_resolution(), eb)
+# bundle_state → core/web/routers/misc.py (Item 2A.3).
 
 
 # ---------- Entities ----------
 
-@app.get("/api/entity-types")
-def entity_types_catalog():
-    """The declarative entity-type catalog (Phase 4.6 of misc/
-    phase4_entity_types.md). One entry per type with the metadata the
-    frontend needs to dispatch (display name, icon, ui.panel, hidden
-    flag, creation gestures). The frontend fetches this once on app
-    load + caches; entity-aware components look up by type instead of
-    hardcoded switch/case. Domain-neutral — the platform serves whatever
-    the loaded YAMLs declare."""
-    from core.entity_types import list_types
-    out: list[dict] = []
-    for t in list_types():
-        out.append({
-            "name": t.name,
-            "display": t.display,
-            "icon": t.icon,
-            "hidden": t.hidden,
-            "category": t.category,
-            "status_states": list(t.status_model.get("states") or []),
-            "ui": t.ui,
-            "creation": t.creation,
-            # advisors block (incl. on_focus_auto flag) — drives
-            # AdvisorStrip's auto-advise-on-focus behaviour on the frontend
-            # instead of hardcoding "dataset || narrative" there.
-            "advisors": t.advisors,
-        })
-    return out
+# entity_types_catalog → core/web/routers/misc.py (Item 2A.3).
 
 
 @app.get("/api/entities")
@@ -600,51 +228,19 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
     ):
         raise HTTPException(400, f"invalid status: {fields['status']}")
     updated = update_entity(entity_id, **fields)
-    # F3: re-derive display_path when the title changes (or first time).
+    # F3: a rename can change the (title-derived) display_path — let the content
+    # pack recompute it via the on_entity_renamed hook, instead of importing bio's
+    # display module here (Item 2A.4 inversion; dispatch is synchronous).
     if updated and "title" in fields:
-        from content.bio.graph.display import recompute_display_path
-        recompute_display_path(entity_id)
+        from core.hooks.dispatcher import dispatch
+        dispatch("on_entity_renamed", {"entity_id": entity_id})
         updated = get_entity(entity_id)
     if not updated:
         raise HTTPException(404, f"Entity {entity_id} not found")
     return updated
 
 
-def _result_cascade_set(result_id: str) -> set[str]:
-    """Containment set for `cascade=members` on a Result: every figure/
-    table/cell member referenced from metadata.members, plus each
-    member's full revision chain (active + superseded). The Result id
-    itself is NOT included — it's deleted separately at the end.
-
-    Why include superseded revisions: when the user deletes a Result,
-    they expect the whole history to go with it (the superseded
-    revisions are figure entities created via make_revision that
-    aren't referenced anywhere visible; leaving them as orphans
-    would just look like a memory leak)."""
-    from content.bio.graph.figure_history import figure_history
-    out: set[str] = set()
-    r = get_entity(result_id)
-    if not r:
-        return out
-    members = (r.get("metadata") or {}).get("members") or []
-    member_ids = [m.get("ref") for m in members if isinstance(m, dict) and m.get("ref")]
-    for mid in member_ids:
-        m = get_entity(mid)
-        if not m:
-            continue
-        out.add(mid)
-        # Expand revision chains for figure/table members. Cells don't
-        # currently form revision chains via wasRevisionOf, but
-        # figure_history is safe on any type — it'll just return [m].
-        if m.get("type") in ("figure", "table"):
-            try:
-                chain = figure_history(mid, include_superseded=True)
-                for e in chain:
-                    if e and e.get("id"):
-                        out.add(e["id"])
-            except Exception:  # noqa: BLE001 — chain walk is best-effort
-                pass
-    return out
+# _result_cascade_set → content/bio/services.py result_cascade_members service (Item 2A.4).
 
 
 @app.delete("/api/entities/{entity_id}")
@@ -686,7 +282,11 @@ def entities_delete(entity_id: str, hard: bool = False,
     # transitively: Result → members → each member's revision chain.
     cascade_set: set[str] = set()
     if cascade == "members" and ent.get("type") == "result":
-        cascade_set = _result_cascade_set(entity_id)
+        # The cascade set (Result → members → each member's revision chain) is bio-
+        # domain knowledge; ask the content pack via the core/services seam instead
+        # of walking figure_history here (Item 2A.4 inversion). Empty if no pack.
+        from core.services import call_service
+        cascade_set = call_service("result_cascade_members", entity_id, default=set())
 
     # Hard-delete: refuse if any non-archived, non-cascade-set entity
     # points at us (inbound), or if we point at any non-archived,
@@ -713,7 +313,8 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     # Delete the on-disk artifact for dataset-shaped entities. Only remove paths
     # under the project's data dir — never traverse outside it.
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     data_root = project_data_dir(current_project_id()).resolve()
     ap = ent.get("artifact_path")
     if ap and ent.get("type") == "dataset":
@@ -928,17 +529,9 @@ class ChatRequest(BaseModel):
     spec: str | None = None
 
 
-def _require_project_context(project_id: str | None) -> str:
-    """Pin the project per-request (A+B fix, 2026-06-02). Used by handlers that
-    take project_id in the REQUEST BODY (chat) — middleware can't safely parse
-    the body. For query/header sources, prefer Depends(require_project) from
-    core.web.deps (Phase B of misc/modularity_audit.md). Both share the
-    `_pin_or_412` primitive.
-
-    Returns the RESOLVED pid (body value, or the global fallback when the body
-    omits it) so callers can bind it to their context — see chat()/#18."""
-    from core.web.deps import _pin_or_412
-    return _pin_or_412(project_id)
+# _require_project_context moved to core.web.deps.require_project_context (Item 2A.3)
+# so router modules share it; aliased here for main.py's own body-pinned handlers.
+from core.web.deps import require_project_context as _require_project_context  # noqa: F401
 
 
 @app.post("/api/chat")
@@ -1083,278 +676,7 @@ def messages_list(thread_id: str | None = None, project_id: str | None = None):
 
 # ---------- Threads (v3 lines of inquiry) ----------
 
-class ThreadRequest(BaseModel):
-    title: str = ""
-    question: str = ""
-    question_source: str | None = None   # 'user' when the user typed the question
-    # Primary spec to pin this thread to (e.g. "lean_guide"). None →
-    # the thread falls through to ABA_PRIMARY_SPEC env / "guide"
-    # default at chat time. See core.runtime.agent.resolve_spec_for_turn.
-    spec: str | None = None
-
-
-class ThreadPatch(BaseModel):
-    title: str | None = None
-    question: str | None = None
-    open_questions: list[dict] | None = None
-    lifecycle: str | None = None
-    # Pin or clear the per-thread primary spec. Empty string clears
-    # (UI dropdown reverts to "use default"). None leaves unchanged.
-    spec: str | None = None
-
-
-@app.get("/api/threads")
-def threads_list():
-    from core.graph.threads import list_threads
-    return list_threads()
-
-
-@app.get("/api/specs/primary")
-def specs_primary_list():
-    """List all registered primary AgentSpecs. The frontend uses this
-    to populate the new-chat "Backend" dropdown; the per-thread chooser
-    on the chat screen reads it too. Empty list when nothing's
-    registered (advisor-only contents)."""
-    from core.runtime.agent import _SPECS, resolve_primary_spec_name
-    active = resolve_primary_spec_name()
-    items = []
-    for name, spec in _SPECS.items():
-        if spec.role != "primary":
-            continue
-        items.append({
-            "name":            name,
-            "model":           spec.model,
-            "prompt_mode":     spec.prompt_mode,
-            "tool_count":      (len(spec.tool_allowlist)
-                                if "*" not in spec.tool_allowlist else None),
-            "summary_budget":  spec.summary_budget_chars,
-            "is_default":      name == active,
-        })
-    items.sort(key=lambda i: (not i["is_default"], i["name"]))
-    return {"specs": items, "default": active}
-
-
-class LlmSelectRequest(BaseModel):
-    model: str
-
-
-def _llm_current(pid: str) -> dict:
-    from core.llm_catalog import spec_for_model, label_for_model
-    from core.config import current_model_for_project
-    from core import projects
-    m = current_model_for_project(pid)
-    return {"model": m, "spec": spec_for_model(m), "label": label_for_model(m),
-            "pinned": bool(projects.project_model(pid))}
-
-
-@app.get("/api/settings/llm")
-def settings_llm_get(_pid: str = Depends(require_project)):
-    """Model selector for the CURRENT project (Settings → LLM): the install-wide
-    catalog (model→spec, from system_bundle/settings.yaml) plus what's active now.
-    The user picks a model; the agent spec follows from the catalog."""
-    from core.llm_catalog import llm_models
-    return {"options": llm_models(), "current": _llm_current(_pid)}
-
-
-@app.post("/api/settings/llm")
-def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)):
-    """Pin a model on the current project. Empty string clears the pin (revert to
-    the global/bundle default). Validated against the catalog; takes effect on the
-    next turn (resolution is live)."""
-    from core.llm_catalog import is_known_model
-    from core import projects
-    model = (req.model or "").strip()
-    if model and not is_known_model(model):
-        raise HTTPException(400, f"unknown model: {model!r}")
-    projects.set_project_model(_pid, model)
-    return {"ok": True, "current": _llm_current(_pid)}
-
-
-class CredentialRequest(BaseModel):
-    credential: str
-
-
-@app.get("/api/settings/credential")
-def settings_credential_get():
-    """LLM credential status for Settings → Model account. Never echoes the secret
-    — only the mode, a 4-char key suffix, OAuth expiry, and a `valid` flag the UI
-    uses to decide between showing status+Change and showing the input."""
-    from core import credentials
-    return credentials.status()
-
-
-@app.post("/api/settings/credential")
-def settings_credential_set(req: CredentialRequest):
-    """One field for both: auto-detects an API key vs a pasted Claude.ai OAuth
-    token, VERIFIES it against Anthropic (a 1-token call), then persists +
-    goes live. HTTP 400 (with a message) on bad format or rejection — nothing is
-    written unless the credential actually works."""
-    from core import credentials
-    try:
-        return credentials.set_credential(req.credential)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-class EnvGateRequest(BaseModel):
-    # auto (default) | off (Always show) | hard (Hide) | soft ; "" reverts to default
-    env_gate: str = ""
-
-
-@app.get("/api/settings/environment")
-def settings_environment_get():
-    """Backs the Settings → Analysis environment card: what this workspace can
-    run (detected), the effective recipe-visibility policy, and its effect."""
-    from core.exec.compute_env import env_profile
-    from core.skills.loader import gate_counts, _env_gate_policy
-    from core.config import get_user_pref
-    policy = _env_gate_policy()
-    return {
-        "profile": env_profile(),
-        "policy": policy,                                   # off | soft | hard (resolved)
-        "user_pref": get_user_pref("discovery.env_gate") or "auto",
-        "counts": gate_counts(policy),
-        "options": ["auto", "off", "hard"],                 # card: Auto / Always / Hide
-    }
-
-
-@app.post("/api/settings/environment")
-def settings_environment_set(req: EnvGateRequest):
-    """Set the user's recipe-visibility preference (user scope). Empty string
-    reverts to auto/default. Takes effect on the next discovery call."""
-    from core.config import set_user_pref
-    from core.skills.loader import gate_counts, _env_gate_policy
-    v = (req.env_gate or "").strip().lower()
-    if v and v not in ("auto", "off", "soft", "hard"):
-        raise HTTPException(400, f"env_gate must be auto|off|soft|hard, got {v!r}")
-    set_user_pref("discovery.env_gate", v)                  # "" clears the pin
-    policy = _env_gate_policy()
-    return {"ok": True, "policy": policy, "counts": gate_counts(policy)}
-
-
-@app.post("/api/threads")
-def threads_create(req: ThreadRequest, _pid: str = Depends(require_project)):
-    from core.graph.threads import create_thread
-    tid = create_thread(req.title, req.question, spec=req.spec)
-    # A user-typed question is user-owned — keep the Guide from silently
-    # rewriting it later.
-    if req.question and req.question_source:
-        ent = get_entity(tid)
-        meta = dict(ent.get("metadata") or {})
-        meta["question_source"] = req.question_source
-        update_entity(tid, metadata=meta)
-    return get_entity(tid)
-
-
-@app.patch("/api/threads/{tid}")
-def threads_patch(tid: str, req: ThreadPatch, _pid: str = Depends(require_project)):
-    ent = get_entity(tid)
-    if not ent or ent["type"] != "thread":
-        raise HTTPException(404, f"Thread {tid} not found")
-    meta = dict(ent.get("metadata") or {})
-    fields: dict = {}
-    if req.title is not None:
-        fields["title"] = req.title
-    if req.question is not None:
-        meta["question"] = req.question
-    if req.open_questions is not None:
-        meta["open_questions"] = req.open_questions
-    if req.lifecycle is not None:
-        meta["lifecycle"] = req.lifecycle
-    if req.spec is not None:
-        # Empty string clears the pin (revert to env/default).
-        if req.spec.strip():
-            meta["spec"] = req.spec.strip()
-        else:
-            meta.pop("spec", None)
-    fields["metadata"] = meta
-    return update_entity(tid, **fields)
-
-
-# ---- thread open questions (component CRUD) ----
-
-class OpenQRequest(BaseModel):
-    text: str = ""
-    source: str = "user"
-
-
-class OpenQPatch(BaseModel):
-    text: str | None = None
-    status: str | None = None      # open | parked | answered | promoted
-    answer: str | None = None      # the answer captured when marking answered
-
-
-def _thread_or_404(tid: str) -> dict:
-    ent = get_entity(tid)
-    if not ent or ent["type"] != "thread":
-        raise HTTPException(404, f"Thread {tid} not found")
-    return ent
-
-
-def _save_oqs(tid: str, ent: dict, oqs: list):
-    meta = dict(ent.get("metadata") or {})
-    meta["open_questions"] = oqs
-    update_entity(tid, metadata=meta)
-
-
-@app.post("/api/threads/{tid}/open-questions")
-def oq_add(tid: str, req: OpenQRequest, _pid: str = Depends(require_project)):
-    from core.graph._schema import gen_entity_id
-    ent = _thread_or_404(tid)
-    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
-    oq = {"id": gen_entity_id("oq"), "text": req.text.strip(),
-          "status": "open", "source": req.source,
-          "at": datetime.now(timezone.utc).isoformat()}
-    oqs.append(oq)
-    _save_oqs(tid, ent, oqs)
-    return oq
-
-
-@app.patch("/api/threads/{tid}/open-questions/{oqid}")
-def oq_patch(tid: str, oqid: str, req: OpenQPatch, _pid: str = Depends(require_project)):
-    ent = _thread_or_404(tid)
-    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
-    found = None
-    for o in oqs:
-        if o.get("id") == oqid:
-            if req.text is not None:
-                o["text"] = req.text.strip()
-            if req.status is not None:
-                o["status"] = req.status
-            if req.answer is not None:
-                o["answer"] = req.answer.strip()
-            found = o
-    if not found:
-        raise HTTPException(404, "open question not found")
-    _save_oqs(tid, ent, oqs)
-    return found
-
-
-@app.delete("/api/threads/{tid}/open-questions/{oqid}")
-def oq_delete(tid: str, oqid: str, _pid: str = Depends(require_project)):
-    ent = _thread_or_404(tid)
-    oqs = [o for o in ((ent.get("metadata") or {}).get("open_questions") or [])
-           if o.get("id") != oqid]
-    _save_oqs(tid, ent, oqs)
-    return {"ok": True}
-
-
-@app.post("/api/threads/{tid}/open-questions/{oqid}/promote")
-def oq_promote(tid: str, oqid: str, _pid: str = Depends(require_project)):
-    """Promote an open question into its own thread (title + question seeded
-    from the OQ); mark the source OQ promoted and link it."""
-    from core.graph.threads import create_thread
-    ent = _thread_or_404(tid)
-    oqs = list((ent.get("metadata") or {}).get("open_questions") or [])
-    oq = next((o for o in oqs if o.get("id") == oqid), None)
-    if not oq:
-        raise HTTPException(404, "open question not found")
-    text = oq["text"]
-    new_tid = create_thread(text[:60], text)
-    oq["status"] = "promoted"
-    oq["promoted_to"] = new_tid
-    _save_oqs(tid, ent, oqs)
-    return {"thread": get_entity(new_tid), "open_question": oq}
+# Thread + open-question routes → core/web/routers/threads.py (Item 2A.3).
 
 
 # ---------- Proactive proposals (Phase D) ----------
@@ -1382,26 +704,7 @@ def oq_promote(tid: str, oqid: str, _pid: str = Depends(require_project)):
 # Phase 8.B-2: /api/messages/pin + PinMessageRequest moved to bio.
 
 
-@app.get("/api/search")
-def search_endpoint(q: str = "", limit: int = 25):
-    """Faceted search across entities + chat snippets (M9 fallback recovery)."""
-    from content.bio.graph.search import search as _search
-    return _search(q, limit=limit)
-
-
-class ClientContextIn(BaseModel):
-    context: dict = {}
-
-
-@app.post("/api/feedback/client-context")
-def feedback_client_context(payload: ClientContextIn):
-    """Stash a browser-side context snapshot (recent console errors, route, UI
-    state) so Guide can read it via read_client_context when filing a bug report
-    — Guide can't see the browser otherwise. Captured on bug-button click; not
-    sent anywhere until the user files a report. No project context needed."""
-    from content.bio.tools.feedback import stash_client_context
-    stash_client_context(payload.context)
-    return {"ok": True}
+# search+feedback routes → content/bio/web/routes/ (Item 2A.4).
 
 
 # arch3.md Phase 8.A: /api/claims/* (12 endpoints) + claim helpers +
@@ -1454,7 +757,7 @@ async def attach(file: UploadFile = File(...), thread_id: str = Form("default"),
     turn carries + a serve url for the chip/thumbnail."""
     if not file.filename:
         raise HTTPException(400, "filename missing")
-    from core.config import current_project_id
+    from core.projects import current_project_id
     from core.runtime.attachments import save_attachment
     return save_attachment(current_project_id(), thread_id, file.filename, file.file)
 
@@ -1462,7 +765,7 @@ async def attach(file: UploadFile = File(...), thread_id: str = Form("default"),
 @app.get("/api/attachments/{thread_id}/{name}")
 def serve_attachment(thread_id: str, name: str, _pid: str = Depends(require_project)):
     """Serve a stashed chat attachment (project-scoped, path-traversal guarded)."""
-    from core.config import current_project_id
+    from core.projects import current_project_id
     from core.runtime.attachments import attachments_root
     root = attachments_root(current_project_id(), thread_id).resolve()
     f = (root / Path(name).name).resolve()
@@ -1481,7 +784,8 @@ async def upload(file: UploadFile = File(...), _pid: str = Depends(require_proje
     if not file.filename:
         raise HTTPException(400, "filename missing")
     safe_name = Path(file.filename).name
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.data.paths import unique_path
     dest = unique_path(project_data_dir(current_project_id()) / safe_name)
     with dest.open("wb") as f:
@@ -1537,7 +841,8 @@ async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(400, "only http(s) URLs are supported")
     name = Path(parsed.path).name or "downloaded.bin"
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.data.paths import unique_path
     dest = unique_path(project_data_dir(current_project_id()) / name)
 
@@ -1581,261 +886,24 @@ async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)
 
 # ---------- Jobs (Phase 17 + Phase A) ----------
 
-@app.get("/api/jobs")
-def jobs_list(limit: int = 50):
-    return list_jobs(limit=limit)
-
-
-@app.get("/api/jobs/worker")
-def jobs_worker_status():
-    """Liveness probe for the background-job worker. Phase A — the (i)
-    drawer's Jobs tab uses this to flag a stalled/dead worker rather
-    than silently lying about 'queued' rows that aren't progressing."""
-    from core.jobs.runner import worker_status
-    return worker_status()
-
-
-def _live_job_log_tail(project_id: str | None, job_id: str, max_bytes: int = 4000) -> str | None:
-    """Live tail of a RUNNING job's stdout. The DB `log_tail` and `run.log` are
-    written only at finalize, so a running job would show NOTHING in the Jobs card
-    until it ends. A Slurm job streams stdout unbuffered to `run_dir/job.log` (its
-    `-o` file) — read that tail so the card updates live. Falls back to run.log."""
-    if not project_id or not job_id:
-        return None
-    try:
-        from core.config import project_work_dir
-        d = project_work_dir(project_id) / job_id
-        log = d / "job.log"
-        if not log.exists():
-            log = d / "run.log"
-        if not log.exists():
-            return None
-        size = log.stat().st_size
-        with log.open("rb") as f:
-            f.seek(max(0, size - max_bytes))
-            data = f.read()
-        text = data.decode("utf-8", errors="replace")
-        if size > max_bytes:                       # drop a partial first line
-            nl = text.find("\n")
-            if nl >= 0:
-                text = text[nl + 1:]
-        return text.strip() or None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-@app.get("/api/jobs/{job_id}")
-def jobs_get(job_id: str):
-    j = get_job(job_id)
-    if not j:
-        raise HTTPException(404, f"job {job_id} not found")
-    # A running/queued job's DB log_tail is empty (it's only written at finalize), so serve
-    # the LIVE job.log tail — else the Jobs card's output pane stays blank until completion.
-    if j.get("status") in ("running", "queued"):
-        live = _live_job_log_tail((j.get("params") or {}).get("project_id"), job_id)
-        if live:
-            j["log_tail"] = live
-    return j
-
-
-@app.post("/api/jobs/{job_id}/archive")
-def jobs_archive(job_id: str, _pid: str = Depends(require_project)):
-    """Dismiss a terminal job from the Jobs list (soft archive — provenance kept; the job
-    is still fetchable by id). Refuses an active (queued/running) job — cancel it first."""
-    j = get_job(job_id)
-    if not j:
-        raise HTTPException(404, f"job {job_id} not found")
-    from core.graph.jobs import archive_job
-    ok = archive_job(job_id, project_id=(j.get("params") or {}).get("project_id"))
-    if not ok:
-        raise HTTPException(409, "job is active or already dismissed (cancel a running job first)")
-    return {"ok": True}
-
-
-@app.get("/api/jobs/{job_id}/hpc")
-def jobs_hpc(job_id: str):
-    """Live scheduler info for a Slurm-submitted job (state/node/elapsed/cores) —
-    the (i) Jobs tab fetches this for a running HPC job. Empty for local jobs."""
-    j = get_job(job_id)
-    if not j:
-        raise HTTPException(404, f"job {job_id} not found")
-    from core.exec.hpc_session import job_hpc_info
-    return job_hpc_info(j)
-
-
-@app.get("/api/jobs/{job_id}/progress")
-def jobs_progress(job_id: str):
-    """Live task progress for a running Nextflow job — completed/running/queued counts + the
-    current stage, read from its trace.txt. {} for non-pipeline jobs or before the trace exists.
-    Polled by the Jobs card so an inline/local head shows progress, not just a spinner."""
-    j = get_job(job_id)
-    if not j:
-        raise HTTPException(404, f"job {job_id} not found")
-    from core.exec.nextflow import nextflow_job_progress
-    return nextflow_job_progress(j)
-
-
-@app.get("/api/hpc/session")
-def hpc_session():
-    """The ABA process' own compute allocation (Slurm node/cores/walltime, or the
-    local CPU picture) for the (i) drawer's HPC session card."""
-    from core.exec.hpc_session import session_allocation
-    return session_allocation()
-
-
-@app.post("/api/jobs/{job_id}/cancel")
-async def jobs_cancel(job_id: str, _pid: str = Depends(require_project)):
-    ok = cancel_job(job_id)
-    if not ok:
-        raise HTTPException(400, "job not found or not cancellable")
-    # Notify the originating thread so the agent isn't left hanging on the deferred
-    # tool — a background job's terminal transition (here, user-cancel) fires a
-    # continuation exactly like done/failed do (continuation.py decides to skip if
-    # the job had no thread). Best-effort: never fail the cancel on a notify error.
-    job = get_job(job_id)
-    try:
-        from core.jobs.continuation import enqueue_continuation
-        pid = (job.get("params") or {}).get("project_id") if job else None
-        await enqueue_continuation(job or {}, str(pid) if pid else None)
-    except Exception as e:  # noqa: BLE001
-        print(f"[jobs.cancel] continuation after cancel failed for {job_id}: {e}", flush=True)
-    return job
+# Jobs routes → core/web/routers/jobs.py (Item 2A.3).
 
 
 # Phase 8.E: /api/home-summary + /api/sample-project moved to
 # content/bio/web/routes.py.
 
 
-@app.post("/api/run-probe")
-async def trigger_probe():
-    """
-    Run one pop-quiz probe (§3.6). Normally a background cron; exposed as an
-    endpoint so it can be triggered on demand / tested. Non-blocking work
-    runs in a thread.
-    """
-    report = await asyncio.get_event_loop().run_in_executor(None, run_probe)
-    if report is None:
-        return {"ran": False, "reason": "no probeable entities yet"}
-    return {"ran": True, **report}
+# run-probe routes → content/bio/web/routes/ (Item 2A.4).
 
 
-@app.get("/api/events")
-def events_list(limit: int = 50, offset: int = 0):
-    """Activity / audit feed (newest first)."""
-    return list_events(limit=limit, offset=offset)
+# events_list → core/web/routers/misc.py (Item 2A.3).
 
 
-@app.get("/api/notifications")
-async def notifications_stream():
-    """Global SSE channel for OUT-OF-BAND events (caption ready, background
-    job done, entity updated, …) — things that happen outside the chat
-    turn lifecycle. Frontend opens this once on app mount and refreshes
-    on relevant events instead of guessing refresh intervals.
-
-    Event shape: `{"type": "entity_updated", "entity_id": "...", "reason": "..."}`.
-    A "hello" event fires on connect so the client knows the stream is live.
-    """
-    from core.runtime import notifications as _notif
-
-    async def gen():
-        q = _notif.subscribe()
-        try:
-            yield f"data: {json.dumps({'type': 'hello'})}\n\n"
-            while True:
-                try:
-                    ev = await asyncio.wait_for(q.get(), timeout=25.0)
-                    yield f"data: {json.dumps(ev)}\n\n"
-                except asyncio.TimeoutError:
-                    # Heartbeat keeps proxies / load balancers from closing
-                    # the idle connection.
-                    yield ": heartbeat\n\n"
-        finally:
-            _notif.unsubscribe(q)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+# notifications_stream → core/web/routers/misc.py (Item 2A.3).
 
 
-@app.get("/api/turns")
-def turns_list(limit: int = 50):
-    """Recent Turn checkpoints (arch3_plan.md Pass E). For diagnostic
-    inspection; the resume endpoint lives at /api/turns/{run_id}/resume
-    once the full state-machine extraction (Pass F) lands."""
-    from core.runtime.checkpoint import list_recent_turns
-    return list_recent_turns(limit=limit)
-
-
-@app.get("/api/turns/{run_id}")
-def turn_get(run_id: str):
-    """Single-Turn lookup — what state was the loop in, what's pending."""
-    from core.runtime.checkpoint import load_turn
-    t = load_turn(run_id)
-    if t is None:
-        raise HTTPException(404, "no such run")
-    return t.to_row()
-
-
-@app.get("/api/turns/{run_id}/stream")
-async def turn_stream(run_id: str, since: int = 0, project_id: str | None = None):
-    _require_project_context(project_id)
-    """C-1 reattach: subscribe to an in-flight Turn's event sink and
-    stream its events as SSE. Replays any events with seq > since from
-    the in-memory tail, then live-streams new ones. Heartbeats every
-    ~25s keep the connection alive through idle periods.
-
-    Client disconnect just unsubscribes — the agent loop is untouched
-    and the next reconnect with `?since=<lastSeq>` resumes from where
-    the client left off.
-
-    Returns 410 Gone if the sink isn't in the registry (process restart
-    or evicted by future C-2 sweeper) AND the Turn is already terminal
-    in the DB — nothing to subscribe to and nothing to replay.
-    Returns 404 if the run_id is unknown."""
-    from core.runtime import turn_sink as _ts
-    from core.runtime.checkpoint import load_turn
-    sink = _ts.get(run_id)
-    if sink is None:
-        # No live sink — either the Turn never existed, completed
-        # before this process started, or was evicted by the TTL
-        # sweeper. C-2: try a disk replay from the JSONL file. If we
-        # have it on disk, replay everything since `since` and then
-        # close (the agent loop is gone — there's no live tail).
-        disk = _ts.rehydrate(run_id, since=since)
-        if disk:
-            async def _disk_replay():
-                import json as _json
-                for seq, payload in disk:
-                    obj = dict(payload)
-                    obj["seq"] = seq
-                    yield f"data: {_json.dumps(obj, default=str)}\n\n"
-                # No terminal `done` injection — if the loop finished
-                # cleanly, the original `done` event is in the JSONL.
-                # If it didn't (process crash mid-flight), the reaper
-                # marked the Turn FAILED and the client renders that
-                # via /api/turns/{rid} polling.
-            return StreamingResponse(
-                _disk_replay(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        # No disk file either — fall through to DB-state check.
-        t = load_turn(run_id)
-        if t is None:
-            raise HTTPException(404, f"no such run: {run_id}")
-        if t.state.value in ("done", "failed"):
-            # Emit a synthetic single-event stream so the client's
-            # handler runs `done` and cleans up cleanly.
-            async def _terminal():
-                import json as _json
-                yield f"data: {_json.dumps({'type': 'done', 'seq': 0})}\n\n"
-            return StreamingResponse(
-                _terminal(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        raise HTTPException(410, f"run {run_id} sink no longer available")
-    return StreamingResponse(
-        _ts.stream_from_sink(sink, since=since),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+# Turn read/stream routes → core/web/routers/turns.py (Item 2A.3).
+# (chat/resume/tool_result stay below — they call guide; active-turn stays — it calls _conn.)
 
 
 @app.get("/api/threads/{thread_id}/active-turn")
@@ -2115,38 +1183,7 @@ def turn_cancel(run_id: str, req: ResumeRequest):
             "fallback_run_id": fallback_run_id, "active": active}
 
 
-@app.get("/api/admin/mcp")
-def admin_mcp_status():
-    """Per-server health, tool counts, last error — drawer can show
-    'MCP: 2/3 servers up'."""
-    from core.runtime.mcp import status
-    return status()
-
-
-@app.get("/api/admin/tool_stats")
-def admin_tool_stats(days: int = 30):
-    """Per-tool aggregates: invocation count, ok/error/rejected/deferred
-    breakdown, average + max duration. Window defaults to 30 days."""
-    from core.runtime.tool_telemetry import stats
-    return stats(days=days)
-
-
-@app.get("/api/admin/tool_invocations")
-def admin_tool_invocations(limit: int = 50, tool_name: str | None = None):
-    """Raw recent invocations for debugging."""
-    from core.runtime.tool_telemetry import recent_invocations
-    return recent_invocations(limit=limit, tool_name=tool_name)
-
-
-@app.post("/api/admin/purge_orphan_fills")
-def admin_purge_orphan_fills():
-    """One-shot cleanup for the buggy-reaper duplication: removes user
-    messages whose content is entirely orphan-fill tool_results. Safe to
-    call repeatedly (no-op on a clean DB). Uses the backend's own
-    connection so it doesn't violate the never-touch-live-DB rule."""
-    from core.runtime.checkpoint import purge_orphan_fill_messages
-    n = purge_orphan_fill_messages()
-    return {"touched": n}
+# Admin/diagnostics routes → core/web/routers/admin.py (Item 2A.3).
 
 
 # ----- Skills (B2 read API) -----
@@ -2201,33 +1238,7 @@ def skill_get(name: str):
 # the write_memory tool (UI may eventually surface its own editor, but
 # the source of truth is the per-project markdown files).
 
-@app.get("/api/memory")
-def memory_list():
-    """Index + entry list for the current project's memory directory.
-    Entries omit bodies; fetch one via /api/memory/{name}."""
-    from core.memory import list_memories, read_memory_index
-    return {
-        "index": read_memory_index(),
-        "entries": [
-            {"name": e.name, "type": e.type, "description": e.description}
-            for e in list_memories()
-        ],
-    }
-
-
-@app.get("/api/memory/{name}")
-def memory_get(name: str):
-    """Full memory body + metadata."""
-    from core.memory import read_memory
-    e = read_memory(name)
-    if e is None:
-        raise HTTPException(404, f"memory {name!r} not found")
-    return {
-        "name": e.name,
-        "type": e.type,
-        "description": e.description,
-        "body": e.body,
-    }
+# Memory routes → core/web/routers/memory.py (Item 2A.3).
 
 
 @app.get("/api/threads/{tid}/manifest")
@@ -2243,391 +1254,10 @@ def thread_latest_manifest(tid: str):
     return {"manifest": m}
 
 
-@app.get("/api/manifest/preview")
-def manifest_preview(focus_entity_id: str | None = None, thread_id: str | None = None):
-    """Build a Manifest live for the current (focus, thread) without
-    running a turn. This is what the Drawer hits whenever the user
-    refocuses or switches threads — so the panel reflects what the agent
-    WOULD see if they sent a message right now, not the last turn's
-    snapshot.
-
-    No persistence; the row only gets written when an actual turn runs.
-    """
-    from core.manifest.assembler import build_manifest
-    import content.bio.cards  # noqa: F401 — ensure per-type builders register
-    # Tolerate the "default" sentinel used elsewhere in the UI.
-    resolved_thread = None
-    if thread_id and thread_id != "default":
-        resolved_thread = thread_id
-    m = build_manifest(
-        session_id="preview",
-        turn_index=0,
-        focus_entity_id=focus_entity_id,
-        thread_id=resolved_thread,
-    )
-    return {"manifest": m.to_dict()}
+# manifest+files+skills+materialize routes → content/bio/web/routes/ (Item 2A.4).
 
 
-@app.get("/api/files/tree")
-def files_tree(include_archived: bool = False, project_id: str | None = None):
-    _require_project_context(project_id)
-    """Virtual files view — the nested project hierarchy (files.md §3.3).
-    Threads → runs/results/claims, runs → child files, results → member
-    files. Multi-rooted: the same canonical artifact may appear at
-    multiple paths.
-
-    Each node carries `kind` (root/folder/file/readme), `name`, `path`,
-    `entity_id` + `entity_type` (when backed by an entity), and either
-    `children` (folders) or content metadata (files). READMEs carry
-    their rendered Markdown inline so the UI shows the same prose the
-    materialized tree would have.
-    """
-    import content.bio  # noqa: F401 — ensure builders register
-    from content.bio.files.tree import build_files_tree
-    return build_files_tree(include_archived=include_archived)
-
-
-@app.get("/api/files/download")
-def files_download_zip(path: str = ""):
-    """Stream a ZIP of every file under the given tree path.
-
-    Walks the nested files-tree (the same one /api/files/tree returns),
-    finds the node at `path` (empty = root), and zips every file +
-    readme beneath it. Real artifacts are added with their on-disk
-    mtime preserved; synthesized files (READMEs, claim .md, etc.) get
-    the entity's created_at as the zip-entry mtime.
-    """
-    import io
-    import zipfile
-    import datetime
-    import content.bio  # noqa: F401 — register builders
-    from content.bio.files.tree import build_files_tree, find_node, iter_files
-    from core.files.materialize import _resolve_artifact_disk_path
-
-    tree = build_files_tree(include_archived=False)
-    node = find_node(tree, path)
-    if node is None:
-        raise HTTPException(404, f"no node at {path!r}")
-
-    # Single file → stream it directly. (Earlier behavior zipped a one-file
-    # download with an empty arcname → corrupt .zip. PK 2026-06-02: tried to
-    # download seurat_scrna_v2_draft.md from the Files tab, got an invalid
-    # zip back.) Real on-disk files use FileResponse so the browser gets the
-    # right MIME + filename; synthesized text nodes (READMEs, claim .md
-    # bodies) stream the text body inline.
-    if node.get("kind") in ("file", "readme"):
-        name = node.get("name") or (path.rsplit("/", 1)[-1] if path else "file")
-        if node.get("kind") == "readme":
-            return Response(
-                content=node.get("content") or "",
-                media_type="text/markdown; charset=utf-8",
-                headers={"Content-Disposition": f'attachment; filename="{name}"'},
-            )
-        if node.get("synthesized"):
-            return Response(
-                content=node.get("synthesized_content") or "",
-                media_type="text/plain; charset=utf-8",
-                headers={"Content-Disposition": f'attachment; filename="{name}"'},
-            )
-        if node.get("artifact_path"):
-            src = _resolve_artifact_disk_path(node["artifact_path"])
-            if src and src.exists():
-                return FileResponse(str(src), filename=name, media_type=None)
-        raise HTTPException(404, f"file at {path!r} is not on disk")
-
-    leaves = iter_files(node)
-    if not leaves:
-        raise HTTPException(404, f"no files under {path!r}")
-
-    base = (node.get("path") or "").rstrip("/")
-    base_prefix_len = len(base) + 1 if base else 0
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for leaf in leaves:
-            arcname = leaf["path"][base_prefix_len:] if base_prefix_len else leaf["path"]
-            mtime = leaf.get("mtime")
-            if leaf["kind"] == "readme":
-                _write_zip_text(zf, arcname, leaf.get("content", ""), mtime)
-            elif leaf.get("synthesized"):
-                _write_zip_text(zf, arcname, leaf.get("synthesized_content") or "", mtime)
-            elif leaf.get("artifact_path"):
-                src = _resolve_artifact_disk_path(leaf["artifact_path"])
-                if src and src.exists():
-                    zf.write(src, arcname=arcname)  # preserves source mtime
-    buf.seek(0)
-    fname = (base.rsplit("/", 1)[-1] or "files") + ".zip"
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
-
-
-def _write_zip_text(zf, arcname: str, content: str, mtime: float | None) -> None:
-    """Add synthesized text content to a zip with the given mtime."""
-    import zipfile, datetime
-    info = zipfile.ZipInfo(filename=arcname)
-    if mtime is not None:
-        dt = datetime.datetime.fromtimestamp(mtime)
-        info.date_time = (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
-    info.compress_type = zipfile.ZIP_DEFLATED
-    zf.writestr(info, content)
-
-
-@app.post("/api/skills/reload")
-def skills_reload():
-    """Re-resolve the bundle scope chain and re-project its skills into the live
-    catalog (system + installation + lab + user). Lets a `git pull` in any
-    scope's bundle (or an edited vendor skill) take effect without a backend
-    bounce.
-
-    Why an explicit endpoint instead of relying on uvicorn's --reload watcher:
-    the institution/lab/user bundles live outside the source tree (or behind
-    --reload-exclude), so edits there don't bounce uvicorn — but that also means
-    new content doesn't propagate. This endpoint is the manual refresh seam.
-
-    Response includes per-scope counts so operators can confirm the scope they
-    expected to load actually loaded."""
-    from core.skills.loader import _REGISTRY, list_skills
-    from core.bundle.active import reload_bundle
-    from content.bio.skills import register_from_bundle
-    before = len(_REGISTRY)
-    reload_bundle()                       # re-resolve scope chain + re-compose
-    by_scope = register_from_bundle(clear=True)
-    sk = list_skills()
-    return {
-        "status": "ok",
-        "before": before,
-        "after": len(sk),
-        "by_scope": by_scope,             # {scope_name: skill count}
-        "always": sum(1 for s in sk if s.visibility == "always"),
-        "local":  sum(1 for s in sk if s.visibility != "always"),
-    }
-
-
-@app.post("/api/projects/{pid}/materialize")
-def project_materialize(pid: str, clean: bool = False, include_archived: bool = False):
-    """Build projects/<pid>/files/ as a navigable folder tree on disk
-    (files.md §8). Symlinks where supported, copies on systems that
-    can't. Idempotent — running it twice converges.
-    """
-    from core.files.materialize import materialize_tree
-    from content.bio.files.tree import build_files_tree
-    from core import projects
-    out = projects.PROJECTS_DIR / pid / "files"
-    tree = build_files_tree(include_archived=include_archived)
-    summary = materialize_tree(tree, out, clean=clean)
-    return summary
-
-
-@app.post("/api/files/promote")
-def files_promote(path: str, title: str = ""):
-    """Promote an unregistered working/scratch file into a curated Dataset entity
-    (data.md scratch→curated tier). Validates that `path` is a real *ephemeral*
-    working-tree node (not an arbitrary disk path), then registers its on-disk
-    artifact as a dataset via the same service the agent's register_dataset uses.
-    """
-    import content.bio  # noqa: F401 — register tree builders + tools
-    from content.bio.files.tree import build_files_tree, find_node
-    from content.bio.tools import register_dataset_tool
-
-    node = find_node(build_files_tree(include_archived=False), (path or "").strip())
-    if not node or node.get("kind") != "file" or not node.get("ephemeral"):
-        raise HTTPException(400, "not a promotable working file")
-    ap = node.get("artifact_path")
-    if not ap or not Path(ap).exists():
-        raise HTTPException(404, "working file is no longer on disk")
-    res = register_dataset_tool({
-        "path": ap,
-        "title": (title or node.get("name") or Path(ap).name).strip(),
-        "summary": "Promoted from the working/scratch tier.",
-        "source": "promoted-from-working",
-    })
-    if res.get("status") != "ok":
-        raise HTTPException(400, res.get("error") or res.get("note") or "promotion failed")
-    return res
-
-
-@app.get("/api/viewers/registry")
-def viewers_registry():
-    """Full viewer registry — fetched once by the frontend, then used for
-    client-side dispatch so each file click doesn't pay a round-trip to
-    pick a viewer. The matching metadata (entity_types, extensions,
-    mime_patterns, applies_any, max_size_kb) is included alongside the
-    wire info so the client can mirror the backend's match logic."""
-    import content.bio  # noqa: F401 — ensure viewer registrations
-    from core.viewers.registry import list_viewers, to_wire
-    out = []
-    for v in list_viewers():
-        d = to_wire(v)
-        d['extensions']     = list(v.extensions)
-        d['mime_patterns']  = list(v.mime_patterns)
-        d['entity_types']   = list(v.entity_types)
-        d['applies_any']    = v.applies_any
-        d['max_size_kb']    = v.max_size_kb
-        out.append(d)
-    return out
-
-
-def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
-    """Resolve a files-tree node from either an entity_id (entity-backed
-    file) or a path (any node in the tree). Shared by the viewer lookup
-    and launch endpoints. Raises HTTPException on missing/underspecified."""
-    if entity_id:
-        e = get_entity(entity_id)
-        if not e:
-            raise HTTPException(404, f"no entity {entity_id}")
-        return {
-            "entity_id": e["id"],
-            "entity_type": e["type"],
-            "name": e.get("title") or "",
-            "artifact_path": e.get("artifact_path"),
-            "size": None,
-        }
-    if path:
-        # Tolerant resolve: exact tree path, else a basename / path-suffix match
-        # (callers — incl. the agent via open_viewer — rarely know the full path).
-        from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
-        tree = build_files_tree(include_archived=False)
-        n = find_file_node(tree, path)
-        if n is None:
-            cands = list_file_matches(tree, path)
-            hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
-            raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
-        return n
-    raise HTTPException(400, "supply either entity_id or path")
-
-
-@app.get("/api/viewers/for")
-def viewers_for_node(
-    entity_id: str | None = None,
-    path: str | None = None,
-):
-    """Return the viewer entries applicable to a tree node. Supply
-    either entity_id (entity-backed file) or path (any node in the
-    files tree). First entry is the default; the rest are alternates.
-
-    The frontend uses this to build the right-click viewer menu and to
-    pick the default click handler.
-    """
-    import content.bio  # noqa: F401 — ensure registrations
-    from core.viewers.registry import viewers_for, to_wire
-
-    node = _resolve_files_node(entity_id, path)
-    viewers = viewers_for(node)
-    return {
-        "primary": viewers[0].id if viewers else None,
-        "viewers": [to_wire(v) for v in viewers],
-        "download_url": (
-            f"/api/entities/{node['entity_id']}/download" if node.get("entity_id") and node.get("artifact_path")
-            else f"/api/files/download?path={path}" if path
-            else None
-        ),
-    }
-
-
-class ViewerLaunchIn(BaseModel):
-    entity_id: str | None = None
-    path: str | None = None
-    viewer_id: str | None = None      # which external viewer; default = highest-priority
-
-
-@app.post("/api/viewers/launch")
-def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
-    """Start preparing an `external`-mode viewer's data store in the BACKGROUND
-    and return `{job_id, label}` (viewers.md §3). The launch page
-    (GET /viewer-launch) polls /api/viewers/launch/status and redirects to the
-    viewer when ready — so the conversion (e.g. .h5ad → .lstar.zarr) never blocks
-    this request. Errors surface as the job's error (shown on the launch page)."""
-    import content.bio  # noqa: F401 — ensure viewer + launcher registrations
-    from core.viewers.registry import viewers_for
-    from core.viewers.launchers import launch as launch_viewer
-    from core.viewers import prepare
-    from core.config import current_project_id
-
-    node = _resolve_files_node(body.entity_id, body.path)
-    ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
-    v = (next((x for x in ext if x.id == body.viewer_id), None) if body.viewer_id
-         else (ext[0] if ext else None))
-    if v is None:
-        raise HTTPException(404, "no external viewer applies to this file")
-    pid = current_project_id()
-
-    def runner(set_phase):
-        set_phase("Preparing the dataset…")
-        return launch_viewer(v.open_external, node, {
-            "entity_id": node.get("entity_id"), "path": body.path,
-            "project_id": pid, "set_phase": set_phase,
-        })
-    job_id = prepare.start(runner, label=v.label or v.id)
-    return {"job_id": job_id, "label": v.label or v.id}
-
-
-@app.get("/api/viewers/launch/status")
-def viewers_launch_status(job: str):
-    """Poll a prepare job started by /api/viewers/launch."""
-    from core.viewers import prepare
-    s = prepare.status(job)
-    if s is None:
-        raise HTTPException(404, "no such prepare job")
-    return s
-
-
-@app.get("/api/viewers/download")
-def viewers_download(
-    entity_id: str | None = None,
-    path: str | None = None,
-    viewer_id: str | None = None,
-    _pid: str = Depends(require_project),
-):
-    """Download an external viewer's prepared store as a single-file
-    `.lstar.zarr.zip` (viewers.md §3).
-
-    For pagoda3 this is lstar's canonical STORED single-file store (produced BY
-    lstar via the launcher's `download_packer` — STORED, byte-range-readable, so it
-    re-opens directly in pagoda3/lstar). View links + the internal cache stay the
-    directory `.lstar.zarr` (faster to load, updatable); only this download is the
-    single file. Reuses the SAME cached store the viewer opens; the archive is
-    CACHED beside the store (packed once, atomically swapped, re-packed only when
-    the store is re-derived) and served with `FileResponse` (Accept-Ranges/206).
-    The frontend routes here THROUGH the /viewer-launch progress page
-    (action=download) so the one-time store conversion runs in the background
-    prepare job, not this request."""
-    import content.bio  # noqa: F401 — ensure viewer + launcher registrations
-    from core.viewers.registry import viewers_for
-    from core.viewers.launchers import launch as launch_viewer
-    from core.viewers.store_serve import zip_store_stored
-    from core.config import current_project_id
-
-    node = _resolve_files_node(entity_id, path)
-    ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
-    v = (next((x for x in ext if x.id == viewer_id), None) if viewer_id
-         else (ext[0] if ext else None))
-    if v is None:
-        raise HTTPException(404, "no external viewer applies to this file")
-    pid = current_project_id()
-    res = launch_viewer(v.open_external, node, {
-        "entity_id": node.get("entity_id"), "path": path, "project_id": pid,
-    })
-    store = Path(res.store_path) if res.store_path else None
-    if not store or not store.is_dir():
-        raise HTTPException(409, "this viewer has no downloadable store")
-    # Clean download name (drop the cache tag): <stem>.lstar.zarr.zip
-    stem = (store.name[:-len(".lstar.zarr")] if store.name.endswith(".lstar.zarr")
-            else store.stem)
-    stem = stem.rsplit("-", 1)[0] if "-" in stem else stem   # strip the -<hash8> tag
-    # Stable cached archive beside the store; re-pack only if missing or older than
-    # the store (ensure_derived rewrites the whole dir on re-derive → newer mtime).
-    pack = res.download_packer or zip_store_stored     # launcher's lstar packer, else generic STORED
-    zip_path = store.with_name(store.name + ".zip")
-    if not zip_path.exists() or zip_path.stat().st_mtime < store.stat().st_mtime:
-        tmp = zip_path.with_name(zip_path.name + ".tmp")
-        pack(store, tmp)
-        tmp.replace(zip_path)                          # atomic publish
-    return FileResponse(
-        str(zip_path), media_type="application/zip", filename=f"{stem}.lstar.zarr.zip",
-    )
+# viewers/* routes → content/bio/web/routes/viewers.py (Item 2A.4/#1).
 
 
 @app.get("/viewer-launch")
@@ -2760,199 +1390,10 @@ async def pagoda3_api_stream(payload: dict):
     return StreamingResponse(gen(), status_code=up.status_code, media_type="text/event-stream")
 
 
-@app.get("/api/files/content")
-def files_content(path: str, download: int = 0):
-    """Serve a tree file's RAW BYTES (with content-type) — powers the image
-    viewer + binary downloads for files whose artifact_path is an on-disk path
-    (run-output / working-tree files), which the browser can't fetch directly.
-    Harvested entities use their served /artifacts URL instead."""
-    import mimetypes
-    import content.bio  # noqa: F401
-    from content.bio.files.tree import build_files_tree, find_node
-    from core.files.materialize import _resolve_artifact_disk_path
-
-    tree = build_files_tree(include_archived=False)
-    node = find_node(tree, path)
-    if node is None:
-        raise HTTPException(404, f"no node at {path!r}")
-    src = _resolve_artifact_disk_path(node.get("artifact_path"))
-    if src is None or not src.exists():
-        raise HTTPException(404, f"file content missing on disk: {node.get('artifact_path')}")
-    media = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
-    headers = {"Content-Disposition": f'attachment; filename="{src.name}"'} if download else {}
-    return FileResponse(str(src), media_type=media, headers=headers)
+# files content/raw/ai-summary routes → content/bio/web/routes/ (Item 2A.4).
 
 
-@app.get("/api/files/raw")
-def files_raw(path: str, offset: int = 0, max_lines: int = 200):
-    """Stream a chunk of a file's text content (viewers.md fallback —
-    powers CSV/TSV/JSON/text viewers in the frontend).
-
-    `offset` and `max_lines` paginate through the file by line. Caps
-    apply to the response size (~256 KB max payload) so this is safe
-    against huge files. Returns:
-      {lines: [...], offset, next_offset, total_lines_seen, eof,
-       truncated, encoding}
-    """
-    import content.bio  # noqa: F401
-    from content.bio.files.tree import build_files_tree, find_node
-    from core.files.materialize import _resolve_artifact_disk_path
-
-    tree = build_files_tree(include_archived=False)
-    node = find_node(tree, path)
-    if node is None:
-        raise HTTPException(404, f"no node at {path!r}")
-
-    # Synthesized / inline content is easy — slice the embedded text.
-    inline = node.get("content") or node.get("synthesized_content")
-    if inline is not None:
-        all_lines = inline.splitlines()
-        end = min(offset + max(1, min(max_lines, 5000)), len(all_lines))
-        chunk = all_lines[offset:end]
-        return {
-            "lines": chunk, "offset": offset, "next_offset": end,
-            "total_lines_seen": len(all_lines), "eof": end >= len(all_lines),
-            "truncated": False, "encoding": "utf-8", "source": "inline",
-        }
-
-    artifact = node.get("artifact_path")
-    src = _resolve_artifact_disk_path(artifact)
-    if src is None or not src.exists():
-        raise HTTPException(404, f"file content missing on disk: {artifact}")
-
-    # Hard cap: refuse pulls > 256 KB of text. Lines may run long.
-    cap_chars = 256 * 1024
-    n = max(1, min(max_lines, 5000))
-    chunk: list[str] = []
-    chars = 0
-    line_no = 0
-    eof = False
-    truncated = False
-    try:
-        with src.open("rb") as f:
-            for raw in f:
-                line_no += 1
-                if line_no <= offset:
-                    continue
-                try:
-                    s = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    s = raw.decode("latin-1", errors="replace")
-                s = s.rstrip("\n").rstrip("\r")
-                if chars + len(s) > cap_chars:
-                    truncated = True
-                    break
-                chunk.append(s)
-                chars += len(s) + 1
-                if len(chunk) >= n:
-                    break
-            else:
-                eof = True
-            # Distinguish "we hit max_lines" from "real EOF".
-            if not eof and not truncated and len(chunk) < n:
-                eof = True
-    except OSError as e:
-        raise HTTPException(500, f"read failed: {e}")
-
-    next_offset = offset + len(chunk)
-    return {
-        "lines": chunk,
-        "offset": offset,
-        "next_offset": next_offset,
-        "total_lines_seen": line_no,
-        "eof": eof,
-        "truncated": truncated,
-        "encoding": "utf-8",
-        "source": "disk",
-    }
-
-
-class AiSummaryRequest(BaseModel):
-    path: str | None = None
-    entity_id: str | None = None
-
-
-@app.post("/api/files/ai-summary")
-def file_ai_summary(req: AiSummaryRequest):
-    """AI fallback viewer (viewers.md §6.1). Reads up to 4 KB of the
-    file's content (or metadata for binaries), hands it to the
-    file_summarizer Agent, returns Markdown.
-
-    For now: no cache, no PHI gate, no cost cap — those land alongside
-    the consent UX. Cheap to call; an explicit user click each time.
-    """
-    import content.bio  # noqa: F401 — registrations
-    from core.files.materialize import _resolve_artifact_disk_path
-    from content.bio.files.tree import build_files_tree, find_node
-    from core.runtime.agent import get_agent_spec, run_advisor_one_shot
-
-    # Resolve the file: path-first, then entity_id.
-    inline_text: str | None = None
-    artifact: str | None = None
-    name = ""
-    if req.path:
-        tree = build_files_tree(include_archived=False)
-        node = find_node(tree, req.path)
-        if node is None:
-            raise HTTPException(404, f"no node at {req.path!r}")
-        name = node.get("name") or ""
-        inline_text = node.get("content") or node.get("synthesized_content") or None
-        artifact = node.get("artifact_path")
-    elif req.entity_id:
-        e = get_entity(req.entity_id)
-        if not e:
-            raise HTTPException(404, f"no entity {req.entity_id}")
-        name = e.get("title") or e["id"]
-        artifact = e.get("artifact_path")
-    else:
-        raise HTTPException(400, "supply either path or entity_id")
-
-    peek_chars = 4000
-    peek = ""
-    file_size = None
-    if inline_text:
-        peek = inline_text[:peek_chars]
-    elif artifact:
-        src = _resolve_artifact_disk_path(artifact)
-        if src and src.exists():
-            try:
-                file_size = src.stat().st_size
-            except OSError:
-                pass
-            if src.suffix.lower() in {
-                ".md", ".markdown", ".txt", ".log", ".py", ".r", ".sh", ".sql",
-                ".yaml", ".yml", ".json", ".ts", ".tsx", ".js", ".jsx", ".csv", ".tsv",
-            }:
-                try:
-                    peek = src.read_text(errors="replace")[:peek_chars]
-                except OSError:
-                    peek = ""
-
-    spec = get_agent_spec("file_summarizer")
-    if spec is None:
-        return {
-            "markdown": f"_No file_summarizer agent registered._\n\nFile: `{name}` ({file_size or 'unknown'} bytes).",
-            "agent": None,
-        }
-
-    prompt_parts = [f"Filename: `{name}`"]
-    if file_size is not None:
-        prompt_parts.append(f"Size on disk: {file_size} bytes.")
-    if not peek:
-        prompt_parts.append("(Binary or unreadable file — no text peek available.)")
-    else:
-        prompt_parts.append("Content peek (first 4 KB):")
-        prompt_parts.append("```")
-        prompt_parts.append(peek)
-        prompt_parts.append("```")
-
-    text = run_advisor_one_shot(spec, user_prompt="\n".join(prompt_parts), max_tokens=400)
-    return {"markdown": text, "agent": "file_summarizer"}
-
-
-@app.get("/api/health")
-def health():
-    return {"ok": True}
+# health → core/web/routers/misc.py (Item 2A.3).
 
 
 # ── Serve the built frontend (production single-server mode) ─────────────────

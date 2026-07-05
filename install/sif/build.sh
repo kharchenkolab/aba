@@ -11,6 +11,9 @@
 #
 # Env knobs: APPTAINER (binary), APPTAINER_TMPDIR, MICROMAMBA (fat only),
 # ABA_RECIPES_SRC (pack dir), ABA_SIF_OUT (output path), ABA_SIF_STAGE (stage dir).
+# Accelerator (fat only, F1): ABA_ACCELERATOR=cpu|cuda (default cpu) + ABA_CUDA_VERSION
+# (default 11.8) — when cuda, bakes the GPU torch base (inject-accelerator + CONDA_OVERRIDE_CUDA),
+# so a GPU OOD/SIF deploy doesn't silently get CPU torch. Recorded in the image's %labels.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +28,7 @@ while [ $# -gt 0 ]; do
   esac; shift
 done
 case "$PROFILE" in fat|slim) ;; *) echo "--profile must be fat or slim"; exit 2 ;; esac
+ACCEL="${ABA_ACCELERATOR:-cpu}"   # F1: bakes the GPU torch base when 'cuda' (fat profile)
 
 APPTAINER="${APPTAINER:-apptainer}"
 STAGE="${ABA_SIF_STAGE:-$REPO_ROOT/../tools/stage-$PROFILE}"
@@ -73,8 +77,20 @@ if [ -x "$MM_BIN" ]; then mkdir -p "$STAGE/bin"; cp "$MM_BIN" "$STAGE/bin/microm
 if [ "$PROFILE" = "fat" ]; then
   MM="${MICROMAMBA:-micromamba}"
   command -v "$MM" >/dev/null 2>&1 || { echo "fat build needs micromamba (set MICROMAMBA)"; exit 1; }
-  echo "-- building conda venv (install/core/environment.yml) --"
-  "$MM" create -y -q -p "$STAGE/aba-venv" -f "$REPO_ROOT/install/core/environment.yml"
+  # Deployment-conditional base (F1 fix): mirror the installer's create-env. Inject the
+  # CUDA torch pin when ABA_ACCELERATOR=cuda so the BAKED venv resolves the GPU torch build
+  # — else conda-forge bakes CPU-only torch and GPU jobs silently run on CPU (the scVI-on-CPU
+  # incident). Inject into a COPY so the shared install/core/environment.yml is never mutated.
+  ENV_YML="$STAGE/environment.yml"
+  cp "$REPO_ROOT/install/core/environment.yml" "$ENV_YML"
+  bash "$REPO_ROOT/install/core/inject-accelerator.sh" "$ENV_YML"
+  if [ "$ACCEL" = "cuda" ]; then
+    # the build host has no GPU → spoof __cuda so the GPU solve resolves (same as the installer)
+    export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"
+    echo "-- [accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA --"
+  fi
+  echo "-- building conda venv ($ACCEL base, from $ENV_YML) --"
+  "$MM" create -y -q --channel-priority strict -p "$STAGE/aba-venv" -f "$ENV_YML"
   echo "-- building R tools base (install/core/r-environment.yml) --"
   "$MM" create -y -q -p "$STAGE/aba-tools" -f "$REPO_ROOT/install/core/r-environment.yml" \
     || echo "WARNING: R tools base failed — R will provision on demand"
@@ -116,6 +132,10 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "%labels"
   echo "    org.aba.role ondemand-backend"
   echo "    org.aba.profile $PROFILE"
+  # F1: record the baked accelerator so a CPU image can't be mistaken for GPU
+  # (fat bakes the venv; slim mounts it at runtime, so the label is authoritative for fat).
+  echo "    org.aba.accelerator $ACCEL"
+  [ "$ACCEL" = "cuda" ] && echo "    org.aba.cuda_version ${ABA_CUDA_VERSION:-11.8}"
 } > "$DEF"
 echo "   wrote $DEF"
 
