@@ -86,28 +86,8 @@ dependencies:
       - pillow
 
       # ── viewer data layer ──────────────────────────────────────────────
-      # lstar-sc: L* model + Zarr interchange for single-cell (import name is
-      # `lstar`; the bare `lstar` on PyPI is an UNRELATED automata library —
-      # always install `lstar-sc`). Powers the pagoda3 viewer's .h5ad →
-      # .lstar.zarr conversion (misc/pagoda3_integration.md). Ships a compiled
-      # C++ core: prebuilt wheels exist for macOS arm64 (cp312); on other
-      # platforms pip builds from source (cmake + pybind11 — cmake is above).
-      # Floor at 0.1.4: earlier releases predate the single-file .lstar.zarr.zip
-      # (STORED, range-readable) support + the store-format the current pagoda3
-      # expects, and 0.1.2 also shipped the macOS-arm64 dup-libomp SIGSEGV.
-      # NOTE: 0.1.4 is not on PyPI yet — until it lands, dev/deploys must install
-      # lstar from the `lstar` repo main (pip install <lstar-checkout>); this pin
-      # will only resolve from PyPI once 0.1.4 is published.
+      # lstar-sc: L* single-cell interchange behind the pagoda3 viewer (import
+      # name `lstar`; the bare `lstar` on PyPI is unrelated). Versioning notes +
+      # the .rds R-bridge setup: misc/pagoda3_integration.md §Viewer data layer.
       - lstar-sc>=0.1.4
-      # lstar main migrated to the zarr-python 3 library (still writes v2 on-disk
-      # format). Pin it so the conda solve doesn't leave a zarr 2 that lstar's
-      # `open_group(zarr_format=…, use_consolidated=…)` calls choke on.
-      - zarr>=3.1
-      # For Seurat / SCE / pagoda2 / conos `.rds` viewing, lstar bridges to Rscript
-      # ($LSTAR_RSCRIPT, else ABA's tools-env R) — that R needs the lstar R package.
-      # BUILD IT CLEANLY in the target R's own env: `R CMD INSTALL --preclean
-      # <lstar-checkout>/r` (a stale r/src/*.so left from a build against a
-      # DIFFERENT R links the wrong libR → ABI SIGSEGV at load). The tools env
-      # (r-environment.yml) already ships Seurat + SingleCellExperiment; pagoda2/
-      # conos additionally need their CRAN+Bioc deps. Verify the bridge with
-      # tests/test_rds_bridge_health.py (subprocess load+read smoke).
+      - zarr>=3.1            # lstar uses the zarr-python 3 library
