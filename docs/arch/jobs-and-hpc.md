@@ -73,8 +73,8 @@ run_python/run_r(background) ─ submit_*_job ─► create_job(row, status=queu
                        └───────────────► _finalize_job(result) ◄─────────┘  poll() → result-shaped dict
                                              │  exec record → on_job_complete (harvest) → status=done|failed
                                              ▼
-                                   enqueue_continuation → _fire → guide.stream_response
-                                        (a fresh turn resumes the agent's plan)
+                                   enqueue_continuation → _fire → reasoning_port.run_continuation
+                                        (→ guide's registered handler; a fresh turn resumes the plan)
 ```
 
 The seam is that **both** placements converge on one `_finalize_job` (`runner.py:649`): map
@@ -144,8 +144,10 @@ When `_finalize_job` reaches a terminal state it calls `enqueue_continuation`
 (`continuation.py:41`). If the originating thread has an actively-streaming turn, the
 continuation **defers** — a background task polls until the thread goes idle (bounded by
 `DEFER_TIMEOUT_S`) — otherwise it fires immediately. `_fire` (`continuation.py:449`) binds the
-project, then re-enters the agent via `guide.stream_response` on a fresh `run_id`: a new
-durable turn, exactly as if the user had typed. The trigger is a **synthetic user message**
+project, then re-enters the agent through the **reasoning-plane port**
+(`reasoning_port.run_continuation`, which calls guide's registered handler) on a fresh
+`run_id`: a new durable turn, exactly as if the user had typed. Core does **not** import
+guide — the port is the up-edge (see Known gaps + `check_seam.sh` rule 4). The trigger is a **synthetic user message**
 (`_continuation_message_text`, `continuation.py:292`) prefixed `[continuation: …]` (the
 frontend badges it) whose text is tailored per outcome — success-with-artifacts ("continue
 the plan"), done-but-**zero**-artifacts (silent-failure shape: "inspect run.log, don't claim
@@ -196,7 +198,8 @@ boundary*.
 | `core/jobs/slurm_entry.py` | compute-node entrypoint; same exec core; numpy canary + GPU verify-at-use preflight |
 | `core/jobs/hpc_config.py` | `hpc_config` (config → bundle → live sinfo/sacctmgr); `resolve_resources` (estimate → partition/qos/account/walltime) |
 | `core/jobs/slurm_live.py` | live `sinfo`/`squeue`/`sacctmgr` parsers; `qos_account_live`; `describe_compute` read model |
-| `core/jobs/continuation.py` | `enqueue_continuation` (defer/fire); `_fire` → `guide.stream_response`; per-outcome `_continuation_message_text` |
+| `core/jobs/continuation.py` | `enqueue_continuation` (defer/fire); `_fire` → `reasoning_port.run_continuation` (→ guide's registered handler); per-outcome `_continuation_message_text` |
+| `core/reasoning_port.py` | the Compute→Reasoning up-edge port: `register_continuation` (guide, at import) / `run_continuation` (continuation.py); mandatory, raises if unregistered |
 | `core/graph/jobs.py` | the `jobs` table: `create_job`/`update_job`/`get_job` |
 | `content/bio/tools/run_exec.py` · `guide.py` | callers of `submit_*_job` (background routing; the estimate) |
 | `misc/hpc_jobs.md` · `misc/deferred_jobs.md` | design/evolution logs (Slurm system; lifecycle+recovery) |
@@ -209,12 +212,13 @@ boundary*.
   (not beside `SlurmSubmitter`) forces `get_submitter`'s lazy import to dodge a cycle. The
   clean shape is a `worker.py` / `local_submitter.py` / `lifecycle.py` split; `misc/modularity_audit3.md`
   flags it.
-- **`guide ⇄ core.jobs` is a two-way import coupling.** `continuation.py:472` imports
-  `guide.stream_response` (the compute plane reaching into the reasoning plane) and
-  `guide.py:27` imports the concrete `submit_python_job`. Both are lazy/at-module-scope
-  workarounds, not a seam — the continuation *should* re-enter the loop through a
-  reasoning-plane port, and the guide *should* submit through an interface. An honest layering
-  gap.
+- **`guide → core.jobs` down-edge remains (up-edge dissolved).** The Compute→Reasoning
+  *up*-edge is fixed (modularity_audit3 Item 1, Phase 1): `continuation._fire` re-enters via
+  `core/reasoning_port.run_continuation` (guide registers the handler at import) instead of
+  `from guide import stream_response`, and `check_seam.sh` rule 4 now forbids core importing
+  guide. What's left is the *down*-edge: `guide.py:27` still imports the concrete
+  `submit_python_job` from `core.jobs.runner` — the guide *should* submit through a
+  content-registered interface (Item 1 / Phase 2b). A one-way layering gap, not two-way.
 - **Single sequential local worker.** One in-memory `asyncio.Queue`, one job at a time,
   in-process — a restart is survived by reconcile but concurrency and cross-process durability
   wait on the arq+Redis successor (`misc/hpc_jobs.md`).
