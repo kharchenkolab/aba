@@ -104,7 +104,10 @@ dependencies:
       # `open_group(zarr_format=…, use_consolidated=…)` calls choke on.
       - zarr>=3.1
       # For Seurat / SCE / pagoda2 / conos `.rds` viewing, lstar bridges to Rscript
-      # ($LSTAR_RSCRIPT / system Rscript) — that R needs the lstar R package
-      # (install from the `lstar` repo main: `R CMD INSTALL <lstar-checkout>/r`).
-      # NB: the C++ core currently SIGSEGVs under the conda tools-env R; use a
-      # system R build until that's fixed upstream.
+      # ($LSTAR_RSCRIPT, else ABA's tools-env R) — that R needs the lstar R package.
+      # BUILD IT CLEANLY in the target R's own env: `R CMD INSTALL --preclean
+      # <lstar-checkout>/r` (a stale r/src/*.so left from a build against a
+      # DIFFERENT R links the wrong libR → ABI SIGSEGV at load). The tools env
+      # (r-environment.yml) already ships Seurat + SingleCellExperiment; pagoda2/
+      # conos additionally need their CRAN+Bioc deps. Verify the bridge with
+      # tests/test_rds_bridge_health.py (subprocess load+read smoke).
