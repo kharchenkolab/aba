@@ -99,3 +99,12 @@ dependencies:
       # lstar from the `lstar` repo main (pip install <lstar-checkout>); this pin
       # will only resolve from PyPI once 0.1.4 is published.
       - lstar-sc>=0.1.4
+      # lstar main migrated to the zarr-python 3 library (still writes v2 on-disk
+      # format). Pin it so the conda solve doesn't leave a zarr 2 that lstar's
+      # `open_group(zarr_format=…, use_consolidated=…)` calls choke on.
+      - zarr>=3.1
+      # For Seurat / SCE / pagoda2 / conos `.rds` viewing, lstar bridges to Rscript
+      # ($LSTAR_RSCRIPT / system Rscript) — that R needs the lstar R package
+      # (install from the `lstar` repo main: `R CMD INSTALL <lstar-checkout>/r`).
+      # NB: the C++ core currently SIGSEGVs under the conda tools-env R; use a
+      # system R build until that's fixed upstream.
