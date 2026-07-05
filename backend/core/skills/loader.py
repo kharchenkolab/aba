@@ -96,30 +96,10 @@ class SkillSpec:
     kind:           str = "recipe"
 
 
-_SPLIT = "---"
-
-
-def _split_frontmatter(text: str) -> tuple[dict, str]:
-    """Pull the leading `--- … ---` YAML block off a markdown file and
-    return (frontmatter_dict, body). Files without frontmatter return
-    ({}, full_text); files with malformed frontmatter raise ValueError
-    so a typo in a checked-in skill file fails loudly at startup."""
-    if not text.startswith(_SPLIT):
-        return {}, text.strip()
-    # Find closing fence on its own line
-    rest = text[len(_SPLIT):]
-    end_idx = rest.find("\n" + _SPLIT)
-    if end_idx == -1:
-        raise ValueError("unterminated frontmatter block")
-    fm_raw = rest[:end_idx]
-    body = rest[end_idx + len("\n" + _SPLIT):].lstrip("\n").strip()
-    try:
-        fm = yaml.safe_load(fm_raw) or {}
-    except yaml.YAMLError as e:
-        raise ValueError(f"frontmatter YAML parse error: {e}") from e
-    if not isinstance(fm, dict):
-        raise ValueError("frontmatter must be a YAML mapping")
-    return fm, body
+# Frontmatter parsing → the canonical parser in core.frontmatter (burn-down #4).
+# This module's `_split_frontmatter` WAS the reference implementation; it now
+# delegates so skills/memory loaders can't drift on edge cases.
+from core.frontmatter import parse_frontmatter as _split_frontmatter
 
 
 def _agents_allows_aba(fm: dict) -> bool:

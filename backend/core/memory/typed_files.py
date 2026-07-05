@@ -55,19 +55,9 @@ def memory_dir() -> Path:
     return d
 
 
-def _split_frontmatter(text: str) -> tuple[dict, str]:
-    if not text.startswith(_SPLIT):
-        return {}, text.strip()
-    rest = text[len(_SPLIT):]
-    end = rest.find("\n" + _SPLIT)
-    if end == -1:
-        raise ValueError("unterminated frontmatter")
-    fm_raw = rest[:end]
-    body = rest[end + len("\n" + _SPLIT):].lstrip("\n").rstrip()
-    fm = yaml.safe_load(fm_raw) or {}
-    if not isinstance(fm, dict):
-        raise ValueError("frontmatter must be a mapping")
-    return fm, body
+# Parsing delegates to the canonical parser (burn-down #4); _SPLIT stays for the
+# WRITER below (memory files are also serialized with the same `---` fence).
+from core.frontmatter import parse_frontmatter as _split_frontmatter
 
 
 def _entry_from_file(f: Path) -> Optional[MemoryEntry]:
