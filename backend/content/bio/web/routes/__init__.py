@@ -29,6 +29,8 @@ from .proposals import router as _proposals_router
 from .advisors import router as _advisors_router
 from .threads_bio import router as _threads_bio_router
 from .misc import router as _misc_router
+from .platform_bio import router as _platform_bio_router   # Item 2A.4
+from .files import router as _files_router                 # Item 2A.4
 
 
 router = APIRouter()
@@ -43,6 +45,8 @@ router.include_router(_proposals_router)
 router.include_router(_advisors_router)
 router.include_router(_threads_bio_router)
 router.include_router(_misc_router)
+router.include_router(_platform_bio_router)   # Item 2A.4: search/feedback/run-probe/manifest-preview/skills-reload/materialize
+router.include_router(_files_router)          # Item 2A.4: files tree/download/content/raw/promote/ai-summary
 
 
 __all__ = ["router"]
