@@ -834,19 +834,15 @@ async def stream_response(
                     # to the result, so the agent has it BEFORE its first run_python
                     # on resume, instead of guessing the path, erroring, and only
                     # THEN seeing the orientation prepended to that run's output.
-                    _orient = ""
-                    try:
-                        from content.bio.tools.run_exec import (_prior_run_files_preamble,
-                                                                _run_scratch_cwd)
-                        from content.bio.lifecycle.runs import active_run_id
-                        from core import projects as _projects
-                        _pid = _projects.current()
-                        _orient = _prior_run_files_preamble(
-                            str(_pid), str(store_tid),
-                            current_run_id=active_run_id(str(store_tid)),
-                            cwd=_run_scratch_cwd(str(_pid), str(store_tid)))
-                    except Exception:  # noqa: BLE001 — orientation is best-effort
-                        _orient = ""
+                    # Orientation is a CONTENT computation (bio run-workspace paths):
+                    # ask for it through the core/services seam so the orchestrator
+                    # doesn't import content privates. Best-effort — "" if no pack /
+                    # it raises (modularity_audit3 Item 1, Phase 2a).
+                    from core.services import call_service
+                    from core import projects as _projects
+                    _pid = _projects.current()
+                    _orient = call_service(
+                        "plan_orientation_preamble", str(_pid), str(store_tid), default="")
                     _note = ("Plan shown to the user with Go/Adjust controls. "
                              "Wait for their decision before executing.")
                     if _orient:
