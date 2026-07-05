@@ -133,7 +133,7 @@ toggle). The base spec (`environment.yml`) lives in the repo.
 | `core/exec/materialize.py` | `materialize()` dispatch (pip/conda); `_pip_install` (overlay + constraints); `_conda_install` (tools env); `PYLIB_DIR`, `project_pylib_dir` |
 | `core/exec/env_integrity.py` | ABI anchor (`abi_anchor_constraints`), base freeze (`ensure_base_constraints`, `_freeze_pins`), `env_selfcheck`, `gpu_capability_ok`/`torch_cuda_build`, `self_heal_base`/`repair_base`/`base_health`, `verify_python_imports` |
 | `core/jobs/slurm_entry.py` | background-job entry; GPU verify-at-use preflight + numpy canary |
-| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base: `ABA_ACCELERATOR` (config.env) → CPU vs CUDA torch pin |
+| `install/core/inject-accelerator.sh` · `install/linux/setup.sh` · `install/sif/build.sh` · `aba-vbc/build.sh` | deployment-conditional base: `ABA_ACCELERATOR` → CPU vs CUDA torch pin — applied by the installer, the SIF build (fat bakes the venv; slim's mounted base too), and the aba-vbc pipeline (`versions.env`); the fat image records it in `%labels` (`org.aba.accelerator`) |
 | `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
 | `core/exec/kernels/` · `core/exec/run.py` (run_python preamble) | assembles the run's `sys.path`: base + project overlay (see [`compute-execution.md`](compute-execution.md)) |
