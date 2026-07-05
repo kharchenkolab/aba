@@ -137,6 +137,11 @@ def test_fstype_classification_sets():
     assert "nfs" in env_integrity._SHARED_FS and "lustre" in env_integrity._SHARED_FS
     assert "beegfs" in env_integrity._SHARED_FS
     assert "tmpfs" in env_integrity._LOCAL_FS and "ext4" in env_integrity._LOCAL_FS
+    # fat SIF: an ENVS_DIR that falls inside the read-only image (session overlay /
+    # squashfs) is node-local + ephemeral — must classify local, so the check fires.
+    assert "overlay" in env_integrity._LOCAL_FS and "squashfs" in env_integrity._LOCAL_FS
+    # (a shared NFS/beegfs BIND into the container still reads as nfs/beegfs, so a
+    # correctly-bound ENVS_DIR passes — verified on a real SIF.)
 
 
 def test_fs_type_for_path_root():

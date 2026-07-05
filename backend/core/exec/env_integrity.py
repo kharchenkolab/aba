@@ -738,8 +738,12 @@ def base_is_readonly_fs() -> bool:
 _SHARED_FS = {"nfs", "nfs4", "lustre", "gpfs", "beegfs", "beegfs_nodev", "fhgfs",
               "cephfs", "ceph", "glusterfs", "fuse.glusterfs", "smb3", "cifs",
               "panfs", "pvfs2", "orangefs", "9p", "afs"}
+# `overlay`/`squashfs` matter under a fat SIF: apptainer preserves a bind's real
+# fstype in the container's mountinfo (a shared NFS/beegfs bind reads as nfs/beegfs),
+# but an ENVS_DIR that falls INSIDE the read-only image (its session overlay /
+# squashfs lowerdir) is node-local + ephemeral — correctly flagged (verified on a SIF).
 _LOCAL_FS = {"tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
-             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay"}
+             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay", "squashfs", "fuse.squashfuse"}
 
 
 def _fs_type_for_path(path) -> "str | None":
