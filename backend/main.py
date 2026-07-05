@@ -132,21 +132,10 @@ import threading
 # Per-project artifacts (post 2026-05-31 reorg) live under
 # projects/<pid>/artifacts/<name>. The URL scheme is /artifacts/<pid>/<name> —
 # served by the route handler below. Legacy single-dir mount removed.
-def _artifact_url_to_path(url: str) -> Path | None:
-    """Resolve an `/artifacts/...` URL stored in an entity record to a disk path.
-    Returns None if the URL doesn't match the expected shape or escapes a project
-    boundary. Single source of truth for URL→file mapping across handlers."""
-    if not url or not url.startswith("/artifacts/"):
-        return None
-    parts = url[len("/artifacts/"):].split("/")
-    if len(parts) == 2 and parts[0] and parts[1] and ".." not in parts[0] and ".." not in parts[1]:
-        # New per-project shape: /artifacts/<pid>/<name>
-        from core.config import project_artifacts_dir
-        return project_artifacts_dir(parts[0]) / parts[1]
-    if len(parts) == 1 and parts[0] and ".." not in parts[0]:
-        # Legacy workspace-level fallback: /artifacts/<name>
-        return ARTIFACTS_DIR / parts[0]
-    return None
+# _artifact_url_to_path moved to core/web/artifacts.py (Item 2A.1) so content code
+# imports it from core, not up from main; re-exported here for back-compat
+# (tests/regtest still do `from main import _artifact_url_to_path`).
+from core.web.artifacts import _artifact_url_to_path  # noqa: F401
 
 
 @app.get("/artifacts/{pid}/{name}")
