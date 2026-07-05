@@ -24,28 +24,20 @@ def _resolve_thread(thread_id: str) -> str:
 
 # Vision-LLM figure caption helpers --------------------------------------
 #
-# Used by results.suggest_interpretation. Kept here because the resolver
-# duplicates main.py's /artifacts/* path translation and is callable from
-# any sub-module that needs to materialize an artifact URL to disk.
+# Used by results.suggest_interpretation. The /artifacts/* → disk translation
+# now lives in core.web.artifacts (Item 2A.1); this thin wrapper adds only the
+# bare-disk-path fallback that this caller also accepts.
 
 
 def _artifact_url_to_path(url: str):
-    """Resolve a /artifacts/<pid>/<name> URL to a disk Path, or None.
-    Local copy — main.py has its own for the /artifacts/* GET route;
-    these will dedupe when an artifact-resolver moves to core."""
-    import json  # noqa: F401 (kept consistent with main.py's import block)
+    """Resolve a /artifacts/<pid>/<name> URL (via core.web.artifacts) to a disk
+    Path, or treat a non-/artifacts value as a bare disk path. None if empty."""
     if not url:
         return None
     if url.startswith("/artifacts/"):
-        parts = url[len("/artifacts/"):].split("/")
-        if len(parts) == 2 and parts[0] and parts[1]:
-            from core.config import project_artifacts_dir
-            return project_artifacts_dir(parts[0]) / parts[1]
-        if len(parts) == 1:
-            from core.config import ARTIFACTS_DIR
-            return ARTIFACTS_DIR / parts[0]
-        return None
-    return Path(url) if url else None
+        from core.web.artifacts import _artifact_url_to_path as _canon
+        return _canon(url)
+    return Path(url)
 
 
 def _llm_figure_caption(artifact_path: str, producing_code: str,

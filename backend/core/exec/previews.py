@@ -72,8 +72,8 @@ _MAX_PX_WIDE = 3000
 def _url_to_disk(url_or_path: str) -> Optional[Path]:
     """Resolve an `/artifacts/...` URL or a bare disk path to an
     absolute Path. Returns None if the URL shape doesn't match or the
-    path escapes a project boundary. Mirrors `main._artifact_url_to_path`
-    deliberately (kept local to avoid a backend → core import)."""
+    path escapes a project boundary. Extends `core.web.artifacts._artifact_url_to_path`
+    (which it deliberately mirrors) with a bare-disk-path passthrough."""
     if not url_or_path:
         return None
     if url_or_path.startswith("/artifacts/"):
