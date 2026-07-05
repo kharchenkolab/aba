@@ -70,4 +70,15 @@ def require_project(
     return pid
 
 
-__all__ = ["require_project", "_pin_or_412"]
+def require_project_context(project_id: str | None) -> str:
+    """Pin the project per-request for handlers that take project_id in the REQUEST
+    BODY (chat/resume) — the ASGI middleware can't safely parse the body. For
+    query/header sources, prefer Depends(require_project). Both share `_pin_or_412`.
+
+    Returns the RESOLVED pid (body value, or the global fallback when the body omits
+    it) so callers can bind it to their context — see chat()/#18. (Moved from main.py
+    in Item 2A.3 so router modules share it without importing up from main.)"""
+    return _pin_or_412(project_id)
+
+
+__all__ = ["require_project", "require_project_context", "_pin_or_412"]

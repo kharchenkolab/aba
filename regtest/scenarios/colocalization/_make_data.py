@@ -14,7 +14,7 @@ out as the bad field that should be excluded.
 
 Everything is seeded (seed=0 + per-field deterministic seeds) so the planted
 truth is stable. Run with the scenario venv:
-  /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+  "" _make_data.py
 """
 
 import os

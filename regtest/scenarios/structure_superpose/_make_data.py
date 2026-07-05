@@ -9,7 +9,7 @@ is still the live state of the PDB. Run it to confirm the scenario is wired to
 reality before using it.
 
 Run:
-  /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+  "" _make_data.py
 """
 import os
 import sys

@@ -729,6 +729,121 @@ def base_is_readonly_fs() -> bool:
         return False
 
 
+# ─── ENVS_DIR must be shared-FS under Slurm (finding F6b, HIGH) ────────────────
+# A package ensure_capability'd into ENVS_DIR/pylib is added to every run's
+# sys.path. Under a Slurm submitter the run happens on ANOTHER node, so if
+# ENVS_DIR is node-local the job dies on ModuleNotFoundError with no obvious
+# cause. We classify by ACTUAL mount fstype (not path prefix), so the default
+# `/workspace` trap and non-standard local mounts are caught too.
+_SHARED_FS = {"nfs", "nfs4", "lustre", "gpfs", "beegfs", "beegfs_nodev", "fhgfs",
+              "cephfs", "ceph", "glusterfs", "fuse.glusterfs", "smb3", "cifs",
+              "panfs", "pvfs2", "orangefs", "9p", "afs"}
+# `overlay`/`squashfs` matter under a fat SIF: apptainer preserves a bind's real
+# fstype in the container's mountinfo (a shared NFS/beegfs bind reads as nfs/beegfs),
+# but an ENVS_DIR that falls INSIDE the read-only image (its session overlay /
+# squashfs lowerdir) is node-local + ephemeral — correctly flagged (verified on a SIF).
+_LOCAL_FS = {"tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
+             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay", "squashfs", "fuse.squashfuse"}
+
+
+def _fs_type_for_path(path) -> "str | None":
+    """Filesystem type backing ``path`` via /proc/self/mountinfo (longest
+    mount-point-prefix match). None if unreadable (non-Linux / no procfs)."""
+    try:
+        real = os.path.realpath(str(path))
+        best_mp, best_fstype = "", None
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                try:
+                    pre, post = line.split(" - ", 1)
+                    mp = pre.split()[4]                 # mount point
+                    fstype = post.split()[0]            # fs type (after " - ")
+                except (ValueError, IndexError):
+                    continue
+                if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) >= len(best_mp):
+                    best_mp, best_fstype = mp, fstype
+        return best_fstype
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _classify_fs(path) -> "tuple[str, str]":
+    """``(kind, detail)`` for a path's backing filesystem — shared|node_local|unknown,
+    by actual mount fstype. NB `overlay`/`squashfs` (a fat SIF's in-image session FS)
+    count as **node-local**: reachable only INSIDE the container, and a Slurm `job.sh`
+    runs BARE on the compute node (no `apptainer exec` re-entry — slurm_submitter.py)."""
+    p = str(path)
+    fstype = _fs_type_for_path(p)
+    if fstype is None:
+        return "unknown", f"could not determine fs type for {p}"
+    if fstype in _SHARED_FS:
+        return "shared", f"{p} on {fstype} (shared)"
+    if fstype in _LOCAL_FS:
+        return "node_local", f"{p} on {fstype} (node-local / in-image)"
+    return "unknown", f"{p} on {fstype} (fs type not classified)"
+
+
+def envs_dir_fs_kind() -> "tuple[str, str]":
+    """``(kind, detail)`` for the filesystem under ENVS_DIR (the growth overlay).
+    Empirical (mount fstype), so it catches the `/workspace`-node-local trap a
+    path-prefix check misses."""
+    from core.exec.materialize import ENVS_DIR
+    return _classify_fs(str(ENVS_DIR))
+
+
+def base_fs_kind() -> "tuple[str, str]":
+    """``(kind, detail)`` for the filesystem under the BASE venv (`sysconfig` purelib).
+    Fat SIF → the in-image overlay/squashfs → node_local; slim → the `image.base_dir`
+    bind (shared iff pointed at shared FS); native → the install FS."""
+    return _classify_fs(str(_base_site_dir()))
+
+
+def check_envs_dir_shared() -> dict:
+    """Self-check (see selfcheck.py): under a Slurm submitter ENVS_DIR must be on
+    shared storage. Fires only for the 'slurm' submitter — a local submitter runs
+    jobs on this same node, so node-local is fine."""
+    from core.jobs.submitter import submitter_name
+    if submitter_name() != "slurm":
+        return {"ok": True, "severity": "info", "detail": "local submitter — ENVS_DIR sharing N/A"}
+    kind, detail = envs_dir_fs_kind()
+    if kind == "shared":
+        return {"ok": True, "severity": "info", "detail": detail}
+    if kind == "node_local":
+        return {"ok": False, "severity": "high",
+                "detail": (f"ENVS_DIR looks node-local ({detail}); a background Slurm job on another "
+                           "node can't see ensure_capability'd packages — point "
+                           "ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage.")}
+    return {"ok": False, "severity": "warning",
+            "detail": (f"ENVS_DIR shared-ness unverified ({detail}); if node-local, background Slurm "
+                       "jobs will fail to import provisioned packages. Confirm shared storage or run "
+                       "the install-time probe (aba doctor).")}
+
+
+def check_base_dir_shared() -> dict:
+    """Self-check: under a Slurm submitter the BASE venv must be on shared storage.
+    The generated job.sh runs BARE on the compute node (`sys.executable -u -m
+    core.jobs.slurm_entry`, no `apptainer exec` re-entry — slurm_submitter.py:117),
+    so an in-image (fat SIF) or node-local base is unreachable → the job can't even
+    find the interpreter. Fires only for the 'slurm' submitter. This is the guard
+    that makes the documented rule enforceable: **Slurm offload needs the env on
+    shared FS** — a slim SIF (`image.base_dir` on shared FS) or a native shared
+    install; a fat SIF is single-node / local-submitter only (misc/slim_sif_deploy.md)."""
+    from core.jobs.submitter import submitter_name
+    if submitter_name() != "slurm":
+        return {"ok": True, "severity": "info", "detail": "local submitter — base sharing N/A"}
+    kind, detail = base_fs_kind()
+    if kind == "shared":
+        return {"ok": True, "severity": "info", "detail": detail}
+    if kind == "node_local":
+        return {"ok": False, "severity": "high",
+                "detail": (f"base venv is node-local / in-image ({detail}); the Slurm job.sh runs bare "
+                           "on the compute node and can't reach it (no container re-entry). Slurm offload "
+                           "needs the env on shared FS — use a slim SIF (image.base_dir on shared FS) or a "
+                           "native shared install; a fat SIF is single-node / local-submitter only.")}
+    return {"ok": False, "severity": "warning",
+            "detail": f"base venv shared-ness unverified ({detail}); confirm it is on shared storage."}
+
+
 def _base_stamp_path() -> Path:
     """Where the 'base verified' stamp lives — under the mutable runtime root, NOT
     the (read-only) base. Independent per install / per OOD tenant."""

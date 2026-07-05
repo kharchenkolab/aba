@@ -115,7 +115,7 @@ def _emit_edge_op(op: str, src: str, dst: str, rel: str, meta: Optional[dict]) -
     archive's edges.jsonl. Failures swallowed — the DB write succeeded."""
     try:
         from core.recovery import get_scribe, EdgeOp        # noqa: PLC0415
-        from core.config import current_project_id          # noqa: PLC0415
+        from core.projects import current_project_id          # noqa: PLC0415
         get_scribe().enqueue(EdgeOp(
             pid=current_project_id(),
             op=op, src=src, dst=dst, rel=rel, meta=meta,

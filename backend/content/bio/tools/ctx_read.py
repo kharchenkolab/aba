@@ -21,7 +21,8 @@ _THREAD_READ_SKILLS: dict = {}
 def read_csv_info(input_: dict) -> dict:
     import pandas as pd
     filename = input_.get("filename", "")
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     path = project_data_dir(current_project_id()) / filename
     if not path.exists():
         return {"error": f"File not found: {filename}"}

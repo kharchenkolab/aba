@@ -36,7 +36,7 @@ Outputs (uint8 TIFF, 256x256, single channel):
     data/moving.tif
 
 Run with the scenario venv:
-    /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+    "" _make_data.py
 """
 import os
 import numpy as np

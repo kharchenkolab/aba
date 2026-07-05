@@ -220,6 +220,19 @@ def current() -> str | None:
     return _state["current"]
 
 
+def current_project_id() -> str:
+    """The active project's id, or '_workspace' as the workspace-level fallback.
+    Used by code paths that need a project context but the caller didn't supply
+    one (e.g. uploads landing in the active project, kernel WORK_DIR injection).
+
+    Moved here from core.config (burn-down #1): config is a foundational leaf and
+    must not import projects. This is the natural home — it just wraps current()."""
+    try:
+        return current() or "_workspace"
+    except Exception:  # noqa: BLE001
+        return "_workspace"
+
+
 def ensure_opened(pid: str) -> None:
     """Idempotent per-process project open WITHOUT mutating the global DB.
 

@@ -105,7 +105,8 @@ promotion, bundle, exec record, …) — is in [`README.md`](README.md).
 
 | Where | What |
 |---|---|
-| `backend/main.py` | the FastAPI app + composition root; `/api/chat` and the route surface |
+| `backend/main.py` | the FastAPI composition root: mounts the routers (`core/web/routers/*` + `content/bio/web`), wires `lifespan.py` + the project-pin middleware, and hosts the Reasoning-plane entries (`/api/chat`, `/api/turns/*/resume`, `/tool_result`) that import `guide` |
+| `backend/core/web/` | the platform web layer: domain-neutral `routers/*`, `deps.py` (project pin), `middleware.py`, `artifacts.py` |
 | `backend/guide.py` | the agent turn loop (`stream_response`) — the Reasoning plane |
 | `backend/core/` | the domain-neutral engine: `graph/` (waist), `runtime/` (turns/LLM/MCP), `exec/` + `jobs/` (Compute), `bundle/` + `skills/` + `catalog/` (knowledge), `recovery/` + `summarize/` (context) |
 | `backend/content/bio/` | the bio content pack: entity types, tools, lifecycle, cards — the domain, plugged in |
@@ -118,12 +119,18 @@ promotion, bundle, exec record, …) — is in [`README.md`](README.md).
 These are cross-cutting; each subsystem doc carries its own local gaps. Full detail +
 grades in `misc/modularity_audit3.md`.
 
-- **`guide ⇄ core.jobs` coupling.** The agent loop was made content-neutral but not
-  *compute*-neutral: `guide` imports a concrete job-submit function and job continuation
-  imports `guide` back. The one genuine cross-layer coupling left. ([`jobs-and-hpc.md`](jobs-and-hpc.md), [`agent-loop.md`](agent-loop.md))
-- **Two entry-point monoliths.** `main.py` (~2700 loc) and `guide.py`'s `stream_response`
-  (~1089 loc) are the pre-refactor god-files arch3 targets for decomposition; the seams
-  around them are built and CI-guarded, the interiors are not yet split.
+- **`guide → core.jobs` down-edge (up-edge dissolved).** The Compute→Reasoning *up*-edge is
+  gone (Item 1): a finished job re-enters through `core/reasoning_port` (guide registers the
+  handler at import), so `core.jobs` no longer imports `guide` — enforced by `check_seam` rule 4.
+  What remains is the forward *down*-edge: `guide` imports a concrete job-submit function
+  (compute-neutrality, deferred). ([`jobs-and-hpc.md`](jobs-and-hpc.md), [`agent-loop.md`](agent-loop.md))
+- **Entry-point monoliths (decomposition in progress).** `main.py` (was ~3000 loc, now ~2066)
+  is being split: the domain-neutral platform routes now live in `core/web/routers/*` (admin,
+  jobs, settings, memory, threads, projects, turns, misc), with `lifespan.py` + project-pin
+  middleware in `core/web`. Remaining in main: the Reasoning-plane entries (which import guide)
+  and the bio-coupled routes (→ `content/bio/web`, Item 2A.4). `guide.py`'s `stream_response`
+  (~1089 loc) is still the un-split monolith (Item 2B). Seams are CI-guarded (route-table
+  snapshot + pin-coverage). Plan: `misc/item2_decomposition.md`.
 - **Store read-port burn-down.** The typed read-port exists and is ratcheted, but some
   modules still reach raw SQL (multi-hop lineage walks have no edge-port yet). ([`entity-model.md`](entity-model.md))
 - **Identity is a reserved seam.** Single-user today (`human:local`); real multi-user

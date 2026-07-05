@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from core.config import API_KEY, MODEL, FAKE_SESSION
+from core.config import MODEL, FAKE_SESSION
 
 
 # Turn-count threshold at which the reflection prompt fires.
@@ -72,8 +72,8 @@ def maybe_reflect(
             "re-read the source CSV."
         )
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=API_KEY)
+        from core.llm import sync_anthropic_client
+        client = sync_anthropic_client()   # credential-aware (oauth_cc/apikey) — model seam
         msg = client.messages.create(
             model=MODEL,
             max_tokens=180,
@@ -146,8 +146,8 @@ def run_probe() -> dict | None:
         passed = False
     else:
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=API_KEY)
+            from core.llm import sync_anthropic_client
+            client = sync_anthropic_client()   # credential-aware — model seam
             _m = build_manifest(session_id='probe', turn_index=0,
                                 focus_entity_id=target["id"], thread_id=None)
             _focus_text, _ = render_focus_preamble(_m)

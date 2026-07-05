@@ -11,7 +11,7 @@ B-factor column of every atom (constant within a residue). data/ holds the
 real AF model so the agent reads REAL pLDDT, never invents it.
 
 Run:
-  /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+  "" _make_data.py
 """
 import os
 import sys

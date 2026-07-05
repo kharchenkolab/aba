@@ -84,7 +84,8 @@ def list_data_files(_input: dict) -> dict:
     # data; list every real file (skip only dotfiles + obvious junk), capped.
     _SKIP_SUFFIX = (".pyc", ".log", ".lock")
     n_unregistered = 0
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     _data_dir = project_data_dir(current_project_id())
     _CAP = 300
     try:
@@ -183,7 +184,8 @@ def inspect_upload(input_: dict) -> dict:
     if not raw:
         return {"error": "path is required"}
     p = Path(raw)
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     _data_dir = project_data_dir(current_project_id())
     if not p.is_absolute():
         p = _data_dir / p

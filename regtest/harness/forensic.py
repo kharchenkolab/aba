@@ -9,7 +9,7 @@ request), then root-causes the failure by LAYER (agent_model / recipe / tool /
 context_assembly / harness / scenario_design / data) with evidence + a fix.
 
     ABA_SCENARIO=gwas_popstruct \
-      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u regtest/harness/forensic.py [step_id]
+      "" -u regtest/harness/forensic.py [step_id]
     # or point at a bundle directly:
     BUNDLE=regtest/scenarios/_runs/gwas_popstruct-20260629-075855 ... diagnose_failure.py s6
 

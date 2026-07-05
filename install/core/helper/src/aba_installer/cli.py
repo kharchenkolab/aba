@@ -71,6 +71,106 @@ def run_playbook_headless(name: str, *, only=None, skip=None) -> int:
     return 0 if ok else 1
 
 
+# Shared vs node-local filesystem classification for the Slurm provisioning-dir
+# gate. Mirrors backend/core/exec/env_integrity._fs_type_for_path — duplicated
+# (not imported) on purpose: the installer package is standalone (no backend dep).
+_SHARED_FS = {"nfs", "nfs4", "lustre", "gpfs", "beegfs", "beegfs_nodev", "fhgfs",
+              "cephfs", "ceph", "glusterfs", "fuse.glusterfs", "smb3", "cifs",
+              "panfs", "pvfs2", "orangefs", "9p", "afs"}
+_LOCAL_FS = {"tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
+             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay", "squashfs", "fuse.squashfuse"}
+
+
+def _fs_kind_for_path(path) -> "tuple[str, str | None]":
+    """``(kind, fstype)`` via /proc/self/mountinfo (longest mount-prefix match).
+    kind ∈ {'shared','node_local','unknown'} — by actual mount fstype, not path
+    name, so `/workspace`-is-local and other non-standard local mounts are caught."""
+    fstype = None
+    try:
+        real = os.path.realpath(str(path))
+        best = ""
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                try:
+                    pre, post = line.split(" - ", 1)
+                    mp = pre.split()[4]
+                    ft = post.split()[0]
+                except (ValueError, IndexError):
+                    continue
+                if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) >= len(best):
+                    best, fstype = mp, ft
+    except Exception:  # noqa: BLE001
+        return "unknown", None
+    if fstype in _SHARED_FS:
+        return "shared", fstype
+    if fstype in _LOCAL_FS:
+        return "node_local", fstype
+    return "unknown", fstype
+
+
+def _probe_envs_visible_on_compute_node(envs_dir: str, home: Path) -> "tuple[bool, str]":
+    """Definitive shared-FS check: write a token under ENVS_DIR (the dir UNDER
+    TEST) from the host running `aba doctor` (a submit node or interactive
+    allocation), `sbatch` a one-shot job that reads it from a compute node and
+    reports via stdout to a log under HOME (a known-shared channel — the env +
+    launcher live there). Poll that shared log. Best-effort: `(True, …)` when
+    sbatch is absent or the job doesn't land in time so a busy scheduler never
+    blocks the install; a genuine MISSING is a hard `(False, …)`."""
+    import time
+    import uuid
+    if not shutil.which("sbatch"):
+        return True, "sbatch not found — compute-node probe skipped"
+    envs = Path(envs_dir)
+    try:
+        envs.mkdir(parents=True, exist_ok=True)
+    except Exception as e:  # noqa: BLE001
+        return False, f"cannot create ENVS_DIR {envs_dir}: {e}"
+    tok = uuid.uuid4().hex
+    pdir = Path(home) / ".aba-probe"
+    pdir.mkdir(parents=True, exist_ok=True)
+    token = envs / f".aba-probe-{tok}"      # under the dir under test
+    out_log = pdir / f"out-{tok}.log"        # shared channel back to the login node
+    script = pdir / f"probe-{tok}.sh"
+    token.write_text(tok)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f"if [ -f '{token}' ] && [ \"$(cat '{token}' 2>/dev/null)\" = '{tok}' ]; then\n"
+        "  echo ABA_PROBE_VISIBLE\nelse\n  echo ABA_PROBE_MISSING\nfi\n"
+    )
+
+    def _rm():
+        for p in (token, script, out_log):
+            try:
+                p.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+    try:
+        sub = subprocess.run(["sbatch", "--parsable", "-t", "5", "-n", "1",
+                              "-o", str(out_log), str(script)],
+                             capture_output=True, text=True, timeout=30)
+        if sub.returncode != 0:
+            _rm()
+            return True, f"probe sbatch failed (skipped): {(sub.stderr or '').strip()[:160]}"
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            if out_log.exists():
+                txt = out_log.read_text(errors="replace")
+                if "ABA_PROBE_VISIBLE" in txt:
+                    _rm()
+                    return True, f"a compute node read a token under {envs_dir} (shared ✓)"
+                if "ABA_PROBE_MISSING" in txt:
+                    _rm()
+                    return False, (f"a compute node could NOT read a token written under {envs_dir} — it "
+                                   "is NOT shared; ensure_capability'd packages will be invisible to Slurm jobs")
+            time.sleep(5)
+        _rm()
+        return True, "probe job didn't finish in 180s (inconclusive — scheduler busy?); fstype check stands"
+    except Exception as e:  # noqa: BLE001
+        _rm()
+        return True, f"probe error (skipped): {e}"
+
+
 def doctor() -> int:
     """Classical health-check of an existing install: env, frontend, recipes,
     launcher, credential, backend, and (on a cluster) Slurm. Prints a fix for
@@ -161,11 +261,25 @@ def doctor() -> int:
         import re as _re
         _me = _re.search(r"ABA_ENVS_DIR=(\S+)", cfg_txt)
         _mr = _re.search(r"ABA_RUNTIME_DIR=(\S+)", cfg_txt)
-        _envs = (_me.group(1) if _me else (_mr.group(1) + "/envs" if _mr else str(home / "runtime" / "envs"))).strip("\"'")
-        _node_local = _envs.startswith(("/tmp", "/dev/shm", "/localscratch", "/scratch-local"))
-        chk("provisioning dir on shared storage (Slurm)", not _node_local,
-            f"ENVS_DIR is node-local ({_envs}) — a background Slurm job on another node can't see "
-            "ensure_capability'd packages; point ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage")
+        if not _me and not _mr:
+            # The default (config.py) is /workspace/aba-runtime — node-local scratch on
+            # many clusters. Under Slurm that silently breaks provisioned-package jobs.
+            chk("provisioning dir configured for shared storage (Slurm)", False,
+                "neither ABA_RUNTIME_DIR nor ABA_ENVS_DIR is set in config.env — the default "
+                "(/workspace/aba-runtime) is node-local on many clusters; set one to a shared path")
+        else:
+            _envs = (_me.group(1) if _me else _mr.group(1) + "/envs").strip("\"'")
+            _kind, _fstype = _fs_kind_for_path(_envs)
+            # Empirical fstype (not path prefix): catches /workspace, /local, bind-mounts.
+            chk(f"provisioning dir on shared storage (Slurm; fs={_fstype or 'unknown'})",
+                _kind != "node_local",
+                f"ENVS_DIR is node-local ({_envs} on {_fstype}) — a background Slurm job on another node "
+                "can't see ensure_capability'd packages; point ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage")
+            # Definitive: only probe when the fstype check didn't already fail (no point
+            # sbatch-ing if we already know it's local). A genuine MISSING is a hard fail.
+            if _kind != "node_local" and os.environ.get("ABA_SKIP_ENVS_PROBE", "").lower() not in ("1", "true", "yes"):
+                _ok, _msg = _probe_envs_visible_on_compute_node(_envs, home)
+                chk("provisioning dir visible from a compute node (Slurm probe)", _ok, _msg)
 
     print(f"\n{'✓ all checks passed' if fails == 0 else f'✗ {fails} issue(s) — see the fixes above'}", flush=True)
     return 0 if fails == 0 else 1

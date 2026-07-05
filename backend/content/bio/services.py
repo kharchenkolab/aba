@@ -58,6 +58,44 @@ def _plan_orientation_preamble(project_id: str, thread_id: str) -> str:
     )
 
 
+def _result_cascade_members(result_id: str) -> set:
+    """Containment set for `cascade=members` on a Result delete (moved from main.py,
+    Item 2A.4): every figure/table/cell member referenced from metadata.members, plus
+    each member's full revision chain (active + superseded). The Result id itself is
+    NOT included — it's deleted separately. This is bio-domain knowledge (Result/figure/
+    revision semantics + the "figure"/"table" types), so the platform delete route asks
+    for it through the core/services seam instead of naming bio types itself.
+
+    Why include superseded revisions: deleting a Result should take its whole history
+    with it (superseded revisions are figure entities from make_revision, referenced
+    nowhere visible; left behind they look like a leak)."""
+    from content.bio.graph.figure_history import figure_history
+    from core.graph.entities import get_entity
+    out: set = set()
+    r = get_entity(result_id)
+    if not r:
+        return out
+    members = (r.get("metadata") or {}).get("members") or []
+    member_ids = [m.get("ref") for m in members if isinstance(m, dict) and m.get("ref")]
+    for mid in member_ids:
+        m = get_entity(mid)
+        if not m:
+            continue
+        out.add(mid)
+        # Expand revision chains for figure/table members. Cells don't currently form
+        # revision chains via wasRevisionOf, but figure_history is safe on any type.
+        if m.get("type") in ("figure", "table"):
+            try:
+                chain = figure_history(mid, include_superseded=True)
+                for e in chain:
+                    if e and e.get("id"):
+                        out.add(e["id"])
+            except Exception:  # noqa: BLE001 — chain walk is best-effort
+                pass
+    return out
+
+
 register_service("language_sniffer", _language_sniffer)
 register_service("host_tool_names", _host_tool_names)
 register_service("plan_orientation_preamble", _plan_orientation_preamble)
+register_service("result_cascade_members", _result_cascade_members)

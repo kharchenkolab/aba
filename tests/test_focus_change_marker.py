@@ -37,7 +37,7 @@ os.environ["ABA_RUNTIME_DIR"] = str(_tmp)
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"]  = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"]      = str(Path(_tmp) / "data")
-os.environ["ABA_ENVS_DIR"]  = "/workspace/aba-runtime/envs"
+os.environ["ABA_ENVS_DIR"]  = str(Path(_tmp) / "envs")
 _fake = Path(_tmp) / "fake.jsonl"
 # Two turns of fake responses so we can drive the same thread twice
 _fake.write_text(

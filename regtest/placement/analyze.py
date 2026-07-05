@@ -7,11 +7,15 @@ human/LLM reviewer (this only extracts + lays out the signal).
 """
 import glob
 import json
+import os
 import sys
 
 
 def latest():
-    fs = sorted(glob.glob("/tmp/aba_placement_study/run-*/results.json"))
+    # Same base as study.py (ABA_PLACEMENT_STUDY_DIR) — one env var, no path coupling.
+    base = os.environ.get("ABA_PLACEMENT_STUDY_DIR",
+                          f"{os.environ.get('TMPDIR', '/tmp')}/aba_placement_study")
+    fs = sorted(glob.glob(f"{base}/run-*/results.json"))
     return fs[-1] if fs else None
 
 

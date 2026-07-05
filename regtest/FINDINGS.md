@@ -4,6 +4,30 @@ Living defect/friction register produced by the scenario test passes (runner:
 `regtest/harness/runner.py`; forensic: `regtest/harness/forensic.py`). One row
 per distinct finding; carried across passes so we don't re-discover.
 
+## 2026-07-06 (Item 2B)
+- **[MED → RESOLVED 2026-07-05] ~19 test files hardcode `ABA_ENVS_DIR="/workspace/aba-runtime/envs"`** —
+  actual count **21** (20 unit tests + `e2e/option_b_live.py`). `ABA_ENVS_DIR` was the ONE dir left
+  un-tmp-ized (every sibling — RUNTIME_DIR/ARTIFACTS/WORK/DATA — was `str(Path(_tmp)/…)`), a copy-paste
+  template artifact. `config.py:316` mkdir's `ENVS_DIR/jupyter` at import → `PermissionError: /workspace`
+  on any box without it → the module can't load, standalone OR under pytest (the module-level assignment
+  also overrode conftest's tmp-runtime). FIX: tmp-ized to `str(Path(_tmp)/"envs")` in the 20 unit tests
+  (safe — ENVS_DIR is the growth overlay, base is `sys.executable`; these tests don't provision);
+  `option_b_live.py` now `setdefault`s to the tmp (operator can `export ABA_ENVS_DIR=<real>` for a live
+  overlay). REGRESSION GUARD: `tests/test_no_workspace_hardcode.py` (standalone) fails on any dir-env-var
+  pinned to `/workspace`. VERIFIED: 21/21 import past config-mkdir with **0 PermissionError**;
+  test_exec_records_stage2 + test_preview_helper pass standalone. (test_revisions_http's `make_revision`
+  check fails on a ZMQ port collision — a real kernel spawn racing the co-located live server's kernel
+  pool on this shared node, orthogonal to the path fix.)
+- **[LOW] The "stable" system-prompt prefix isn't byte-stable across restarts** — surfaced
+  while building the turn-context golden guard (`tests/test_turn_context_golden.py`): the
+  assembled `system` prompt renders some set/dict-derived segment(s) in hash order, so its
+  bytes differ across processes (PYTHONHASHSEED) at identical length. Within one server
+  process it's stable (caching works during a session), but each **restart** gets a new hash
+  seed → the `cache_control: ephemeral` stable prefix hashes differently → one prompt-cache
+  MISS on the first turn after every restart. Minor cost. Fix-at-source: sort the set-derived
+  segment in the system-prompt assembly (would also let the golden drop its normalize/sort +
+  PYTHONHASHSEED pin). Not chased now — needs locating the exact segment.
+
 **Cycle:** Sweep (Haiku, broad — no fixing) → Triage (refresh this register; rank by
 severity×frequency) → **Deep-dive** (forensic, *verify root cause against the run*) →
 **Fix** (test-infra first, then ABA core→recipes→agent; each gated by a re-run) →
@@ -217,9 +241,62 @@ the regtest system is fully operational (Haiku coarse robustness net + Opus prec
 
 ## 2026-07-04/05 autonomous QA + Jobs-card pass — open items for review
 Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the actionable items:
-- **[HIGH] SIF/OOD build ignores ABA_ACCELERATOR** — `install/sif/build.sh` (fat+slim) + aba-vbc's `build.sh` build the env with a plain `micromamba create -f environment.yml`; no `inject-accelerator.sh` / `CONDA_OVERRIDE_CUDA`. aba-vbc deploys via SIF, so a GPU deploy there silently gets a CPU base. Needs container build-arg plumbing + a SIF build to verify (untestable on the personal install).
-- **[HIGH] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local. Live instance is fine (shared). `aba doctor` now warns; a hard startup assertion would be stronger.
-- **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
-- **[LOW] `scripts/check_invariants.sh` defaults to a stale interpreter** — it uses `PY="${PYTHON:-python3}"`; on the CLIP cluster `python3` is `/usr/bin/python3` = 3.6.8, which can't even parse the modern checker scripts (`set[...]` subscripting, `from __future__ import annotations`), so a bare run reports two spurious `✗ FAIL`s (platform-purity, derivation). You MUST run `PYTHON=<env>/bin/python bash scripts/check_invariants.sh` (with 3.12 → ALL INVARIANTS OK). Fix-the-tool option: default to a repo-local/≥3.9 interpreter, or hard-error with a clear message when `$PY` is too old, so the gate can't silently mislead. (Found 2026-07-05 during the Item 1 refactor verification; `check_seam.sh` itself is fine — it's pure bash.)
+- **[HIGH → RESOLVED 2026-07-05] SIF/OOD build ignores ABA_ACCELERATOR** — was: `install/sif/build.sh` +
+  aba-vbc's `build.sh` built the env with a plain `micromamba create -f environment.yml` (no
+  `inject-accelerator.sh` / `CONDA_OVERRIDE_CUDA`), so an aba-vbc GPU SIF deploy silently got a CPU torch base.
+  FIX (aba `eb6322a`, aba-vbc `cf7e9d9`): the fat-profile venv create now mirrors the installer — copy
+  `environment.yml` → `inject-accelerator.sh` → export `CONDA_OVERRIDE_CUDA=$ABA_CUDA_VERSION` when
+  `ABA_ACCELERATOR=cuda` → `micromamba create --channel-priority strict`; the fat image records
+  `org.aba.accelerator`/`org.aba.cuda_version` in `%labels`. aba-vbc passes the knobs through (`versions.env`)
+  and applies the same inject to its own slim base. VERIFIED on-cluster (not just structurally):
+  built the fat SIF with `ABA_ACCELERATOR=cuda ABA_CUDA_VERSION=11.8` **on the login node** *and* **on a real
+  GPU node** (`clip-g1-1`, job 148980, full `--profile fat` rc=0 — compute nodes reach conda-forge, unprivileged
+  apptainer build works, CUDA venv + R base build on-node). Baked venv = `torch 2.5.1.post303, built-against
+  cuda 11.8` (a CUDA build, not CPU); labels `org.aba.accelerator=cuda`. Runtime gold-standard on `clip-g2-1`
+  (V100): `apptainer exec --nv` → `torch.cuda.is_available()=True`, real CUDA matmul, `scvi 1.4.3 / scanpy 1.12.2`
+  import — `F1-GPU-VERIFY: PASS`.
+- **[LOW, ops — not a code defect] CBE g-node `apptainer exec` can fail on stale scratch-bind hook** — on
+  `clip-g1-1` a compiled-in apptainer mount hook tried to bind 6 orphaned `/scratch-cbe/jobtmp/clip-g1-1/<id>`
+  dirs (root-owned, absent — not in the live jobtmp listing) → `FATAL: mount source doesn't exist`, before the
+  container even starts. Not env-driven (`env -i` didn't clear it) and not in `apptainer.conf` (stock: only
+  localtime/hosts); a broken-node condition. Workaround: `--exclude` the node (a clean g-node runs fine). Worth
+  keeping in mind for the OOD apptainer launch on shared CBE GPU nodes — a launch that lands on such a node
+  fails opaquely; the OOD job owns its own scratch so it's lower-risk, but a retry/`--exclude` or a preflight
+  `apptainer exec true` smoke-check would harden it.
+- **[HIGH → RESOLVED 2026-07-05] ENVS_DIR must be shared-FS under Slurm** — a background Slurm job on
+  another node can't import an `ensure_capability`'d overlay package if `RUNTIME_DIR/ENVS_DIR` is node-local
+  (dies on `ModuleNotFoundError`, no obvious cause). Two-layer fix, both **empirical** (mount fstype via
+  `/proc/self/mountinfo`, not path-prefix — catches the default `/workspace` trap the old heuristic missed):
+  (1) **Install-time strong gate** (`aba doctor`, `cli.py`): under a Slurm submitter, fail if ENVS_DIR's fstype
+  is node-local OR neither `ABA_RUNTIME_DIR`/`ABA_ENVS_DIR` is set; **plus a definitive probe** — write a token
+  under ENVS_DIR, `sbatch` a one-shot job that reads it from a compute node and reports via a shared channel
+  (HOME); a genuine MISSING hard-fails (best-effort/skippable via `ABA_SKIP_ENVS_PROBE` so a busy scheduler
+  doesn't block install). (2) **Runtime loud-but-boot safety net** for post-install drift: a startup
+  self-check (`core/runtime/selfcheck.py` registry + `env_integrity.check_envs_dir_shared`) runs on boot,
+  logs `[startup] SELFCHECK HIGH: …`, and surfaces on **`/api/health`** (`degraded`+`warnings[]`, monitorable;
+  `ok` stays liveness) and **`/api/admin/selfcheck`** (diagnostics drawer) — no hard exit (that's the
+  installer's job). Guards: `tests/test_selfcheck.py` (11, standalone) + installer fstype tests. NB the
+  reusable self-check registry is the substrate for future boot checks (GPU base, base integrity), not just this one.
+  Under **SIF/OOD** the install gate doesn't run, so the runtime self-check is the guard — verified on a real fat SIF
+  that apptainer preserves a bind's underlying fstype in the container mountinfo (shared NFS bind → `nfs` → ok;
+  `ENVS_DIR` inside the image → `overlay`/`squashfs` → fires). A second registry tenant `check_base_dir_shared`
+  now enforces the deeper rule: the Slurm `job.sh` runs BARE on the compute node (no `apptainer exec` re-entry,
+  slurm_submitter.py:117), so the **base venv** must be on shared FS too — which means **a fat SIF cannot offload
+  to Slurm at all** (its baked in-image base is unreachable by the bare job → fires under a `slurm` submitter);
+  Slurm needs a slim SIF (base on shared FS) or a native shared install, and fat is single-node/local-submitter
+  only. Remaining gap: no SIF-aware *deploy-time* probe (native-install only).
+- **[MED → RESOLVED 2026-07-05] regtest harness portability** — `_regen_all.sh` + `placement/study.py`
+  hardcoded `/home/pkharchenko/...` venvs, and `study.py`/`analyze.py` coupled a literal `/tmp/aba_placement_study`
+  path across two files; a fresh box (or aba-vbc, running the sweep against a VBC deployment) couldn't run it
+  without reverse-engineering overrides, and `_regen_all.sh` silently FAILed every generator. FIX:
+  (1) `_regen_all.sh` resolves interpreters portably (ABA_SCENARIO_VENV/ABA_RUNTIME_VENV → repo `.venv` →
+  `$ABA_HOME/env` → `$PYTHON` → `python3`) and **fails loud with guidance** if none has the scenario deps,
+  no `/home` default; (2) `ABA_PLACEMENT_STUDY_DIR` is one shared env var read by both `study.py` + `analyze.py`
+  (+ `$TMPDIR`-based defaults); (3) env-var contract documented in `regtest/README.md`; (4) `/home/pkharchenko`
+  run-example docstrings → `$ABA_SCENARIO_VENV`/`$ABA_RUNTIME_VENV`; (5) guard `tests/test_regtest_portability.py`
+  fails on any `/home/<user>` in the harness. VERIFIED on this cluster: ran `_selftest_session` end-to-end via
+  the portable harness (ABA env python + `ABA_HOME` OAuth creds, isolated runtime, no `/home`) → **7/7 mechanical
+  steps PASS**, real Haiku turns + prompt caching, kernels spawned + reaped.
+- **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
 - **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.
 - **Shipped this pass (on main, live):** deployment-conditional CUDA base (live instance rebuilt cuda118, scVI-on-GPU fixed) + install docs (aba + aba-vbc); regtest scenarios gpu_job_completion + slurm_missing_pkg; runner ENVS_DIR→shared; `aba doctor` oauth_cc-cred + node-local-ENVS_DIR checks; Jobs-card: live output (queued/running placeholder + live run.log tail + PYTHONUNBUFFERED), deferred-submit note points at the panel, R bg jobs stream live, job archive/dismiss + auto-retention(keep=30), and the Dismiss-hang fix (reconcileJobs prunes archived jobs from the poll).

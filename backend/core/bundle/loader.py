@@ -188,7 +188,13 @@ _FRONTMATTER_RE = re.compile(
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     """Split YAML frontmatter from markdown body. Returns ({}, body) when
-    no frontmatter is present."""
+    no frontmatter is present.
+
+    NB: intentionally NOT the canonical `core.frontmatter.parse_frontmatter`
+    (burn-down #4 deduped the two *strict* parsers). This one is deliberately
+    LENIENT — regex-matched, never raises, and preserves the body verbatim
+    (no strip) — because bundle snippets/AGENTS.md must load best-effort even
+    with a malformed header, and their body whitespace is significant."""
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return {}, text

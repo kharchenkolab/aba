@@ -20,7 +20,7 @@ the project DB + artifacts, and bundle.json (step -> files navigation) for a lat
 Opus-1M forensic agent to root-cause failures.
 
     ABA_SCENARIO=_selftest_session \
-      /home/pkharchenko/aba/aba_runtime/.venv/bin/python -u regtest/harness/runner.py
+      "" -u regtest/harness/runner.py
 """
 from __future__ import annotations
 import base64
