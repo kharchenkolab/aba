@@ -111,6 +111,15 @@ viewers:
     priority: 8
     label: "Explore in pagoda3"
 
+  # .h5mu (MuData / multimodal) — converted via the same lstar CLI (mudata pkg is
+  # in the base env). Seurat/SCE/pagoda2/conos `.rds` are added in P2 (need R).
+  - id: pagoda3-mudata
+    extensions: [.h5mu]
+    mode: external
+    open_external: pagoda3_launcher
+    priority: 8
+    label: "Explore in pagoda3"
+
   # ---------- AI viewers (deferred to V4 — registered now so the menu shows them) ----------
   - id: ai-summary
     applies: any
