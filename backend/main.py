@@ -313,7 +313,8 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     # Delete the on-disk artifact for dataset-shaped entities. Only remove paths
     # under the project's data dir — never traverse outside it.
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     data_root = project_data_dir(current_project_id()).resolve()
     ap = ent.get("artifact_path")
     if ap and ent.get("type") == "dataset":
@@ -756,7 +757,7 @@ async def attach(file: UploadFile = File(...), thread_id: str = Form("default"),
     turn carries + a serve url for the chip/thumbnail."""
     if not file.filename:
         raise HTTPException(400, "filename missing")
-    from core.config import current_project_id
+    from core.projects import current_project_id
     from core.runtime.attachments import save_attachment
     return save_attachment(current_project_id(), thread_id, file.filename, file.file)
 
@@ -764,7 +765,7 @@ async def attach(file: UploadFile = File(...), thread_id: str = Form("default"),
 @app.get("/api/attachments/{thread_id}/{name}")
 def serve_attachment(thread_id: str, name: str, _pid: str = Depends(require_project)):
     """Serve a stashed chat attachment (project-scoped, path-traversal guarded)."""
-    from core.config import current_project_id
+    from core.projects import current_project_id
     from core.runtime.attachments import attachments_root
     root = attachments_root(current_project_id(), thread_id).resolve()
     f = (root / Path(name).name).resolve()
@@ -783,7 +784,8 @@ async def upload(file: UploadFile = File(...), _pid: str = Depends(require_proje
     if not file.filename:
         raise HTTPException(400, "filename missing")
     safe_name = Path(file.filename).name
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.data.paths import unique_path
     dest = unique_path(project_data_dir(current_project_id()) / safe_name)
     with dest.open("wb") as f:
@@ -839,7 +841,8 @@ async def upload_url(req: URLUploadRequest, _pid: str = Depends(require_project)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(400, "only http(s) URLs are supported")
     name = Path(parsed.path).name or "downloaded.bin"
-    from core.config import current_project_id, project_data_dir
+    from core.config import project_data_dir
+    from core.projects import current_project_id
     from core.data.paths import unique_path
     dest = unique_path(project_data_dir(current_project_id()) / name)
 

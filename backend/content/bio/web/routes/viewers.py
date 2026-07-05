@@ -114,7 +114,7 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
     from core.viewers.registry import viewers_for
     from core.viewers.launchers import launch as launch_viewer
     from core.viewers import prepare
-    from core.config import current_project_id
+    from core.projects import current_project_id
 
     node = _resolve_files_node(body.entity_id, body.path)
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
@@ -168,7 +168,7 @@ def viewers_download(
     from core.viewers.registry import viewers_for
     from core.viewers.launchers import launch as launch_viewer
     from core.viewers.store_serve import zip_store_stored
-    from core.config import current_project_id
+    from core.projects import current_project_id
 
     node = _resolve_files_node(entity_id, path)
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]

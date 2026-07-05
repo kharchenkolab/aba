@@ -88,7 +88,7 @@ def clear_history():
 def _emit_message_appended(row: dict) -> None:
     try:
         from core.recovery import get_scribe, MessageAppended  # noqa: PLC0415
-        from core.config import current_project_id             # noqa: PLC0415
+        from core.projects import current_project_id             # noqa: PLC0415
         get_scribe().enqueue(MessageAppended(pid=current_project_id(), row=row))
     except Exception:
         pass
@@ -97,7 +97,7 @@ def _emit_message_appended(row: dict) -> None:
 def _emit_messages_cleared(entity_id: str, thread_id: Optional[str]) -> None:
     try:
         from core.recovery import get_scribe, MessagesCleared  # noqa: PLC0415
-        from core.config import current_project_id             # noqa: PLC0415
+        from core.projects import current_project_id             # noqa: PLC0415
         get_scribe().enqueue(MessagesCleared(
             pid=current_project_id(),
             entity_id=entity_id,

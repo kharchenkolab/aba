@@ -461,7 +461,7 @@ def restore_entity(entity_id: str) -> Optional[dict]:
 def _emit_upsert(eid: str, row: dict) -> None:
     try:
         from core.recovery import get_scribe, EntityUpserted  # noqa: PLC0415
-        from core.config import current_project_id            # noqa: PLC0415
+        from core.projects import current_project_id            # noqa: PLC0415
         get_scribe().enqueue(EntityUpserted(pid=current_project_id(), entity_id=eid, row=row))
     except Exception:
         _log.debug("scribe emit_upsert failed (eid=%s)", eid, exc_info=True)
@@ -470,7 +470,7 @@ def _emit_upsert(eid: str, row: dict) -> None:
 def _emit_delete(eid: str) -> None:
     try:
         from core.recovery import get_scribe, EntityHardDeleted  # noqa: PLC0415
-        from core.config import current_project_id               # noqa: PLC0415
+        from core.projects import current_project_id               # noqa: PLC0415
         get_scribe().enqueue(EntityHardDeleted(pid=current_project_id(), entity_id=eid))
     except Exception:
         _log.debug("scribe emit_delete failed (eid=%s)", eid, exc_info=True)
