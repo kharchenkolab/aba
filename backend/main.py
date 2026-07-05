@@ -120,6 +120,8 @@ from core.web.routers import admin as _admin_routes
 app.include_router(_admin_routes.router)
 from core.web.routers import jobs as _jobs_routes
 app.include_router(_jobs_routes.router)
+from core.web.routers import settings as _settings_routes
+app.include_router(_settings_routes.router)
 
 
 # Startup/shutdown lifecycle → lifespan.py (Item 2A.2). Composition-root
@@ -843,127 +845,7 @@ def threads_list():
     return list_threads()
 
 
-@app.get("/api/specs/primary")
-def specs_primary_list():
-    """List all registered primary AgentSpecs. The frontend uses this
-    to populate the new-chat "Backend" dropdown; the per-thread chooser
-    on the chat screen reads it too. Empty list when nothing's
-    registered (advisor-only contents)."""
-    from core.runtime.agent import _SPECS, resolve_primary_spec_name
-    active = resolve_primary_spec_name()
-    items = []
-    for name, spec in _SPECS.items():
-        if spec.role != "primary":
-            continue
-        items.append({
-            "name":            name,
-            "model":           spec.model,
-            "prompt_mode":     spec.prompt_mode,
-            "tool_count":      (len(spec.tool_allowlist)
-                                if "*" not in spec.tool_allowlist else None),
-            "summary_budget":  spec.summary_budget_chars,
-            "is_default":      name == active,
-        })
-    items.sort(key=lambda i: (not i["is_default"], i["name"]))
-    return {"specs": items, "default": active}
-
-
-class LlmSelectRequest(BaseModel):
-    model: str
-
-
-def _llm_current(pid: str) -> dict:
-    from core.llm_catalog import spec_for_model, label_for_model
-    from core.config import current_model_for_project
-    from core import projects
-    m = current_model_for_project(pid)
-    return {"model": m, "spec": spec_for_model(m), "label": label_for_model(m),
-            "pinned": bool(projects.project_model(pid))}
-
-
-@app.get("/api/settings/llm")
-def settings_llm_get(_pid: str = Depends(require_project)):
-    """Model selector for the CURRENT project (Settings → LLM): the install-wide
-    catalog (model→spec, from system_bundle/settings.yaml) plus what's active now.
-    The user picks a model; the agent spec follows from the catalog."""
-    from core.llm_catalog import llm_models
-    return {"options": llm_models(), "current": _llm_current(_pid)}
-
-
-@app.post("/api/settings/llm")
-def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)):
-    """Pin a model on the current project. Empty string clears the pin (revert to
-    the global/bundle default). Validated against the catalog; takes effect on the
-    next turn (resolution is live)."""
-    from core.llm_catalog import is_known_model
-    from core import projects
-    model = (req.model or "").strip()
-    if model and not is_known_model(model):
-        raise HTTPException(400, f"unknown model: {model!r}")
-    projects.set_project_model(_pid, model)
-    return {"ok": True, "current": _llm_current(_pid)}
-
-
-class CredentialRequest(BaseModel):
-    credential: str
-
-
-@app.get("/api/settings/credential")
-def settings_credential_get():
-    """LLM credential status for Settings → Model account. Never echoes the secret
-    — only the mode, a 4-char key suffix, OAuth expiry, and a `valid` flag the UI
-    uses to decide between showing status+Change and showing the input."""
-    from core import credentials
-    return credentials.status()
-
-
-@app.post("/api/settings/credential")
-def settings_credential_set(req: CredentialRequest):
-    """One field for both: auto-detects an API key vs a pasted Claude.ai OAuth
-    token, VERIFIES it against Anthropic (a 1-token call), then persists +
-    goes live. HTTP 400 (with a message) on bad format or rejection — nothing is
-    written unless the credential actually works."""
-    from core import credentials
-    try:
-        return credentials.set_credential(req.credential)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-class EnvGateRequest(BaseModel):
-    # auto (default) | off (Always show) | hard (Hide) | soft ; "" reverts to default
-    env_gate: str = ""
-
-
-@app.get("/api/settings/environment")
-def settings_environment_get():
-    """Backs the Settings → Analysis environment card: what this workspace can
-    run (detected), the effective recipe-visibility policy, and its effect."""
-    from core.exec.compute_env import env_profile
-    from core.skills.loader import gate_counts, _env_gate_policy
-    from core.config import get_user_pref
-    policy = _env_gate_policy()
-    return {
-        "profile": env_profile(),
-        "policy": policy,                                   # off | soft | hard (resolved)
-        "user_pref": get_user_pref("discovery.env_gate") or "auto",
-        "counts": gate_counts(policy),
-        "options": ["auto", "off", "hard"],                 # card: Auto / Always / Hide
-    }
-
-
-@app.post("/api/settings/environment")
-def settings_environment_set(req: EnvGateRequest):
-    """Set the user's recipe-visibility preference (user scope). Empty string
-    reverts to auto/default. Takes effect on the next discovery call."""
-    from core.config import set_user_pref
-    from core.skills.loader import gate_counts, _env_gate_policy
-    v = (req.env_gate or "").strip().lower()
-    if v and v not in ("auto", "off", "soft", "hard"):
-        raise HTTPException(400, f"env_gate must be auto|off|soft|hard, got {v!r}")
-    set_user_pref("discovery.env_gate", v)                  # "" clears the pin
-    policy = _env_gate_policy()
-    return {"ok": True, "policy": policy, "counts": gate_counts(policy)}
+# Settings + /api/specs/primary routes → core/web/routers/settings.py (Item 2A.3).
 
 
 @app.post("/api/threads")
