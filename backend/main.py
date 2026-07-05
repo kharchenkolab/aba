@@ -2437,11 +2437,15 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
             "size": None,
         }
     if path:
-        from content.bio.files.tree import build_files_tree, find_node
+        # Tolerant resolve: exact tree path, else a basename / path-suffix match
+        # (callers — incl. the agent via open_viewer — rarely know the full path).
+        from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
         tree = build_files_tree(include_archived=False)
-        n = find_node(tree, path)
+        n = find_file_node(tree, path)
         if n is None:
-            raise HTTPException(404, f"no node at {path!r}")
+            cands = list_file_matches(tree, path)
+            hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
+            raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
         return n
     raise HTTPException(400, "supply either entity_id or path")
 

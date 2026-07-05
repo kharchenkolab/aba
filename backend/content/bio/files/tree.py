@@ -754,3 +754,54 @@ def find_node(tree: dict, path: str) -> Optional[dict]:
         return None
 
     return walk(tree)
+
+
+def find_file_node(tree: dict, path: str) -> Optional[dict]:
+    """Resolve a file to its tree node TOLERANTLY: an exact path first, then a
+    path-suffix or bare-basename match — so a bare `processed.h5ad` or a partial
+    `output/processed.h5ad` resolves to the real node (an agent rarely knows the
+    full tree path). On multiple matches, prefer a path-suffix hit over a mere
+    basename, then the most recently modified. Returns None if nothing matches."""
+    exact = find_node(tree, path)
+    if exact is not None:
+        return exact
+    target = (path or "").strip("/")
+    if not target:
+        return None
+    base = target.rsplit("/", 1)[-1]
+    matches: list[dict] = []
+
+    def collect(node: dict) -> None:
+        p = node.get("path") or ""
+        if p == target or p.endswith("/" + target) or node.get("name") == base:
+            matches.append(node)
+        for c in node.get("children", []):
+            collect(c)
+
+    collect(tree)
+    if not matches:
+        return None
+
+    def score(n: dict):
+        p = n.get("path") or ""
+        is_suffix = (p == target or p.endswith("/" + target))
+        return (1 if is_suffix else 0, n.get("mtime") or 0)
+
+    matches.sort(key=score, reverse=True)
+    return matches[0]
+
+
+def list_file_matches(tree: dict, path: str, limit: int = 6) -> list[str]:
+    """Tree paths whose basename matches `path`'s basename — for a clear
+    'did you mean' error when resolution is ambiguous or the caller wants options."""
+    base = (path or "").strip("/").rsplit("/", 1)[-1]
+    out: list[str] = []
+
+    def collect(node: dict) -> None:
+        if node.get("name") == base and node.get("path"):
+            out.append(node["path"])
+        for c in node.get("children", []):
+            collect(c)
+
+    collect(tree)
+    return out[:limit]

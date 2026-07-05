@@ -29,14 +29,15 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     if not entity_id and not file_path:
         return {"ok": False, "error": "Provide entity_id or file_path (or focus an entity first)."}
 
-    # Build a dispatch node. Match on the artifact BASENAME (not the entity
-    # title) so extension-based external viewers — pagoda3 (.h5ad / .lstar.zarr)
-    # — match: viewers_for keys off `name or artifact_path`, and a title like
-    # "Processed PBMC" wouldn't end in the file extension.
+    # Build a dispatch node. Match on the BASENAME (not the entity title) so
+    # extension-based external viewers — pagoda3 (.h5ad / .lstar.zarr) — match:
+    # viewers_for keys off `name or artifact_path`, and a title like "Processed
+    # PBMC" wouldn't end in the file extension.
+    link_path = None    # canonical tree path used in the launch link (file case)
     if entity_id:
         e = get_entity(entity_id)
         if not e:
-            return {"ok": False, "error": f"No entity {entity_id}."}
+            return {"ok": False, "error": f"No entity {entity_id!r} in this project."}
         artifact = e.get("artifact_path") or ""
         node = {
             "entity_id": e["id"],
@@ -46,22 +47,38 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
             "size": None,
         }
     else:
+        # Resolve file_path to a REAL files-tree node (a bare basename like
+        # 'processed.h5ad' is fine — resolved by suffix/basename). Validate NOW so
+        # we return a clear error to you instead of emitting a link that dies at
+        # launch with "no file matching …".
+        from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
+        tree = build_files_tree(include_archived=False)
+        n = find_file_node(tree, file_path)
+        if n is None:
+            cands = list_file_matches(tree, file_path)
+            hint = (" Matching files in this project: " + ", ".join(cands) + "."
+                    if cands else
+                    " No file with that name exists here — check the Files tab / your recent"
+                    " outputs, then pass its path or register it as a dataset and pass entity_id.")
+            return {"ok": False, "error": f"No file matching {file_path!r} in this project.{hint}"}
+        link_path = n.get("path")
         node = {
-            "entity_id": None,
-            "entity_type": None,
-            "name": os.path.basename(file_path),
-            "artifact_path": file_path,
-            "size": None,
+            "entity_id": n.get("entity_id"),
+            "entity_type": n.get("entity_type"),
+            "name": n.get("name") or os.path.basename(link_path or ""),
+            "artifact_path": n.get("artifact_path") or link_path,
+            "size": n.get("size"),
         }
 
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
     if not ext:
-        tgt = entity_id or file_path
+        tgt = entity_id or link_path or file_path
         return {
             "ok": False,
             "error": (
-                f"No external viewer applies to {tgt!r}. pagoda3 handles single-cell "
-                "results saved as .h5ad or .lstar.zarr — this file isn't one of those."
+                f"No external viewer applies to {tgt!r}. pagoda3 opens single-cell results "
+                "saved as .h5ad or .lstar.zarr; anything else (figure, table, PDF, CSV) already "
+                "opens inside ABA — don't offer a viewer link for those."
             ),
         }
     v = next((x for x in ext if x.id == viewer_id), None) if viewer_id else ext[0]
@@ -74,7 +91,7 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
     if entity_id:
         q["entity"] = entity_id
     else:
-        q["path"] = file_path
+        q["path"] = link_path
     viewer_url = "/viewer-launch?" + urlencode(q)
 
     label = v.label or v.id
@@ -82,11 +99,13 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
         "ok": True,
         "viewer_id": v.id,
         "label": label,
+        "resolved_path": link_path,
         "viewer_url": viewer_url,
         "_agent_hint": (
-            f"Present viewer_url to the user as a markdown link — [{label}]({viewer_url}) — "
-            "NOT the raw URL. The UI renders it as a launch button that opens a new tab, "
-            "shows a brief 'preparing…' screen while the data store is built, then loads "
-            "the interactive viewer."
+            f"Success: present viewer_url to the user as a markdown link — [{label}]({viewer_url}) — "
+            "NOT the raw URL, and NOT with an emoji (the UI draws the button). It opens a new tab, "
+            "shows a brief 'preparing…' screen while the store is built, then loads the viewer. "
+            "(If a call returns ok:false, tell the user what the `error` says or retry with a "
+            "corrected file — never hand out a link when ok:false.)"
         ),
     }

@@ -60,22 +60,55 @@ def _node_bin() -> "str | None":
 
 def _prep_script() -> Path:
     dist = Path(os.getenv("ABA_PAGODA3_DIST") or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
-    return dist.parent.parent / "prep" / "prep.ts"     # <pagoda3>/prep/prep.ts
+    # .resolve() is load-bearing: ABA_PAGODA3_DIST may be a frozen dist whose
+    # `prep/` is a SYMLINK to the real checkout. prep.ts guards its main-run with
+    # `fileURLToPath(import.meta.url) === resolve(argv[1])`; node resolves
+    # import.meta.url to the REAL path, so we must invoke it by the real path too
+    # (else argv[1] is the symlink, the guard fails, and prep silently no-ops).
+    return (dist.parent.parent / "prep" / "prep.ts").resolve()   # <pagoda3>/prep/prep.ts
+
+
+# The grouping the viewer opens on + computes markers/stats for. Prefer a real
+# clustering / cell-type label; avoid boolean QC flags (e.g. `qc_kept`) which make
+# a useless 2-group default. extendForViewer requires an explicit grouping (lstar
+# doesn't auto-detect), so we always pick the best available.
+_GROUPING_PREFER = ("leiden", "louvain", "cluster", "celltype", "cell_type",
+                    "cell.type", "annotation", "seurat_clusters", "kmeans", "phenograph")
+_GROUPING_AVOID = ("qc_kept", "kept", "highly_variable", "predicted_doublet",
+                   "doublet", "outlier", "passed", "is_", "_mt", "_ribo", "sample", "batch")
 
 
 def _detect_grouping(store: Path) -> "str | None":
-    """First categorical/utf8 per-cell label (extendForViewer requires a grouping)."""
+    """Pick the best categorical/utf8 per-cell label to open the viewer on.
+    Prefers clustering/cell-type names, then any non-QC categorical, and only as a
+    last resort a QC/boolean flag (so prep still runs)."""
     try:
         import lstar
         ds = lstar.read(str(store))
-        for f in ds.fields:
-            fl = ds.field(f)
-            if (fl.role == "label" and fl.encoding in ("categorical", "utf8")
-                    and (fl.span or []) == ["cells"] and fl.subtype != "color"):
-                return f
     except Exception:  # noqa: BLE001
-        pass
-    return None
+        return None
+    cands: list[str] = []
+    for f in ds.fields:
+        try:
+            fl = ds.field(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if (fl.role == "label" and fl.encoding in ("categorical", "utf8")
+                and (fl.span or []) == ["cells"] and fl.subtype != "color"):
+            cands.append(f)
+    if not cands:
+        return None
+    # 1) a preferred clustering / cell-type name
+    for pref in _GROUPING_PREFER:
+        for c in cands:
+            if pref in c.lower():
+                return c
+    # 2) any categorical that isn't an obvious QC/boolean flag
+    for c in cands:
+        if not any(a in c.lower() for a in _GROUPING_AVOID):
+            return c
+    # 3) last resort: whatever exists, so prep still produces viewer@0.1
+    return cands[0]
 
 
 def _try_viewer_prep(store: Path) -> None:

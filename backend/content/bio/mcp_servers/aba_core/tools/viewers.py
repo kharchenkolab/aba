@@ -22,17 +22,25 @@ def register_viewer_tools(mcp: FastMCP) -> None:
         opens it as an interactive UMAP / expression explorer in a new browser tab.
 
         Provide ONE of (if neither, the currently focused entity is used):
-          • entity_id — the dataset/result entity to view (preferred).
-          • file_path — a project-relative path to the data file.
+          • entity_id  — a dataset/result entity to view (preferred when it exists).
+          • file_path  — the data file. A bare filename ('processed.h5ad') is fine —
+                         it's resolved against the project's files (basename or
+                         partial path); you do NOT need the full tree path.
         Optionally viewer_id to force a specific viewer (default: best match).
 
-        Returns {ok, viewer_id, label, viewer_url, _agent_hint}, or {ok: False,
-        error} when no external viewer applies (e.g. the file is a table/figure,
-        not a viewable single-cell store — those already open inside ABA, so don't
-        call this for them). On success, present `viewer_url` as a markdown link
-        using the returned `label` (NOT the raw URL); the UI renders it as a launch
-        button and handles the 'preparing…' step. This does not block — it only
-        returns the link; conversion happens after the user clicks."""
+        Returns {ok: true, label, viewer_url, resolved_path, _agent_hint} on
+        success, or {ok: false, error} when the file can't be found or no viewer
+        applies (a figure/table/PDF/CSV opens inside ABA already — don't call this
+        for those).
+
+        CONTRACT — read `ok`:
+          • ok:true  → present `viewer_url` as a markdown link using `label`, e.g.
+            `[Explore in pagoda3](<viewer_url>)` — NOT the raw URL, no emoji (the UI
+            draws the button). It opens a new tab and handles the 'preparing…' step;
+            this call does NOT block or convert.
+          • ok:false → do NOT fabricate or hand out a link. Tell the user what
+            `error` says, or retry with a corrected file (the error lists matching
+            files when it can). A returned link is ALWAYS validated to resolve."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import open_viewer_impl
         return open_viewer_impl(
