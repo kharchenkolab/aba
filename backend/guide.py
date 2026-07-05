@@ -328,88 +328,15 @@ def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
     return spec, spec_name, guide_model
 
 
-async def stream_response(
-    user_text: str,
-    *,
-    focus_entity_id: str = WORKSPACE_ID,
-    focus_member_id: str | None = None,
-    thread_id: str = "default",
-    annotation_image: str | None = None,
-    annotation_note: str | None = None,
-    attachments: list[dict] | None = None,
-    retry: bool = False,
-    plan_entity_id: str | None = None,
-    run_id: str | None = None,
-    spec_override: str | None = None,
-) -> AsyncGenerator[dict, None]:
-    """
-    Append user message to the workspace thread, run the Guide loop, yield
-    event dicts. See aba_arch2.md §2.3 for the focus context model.
-
-    `retry=True` regenerates the reply for the existing last turn without
-    appending a new user message — used after a transient API failure, where
-    the user turn was already persisted but no assistant reply was produced.
-
-    `run_id` should be allocated by the caller (via core.runtime.turn_executor.
-    new_run_id()) so the TurnSink can be created upfront and subscribers can
-    attach before the body starts emitting. If omitted (callers that don't
-    care about pre-allocation), one is generated internally.
-
-    The yielded dicts are the *payloads* — SSE wire framing happens in
-    core.runtime.turn_sink.stream_from_sink (which embeds the seq from the
-    sink). Callers running the body via turn_executor.start_turn never
-    consume this generator directly; the executor's _drain does the pushing.
-    """
-    _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
-    def sse(obj: dict) -> dict:
-        # The name is retained for diff-friendliness; the function no longer
-        # formats SSE wire frames — it just live-logs and returns the payload.
-        _live_log_event(turn.run_id, obj, _dtbuf)
-        return obj
-
-    # Wave 2 A.3: the content pack is the single seam to bio. Cache the
-    # accessors per-turn — calling pack methods is cheap but the dict
-    # lookup beats re-fetching.
-    pack = active_pack()
-    _prompts = pack.prompts()
-    _tools_all = pack.tools()
-    _exec_tool = pack.execute_tool()
-    session_id = pack.new_session_id()
-    turn_index = 0
-    # A2: Guide is spec-driven (model + role); resolve spec + model at the turn
-    # boundary via the module-level helper (Item 2B). Loop body stays inline.
-    spec, spec_name, guide_model = _resolve_turn_spec(thread_id, spec_override)
-
-    # Turn checkpointing (Pass E): create a Turn row at the start; update
-    # state through transitions; mark DONE/FAILED at the end. Lets resume-
-    # after-restart see what was in flight.
-    turn = Turn(
-        run_id=run_id or gen_run_id(),
-        session_id=session_id,
-        turn_index=0,
-        agent_spec_name=spec_name,
-        state=TurnState.GENERATING,
-        focus_entity_id=focus_entity_id,
-        thread_id=thread_id,
-        plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
-    )
-
-    # Per-turn cancellation token. Acquired here, released in the
-    # finally block at the very end of stream_response. Any tool that
-    # might run for a perceptible duration (subprocess, MCP call, etc.)
-    # registers an interrupter against this token via tool_ctx; the
-    # /api/turns/{id}/cancel endpoint fires them all.
-    from core.runtime import cancellation as _cancel
-    cancel_token = _cancel.acquire(turn.run_id)
-    # Threads are real lines of inquiry: the Guide reasons within the current
-    # thread, not the whole project firehose. "default" resolves to (and
-    # materializes) the project's default thread entity.
-    store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
-    # C-1: the per-Turn sink is allocated by core.runtime.turn_executor.
-    # start_turn BEFORE this body runs, so subscribers can attach before
-    # any event is emitted. We don't create or close it here — the
-    # executor's _drain owns the sink lifecycle.
-
+def _assemble_turn_history(*, user_text, attachments, focus_entity_id, store_tid,
+                           retry, annotation_note, annotation_image):
+    """Persist the user's turn (unless retry) and assemble the EFFECTIVE in-memory
+    history for this call (Item 2B extraction). Reads persisted history, then applies
+    the ephemeral, NON-persisted injections in order: framing note, thread title/
+    question seed (this one persists), focus-change marker, focus trailer, vision
+    image, and attachment context note. Returns the mutated history list. Behavior is
+    guarded by test_focus_change_marker / test_focus_trailer / test_annotation_note_
+    ephemeral + the golden-context guard + a live turn."""
     if not retry:
         # PERSIST ONLY the user's actual text. The annotation note (a
         # system-generated framing hint authored by the frontend, e.g.
@@ -564,6 +491,97 @@ async def stream_response(
             history[-1] = {**last,
                            "content": [{"type": "text", "text": note}, *list(last["content"])]}
 
+    return history
+
+
+async def stream_response(
+    user_text: str,
+    *,
+    focus_entity_id: str = WORKSPACE_ID,
+    focus_member_id: str | None = None,
+    thread_id: str = "default",
+    annotation_image: str | None = None,
+    annotation_note: str | None = None,
+    attachments: list[dict] | None = None,
+    retry: bool = False,
+    plan_entity_id: str | None = None,
+    run_id: str | None = None,
+    spec_override: str | None = None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Append user message to the workspace thread, run the Guide loop, yield
+    event dicts. See aba_arch2.md §2.3 for the focus context model.
+
+    `retry=True` regenerates the reply for the existing last turn without
+    appending a new user message — used after a transient API failure, where
+    the user turn was already persisted but no assistant reply was produced.
+
+    `run_id` should be allocated by the caller (via core.runtime.turn_executor.
+    new_run_id()) so the TurnSink can be created upfront and subscribers can
+    attach before the body starts emitting. If omitted (callers that don't
+    care about pre-allocation), one is generated internally.
+
+    The yielded dicts are the *payloads* — SSE wire framing happens in
+    core.runtime.turn_sink.stream_from_sink (which embeds the seq from the
+    sink). Callers running the body via turn_executor.start_turn never
+    consume this generator directly; the executor's _drain does the pushing.
+    """
+    _dtbuf: list[str] = []   # buffers streamed text deltas for the live transcript
+    def sse(obj: dict) -> dict:
+        # The name is retained for diff-friendliness; the function no longer
+        # formats SSE wire frames — it just live-logs and returns the payload.
+        _live_log_event(turn.run_id, obj, _dtbuf)
+        return obj
+
+    # Wave 2 A.3: the content pack is the single seam to bio. Cache the
+    # accessors per-turn — calling pack methods is cheap but the dict
+    # lookup beats re-fetching.
+    pack = active_pack()
+    _prompts = pack.prompts()
+    _tools_all = pack.tools()
+    _exec_tool = pack.execute_tool()
+    session_id = pack.new_session_id()
+    turn_index = 0
+    # A2: Guide is spec-driven (model + role); resolve spec + model at the turn
+    # boundary via the module-level helper (Item 2B). Loop body stays inline.
+    spec, spec_name, guide_model = _resolve_turn_spec(thread_id, spec_override)
+
+    # Turn checkpointing (Pass E): create a Turn row at the start; update
+    # state through transitions; mark DONE/FAILED at the end. Lets resume-
+    # after-restart see what was in flight.
+    turn = Turn(
+        run_id=run_id or gen_run_id(),
+        session_id=session_id,
+        turn_index=0,
+        agent_spec_name=spec_name,
+        state=TurnState.GENERATING,
+        focus_entity_id=focus_entity_id,
+        thread_id=thread_id,
+        plan_entity_id=plan_entity_id,    # #160: carried forward by /resume so DONE/FAILED can transition lifecycle
+    )
+
+    # Per-turn cancellation token. Acquired here, released in the
+    # finally block at the very end of stream_response. Any tool that
+    # might run for a perceptible duration (subprocess, MCP call, etc.)
+    # registers an interrupter against this token via tool_ctx; the
+    # /api/turns/{id}/cancel endpoint fires them all.
+    from core.runtime import cancellation as _cancel
+    cancel_token = _cancel.acquire(turn.run_id)
+    # Threads are real lines of inquiry: the Guide reasons within the current
+    # thread, not the whole project firehose. "default" resolves to (and
+    # materializes) the project's default thread entity.
+    store_tid = get_or_create_default_thread() if thread_id == "default" else thread_id
+    # C-1: the per-Turn sink is allocated by core.runtime.turn_executor.
+    # start_turn BEFORE this body runs, so subscribers can attach before
+    # any event is emitted. We don't create or close it here — the
+    # executor's _drain owns the sink lifecycle.
+
+    # Persist the user turn + assemble the effective in-memory history (ephemeral
+    # injections: framing note, focus marker/trailer, vision, attachments) — Item 2B.
+    history = _assemble_turn_history(
+        user_text=user_text, attachments=attachments,
+        focus_entity_id=focus_entity_id, store_tid=store_tid, retry=retry,
+        annotation_note=annotation_note, annotation_image=annotation_image)
     # Capability set for this turn — assembled by the module-level helper (Item 2B).
     active_tools = _assemble_active_tools(_tools_all, spec)
 
