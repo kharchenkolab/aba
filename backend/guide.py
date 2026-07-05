@@ -291,6 +291,43 @@ def _assemble_active_tools(tools_all: list, spec) -> list:
     return active
 
 
+def _resolve_turn_spec(thread_id: str | None, spec_override: str | None):
+    """Resolve the agent spec + model for this turn (Item 2B extraction).
+
+    Model precedence (resolved PER PROJECT at the turn boundary, not import time, so
+    the Settings model selector takes effect next turn without a restart): env override
+    > the project's selected model > config.env > bundle default > snapshot. The SPEC
+    follows the chosen model via the install-wide catalog unless a request/thread
+    override pins it: request_override → thread.metadata.spec → catalog[model].spec →
+    bundle primary_spec → "guide". A2/A3: guide is spec-driven (model + role only); the
+    loop body stays in stream_response. Returns (spec, spec_name, guide_model)."""
+    from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
+    from core.config import current_model_for_project, current_project_id
+    from core.llm_catalog import spec_for_model
+    # Thread's pinned spec only if a real thread id was passed; "default" is a
+    # sentinel the chat handler may not have materialized yet — no side effects here.
+    thread_spec: str | None = None
+    if thread_id and thread_id != "default":
+        try:
+            from core.graph.threads import get_thread_spec
+            thread_spec = get_thread_spec(thread_id)
+        except Exception:                                    # noqa: BLE001
+            thread_spec = None
+    guide_model = current_model_for_project(current_project_id())
+    spec_name = resolve_spec_for_turn(
+        request_override=spec_override, thread_spec=thread_spec,
+        project_default=spec_for_model(guide_model))
+    spec = get_agent_spec(spec_name)
+    if spec is None and spec_name != "guide":
+        print(f"[guide] WARNING: spec={spec_name!r} "
+              f"is not registered; falling back to 'guide'", flush=True)
+        spec_name = "guide"
+        spec = get_agent_spec(spec_name)
+    if not guide_model and spec:
+        guide_model = spec.model
+    return spec, spec_name, guide_model
+
+
 async def stream_response(
     user_text: str,
     *,
@@ -339,46 +376,9 @@ async def stream_response(
     _exec_tool = pack.execute_tool()
     session_id = pack.new_session_id()
     turn_index = 0
-    # A2: Guide is now spec-driven. The YAML at bio/advisors/guide.yaml
-    # declares the model + role + halt/streaming flags. Full loop-body
-    # extraction into Agent.run() is deferred; for now the spec is
-    # consulted for model + role only, while the loop body stays here.
-    from core.runtime.agent import get_agent_spec, resolve_spec_for_turn
-    from core.config import current_model_for_project, current_project_id
-    from core.llm_catalog import spec_for_model
-    # Look up the thread's pinned spec only if a real thread id was
-    # passed; "default" is a sentinel the chat handler may not have
-    # materialized yet, and we don't want to introduce side effects
-    # here.
-    thread_spec: str | None = None
-    if thread_id and thread_id != "default":
-        try:
-            from core.graph.threads import get_thread_spec
-            thread_spec = get_thread_spec(thread_id)
-        except Exception:                                    # noqa: BLE001
-            thread_spec = None
-    # Resolve the primary MODEL first, PER PROJECT, at the turn boundary (not
-    # import time) so the Settings model selector takes effect on the next turn
-    # without a backend restart. Precedence: env override > the project's
-    # selected model > config.env > bundle default_model > snapshot. See
-    # core.config.current_model_for_project.
-    _pid = current_project_id()
-    guide_model = current_model_for_project(_pid)
-    # The SPEC follows the chosen model via the install-wide catalog
-    # (llm_catalog), unless a request/thread override pins it. Precedence:
-    #   request_override → thread.metadata.spec → catalog[model].spec →
-    #   bundle primary_spec → "guide".
-    spec_name = resolve_spec_for_turn(
-        request_override=spec_override, thread_spec=thread_spec,
-        project_default=spec_for_model(guide_model))
-    spec = get_agent_spec(spec_name)
-    if spec is None and spec_name != "guide":
-        print(f"[guide] WARNING: spec={spec_name!r} "
-              f"is not registered; falling back to 'guide'", flush=True)
-        spec_name = "guide"
-        spec = get_agent_spec(spec_name)
-    if not guide_model and spec:
-        guide_model = spec.model
+    # A2: Guide is spec-driven (model + role); resolve spec + model at the turn
+    # boundary via the module-level helper (Item 2B). Loop body stays inline.
+    spec, spec_name, guide_model = _resolve_turn_spec(thread_id, spec_override)
 
     # Turn checkpointing (Pass E): create a Turn row at the start; update
     # state through transitions; mark DONE/FAILED at the end. Lets resume-
