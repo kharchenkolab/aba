@@ -119,6 +119,13 @@ job runs on a GPU node ABA can't observe):
 - **`env_selfcheck` invariant + `aba doctor`** — a deployment declaring `ABA_ACCELERATOR=cuda`
   must have a CUDA-build torch; a CPU-only base is flagged at startup / by `doctor`, which
   names the fix (set the toggle + rebuild the env).
+- **ENVS_DIR shared-FS gate (finding F6b)** — under a Slurm submitter the provisioning dir MUST be on
+  shared storage, or a background job on another node can't import an `ensure_capability`'d overlay
+  package (`ModuleNotFoundError`, no obvious cause). Classified **empirically** by mount fstype
+  (`_fs_type_for_path` → `/proc/self/mountinfo`), not path prefix — so the `/workspace` default trap is
+  caught. **Install-time is the hard gate** (`aba doctor`: fstype check + a definitive token/`sbatch`
+  probe read back from a compute node); **runtime is a loud-but-boot startup self-check**
+  (`check_envs_dir_shared`) surfaced on `/api/health` (`degraded`+`warnings[]`) and `/api/admin/selfcheck`.
 
 **Config topology (no floating vars):** the accelerator toggle is a `config.env` line
 (installer-written, admin-editable), exactly like `ABA_BATCH_SUBMITTER`. `hpc.yaml` stays
@@ -134,6 +141,7 @@ toggle). The base spec (`environment.yml`) lives in the repo.
 | `core/exec/env_integrity.py` | ABI anchor (`abi_anchor_constraints`), base freeze (`ensure_base_constraints`, `_freeze_pins`), `env_selfcheck`, `gpu_capability_ok`/`torch_cuda_build`, `self_heal_base`/`repair_base`/`base_health`, `verify_python_imports` |
 | `core/jobs/slurm_entry.py` | background-job entry; GPU verify-at-use preflight + numpy canary |
 | `install/core/inject-accelerator.sh` · `install/linux/setup.sh` · `install/sif/build.sh` · `aba-vbc/build.sh` | deployment-conditional base: `ABA_ACCELERATOR` → CPU vs CUDA torch pin — applied by the installer, the SIF build (fat bakes the venv; slim's mounted base too), and the aba-vbc pipeline (`versions.env`); the fat image records it in `%labels` (`org.aba.accelerator`) |
+| `core/runtime/selfcheck.py` · `env_integrity.check_envs_dir_shared`/`envs_dir_fs_kind`/`_fs_type_for_path` | startup self-check registry (`{name,ok,severity,detail}`) → `/api/health` (`degraded`+`warnings[]`) + `/api/admin/selfcheck`; the ENVS_DIR shared-FS gate is its first tenant. Install-time hard gate + `sbatch` probe live in `aba_installer/cli.py` (`_fs_kind_for_path`, `_probe_envs_visible_on_compute_node`) |
 | `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
 | `core/exec/kernels/` · `core/exec/run.py` (run_python preamble) | assembles the run's `sys.path`: base + project overlay (see [`compute-execution.md`](compute-execution.md)) |

@@ -19,6 +19,15 @@ def admin_mcp_status():
     return status()
 
 
+@router.get("/api/admin/selfcheck")
+def admin_selfcheck():
+    """Startup self-check results (core/runtime/selfcheck) — the diagnostics drawer
+    shows outstanding warnings (e.g. 'ENVS_DIR node-local under Slurm'). `re_run`
+    is not offered here: checks run at boot; a config change needs a restart."""
+    from core.runtime import selfcheck
+    return selfcheck.summary()
+
+
 @router.get("/api/admin/tool_stats")
 def admin_tool_stats(days: int = 30):
     """Per-tool aggregates: invocation count, ok/error/rejected/deferred

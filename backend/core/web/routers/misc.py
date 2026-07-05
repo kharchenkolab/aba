@@ -95,4 +95,10 @@ async def notifications_stream():
 
 @router.get("/api/health")
 def health():
-    return {"ok": True}
+    """Liveness + a shallow degraded flag. `ok` stays a pure liveness signal (the
+    process is up and serving — we deliberately boot even when a startup self-check
+    fails), so a load balancer won't pull the server for a config warning. Monitors
+    key off `degraded`/`worst`; full details are on /api/admin/selfcheck."""
+    from core.runtime import selfcheck
+    return {"ok": True, "degraded": selfcheck.degraded(),
+            "worst": selfcheck.worst_severity(), "warnings": selfcheck.warnings()}

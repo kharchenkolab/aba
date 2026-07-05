@@ -7,6 +7,7 @@ DELETE /api/projects/{pid}
 DELETE /api/results/{rid}/members/{member_id}
 DELETE /api/threads/{tid}/open-questions/{oqid}
 GET /api/admin/mcp
+GET /api/admin/selfcheck
 GET /api/admin/tool_invocations
 GET /api/admin/tool_stats
 GET /api/artifacts/{exec_id}/{kind}/{idx}
