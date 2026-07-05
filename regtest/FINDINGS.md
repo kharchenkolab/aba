@@ -274,8 +274,12 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
   reusable self-check registry is the substrate for future boot checks (GPU base, base integrity), not just this one.
   Under **SIF/OOD** the install gate doesn't run, so the runtime self-check is the guard — verified on a real fat SIF
   that apptainer preserves a bind's underlying fstype in the container mountinfo (shared NFS bind → `nfs` → ok;
-  `ENVS_DIR` inside the image → `overlay`/`squashfs` → fires). Open sub-gaps: slim's mounted base (`image.base_dir`)
-  has the same requirement but isn't checked yet (→ `check_base_dir_shared`), and there's no SIF-aware deploy-time probe.
+  `ENVS_DIR` inside the image → `overlay`/`squashfs` → fires). A second registry tenant `check_base_dir_shared`
+  now enforces the deeper rule: the Slurm `job.sh` runs BARE on the compute node (no `apptainer exec` re-entry,
+  slurm_submitter.py:117), so the **base venv** must be on shared FS too — which means **a fat SIF cannot offload
+  to Slurm at all** (its baked in-image base is unreachable by the bare job → fires under a `slurm` submitter);
+  Slurm needs a slim SIF (base on shared FS) or a native shared install, and fat is single-node/local-submitter
+  only. Remaining gap: no SIF-aware *deploy-time* probe (native-install only).
 - **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
 - **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
 - **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.
