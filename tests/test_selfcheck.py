@@ -132,6 +132,43 @@ def test_envs_check_slurm_unknown_warns():
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
+def _patch_base_kind(kind, detail="d"):
+    orig = env_integrity.base_fs_kind
+    env_integrity.base_fs_kind = lambda: (kind, detail)
+    return orig
+
+
+def test_base_check_local_submitter_ok():
+    os.environ["ABA_BATCH_SUBMITTER"] = "local"
+    try:
+        assert env_integrity.check_base_dir_shared()["ok"] is True
+    finally:
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+
+
+def test_base_check_slurm_in_image_fat_fires_high():
+    # fat SIF: base baked in-image -> node_local -> a bare Slurm job.sh can't reach it
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    orig = _patch_base_kind("node_local", "/opt/aba-venv/lib/... on squashfs (node-local / in-image)")
+    try:
+        r = env_integrity.check_base_dir_shared()
+        assert r["ok"] is False and r["severity"] == "high"
+        assert "shared FS" in r["detail"] and "fat SIF" in r["detail"]
+    finally:
+        env_integrity.base_fs_kind = orig
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+
+
+def test_base_check_slurm_shared_passes():
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    orig = _patch_base_kind("shared", "/cluster/aba/base on nfs (shared)")
+    try:
+        assert env_integrity.check_base_dir_shared()["ok"] is True
+    finally:
+        env_integrity.base_fs_kind = orig
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+
+
 def test_fstype_classification_sets():
     # empirical classifier must know the canonical shared/local fstypes
     assert "nfs" in env_integrity._SHARED_FS and "lustre" in env_integrity._SHARED_FS

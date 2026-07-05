@@ -47,8 +47,9 @@ async def on_startup():
     # Non-fatal by design (loud-but-boot); the install-time gate is the hard stop.
     try:
         from core.runtime import selfcheck
-        from core.exec.env_integrity import check_envs_dir_shared
+        from core.exec.env_integrity import check_envs_dir_shared, check_base_dir_shared
         selfcheck.register("envs_dir_shared", check_envs_dir_shared)
+        selfcheck.register("base_dir_shared", check_base_dir_shared)
         for _r in selfcheck.run():
             if not _r["ok"]:
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")

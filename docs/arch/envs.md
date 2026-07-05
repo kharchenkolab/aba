@@ -131,11 +131,16 @@ job runs on a GPU node ABA can't observe):
   underlying fstype in the container's `/proc/self/mountinfo` (a shared NFS/beegfs bind reads as
   `nfs`/`beegfs` → shared; an `ENVS_DIR` left inside the read-only image reads as `overlay`/`squashfs`
   → node-local → fires; a node-local bind reads as the local fstype → fires). Verified on a real fat SIF.
-  **Slim caveat / gap:** slim also mounts the *base* venv from `image.base_dir` (site.yaml) — that path
-  has the same shared-FS requirement but is NOT yet checked (fat bakes the base, so squashfs there is
-  ubiquitous-in-image, not a growth dir). A `check_base_dir_shared` is the natural next tenant of the
-  self-check registry. There is also no SIF-aware *deploy-time* probe (the definitive `sbatch` probe is
-  native-install only) — a SIF probe would `apptainer exec` the image on a compute node.
+- **BASE reachability under Slurm (`check_base_dir_shared`)** — the deeper rule: the Slurm `job.sh` runs
+  **bare** on the compute node (`slurm_submitter.py:117`: `sys.executable -u -m core.jobs.slurm_entry`,
+  no `apptainer exec` re-entry), so the base venv must be on **shared FS**, reachable by that bare job.
+  This makes the documented constraint enforceable (`misc/slim_sif_deploy.md`): **Slurm offload requires
+  a slim SIF** (base on shared FS via `image.base_dir`) **or a native shared install**. A **fat SIF bakes
+  the base in-image** (`sys.executable=/opt/aba-venv/...` → `overlay`/`squashfs` → node-local) — a bare
+  compute-node job can't even find the interpreter, so `check_base_dir_shared` **fires under a `slurm`
+  submitter**. Fat is therefore **single-node / local-submitter only** (jobs run inline in ABA's own
+  allocation). Gap: no SIF-aware *deploy-time* probe (the definitive `sbatch` probe is native-install
+  only) — a SIF probe would `apptainer exec` the image on a compute node.
 
 **Config topology (no floating vars):** the accelerator toggle is a `config.env` line
 (installer-written, admin-editable), exactly like `ABA_BATCH_SUBMITTER`. `hpc.yaml` stays
