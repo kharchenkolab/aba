@@ -47,6 +47,31 @@ def test_registry_matches_single_cell_source_formats():
     # every supported source routes to the pagoda3 launcher
     assert top_external("processed.h5ad") == "pagoda3_launcher"
     assert top_external("multimodal.h5mu") == "pagoda3_launcher"
+    assert top_external("seurat_obj.rds") == "pagoda3_launcher"    # Seurat/SCE/pagoda2/conos
     assert top_external("sample.lstar.zarr") == "pagoda3_launcher"
     # a non-single-cell file gets no external viewer
     assert top_external("table.csv") is None
+
+
+def test_rscript_resolves_for_rds_bridge(monkeypatch):
+    from content.bio.viewers.launchers import pagoda3
+    # honors $LSTAR_RSCRIPT when it points at a real file
+    import sys
+    monkeypatch.setenv("LSTAR_RSCRIPT", sys.executable)   # any existing executable
+    assert pagoda3._rscript() == sys.executable
+
+
+def test_convert_any_sets_lstar_rscript_env(monkeypatch, tmp_path):
+    from content.bio.viewers.launchers import pagoda3
+    import sys
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["env"] = kw.get("env") or {}
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(pagoda3, "_try_viewer_prep", lambda out: None)
+    monkeypatch.setattr(pagoda3, "_rscript", lambda: sys.executable)
+    pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
+    assert seen["env"].get("LSTAR_RSCRIPT") == sys.executable   # bridge points at R

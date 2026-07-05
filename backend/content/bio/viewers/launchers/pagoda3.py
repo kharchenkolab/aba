@@ -140,6 +140,19 @@ def _try_viewer_prep(store: Path) -> None:
     shutil.rmtree(prepped, ignore_errors=True)  # both failed → keep clean un-prepped
 
 
+def _rscript() -> "str | None":
+    """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
+    conos) — must be an R that has the lstar R package installed. Honors
+    `$LSTAR_RSCRIPT`, else a system Rscript (the backend's own PATH may not include
+    it, so we resolve explicitly)."""
+    import shutil as _sh
+    for cand in (os.getenv("LSTAR_RSCRIPT"), "/usr/local/bin/Rscript",
+                 "/opt/homebrew/bin/Rscript", _sh.which("Rscript")):
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
 def _convert_any(src: Path, out: Path) -> None:
     """Convert any lstar-supported source into a `.lstar.zarr` directory store via
     the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
@@ -149,9 +162,13 @@ def _convert_any(src: Path, out: Path) -> None:
     extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP)."""
     import subprocess
     import sys
+    env = {**os.environ}
+    rs = _rscript()
+    if rs and not env.get("LSTAR_RSCRIPT"):
+        env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
     r = subprocess.run(
         [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
-        capture_output=True, text=True, timeout=1800,
+        capture_output=True, text=True, timeout=1800, env=env,
     )
     if r.returncode != 0:
         tail = (r.stderr or r.stdout or "").strip()[-600:]
