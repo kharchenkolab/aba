@@ -142,12 +142,19 @@ def _try_viewer_prep(store: Path) -> None:
 
 def _rscript() -> "str | None":
     """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
-    conos) — must be an R that has the lstar R package installed. Honors
-    `$LSTAR_RSCRIPT`, else a system Rscript (the backend's own PATH may not include
-    it, so we resolve explicitly)."""
+    conos) — must be an R with the lstar R package installed. Preference:
+    `$LSTAR_RSCRIPT` (explicit override), then ABA's tools-env R (it ships the
+    domain frameworks — Seurat / SingleCellExperiment / …), then a system Rscript.
+    (The backend's own PATH may not include any R, so we resolve explicitly.)"""
     import shutil as _sh
-    for cand in (os.getenv("LSTAR_RSCRIPT"), "/usr/local/bin/Rscript",
-                 "/opt/homebrew/bin/Rscript", _sh.which("Rscript")):
+    cands = [os.getenv("LSTAR_RSCRIPT")]
+    try:
+        from core.config import ENVS_DIR
+        cands.append(str(Path(ENVS_DIR) / "tools" / "bin" / "Rscript"))
+    except Exception:  # noqa: BLE001
+        pass
+    cands += ["/usr/local/bin/Rscript", "/opt/homebrew/bin/Rscript", _sh.which("Rscript")]
+    for cand in cands:
         if cand and os.path.exists(cand):
             return cand
     return None
