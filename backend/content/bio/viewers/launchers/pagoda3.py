@@ -225,7 +225,15 @@ def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
 
 def _resolve_source(node: dict, pid: str) -> Path:
     """Best-effort resolution of the node to an on-disk file. Prefer the
-    entity/tree artifact_path (absolute); fall back to project-relative."""
+    entity/tree artifact_path (absolute); fall back to project-relative; finally
+    search the project's work dirs by basename.
+
+    The last fallback matters for `.lstar.zarr` **directory** stores written by a
+    run: a Run's output is shown at the LOGICAL path `threads/<t>/runs/<r>/output/`
+    but physically lives under `work/<ana_id>/` (tree.py). Regular files carry a
+    physical `artifact_path`, but a directory store can resolve to the logical
+    output path with no physical path — so `project_root/<logical>` doesn't exist.
+    The store is really at `work/<ana_id>/<name>`, so scan there (newest first)."""
     from core.config import project_root, project_data_dir
     raw = node.get("artifact_path") or node.get("path") or node.get("name") or ""
     p = Path(raw)
@@ -235,6 +243,14 @@ def _resolve_source(node: dict, pid: str) -> Path:
         cand = base / raw
         if cand.exists():
             return cand
+    # Fallback: a run wrote the source into its work dir (work/<ana_id>/<name>),
+    # which the logical output-tree path doesn't map to. Match by basename.
+    name = Path(raw).name
+    work = project_root(pid) / "work"
+    if name and work.exists():
+        matches = sorted(work.glob(f"*/{name}"), key=lambda m: m.stat().st_mtime, reverse=True)
+        if matches:
+            return matches[0]
     return p            # nonexistent → caller surfaces a clean error
 
 

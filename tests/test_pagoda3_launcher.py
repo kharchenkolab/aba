@@ -53,6 +53,25 @@ def test_registry_matches_single_cell_source_formats():
     assert top_external("table.csv") is None
 
 
+def test_resolve_source_falls_back_to_run_work_dir(monkeypatch, tmp_path):
+    """A `.lstar.zarr` store a run wrote lands physically in work/<ana_id>/<name>,
+    but the file tree may hand us only the LOGICAL output path (threads/.../output/)
+    with no physical file there. _resolve_source must still find the store by
+    scanning the project work dirs (regression: 'pagoda3: source not found')."""
+    from content.bio.viewers.launchers import pagoda3
+    import core.config as cfg
+
+    store = tmp_path / "work" / "ana_abc" / "seurat_processed.lstar.zarr"
+    store.mkdir(parents=True)
+    (store / ".zattrs").write_text("{}")
+    monkeypatch.setattr(cfg, "project_root", lambda pid: tmp_path)
+    monkeypatch.setattr(cfg, "project_data_dir", lambda pid: tmp_path / "data")
+
+    node = {"path": "threads/t/runs/r/output/seurat_processed.lstar.zarr",
+            "name": "seurat_processed.lstar.zarr"}   # logical path, nothing on disk there
+    assert pagoda3._resolve_source(node, "prj_x") == store
+
+
 def test_rscript_resolves_for_rds_bridge(monkeypatch):
     from content.bio.viewers.launchers import pagoda3
     # honors $LSTAR_RSCRIPT when it points at a real file
