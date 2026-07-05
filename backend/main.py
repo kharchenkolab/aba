@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.config import ARTIFACTS_DIR, DATA_DIR
-from content.bio.graph.result_members import update_result_member
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
 from core.graph.entities import list_entities, get_entity, create_entity, update_entity, archive_entity, restore_entity, delete_entity_hard
@@ -38,7 +37,6 @@ from core.runtime.content_pack import set_active_pack as _set_active_pack
 _set_active_pack(_BIO_PACK)
 _BIO_PACK.register_hooks()
 
-from content.bio.graph.figure_history import figure_history
 from core.graph.jobs import list_jobs, get_job
 from core.jobs.runner import start_worker, cancel_job
 
@@ -230,51 +228,19 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
     ):
         raise HTTPException(400, f"invalid status: {fields['status']}")
     updated = update_entity(entity_id, **fields)
-    # F3: re-derive display_path when the title changes (or first time).
+    # F3: a rename can change the (title-derived) display_path — let the content
+    # pack recompute it via the on_entity_renamed hook, instead of importing bio's
+    # display module here (Item 2A.4 inversion; dispatch is synchronous).
     if updated and "title" in fields:
-        from content.bio.graph.display import recompute_display_path
-        recompute_display_path(entity_id)
+        from core.hooks.dispatcher import dispatch
+        dispatch("on_entity_renamed", {"entity_id": entity_id})
         updated = get_entity(entity_id)
     if not updated:
         raise HTTPException(404, f"Entity {entity_id} not found")
     return updated
 
 
-def _result_cascade_set(result_id: str) -> set[str]:
-    """Containment set for `cascade=members` on a Result: every figure/
-    table/cell member referenced from metadata.members, plus each
-    member's full revision chain (active + superseded). The Result id
-    itself is NOT included — it's deleted separately at the end.
-
-    Why include superseded revisions: when the user deletes a Result,
-    they expect the whole history to go with it (the superseded
-    revisions are figure entities created via make_revision that
-    aren't referenced anywhere visible; leaving them as orphans
-    would just look like a memory leak)."""
-    from content.bio.graph.figure_history import figure_history
-    out: set[str] = set()
-    r = get_entity(result_id)
-    if not r:
-        return out
-    members = (r.get("metadata") or {}).get("members") or []
-    member_ids = [m.get("ref") for m in members if isinstance(m, dict) and m.get("ref")]
-    for mid in member_ids:
-        m = get_entity(mid)
-        if not m:
-            continue
-        out.add(mid)
-        # Expand revision chains for figure/table members. Cells don't
-        # currently form revision chains via wasRevisionOf, but
-        # figure_history is safe on any type — it'll just return [m].
-        if m.get("type") in ("figure", "table"):
-            try:
-                chain = figure_history(mid, include_superseded=True)
-                for e in chain:
-                    if e and e.get("id"):
-                        out.add(e["id"])
-            except Exception:  # noqa: BLE001 — chain walk is best-effort
-                pass
-    return out
+# _result_cascade_set → content/bio/services.py result_cascade_members service (Item 2A.4).
 
 
 @app.delete("/api/entities/{entity_id}")
@@ -316,7 +282,11 @@ def entities_delete(entity_id: str, hard: bool = False,
     # transitively: Result → members → each member's revision chain.
     cascade_set: set[str] = set()
     if cascade == "members" and ent.get("type") == "result":
-        cascade_set = _result_cascade_set(entity_id)
+        # The cascade set (Result → members → each member's revision chain) is bio-
+        # domain knowledge; ask the content pack via the core/services seam instead
+        # of walking figure_history here (Item 2A.4 inversion). Empty if no pack.
+        from core.services import call_service
+        cascade_set = call_service("result_cascade_members", entity_id, default=set())
 
     # Hard-delete: refuse if any non-archived, non-cascade-set entity
     # points at us (inbound), or if we point at any non-archived,
