@@ -160,15 +160,19 @@ def _rscript() -> "str | None":
     return None
 
 
-def _convert_any(src: Path, out: Path) -> None:
+def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     """Convert any lstar-supported source into a `.lstar.zarr` directory store via
     the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
     the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
     conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
     regardless of the temp path's `.building` suffix (the CLI detects format by
-    extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP)."""
+    extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP).
+    `set_phase` (optional) reports the current sub-step to the launch page so the
+    user sees convert-vs-optimize instead of a static spinner."""
     import subprocess
     import sys
+    sp = set_phase or (lambda *_: None)
+    sp(f"Converting {src.name} → viewer store…")
     env = {**os.environ}
     rs = _rscript()
     if rs and not env.get("LSTAR_RSCRIPT"):
@@ -182,6 +186,7 @@ def _convert_any(src: Path, out: Path) -> None:
         raise RuntimeError(
             f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
     if _PREP_ENABLED:
+        sp("Optimizing for fast viewing…")
         _try_viewer_prep(out)   # best-effort viewer@0.1 via pagoda3 prep.ts (WASM)
 
 
@@ -201,16 +206,18 @@ def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:
     _pack_stored_zip(str(store_dir), str(dest))
 
 
-def _copy_store(src: Path, out: Path) -> None:
+def _copy_store(src: Path, out: Path, set_phase=None) -> None:
     """Native store already a directory — copy the tree into the served cache."""
+    (set_phase or (lambda *_: None))("Copying store…")
     shutil.copytree(src, out)
 
 
-def _unzip_store(src: Path, out: Path) -> None:
+def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
     """Native store shipped as a .lstar.zarr.zip — extract into a directory the
     store route can serve (the browser can't range-read a zip over HTTP). The
     archive's root IS the store root (.zattrs/axes/fields at top level)."""
     import zipfile
+    (set_phase or (lambda *_: None))("Unpacking store…")
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(src) as z:
         z.extractall(out)
@@ -234,6 +241,10 @@ def _resolve_source(node: dict, pid: str) -> Path:
 def launch(node: dict, ctx: dict) -> LaunchResult:
     from core.config import project_root, current_project_id
     pid = ctx.get("project_id") or current_project_id()
+    # Reported to the launch page's poller so the user sees which step is running
+    # (convert / optimize / unpack) rather than a static spinner. Only fires when
+    # ensure_derived actually (re)builds — a cached store returns instantly.
+    set_phase = ctx.get("set_phase") or (lambda *_: None)
     src = _resolve_source(node, pid)
     if not src.exists():
         raise FileNotFoundError(
@@ -244,14 +255,17 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # Pick the derivation by source kind, and strip the (possibly two-part) suffix
     # for a clean output name.
     if name.endswith(_ZIP_SUFFIX):
-        convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
+        base_convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
     elif name.endswith(_STORE_SUFFIX):
-        convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
+        base_convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
     else:
-        convert, suffix = _convert_any, None             # .h5ad / .h5mu / .rds → convert (lstar CLI)
+        base_convert, suffix = _convert_any, None             # .h5ad / .h5mu / .rds → convert (lstar CLI)
     stem = src.name[:-len(suffix)] if suffix else src.stem
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
+
+    def convert(s: Path, o: Path) -> None:      # bind set_phase into the 2-arg callback
+        base_convert(s, o, set_phase)
 
     store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
 
