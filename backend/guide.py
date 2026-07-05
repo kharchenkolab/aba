@@ -494,6 +494,36 @@ def _assemble_turn_history(*, user_text, attachments, focus_entity_id, store_tid
     return history
 
 
+def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
+                         prompt_ctx, sidebar_text, focus_text, thread_text):
+    """Assemble the turn's system prompt (Item 2B). Returns (system, dynamic_sys):
+    `system` = project sidebar + focus + thread preambles + the pack's STABLE system
+    block (sent at the transport layer with cache_control: ephemeral); `dynamic_sys` =
+    the pack's per-turn tail (the BM25 recipes slice) plus the live compute-env line
+    (mode + node capacity + Slurm landscape). The two-block split (CC-convergence
+    Phase 4) keeps per-turn intent changes from invalidating the ~26K stable prefix."""
+    import time as _time
+    _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
+    _t0 = _time.perf_counter()
+    stable_sys, dynamic_sys = prompts["system"](
+        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
+        mode=(spec.prompt_mode if spec else "full"))
+    if _debug_timing:
+        print(f"[guide-timing] prompt_assembly={(_time.perf_counter()-_t0)*1000:.0f}ms "
+              f"sys_chars={len(stable_sys or '') + len(dynamic_sys or '')}", flush=True)
+    # Auto-surface the compute environment into the per-turn dynamic block so the
+    # agent plans placement with current facts (20s-cached; empty on a bare box).
+    try:
+        from core.exec.compute_env import context_line as _compute_line
+        _cl = _compute_line()
+        if _cl:
+            dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
+    except Exception:  # noqa: BLE001
+        pass
+    system = sidebar_text + focus_text + thread_text + stable_sys
+    return system, dynamic_sys
+
+
 async def stream_response(
     user_text: str,
     *,
@@ -616,32 +646,12 @@ async def stream_response(
         "highlight_active": bool(annotation_image),
         "thread_id": store_tid,  # for thread-scoped blocks (e.g. declared_recipes — #324 Phase 2)
     }
-    import time as _time
+    # Assemble the system prompt (stable block + dynamic tail) — Item 2B helper.
+    system, dynamic_sys = _build_system_prompt(
+        _prompts, active_tools, spec, guide_role, eff_intent, prompt_ctx,
+        sidebar_text, focus_text, thread_text)
+    import time as _time   # per-iteration timing in the loop below
     _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
-    _t_prompt_begin = _time.perf_counter()
-    stable_sys, dynamic_sys = _prompts["system"](
-        active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
-        mode=(spec.prompt_mode if spec else "full"))
-    _t_prompt_done = _time.perf_counter()
-    if _debug_timing:
-        print(f"[guide-timing] prompt_assembly={(_t_prompt_done-_t_prompt_begin)*1000:.0f}ms "
-              f"sys_chars={len(stable_sys or '') + len(dynamic_sys or '')}",
-              flush=True)
-    # CC-convergence Phase 4 (cache split): system is sent as TWO blocks at the
-    # transport layer — the stable prefix (cache_control: ephemeral) plus the
-    # uncached dynamic tail (the BM25 recipes slice). Per-turn intent changes
-    # only invalidate the small tail, not the 26K stable prefix.
-    # Auto-surface the compute environment (mode + node capacity + live Slurm
-    # landscape) into the per-turn dynamic block, so the agent plans placement
-    # with current facts. Cheap (20s-cached); empty on a bare local box error.
-    try:
-        from core.exec.compute_env import context_line as _compute_line
-        _cl = _compute_line()
-        if _cl:
-            dynamic_sys = (dynamic_sys + "\n\n" if dynamic_sys else "") + _cl
-    except Exception:  # noqa: BLE001
-        pass
-    system = sidebar_text + focus_text + thread_text + stable_sys
     # The user-message reminder injection (the 'reminder-only catalog' variant)
     # is OFF by default after the 2026-06-02 Haiku+Sonnet study showed both
     # models reject reminder-only catalogs (Haiku can't find them, Sonnet

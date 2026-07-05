@@ -74,13 +74,28 @@ def _capture() -> dict:
     """Drive one FAKE turn; return the assembled-context fingerprint."""
     from fastapi.testclient import TestClient
     from main import app
+    saw_done, turn_err = False, None
     with TestClient(app) as client:
         with client.stream("POST", "/api/chat",
                            json={"text": "what files are here?",
                                  "thread_id": "default",
                                  "focus_entity_id": "workspace"}) as r:
-            for _ in r.iter_text():
-                pass
+            for line in r.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    ev = json.loads(line[5:].strip())
+                except Exception:
+                    continue
+                if ev.get("type") == "error":
+                    turn_err = ev.get("error") or ev
+                elif ev.get("type") == "done":
+                    saw_done = True
+    # The byte-golden dumps mid-turn, so a POST-dump crash (e.g. a NameError in the
+    # loop after the setup) leaves the sha matching while the turn actually FAILED —
+    # exactly the 2B _time/_debug_timing regression. Assert the turn completed cleanly.
+    assert turn_err is None, f"FAKE turn emitted an error event: {turn_err}"
+    assert saw_done, "FAKE turn produced no `done` event — the loop broke mid-turn"
     files = sorted(glob.glob(os.path.join(os.environ["ABA_TURN_LOG_DIR"], "*_run_*.json")))
     assert files, "no turn-context sidecar was dumped — did the turn start?"
     payload = json.loads(Path(files[-1]).read_text())
