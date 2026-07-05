@@ -126,6 +126,16 @@ job runs on a GPU node ABA can't observe):
   caught. **Install-time is the hard gate** (`aba doctor`: fstype check + a definitive token/`sbatch`
   probe read back from a compute node); **runtime is a loud-but-boot startup self-check**
   (`check_envs_dir_shared`) surfaced on `/api/health` (`degraded`+`warnings[]`) and `/api/admin/selfcheck`.
+  **Under a SIF/OOD deploy** the install-time gate doesn't run (the image is built once, launched per
+  session), so the **runtime self-check is the guard**. It works because apptainer preserves a bind's
+  underlying fstype in the container's `/proc/self/mountinfo` (a shared NFS/beegfs bind reads as
+  `nfs`/`beegfs` → shared; an `ENVS_DIR` left inside the read-only image reads as `overlay`/`squashfs`
+  → node-local → fires; a node-local bind reads as the local fstype → fires). Verified on a real fat SIF.
+  **Slim caveat / gap:** slim also mounts the *base* venv from `image.base_dir` (site.yaml) — that path
+  has the same shared-FS requirement but is NOT yet checked (fat bakes the base, so squashfs there is
+  ubiquitous-in-image, not a growth dir). A `check_base_dir_shared` is the natural next tenant of the
+  self-check registry. There is also no SIF-aware *deploy-time* probe (the definitive `sbatch` probe is
+  native-install only) — a SIF probe would `apptainer exec` the image on a compute node.
 
 **Config topology (no floating vars):** the accelerator toggle is a `config.env` line
 (installer-written, admin-editable), exactly like `ABA_BATCH_SUBMITTER`. `hpc.yaml` stays

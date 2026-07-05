@@ -78,7 +78,7 @@ _SHARED_FS = {"nfs", "nfs4", "lustre", "gpfs", "beegfs", "beegfs_nodev", "fhgfs"
               "cephfs", "ceph", "glusterfs", "fuse.glusterfs", "smb3", "cifs",
               "panfs", "pvfs2", "orangefs", "9p", "afs"}
 _LOCAL_FS = {"tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
-             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay"}
+             "reiserfs", "jfs", "vfat", "devtmpfs", "overlay", "squashfs", "fuse.squashfuse"}
 
 
 def _fs_kind_for_path(path) -> "tuple[str, str | None]":
@@ -110,9 +110,10 @@ def _fs_kind_for_path(path) -> "tuple[str, str | None]":
 
 def _probe_envs_visible_on_compute_node(envs_dir: str, home: Path) -> "tuple[bool, str]":
     """Definitive shared-FS check: write a token under ENVS_DIR (the dir UNDER
-    TEST) on the login node, `sbatch` a one-shot job that reads it from a compute
-    node and reports via stdout to a log under HOME (a known-shared channel — the
-    env + launcher live there). Poll that shared log. Best-effort: `(True, …)` when
+    TEST) from the host running `aba doctor` (a submit node or interactive
+    allocation), `sbatch` a one-shot job that reads it from a compute node and
+    reports via stdout to a log under HOME (a known-shared channel — the env +
+    launcher live there). Poll that shared log. Best-effort: `(True, …)` when
     sbatch is absent or the job doesn't land in time so a busy scheduler never
     blocks the install; a genuine MISSING is a hard `(False, …)`."""
     import time
