@@ -122,6 +122,8 @@ from core.web.routers import jobs as _jobs_routes
 app.include_router(_jobs_routes.router)
 from core.web.routers import settings as _settings_routes
 app.include_router(_settings_routes.router)
+from core.web.routers import memory as _memory_routes
+app.include_router(_memory_routes.router)
 
 
 # Startup/shutdown lifecycle → lifespan.py (Item 2A.2). Composition-root
@@ -1668,33 +1670,7 @@ def skill_get(name: str):
 # the write_memory tool (UI may eventually surface its own editor, but
 # the source of truth is the per-project markdown files).
 
-@app.get("/api/memory")
-def memory_list():
-    """Index + entry list for the current project's memory directory.
-    Entries omit bodies; fetch one via /api/memory/{name}."""
-    from core.memory import list_memories, read_memory_index
-    return {
-        "index": read_memory_index(),
-        "entries": [
-            {"name": e.name, "type": e.type, "description": e.description}
-            for e in list_memories()
-        ],
-    }
-
-
-@app.get("/api/memory/{name}")
-def memory_get(name: str):
-    """Full memory body + metadata."""
-    from core.memory import read_memory
-    e = read_memory(name)
-    if e is None:
-        raise HTTPException(404, f"memory {name!r} not found")
-    return {
-        "name": e.name,
-        "type": e.type,
-        "description": e.description,
-        "body": e.body,
-    }
+# Memory routes → core/web/routers/memory.py (Item 2A.3).
 
 
 @app.get("/api/threads/{tid}/manifest")
