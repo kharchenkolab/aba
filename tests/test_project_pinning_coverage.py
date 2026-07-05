@@ -6,38 +6,62 @@ voluntarily per-endpoint. Audit measurement: 4 of 30 mutation
 endpoints in backend/main.py used `Depends(require_project)`; the
 state-bleed footgun (request lands in wrong project) was still loaded.
 
-This AST test walks every `@app.{post,patch,delete,put}` decorator in
-main.py and every `@router.{...}` decorator in bio/web/routes.py and
-fails if a mutation handler is missing the project-pin dependency.
+This AST test walks every mutating FastAPI route decorator across ALL
+web-route files and fails if a mutation handler is missing the
+project-pin dependency.
+
+Item 2 hardening (2A.0): route files are DISCOVERED (main.py + every
+*.py under core/web/ and content/bio/web/), not hardcoded, and the
+decorator base may be ANY name (not just `app`/`router`) — so moving a
+route onto a differently-named `APIRouter` in a new module can NEVER
+make this gate silently vacuous. The companion `test_route_table.py`
+snapshots the live route set so a move that drops/renames a path fails
+loudly too.
 
 Exemption rule: a handler is exempt if it appears in EXEMPT_ENDPOINTS
 below. Exemptions are limited to genuinely-global endpoints (project
-lifecycle, server-wide config) and must be justified in the table.
+lifecycle, server-wide config) or body-sourced-pid handlers, and must
+be justified in the table.
 
-Adding a new endpoint:
-  - Mutating (POST/PATCH/DELETE/PUT) endpoint on project data:
-    add `Depends(require_project)` or use the function-form
-    `_require_project_context(req.project_id)` if pid is in the
-    request body.
-  - Genuinely global (project create/open, server-wide):
-    add the route path + method to EXEMPT_ENDPOINTS with a one-line
-    justification.
+Runs under pytest (CI) OR standalone (`python tests/test_project_pinning_coverage.py`)
+since the base env may lack pytest.
 """
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
-import pytest
-
-pytestmark = pytest.mark.platform
+try:
+    import pytest
+    pytestmark = pytest.mark.platform
+    def _fail(msg): pytest.fail(msg)
+except ImportError:  # standalone (base env has no pytest)
+    pytest = None
+    def _fail(msg): raise AssertionError(msg)
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 MAIN = BACKEND / "main.py"
-# Wave 1 Track B: routes.py was split into per-entity files under
-# routes/. Test now walks every *.py in the package (and tolerates
-# either layout for backward compat in case rollback is needed).
+
+
+def _route_files() -> list[Path]:
+    """All files that may register FastAPI routes: the composition root
+    plus every module under core/web/ and content/bio/web/. Discovered,
+    not hardcoded, so route extraction into new router modules stays
+    covered (2A.0). Legacy single-file bio routes.py is included if present."""
+    files = [MAIN]
+    for base in (BACKEND / "core" / "web", BACKEND / "content" / "bio" / "web"):
+        if base.is_dir():
+            files += [p for p in base.rglob("*.py") if p.name != "__init__.py"]
+    legacy = BACKEND / "content" / "bio" / "web" / "routes.py"
+    if legacy.exists() and legacy not in files:
+        files.append(legacy)
+    # stable order, de-duped
+    return sorted(set(files))
+
+
+# main.py is always scanned; bio route files kept as a named list for the
+# per-group failure messages (back-compat with the original two tests).
 _BIO_ROUTES_PKG = BACKEND / "content" / "bio" / "web" / "routes"
 _BIO_ROUTES_FILE = BACKEND / "content" / "bio" / "web" / "routes.py"
 if _BIO_ROUTES_PKG.is_dir():
@@ -82,6 +106,11 @@ def _decorators_in(py: Path) -> list[tuple[int, str, str, str]]:
     """Walk every async/sync def's decorator list and return rows for
     those matching FastAPI route decorators.
 
+    Matches `<name>.METHOD("/path", ...)` for ANY `<name>` (app, router, or a
+    module-specific APIRouter like `chat_router`) — over-inclusion is safe (we
+    only scan web-route files), under-inclusion would silently drop the pin
+    gate for a moved route.
+
     Returns: list of (lineno, path, method, func_name).
     """
     tree = ast.parse(py.read_text())
@@ -92,16 +121,14 @@ def _decorators_in(py: Path) -> list[tuple[int, str, str, str]]:
         for d in node.decorator_list:
             if not isinstance(d, ast.Call):
                 continue
-            # Look for `app.METHOD(...)` or `router.METHOD(...)`.
             if not isinstance(d.func, ast.Attribute):
                 continue
             method = d.func.attr.upper()
             if method not in ("POST", "PATCH", "DELETE", "PUT"):
                 continue
-            base = d.func.value
-            if not isinstance(base, ast.Name) or base.id not in ("app", "router"):
+            # base must be a bare Name (a router/app object), not e.g. a call chain.
+            if not isinstance(d.func.value, ast.Name):
                 continue
-            # First positional arg is the path string.
             if not d.args or not isinstance(d.args[0], ast.Constant):
                 continue
             path = d.args[0].value
@@ -114,10 +141,6 @@ def _decorators_in(py: Path) -> list[tuple[int, str, str, str]]:
 def _has_require_project_dep(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True iff any positional/kwarg parameter has a default of
     `Depends(require_project)`. Handles `_pid: str = Depends(require_project)`."""
-    args = list(func.args.args) + list(func.args.kwonlyargs)
-    for a in args:
-        pass  # default lookup is on args.defaults; do it below
-    # walk args.defaults / args.kw_defaults
     defaults = list(func.args.defaults) + list(func.args.kw_defaults)
     for d in defaults:
         if d is None:
@@ -133,7 +156,6 @@ def _missing_pin(py: Path) -> list[tuple[int, str, str, str]]:
     """Return rows for mutating endpoints in `py` that lack
     Depends(require_project) AND aren't exempt."""
     tree = ast.parse(py.read_text())
-    # Index funcs by lineno for lookup.
     funcs_by_line: dict[int, ast.FunctionDef | ast.AsyncFunctionDef] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -151,24 +173,11 @@ def _missing_pin(py: Path) -> list[tuple[int, str, str, str]]:
     return missing
 
 
-def test_main_py_mutations_all_pinned():
-    missing = _missing_pin(MAIN)
-    if missing:
-        msg = "\n".join(
-            f"  main.py:{lineno}  {method} {path}  ({name})"
-            for lineno, path, method, name in missing
-        )
-        pytest.fail(
-            f"{len(missing)} mutation endpoint(s) in main.py lack "
-            f"Depends(require_project) and aren't in EXEMPT_ENDPOINTS:\n{msg}\n\n"
-            f"Either add the dep, or — if genuinely global — add to "
-            f"EXEMPT_ENDPOINTS with a one-line justification."
-        )
-
-
-def test_bio_routes_mutations_all_pinned():
+def test_all_mutations_pinned():
+    """Every mutating route across ALL web-route files (discovered, not
+    hardcoded) is pinned or explicitly exempt."""
     rows: list[tuple[Path, int, str, str, str]] = []
-    for py in BIO_ROUTES_FILES:
+    for py in _route_files():
         for lineno, path, method, name in _missing_pin(py):
             rows.append((py, lineno, path, method, name))
     if rows:
@@ -176,11 +185,12 @@ def test_bio_routes_mutations_all_pinned():
             f"  {py.relative_to(ROOT)}:{lineno}  {method} {path}  ({name})"
             for py, lineno, path, method, name in rows
         )
-        pytest.fail(
-            f"{len(rows)} mutation endpoint(s) in bio/web/routes/ lack "
-            f"Depends(require_project) and aren't in EXEMPT_ENDPOINTS:\n{msg}\n\n"
-            f"Either add the dep, or add to EXEMPT_ENDPOINTS with a one-line "
-            f"justification."
+        _fail(
+            f"{len(rows)} mutation endpoint(s) lack Depends(require_project) and "
+            f"aren't in EXEMPT_ENDPOINTS:\n{msg}\n\n"
+            f"Either add the dep, use body-sourced _require_project_context() (and "
+            f"exempt it), or — if genuinely global — add to EXEMPT_ENDPOINTS with a "
+            f"one-line justification."
         )
 
 
@@ -188,7 +198,7 @@ def test_exemptions_are_real_endpoints():
     """Every EXEMPT_ENDPOINTS entry must correspond to a real endpoint —
     catches typos that would silently make the gate vacuous."""
     real = set()
-    for py in (MAIN, *BIO_ROUTES_FILES):
+    for py in _route_files():
         for _lineno, path, method, _name in _decorators_in(py):
             real.add((path, method))
     bogus = set(EXEMPT_ENDPOINTS) - real
@@ -196,3 +206,14 @@ def test_exemptions_are_real_endpoints():
         f"EXEMPT_ENDPOINTS contains entries that don't match any real "
         f"endpoint (typos?): {sorted(bogus)}"
     )
+
+
+if __name__ == "__main__":
+    print(f"scanning {len(_route_files())} web-route file(s):")
+    for p in _route_files():
+        print("  ", p.relative_to(ROOT))
+    test_all_mutations_pinned()
+    print("PASS test_all_mutations_pinned")
+    test_exemptions_are_real_endpoints()
+    print("PASS test_exemptions_are_real_endpoints")
+    print("all passed")

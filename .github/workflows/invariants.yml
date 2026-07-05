@@ -17,10 +17,10 @@ jobs:
           python-version: '3.12'
       - name: seam + platform purity (dep-free)
         run: bash scripts/check_invariants.sh   # check_seam.sh + check_platform_purity.py (stdlib-only)
-      - name: access-gate — no ungated entity mutation
+      - name: access-gate + route-table snapshot
         run: |
           pip install pytest
-          python -m pytest tests/test_project_pinning_coverage.py -q
+          python -m pytest tests/test_project_pinning_coverage.py tests/test_route_table.py -q
 
   frontend:
     name: frontend platform purity
