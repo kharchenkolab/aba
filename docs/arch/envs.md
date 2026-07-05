@@ -26,11 +26,11 @@ construction**:
 **Python — two tiers + an escape hatch.**
 - **base (immutable)** — the baked scientific stack (the install-wide foundation). Made
   read-only at runtime so nothing can mutate it; self-heals at startup (see Guards).
-- **project overlay** (`ENVS_DIR/pylib_proj/<pid>`) — the only session-writable layer,
+- **project overlay** (`ENVS_DIR/pylib_proj/<pid>` — `project_pylib_dir`, `materialize.py:95`) — the only session-writable layer,
   **prepended** so a project's package version wins over base, with **numpy + the ABI
   core pinned** (`abi-anchor.txt`) so an override can't shadow-break the compiled stack.
   Per-project: one project can't pollute another or the base.
-- **isolated envs** (`ENVS_DIR/isolated/proj/<pid>/<name>`) — the escape hatch for a hard
+- **isolated envs** (`ENVS_DIR/isolated/proj/<pid>/<name>` — `isolated_env.py:139`) — the escape hatch for a hard
   conflict; a full separate env with its own persistent kernel, reproducible from a
   per-env lock.
 
@@ -43,37 +43,41 @@ importable Python libraries (see Known gaps).
 
 ## Provisioning (adding a capability on demand)
 
-Agent calls `ensure_capability(name)` → resolves a capability record → `materialize()`
-dispatches by provisioning kind:
-- **pip** → installs into the project overlay via `pip --prefix`, **`--prefer-binary`**
-  (use a prebuilt wheel over a newer sdist — never source-build on an old system toolchain
-  when a wheel exists for some version), **constrained to the ABI anchor** (numpy pinned to
-  the base version). Two-phase: fast `--prefix`, then an `--ignore-installed` retry if the
-  read-only base blocks an override.
-- **conda** → micromamba into the shared tools env (CLI tools on PATH).
+Agent calls `ensure_capability(name)` (`discovery.py:702`) → resolves a capability record (the
+catalog entity and its bundle composition are owned by [`bundle-and-content.md`](bundle-and-content.md))
+→ `materialize()` (`materialize.py:155`) dispatches by provisioning kind:
+- **pip** (`_pip_install`, `materialize.py:202`) → installs into the project overlay via
+  `pip --prefix`, **`--prefer-binary`** (`materialize.py:242` — prefer a prebuilt wheel over a
+  newer sdist; never source-build on an old system toolchain when a wheel exists for some
+  version), **constrained to the ABI anchor** (numpy pinned to the base version). Two-phase:
+  fast `--prefix`, then an `--ignore-installed` retry (`materialize.py:255`) if the read-only
+  base blocks an override.
+- **conda** (`_conda_install`, `materialize.py:182`) → micromamba into the shared tools env (CLI tools on PATH).
 
-The **ABI anchor** is the crux of pip safety: `abi_anchor_constraints()` pins numpy to the
-base's installed version so an overlay install reuses the prebuilt base numpy instead of
+The **ABI anchor** is the crux of pip safety: `abi_anchor_constraints()` (`env_integrity.py:141`)
+pins numpy to the base's installed version so an overlay install reuses the prebuilt base numpy instead of
 pulling/rebuilding it. The version is read from **live package metadata** (robust to a
 conda-forge / local-wheel base, where `pip freeze` renders packages as `name @ file://…`
-rather than `name==version`). A full base freeze (`ensure_base_constraints` → `_freeze_pins`,
+rather than `name==version`). A full base freeze (`ensure_base_constraints` → `_freeze_pins` — `env_integrity.py:285`/`:241`,
 also metadata-based) or a shipped canonical lock (`$ABA_BASE_LOCK`) backs the legacy
 shared path.
 
 ## Integrity guards
 
-- **Read-only base + startup self-heal** (`self_heal_base`): `pip check` + a deep import of
-  the lazy workflow deps; repairs the missing closure from the lock; re-freezes read-only.
+- **Read-only base + startup self-heal** (`self_heal_base`, `env_integrity.py:781`): `pip check`
+  + a deep import of the lazy workflow deps; repairs the missing closure from the lock; re-freezes read-only.
 - **ABI-anchor pin** on every overlay install (above) — an incompatible-numpy override
   fails the resolve instead of shadow-breaking the stack.
-- **`env_selfcheck()`** — a fast standard check (ABI anchor armed + numpy resolvable) run at
-  startup; catches the *silent* config gap the deep closure check misses (e.g. the anchor
+- **`env_selfcheck()`** (`env_integrity.py:164`) — a fast standard check (ABI anchor armed +
+  numpy resolvable) run at startup; catches the *silent* config gap the deep closure check misses (e.g. the anchor
   being unresolved). Also a CI invariant (`tests/test_env_integrity.py`).
-- **Real-import verification** — capabilities are confirmed by importing, not by
-  `find_spec`; a present-but-unloadable (ABI-mismatched) package is caught, not reported ready.
-- **Background jobs** run on the same base + overlay; `slurm_entry` clears `PYTHONHOME` +
-  pins `PYTHONPATH` so a cluster module can't shadow the interpreter (see
-  `misc/deferred_jobs.md`, the prj_6d986f40 incident).
+- **Real-import verification** (`verify_python_imports`, `env_integrity.py:26`) — capabilities are
+  confirmed by importing, not by `find_spec`; a present-but-unloadable (ABI-mismatched) package
+  is caught, not reported ready.
+- **Background jobs** ([`jobs-and-hpc.md`](jobs-and-hpc.md)) run on the same base + overlay; the
+  submitted job script clears `PYTHONHOME` + pins `PYTHONPATH` (`slurm_submitter.py:113`) so a
+  cluster `module load` can't shadow the interpreter (see `misc/deferred_jobs.md`, the
+  prj_6d986f40 incident).
 
 ## GPU / accelerator (target hardware)
 
@@ -84,15 +88,15 @@ from its *library* needs, and lives in a different tier:
   in transitively via `scvi-tools`; conda-forge's default is the **CPU-only** build. A GPU
   deployment builds a **CUDA** base instead. The decision is one toggle in
   `$ABA_HOME/config.env` — `ABA_ACCELERATOR=cpu|cuda` (+ optional `ABA_CUDA_VERSION`) —
-  written by `install/linux/setup.sh` (auto-detects a `gpu` Slurm partition; admin-overridable)
-  and applied by `install/core/inject-accelerator.sh`, which injects a `pytorch-gpu` pin into
+  written by `install/linux/setup.sh:217` (auto-detects a `gpu` Slurm partition; admin-overridable)
+  and applied by `install/core/inject-accelerator.sh:29`, which injects a `pytorch-gpu` pin into
   the copied `environment.yml` at `create-env` (single source — no duplicate GPU env file). A
   CUDA torch is a **superset**: it uses a GPU when present and falls back to CPU on the login
   node / CPU jobs, so one base serves both. Non-GPU deployments (laptops) build the CPU base.
   The base is **built on the GPU-less login node** (there is no build-time access to a GPU
   node): conda-forge `pytorch=*=cuda*` builds require the `__cuda` virtual package, which
   micromamba only detects from a host driver, so `create-env` exports `CONDA_OVERRIDE_CUDA`
-  (default `11.8`; `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
+  (`install.yml:97`; default `11.8`, `ABA_CUDA_VERSION` overrides) to spoof it — this both unblocks the solve and
   selects the CUDA major (`12.x`→`cuda12x`, `11.8`→`cuda118`). `11.8` is the widest-compat
   default: it runs on any driver ≥450.80 and covers GPUs sm_60 (P100)…sm_90 (H100). A `12.x`
   runtime needs a CUDA-12 driver (≥R525); it *does* run on an older 12.x driver via CUDA
@@ -104,13 +108,13 @@ from its *library* needs, and lives in a different tier:
 
 **Certainty across nodes = discover-once + verify-at-use** (ABA runs on a CPU login node; a
 job runs on a GPU node ABA can't observe):
-- **`gpu_usable`** (`compute_env`) — a *node-independent* readiness hint in the agent's
+- **`gpu_usable`** (`compute_env.py:197`) — a *node-independent* readiness hint in the agent's
   per-turn cue: a GPU is present (local or a `gpu` partition) **and** the base torch is a CUDA
-  build (`torch_cuda_build` = `torch.version.cuda`, a property of the build, not of runtime
+  build (`torch_cuda_build`, `env_integrity.py:225` = `torch.version.cuda`, a property of the build, not of runtime
   GPU visibility). If a GPU exists but the base is CPU-only, the cue **warns** so the agent
   runs on CPU / tells the user instead of submitting a job that silently falls back.
-- **Verify-at-use** (`slurm_entry`) — a GPU-requested job (`estimate.gpu`) is preflighted on
-  the compute node via `gpu_capability_ok()`; if no usable GPU, it **fails fast** rather than
+- **Verify-at-use** (`slurm_entry.py:44`) — a GPU-requested job (`estimate.gpu`) is preflighted on
+  the compute node via `gpu_capability_ok()` (`env_integrity.py:201`); if no usable GPU, it **fails fast** rather than
   training on CPU on an idle allocated GPU (the scVI-on-CPU incident: right placement, CPU base).
 - **`env_selfcheck` invariant + `aba doctor`** — a deployment declaring `ABA_ACCELERATOR=cuda`
   must have a CUDA-build torch; a CPU-only base is flagged at startup / by `doctor`, which
@@ -132,7 +136,7 @@ toggle). The base spec (`environment.yml`) lives in the repo.
 | `install/core/inject-accelerator.sh` · `install/linux/setup.sh` | deployment-conditional base: `ABA_ACCELERATOR` (config.env) → CPU vs CUDA torch pin |
 | `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
-| `backend/kernels/…` (run_python preamble) | assembles the run's `sys.path`: base + project overlay |
+| `core/exec/kernels/` · `core/exec/run.py` (run_python preamble) | assembles the run's `sys.path`: base + project overlay (see [`compute-execution.md`](compute-execution.md)) |
 | `misc/env_refactor.md` | design/evolution log (§0 as-built); `misc/capabilities.md`, `misc/capdat_impl.md` |
 
 ## Known gaps

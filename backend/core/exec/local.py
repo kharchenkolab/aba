@@ -100,12 +100,27 @@ class LocalSubprocessExecutor:
         try:
             if stream:
                 # Live mode: drain stdout/stderr line-by-line on threads so a
-                # long background/Slurm job's progress is tailable AS IT RUNS
-                # (the child's stdout is captured to job.log by `sbatch -o`).
-                # Threads keep the pipes drained → no communicate()-style
-                # deadlock; timeout/cancel still kill via the group.
-                stdout, stderr, returncode, timed_out = self._exec_streaming(
-                    proc, timeout_s)
+                # long background/Slurm job's progress is tailable AS IT RUNS.
+                # A Slurm job's stdout is captured to job.log by `sbatch -o`, but a
+                # LOCAL background job's tee goes to the SERVER's stdout, not a
+                # per-job file — so also append each line to <cwd>/run.log, which
+                # /api/jobs/{id} reads for the live tail. (run.log is overwritten
+                # with the canonical formatted version at finalize.) Threads keep
+                # the pipes drained → no communicate() deadlock; cancel kills via group.
+                live_log = None
+                try:
+                    live_log = open(os.path.join(str(cwd), "run.log"), "w", buffering=1)
+                except Exception:  # noqa: BLE001 — live tail is best-effort
+                    live_log = None
+                try:
+                    stdout, stderr, returncode, timed_out = self._exec_streaming(
+                        proc, timeout_s, live_log=live_log)
+                finally:
+                    if live_log is not None:
+                        try:
+                            live_log.close()
+                        except Exception:  # noqa: BLE001
+                            pass
             else:
                 try:
                     stdout, stderr = proc.communicate(timeout=timeout_s)
@@ -129,15 +144,18 @@ class LocalSubprocessExecutor:
         )
 
     @staticmethod
-    def _exec_streaming(proc, timeout_s):
+    def _exec_streaming(proc, timeout_s, live_log=None):
         """Drain proc.stdout/stderr on daemon threads, tee'ing each line to this
         process's stdout/stderr (live, flushed) while accumulating for the
-        result. Returns (stdout, stderr, returncode, timed_out). Used when
-        `stream=True` — the background/Slurm job path — so job.log is live."""
+        result. When `live_log` is given, ALSO append each line to it (a per-job
+        run.log) so a LOCAL background job — whose tee otherwise reaches only the
+        server's stdout — is tailable live via /api/jobs/{id}. Returns
+        (stdout, stderr, returncode, timed_out). Used when `stream=True`."""
         import threading
 
         out_chunks: list[str] = []
         err_chunks: list[str] = []
+        _log_lock = threading.Lock()  # stdout+stderr pumps share live_log
 
         def _pump(src, sink, chunks):
             try:
@@ -148,6 +166,13 @@ class LocalSubprocessExecutor:
                         sink.flush()
                     except Exception:  # noqa: BLE001 — tee is best-effort
                         pass
+                    if live_log is not None:
+                        try:
+                            with _log_lock:
+                                live_log.write(line)
+                                live_log.flush()
+                        except Exception:  # noqa: BLE001 — live tail is best-effort
+                            pass
             finally:
                 try:
                     src.close()
