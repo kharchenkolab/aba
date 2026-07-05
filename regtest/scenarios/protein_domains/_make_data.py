@@ -29,7 +29,7 @@ Outputs (all committed under data/, all small):
                                 mutation -> domain mapping) be answered LOCALLY.
 
 Run:
-    /home/pkharchenko/aba/tools/scenario-venv/bin/python _make_data.py
+    "" _make_data.py
 """
 from __future__ import annotations
 

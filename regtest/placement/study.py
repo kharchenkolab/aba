@@ -44,12 +44,17 @@ _load_config_env()
 os.environ["ABA_HOME"] = str(INSTALL)
 
 # ── 2. isolate runtime state to a throwaway study dir ─────────────────────────
-RUN = Path("/tmp/aba_placement_study") / time.strftime("run-%Y%m%d-%H%M%S")
+# Portable + configurable: ABA_PLACEMENT_STUDY_DIR is the shared base read by BOTH
+# this script (run output) and analyze.py (results glob) — one env var, no two-file
+# literal coupling. Defaults under $TMPDIR (node-local scratch is fine here).
+_TMP = os.environ.get("TMPDIR", "/tmp")
+STUDY_DIR = Path(os.environ.get("ABA_PLACEMENT_STUDY_DIR", f"{_TMP}/aba_placement_study"))
+RUN = STUDY_DIR / time.strftime("run-%Y%m%d-%H%M%S")
 RUN.mkdir(parents=True, exist_ok=True)
 os.environ["ABA_RUNTIME_DIR"] = str(RUN)
 os.environ["ABA_DB_PATH"] = str(RUN / "live.db")
 os.environ["ABA_RAW_REQUEST_DIR"] = str(RUN / "rawreq")
-os.environ.setdefault("ABA_ENVS_DIR", "/tmp/aba_discovery/envs")
+os.environ.setdefault("ABA_ENVS_DIR", f"{_TMP}/aba_discovery/envs")
 os.environ["ABA_MODEL"] = os.environ.get("ABA_STUDY_MODEL", "claude-opus-4-8")
 
 # ── 3. sys.path → WORKING-TREE backend (test restest code directly) ───────────

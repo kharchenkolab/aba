@@ -285,7 +285,18 @@ Full session log was in a scratch dir (`../qa-2026-07-04/`, now deleted); the ac
   to Slurm at all** (its baked in-image base is unreachable by the bare job → fires under a `slurm` submitter);
   Slurm needs a slim SIF (base on shared FS) or a native shared install, and fat is single-node/local-submitter
   only. Remaining gap: no SIF-aware *deploy-time* probe (native-install only).
-- **[MED] regtest harness portability** — `_regen_all.sh` + placement/study.py hardcode `/home/pkharchenko/...` venvs + `/tmp/aba_8000.env`; a full sweep isn't runnable fresh on another box without overrides. Relevant to aba-vbc.
+- **[MED → RESOLVED 2026-07-05] regtest harness portability** — `_regen_all.sh` + `placement/study.py`
+  hardcoded `/home/pkharchenko/...` venvs, and `study.py`/`analyze.py` coupled a literal `/tmp/aba_placement_study`
+  path across two files; a fresh box (or aba-vbc, running the sweep against a VBC deployment) couldn't run it
+  without reverse-engineering overrides, and `_regen_all.sh` silently FAILed every generator. FIX:
+  (1) `_regen_all.sh` resolves interpreters portably (ABA_SCENARIO_VENV/ABA_RUNTIME_VENV → repo `.venv` →
+  `$ABA_HOME/env` → `$PYTHON` → `python3`) and **fails loud with guidance** if none has the scenario deps,
+  no `/home` default; (2) `ABA_PLACEMENT_STUDY_DIR` is one shared env var read by both `study.py` + `analyze.py`
+  (+ `$TMPDIR`-based defaults); (3) env-var contract documented in `regtest/README.md`; (4) `/home/pkharchenko`
+  run-example docstrings → `$ABA_SCENARIO_VENV`/`$ABA_RUNTIME_VENV`; (5) guard `tests/test_regtest_portability.py`
+  fails on any `/home/<user>` in the harness. VERIFIED on this cluster: ran `_selftest_session` end-to-end via
+  the portable harness (ABA env python + `ABA_HOME` OAuth creds, isolated runtime, no `/home`) → **7/7 mechanical
+  steps PASS**, real Haiku turns + prompt caching, kernels spawned + reaped.
 - **[LOW → RESOLVED 2026-07-05] `scripts/check_invariants.sh` defaulted to a stale interpreter** — it used `PY="${PYTHON:-python3}"`; on CLIP `python3` = 3.6.8 can't parse the modern checkers, so a bare run reported spurious `✗ FAIL`s. FIXED in 2A.0: the script now resolves a Python >=3.9 ($PYTHON → .venv → python3.12/11/10 → python3, each version-validated) and, if none is found, exits with a clear "set PYTHON=…" message instead of misleading SyntaxErrors. CI's modern python3 auto-resolves.
 - **Coverage gaps not run** — D4 OOM-then-resize, D5 timeout-then-resize, D6 reactive error-recovery (agent reads a *failed* job → fixes → reruns). Worth dedicated scenarios.
 - **Shipped this pass (on main, live):** deployment-conditional CUDA base (live instance rebuilt cuda118, scVI-on-GPU fixed) + install docs (aba + aba-vbc); regtest scenarios gpu_job_completion + slurm_missing_pkg; runner ENVS_DIR→shared; `aba doctor` oauth_cc-cred + node-local-ENVS_DIR checks; Jobs-card: live output (queued/running placeholder + live run.log tail + PYTHONUNBUFFERED), deferred-submit note points at the panel, R bg jobs stream live, job archive/dismiss + auto-retention(keep=30), and the Dismiss-hang fix (reconcileJobs prunes archived jobs from the poll).
