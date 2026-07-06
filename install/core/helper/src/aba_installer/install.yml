@@ -107,8 +107,8 @@ steps:
     why: Source for the backend, the frontend, and the recipe library.
     commands:
       - 'mkdir -p "$REPO_DIR"'
-      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
-      - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
+      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --filter=':- .gitignore' --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
+      - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --filter=':- .gitignore' --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
     timeout_seconds: 120
     remediation: |
       git clone failed — most often a private-repo access issue. Use SSH:
