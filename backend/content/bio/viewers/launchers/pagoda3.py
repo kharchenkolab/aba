@@ -38,7 +38,7 @@ def _launcher_version() -> str:
 # prep.ts is TypeScript, so it needs node >= 22 (env node may be older); if none
 # is found, prep is skipped and we serve the un-prepped store.
 _PREP_ENABLED = os.getenv("ABA_PAGODA3_PREP", "1").lower() in ("1", "true", "yes", "on")
-LAUNCHER_VERSION = _launcher_version() + ("+prep3" if _PREP_ENABLED else "")
+LAUNCHER_VERSION = _launcher_version() + "+viewer1"   # optimize via lstar --viewer (Python)
 _STORE_SUFFIX = ".lstar.zarr"
 _ZIP_SUFFIX = ".lstar.zarr.zip"
 
@@ -187,28 +187,41 @@ def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
     conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
     regardless of the temp path's `.building` suffix (the CLI detects format by
-    extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP).
-    `set_phase` (optional) reports the current sub-step to the launch page so the
-    user sees convert-vs-optimize instead of a static spinner."""
+    extension). **Optimizes during conversion via `--viewer`** (lstar's Python
+    `extend_for_viewer` → the `viewer@0.1` profile: od_score, per-group
+    stats/markers, cell-major counts) so the store opens WITHOUT the "Not
+    viewer-optimized" banner.
+
+    Why in-process `--viewer` and not the old prep.ts (WASM) step: prep.ts is
+    fragile — it needs node ≥22 (prod pins node 20), the pagoda3 dist's bundled JS
+    optimizer, and a subprocess+copytree, and it fails SILENTLY (best-effort), which
+    is how an scvi `.h5ad` opened un-optimized on a server where other files were
+    fine. `--viewer` runs in the SAME lstar-sc that did the conversion — no node, no
+    WASM, deterministic — and the dup-libomp SIGSEGV that once forced the WASM path
+    is fixed in lstar-sc ≥0.1.6. If `--viewer` fails on some unusual input, fall
+    back to a plain (functional, un-optimized) store rather than failing the launch.
+    `set_phase` reports the sub-step to the launch page."""
     import subprocess
     import sys
     sp = set_phase or (lambda *_: None)
-    sp(f"Converting {src.name} → viewer store…")
     env = {**os.environ}
     rs = _rscript()
     if rs and not env.get("LSTAR_RSCRIPT"):
         env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
-    r = subprocess.run(
-        [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
-        capture_output=True, text=True, timeout=1800, env=env,
-    )
+    base = [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"]
+    sp(f"Converting {src.name} → optimized viewer store…")
+    r = subprocess.run(base + ["--viewer"], capture_output=True, text=True, timeout=1800, env=env)
     if r.returncode != 0:
-        tail = (r.stderr or r.stdout or "").strip()[-600:]
-        raise RuntimeError(
-            f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
-    if _PREP_ENABLED:
-        sp("Optimizing for fast viewing…")
-        _try_viewer_prep(out)   # best-effort viewer@0.1 via pagoda3 prep.ts (WASM)
+        # --viewer failed (unusual matrix/grouping) — don't fail the launch: retry a
+        # plain convert so the viewer still opens (it recomputes DE/HVG per session —
+        # the banner). Clear any partial store first.
+        shutil.rmtree(out, ignore_errors=True)
+        sp(f"Converting {src.name} → viewer store (optimization skipped)…")
+        r = subprocess.run(base, capture_output=True, text=True, timeout=1800, env=env)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip()[-600:]
+            raise RuntimeError(
+                f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
 
 
 def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:

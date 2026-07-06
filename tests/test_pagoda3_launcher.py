@@ -6,7 +6,7 @@ import types
 import pytest
 
 
-def test_convert_any_invokes_lstar_cli_to_store(monkeypatch, tmp_path):
+def test_convert_any_optimizes_via_viewer_flag(monkeypatch, tmp_path):
     from content.bio.viewers.launchers import pagoda3
     seen = {}
 
@@ -15,15 +15,16 @@ def test_convert_any_invokes_lstar_cli_to_store(monkeypatch, tmp_path):
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(pagoda3, "_try_viewer_prep", lambda out: None)
     src, out = tmp_path / "processed.h5ad", tmp_path / "o.lstar.zarr.building"
     pagoda3._convert_any(src, out)
     a = seen["args"]
-    # sys.executable -m lstar convert <src> <out> --to store  (--to store forces
-    # store output despite the .building temp suffix)
+    # sys.executable -m lstar convert <src> <out> --to store --viewer
+    #   --to store forces store output despite the .building temp suffix;
+    #   --viewer precomputes viewer@0.1 in-process (no node/prep.ts dependency).
     assert a[1:4] == ["-m", "lstar", "convert"]
     assert str(src) in a and str(out) in a
-    assert a[-2:] == ["--to", "store"]
+    assert "--to" in a and "store" in a
+    assert "--viewer" in a          # optimization happens in the convert, not prep.ts
 
 
 def test_convert_any_raises_with_stderr_on_failure(monkeypatch, tmp_path):
