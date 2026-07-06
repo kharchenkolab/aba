@@ -13,10 +13,13 @@
 # Before this helper the logic was copy-pasted; it drifted once (pagoda3 sibling stayed
 # install-only → dark on update), so it lives here now. Mirrors inject-accelerator.sh.
 #
-# Why NOT remotes::install_github: on a shared cluster its GitHub-API dance 404s
-# (unauth rate-limits on the shared NAT IP; also case-sensitive `subdir`), so we fetch
-# the tag tarball straight from codeload (no API — same as the pagoda3 dist) and compile
-# the R package locally. The compile runs INSIDE the activated env (`micromamba run`) so
+# Why NOT remotes::install_github: it resolves the repo + subdir through the GitHub API,
+# which is CASE-SENSITIVE on `subdir` — the package lives under `R/` (capital), and a
+# lowercase `r` 404s the Contents API (surfaced as a misleading "did you spell the repo
+# owner correctly?" — this is what silently broke .rds viewing). Fetching the tag tarball
+# from codeload sidesteps the API entirely (find the pkg dir ourselves, case and all) and
+# is also not bound by the API's 60-req/hr unauth budget shared across the cluster NAT IP.
+# Same mechanism as the pagoda3 dist. The compile runs INSIDE the activated env (`micromamba run`) so
 # the conda toolchain supplies zlib.h + the right flags, then we rewrite the built .so's
 # rpath to $ORIGIN-relative (conda's own convention) so a RELOCATED env — the SIF stages
 # the tools env then moves it to /opt/aba-envs/tools — still resolves its libs at runtime.
