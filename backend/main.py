@@ -1276,26 +1276,11 @@ def viewer_launch_page():
 # viewer inherits ABA's trust model (no CORS; session/localStorage work) and its
 # SharedArrayBuffer workers get the cross-origin isolation headers they need.
 # Registered here (before the SPA catch-all near end of file) so /pagoda3/* and
-# /pagoda3-store/* match these, not the react-router HTML fallback.
-def _resolve_pagoda3_dist() -> Path:
-    """Where the pagoda3 viewer bundle lives. First existing wins:
-      1. $ABA_PAGODA3_DIST (explicit override)
-      2. $ABA_HOME/vendor/pagoda3/dist  — where the installer's fetch-pagoda3-dist
-         step drops the pre-built v0.1.0 release bundle (deploy default)
-      3. ~/pagoda/pagoda3/web/dist      — dev checkout
-    Returns the override (or the deploy default) even if absent, so the mount
-    guard below reports "not present" against the expected location."""
-    env = os.environ.get("ABA_PAGODA3_DIST")
-    if env:
-        return Path(env)
-    home = Path(os.environ.get("ABA_HOME") or Path.home() / ".aba")
-    for cand in (home / "vendor" / "pagoda3" / "dist",
-                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
-        if (cand / "index.html").is_file():
-            return cand
-    return home / "vendor" / "pagoda3" / "dist"
-
-_PAGODA3_DIST = _resolve_pagoda3_dist()
+# /pagoda3-store/* match these, not the react-router HTML fallback. WHERE the
+# pagoda3 bundle lives is bio/viewer domain knowledge — owned by the launcher, not
+# the app root; we just wire the mount at the right ordering point.
+from content.bio.viewers.launchers.pagoda3 import pagoda3_dist_path
+_PAGODA3_DIST = pagoda3_dist_path()
 
 
 class _IsolatedStatic(StaticFiles):

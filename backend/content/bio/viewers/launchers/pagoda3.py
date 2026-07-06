@@ -58,8 +58,29 @@ def _node_bin() -> "str | None":
     return None
 
 
+def pagoda3_dist_path() -> Path:
+    """Where pagoda3's built web bundle lives — the single source of truth for
+    every consumer (the `/pagoda3` static mount the app root wires up, and prep
+    below). First existing wins:
+      1. `$ABA_PAGODA3_DIST`                — explicit override (dev sets this)
+      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored v0.1.0
+                                              release bundle (deploy default)
+      3. `~/pagoda/pagoda3/web/dist`        — a dev checkout
+    Returns the override / deploy default even if absent, so a caller can report a
+    clean 'not present' against the expected location rather than guessing."""
+    env = os.getenv("ABA_PAGODA3_DIST")
+    if env:
+        return Path(env)
+    home = Path(os.getenv("ABA_HOME") or (Path.home() / ".aba"))
+    for cand in (home / "vendor" / "pagoda3" / "dist",
+                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
+        if (cand / "index.html").is_file():
+            return cand
+    return home / "vendor" / "pagoda3" / "dist"
+
+
 def _prep_script() -> Path:
-    dist = Path(os.getenv("ABA_PAGODA3_DIST") or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
+    dist = pagoda3_dist_path()
     # .resolve() is load-bearing: ABA_PAGODA3_DIST may be a frozen dist whose
     # `prep/` is a SYMLINK to the real checkout. prep.ts guards its main-run with
     # `fileURLToPath(import.meta.url) === resolve(argv[1])`; node resolves
