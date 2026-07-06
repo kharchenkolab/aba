@@ -182,21 +182,24 @@ steps:
   - id: fetch-pagoda3-dist
     title: Install the pagoda3 viewer bundle
     why: |
-      pagoda3 is a static web app ABA serves under /pagoda3. It needs node >= 22
-      to BUILD, but the deploy node is pinned to 20 — so we ship a PRE-BUILT dist
-      (attached to the pagoda3 v0.1.0 GitHub release), not a source build. The
-      backend mounts /pagoda3 only if the dist is present, so without this step
-      the interactive viewer is silently unavailable. Override the asset URL with
-      $ABA_PAGODA3_DIST_URL (e.g. air-gapped mirror). Non-fatal.
+      pagoda3 is a static web app ABA serves under /pagoda3. We grab the PRE-BUILT
+      viewer dist attached to the pagoda3 GitHub release (built once, on node >= 22,
+      and published as a release asset — so no node/glibc toolchain is needed here;
+      old-glibc hosts can't build it). The backend mounts /pagoda3 only if the dist
+      is present, so without this the interactive viewer is silently unavailable
+      (conversion still works; only the interactive view is gated). node >= 22 is
+      needed only for the OPTIONAL runtime viewer-optimize (prep.ts) — without it the
+      viewer still opens, just un-optimized. Override the asset URL with
+      $ABA_PAGODA3_DIST_URL (air-gapped mirror / a newer pin). Non-fatal.
     commands:
-      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; if [ -f \"$DIST/index.html\" ]; then echo \"pagoda3 dist already present — skipping\"; else URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.0/pagoda3-dist-v0.1.0.tgz}\"; mkdir -p \"$DIST\"; if curl -fsSL \"$URL\" | tar -xz -C \"$DIST\" --strip-components=1; then echo \"pagoda3 v0.1.0 dist installed to $DIST\"; else echo \"WARNING: pagoda3 dist fetch failed ($URL) — interactive viewer unavailable until a built dist is placed at $DIST\"; fi; fi"
+      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; if [ -f \"$DIST/index.html\" ]; then echo \"pagoda3 dist already present — skipping\"; else URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.0/pagoda3-viewer-0.1.0.zip}\"; mkdir -p \"$DIST\"; TMP=\"$(mktemp -d)\"; if command -v unzip >/dev/null 2>&1 && curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$DIST\"; then echo \"pagoda3 viewer dist installed to $DIST\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — interactive viewer unavailable until a dist with index.html sits at $DIST\"; fi; rm -rf \"$TMP\"; fi"
     timeout_seconds: 300
     remediation: |
-      pagoda3 dist fetch failed — NON-FATAL, but the interactive viewer won't work
-      until a built dist sits at $ABA_HOME/vendor/pagoda3/dist (with index.html at
-      its root). Attach a built dist tarball to the pagoda3 v0.1.0 release, or set
-      $ABA_PAGODA3_DIST_URL to a reachable one, then re-run. The tarball's root
-      should contain index.html (adjust --strip-components if it's nested).
+      pagoda3 dist fetch failed — NON-FATAL; the interactive viewer won't work until a
+      dist with index.html at its root sits at $ABA_HOME/vendor/pagoda3/dist. Needs
+      `curl` + `unzip`. The default asset is the pagoda3-viewer-<ver>.zip on the GitHub
+      release (index.html at the zip root); set $ABA_PAGODA3_DIST_URL to a reachable
+      mirror / newer pin, or unzip a built dist there by hand, then re-run.
 
   - id: build-frontend
     title: Build the interface
