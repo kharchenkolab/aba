@@ -25,11 +25,20 @@ SELF = Path(__file__).name
 _PAT = re.compile(r"/home/[A-Za-z0-9_.\-]+/")
 
 
+# Built / cached / output dirs (gitignored — NOT source harness). A conda tools env
+# staged under .envs_cache, forensic bundles under _runs, etc. carry /home/conda/…
+# build paths that aren't ours to fix; the guard only polices the source harness.
+_SKIP_DIRS = {".envs_cache", "_runs", "reports", "baselines", "work",
+              "node_modules", ".git", "__pycache__"}
+
+
 def _offenders() -> list[str]:
     out: list[str] = []
     for f in sorted(list(REGTEST.rglob("*.py")) + list(REGTEST.rglob("*.sh"))):
         if f.name == SELF:
             continue
+        if _SKIP_DIRS & set(f.relative_to(ROOT).parts):
+            continue        # skip built/cached artifacts, not source
         try:
             text = f.read_text(errors="replace")
         except OSError:

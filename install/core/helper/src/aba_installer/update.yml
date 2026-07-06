@@ -18,14 +18,14 @@ steps:
     title: Update aba
     why: Pull the latest backend + frontend code.
     commands:
-      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
+      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
     timeout_seconds: 60
 
   - id: pull-recipes
     title: Update aba-recipe-pack
     why: Pull the latest skill/recipe library so newly-published recipes appear.
     commands:
-      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; elif [ -d "$REPO_DIR/aba-recipe-pack/.git" ]; then cd "$REPO_DIR/aba-recipe-pack" && git fetch --depth 1 && git reset --hard origin/main; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
+      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; elif [ -d "$REPO_DIR/aba-recipe-pack/.git" ]; then cd "$REPO_DIR/aba-recipe-pack" && git fetch --depth 1 && git reset --hard origin/main; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
     timeout_seconds: 60
 
   - id: import-recipes
@@ -33,10 +33,15 @@ steps:
     why: |
       Re-map the freshly-pulled pack into the installation-scope bundle the
       backend reads ($ABA_HOME/installation): recipes/<domain>/ →
-      skills/recipes/<domain>/ and catalog/*.yaml → catalog/. Same step as the
-      install playbook, so updates surface newly-published recipes.
+      skills/recipes/<domain>/, catalog/*.yaml → catalog/, and knowhow/ →
+      knowhow/ (the advisory docs recipes cross-link to AND knowhow/refsources/).
+      MUST mirror install.yml's import — this DRIFTED once (update copied only
+      recipes+catalog, so newly-published knowhows — e.g. the pagoda3 viewer
+      knowhow — never reached updated instances). Idempotent + always re-copied
+      (kilobytes), so an update refreshes it.
     commands:
-      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi'
+      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog" "$INST/knowhow"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi; if [ -d "$PACK/knowhow" ]; then cp -R "$PACK/knowhow/." "$INST/knowhow/"; fi'
+      - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files + $(ls "$ABA_HOME/installation/knowhow/refsources"/*.yaml 2>/dev/null | wc -l | tr -d " ") refsource providers into $ABA_HOME/installation"'
     timeout_seconds: 60
 
   - id: refresh-env
@@ -53,8 +58,64 @@ steps:
       # repos were private, failing with curl exit 56. The local-clone
       # branch makes the env-refresh idempotent and offline-friendly.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/core/environment.yml" ]; then cp "$REPO_DIR/aba/install/core/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment.yml}"; fi'
-      - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
+      # Deployment-conditional base — MUST mirror create-env (finding F1): inject the CUDA
+      # torch pin when ABA_ACCELERATOR=cuda, else `env update --prune` resolves the plain
+      # (CPU) spec and prunes the GPU torch build back to CPU. Keep this in lock-step with
+      # install.yml's create-env accelerator handling.
+      - 'if [ -f "$REPO_DIR/aba/install/core/inject-accelerator.sh" ]; then bash "$REPO_DIR/aba/install/core/inject-accelerator.sh" "$ABA_HOME/environment.yml"; fi'
+      - 'if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA"; fi; "$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
+
+  # NB: these two steps mirror install.yml (the engine has no include/compose) — they
+  # drifted once (were install-only → viewer stayed dark on update). install-lstar-r now
+  # delegates to the shared install/core/install-lstar-r.sh, so only fetch-pagoda3-dist
+  # below is still copied verbatim — keep it byte-identical to install.yml's. Both are
+  # idempotent (skip-if-present), so re-running on update is safe.
+  - id: install-lstar-r
+    title: Install the lstar R viewer bridge
+    why: |
+      The pagoda3 viewer opens Seurat / SingleCellExperiment `.rds` results by
+      bridging through the tools env's Rscript, which needs the lstar R package.
+      It is NOT on CRAN (lstar moves fast); we pin a git tag (authoritative in
+      `install-lstar-r.sh`) — the SAME release moment as the Python `lstar-sc`
+      (same repo, `subdir=r`) and the pagoda3 dist, so writer/reader/store-format
+      stay a matched set. Bump those pins together. Source-compiles (cpp11), so the
+      conda compiler must be on PATH (the tools env ships it). Non-fatal: without it
+      `.h5ad` / `.lstar.zarr` viewing still works; only `.rds` conversion degrades.
+    commands:
+      # Delegates to the shared install/core/install-lstar-r.sh — pin, idempotency
+      # (RemoteRef, not packageVersion) and non-fatal semantics all live there, so the
+      # installers and the SIF builders never drift. Guarded: a stale checkout that
+      # predates the helper just skips (the step stays non-fatal either way).
+      - 'H="$REPO_DIR/aba/install/core/install-lstar-r.sh"; if [ -f "$H" ]; then bash "$H" "${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools" "$ABA_HOME/bin/micromamba"; else echo "no install-lstar-r.sh (stale checkout) — skipping lstar R"; fi'
+    timeout_seconds: 900
+    remediation: |
+      lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
+      `.lstar.zarr`; only Seurat/SCE `.rds` conversion is affected. To install by
+      hand: with the tools env's bin on PATH (for the compiler), run its Rscript:
+      `remotes::install_github("kharchenkolab/lstar", ref="v0.1.6", subdir="r")`.
+
+  - id: fetch-pagoda3-dist
+    title: Install the pagoda3 viewer bundle
+    why: |
+      pagoda3 is a static web app ABA serves under /pagoda3. We grab the PRE-BUILT
+      viewer dist attached to the pagoda3 GitHub release (built once, on node >= 22,
+      and published as a release asset — so no node/glibc toolchain is needed here;
+      old-glibc hosts can't build it). The backend mounts /pagoda3 only if the dist
+      is present, so without this the interactive viewer is silently unavailable
+      (conversion still works; only the interactive view is gated). node >= 22 is
+      needed only for the OPTIONAL runtime viewer-optimize (prep.ts) — without it the
+      viewer still opens, just un-optimized. Override the asset URL with
+      $ABA_PAGODA3_DIST_URL (air-gapped mirror / a newer pin). Non-fatal.
+    commands:
+      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; if [ -f \"$DIST/index.html\" ]; then echo \"pagoda3 dist already present — skipping\"; else URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.0/pagoda3-viewer-0.1.0.zip}\"; mkdir -p \"$DIST\"; TMP=\"$(mktemp -d)\"; if command -v unzip >/dev/null 2>&1 && curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$DIST\"; then echo \"pagoda3 viewer dist installed to $DIST\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — interactive viewer unavailable until a dist with index.html sits at $DIST\"; fi; rm -rf \"$TMP\"; fi"
+    timeout_seconds: 300
+    remediation: |
+      pagoda3 dist fetch failed — NON-FATAL; the interactive viewer won't work until a
+      dist with index.html at its root sits at $ABA_HOME/vendor/pagoda3/dist. Needs
+      `curl` + `unzip`. The default asset is the pagoda3-viewer-<ver>.zip on the GitHub
+      release (index.html at the zip root); set $ABA_PAGODA3_DIST_URL to a reachable
+      mirror / newer pin, or unzip a built dist there by hand, then re-run.
 
   - id: rebuild-frontend
     title: Rebuild the interface
