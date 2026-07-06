@@ -18,14 +18,14 @@ steps:
     title: Update aba
     why: Pull the latest backend + frontend code.
     commands:
-      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
+      - 'if [ -n "${ABA_REPO_SRC:-}" ]; then rsync -a --filter=':- .gitignore' --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else cd "$REPO_DIR/aba" && git fetch --depth 1 && git reset --hard origin/main; fi'
     timeout_seconds: 60
 
   - id: pull-recipes
     title: Update aba-recipe-pack
     why: Pull the latest skill/recipe library so newly-published recipes appear.
     commands:
-      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; elif [ -d "$REPO_DIR/aba-recipe-pack/.git" ]; then cd "$REPO_DIR/aba-recipe-pack" && git fetch --depth 1 && git reset --hard origin/main; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
+      - 'if [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --filter=':- .gitignore' --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; elif [ -d "$REPO_DIR/aba-recipe-pack/.git" ]; then cd "$REPO_DIR/aba-recipe-pack" && git fetch --depth 1 && git reset --hard origin/main; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
     timeout_seconds: 60
 
   - id: import-recipes
