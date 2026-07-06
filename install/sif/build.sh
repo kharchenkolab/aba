@@ -62,6 +62,19 @@ echo "   recipes baked: $(find "$SB/skills/recipes" -name '*.md' 2>/dev/null | w
 mkdir -p "$STAGE/ood"; cp "$REPO_ROOT/install/ood/aba_preflight.py" "$STAGE/ood/aba_preflight.py"
 echo "   ood preflight baked: /opt/aba/ood/aba_preflight.py"
 
+# ── bake the pagoda3 viewer dist (grabbed from its GitHub release — a pre-built
+# static bundle, NOT vendored/built here; the /pagoda3 mount serves it). Unzipped
+# on the build host (needs curl+unzip); the image just gets the files. Non-fatal:
+# a fetch failure leaves the interactive viewer unavailable (conversion still works).
+PG3_URL="${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.0/pagoda3-viewer-0.1.0.zip}"
+if command -v unzip >/dev/null 2>&1 && curl -fsSL "$PG3_URL" -o "$STAGE/pg3.zip" 2>/dev/null; then
+  mkdir -p "$STAGE/pagoda3-dist"
+  if unzip -q -o "$STAGE/pg3.zip" -d "$STAGE/pagoda3-dist" 2>/dev/null && [ -f "$STAGE/pagoda3-dist/index.html" ]; then
+    echo "   pagoda3 viewer dist baked → /opt/aba/vendor/pagoda3/dist"
+  else rm -rf "$STAGE/pagoda3-dist"; echo "WARNING: pagoda3 dist unzip produced no index.html — interactive viewer unavailable"; fi
+  rm -f "$STAGE/pg3.zip"
+else echo "NOTE: pagoda3 dist not baked (curl+unzip needed / fetch failed) — interactive viewer unavailable"; fi
+
 # ── runtime-install essentials the debian:12-slim base omits (no %post needed) ──
 # CA certs: without them every runtime https download (pip/PyPI, micromamba, CRAN/
 # Bioconductor) fails with CERTIFICATE_VERIFY_FAILED. micromamba: the agent needs
@@ -94,6 +107,10 @@ if [ "$PROFILE" = "fat" ]; then
   echo "-- building R tools base (install/core/r-environment.yml) --"
   "$MM" create -y -q -p "$STAGE/aba-tools" -f "$REPO_ROOT/install/core/r-environment.yml" \
     || echo "WARNING: R tools base failed — R will provision on demand"
+  # bake the lstar R viewer bridge into the tools env (compiled here, travels in the image)
+  # so Seurat/SCE .rds viewing works in the deploy — shared helper with the installers. The
+  # helper rewrites the built .so rpath $ORIGIN-relative so it survives the stage→image move.
+  bash "$REPO_ROOT/install/core/install-lstar-r.sh" "$STAGE/aba-tools" "$MM"
 fi
 
 # ── generate the .def for this profile ──
@@ -108,6 +125,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    $STAGE/frontend-dist /opt/aba/frontend-dist"
   echo "    $STAGE/system_bundle /opt/aba/system_bundle"
   echo "    $STAGE/ood/aba_preflight.py /opt/aba/ood/aba_preflight.py"
+  [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
@@ -116,6 +134,9 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "%environment"
   echo "    export ABA_SYSTEM_BUNDLE=/opt/aba/system_bundle"
   echo "    export ABA_FRONTEND_DIST=\${ABA_FRONTEND_DIST:-/opt/aba/frontend-dist}"
+  # pagoda3 viewer dist (baked above) — point the launcher's resolver at it so the
+  # /pagoda3 mount wires up. Absent → the interactive viewer is unavailable (graceful).
+  [ -d "$STAGE/pagoda3-dist" ] && echo "    export ABA_PAGODA3_DIST=\${ABA_PAGODA3_DIST:-/opt/aba/vendor/pagoda3/dist}"
   # /opt/aba-venv + /opt/aba-envs/tools are BAKED (fat) or BIND-MOUNTED (slim) —
   # same paths either way, so the runscript + env don't branch on the profile.
   # /opt/aba/bin carries the baked micromamba (runtime conda/CLI materialization).
