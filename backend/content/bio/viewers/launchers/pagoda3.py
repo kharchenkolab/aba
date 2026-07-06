@@ -29,33 +29,16 @@ def _launcher_version() -> str:
     except Exception:  # noqa: BLE001
         return "lstar-sc/unknown"
 
-# viewer@0.1 prep goes through pagoda3's own prep.ts (WASM, which delegates to
-# lstar's extendForViewer). Chosen over Python lstar.extend_for_viewer because
-# (a) WASM has no OpenMP → sidesteps the dup-libomp SIGSEGV, and (b) it's the
-# canonical path pagoda3 ships, so the store is written exactly as the viewer
-# expects. On by default (ABA_PAGODA3_PREP=0 to disable); best-effort — any
-# failure leaves the clean un-prepped store (opens, minus the optimization).
-# prep.ts is TypeScript, so it needs node >= 22 (env node may be older); if none
-# is found, prep is skipped and we serve the un-prepped store.
-_PREP_ENABLED = os.getenv("ABA_PAGODA3_PREP", "1").lower() in ("1", "true", "yes", "on")
-LAUNCHER_VERSION = _launcher_version() + "+viewer1"   # optimize via lstar --viewer (Python)
+# viewer@0.1 optimization is done IN-PROCESS by lstar's Python `extend_for_viewer`
+# (see `_optimize_store`), NOT pagoda3's prep.ts (WASM). prep.ts needs node >= 22,
+# which is unavailable on prod / old-glibc hosts (native node fails to build), so it
+# silently skipped there — leaving every conversion with the "Not viewer-optimized"
+# banner. The Python path is node-free + deterministic; the dup-libomp SIGSEGV that
+# once argued for WASM is fixed in lstar-sc >=0.1.6 (we still run it in a subprocess
+# to isolate libomp). Bump the +N suffix when THIS optimization logic changes.
+LAUNCHER_VERSION = _launcher_version() + "+viewer2"   # in-process extend_for_viewer (raw->lognorm)
 _STORE_SUFFIX = ".lstar.zarr"
 _ZIP_SUFFIX = ".lstar.zarr.zip"
-
-
-def _node_bin() -> "str | None":
-    """A node >= 22 that can run pagoda3's TS prep (the conda env's node may be 20)."""
-    import shutil as _sh, subprocess as _sp
-    for cand in (os.getenv("ABA_NODE_BIN"), "/opt/homebrew/bin/node", "/usr/local/bin/node", _sh.which("node")):
-        if not cand or not os.path.exists(cand):
-            continue
-        try:
-            v = _sp.run([cand, "-v"], capture_output=True, text=True, timeout=5).stdout.strip()
-            if int(v.lstrip("v").split(".")[0]) >= 22:
-                return cand
-        except Exception:  # noqa: BLE001
-            continue
-    return None
 
 
 def pagoda3_dist_path() -> Path:
@@ -79,88 +62,6 @@ def pagoda3_dist_path() -> Path:
     return home / "vendor" / "pagoda3" / "dist"
 
 
-def _prep_script() -> Path:
-    dist = pagoda3_dist_path()
-    # .resolve() is load-bearing: ABA_PAGODA3_DIST may be a frozen dist whose
-    # `prep/` is a SYMLINK to the real checkout. prep.ts guards its main-run with
-    # `fileURLToPath(import.meta.url) === resolve(argv[1])`; node resolves
-    # import.meta.url to the REAL path, so we must invoke it by the real path too
-    # (else argv[1] is the symlink, the guard fails, and prep silently no-ops).
-    return (dist.parent.parent / "prep" / "prep.ts").resolve()   # <pagoda3>/prep/prep.ts
-
-
-# The grouping the viewer opens on + computes markers/stats for. Prefer a real
-# clustering / cell-type label; avoid boolean QC flags (e.g. `qc_kept`) which make
-# a useless 2-group default. extendForViewer requires an explicit grouping (lstar
-# doesn't auto-detect), so we always pick the best available.
-_GROUPING_PREFER = ("leiden", "louvain", "cluster", "celltype", "cell_type",
-                    "cell.type", "annotation", "seurat_clusters", "kmeans", "phenograph")
-_GROUPING_AVOID = ("qc_kept", "kept", "highly_variable", "predicted_doublet",
-                   "doublet", "outlier", "passed", "is_", "_mt", "_ribo", "sample", "batch")
-
-
-def _detect_grouping(store: Path) -> "str | None":
-    """Pick the best categorical/utf8 per-cell label to open the viewer on.
-    Prefers clustering/cell-type names, then any non-QC categorical, and only as a
-    last resort a QC/boolean flag (so prep still runs)."""
-    try:
-        import lstar
-        ds = lstar.read(str(store))
-    except Exception:  # noqa: BLE001
-        return None
-    cands: list[str] = []
-    for f in ds.fields:
-        try:
-            fl = ds.field(f)
-        except Exception:  # noqa: BLE001
-            continue
-        if (fl.role == "label" and fl.encoding in ("categorical", "utf8")
-                and (fl.span or []) == ["cells"] and fl.subtype != "color"):
-            cands.append(f)
-    if not cands:
-        return None
-    # 1) a preferred clustering / cell-type name
-    for pref in _GROUPING_PREFER:
-        for c in cands:
-            if pref in c.lower():
-                return c
-    # 2) any categorical that isn't an obvious QC/boolean flag
-    for c in cands:
-        if not any(a in c.lower() for a in _GROUPING_AVOID):
-            return c
-    # 3) last resort: whatever exists, so prep still produces viewer@0.1
-    return cands[0]
-
-
-def _try_viewer_prep(store: Path) -> None:
-    """Best-effort viewer@0.1 via pagoda3's prep.ts. Preps a COPY and swaps on
-    success, so a failed/partial prep never leaves a broken served store. Prefers
-    raw counts; if the store has none (e.g. a processed .h5ad with only scaled/
-    lognorm matrices) falls back to basis=lognorm so it's still optimized
-    (approximately) rather than showing pagoda3's 'not viewer-optimized' banner.
-    Both failing → keep the clean un-prepped store."""
-    import subprocess
-    node, script = _node_bin(), _prep_script()
-    grouping = _detect_grouping(store)
-    if not node or not script.exists() or not grouping:
-        return
-    prepped = store.parent / (store.name + ".prep")
-    for extra in ([], ["basis=lognorm"]):     # raw counts first; then approximate from lognorm
-        shutil.rmtree(prepped, ignore_errors=True)
-        try:
-            shutil.copytree(store, prepped)
-            r = subprocess.run([node, str(script), str(prepped), grouping, *extra],
-                               capture_output=True, timeout=1800)
-        except Exception:  # noqa: BLE001
-            shutil.rmtree(prepped, ignore_errors=True)
-            return
-        if r.returncode == 0:                 # swap the optimized store in
-            shutil.rmtree(store, ignore_errors=True)
-            prepped.rename(store)
-            return
-    shutil.rmtree(prepped, ignore_errors=True)  # both failed → keep clean un-prepped
-
-
 def _rscript() -> "str | None":
     """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
     conos) — must be an R with the lstar R package installed. Preference:
@@ -181,25 +82,49 @@ def _rscript() -> "str | None":
     return None
 
 
+# Optimize a store to the `viewer@0.1` profile IN-PROCESS via lstar's Python
+# `extend_for_viewer` — the node-free replacement for the old prep.ts (WASM) step.
+# Run as a SUBPROCESS (fresh interpreter) to isolate lstar's OpenMP/libomp from any
+# libomp already loaded in the backend (the dup-libomp SIGSEGV that first pushed us
+# to WASM). Raw counts are preferred; falls back to `basis='lognorm'` when the
+# source has no raw counts (e.g. a scaled/log-normalized scanpy `.h5ad`) — EXACTLY
+# the raw→lognorm fallback prep.ts had, which the CLI `--viewer` flag can't express.
+_OPTIMIZE_SCRIPT = (
+    "import sys, os, shutil, lstar\n"
+    "store = sys.argv[1]; tmp = store + '.opt.lstar.zarr'\n"
+    "shutil.rmtree(tmp, ignore_errors=True)\n"
+    "ds = lstar.read(store)\n"
+    "try:\n"
+    "    lstar.extend_for_viewer(ds)\n"                 # raw counts (preferred)
+    "except Exception:\n"
+    "    lstar.extend_for_viewer(ds, basis='lognorm')\n"  # approximate from lognorm
+    "lstar.write(ds, tmp)\n"                             # tmp ends in .lstar.zarr -> store
+    "shutil.rmtree(store); os.rename(tmp, store)\n"      # atomic-ish swap
+)
+
+
+def _optimize_store(store: Path, env: dict, sp) -> None:
+    """Best-effort: add viewer@0.1 to `store` in place. On any failure keep the
+    functional un-optimized store (viewer works, just recomputes per session)."""
+    import subprocess
+    import sys
+    sp("Optimizing for fast viewing…")
+    r = subprocess.run([sys.executable, "-c", _OPTIMIZE_SCRIPT, str(store)],
+                       capture_output=True, text=True, timeout=1800, env=env)
+    if r.returncode != 0:
+        shutil.rmtree(Path(str(store) + ".opt.lstar.zarr"), ignore_errors=True)
+
+
 def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     """Convert any lstar-supported source into a `.lstar.zarr` directory store via
     the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
     the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
     conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
     regardless of the temp path's `.building` suffix (the CLI detects format by
-    extension). **Optimizes during conversion via `--viewer`** (lstar's Python
-    `extend_for_viewer` → the `viewer@0.1` profile: od_score, per-group
-    stats/markers, cell-major counts) so the store opens WITHOUT the "Not
-    viewer-optimized" banner.
-
-    Why in-process `--viewer` and not the old prep.ts (WASM) step: prep.ts is
-    fragile — it needs node ≥22 (prod pins node 20), the pagoda3 dist's bundled JS
-    optimizer, and a subprocess+copytree, and it fails SILENTLY (best-effort), which
-    is how an scvi `.h5ad` opened un-optimized on a server where other files were
-    fine. `--viewer` runs in the SAME lstar-sc that did the conversion — no node, no
-    WASM, deterministic — and the dup-libomp SIGSEGV that once forced the WASM path
-    is fixed in lstar-sc ≥0.1.6. If `--viewer` fails on some unusual input, fall
-    back to a plain (functional, un-optimized) store rather than failing the launch.
+    extension). Then optimizes the store to `viewer@0.1` IN-PROCESS via
+    `extend_for_viewer` (`_optimize_store`) — node-free, so it works where the old
+    prep.ts (WASM, needs node ≥22 — unavailable on prod/old-glibc) silently didn't,
+    which left every conversion showing the "Not viewer-optimized" banner.
     `set_phase` reports the sub-step to the launch page."""
     import subprocess
     import sys
@@ -208,20 +133,16 @@ def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     rs = _rscript()
     if rs and not env.get("LSTAR_RSCRIPT"):
         env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
-    base = [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"]
-    sp(f"Converting {src.name} → optimized viewer store…")
-    r = subprocess.run(base + ["--viewer"], capture_output=True, text=True, timeout=1800, env=env)
+    sp(f"Converting {src.name} → viewer store…")
+    r = subprocess.run(
+        [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
+        capture_output=True, text=True, timeout=1800, env=env,
+    )
     if r.returncode != 0:
-        # --viewer failed (unusual matrix/grouping) — don't fail the launch: retry a
-        # plain convert so the viewer still opens (it recomputes DE/HVG per session —
-        # the banner). Clear any partial store first.
-        shutil.rmtree(out, ignore_errors=True)
-        sp(f"Converting {src.name} → viewer store (optimization skipped)…")
-        r = subprocess.run(base, capture_output=True, text=True, timeout=1800, env=env)
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip()[-600:]
-            raise RuntimeError(
-                f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
+        tail = (r.stderr or r.stdout or "").strip()[-600:]
+        raise RuntimeError(
+            f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
+    _optimize_store(out, env, sp)   # best-effort viewer@0.1 (in-process, node-free)
 
 
 def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:

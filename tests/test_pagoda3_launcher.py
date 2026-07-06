@@ -6,25 +6,27 @@ import types
 import pytest
 
 
-def test_convert_any_optimizes_via_viewer_flag(monkeypatch, tmp_path):
+def test_convert_any_converts_then_optimizes_in_process(monkeypatch, tmp_path):
     from content.bio.viewers.launchers import pagoda3
-    seen = {}
+    calls = []
 
     def fake_run(args, **kw):
-        seen["args"] = args
+        calls.append(args)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     src, out = tmp_path / "processed.h5ad", tmp_path / "o.lstar.zarr.building"
     pagoda3._convert_any(src, out)
-    a = seen["args"]
-    # sys.executable -m lstar convert <src> <out> --to store --viewer
-    #   --to store forces store output despite the .building temp suffix;
-    #   --viewer precomputes viewer@0.1 in-process (no node/prep.ts dependency).
-    assert a[1:4] == ["-m", "lstar", "convert"]
-    assert str(src) in a and str(out) in a
-    assert "--to" in a and "store" in a
-    assert "--viewer" in a          # optimization happens in the convert, not prep.ts
+    # 1) base convert to a store — `--to store` forces store output despite the
+    #    .building temp suffix.
+    conv = calls[0]
+    assert conv[1:4] == ["-m", "lstar", "convert"]
+    assert str(src) in conv and str(out) in conv
+    assert conv[-2:] == ["--to", "store"]
+    # 2) viewer@0.1 optimization runs IN-PROCESS (extend_for_viewer via `python -c`),
+    #    NOT prep.ts — node-free, with a raw→lognorm fallback.
+    assert any("-c" in c and any("extend_for_viewer" in str(x) for x in c)
+               for c in calls[1:]), "expected an in-process extend_for_viewer step"
 
 
 def test_convert_any_raises_with_stderr_on_failure(monkeypatch, tmp_path):
@@ -32,7 +34,6 @@ def test_convert_any_raises_with_stderr_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run",
                         lambda args, **kw: types.SimpleNamespace(
                             returncode=2, stdout="", stderr="unsupported source"))
-    monkeypatch.setattr(pagoda3, "_try_viewer_prep", lambda out: None)
     with pytest.raises(RuntimeError, match="unsupported source"):
         pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
 
@@ -91,7 +92,6 @@ def test_convert_any_sets_lstar_rscript_env(monkeypatch, tmp_path):
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(pagoda3, "_try_viewer_prep", lambda out: None)
     monkeypatch.setattr(pagoda3, "_rscript", lambda: sys.executable)
     pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
     assert seen["env"].get("LSTAR_RSCRIPT") == sys.executable   # bridge points at R
