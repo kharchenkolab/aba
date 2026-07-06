@@ -56,6 +56,15 @@ if [ ! -x "$MM" ]; then
 fi
 
 echo "[lstar-r] installing kharchenkolab/lstar@$LSTAR_REF into $TOOLS_ENV"
+
+# ensure the compile prerequisites are in the env: zlib (the .so needs zlib.h — the env
+# otherwise only has runtime libzlib) + patchelf (rpath rewrite below). r-environment.yml
+# declares both for FRESH builds, but `aba update` does NOT refresh the R tools env, so a
+# pre-existing env may lack them — install them here (idempotent/fast when already present,
+# only reached on an actual (re)install since the marker check short-circuits above).
+"$MM" install -y -p "$TOOLS_ENV" zlib patchelf >/dev/null 2>&1 \
+  || echo "NOTE: could not ensure zlib/patchelf in the tools env — compile may fail if zlib.h is absent"
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # 1. fetch the tag tarball from codeload (no GitHub API → no rate-limit / 404)
