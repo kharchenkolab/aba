@@ -58,8 +58,29 @@ def _node_bin() -> "str | None":
     return None
 
 
+def pagoda3_dist_path() -> Path:
+    """Where pagoda3's built web bundle lives — the single source of truth for
+    every consumer (the `/pagoda3` static mount the app root wires up, and prep
+    below). First existing wins:
+      1. `$ABA_PAGODA3_DIST`                — explicit override (dev sets this)
+      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored v0.1.0
+                                              release bundle (deploy default)
+      3. `~/pagoda/pagoda3/web/dist`        — a dev checkout
+    Returns the override / deploy default even if absent, so a caller can report a
+    clean 'not present' against the expected location rather than guessing."""
+    env = os.getenv("ABA_PAGODA3_DIST")
+    if env:
+        return Path(env)
+    home = Path(os.getenv("ABA_HOME") or (Path.home() / ".aba"))
+    for cand in (home / "vendor" / "pagoda3" / "dist",
+                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
+        if (cand / "index.html").is_file():
+            return cand
+    return home / "vendor" / "pagoda3" / "dist"
+
+
 def _prep_script() -> Path:
-    dist = Path(os.getenv("ABA_PAGODA3_DIST") or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
+    dist = pagoda3_dist_path()
     # .resolve() is load-bearing: ABA_PAGODA3_DIST may be a frozen dist whose
     # `prep/` is a SYMLINK to the real checkout. prep.ts guards its main-run with
     # `fileURLToPath(import.meta.url) === resolve(argv[1])`; node resolves
@@ -140,10 +161,53 @@ def _try_viewer_prep(store: Path) -> None:
     shutil.rmtree(prepped, ignore_errors=True)  # both failed → keep clean un-prepped
 
 
-def _convert_h5ad(src: Path, out: Path) -> None:
-    import lstar
-    lstar.convert_anndata(str(src), str(out))
+def _rscript() -> "str | None":
+    """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
+    conos) — must be an R with the lstar R package installed. Preference:
+    `$LSTAR_RSCRIPT` (explicit override), then ABA's tools-env R (it ships the
+    domain frameworks — Seurat / SingleCellExperiment / …), then a system Rscript.
+    (The backend's own PATH may not include any R, so we resolve explicitly.)"""
+    import shutil as _sh
+    cands = [os.getenv("LSTAR_RSCRIPT")]
+    try:
+        from core.config import ENVS_DIR
+        cands.append(str(Path(ENVS_DIR) / "tools" / "bin" / "Rscript"))
+    except Exception:  # noqa: BLE001
+        pass
+    cands += ["/usr/local/bin/Rscript", "/opt/homebrew/bin/Rscript", _sh.which("Rscript")]
+    for cand in cands:
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def _convert_any(src: Path, out: Path, set_phase=None) -> None:
+    """Convert any lstar-supported source into a `.lstar.zarr` directory store via
+    the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
+    the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
+    conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
+    regardless of the temp path's `.building` suffix (the CLI detects format by
+    extension). Then best-effort viewer@0.1 via prep.ts (WASM — no OpenMP).
+    `set_phase` (optional) reports the current sub-step to the launch page so the
+    user sees convert-vs-optimize instead of a static spinner."""
+    import subprocess
+    import sys
+    sp = set_phase or (lambda *_: None)
+    sp(f"Converting {src.name} → viewer store…")
+    env = {**os.environ}
+    rs = _rscript()
+    if rs and not env.get("LSTAR_RSCRIPT"):
+        env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
+    r = subprocess.run(
+        [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
+        capture_output=True, text=True, timeout=1800, env=env,
+    )
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "").strip()[-600:]
+        raise RuntimeError(
+            f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
     if _PREP_ENABLED:
+        sp("Optimizing for fast viewing…")
         _try_viewer_prep(out)   # best-effort viewer@0.1 via pagoda3 prep.ts (WASM)
 
 
@@ -163,16 +227,18 @@ def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:
     _pack_stored_zip(str(store_dir), str(dest))
 
 
-def _copy_store(src: Path, out: Path) -> None:
+def _copy_store(src: Path, out: Path, set_phase=None) -> None:
     """Native store already a directory — copy the tree into the served cache."""
+    (set_phase or (lambda *_: None))("Copying store…")
     shutil.copytree(src, out)
 
 
-def _unzip_store(src: Path, out: Path) -> None:
+def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
     """Native store shipped as a .lstar.zarr.zip — extract into a directory the
     store route can serve (the browser can't range-read a zip over HTTP). The
     archive's root IS the store root (.zattrs/axes/fields at top level)."""
     import zipfile
+    (set_phase or (lambda *_: None))("Unpacking store…")
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(src) as z:
         z.extractall(out)
@@ -180,7 +246,15 @@ def _unzip_store(src: Path, out: Path) -> None:
 
 def _resolve_source(node: dict, pid: str) -> Path:
     """Best-effort resolution of the node to an on-disk file. Prefer the
-    entity/tree artifact_path (absolute); fall back to project-relative."""
+    entity/tree artifact_path (absolute); fall back to project-relative; finally
+    search the project's work dirs by basename.
+
+    The last fallback matters for `.lstar.zarr` **directory** stores written by a
+    run: a Run's output is shown at the LOGICAL path `threads/<t>/runs/<r>/output/`
+    but physically lives under `work/<ana_id>/` (tree.py). Regular files carry a
+    physical `artifact_path`, but a directory store can resolve to the logical
+    output path with no physical path — so `project_root/<logical>` doesn't exist.
+    The store is really at `work/<ana_id>/<name>`, so scan there (newest first)."""
     from core.config import project_root, project_data_dir
     raw = node.get("artifact_path") or node.get("path") or node.get("name") or ""
     p = Path(raw)
@@ -190,6 +264,14 @@ def _resolve_source(node: dict, pid: str) -> Path:
         cand = base / raw
         if cand.exists():
             return cand
+    # Fallback: a run wrote the source into its work dir (work/<ana_id>/<name>),
+    # which the logical output-tree path doesn't map to. Match by basename.
+    name = Path(raw).name
+    work = project_root(pid) / "work"
+    if name and work.exists():
+        matches = sorted(work.glob(f"*/{name}"), key=lambda m: m.stat().st_mtime, reverse=True)
+        if matches:
+            return matches[0]
     return p            # nonexistent → caller surfaces a clean error
 
 
@@ -197,6 +279,10 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     from core.config import project_root
     from core.projects import current_project_id
     pid = ctx.get("project_id") or current_project_id()
+    # Reported to the launch page's poller so the user sees which step is running
+    # (convert / optimize / unpack) rather than a static spinner. Only fires when
+    # ensure_derived actually (re)builds — a cached store returns instantly.
+    set_phase = ctx.get("set_phase") or (lambda *_: None)
     src = _resolve_source(node, pid)
     if not src.exists():
         raise FileNotFoundError(
@@ -207,14 +293,17 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # Pick the derivation by source kind, and strip the (possibly two-part) suffix
     # for a clean output name.
     if name.endswith(_ZIP_SUFFIX):
-        convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
+        base_convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
     elif name.endswith(_STORE_SUFFIX):
-        convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
+        base_convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
     else:
-        convert, suffix = _convert_h5ad, None            # .h5ad etc → convert
+        base_convert, suffix = _convert_any, None             # .h5ad / .h5mu / .rds → convert (lstar CLI)
     stem = src.name[:-len(suffix)] if suffix else src.stem
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
+
+    def convert(s: Path, o: Path) -> None:      # bind set_phase into the 2-arg callback
+        base_convert(s, o, set_phase)
 
     store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
 

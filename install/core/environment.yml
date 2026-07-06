@@ -86,16 +86,11 @@ dependencies:
       - pillow
 
       # ── viewer data layer ──────────────────────────────────────────────
-      # lstar-sc: L* model + Zarr interchange for single-cell (import name is
-      # `lstar`; the bare `lstar` on PyPI is an UNRELATED automata library —
-      # always install `lstar-sc`). Powers the pagoda3 viewer's .h5ad →
-      # .lstar.zarr conversion (misc/pagoda3_integration.md). Ships a compiled
-      # C++ core: prebuilt wheels exist for macOS arm64 (cp312); on other
-      # platforms pip builds from source (cmake + pybind11 — cmake is above).
-      # Floor at 0.1.4: earlier releases predate the single-file .lstar.zarr.zip
-      # (STORED, range-readable) support + the store-format the current pagoda3
-      # expects, and 0.1.2 also shipped the macOS-arm64 dup-libomp SIGSEGV.
-      # NOTE: 0.1.4 is not on PyPI yet — until it lands, dev/deploys must install
-      # lstar from the `lstar` repo main (pip install <lstar-checkout>); this pin
-      # will only resolve from PyPI once 0.1.4 is published.
-      - lstar-sc>=0.1.4
+      # lstar-sc: L* single-cell interchange behind the pagoda3 viewer (import
+      # name `lstar`; the bare `lstar` on PyPI is unrelated). Versioning notes +
+      # the .rds R-bridge setup: misc/pagoda3_integration.md §Viewer data layer.
+      - lstar-sc==0.1.6     # EXACT pin — lstar moves fast + isn't in a stable channel;
+                            #   deploy reproducibility beats floating. Co-versioned with the
+                            #   lstar R package at git tag v0.1.6 (same repo) and pagoda3 v0.1.0.
+                            #   Bump this + the R/pagoda3 pins together as a validated set.
+      - zarr>=3.1            # lstar uses the zarr-python 3 library

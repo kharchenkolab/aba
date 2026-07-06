@@ -155,7 +155,8 @@ _HTML = r"""<!doctype html>
                 var v = s.set_local_storage[k]; localStorage.setItem(k, (v && v.charAt(0) === "/") ? withBase(v) : v);
               }); } catch (e) {}
             }
-            $("vl-phase").textContent = "Ready — opening…";
+            $("vl-title").textContent = label ? ("Opening " + label + "…") : "Opening viewer…";
+            $("vl-phase").textContent = "Store ready — loading…";
             location.replace(finalUrl(s.url));
             return;
           }
