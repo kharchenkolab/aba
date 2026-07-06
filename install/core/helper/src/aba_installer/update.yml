@@ -33,10 +33,15 @@ steps:
     why: |
       Re-map the freshly-pulled pack into the installation-scope bundle the
       backend reads ($ABA_HOME/installation): recipes/<domain>/ →
-      skills/recipes/<domain>/ and catalog/*.yaml → catalog/. Same step as the
-      install playbook, so updates surface newly-published recipes.
+      skills/recipes/<domain>/, catalog/*.yaml → catalog/, and knowhow/ →
+      knowhow/ (the advisory docs recipes cross-link to AND knowhow/refsources/).
+      MUST mirror install.yml's import — this DRIFTED once (update copied only
+      recipes+catalog, so newly-published knowhows — e.g. the pagoda3 viewer
+      knowhow — never reached updated instances). Idempotent + always re-copied
+      (kilobytes), so an update refreshes it.
     commands:
-      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi'
+      - 'PACK="$REPO_DIR/aba-recipe-pack"; INST="$ABA_HOME/installation"; mkdir -p "$INST/skills/recipes" "$INST/catalog" "$INST/knowhow"; if [ -d "$PACK/recipes" ]; then cp -R "$PACK/recipes/." "$INST/skills/recipes/"; fi; if ls "$PACK"/catalog/*.yaml >/dev/null 2>&1; then cp "$PACK"/catalog/*.yaml "$INST/catalog/"; fi; if [ -d "$PACK/knowhow" ]; then cp -R "$PACK/knowhow/." "$INST/knowhow/"; fi'
+      - 'echo "imported $(find "$ABA_HOME/installation/skills/recipes" -name "*.md" 2>/dev/null | wc -l | tr -d " ") recipe files + $(ls "$ABA_HOME/installation/catalog"/*.yaml 2>/dev/null | wc -l | tr -d " ") catalog files + $(ls "$ABA_HOME/installation/knowhow/refsources"/*.yaml 2>/dev/null | wc -l | tr -d " ") refsource providers into $ABA_HOME/installation"'
     timeout_seconds: 60
 
   - id: refresh-env
