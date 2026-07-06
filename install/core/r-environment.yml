@@ -32,6 +32,12 @@ dependencies:
   - compilers
   - make
   - pkg-config
+  - zlib                 # dev headers (zlib.h) for source-compiled R pkgs — the lstar
+                         #   R viewer bridge (install-lstar-r.sh) needs it; the env
+                         #   otherwise only pulls libzlib (runtime .so, no headers).
+  - patchelf             # rewrite compiled .so rpaths to $ORIGIN-relative post-install
+                         #   (install-lstar-r.sh), so the SIF's relocated tools env
+                         #   still resolves env libs — matches conda's own convention.
 
   # ── the R Jupyter kernel (jupyter.py registers aba_r from this) ────────
   - r-irkernel

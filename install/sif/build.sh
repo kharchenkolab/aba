@@ -107,6 +107,10 @@ if [ "$PROFILE" = "fat" ]; then
   echo "-- building R tools base (install/core/r-environment.yml) --"
   "$MM" create -y -q -p "$STAGE/aba-tools" -f "$REPO_ROOT/install/core/r-environment.yml" \
     || echo "WARNING: R tools base failed — R will provision on demand"
+  # bake the lstar R viewer bridge into the tools env (compiled here, travels in the image)
+  # so Seurat/SCE .rds viewing works in the deploy — shared helper with the installers. The
+  # helper rewrites the built .so rpath $ORIGIN-relative so it survives the stage→image move.
+  bash "$REPO_ROOT/install/core/install-lstar-r.sh" "$STAGE/aba-tools" "$MM"
 fi
 
 # ── generate the .def for this profile ──
