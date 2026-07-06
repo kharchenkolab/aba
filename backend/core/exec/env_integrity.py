@@ -798,10 +798,20 @@ def base_fs_kind() -> "tuple[str, str]":
     return _classify_fs(str(_base_site_dir()))
 
 
+def _on_slurm() -> bool:
+    """True when ABA itself runs inside a Slurm allocation (SLURM_JOB_ID set). Then
+    in-allocation jobs run INLINE (this process/container), so a node-local/in-image
+    ENVS_DIR or base is reachable for THEM; only jobs offloaded BEYOND the allocation
+    (sbatched to another node) can't reach it → a warning, not a hard 'high'. On a
+    bare submit node (no allocation), every job offloads → 'high'."""
+    return bool(os.environ.get("SLURM_JOB_ID") or os.environ.get("SLURM_JOBID"))
+
+
 def check_envs_dir_shared() -> dict:
     """Self-check (see selfcheck.py): under a Slurm submitter ENVS_DIR must be on
     shared storage. Fires only for the 'slurm' submitter — a local submitter runs
-    jobs on this same node, so node-local is fine."""
+    jobs on this same node, so node-local is fine. Severity is `on_slurm`-aware
+    (inline covers in-allocation jobs; only true offload fails)."""
     from core.jobs.submitter import submitter_name
     if submitter_name() != "slurm":
         return {"ok": True, "severity": "info", "detail": "local submitter — ENVS_DIR sharing N/A"}
@@ -809,12 +819,17 @@ def check_envs_dir_shared() -> dict:
     if kind == "shared":
         return {"ok": True, "severity": "info", "detail": detail}
     if kind == "node_local":
+        if _on_slurm():
+            return {"ok": False, "severity": "warning",
+                    "detail": (f"ENVS_DIR is node-local ({detail}); in-allocation jobs run inline so they "
+                               "work, but a job offloaded to ANOTHER node can't see ensure_capability'd "
+                               "packages. Point ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage for true offload.")}
         return {"ok": False, "severity": "high",
-                "detail": (f"ENVS_DIR looks node-local ({detail}); a background Slurm job on another "
-                           "node can't see ensure_capability'd packages — point "
-                           "ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage.")}
+                "detail": (f"ENVS_DIR is node-local ({detail}) and this is a submit node (no allocation), so "
+                           "every background job runs on another node and can't see ensure_capability'd "
+                           "packages. Point ABA_RUNTIME_DIR/ABA_ENVS_DIR at shared storage.")}
     return {"ok": False, "severity": "warning",
-            "detail": (f"ENVS_DIR shared-ness unverified ({detail}); if node-local, background Slurm "
+            "detail": (f"ENVS_DIR shared-ness unverified ({detail}); if node-local, offloaded Slurm "
                        "jobs will fail to import provisioned packages. Confirm shared storage or run "
                        "the install-time probe (aba doctor).")}
 
@@ -835,11 +850,17 @@ def check_base_dir_shared() -> dict:
     if kind == "shared":
         return {"ok": True, "severity": "info", "detail": detail}
     if kind == "node_local":
+        if _on_slurm():
+            return {"ok": False, "severity": "warning",
+                    "detail": (f"base venv is node-local / in-image ({detail}); in-allocation jobs run inline "
+                               "in this container so they work, but a job offloaded to ANOTHER node can't reach "
+                               "the baked base (bare job.sh, no container re-entry). For true offload use a slim "
+                               "SIF (image.base_dir on shared FS) or a native shared install; a fat SIF is "
+                               "inline / single-node.")}
         return {"ok": False, "severity": "high",
-                "detail": (f"base venv is node-local / in-image ({detail}); the Slurm job.sh runs bare "
-                           "on the compute node and can't reach it (no container re-entry). Slurm offload "
-                           "needs the env on shared FS — use a slim SIF (image.base_dir on shared FS) or a "
-                           "native shared install; a fat SIF is single-node / local-submitter only.")}
+                "detail": (f"base venv is node-local / in-image ({detail}) and this is a submit node (no "
+                           "allocation), so every background job runs bare on another node and can't reach it. "
+                           "Use a slim SIF (image.base_dir on shared FS) or a native shared install.")}
     return {"ok": False, "severity": "warning",
             "detail": f"base venv shared-ness unverified ({detail}); confirm it is on shared storage."}
 

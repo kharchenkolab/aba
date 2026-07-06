@@ -98,15 +98,48 @@ def test_envs_check_local_submitter_ok():
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
-def test_envs_check_slurm_node_local_fires_high():
+def _set_slurm(on: bool):
+    """Force _on_slurm() on/off by controlling SLURM_JOB_ID; return a restore fn.
+    NB the test host may itself be inside a Slurm job, so tests must set this."""
+    saved = {k: os.environ.get(k) for k in ("SLURM_JOB_ID", "SLURM_JOBID")}
+    if on:
+        os.environ["SLURM_JOB_ID"] = "999999"
+    else:
+        os.environ.pop("SLURM_JOB_ID", None)
+        os.environ.pop("SLURM_JOBID", None)
+
+    def restore():
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return restore
+
+
+def test_envs_check_slurm_node_local_submit_node_fires_high():
     os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
     orig = _patch_kind("node_local", "/workspace/aba-runtime/envs on tmpfs (node-local)")
+    unslurm = _set_slurm(False)                 # bare submit node → every job offloads
     try:
         r = env_integrity.check_envs_dir_shared()
         assert r["ok"] is False and r["severity"] == "high"
         assert "node-local" in r["detail"]
     finally:
-        env_integrity.envs_dir_fs_kind = orig
+        unslurm(); env_integrity.envs_dir_fs_kind = orig
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+
+
+def test_envs_check_slurm_node_local_in_allocation_warns():
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    orig = _patch_kind("node_local", "/scratch/envs on tmpfs (node-local)")
+    inalloc = _set_slurm(True)                  # in an allocation → inline covers in-alloc jobs
+    try:
+        r = env_integrity.check_envs_dir_shared()
+        assert r["ok"] is False and r["severity"] == "warning"
+        assert "offloaded" in r["detail"] or "another node" in r["detail"]
+    finally:
+        inalloc(); env_integrity.envs_dir_fs_kind = orig
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
@@ -146,16 +179,31 @@ def test_base_check_local_submitter_ok():
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
-def test_base_check_slurm_in_image_fat_fires_high():
-    # fat SIF: base baked in-image -> node_local -> a bare Slurm job.sh can't reach it
+def test_base_check_slurm_in_image_submit_node_fires_high():
+    # fat SIF on a bare submit node: base baked in-image -> every offloaded job fails
     os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
     orig = _patch_base_kind("node_local", "/opt/aba-venv/lib/... on squashfs (node-local / in-image)")
+    unslurm = _set_slurm(False)
     try:
         r = env_integrity.check_base_dir_shared()
         assert r["ok"] is False and r["severity"] == "high"
-        assert "shared FS" in r["detail"] and "fat SIF" in r["detail"]
+        assert "slim SIF" in r["detail"]
     finally:
-        env_integrity.base_fs_kind = orig
+        unslurm(); env_integrity.base_fs_kind = orig
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+
+
+def test_base_check_slurm_in_image_in_allocation_warns():
+    # fat SIF inside an OOD allocation: inline jobs work; only beyond-allocation offload fails
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    orig = _patch_base_kind("node_local", "/opt/aba-venv/lib/... on squashfs (node-local / in-image)")
+    inalloc = _set_slurm(True)
+    try:
+        r = env_integrity.check_base_dir_shared()
+        assert r["ok"] is False and r["severity"] == "warning"
+        assert "inline" in r["detail"] and "slim SIF" in r["detail"]
+    finally:
+        inalloc(); env_integrity.base_fs_kind = orig
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
