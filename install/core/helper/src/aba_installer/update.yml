@@ -56,6 +56,56 @@ steps:
       - '"$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
 
+  # NB: the next two steps are DUPLICATED VERBATIM from install.yml (the engine has
+  # no include/compose). Keep them byte-identical to install.yml's fetch-pagoda3-dist
+  # / install-lstar-r — they drifted once (were install-only → viewer stayed dark on
+  # update). Both are idempotent (skip-if-present), so re-running on update is safe.
+  - id: install-lstar-r
+    title: Install the lstar R viewer bridge
+    why: |
+      The pagoda3 viewer opens Seurat / SingleCellExperiment `.rds` results by
+      bridging through the tools env's Rscript, which needs the lstar R package.
+      It is NOT on CRAN (lstar moves fast); we pin the git tag **v0.1.6** — the
+      SAME release moment as the Python `lstar-sc==0.1.6` (same repo, `subdir=r`)
+      and pagoda3 v0.1.0, so writer/reader/store-format stay a matched set. Bump
+      these three pins together. Source-compiles (cpp11), so the conda compiler
+      must be on PATH (the tools env ships it). Non-fatal: without it `.h5ad` /
+      `.lstar.zarr` viewing still works; only `.rds` conversion degrades.
+    commands:
+      # Idempotency keys on the git ref remotes records in DESCRIPTION (RemoteRef),
+      # NOT packageVersion — the lstar R package's Version field lags its git tags
+      # (still 0.1.0 at tag v0.1.6). The RemoteRef check is also offline-safe on
+      # re-runs (no network SHA resolve when already current).
+      - "TOOLS_ENV=\"${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools\"; RS=\"$TOOLS_ENV/bin/Rscript\"; DESC=\"$TOOLS_ENV/lib/R/library/lstar/DESCRIPTION\"; if [ ! -x \"$RS\" ]; then echo \"no R tools env — skipping lstar R\"; elif grep -qs \"RemoteRef: v0.1.6\" \"$DESC\"; then echo \"lstar R v0.1.6 already installed — skipping\"; else PATH=\"$TOOLS_ENV/bin:$PATH\" \"$RS\" -e 'remotes::install_github(\"kharchenkolab/lstar\", ref=\"v0.1.6\", subdir=\"r\", upgrade=\"never\")' || echo \"WARNING: lstar R install failed — Seurat/SCE .rds viewer bridge unavailable (.h5ad/.lstar.zarr still work)\"; fi"
+    timeout_seconds: 900
+    remediation: |
+      lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
+      `.lstar.zarr`; only Seurat/SCE `.rds` conversion is affected. To install by
+      hand: with the tools env's bin on PATH (for the compiler), run its Rscript:
+      `remotes::install_github("kharchenkolab/lstar", ref="v0.1.6", subdir="r")`.
+
+  - id: fetch-pagoda3-dist
+    title: Install the pagoda3 viewer bundle
+    why: |
+      pagoda3 is a static web app ABA serves under /pagoda3. We grab the PRE-BUILT
+      viewer dist attached to the pagoda3 GitHub release (built once, on node >= 22,
+      and published as a release asset — so no node/glibc toolchain is needed here;
+      old-glibc hosts can't build it). The backend mounts /pagoda3 only if the dist
+      is present, so without this the interactive viewer is silently unavailable
+      (conversion still works; only the interactive view is gated). node >= 22 is
+      needed only for the OPTIONAL runtime viewer-optimize (prep.ts) — without it the
+      viewer still opens, just un-optimized. Override the asset URL with
+      $ABA_PAGODA3_DIST_URL (air-gapped mirror / a newer pin). Non-fatal.
+    commands:
+      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; if [ -f \"$DIST/index.html\" ]; then echo \"pagoda3 dist already present — skipping\"; else URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.0/pagoda3-viewer-0.1.0.zip}\"; mkdir -p \"$DIST\"; TMP=\"$(mktemp -d)\"; if command -v unzip >/dev/null 2>&1 && curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$DIST\"; then echo \"pagoda3 viewer dist installed to $DIST\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — interactive viewer unavailable until a dist with index.html sits at $DIST\"; fi; rm -rf \"$TMP\"; fi"
+    timeout_seconds: 300
+    remediation: |
+      pagoda3 dist fetch failed — NON-FATAL; the interactive viewer won't work until a
+      dist with index.html at its root sits at $ABA_HOME/vendor/pagoda3/dist. Needs
+      `curl` + `unzip`. The default asset is the pagoda3-viewer-<ver>.zip on the GitHub
+      release (index.html at the zip root); set $ABA_PAGODA3_DIST_URL to a reachable
+      mirror / newer pin, or unzip a built dist there by hand, then re-run.
+
   - id: rebuild-frontend
     title: Rebuild the interface
     why: Picks up any frontend changes that landed since last build.
