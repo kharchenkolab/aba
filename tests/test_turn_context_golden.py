@@ -20,11 +20,11 @@ Runs standalone (base env may lack pytest) or under pytest.
 import os
 import sys
 
-# The assembled system prompt renders some set/dict-derived segments in hash order,
-# so its bytes vary across processes (PYTHONHASHSEED) even when content is identical
-# — which would make a byte-exact golden flaky (and, in production, churns the
-# prompt-cache prefix on every restart — logged as a finding). Pin the seed so THIS
-# guard is deterministic; must happen before any set-using import → re-exec.
+# The cached prefix (system + tool defs) is byte-stable across processes — verified;
+# the old set/dict-in-hash-order nondeterminism is gone, and cross-seed stability is
+# now guarded by test_cache_prefix_determinism. We still pin PYTHONHASHSEED=0 so THIS
+# golden's raw hash stays deterministic + non-flaky even if that ever regresses; must
+# happen before any set-using import → re-exec.
 if os.environ.get("PYTHONHASHSEED") != "0" and "pytest" not in sys.modules:
     os.environ["PYTHONHASHSEED"] = "0"
     os.execv(sys.executable, [sys.executable, *sys.argv])  # standalone only; under pytest set PYTHONHASHSEED=0
@@ -37,14 +37,14 @@ import tempfile
 from pathlib import Path
 
 
-def _normalize(system: str) -> str:
-    """Neutralize benign per-run variation so the guard is robust but still catches
-    real content changes: mask entity/run ids + the temp runtime path, then sort
-    lines (kills set-iteration-order noise). A refactor that adds/removes/edits any
-    substantive line still changes the normalized hash."""
+def _mask(system: str) -> str:
+    """Mask benign per-run variation (entity/run ids + the temp runtime path) but
+    PRESERVE line order. The cached prefix is byte-stable across processes (proven +
+    guarded by test_cache_prefix_determinism), so we no longer sort-normalize — a
+    reordering IS a real change worth catching (the old sorted hash hid it)."""
     s = re.sub(r'\b(prj|thr|run|ana|fig|res|cl|ds|nb|oq|job)_[0-9a-f]{6,}\b', r'\1_ID', system)
     s = re.sub(r'/tmp/aba_ctxgold_[A-Za-z0-9_]+', '/TMP', s)
-    return "\n".join(sorted(s.splitlines()))
+    return s
 
 try:
     import pytest
@@ -100,12 +100,12 @@ def _capture() -> dict:
     assert files, "no turn-context sidecar was dumped — did the turn start?"
     payload = json.loads(Path(files[-1]).read_text())
     system = payload.get("system") or ""
-    names = sorted(n for n in (payload.get("tools") or []) if n)
+    names = [n for n in (payload.get("tools") or []) if n]   # ORDERED as sent (guards tool order)
     return {
         "tool_names": names,
         "n_tools": len(names),
         "system_len": len(system),
-        "system_norm_sha256": hashlib.sha256(_normalize(system).encode("utf-8")).hexdigest(),
+        "system_sha256": hashlib.sha256(_mask(system).encode("utf-8")).hexdigest(),
     }
 
 
@@ -115,12 +115,16 @@ def test_turn_context_matches_golden():
         f"no golden at {GOLDEN.relative_to(ROOT)} — generate with "
         f"ABA_UPDATE_CONTEXT_GOLDEN=1 python tests/test_turn_context_golden.py")
     gold = json.loads(GOLDEN.read_text())
-    if cur["tool_names"] != gold["tool_names"]:
+    if set(cur["tool_names"]) != set(gold["tool_names"]):
         added = sorted(set(cur["tool_names"]) - set(gold["tool_names"]))
         removed = sorted(set(gold["tool_names"]) - set(cur["tool_names"]))
         _fail(f"offered tool catalog changed — added={added} removed={removed}")
-    if cur["system_norm_sha256"] != gold["system_norm_sha256"]:
-        _fail(f"assembled system prompt changed (normalized; len {gold['system_len']} → "
+    if cur["tool_names"] != gold["tool_names"]:
+        _fail(f"tool ORDER changed (same set, different order) — tools are part of the cached "
+              f"prefix in order, so this churns the prompt cache. "
+              f"golden[:6]={gold['tool_names'][:6]} current[:6]={cur['tool_names'][:6]}")
+    if cur["system_sha256"] != gold["system_sha256"]:
+        _fail(f"assembled system prompt changed (raw, ids/paths masked; len {gold['system_len']} → "
               f"{cur['system_len']}). A setup-phase refactor must preserve it; if the "
               f"change is intentional, regenerate the golden.")
 
