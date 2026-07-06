@@ -1276,9 +1276,11 @@ def viewer_launch_page():
 # viewer inherits ABA's trust model (no CORS; session/localStorage work) and its
 # SharedArrayBuffer workers get the cross-origin isolation headers they need.
 # Registered here (before the SPA catch-all near end of file) so /pagoda3/* and
-# /pagoda3-store/* match these, not the react-router HTML fallback.
-_PAGODA3_DIST = Path(os.environ.get("ABA_PAGODA3_DIST")
-                     or (Path.home() / "pagoda" / "pagoda3" / "web" / "dist"))
+# /pagoda3-store/* match these, not the react-router HTML fallback. WHERE the
+# pagoda3 bundle lives is bio/viewer domain knowledge — owned by the launcher, not
+# the app root; we just wire the mount at the right ordering point.
+from content.bio.viewers.launchers.pagoda3 import pagoda3_dist_path
+_PAGODA3_DIST = pagoda3_dist_path()
 
 
 class _IsolatedStatic(StaticFiles):
