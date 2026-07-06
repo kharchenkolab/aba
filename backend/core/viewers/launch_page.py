@@ -155,8 +155,8 @@ _HTML = r"""<!doctype html>
                 var v = s.set_local_storage[k]; localStorage.setItem(k, (v && v.charAt(0) === "/") ? withBase(v) : v);
               }); } catch (e) {}
             }
-            $("vl-title").textContent = "Opening pagoda3…";
-            $("vl-phase").textContent = "Store ready — loading the embedding in pagoda3…";
+            $("vl-title").textContent = label ? ("Opening " + label + "…") : "Opening viewer…";
+            $("vl-phase").textContent = "Store ready — loading…";
             location.replace(finalUrl(s.url));
             return;
           }
