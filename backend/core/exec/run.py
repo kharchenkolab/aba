@@ -368,7 +368,7 @@ def harvest_intents(cwd, ctx=None) -> list:
     if not p.exists():
         return []
     import json
-    from core.graph.entities import create_entity, update_entity
+    from core.graph.entities import create_entity, update_entity, archive_entity
     from core.graph.edges import add_edge
     from core.graph.derivation import manual
     refs: dict = {}
@@ -402,6 +402,10 @@ def harvest_intents(cwd, ctx=None) -> list:
                 eid = refs.get(it["id"], it["id"])
                 update_entity(eid, **(it.get("fields") or {}))
                 out.append({"verb": "update", "id": eid})
+            elif v == "archive":
+                eid = refs.get(it["id"], it["id"])
+                archive_entity(eid)
+                out.append({"verb": "archive", "id": eid})
             else:
                 # Content (lifecycle) verbs — promote/finding/claim/register_dataset — are
                 # dispatched to a CONTENT-registered handler via the services seam (core

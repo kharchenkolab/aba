@@ -185,6 +185,11 @@ class _Aba:
         print(f"[aba.update] {entity_id} {list(fields)}", flush=True)
         self._emit({"verb": "update", "id": entity_id, "fields": fields})
 
+    def archive(self, entity_id: str, reason: Optional[str] = None) -> None:
+        """Archive (soft-delete) an entity."""
+        print(f"[aba.archive] {entity_id}", flush=True)
+        self._emit({"verb": "archive", "id": entity_id, "reason": reason})
+
     def emit_intent(self, verb: str, **fields: Any) -> str:
         """Emit a CONTENT-provided write intent (a verb core doesn't know — dispatched
         backend-side by a content-registered handler). Returns a local ref for chaining.

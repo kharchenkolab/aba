@@ -104,7 +104,8 @@ def _aba_intent(intent: dict, refs: dict, ctx=None) -> dict:
     lets the WHOLE contact plane flip to the library — content extends aba's verbs
     via registration, no core edit (tool_library Phase 3 / follow-on (a))."""
     from content.bio.tools.curation import (
-        promote_to_result_tool, create_finding_tool, create_claim_tool, register_dataset_tool)
+        promote_to_result_tool, create_finding_tool, create_claim_tool, register_dataset_tool,
+        register_reference_tool, promote_reference_tool)
     v = intent.get("verb")
 
     def rr(x):  # resolve a local ref (or list) to a real id
@@ -131,6 +132,12 @@ def _aba_intent(intent: dict, refs: dict, ctx=None) -> dict:
                                        "summary": intent.get("summary"),
                                        "source": intent.get("source"),
                                        "organism": intent.get("organism")}, ctx)
+        elif v == "register_reference":
+            r = register_reference_tool({k: intent.get(k) for k in
+                                         ("path", "organism", "role", "mode", "scope", "title")}, ctx)
+        elif v == "promote_reference":
+            r = promote_reference_tool({"reference_id": rr(intent.get("reference_id")),
+                                        "scope": intent.get("scope")}, ctx)
         else:
             return {"verb": v, "error": f"unknown lifecycle verb {v!r}"}
         if isinstance(r, dict) and r.get("error"):
@@ -164,10 +171,19 @@ def register_dataset(title, path=None, paths=None, summary=None, source=None, or
     """Register a file/folder as a Dataset entity (with file adoption). Returns a local ref."""
     return aba.emit_intent("register_dataset", title=title, path=path, paths=paths,
                            summary=summary, source=source, organism=organism)
+def register_reference(path, organism=None, role=None, mode=None, scope=None, title=None):
+    """Keep a file/dir as a reusable reference. Returns a local ref."""
+    return aba.emit_intent("register_reference", path=path, organism=organism, role=role,
+                           mode=mode, scope=scope, title=title)
+def promote_reference(reference_id, scope):
+    """Promote a reference to a wider scope tier."""
+    return aba.emit_intent("promote_reference", reference_id=reference_id, scope=scope)
 aba.promote = promote
 aba.finding = finding
 aba.claim = claim
 aba.register_dataset = register_dataset
+aba.register_reference = register_reference
+aba.promote_reference = promote_reference
 # guard: these types need lifecycle wiring — aba.create refuses them, redirecting here.
 aba._lifecycle_verbs = {"result": "promote", "finding": "finding", "claim": "claim", "dataset": "register_dataset"}
 aba._extra_help = ("LIFECYCLE (use these, not create()): aba.promote(figure, interpretation) -> result; "

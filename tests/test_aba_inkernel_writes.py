@@ -108,6 +108,22 @@ def test_lifecycle_verb_via_bio_service():
     assert "R1" in [e["title"] for e in find_entities(type="result")]
 
 
+def test_archive_intent():
+    _fresh_db()
+    work = tempfile.mkdtemp(prefix="aba_arch_")
+    os.environ["WORK_DIR"] = work
+    from core.graph.entities import create_entity, get_entity
+    from core.graph.derivation import manual
+    from core.exec.kernels.aba_inkernel import _Aba
+    from core.exec.run import harvest_intents
+    e = create_entity(entity_type="dataset", title="d", derivation=manual())
+    aba = _Aba(db=os.environ["ABA_PROJECT_DB"])
+    aba.archive(e)
+    res = harvest_intents(work)
+    assert res == [{"verb": "archive", "id": e}], res
+    assert get_entity(e)["status"] == "archived"
+
+
 def test_no_intents_is_noop():
     _fresh_db()
     work = tempfile.mkdtemp(prefix="aba_work_")

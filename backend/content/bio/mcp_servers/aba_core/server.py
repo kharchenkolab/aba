@@ -99,7 +99,9 @@ def make_server() -> FastMCP:
                     "register_dataset", "annotate_entity", "update_entity_fields", "add_to_dataset",
                     "promote_to_result", "create_finding", "create_claim",
                     # Tranche A (contact reads): aba.provenance / aba.ops
-                    "get_provenance", "get_dependents", "list_entity_operations"]
+                    "get_provenance", "get_dependents", "list_entity_operations",
+                    # Tranche B (contact writes): aba.archive / aba.register_reference / aba.promote_reference
+                    "archive_entity", "register_reference", "promote_reference"]
     if _demote:
         tm = mcp._tool_manager
         for _t in _demote:
