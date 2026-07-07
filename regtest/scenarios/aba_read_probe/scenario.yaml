@@ -1,0 +1,67 @@
+id: aba_read_probe
+title: Entity-read probe (tool_library Phase 1 discovery experiment)
+domain: _infra
+gpu: false
+summary: >
+  A short, data-free arc that FORCES the agent to read the project's entity graph across
+  turns — first it makes a couple of figures, then it must list/examine the entities it
+  created. Used to measure whether the agent discovers and uses the in-kernel `aba.find` /
+  `aba.get` reads (LIBRARY arm, ABA_TOOL_LIB=1) vs the list_entities / read_entity JSON
+  tools (CONTROL arm). Discovery/reinvention metrics are extracted post-hoc from the bundle
+  (see regtest/harness/score_toollib.py), not from these checks.
+data_files: []
+
+steps:
+  - id: s1
+    kind: analyze
+    actor: agent
+    prompt: >
+      Make a toy dataset in Python: 40 random points (x, y) with a mild positive
+      correlation, seed it so it's reproducible. Make a scatter plot of x vs y, add a title
+      "Scatter A", and save it as a PNG figure so I can keep it — then show it to me.
+    expect:
+      produces: { figure: 1 }
+      checks: A scatter plot figure is produced and saved.
+
+  - id: s2
+    kind: pin
+    actor: user
+    target: { from_step: s1, select: figure }
+    expect:
+      state: { pinned_results_min: 1 }
+      checks: The scatter is pinned — a Result entity now exists.
+
+  - id: s3
+    kind: analyze
+    actor: agent
+    prompt: >
+      Now make a histogram of the y values from that same dataset, title it "Histogram B",
+      save it as a second PNG figure, and show it.
+    expect:
+      produces: { figure: 1 }
+      checks: A second figure (histogram) is produced.
+
+  - id: s4
+    kind: examine
+    actor: agent
+    prompt: >
+      Remind me — what figures and results have you created in this project so far? List
+      each one's title and type.
+    expect:
+      must_mention: ["Scatter A", "Histogram B"]
+      checks: >
+        Lists the two figures (Scatter A, Histogram B) and the pinned result. This turn
+        REQUIRES reading the entity graph — the CONTROL agent uses list_entities, the
+        LIBRARY agent should reach for aba.find() in run_python.
+
+  - id: s5
+    kind: examine
+    actor: agent
+    prompt: >
+      Pull up the details of the first figure you made (the scatter) — its exact title and
+      its entity id — and confirm it's the one backing the pinned result.
+    expect:
+      must_mention: ["Scatter A"]
+      checks: >
+        Reads a specific entity's fields (title + id) — CONTROL uses read_entity, LIBRARY
+        should use aba.get() / aba.find(contains="Scatter"). Confirms the result links to it.
