@@ -14,6 +14,8 @@ Why a factory rather than a module-level singleton?
 """
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 from .tools.simple import register_simple_tools
@@ -74,5 +76,18 @@ def make_server() -> FastMCP:
                                     #      cancel_job — let the agent answer
                                     #      "is it still running?" without
                                     #      deflecting to the UI Queues panel.
+
+    # tool_library read-flip (opt-in via ABA_TOOL_LIB): the in-kernel `aba`
+    # library (aba.find / aba.get, injected into run_python) replaces the entity
+    # read TOOLS — so demote them from the catalog when the flag is on. Validated
+    # safe by the Phase-1 forced arm (opus + haiku adopt aba cleanly, zero
+    # reinvention, no quality regression). Seam-clean: bio names its own tools.
+    if os.environ.get("ABA_TOOL_LIB"):
+        tm = mcp._tool_manager
+        for _t in ("list_entities", "read_entity"):
+            try:
+                tm.remove_tool(_t)
+            except Exception:
+                tm._tools.pop(_t, None)
 
     return mcp
