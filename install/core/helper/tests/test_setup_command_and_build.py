@@ -63,6 +63,67 @@ def test_setup_command_refuses_non_macos():
     assert 'uname -s' in body and 'Darwin' in body
 
 
+# ─── ref pin (consolidated onto ABA_REF / RECIPES_REF) ──────────────────────
+def test_setup_command_ref_pin_consolidated():
+    # One pin knob: ABA_REF / RECIPES_REF (branch/tag/commit), with the older
+    # ABA_REPO_BRANCH / ABA_RECIPES_BRANCH kept only as back-compat aliases.
+    # The clone calls must pass the resolved $ABA_REF / $RECIPES_REF — NOT the
+    # legacy branch vars directly (that would drop tag/commit support).
+    body = SETUP_CMD.read_text()
+    assert 'ABA_REF="${ABA_REF:-${ABA_REPO_BRANCH:-}}"' in body
+    assert 'RECIPES_REF="${RECIPES_REF:-${ABA_RECIPES_BRANCH:-}}"' in body
+    assert 'clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"             "$ABA_REF"' in body
+    assert 'clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipe-pack" "$RECIPES_REF"' in body
+
+
+def _extract_bash_func(body: str, name: str) -> str:
+    """Pull a top-level `name() { … }` function (closing brace at col 0) out of a script."""
+    lines = body.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}() {{"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start:end + 1])
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+@pytest.mark.parametrize("ref_env,expect", [
+    ({}, "B"),                                  # neither → default branch
+    ({"ABA_REPO_BRANCH": "v1"}, "A"),           # legacy alias resolves
+    ({"ABA_REF": "v1"}, "A"),                   # tag
+    ({"ABA_REF": "__SHA__"}, "A"),              # bare commit SHA (full-clone fallback)
+    ({"ABA_REF": "v1", "ABA_REPO_BRANCH": "main"}, "A"),  # ABA_REF wins over alias
+])
+def test_setup_command_clone_honors_ref(tmp_path, ref_env, expect):
+    """The real clone_or_pull from setup.command, driven by the same
+    ABA_REF/alias resolution, honors a branch / tag / commit against a throwaway
+    repo (commit A tagged v1, then commit B on main)."""
+    def git(*a, cwd):
+        subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+    src = tmp_path / "src"; src.mkdir()
+    git("init", "-q", "-b", "main", ".", cwd=src)
+    git("config", "user.email", "t@t", cwd=src); git("config", "user.name", "t", cwd=src)
+    (src / "f").write_text("A"); git("add", "-A", cwd=src); git("commit", "-qm", "A", cwd=src)
+    sha_a = subprocess.run(["git", "rev-parse", "HEAD"], cwd=src,
+                           capture_output=True, text=True).stdout.strip()
+    git("tag", "v1", cwd=src)
+    (src / "f").write_text("B"); git("commit", "-qam", "B", cwd=src)
+
+    env = {k: (sha_a if v == "__SHA__" else v) for k, v in ref_env.items()}
+    fn = _extract_bash_func(SETUP_CMD.read_text(), "clone_or_pull")
+    # Mirror setup.command's alias resolution + call, then report HEAD's subject.
+    script = f'''
+set -euo pipefail
+fail() {{ echo "FAIL: $*" >&2; exit 1; }}
+{fn}
+ABA_REF="${{ABA_REF:-${{ABA_REPO_BRANCH:-}}}}"
+clone_or_pull "{src}" "{tmp_path}/out" "$ABA_REF"
+git -C "{tmp_path}/out" log -1 --format=%s
+'''
+    out = subprocess.run(["bash", "-c", script], env={**os.environ, **env},
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == expect  # last line = HEAD subject
+
+
 # ─── build pipeline ────────────────────────────────────────────────────────
 @pytest.mark.skipif(shutil.which("make") is None or shutil.which("zip") is None,
                     reason="make / zip not available")
