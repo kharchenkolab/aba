@@ -76,6 +76,14 @@ def run_python_code(
     _seed = 0
     lines.append(f"import random as _aba_rnd; _aba_rnd.seed({_seed})")
     lines.append(f"try:\n    import numpy as _aba_np; _aba_np.random.seed({_seed})\nexcept Exception: pass")
+    # tool_library Phase 1: inject the in-kernel `aba` read library so `aba.find`/
+    # `aba.get` are available on the stateless/fresh path too — NOT only the
+    # interactive kernel — so the surface is consistent (a fresh run that lost `aba`
+    # would push the agent to reinvent the op in raw code). Pure-stdlib, reads
+    # $ABA_PROJECT_DB (set in env_vars below). Safe mid-script (no __future__).
+    from pathlib import Path as _AbaP
+    _aba_src = (_AbaP(__file__).parent / "kernels" / "aba_inkernel.py").read_text()
+    lines.append(_aba_src + "\naba = _Aba()")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
     # Harvest only what THIS run produced. When run_id is the active Run, the
     # scratch IS the Run's work dir (shared with prior cells), so filter by the
@@ -107,6 +115,14 @@ def run_python_code(
         # nothing until completion regardless of how often the UI polls).
         "PYTHONUNBUFFERED": "1",
     }
+    # tool_library Phase 1: point the injected `aba` reads at THIS project's DB.
+    try:
+        from core import projects as _pj
+        from core.graph._schema import active_db_path as _adb
+        from core.config import project_db_path as _pdb
+        env_vars["ABA_PROJECT_DB"] = str(_adb() if _pj.SINGLE else _pdb(_pid))
+    except Exception:
+        pass
     result = ex.exec(
         menv, [used_interp, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,

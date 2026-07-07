@@ -275,6 +275,7 @@ def _setup_code(cwd: str) -> str:
         f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
         + _harvest_helpers_py()
+        + _aba_helpers_py()
     )
 
 
@@ -291,7 +292,18 @@ def _env_setup_code(cwd: str) -> str:
         f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
         + _harvest_helpers_py()
+        + _aba_helpers_py()
     )
+
+
+def _aba_helpers_py() -> str:
+    """Inject the in-kernel `aba` read library (aba_inkernel.py) into the kernel
+    namespace. The module is pure-stdlib (no backend import) and reads the project
+    graph directly from $ABA_PROJECT_DB. Kept in a real file so it's testable +
+    lintable; injected as source because `core` isn't on the kernel's path."""
+    from pathlib import Path
+    src = (Path(__file__).parent / "aba_inkernel.py").read_text()
+    return "\n# --- aba: in-kernel entity-graph reads (tool_library Phase 1) ---\n" + src + "\naba = _Aba()\n"
 
 
 def _harvest_helpers_py() -> str:
@@ -380,6 +392,14 @@ def _kernel_env(lang: str, cwd: str) -> dict:
     # this. Set unconditionally so the contract is the same in both
     # kernels.
     env["ABA_PYTHON"] = sys.executable
+    # Phase 1 (tool_library): expose THIS project's DB to the in-kernel `aba`
+    # read verbs (aba_inkernel.py), which query the graph directly — the kernel
+    # is a separate subprocess with no backend context, so it needs the path.
+    try:
+        from core.graph._schema import active_db_path
+        env["ABA_PROJECT_DB"] = str(active_db_path())
+    except Exception:
+        pass
     nthreads = str(_kernel_threads())
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
