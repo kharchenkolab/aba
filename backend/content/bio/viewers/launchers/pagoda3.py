@@ -1,9 +1,10 @@
 """pagoda3 external-viewer launcher (misc/pagoda3_integration.md B1/B3).
 
 Turns a project's single-cell file into a pagoda3 launch URL:
-  - `.lstar.zarr` (native)  → cached copy under the project's pagoda3/ dir so
-                              it's reachable via /pagoda3-store (and passes the
-                              store route's symlink-safe containment check)
+  - `.lstar.zarr` (native)  → symlinked into the project's pagoda3/ dir so it's
+                              reachable via /pagoda3-store WITHOUT copying the
+                              tree (the store route follows a project-internal
+                              link); copied only if it lives outside the project
   - `.h5ad` (and friends)   → converted to `.lstar.zarr` via lstar, cached
 pagoda3 reads the store over HTTP Range; since it shares ABA's origin it picks
 up `p3-agent-proxy=/pagoda3-api`, so its copilot rides ABA's credential.
@@ -135,10 +136,39 @@ def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:
     _pack_stored_zip(str(store_dir), str(dest))
 
 
-def _copy_store(src: Path, out: Path, set_phase=None) -> None:
-    """Native store already a directory — copy the tree into the served cache."""
-    (set_phase or (lambda *_: None))("Copying store…")
-    shutil.copytree(src, out)
+def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
+                        project_root: Path, set_phase=None) -> Path:
+    """Place an already-built `.lstar.zarr` DIRECTORY store where the store route
+    can serve it, WITHOUT copying the tree when avoidable.
+
+    A store inside the project (the usual case — a run wrote it under work/) is
+    SYMLINKED into pagoda3/: the store route follows a project-internal symlink,
+    so there's no reason to duplicate a possibly-multi-GB tree on every open. A
+    store OUTSIDE the project (a registered external path the route can't reach
+    through the project sandbox) is copied in as a fallback. Idempotent: an
+    existing correct symlink is reused; a stale/wrong one is replaced."""
+    sp = set_phase or (lambda *_: None)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out = cache_dir / out_name
+    real = src.resolve()
+    if out.is_symlink() and out.exists() and out.resolve() == real:
+        return out                              # already linked to this store
+    if out.is_symlink() or out.is_file():
+        out.unlink()                            # replace a stale/dangling link
+    elif out.exists():
+        shutil.rmtree(out, ignore_errors=True)  # replace an old copied tree
+    try:
+        real.relative_to(project_root.resolve())
+        inside = True
+    except ValueError:
+        inside = False
+    if inside:
+        sp("Linking store…")
+        out.symlink_to(real, target_is_directory=True)
+    else:
+        sp("Copying store…")
+        shutil.copytree(real, out)
+    return out
 
 
 def _unzip_store(src: Path, out: Path, set_phase=None) -> None:
@@ -196,24 +226,30 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         raise FileNotFoundError(
             f"pagoda3: source not found for {node.get('name') or node.get('path')!r}")
 
-    cache_dir = project_root(pid) / "pagoda3"
+    root = project_root(pid)
+    cache_dir = root / "pagoda3"
     name = src.name.lower()
-    # Pick the derivation by source kind, and strip the (possibly two-part) suffix
-    # for a clean output name.
+    # Strip the (possibly two-part) suffix for a clean output name.
     if name.endswith(_ZIP_SUFFIX):
-        base_convert, suffix = _unzip_store, _ZIP_SUFFIX      # native store (zipped)
+        suffix = _ZIP_SUFFIX          # native store, zipped → unzip
     elif name.endswith(_STORE_SUFFIX):
-        base_convert, suffix = _copy_store, _STORE_SUFFIX     # native store (directory)
+        suffix = _STORE_SUFFIX        # native store, directory → serve in place
     else:
-        base_convert, suffix = _convert_any, None             # .h5ad / .h5mu / .rds → convert (lstar CLI)
+        suffix = None                 # .h5ad / .h5mu / .rds → convert (lstar CLI)
     stem = src.name[:-len(suffix)] if suffix else src.stem
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
 
-    def convert(s: Path, o: Path) -> None:      # bind set_phase into the 2-arg callback
-        base_convert(s, o, set_phase)
-
-    store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
+    if suffix == _STORE_SUFFIX:
+        # Already a store — nothing to derive; symlink it into the served dir
+        # (copy only if it lives outside the project). No ensure_derived cache:
+        # the store IS the source, so there's nothing to key on or rebuild.
+        store = _serve_native_store(src, cache_dir, out_name, root, set_phase)
+    else:
+        base_convert = _unzip_store if suffix == _ZIP_SUFFIX else _convert_any
+        def convert(s: Path, o: Path) -> None:  # bind set_phase into the 2-arg callback
+            base_convert(s, o, set_phase)
+        store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
 
     return LaunchResult(
         url=f"/pagoda3/?store=/pagoda3-store/{pid}/{store.name}/",

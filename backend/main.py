@@ -1315,9 +1315,14 @@ def pagoda3_store(pid: str, relpath: str):
     under COEP. Range → 206 is handled by Starlette's FileResponse."""
     from core.viewers.store_serve import resolve_within
     from core.config import project_root
-    base = project_root(pid) / "pagoda3"
+    root = project_root(pid)
+    base = root / "pagoda3"
     try:
-        f = resolve_within(base, relpath)
+        # A native `.lstar.zarr` produced by a run lives under work/ and is
+        # symlinked into pagoda3/ (not copied) — so allow following that link as
+        # long as its real target stays inside THIS project. The `..` block in
+        # resolve_within keeps the URL itself from walking out of pagoda3/.
+        f = resolve_within(base, relpath, extra_roots=(root,))
     except ValueError:
         raise HTTPException(403, "path escapes store root")
     if not f.is_file():

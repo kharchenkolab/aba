@@ -11,17 +11,29 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def resolve_within(base: Path, relpath: str) -> Path:
+def resolve_within(base: Path, relpath: str,
+                   extra_roots: "tuple[Path, ...]" = ()) -> Path:
     """Resolve `relpath` under `base`, guaranteeing the result stays inside
-    `base` (defeats `..`, absolute paths, and symlink escapes). Raises
-    ValueError if the target would fall outside the root.
+    `base` — or, if given, inside one of `extra_roots`. Raises ValueError if the
+    target would fall outside every allowed root.
 
-    Empty relpath resolves to `base` itself. Both are `.resolve()`d so a
-    symlinked chunk that points out of the tree is rejected too."""
+    Empty relpath resolves to `base` itself. The result is `.resolve()`d, so a
+    symlink is FOLLOWED and its real target is what gets range-checked.
+
+    `..` in the request path is rejected outright: the only legitimate way for a
+    served path to leave `base` is a symlink WE placed inside it (whose real
+    target we vet against `extra_roots`), never a `..` in the client's URL. This
+    lets the pagoda3 store serve a run's `.lstar.zarr` in place (symlinked from
+    pagoda3/ → work/) without copying the tree, while still confining reads to
+    the project. Without the `..` block, widening the roots would let a crafted
+    URL walk up out of the store dir — so the two changes are a matched pair."""
     base_r = base.resolve()
-    # A leading "/" in relpath would make (base / relpath) ignore base — strip it.
-    target = (base_r / relpath.lstrip("/")).resolve()
-    if target != base_r and base_r not in target.parents:
+    rel = relpath.lstrip("/")   # a leading "/" would make (base / rel) ignore base
+    if ".." in Path(rel).parts:
+        raise ValueError(f"path {relpath!r} traverses upward")
+    target = (base_r / rel).resolve()   # follows symlinks in the tree
+    roots = (base_r, *(r.resolve() for r in extra_roots))
+    if not any(target == r or r in target.parents for r in roots):
         raise ValueError(f"path {relpath!r} escapes store root {base_r}")
     return target
 
