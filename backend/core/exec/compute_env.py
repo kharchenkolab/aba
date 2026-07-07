@@ -131,10 +131,12 @@ def context_line() -> str:
         # read library — a per-turn line that reaches every model tier uniformly
         # (unlike a tool description, which lean tiers trim). Only when the flag is on.
         if os.environ.get("ABA_TOOL_LIB"):
-            line += (". Entity reads: an `aba` object is in the run_python/run_r kernel — "
-                     "aba.find(type=…, status=…, contains=…), aba.get(id), aba.types() — "
-                     "read this project's entities directly in code instead of the "
-                     "list_entities / read_entity tools.")
+            line += (". Entity graph: an `aba` object is in the run_python/run_r kernel. "
+                     "READ with aba.find(type=…, contains=…) / aba.get(id) / aba.types() "
+                     "(find() returns a LIST in one call — don't loop it). WRITE with "
+                     "aba.create(type, title, **fields) / aba.relate(src, rel, dst) / "
+                     "aba.update(id, **fields) (applied after the cell, provenance-stamped). "
+                     "aba.help() for the full reference, aba.ops(type) for a type's fields/edges.")
         return line
     except Exception:  # noqa: BLE001
         return ""

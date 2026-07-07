@@ -117,6 +117,22 @@ def test_no_db_bound_raises():
             os.environ["ABA_PROJECT_DB"] = saved
 
 
+def test_ops_and_help_from_registry():
+    import json
+    os.environ["ABA_TYPE_REGISTRY"] = json.dumps({
+        "dataset": {"required": ["title"], "optional": ["organism"], "edges_out": ["wasDerivedFrom"]},
+        "result": {"required": [], "optional": [], "edges_out": ["supports"]},
+    })
+    from core.exec.kernels.aba_inkernel import _Aba
+    aba = _Aba(db=None)
+    assert aba.ops() == ["dataset", "result"]
+    assert aba.ops("dataset")["edges_out"] == ["wasDerivedFrom"]
+    assert "error" in aba.ops("bogus")
+    assert "aba.create" in aba.help() and "aba.find" in aba.help()
+    os.environ.pop("ABA_TYPE_REGISTRY", None)
+    assert "error" in _Aba(db=None).ops()  # unavailable without the injected registry
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

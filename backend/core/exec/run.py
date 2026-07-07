@@ -126,6 +126,13 @@ def run_python_code(
         env_vars["ABA_PROJECT_DB"] = str(_adb() if _pj.SINGLE else _pdb(_pid))
     except Exception:
         pass
+    if os.environ.get("ABA_TOOL_LIB"):
+        try:
+            import json as _json
+            from core.entity_types.registry import registry_digest
+            env_vars["ABA_TYPE_REGISTRY"] = _json.dumps(registry_digest())
+        except Exception:
+            pass
     result = ex.exec(
         menv, [used_interp, str(scratch / "script.py")],
         cwd=str(scratch), cancel_token=cancel_token, timeout_s=timeout_s,

@@ -406,6 +406,15 @@ def _kernel_env(lang: str, cwd: str) -> dict:
         env["ABA_PROJECT_DB"] = str(active_db_path())
     except Exception:
         pass
+    # tool_library Phase 3/4: inject the entity-type registry digest so the in-kernel
+    # aba.ops()/aba.create() are registry-aware (a new type surfaces with no code change).
+    if os.environ.get("ABA_TOOL_LIB"):
+        try:
+            import json as _json
+            from core.entity_types.registry import registry_digest
+            env["ABA_TYPE_REGISTRY"] = _json.dumps(registry_digest())
+        except Exception:
+            pass
     nthreads = str(_kernel_threads())
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):

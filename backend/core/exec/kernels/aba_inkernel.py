@@ -142,6 +142,44 @@ class _Aba:
         print(f"[aba.update] {entity_id} {list(fields)}", flush=True)
         self._emit({"verb": "update", "id": entity_id, "fields": fields})
 
+    # -- discovery (Phase 4) ---------------------------------------------------
+    def help(self) -> str:
+        """Print the aba verb reference. Reads: find/get/types/exists. Writes
+        (deferred to end-of-run, provenance-stamped): create/relate/update.
+        Use ops(type) for a type's required fields + allowed edges."""
+        txt = (
+            "aba — the project's entity graph, in this kernel.\n"
+            "READS (return now):\n"
+            "  aba.find(type=None, status=None, contains=None, limit=50) -> [rows]\n"
+            "  aba.get(id, fields=None) -> row | None\n"
+            "  aba.types() -> [{type, n}]   aba.exists(**predicates) -> bool\n"
+            "WRITES (applied after this run, with provenance + your actor):\n"
+            "  aba.create(type, title, **fields) -> local ref (use in relate/update)\n"
+            "  aba.relate(source, rel, target)   aba.update(id, **fields)\n"
+            "  aba.ops(type) -> what a type needs (required fields, allowed edges)\n"
+            "Tip: find() returns a LIST in one call — don't loop it."
+        )
+        print(txt, flush=True)
+        return txt
+
+    def ops(self, type: Optional[str] = None):  # noqa: A002
+        """Registry-driven affordances. ops() lists entity types; ops(type)
+        returns {required, optional, edges_out} for that type — so create()
+        and relate() are self-describing. A new entity type appears here with
+        no code change (registry-generated)."""
+        reg = os.environ.get("ABA_TYPE_REGISTRY")
+        if not reg:
+            return {"error": "type registry unavailable in this kernel"}
+        try:
+            reg = json.loads(reg)
+        except Exception:
+            return {"error": "type registry malformed"}
+        if type is None:
+            print(f"[aba.ops] types: {sorted(reg)}", flush=True)
+            return sorted(reg)
+        print(f"[aba.ops] {type}", flush=True)
+        return reg.get(type, {"error": f"unknown type {type!r}; known: {sorted(reg)}"})
+
     def __repr__(self) -> str:
-        return ("<aba: reads .find(type=,status=,contains=)/.get(id)/.types(); "
-                "writes .create(type,title,**)/.relate(src,rel,dst)/.update(id,**)>")
+        return ("<aba: reads .find/.get/.types/.exists; writes .create/.relate/.update; "
+                "discovery .help()/.ops(type)>")

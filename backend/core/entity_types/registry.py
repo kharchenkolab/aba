@@ -140,6 +140,26 @@ def list_type_names(*, include_hidden: bool = True) -> list[str]:
     return [t.name for t in _TYPES.values() if include_hidden or not t.hidden]
 
 
+def registry_digest() -> dict:
+    """Compact per-(non-hidden)-type summary for surfacing to the agent — the
+    in-kernel `aba.ops()` discovery reads this (injected as $ABA_TYPE_REGISTRY).
+    Domain-neutral: the registry describing itself. This is what makes the graph
+    verbs registry-generated — a new entity type shows up here (and thus in
+    aba.ops + aba.create) with no code change (tool_library Phase 3)."""
+    out: dict = {}
+    for s in _TYPES.values():
+        if getattr(s, "hidden", False):
+            continue
+        sch = s.schema or {}
+        out[s.name] = {
+            "display": s.display,
+            "required": list(sch.get("required") or []),
+            "optional": list(sch.get("optional") or []),
+            "edges_out": list((s.allowed_edges or {}).get("out") or []),
+        }
+    return out
+
+
 def types_in_category(category: str) -> set[str]:
     """All type names declaring `category: <category>` in their YAML.
     Empty set for an unknown category. Stable across calls (the registry
