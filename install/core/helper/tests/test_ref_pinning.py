@@ -19,9 +19,10 @@ def srcrepo(tmp_path):
     """A source repo: commit A (tagged v1) then commit B on main."""
     s = tmp_path / "src"
     s.mkdir()
-    _git("init", "-q", "-b", "main", ".", cwd=s)
+    _git("init", "-q", ".", cwd=s)
     _git("config", "user.email", "t@t", cwd=s); _git("config", "user.name", "t", cwd=s)
     (s / "f").write_text("A"); _git("add", "-A", cwd=s); _git("commit", "-qm", "A", cwd=s)
+    _git("branch", "-m", "main", cwd=s)   # default branch -> main (RHEL7 git 1.8.3.1 has no `init -b`)
     sha_a = subprocess.run(["git", "rev-parse", "HEAD"], cwd=s, capture_output=True, text=True).stdout.strip()
     _git("tag", "v1", cwd=s)
     (s / "f").write_text("B"); _git("commit", "-qam", "B", cwd=s)
@@ -35,7 +36,7 @@ def _pkg_cmd(playbook: str, step_id: str, idx: int) -> str:
 
 
 def _head_subject(repo: Path) -> str:
-    return subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%s"],
+    return subprocess.run(["git", "log", "-1", "--format=%s"], cwd=str(repo),
                           capture_output=True, text=True).stdout.strip()
 
 
@@ -72,3 +73,51 @@ def test_cli_bootstrap_honors_aba_ref(srcrepo, tmp_path, monkeypatch):
     monkeypatch.delenv("ABA_REPO_SRC", raising=False)
     cli._bootstrap_repo_for_update()
     assert _head_subject(repo) == "A"     # retargeted main → v1
+
+
+# ── post-public acquisition contract: default = git checkout (one-command update);
+#    ABA_REPO_SRC = file-copy override (dev/offline). See install/linux/setup.sh. ──
+
+def test_clone_default_is_git_checkout(srcrepo, tmp_path):
+    """No ABA_REPO_SRC → clone-repos git-clones a real .git checkout, so the deployed
+    repo can `aba update` via git-pull. This is the post-public default that replaced
+    the private-era file-copy (the whole point of dropping setup.sh's ABA_REPO_SRC=self)."""
+    import os
+    cmd = _pkg_cmd("install.yml", "clone-repos", 1)   # the aba clone command
+    repo_dir = tmp_path / "rd"
+    env = {"REPO_DIR": str(repo_dir), "ABA_REPO_URL": str(srcrepo["path"]),
+           "PATH": os.environ["PATH"]}                # ABA_REPO_SRC intentionally UNSET
+    subprocess.run(["bash", "-c", cmd], env=env, check=True, capture_output=True)
+    assert (repo_dir / "aba" / ".git").is_dir(), "default install must be a git checkout"
+    assert _head_subject(repo_dir / "aba") == "B"     # tracks main
+
+
+def test_clone_with_src_is_filecopy(srcrepo, tmp_path):
+    """ABA_REPO_SRC (dev/offline override) → rsync file-copy, NOT a checkout — such
+    installs can't git-pull, so the CLI bootstrap must rsync-before-load to keep them
+    current. Documents the two-mode contract the update path branches on."""
+    import os
+    cmd = _pkg_cmd("install.yml", "clone-repos", 1)
+    repo_dir = tmp_path / "rd"
+    env = {"REPO_DIR": str(repo_dir), "ABA_REPO_SRC": str(srcrepo["path"]),
+           "PATH": os.environ["PATH"]}
+    subprocess.run(["bash", "-c", cmd], env=env, check=True, capture_output=True)
+    assert (repo_dir / "aba").is_dir() and not (repo_dir / "aba" / ".git").exists()
+
+
+def test_setup_sh_does_not_force_repo_src():
+    """Regression guard for the one-command-update simplification: setup.sh must NOT
+    default ABA_REPO_SRC to the checkout (the private-era file-copy force) — post-public
+    the default is a git clone. Re-adding the force silently reverts cluster/linux-personal
+    to the file-copy path (stale-playbook-at-load, manual pre-sync)."""
+    setup = Path(__file__).resolve().parents[3] / "linux" / "setup.sh"
+    if not setup.is_file():
+        pytest.skip("setup.sh not found relative to the test tree")
+    text = setup.read_text()
+    assert "ABA_REPO_SRC:-$REPO_ROOT" not in text, \
+        "setup.sh re-introduced the ABA_REPO_SRC=self file-copy force"
+
+
+if __name__ == "__main__":   # standalone runner (base env lacks pytest)
+    import sys
+    sys.exit(pytest.main([__file__, "-q"]))
