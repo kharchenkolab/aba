@@ -34,6 +34,12 @@ class _Aba:
     def __init__(self, db: Optional[str] = None):
         self._db = db or os.environ.get("ABA_PROJECT_DB")
         self._n = 0  # local-ref counter for write intents (create → relate chaining)
+        # Content populates these (seam-clean: core reads, content provides). A type in
+        # _lifecycle_verbs must be created via its dedicated verb, not generic create()
+        # — else the agent makes structurally-poor entities (a finding with no evidence,
+        # a dataset with no file adoption). _extra_help is appended to help().
+        self._lifecycle_verbs: dict = {}
+        self._extra_help = ""
 
     # -- internal --------------------------------------------------------
     def _rows(self, q: str, args: list) -> list[dict]:
@@ -125,7 +131,14 @@ class _Aba:
 
     def create(self, type: str, title: str, **fields: Any) -> str:  # noqa: A002
         """Create a new entity (executed backend-side after this run, with
-        provenance + actor stamped there). Returns a local ref for relate()."""
+        provenance + actor stamped there). Returns a local ref for relate().
+        Refuses lifecycle-managed types — use their dedicated verb instead."""
+        lv = self._lifecycle_verbs.get(type)
+        if lv:
+            raise ValueError(
+                f"{type!r} must be created with aba.{lv}(...), not aba.create — it needs "
+                f"lifecycle wiring (evidence/interpretation/file adoption). See aba.help()."
+            )
         ref = f"aba:new:{self._n}"; self._n += 1
         print(f"[aba.create] type={type!r} title={title!r} -> {ref}", flush=True)
         self._emit({"verb": "create", "ref": ref, "type": type, "title": title, "fields": fields})
@@ -169,6 +182,8 @@ class _Aba:
             "  aba.ops(type) -> what a type needs (required fields, allowed edges)\n"
             "Tip: find() returns a LIST in one call — don't loop it."
         )
+        if self._extra_help:
+            txt += "\n" + self._extra_help
         print(txt, flush=True)
         return txt
 

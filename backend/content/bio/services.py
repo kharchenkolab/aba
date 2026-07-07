@@ -168,6 +168,11 @@ aba.promote = promote
 aba.finding = finding
 aba.claim = claim
 aba.register_dataset = register_dataset
+# guard: these types need lifecycle wiring — aba.create refuses them, redirecting here.
+aba._lifecycle_verbs = {"result": "promote", "finding": "finding", "claim": "claim", "dataset": "register_dataset"}
+aba._extra_help = ("LIFECYCLE (use these, not create()): aba.promote(figure, interpretation) -> result; "
+                   "aba.finding(result_ids, text); aba.claim(statement, evidence_ids=); "
+                   "aba.register_dataset(title, path=/paths=).")
 '''
 
 
