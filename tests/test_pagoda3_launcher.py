@@ -6,27 +6,26 @@ import types
 import pytest
 
 
-def test_convert_any_converts_then_optimizes_in_process(monkeypatch, tmp_path):
+def test_convert_any_optimizes_via_viewer_flag(monkeypatch, tmp_path):
     from content.bio.viewers.launchers import pagoda3
-    calls = []
+    seen = {}
 
     def fake_run(args, **kw):
-        calls.append(args)
+        seen["args"] = args
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     src, out = tmp_path / "processed.h5ad", tmp_path / "o.lstar.zarr.building"
     pagoda3._convert_any(src, out)
-    # 1) base convert to a store — `--to store` forces store output despite the
-    #    .building temp suffix.
-    conv = calls[0]
-    assert conv[1:4] == ["-m", "lstar", "convert"]
-    assert str(src) in conv and str(out) in conv
-    assert conv[-2:] == ["--to", "store"]
-    # 2) viewer@0.1 optimization runs IN-PROCESS (extend_for_viewer via `python -c`),
-    #    NOT prep.ts — node-free, with a raw→lognorm fallback.
-    assert any("-c" in c and any("extend_for_viewer" in str(x) for x in c)
-               for c in calls[1:]), "expected an in-process extend_for_viewer step"
+    a = seen["args"]
+    # sys.executable -m lstar convert <src> <out> --to store --viewer
+    #   --to store forces store output despite the .building temp suffix;
+    #   --viewer optimizes to viewer@0.1 in-process (lstar-sc >=0.1.7 auto-falls-back
+    #   raw→lognorm) — node-free, no prep.ts.
+    assert a[1:4] == ["-m", "lstar", "convert"]
+    assert str(src) in a and str(out) in a
+    assert "--to" in a and "store" in a
+    assert a[-1] == "--viewer"
 
 
 def test_convert_any_raises_with_stderr_on_failure(monkeypatch, tmp_path):
