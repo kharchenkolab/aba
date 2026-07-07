@@ -66,6 +66,29 @@ def test_load_playbook_rejects_bad_root(tmp_path):
         load_playbook(bad)
 
 
+def _fetch_pagoda3_cmd(playbook: str) -> str:
+    p = Path(__file__).resolve().parents[1] / "src/aba_installer" / playbook
+    step = next(s for s in load_playbook(p).steps if s.id == "fetch-pagoda3-dist")
+    return step.commands[0]
+
+
+def test_fetch_pagoda3_dist_identical_across_playbooks():
+    # The engine has no include/compose, so this step is duplicated — it drifted
+    # once (install-only → dark viewer on update). Guard byte-identity.
+    assert _fetch_pagoda3_cmd("install.yml") == _fetch_pagoda3_cmd("update.yml")
+
+
+def test_fetch_pagoda3_dist_is_version_aware():
+    # A pinned URL + a marker so a version bump re-fetches on update (not skipped
+    # on "index.html present"), with an atomic swap that keeps the old dist on
+    # failure. If the pin bumps, update BOTH the URL and this assertion together.
+    cmd = _fetch_pagoda3_cmd("update.yml")
+    assert "pagoda3-viewer-0.1.1.zip" in cmd and "download/v0.1.1/" in cmd
+    assert ".aba-dist-url" in cmd                 # version marker gates the skip
+    assert '"$(cat "$MARK" 2>/dev/null)" = "$URL"' in cmd
+    assert "0.1.0" not in cmd                      # no stale pin left behind
+
+
 def test_install_yml_has_import_recipes_step():
     pb_path = Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml"
     ids = [s.id for s in load_playbook(pb_path).steps]

@@ -47,8 +47,9 @@ def pagoda3_dist_path() -> Path:
     every consumer (the `/pagoda3` static mount the app root wires up, and prep
     below). First existing wins:
       1. `$ABA_PAGODA3_DIST`                — explicit override (dev sets this)
-      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored v0.1.0
-                                              release bundle (deploy default)
+      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored release
+                                              bundle (deploy default; version
+                                              pinned in the fetch playbook)
       3. `~/pagoda/pagoda3/web/dist`        — a dev checkout
     Returns the override / deploy default even if absent, so a caller can report a
     clean 'not present' against the expected location rather than guessing."""
