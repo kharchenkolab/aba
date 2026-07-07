@@ -177,7 +177,7 @@ steps:
       lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
       `.lstar.zarr`; only Seurat/SCE `.rds` conversion is affected. To install by
       hand: with the tools env's bin on PATH (for the compiler), run its Rscript:
-      `remotes::install_github("kharchenkolab/lstar", ref="v0.1.6", subdir="r")`.
+      `remotes::install_github("kharchenkolab/lstar", ref="v0.1.7", subdir="r")`.
 
   - id: fetch-pagoda3-dist
     title: Install the pagoda3 viewer bundle

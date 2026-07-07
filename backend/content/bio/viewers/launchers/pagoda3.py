@@ -29,14 +29,14 @@ def _launcher_version() -> str:
     except Exception:  # noqa: BLE001
         return "lstar-sc/unknown"
 
-# viewer@0.1 optimization is done IN-PROCESS by lstar's Python `extend_for_viewer`
-# (see `_optimize_store`), NOT pagoda3's prep.ts (WASM). prep.ts needs node >= 22,
-# which is unavailable on prod / old-glibc hosts (native node fails to build), so it
-# silently skipped there — leaving every conversion with the "Not viewer-optimized"
-# banner. The Python path is node-free + deterministic; the dup-libomp SIGSEGV that
-# once argued for WASM is fixed in lstar-sc >=0.1.6 (we still run it in a subprocess
-# to isolate libomp). Bump the +N suffix when THIS optimization logic changes.
-LAUNCHER_VERSION = _launcher_version() + "+viewer2"   # in-process extend_for_viewer (raw->lognorm)
+# viewer@0.1 optimization is done by lstar's `convert --viewer` (in `_convert_any`),
+# NOT pagoda3's prep.ts (WASM). prep.ts needs node >= 22, unavailable on prod /
+# old-glibc hosts (native node fails to build), so it silently skipped there —
+# leaving every conversion with the "Not viewer-optimized" banner. `--viewer` is
+# node-free and, since lstar-sc >=0.1.7, auto-falls-back raw→lognorm for sources
+# with no raw counts. Optimization is thus lstar's job → the cache keys purely on
+# the lstar-sc version (no launcher-local suffix needed).
+LAUNCHER_VERSION = _launcher_version()   # optimization delegated to lstar convert --viewer
 _STORE_SUFFIX = ".lstar.zarr"
 _ZIP_SUFFIX = ".lstar.zarr.zip"
 
@@ -82,50 +82,21 @@ def _rscript() -> "str | None":
     return None
 
 
-# Optimize a store to the `viewer@0.1` profile IN-PROCESS via lstar's Python
-# `extend_for_viewer` — the node-free replacement for the old prep.ts (WASM) step.
-# Run as a SUBPROCESS (fresh interpreter) to isolate lstar's OpenMP/libomp from any
-# libomp already loaded in the backend (the dup-libomp SIGSEGV that first pushed us
-# to WASM). Raw counts are preferred; falls back to `basis='lognorm'` when the
-# source has no raw counts (e.g. a scaled/log-normalized scanpy `.h5ad`) — EXACTLY
-# the raw→lognorm fallback prep.ts had, which the CLI `--viewer` flag can't express.
-_OPTIMIZE_SCRIPT = (
-    "import sys, os, shutil, lstar\n"
-    "store = sys.argv[1]; tmp = store + '.opt.lstar.zarr'\n"
-    "shutil.rmtree(tmp, ignore_errors=True)\n"
-    "ds = lstar.read(store)\n"
-    "try:\n"
-    "    lstar.extend_for_viewer(ds)\n"                 # raw counts (preferred)
-    "except Exception:\n"
-    "    lstar.extend_for_viewer(ds, basis='lognorm')\n"  # approximate from lognorm
-    "lstar.write(ds, tmp)\n"                             # tmp ends in .lstar.zarr -> store
-    "shutil.rmtree(store); os.rename(tmp, store)\n"      # atomic-ish swap
-)
-
-
-def _optimize_store(store: Path, env: dict, sp) -> None:
-    """Best-effort: add viewer@0.1 to `store` in place. On any failure keep the
-    functional un-optimized store (viewer works, just recomputes per session)."""
-    import subprocess
-    import sys
-    sp("Optimizing for fast viewing…")
-    r = subprocess.run([sys.executable, "-c", _OPTIMIZE_SCRIPT, str(store)],
-                       capture_output=True, text=True, timeout=1800, env=env)
-    if r.returncode != 0:
-        shutil.rmtree(Path(str(store) + ".opt.lstar.zarr"), ignore_errors=True)
-
-
 def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     """Convert any lstar-supported source into a `.lstar.zarr` directory store via
     the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
     the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
     conos `.rds` (lstar bridges to Rscript). `--to store` forces store output
-    regardless of the temp path's `.building` suffix (the CLI detects format by
-    extension). Then optimizes the store to `viewer@0.1` IN-PROCESS via
-    `extend_for_viewer` (`_optimize_store`) — node-free, so it works where the old
-    prep.ts (WASM, needs node ≥22 — unavailable on prod/old-glibc) silently didn't,
-    which left every conversion showing the "Not viewer-optimized" banner.
-    `set_phase` reports the sub-step to the launch page."""
+    regardless of the temp path's `.building` suffix; `--viewer` optimizes it to the
+    `viewer@0.1` profile (od_score, per-group stats/markers, cell-major counts) so
+    it opens WITHOUT the "Not viewer-optimized" banner.
+
+    In-process + node-free (no prep.ts / node ≥22 — unavailable on prod/old-glibc).
+    lstar-sc >=0.1.7's `--viewer` auto-falls-back raw→lognorm when the source has no
+    raw counts (a scaled/log-normalized scanpy `.h5ad`), so it optimizes those too.
+    If `--viewer` fails on unusual input, fall back to a plain (functional,
+    un-optimized) store rather than failing the launch. `set_phase` reports the
+    sub-step to the launch page."""
     import subprocess
     import sys
     sp = set_phase or (lambda *_: None)
@@ -133,16 +104,19 @@ def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     rs = _rscript()
     if rs and not env.get("LSTAR_RSCRIPT"):
         env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
-    sp(f"Converting {src.name} → viewer store…")
-    r = subprocess.run(
-        [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"],
-        capture_output=True, text=True, timeout=1800, env=env,
-    )
+    base = [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"]
+    sp(f"Converting {src.name} → optimized viewer store…")
+    r = subprocess.run(base + ["--viewer"], capture_output=True, text=True, timeout=1800, env=env)
     if r.returncode != 0:
-        tail = (r.stderr or r.stdout or "").strip()[-600:]
-        raise RuntimeError(
-            f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
-    _optimize_store(out, env, sp)   # best-effort viewer@0.1 (in-process, node-free)
+        # --viewer failed on odd input — don't fail the launch: retry a plain convert
+        # so the viewer still opens (it recomputes DE/HVG per session — the banner).
+        shutil.rmtree(out, ignore_errors=True)
+        sp(f"Converting {src.name} → viewer store (optimization skipped)…")
+        r = subprocess.run(base, capture_output=True, text=True, timeout=1800, env=env)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip()[-600:]
+            raise RuntimeError(
+                f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
 
 
 def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:

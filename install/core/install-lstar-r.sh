@@ -30,7 +30,7 @@
 # Usage: install-lstar-r.sh <tools_env_dir> [micromamba_bin]   (idempotent; skips at pin)
 set -uo pipefail   # NOT -e: non-fatal by design (see contract above)
 
-LSTAR_REF="v0.1.6"   # bump together with lstar-sc (pip) + the pagoda3 dist
+LSTAR_REF="v0.1.7"   # bump together with lstar-sc (pip) + the pagoda3 dist
 
 TOOLS_ENV="${1:?usage: install-lstar-r.sh <tools_env_dir> [micromamba_bin]}"
 # micromamba: explicit arg wins, then $ABA_MICROMAMBA, then PATH. Needed to `run` inside
