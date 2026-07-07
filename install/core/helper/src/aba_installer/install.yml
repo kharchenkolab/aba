@@ -25,7 +25,14 @@ env_vars:
   #     or commit (default: main). Tags/branches are clean; a bare commit SHA works
   #     via a full-clone fallback. Pin to a TAG for reproducible deploys (mirrors
   #     the lstar-sc / lstar-R / pagoda3 version pins). Ignored on the *_SRC path
-  #     (a local working tree has no ref to resolve).
+  #     (a local working tree has no ref to resolve). This is the ONE pin knob —
+  #     the Mac bootstrap (install/mac/setup.command) accepts ABA_REPO_BRANCH /
+  #     ABA_RECIPES_BRANCH as back-compat aliases; prefer ABA_REF / RECIPES_REF.
+  #     To keep a pin across `aba update`, set it in ~/.aba/config.env.
+  # No other install knobs: the viewer stack (lstar-sc, lstar-R, pagoda3 dist)
+  # is version-pinned in its own manifests, and paths like the pagoda3 dist and
+  # the tools-env Rscript are DERIVED at runtime (env vars are optional overrides,
+  # not required settings) — don't add a knob for a value that can be derived.
 
 steps:
   - id: preflight

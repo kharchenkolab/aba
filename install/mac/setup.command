@@ -19,12 +19,16 @@
 #   ABA_RECIPES_URL=git@github.com:kharchenkolab/aba-recipe-pack.git \
 #       "./ABA Setup.command"
 #
-# Override the branch (default: whatever each remote's HEAD points to). Useful
-# for testing a feature branch end-to-end before merging to main:
-#   ABA_REPO_BRANCH=your-feature-branch "./ABA Setup.command"
+# Pin what to clone with ABA_REF / RECIPES_REF (a branch, tag, or commit;
+# default: each remote's HEAD). Useful for testing a feature branch or a pinned
+# release end-to-end. This is the same pin the installer/update playbook honors —
+# canonical doc: install/core/helper/src/aba_installer/install.yml (env-var block).
+#   ABA_REF=your-feature-branch "./ABA Setup.command"
+# (ABA_REPO_BRANCH / ABA_RECIPES_BRANCH are accepted as back-compat aliases.)
 # Only affects the initial clone — on subsequent runs this script `git pull`s
-# whatever branch the local checkout is on, so to switch branches after the
-# fact, remove $REPO_DIR/aba and re-run.
+# whatever the local checkout is on, so to switch after the fact, remove
+# $REPO_DIR/aba and re-run. To keep the pin across `aba update`, set ABA_REF in
+# ~/.aba/config.env (the launcher sources it).
 #
 # What this touches:
 #   ~/.aba/repo/{aba,aba-recipe-pack}   (source)
@@ -89,7 +93,7 @@ mkdir -p "$REPO_DIR" "$HELPER_DIR"
 
 # Clone (or refresh) the repo + recipe library — in this shell, so SSH keys /
 # git credentials work while the repos are private.
-clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
+clone_or_pull() {  # $1=url  $2=dest  $3=ref (branch/tag/commit, optional)
   local name; name="$(basename "$2")"
   if [[ -d "$2/.git" ]]; then
     echo "Updating $name …"
@@ -102,7 +106,10 @@ clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
     # `|| rc=$?` keeps set -e from aborting before we can give a useful message.
     local rc=0
     if [[ -n "${3:-}" ]]; then
-      git clone -b "$3" --depth 1 "$1" "$2" || rc=$?
+      # $3 pins a branch/tag/commit. Shallow --branch covers branch+tag; a bare
+      # commit SHA falls back to a full clone + checkout (matches the playbook).
+      git clone -b "$3" --depth 1 "$1" "$2" 2>/dev/null \
+        || { rm -rf "$2"; git clone "$1" "$2" && git -C "$2" checkout "$3"; } || rc=$?
     else
       git clone --depth 1 "$1" "$2" || rc=$?
     fi
@@ -117,8 +124,12 @@ clone_or_pull() {  # $1=url  $2=dest  $3=branch (optional)
     fi
   fi
 }
-clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"          "${ABA_REPO_BRANCH:-}"
-clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipe-pack"  "${ABA_RECIPES_BRANCH:-}"
+# ABA_REF / RECIPES_REF pin the clone (branch/tag/commit); ABA_REPO_BRANCH /
+# ABA_RECIPES_BRANCH are back-compat aliases. Empty → the remote's default branch.
+ABA_REF="${ABA_REF:-${ABA_REPO_BRANCH:-}}"
+RECIPES_REF="${RECIPES_REF:-${ABA_RECIPES_BRANCH:-}}"
+clone_or_pull "$ABA_REPO_URL"    "$REPO_DIR/aba"             "$ABA_REF"
+clone_or_pull "$ABA_RECIPES_URL" "$REPO_DIR/aba-recipe-pack" "$RECIPES_REF"
 
 # Install the helper from the cloned repo into a private venv (never touches
 # the user's system Python).
