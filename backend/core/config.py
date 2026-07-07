@@ -9,6 +9,20 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).parent.parent  # backend/ — SOURCE root, never written at runtime
 load_dotenv(BASE_DIR.parent / ".env")
 
+_ABA_RPC_TOKEN = None
+
+
+def rpc_token() -> str:
+    """Process-global secret for the loopback aba_rpc endpoint (the in-kernel `aba`
+    backend-reads authenticate with it; the endpoint binds 127.0.0.1). Generated once,
+    injected into the interactive kernel env by jupyter._kernel_env and checked by the
+    /api/aba_rpc handler — both call this in the SAME backend process, so they agree."""
+    global _ABA_RPC_TOKEN
+    if _ABA_RPC_TOKEN is None:
+        import secrets
+        _ABA_RPC_TOKEN = os.environ.get("ABA_RPC_TOKEN") or secrets.token_hex(16)
+    return _ABA_RPC_TOKEN
+
 # ABA_RUNTIME_DIR is the roof for all mutable runtime state (data, work, artifacts,
 # envs, projects, the workspace DB). Hard-separated from the source tree so:
 #   - `git status` is clean (no `?? backend/envs/` etc.)

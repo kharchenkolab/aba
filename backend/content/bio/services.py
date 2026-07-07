@@ -178,18 +178,48 @@ def register_reference(path, organism=None, role=None, mode=None, scope=None, ti
 def promote_reference(reference_id, scope):
     """Promote a reference to a wider scope tier."""
     return aba.emit_intent("promote_reference", reference_id=reference_id, scope=scope)
+def search(query, source="skills", limit=10):
+    """Search a backend index (source='skills' recipe library, …). Returns hits."""
+    return aba._rpc("search", query=query, source=source, limit=limit)
+def capabilities(query=None, tags=None):
+    """Search the capability catalog. Returns matching capabilities."""
+    return aba._rpc("capabilities", query=query, tags=tags)
 aba.promote = promote
 aba.finding = finding
 aba.claim = claim
 aba.register_dataset = register_dataset
 aba.register_reference = register_reference
 aba.promote_reference = promote_reference
+aba.search = search
+aba.capabilities = capabilities
 # guard: these types need lifecycle wiring — aba.create refuses them, redirecting here.
 aba._lifecycle_verbs = {"result": "promote", "finding": "finding", "claim": "claim", "dataset": "register_dataset"}
 aba._extra_help = ("LIFECYCLE (use these, not create()): aba.promote(figure, interpretation) -> result; "
                    "aba.finding(result_ids, text); aba.claim(statement, evidence_ids=); "
                    "aba.register_dataset(title, path=/paths=).")
 '''
+
+
+def _aba_rpc(op: str, args: dict, ctx=None) -> dict:
+    """Synchronous backend-read handler for the in-kernel `aba._rpc` loopback
+    (dispatched by /api/aba_rpc). Whitelisted reads that need live backend state
+    (recipe index, capability catalog) — calls the same `*_tool` logic the JSON tools
+    call, so results are identical. Content-owned (bio names its own read surfaces),
+    seam-clean (core's endpoint just calls this service)."""
+    args = args or {}
+    try:
+        if op == "search":
+            src = args.get("source", "skills")
+            if src == "skills":
+                from content.bio.tools.discovery import search_skills_tool
+                return search_skills_tool({"query": args.get("query"), "limit": args.get("limit", 10)})
+            return {"error": f"search source {src!r} not supported yet"}
+        if op == "capabilities":
+            from content.bio.tools.simple import list_capabilities_tool
+            return list_capabilities_tool({"query": args.get("query"), "tags": args.get("tags")})
+        return {"error": f"unknown aba_rpc op {op!r}"}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
 
 
 def _aba_kernel_verbs() -> str:
@@ -203,3 +233,4 @@ register_service("plan_orientation_preamble", _plan_orientation_preamble)
 register_service("result_cascade_members", _result_cascade_members)
 register_service("aba_intent", _aba_intent)
 register_service("aba_kernel_verbs", _aba_kernel_verbs)
+register_service("aba_rpc", _aba_rpc)

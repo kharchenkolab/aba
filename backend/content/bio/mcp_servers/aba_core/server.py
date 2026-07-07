@@ -101,7 +101,9 @@ def make_server() -> FastMCP:
                     # Tranche A (contact reads): aba.provenance / aba.ops
                     "get_provenance", "get_dependents", "list_entity_operations",
                     # Tranche B (contact writes): aba.archive / aba.register_reference / aba.promote_reference
-                    "archive_entity", "register_reference", "promote_reference"]
+                    "archive_entity", "register_reference", "promote_reference",
+                    # Tranche C (backend reads via the sync-RPC): aba.search / aba.capabilities
+                    "search_skills", "list_capabilities"]
     if _demote:
         tm = mcp._tool_manager
         for _t in _demote:

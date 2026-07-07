@@ -424,6 +424,19 @@ def _kernel_env(lang: str, cwd: str) -> dict:
             env["ABA_TYPE_REGISTRY"] = _json.dumps(registry_digest())
         except Exception:
             pass
+        # Sync-RPC (S1): loopback so the in-kernel aba.* can do backend reads
+        # (search/capabilities). Interactive kernel only — it's co-located with the
+        # backend; a background/Slurm kernel has no ABA_PORT so aba._rpc degrades.
+        try:
+            _port = os.environ.get("ABA_PORT")
+            if _port:
+                from core.config import rpc_token
+                env["ABA_RPC_URL"] = f"http://127.0.0.1:{_port}/api/aba_rpc"
+                env["ABA_RPC_TOKEN"] = rpc_token()
+            from core import projects as _pj
+            env["ABA_PROJECT_ID"] = str(_pj.current() or "")
+        except Exception:
+            pass
     nthreads = str(_kernel_threads())
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):

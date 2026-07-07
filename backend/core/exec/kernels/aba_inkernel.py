@@ -185,6 +185,34 @@ class _Aba:
         print(f"[aba.update] {entity_id} {list(fields)}", flush=True)
         self._emit({"verb": "update", "id": entity_id, "fields": fields})
 
+    def _rpc(self, op: str, **args: Any):
+        """Synchronous backend read (loopback HTTP to /api/aba_rpc). For reads that
+        need LIVE backend state the project DB doesn't hold — the recipe index,
+        capability catalog, reference scope resolution, cluster state. Content verbs
+        (aba.search, aba.capabilities, …) call this. Raises with a clear message when
+        no backend is reachable (a background/Slurm job) — use the in-kernel-direct
+        reads (find/get/provenance) there instead."""
+        url = os.environ.get("ABA_RPC_URL")
+        if not url:
+            raise RuntimeError(
+                f"aba.{op}: backend reads aren't available in this context (no ABA_RPC_URL "
+                "— e.g. a background/Slurm job with no backend). Use aba.find/get/provenance, "
+                "which read the project DB directly."
+            )
+        import urllib.request
+        body = json.dumps({
+            "op": op, "args": args,
+            "token": os.environ.get("ABA_RPC_TOKEN", ""),
+            "project_id": os.environ.get("ABA_PROJECT_ID", ""),
+            "thread_id": os.environ.get("ABA_THREAD_ID", ""),
+        }).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            res = json.loads(r.read().decode())
+        if isinstance(res, dict) and res.get("error"):
+            raise RuntimeError(f"aba.{op}: {res['error']}")
+        return res.get("value", res) if isinstance(res, dict) else res
+
     def archive(self, entity_id: str, reason: Optional[str] = None) -> None:
         """Archive (soft-delete) an entity."""
         print(f"[aba.archive] {entity_id}", flush=True)

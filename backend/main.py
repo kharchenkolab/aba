@@ -143,6 +143,37 @@ _register_lifecycle(app)
 # entity_types_catalog → core/web/routers/misc.py (Item 2A.3).
 
 
+@app.post("/api/aba_rpc")
+async def aba_rpc(payload: dict):
+    """Loopback sync-RPC for the in-kernel `aba` backend-reads (tool_library S1).
+    The interactive kernel POSTs {op, args, token, project_id, thread_id}; we run the
+    whitelisted read handler (registered by the content pack as the `aba_rpc` service)
+    with the project bound, and return {result}. 127.0.0.1 + a per-run token; read-only
+    whitelist. Runs off the event loop so the loop stays free for other kernels."""
+    from core.config import rpc_token
+    if payload.get("token") != rpc_token():
+        raise HTTPException(status_code=403, detail="bad aba_rpc token")
+    op = payload.get("op")
+    args = payload.get("args") or {}
+    pid = payload.get("project_id") or None
+    from core.services import call_service
+    from core import projects
+    _UNSET = object()
+
+    import contextlib
+
+    def _run():
+        cm = projects.bind(pid) if pid else contextlib.nullcontext()
+        with cm:
+            ctx = {"project_id": pid, "thread_id": payload.get("thread_id")}
+            return call_service("aba_rpc", op, args, ctx, default=_UNSET)
+
+    res = await asyncio.to_thread(_run)
+    if res is _UNSET:
+        raise HTTPException(status_code=400, detail=f"no aba_rpc handler for op {op!r}")
+    return {"value": res}
+
+
 @app.get("/api/entities")
 def entities_list(
     q: str | None = None,
