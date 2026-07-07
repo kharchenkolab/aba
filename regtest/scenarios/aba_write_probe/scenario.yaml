@@ -68,3 +68,16 @@ steps:
       checks: >
         Reads back the result's tags/note and the dataset link — via aba.get/aba.find (flip)
         or read_entity/list_entities (control). Confirms the writes landed.
+
+  - id: s6
+    kind: analyze
+    actor: agent
+    prompt: >
+      Record a finding citing that result — text "x and y are positively correlated" — and
+      state a claim: "the positive x–y correlation is real, not sampling noise".
+    expect:
+      must_mention: ["correlated"]
+      checks: >
+        Creates a Finding (citing the result) + a Claim. CONTROL uses create_finding +
+        create_claim; the flip agent should use aba.finding(result_ids=…, text=…) +
+        aba.claim(statement=…). Exercises the content-provided lifecycle verbs. No raw-graph writes.
