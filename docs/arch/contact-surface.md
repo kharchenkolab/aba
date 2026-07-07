@@ -3,10 +3,7 @@
 The frontend: how the scientist *points at* entities and *operates* on them, and why
 adding a new entity type is a registration, never a shell edit.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/ui2_plan.md` + `misc/ui3_impl.md` (UI structure),
-> `misc/entity_pin_redesign.md` (the pin/reference gesture), and `misc/modularity_audit3.md`
-> (the frontend seam audit + the debt this doc flags honestly).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -162,8 +159,7 @@ domain state in the client.
   files (`FocusCanvas` → `focus_view_for`/`AnnotatedFigure`, `ResultList`/`PreviewWindow` →
   `HighlightableImage`) while `bio/` imports `components/` in 7 (icons, `SplitButton`,
   `ConfirmDialog`, `ResultList`, `highlightTools`). Import-safe, but a cohesion tangle: the
-  clean seam is `platform ↛ bio`, and `components/` sits ambiguously between shell and domain
-  (`misc/modularity_audit3.md:43`).
+  clean seam is `platform ↛ bio`, and `components/` sits ambiguously between shell and domain.
 
 - **The typed API seam is bypassed wholesale.** ~132 inline `/api/` fetches (I count 138 raw
   `fetch(` in non-test `frontend/src/`, 107 hitting `/api/`) route around `lib/api.ts`; the
@@ -182,9 +178,8 @@ domain state in the client.
   classes, icons, section counts, focus-views) coexist with the runtime `/api/entity-types`
   catalog (`entityTypes.ts`); metadata like a type's display label lives in both. The catalog
   is fetched but the shell still leans on the import-time registries for most dispatch — a
-  consolidation the type-registry work (`misc/phase4_entity_types.md`) started but didn't finish.
+  consolidation the type-registry work started but didn't finish.
 
 - **God-components.** `bio/Message.tsx` (1235 lines), `App.tsx` (1086), `useChat.ts` (1033),
   `bio/ResultView.tsx` (981), `platform/Drawer.tsx` (971) each carry several axes; the audit's
-  standing recommendation is to extract routing/data hooks and keep leaf components leaf-only
-  (`misc/modularity_audit3.md:78`).
+  standing recommendation is to extract routing/data hooks and keep leaf components leaf-only.

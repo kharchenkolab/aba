@@ -4,9 +4,7 @@ How ABA runs the agent's Python and R *interactively* — the persistent kernel
 pool behind `run_python`/`run_r`, and how outputs are harvested back into the
 entity graph no matter where the code wrote them.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the
-> design/evolution log lives in `misc/kernels.md` (the lifecycle model) and
-> `misc/exec_records_and_versioning.md` (the harvest → entity path).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -86,7 +84,7 @@ thread's), so concurrent agents can't share a single-consumer kernel.
 ## The kernel pool (conservative lifecycle)
 
 A kernel is expensive, long-lived state ABA owns, so the pool is deliberately
-frugal (`misc/kernels.md §4`):
+frugal:
 
 - **Lazy start.** No kernel exists until the first interactive `run_python`/
   `run_r` in a thread; `get_or_start` spawns on demand and returns the live one
@@ -229,13 +227,12 @@ entities with provenance ([`entity-model.md`](entity-model.md),
 | `core/exec/compute_env.py` | `compute_env()` + `context_line()` — the per-turn "Compute environment:" cue the router + agent read |
 | `core/exec/cpu.py` | `default_thread_cap`/`effective_cpu_count`/`pin_blas_threads` — size to the allocation |
 | `core/exec/output_cap.py` · `stream_coalesce.py` | middle-snip cap; live iopub coalescing |
-| `misc/kernels.md` | design/evolution log (lifecycle, scope, the hybrid) |
 
 ## Known gaps
 
 - **`run_python`/`run_r` duplication.** The two language paths run near-parallel
   bodies in both `run_exec.py` and `run.py`. A `LangSpec` collapse is
-  **consciously deferred** (`misc/modularity_audit3.md:105`): the functions
+  **consciously deferred**: the functions
   genuinely diverge (kernelspec, preamble, libpaths, future/BLAS env), it's the
   critical path, and it's hard to verify safely without a live kernel. Kept
   in sync by hand today.
@@ -247,6 +244,6 @@ entities with provenance ([`entity-model.md`](entity-model.md),
   acquisition serializes on one lock).
 - **`display_data` images aren't captured inline.** Rich `execute_result`/
   `display_data` payloads are folded into stdout text; a plot shown but never
-  `savefig`'d in a kernel cell isn't registered (`misc/kernels.md §12`).
+  `savefig`'d in a kernel cell isn't registered.
   Recipes/agents are steered to write files (or `harvest_table`) for anything
   that should become an entity.

@@ -3,10 +3,7 @@
 The typed, persistent graph both the scientist and the agent read and write: the
 **contract** at the center of ABA, not the database that happens to hold it.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/entity_model_proposal.md`, `misc/arch3.md` (the pass that
-> built `core/graph/`), and `misc/modularity2.md` §4 (the waist) / §4a (promotion).
-> Store-port burn-down status: `misc/modularity_audit3.md`.
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -151,8 +148,7 @@ it. See Known gaps.
 ## Promotion — substrate becomes an entity
 
 Substrate (scratch files, run intermediates, un-pinned outputs) is *not* in the graph until
-something promotes it — and promotion is **bilateral and explicit** (`misc/modularity2.md`
-§4a):
+something promotes it — and promotion is **bilateral and explicit**:
 
 - **The scientist pins.** A UI Pin gesture converges on `pin_evidence`
   (`content/bio/lifecycle/promote.py:96`): it creates (or extends) a `result` entity

@@ -4,11 +4,7 @@ How ABA runs work that outlives a single agent turn — a long `run_python`/`run
 `run_nextflow` — as a **background job**, on this node or offloaded to a Slurm cluster,
 and how the finished job wakes the agent back up.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/hpc_jobs.md` (the Slurm job system) and
-> `misc/deferred_jobs.md` (lifecycle/completion/restart-recovery), with
-> `misc/cluster_modules.md` (module provider) and `misc/inplace_submission.md` (in-place)
-> as satellites.
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -89,7 +85,7 @@ tuples off an in-memory `asyncio.Queue` and runs them **one at a time** through 
 (`runner.py:722`) — the same execution core as synchronous `run_python`, so the job sees the
 project overlay, tools env, and killpg cancellation. This is deliberately single-process and
 sequential — fine for the single-user prototype; arq+Redis is the multiuser successor
-(`misc/hpc_jobs.md`). A per-job `CancelToken` keyed by `job_id` lets `cancel_job` killpg the
+A per-job `CancelToken` keyed by `job_id` lets `cancel_job` killpg the
 whole process group.
 
 **Slurm.** `SlurmSubmitter.submit` (`slurm_submitter.py:44`) writes a `job_spec.json` and a
@@ -202,7 +198,6 @@ boundary*.
 | `core/reasoning_port.py` | the Compute→Reasoning up-edge port: `register_continuation` (guide, at import) / `run_continuation` (continuation.py); mandatory, raises if unregistered |
 | `core/graph/jobs.py` | the `jobs` table: `create_job`/`update_job`/`get_job` |
 | `content/bio/tools/run_exec.py` · `guide.py` | callers of `submit_*_job` (background routing; the estimate) |
-| `misc/hpc_jobs.md` · `misc/deferred_jobs.md` | design/evolution logs (Slurm system; lifecycle+recovery) |
 
 ## Known gaps
 
@@ -210,8 +205,7 @@ boundary*.
   worker, the submit API (`submit_*_job`), finalize+continuation dispatch, restart
   reconcile/reap, and the Slurm poll + inline watchdog loops. `LocalSubmitter` living here
   (not beside `SlurmSubmitter`) forces `get_submitter`'s lazy import to dodge a cycle. The
-  clean shape is a `worker.py` / `local_submitter.py` / `lifecycle.py` split; `misc/modularity_audit3.md`
-  flags it.
+  clean shape is a `worker.py` / `local_submitter.py` / `lifecycle.py` split.
 - **`guide → core.jobs` down-edge remains (up-edge dissolved).** The Compute→Reasoning
   *up*-edge is fixed (modularity_audit3 Item 1, Phase 1): `continuation._fire` re-enters via
   `core/reasoning_port.run_continuation` (guide registers the handler at import) instead of
@@ -221,7 +215,7 @@ boundary*.
   content-registered interface (Item 1 / Phase 2b). A one-way layering gap, not two-way.
 - **Single sequential local worker.** One in-memory `asyncio.Queue`, one job at a time,
   in-process — a restart is survived by reconcile but concurrency and cross-process durability
-  wait on the arq+Redis successor (`misc/hpc_jobs.md`).
+  wait on the arq+Redis successor.
 - **Install-time GPU verify & build-on-target are only partially covered.** Per-job
   `gpu_capability_ok` verifies at *run* time, but ABA does not yet confirm at *install* that
   the built CUDA runtime initializes on each GPU partition, nor build node-arch-specific

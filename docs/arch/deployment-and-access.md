@@ -4,9 +4,7 @@ How the *same* ABA code runs on a laptop, a personal Slurm login node, or a mult
 Open OnDemand cluster without a per-target branch in business logic — and where identity
 and access attach to it.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/evolution
-> logs live in `misc/site-config.md` (site.yaml schema), `misc/multiuser.md` (the identity
-> seam), `misc/ondemand.md` (the OOD target), and `misc/modularity_audit3.md`.
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -114,7 +112,7 @@ A toggle has exactly one home. Four layers, narrowest-wins where they overlap:
 
 Multi-user deployments add **`site.yaml`** (`$ABA_SITE_CONFIG` or `/cluster/aba/site.yaml`):
 path templates and scope-chain layout for a shared cluster, consumed by the scope resolver
-below (`misc/site-config.md`).
+below.
 
 ## The install-type shells
 
@@ -155,7 +153,7 @@ are owned by [`provenance.md`](provenance.md); here it is the *who* half of the 
 
 **The reserved principal.** `human_actor(uid="local")` (`core/graph/derivation.py:64`)
 hardcodes `uid="local"`: single-user today, but the `human:<uid>` shape is the reserved seam
-for real identity (`misc/multiuser.md`). Likewise `CAPABILITY_APPROVAL` (`core/config.py:264`)
+for real identity. Likewise `CAPABILITY_APPROVAL` (`core/config.py:264`)
 defaults `"auto"` (solo) with `"ask"` reserved as the multi-user review gate.
 
 **Scope isolation is ambient-DB.** A project's isolation is *physical*: each project is its
@@ -198,7 +196,7 @@ credential/access scope.
 - **Real identity / multi-user enforcement is deferred.** `human_actor` hardcodes `"local"`;
   `require_project` pins *which* project but does **not** check that the caller *may* access it
   — there is no authn/authz layer. Single trusted OS user per server process is assumed. The
-  principal (`human:<uid>`) is a reserved seam, not a live check (`misc/multiuser.md`).
+  principal (`human:<uid>`) is a reserved seam, not a live check.
 - **Scope isolation is ambient-DB only.** Cross-project safety rests entirely on separate
   SQLite files + contextvar binding; there is no live `store._scope_of` filter over a shared
   tenant store. A genuinely shared multi-tenant server would need the principal threaded to the
