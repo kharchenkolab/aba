@@ -1,63 +1,65 @@
-# aba
+# ABA
 
-AI-orchestrated bioinformatics workspace. Chat with the Guide agent (Claude), explore CSV data, and generate plots — all in a persistent, Slack-like interface.
+**An AI-orchestrated workspace for biological data analysis.**
 
-## Running the app
+ABA is a research environment where a biologist and an AI agent — **Guide** (powered by
+Claude) — work side by side on a real analysis project, from raw data all the way to
+results and conclusions. You describe what you want in plain language; Guide plans the
+analysis, runs the code, and produces results you can inspect, revise, and build on.
 
-**Requires:** Python 3.8+, Node 20+ (via nvm), an Anthropic API key.
+Unlike a chatbot bolted onto a notebook, ABA keeps your work as **structured, typed,
+persistent objects** — datasets, analyses, figures, findings — each stamped with the
+provenance of how it was made. Your project is durable: close the browser, come back
+tomorrow, and everything (data, results, and the reasoning behind them) is where you
+left it. It's built for long-running research, not one-off questions.
 
-```sh
-cp .env.example .env       # then put your key in .env
-./start.sh
-# open http://localhost:5173
-```
+## What you can do
 
-The chat history persists in `backend/aba.db`. Closing and reopening the browser picks up exactly where you left off.
+- **Analyze your data by asking.** Import a dataset and ask Guide to run quality control,
+  clustering, differential expression, annotation, and more. It picks appropriate methods
+  and runs them for real.
+- **Work with results, not files.** Datasets, analyses, and figures are first-class
+  entities you can pin, revisit, and connect — organized by project, not scattered across
+  folders.
+- **Trust what you get.** Every result carries an execution record — the code, inputs, and
+  environment that produced it — so any figure is reproducible and reviewable.
+- **Explore interactively.** Rich built-in viewers open your results (e.g. single-cell
+  data in the pagoda3 viewer) directly from a link.
+- **Run heavy pipelines on HPC.** Launch large workflow pipelines — including
+  **Nextflow / nf-core** — as batch jobs on a **Slurm/HPC** cluster, with results flowing
+  back into your project. Work locally on a Mac or Linux machine, or offload the compute to
+  a cluster without changing how you work.
 
-Defaults to `claude-haiku-4-5` (cheap). Override per-shell with `ABA_MODEL=claude-sonnet-4-6` (or any other model id) when you need smarter answers.
+ABA's analysis know-how is organized as a library of **recipes** that Guide draws on, so
+its capabilities grow over time without changing the core application.
 
-## Testing without spending tokens
+## Requirements
 
-Most dev work (UI, persistence, tool wiring, SSE plumbing) doesn't need the real model. Set `ABA_FAKE_SESSION` to a JSONL fixture of scripted assistant turns and the Guide loop replays them — tools still execute for real.
+- A **Mac or Linux** machine (or access to a Slurm cluster / Open OnDemand).
+- An **Anthropic API key** *or* a **Claude.ai subscription** to power the Guide agent.
 
-```sh
-# end-to-end smoke test, no API key needed
-.venv/bin/python tests/smoke_fake.py
+The installer bootstraps everything else it needs (Python, the analysis environment, and
+the interface) — you don't have to set those up by hand.
 
-# or run the dev servers in fake mode
-ABA_FAKE_SESSION=tests/fixtures/list_files.jsonl ./start.sh
-```
+## Install
 
-Fixture format (one assistant turn per line):
-```json
-{"blocks": [{"type": "text", "text": "..."}, {"type": "tool_use", "name": "list_data_files", "input": {}}]}
-{"blocks": [{"type": "text", "text": "..."}]}
-```
+Pick the guide for your setup:
 
-Guideline: fake the model unless its reasoning is what you're testing. When you do need a live model, default to Haiku; reach for Sonnet/Opus only for genuine quality checks.
+| Setup | Guide |
+|---|---|
+| **Mac** (your laptop) | [docs/install/mac_personal.md](docs/install/mac_personal.md) |
+| **Linux** (laptop, workstation, or server) | [docs/install/linux_personal.md](docs/install/linux_personal.md) |
+| **Slurm cluster** (offload jobs to HPC) | [docs/install/cluster_personal.md](docs/install/cluster_personal.md) |
+| **Multi-user cluster** (admin setup via Open OnDemand) | [docs/install/cluster_open_ondemand.md](docs/install/cluster_open_ondemand.md) |
 
-### What Guide can do
-- List and read CSV files from `backend/data/`
-- Execute Python (pandas + matplotlib) and display plots inline in the chat
-- Answer questions about the data in natural language
+Once installed, ABA opens in your browser. Sign in with your Anthropic API key or Claude.ai
+account, create a project, import your data, and start working with Guide.
 
-### Adding your own data
-Drop CSV files into `backend/data/` (or set `DATA_DIR=/your/path` in the environment). Guide will find them automatically via `list_data_files`.
+## Learn more
 
-## Layout
+- **Architecture overview** — [docs/arch/overview.md](docs/arch/overview.md)
+- **All documentation** — [docs/](docs/)
 
-```
-backend/
-  main.py        FastAPI app + routes
-  guide.py       Claude API loop with streaming tool use
-  tools.py       Tool executors: list_data_files, read_csv_info, run_python
-  db.py          SQLite message persistence
-  config.py      Paths + system prompt
-  data/          CSV data files (add yours here)
-  artifacts/     Generated plot PNGs (served at /artifacts/*)
-frontend/
-  src/
-    App.tsx              4-column layout
-    useChat.ts           SSE streaming + history hook
-    components/          Rail, ProjectTree, ChatPane, Message, Composer, AdvisorRail
-```
+## License
+
+[MIT](LICENSE) © 2026 Peter Kharchenko
