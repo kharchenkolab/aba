@@ -136,6 +136,9 @@ def context_line() -> str:
                      "(find() returns a LIST in one call — don't loop it). WRITE with "
                      "aba.create(type, title, **fields) / aba.relate(src, rel, dst) / "
                      "aba.update(id, **fields) (applied after the cell, provenance-stamped). "
+                     "BATCH: do several aba ops in ONE run_python cell — read what you need, "
+                     "compute, then create/update/relate together — instead of one op per cell; "
+                     "and don't re-read state you already have. "
                      "aba.help() for the full reference, aba.ops(type) for a type's fields/edges.")
         return line
     except Exception:  # noqa: BLE001
