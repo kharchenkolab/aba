@@ -91,6 +91,6 @@ dependencies:
       # the .rds R-bridge setup: misc/pagoda3_integration.md §Viewer data layer.
       - lstar-sc==0.1.7     # EXACT pin — lstar moves fast + isn't in a stable channel;
                             #   deploy reproducibility beats floating. Co-versioned with the
-                            #   lstar R package at git tag v0.1.7 (same repo) and pagoda3 v0.1.0.
+                            #   lstar R package at git tag v0.1.7 (same repo) and pagoda3 v0.1.1.
                             #   Bump this + the R/pagoda3 pins together as a validated set.
       - zarr>=3.1            # lstar uses the zarr-python 3 library
