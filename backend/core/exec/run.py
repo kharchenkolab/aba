@@ -86,7 +86,15 @@ def run_python_code(
     if os.environ.get("ABA_TOOL_LIB"):
         from pathlib import Path as _AbaP
         _aba_src = (_AbaP(__file__).parent / "kernels" / "aba_inkernel.py").read_text()
-        lines.append(_aba_src + "\naba = _Aba()")
+        _blk = _aba_src + "\naba = _Aba()"
+        try:
+            from core.services import call_service as _cs
+            _extra = _cs("aba_kernel_verbs", default="")
+            if _extra:
+                _blk += "\n" + _extra
+        except Exception:
+            pass
+        lines.append(_blk)
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
     # Harvest only what THIS run produced. When run_id is the active Run, the
     # scratch IS the Run's work dir (shared with prior cells), so filter by the
@@ -347,7 +355,7 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         yield f
 
 
-def harvest_intents(cwd) -> list:
+def harvest_intents(cwd, ctx=None) -> list:
     """Execute the .aba_intents.jsonl the in-kernel `aba.*` write verbs emitted
     (aba.create / aba.relate / aba.update), backend-side with full context —
     provenance (derivation=manual, actor defaulted from the ambient turn context by
@@ -394,6 +402,19 @@ def harvest_intents(cwd) -> list:
                 eid = refs.get(it["id"], it["id"])
                 update_entity(eid, **(it.get("fields") or {}))
                 out.append({"verb": "update", "id": eid})
+            else:
+                # Content (lifecycle) verbs — promote/finding/claim/register_dataset — are
+                # dispatched to a CONTENT-registered handler via the services seam (core
+                # never imports content). The handler resolves refs + returns {'id': ...}.
+                from core.services import call_service
+                _UNH = object()
+                res = call_service("aba_intent", it, refs, ctx, default=_UNH)
+                if res is _UNH:
+                    out.append({"verb": v, "error": f"no handler for verb {v!r}"})
+                else:
+                    if it.get("ref") and isinstance(res, dict) and res.get("id"):
+                        refs[it["ref"]] = res["id"]
+                    out.append(res if isinstance(res, dict) else {"verb": v, "output": res})
         except Exception as e:  # noqa: BLE001
             out.append({"verb": v, "error": str(e)})
     try:

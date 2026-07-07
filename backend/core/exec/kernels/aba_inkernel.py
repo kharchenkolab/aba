@@ -142,6 +142,16 @@ class _Aba:
         print(f"[aba.update] {entity_id} {list(fields)}", flush=True)
         self._emit({"verb": "update", "id": entity_id, "fields": fields})
 
+    def emit_intent(self, verb: str, **fields: Any) -> str:
+        """Emit a CONTENT-provided write intent (a verb core doesn't know — dispatched
+        backend-side by a content-registered handler). Returns a local ref for chaining.
+        Content packs attach domain verbs (e.g. aba.promote) onto this — the kernel-side
+        equivalent of the core/services seam, so core names no domain concept."""
+        ref = f"aba:new:{self._n}"; self._n += 1
+        print(f"[aba.{verb}] -> {ref}", flush=True)
+        self._emit({"verb": verb, "ref": ref, **fields})
+        return ref
+
     # -- discovery (Phase 4) ---------------------------------------------------
     def help(self) -> str:
         """Print the aba verb reference. Reads: find/get/types/exists. Writes

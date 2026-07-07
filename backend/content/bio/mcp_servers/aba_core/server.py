@@ -82,17 +82,22 @@ def make_server() -> FastMCP:
     # read TOOLS — so demote them from the catalog when the flag is on. Validated
     # safe by the Phase-1 forced arm (opus + haiku adopt aba cleanly, zero
     # reinvention, no quality regression). Seam-clean: bio names its own tools.
-    # ABA_TOOL_LIB = the in-kernel aba library REPLACES the tools it covers. Reads:
-    # list_entities/read_entity → aba.find/get. Writes: register_dataset→aba.create,
-    # annotate_entity/update_entity_fields→aba.update, add_to_dataset→aba.relate.
-    # Both validated safe (opus+haiku adopt cleanly, zero reinvention). Richer lifecycle
-    # tools (promote_to_result/create_finding/create_claim) stay — they have no generic
-    # aba equivalent yet (the content-provided aba.promote follow-on). One flag, no
-    # separate read/write knobs.
+    # ABA_TOOL_LIB = the in-kernel aba library REPLACES the tools it covers — the WHOLE
+    # entity contact plane (reads + writes + curation) is now aba.*:
+    #   reads:   list_entities/read_entity → aba.find/get
+    #   writes:  register_dataset→aba.register_dataset, annotate_entity/update_entity_fields
+    #            →aba.update, add_to_dataset→aba.relate
+    #   curation (content-provided via the aba_intent service): promote_to_result→aba.promote,
+    #            create_finding→aba.finding, create_claim→aba.claim
+    # A COHERENT surface: everything you do TO entities is aba.*, scripted in run_python.
+    # (Specialized subsystems — revisions/provenance/search/capabilities/jobs — remain tools
+    # for now; they're the next tranche.) Only the boundary tools that SUSPEND the loop
+    # (present_plan/ask_clarification) or INJECT context (view_artifact/vision) always stay.
     _demote = []
     if os.environ.get("ABA_TOOL_LIB"):
         _demote += ["list_entities", "read_entity",
-                    "register_dataset", "annotate_entity", "update_entity_fields", "add_to_dataset"]
+                    "register_dataset", "annotate_entity", "update_entity_fields", "add_to_dataset",
+                    "promote_to_result", "create_finding", "create_claim"]
     if _demote:
         tm = mcp._tool_manager
         for _t in _demote:

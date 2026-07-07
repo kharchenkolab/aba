@@ -81,6 +81,33 @@ def test_create_parity_with_direct():
     assert "manual" in str(via_intent.get("derivation")) and "manual" in str(direct.get("derivation"))
 
 
+def test_lifecycle_verb_via_bio_service():
+    # Content-provided lifecycle verb (aba.promote) → dispatched through the aba_intent
+    # service to promote_to_result_tool, with local-ref + provenance. Proves the whole
+    # contact plane flips coherently (core domain-neutral; bio contributes the verb).
+    dbp = _fresh_db()
+    work = tempfile.mkdtemp(prefix="aba_lc_")
+    os.environ["WORK_DIR"] = work
+    import content.bio  # noqa: F401  loads types
+    import content.bio.services  # noqa: F401  registers aba_intent + aba_kernel_verbs
+    from core.graph.entities import create_entity, find_entities
+    from core.graph.derivation import manual
+    from core.exec.kernels.aba_inkernel import _Aba
+    from core.exec.run import harvest_intents
+    from content.bio.services import _aba_kernel_verbs
+    fig = create_entity(entity_type="figure", title="F", derivation=manual(),
+                        artifact_path=work + "/x.png")
+    aba = _Aba(db=os.environ["ABA_PROJECT_DB"])
+    ns = {"aba": aba}
+    exec(_aba_kernel_verbs(), ns)          # bio attaches promote/finding/claim/register_dataset
+    assert hasattr(aba, "promote") and hasattr(aba, "finding")
+    aba.promote(fig, "the interpretation", title="R1")
+    res = harvest_intents(work, ctx=None)
+    promoted = [r for r in res if r.get("verb") == "promote"]
+    assert promoted and promoted[0].get("id"), res
+    assert "R1" in [e["title"] for e in find_entities(type="result")]
+
+
 def test_no_intents_is_noop():
     _fresh_db()
     work = tempfile.mkdtemp(prefix="aba_work_")

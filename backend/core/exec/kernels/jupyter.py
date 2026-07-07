@@ -309,7 +309,16 @@ def _aba_helpers_py() -> str:
         return ""
     from pathlib import Path
     src = (Path(__file__).parent / "aba_inkernel.py").read_text()
-    return "\n# --- aba: in-kernel entity-graph reads (tool_library Phase 1) ---\n" + src + "\naba = _Aba()\n"
+    out = "\n# --- aba: in-kernel entity-graph library (tool_library) ---\n" + src + "\naba = _Aba()\n"
+    # content packs attach their domain verbs onto aba (seam: core names no bio concept).
+    try:
+        from core.services import call_service
+        extra = call_service("aba_kernel_verbs", default="")
+        if extra:
+            out += "\n# --- content-provided aba verbs ---\n" + extra + "\n"
+    except Exception:
+        pass
+    return out
 
 
 def _harvest_helpers_py() -> str:

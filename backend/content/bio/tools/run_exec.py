@@ -719,7 +719,7 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
             plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
             from core.exec.run import harvest_intents
-            _intents = harvest_intents(cwd)   # aba.* write verbs (tool_library Phase 2)
+            _intents = harvest_intents(cwd, ctx=ctx)   # aba.* write verbs (tool_library Phase 2)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
             from core.exec.output_cap import snip_middle

@@ -95,7 +95,90 @@ def _result_cascade_members(result_id: str) -> set:
     return out
 
 
+def _aba_intent(intent: dict, refs: dict, ctx=None) -> dict:
+    """Execute a CONTENT (lifecycle) `aba.*` write intent — dispatched by
+    core.exec.run.harvest_intents for verbs core doesn't handle generically
+    (promote/finding/claim/register_dataset). Calls the same `*_tool` logic the
+    JSON tools call (so semantics + provenance are identical), resolving local
+    'aba:new:N' refs first. Returns {'verb','id'} or {'verb','error'}. This is what
+    lets the WHOLE contact plane flip to the library — content extends aba's verbs
+    via registration, no core edit (tool_library Phase 3 / follow-on (a))."""
+    from content.bio.tools.curation import (
+        promote_to_result_tool, create_finding_tool, create_claim_tool, register_dataset_tool)
+    v = intent.get("verb")
+
+    def rr(x):  # resolve a local ref (or list) to a real id
+        if isinstance(x, list):
+            return [refs.get(i, i) for i in x]
+        return refs.get(x, x)
+
+    try:
+        if v == "promote":
+            r = promote_to_result_tool({"figure_id": rr(intent.get("figure")),
+                                        "interpretation": intent.get("interpretation", ""),
+                                        "title": intent.get("title")}, ctx)
+        elif v == "finding":
+            r = create_finding_tool({"result_ids": rr(intent.get("result_ids") or []),
+                                     "text": intent.get("text", ""),
+                                     "title": intent.get("title")}, ctx)
+        elif v == "claim":
+            r = create_claim_tool({"statement": intent.get("statement", ""),
+                                   "evidence_ids": rr(intent.get("evidence_ids") or []),
+                                   "negative": bool(intent.get("negative"))}, ctx)
+        elif v == "register_dataset":
+            r = register_dataset_tool({"title": intent.get("title"),
+                                       "path": intent.get("path"), "paths": intent.get("paths"),
+                                       "summary": intent.get("summary"),
+                                       "source": intent.get("source"),
+                                       "organism": intent.get("organism")}, ctx)
+        else:
+            return {"verb": v, "error": f"unknown lifecycle verb {v!r}"}
+        if isinstance(r, dict) and r.get("error"):
+            return {"verb": v, "error": r["error"]}
+        # id key varies by op (result_id/finding_id/claim_id/dataset_id/…)
+        eid = None
+        if isinstance(r, dict):
+            eid = (r.get("id") or r.get("entity_id") or r.get("result_id")
+                   or r.get("finding_id") or r.get("claim_id") or r.get("dataset_id"))
+        return {"verb": v, "id": eid, "result": r}
+    except Exception as e:  # noqa: BLE001
+        return {"verb": v, "error": str(e)}
+
+
+# Content-provided in-kernel verbs: bio attaches its lifecycle verbs onto the generic
+# `aba` object (which core injects). Source string (runs in the kernel after aba=_Aba();
+# uses aba.emit_intent → the aba_intent dispatch above). This is the kernel-side twin of
+# the services seam: core names no bio concept; bio contributes promote/finding/claim/
+# register_dataset here, so the WHOLE contact plane is aba.* and stays seam-clean.
+_ABA_KERNEL_VERBS = '''
+def promote(figure, interpretation, title=None):
+    """Promote a figure to a Result with a written interpretation. Returns a local ref."""
+    return aba.emit_intent("promote", figure=figure, interpretation=interpretation, title=title)
+def finding(result_ids, text, title=None):
+    """Draft a Finding citing one or more results as evidence. Returns a local ref."""
+    return aba.emit_intent("finding", result_ids=result_ids, text=text, title=title)
+def claim(statement, evidence_ids=None, negative=False):
+    """Draft a Claim supported by evidence. Returns a local ref."""
+    return aba.emit_intent("claim", statement=statement, evidence_ids=evidence_ids or [], negative=negative)
+def register_dataset(title, path=None, paths=None, summary=None, source=None, organism=None):
+    """Register a file/folder as a Dataset entity (with file adoption). Returns a local ref."""
+    return aba.emit_intent("register_dataset", title=title, path=path, paths=paths,
+                           summary=summary, source=source, organism=organism)
+aba.promote = promote
+aba.finding = finding
+aba.claim = claim
+aba.register_dataset = register_dataset
+'''
+
+
+def _aba_kernel_verbs() -> str:
+    """Python source (bio's lifecycle verbs) appended to the kernel's aba setup."""
+    return _ABA_KERNEL_VERBS
+
+
 register_service("language_sniffer", _language_sniffer)
 register_service("host_tool_names", _host_tool_names)
 register_service("plan_orientation_preamble", _plan_orientation_preamble)
 register_service("result_cascade_members", _result_cascade_members)
+register_service("aba_intent", _aba_intent)
+register_service("aba_kernel_verbs", _aba_kernel_verbs)
