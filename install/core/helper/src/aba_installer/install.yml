@@ -21,6 +21,11 @@ env_vars:
   #   ABA_ENV_YML_SRC / ABA_REPO_SRC / ABA_RECIPES_SRC — install from a local
   #     path (working tree / offline mirror) instead of fetching. Used by the
   #     smoke harness to test un-pushed changes.
+  #   ABA_REF / RECIPES_REF — pin the aba / recipe-pack checkout to a branch, TAG,
+  #     or commit (default: main). Tags/branches are clean; a bare commit SHA works
+  #     via a full-clone fallback. Pin to a TAG for reproducible deploys (mirrors
+  #     the lstar-sc / lstar-R / pagoda3 version pins). Ignored on the *_SRC path
+  #     (a local working tree has no ref to resolve).
 
 steps:
   - id: preflight
@@ -107,8 +112,11 @@ steps:
     why: Source for the backend, the frontend, and the recipe library.
     commands:
       - 'mkdir -p "$REPO_DIR"'
-      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else git clone --depth 1 "${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}" "$REPO_DIR/aba"; fi'
-      - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else git clone --depth 1 "${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}" "$REPO_DIR/aba-recipe-pack"; fi'
+      # ABA_REF / RECIPES_REF (default main) pin the clone to a branch / tag / commit.
+      # Shallow --branch works for a branch or tag; a bare commit SHA falls back to a
+      # full clone + checkout (shallow ref-fetch of an arbitrary SHA isn't portable).
+      - 'if [ -d "$REPO_DIR/aba" ]; then :; elif [ -n "${ABA_REPO_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba" && rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude .venv --exclude node_modules --exclude dist --exclude __pycache__ "$ABA_REPO_SRC/" "$REPO_DIR/aba/"; else R="${ABA_REF:-main}"; U="${ABA_REPO_URL:-https://github.com/kharchenkolab/aba}"; git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/aba" 2>/dev/null || { git clone "$U" "$REPO_DIR/aba" && git -C "$REPO_DIR/aba" checkout "$R"; }; fi'
+      - 'if [ -d "$REPO_DIR/aba-recipe-pack" ]; then :; elif [ -n "${ABA_RECIPES_SRC:-}" ]; then mkdir -p "$REPO_DIR/aba-recipe-pack" && rsync -a --exclude .envs_cache --exclude _runs --exclude reports --exclude .git --exclude __pycache__ "$ABA_RECIPES_SRC/" "$REPO_DIR/aba-recipe-pack/"; else R="${RECIPES_REF:-main}"; U="${ABA_RECIPES_URL:-https://github.com/kharchenkolab/aba-recipe-pack}"; git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/aba-recipe-pack" 2>/dev/null || { git clone "$U" "$REPO_DIR/aba-recipe-pack" && git -C "$REPO_DIR/aba-recipe-pack" checkout "$R"; }; fi'
     timeout_seconds: 120
     remediation: |
       git clone failed — most often a private-repo access issue. Use SSH:

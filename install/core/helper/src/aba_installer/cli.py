@@ -49,26 +49,33 @@ def _emit(name: str, payload: dict) -> None:
 
 
 def _bootstrap_repo_for_update() -> None:
-    """Bring the pulled repo to origin/main BEFORE loading the update playbook, so a
-    step added upstream takes effect on THIS `aba update`, not the next one. Mirrors
-    the playbook's own pull-aba (common git case); the in-playbook pull-aba then
-    re-runs idempotently (and covers the rsync / clone cases this skips). Skipped
-    when ABA_REPO_SRC is set (a local/offline install — pull-aba rsyncs from that
-    source). Non-fatal: on any failure we fall through and `_playbook_path` uses the
-    repo copy already on disk, else the bundled one."""
+    """Bring the pulled repo to `$ABA_REF` (default main) BEFORE loading the update
+    playbook, so a step added at that ref takes effect on THIS `aba update`, not the
+    next one. Mirrors the playbook's own pull-aba (git case); the in-playbook pull-aba
+    then re-runs idempotently (and covers the rsync / clone cases this skips). Skipped
+    when ABA_REPO_SRC is set (a local/offline install — pull-aba rsyncs from source).
+    Non-fatal: on any failure we fall through and `_playbook_path` uses the repo copy
+    already on disk, else the bundled one."""
     if os.environ.get("ABA_REPO_SRC"):
         return
     repo = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba")) / "repo" / "aba"
     if not (repo / ".git").is_dir():
         return
+    ref = os.environ.get("ABA_REF", "main")
+    git = ["git", "-C", str(repo)]
     try:
-        subprocess.run(["git", "-C", str(repo), "fetch", "--depth", "1", "origin", "main"],
+        # shallow-fetch the ref (branch / tag / server-allowed SHA) → reset to it
+        subprocess.run(git + ["fetch", "--depth", "1", "origin", ref],
                        check=True, capture_output=True, timeout=180)
-        subprocess.run(["git", "-C", str(repo), "reset", "--hard", "origin/main"],
+        subprocess.run(git + ["reset", "--hard", "FETCH_HEAD"],
                        check=True, capture_output=True, timeout=60)
-        print("  (refreshed repo → origin/main so the current update playbook is used)", flush=True)
-    except Exception:  # noqa: BLE001 — best-effort; playbook resolution still has fallbacks
-        pass
+    except Exception:  # noqa: BLE001 — bare SHA / server rejects shallow ref-fetch
+        try:
+            subprocess.run(git + ["fetch", "origin"], check=True, capture_output=True, timeout=300)
+            subprocess.run(git + ["reset", "--hard", ref], check=True, capture_output=True, timeout=60)
+        except Exception:  # noqa: BLE001 — best-effort; playbook resolution still has fallbacks
+            return
+    print(f"  (refreshed repo → {ref} so the current update playbook is used)", flush=True)
 
 
 def run_playbook_headless(name: str, *, only=None, skip=None) -> int:
