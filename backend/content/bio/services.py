@@ -184,6 +184,12 @@ def search(query, source="skills", limit=10):
 def capabilities(query=None, tags=None):
     """Search the capability catalog. Returns matching capabilities."""
     return aba._rpc("capabilities", query=query, tags=tags)
+def find_reference(organism=None, role=None, assembly=None, all=False):
+    """Find stored references by organism/role/assembly."""
+    return aba._rpc("find_reference", organism=organism, role=role, assembly=assembly, all=all)
+def resolve_reference(reference_id=None, organism=None, role=None, assembly=None):
+    """Resolve a reference to a path + pin the run-lock."""
+    return aba._rpc("resolve_reference", reference_id=reference_id, organism=organism, role=role, assembly=assembly)
 aba.promote = promote
 aba.finding = finding
 aba.claim = claim
@@ -192,6 +198,8 @@ aba.register_reference = register_reference
 aba.promote_reference = promote_reference
 aba.search = search
 aba.capabilities = capabilities
+aba.find_reference = find_reference
+aba.resolve_reference = resolve_reference
 # guard: these types need lifecycle wiring — aba.create refuses them, redirecting here.
 aba._lifecycle_verbs = {"result": "promote", "finding": "finding", "claim": "claim", "dataset": "register_dataset"}
 aba._extra_help = ("LIFECYCLE (use these, not create()): aba.promote(figure, interpretation) -> result; "
@@ -217,6 +225,14 @@ def _aba_rpc(op: str, args: dict, ctx=None) -> dict:
         if op == "capabilities":
             from content.bio.tools.simple import list_capabilities_tool
             return list_capabilities_tool({"query": args.get("query"), "tags": args.get("tags")})
+        if op == "find_reference":
+            from content.bio.tools.curation import find_reference_tool
+            return find_reference_tool({k: args.get(k) for k in
+                                        ("organism", "role", "assembly", "all")}, ctx)
+        if op == "resolve_reference":
+            from content.bio.tools.curation import resolve_reference_tool
+            return resolve_reference_tool({k: args.get(k) for k in
+                                           ("reference_id", "organism", "role", "assembly")}, ctx)
         return {"error": f"unknown aba_rpc op {op!r}"}
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}

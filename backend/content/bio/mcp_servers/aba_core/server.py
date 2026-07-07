@@ -102,8 +102,10 @@ def make_server() -> FastMCP:
                     "get_provenance", "get_dependents", "list_entity_operations",
                     # Tranche B (contact writes): aba.archive / aba.register_reference / aba.promote_reference
                     "archive_entity", "register_reference", "promote_reference",
-                    # Tranche C (backend reads via the sync-RPC): aba.search / aba.capabilities
-                    "search_skills", "list_capabilities"]
+                    # Tranche C (backend reads via the sync-RPC): aba.search / aba.capabilities /
+                    # aba.find_reference / aba.resolve_reference. (describe_compute/get_job_status
+                    # deferred — inline @mcp.tool logic, extract first like the B2 writes.)
+                    "search_skills", "list_capabilities", "find_reference", "resolve_reference"]
     if _demote:
         tm = mcp._tool_manager
         for _t in _demote:

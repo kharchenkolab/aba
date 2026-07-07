@@ -28,6 +28,9 @@ def test_rpc_dispatch_parity():
     assert call_service("aba_rpc", "search", q, None) == search_skills_tool(q)
     assert call_service("aba_rpc", "capabilities", {"query": "align"}, None) == \
         list_capabilities_tool({"query": "align"})
+    from content.bio.tools.curation import find_reference_tool
+    assert call_service("aba_rpc", "find_reference", {"organism": "human"}, None) == \
+        find_reference_tool({"organism": "human", "role": None, "assembly": None, "all": None}, None)
     assert "error" in call_service("aba_rpc", "bogus", {}, None)
 
 
