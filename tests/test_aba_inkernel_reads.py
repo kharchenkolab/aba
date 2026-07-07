@@ -117,6 +117,25 @@ def test_no_db_bound_raises():
             os.environ["ABA_PROJECT_DB"] = saved
 
 
+def test_provenance_walk_parity():
+    _fresh_db()
+    from core.graph.entities import create_entity
+    from core.graph.edges import add_edge
+    from core.graph.derivation import manual
+    from core.graph.provenance import upstream, downstream
+    from core.exec.kernels.aba_inkernel import _Aba
+    ds = create_entity(entity_type="dataset", title="d", derivation=manual())
+    fig = create_entity(entity_type="figure", title="f", derivation=manual())
+    res = create_entity(entity_type="result", title="r", derivation=manual())
+    add_edge(fig, ds, "wasDerivedFrom")
+    add_edge(res, fig, "wasDerivedFrom")
+    aba = _Aba(db=os.environ["ABA_PROJECT_DB"])
+    assert {e["id"] for e in aba.provenance(res, "up")} == {e["id"] for e in upstream(res, max_depth=8)}
+    assert {e["id"] for e in aba.provenance(ds, "down")} == {e["id"] for e in downstream(ds, max_depth=8)}
+    # rel filter works
+    assert all(e["rel"] == "wasDerivedFrom" for e in aba.provenance(res, "up", rels=["wasDerivedFrom"]))
+
+
 def test_ops_and_help_from_registry():
     import json
     os.environ["ABA_TYPE_REGISTRY"] = json.dumps({

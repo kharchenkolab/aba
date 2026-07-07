@@ -97,7 +97,9 @@ def make_server() -> FastMCP:
     if os.environ.get("ABA_TOOL_LIB"):
         _demote += ["list_entities", "read_entity",
                     "register_dataset", "annotate_entity", "update_entity_fields", "add_to_dataset",
-                    "promote_to_result", "create_finding", "create_claim"]
+                    "promote_to_result", "create_finding", "create_claim",
+                    # Tranche A (contact reads): aba.provenance / aba.ops
+                    "get_provenance", "get_dependents", "list_entity_operations"]
     if _demote:
         tm = mcp._tool_manager
         for _t in _demote:

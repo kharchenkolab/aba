@@ -63,8 +63,9 @@ def score(run_dir: str) -> dict:
         # round-trip = a context re-read). The composition question — does the library
         # cut round-trips (batch ops in one code cell) or add them (discovery lookups)?
         out["llm_turns"] = sum(s.get("llm_calls", 0) for s in (d.get("timeline") or []))
-    aba = {"find": 0, "get": 0, "types": 0, "exists": 0,
-           "create": 0, "relate": 0, "update": 0, "promote": 0}
+    aba = {"find": 0, "get": 0, "types": 0, "exists": 0, "provenance": 0, "ops": 0,
+           "create": 0, "relate": 0, "update": 0, "promote": 0,
+           "finding": 0, "claim": 0, "register_dataset": 0, "revise": 0}
     json_reads = {"list_entities": 0, "read_entity": 0}
     tool_total = 0
     aba_errors = 0
