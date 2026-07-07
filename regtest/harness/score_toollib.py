@@ -59,6 +59,10 @@ def score(run_dir: str) -> dict:
         out["mech"] = d.get("mechanical")
         out["rubric_overall"] = (d.get("rubric_mean") or {}).get("overall")
         out["n_steps"] = len(d.get("report") or [])
+        # Turns / round-trips: sum of LLM calls across agent steps (each LLM call is a
+        # round-trip = a context re-read). The composition question — does the library
+        # cut round-trips (batch ops in one code cell) or add them (discovery lookups)?
+        out["llm_turns"] = sum(s.get("llm_calls", 0) for s in (d.get("timeline") or []))
     aba = {"find": 0, "get": 0, "types": 0, "exists": 0,
            "create": 0, "relate": 0, "update": 0, "promote": 0}
     json_reads = {"list_entities": 0, "read_entity": 0}
@@ -119,9 +123,10 @@ if __name__ == "__main__":
         m = r.get("mech") or {}
         print(f"{r['run']:<40} model={str(r.get('model')):<32} "
               f"mech={m.get('pass')}/{m.get('total')} rubric={r.get('rubric_overall')} "
-              f"| aba={r['aba_total']} {r['aba_calls']} "
-              f"| json_reads={r['json_read_total']} {r['json_reads']} "
-              f"| aba_err={r['aba_errors']} | reinvention={r['reinvention']}")
+              f"turns={r.get('llm_turns')} tools={r.get('tool_total')} "
+              f"| aba={r['aba_total']} "
+              f"| json_reads={r['json_read_total']} "
+              f"| reinvention={r['reinvention']}")
     print(json.dumps(rows, indent=1))
     if gate:
         bad = [r["run"] for r in rows if r.get("reinvention", 0) > 0]
