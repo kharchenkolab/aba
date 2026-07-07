@@ -62,17 +62,19 @@ def _bootstrap_repo_for_update() -> None:
     if not (repo / ".git").is_dir():
         return
     ref = os.environ.get("ABA_REF", "main")
-    git = ["git", "-C", str(repo)]
+    # Run git with cwd=repo, NOT `git -C repo`: the RHEL7 / CLIP cluster nodes ship
+    # git 1.8.3.1, which has no `-C` flag (fails "Unknown option: -C") — and those are
+    # exactly the nodes cluster-personal installs onto. cwd= is portable to any git.
+    def _g(args, timeout):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, timeout=timeout)
     try:
         # shallow-fetch the ref (branch / tag / server-allowed SHA) → reset to it
-        subprocess.run(git + ["fetch", "--depth", "1", "origin", ref],
-                       check=True, capture_output=True, timeout=180)
-        subprocess.run(git + ["reset", "--hard", "FETCH_HEAD"],
-                       check=True, capture_output=True, timeout=60)
+        _g(["fetch", "--depth", "1", "origin", ref], 180)
+        _g(["reset", "--hard", "FETCH_HEAD"], 60)
     except Exception:  # noqa: BLE001 — bare SHA / server rejects shallow ref-fetch
         try:
-            subprocess.run(git + ["fetch", "origin"], check=True, capture_output=True, timeout=300)
-            subprocess.run(git + ["reset", "--hard", ref], check=True, capture_output=True, timeout=60)
+            _g(["fetch", "origin"], 300)
+            _g(["reset", "--hard", ref], 60)
         except Exception:  # noqa: BLE001 — best-effort; playbook resolution still has fallbacks
             return
     print(f"  (refreshed repo → {ref} so the current update playbook is used)", flush=True)

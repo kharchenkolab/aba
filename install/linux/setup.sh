@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # ABA — Linux installer bootstrap (install type 2). Run from a cloned checkout:
-#   git clone git@github.com:kharchenkolab/aba.git
+#   git clone https://github.com/kharchenkolab/aba.git
 #   cd aba && ./install/linux/setup.sh                       # desktop: helper UI + browser
 #   ./install/linux/setup.sh --headless                      # server / login node: no browser
 #   ./install/linux/setup.sh --install-dir /opt/aba          # put the WHOLE install elsewhere (default ~/.aba)
 #   ./install/linux/setup.sh --runtime-dir /data/$USER/aba   # just projects/data on a bigger disk
 #   ./install/linux/setup.sh --cluster-personal --runtime-dir /shared/$USER/aba   # Slurm offload
 #
-# The aba repo is private for now (ssh+key); this installs FROM the checkout it
-# lives in (ABA_REPO_SRC=self), so no second clone/auth is needed. The public
-# recipe pack is cloned over https. Overrides: ABA_REPO_URL / ABA_RECIPES_URL
-# (alternate git URLs), ABA_REPO_SRC / ABA_RECIPES_SRC (local paths), ABA_HOME.
+# aba + the recipe pack are public: the playbook git-clones both over https at
+# $ABA_REF / $RECIPES_REF (default main) into $ABA_HOME/repo — the deployed repo is a
+# real checkout, so `aba update` just git-pulls (one command, no external checkout).
+# Overrides: ABA_REF / RECIPES_REF (pin a branch/tag/commit), ABA_REPO_URL /
+# ABA_RECIPES_URL (alternate URLs), ABA_REPO_SRC / ABA_RECIPES_SRC (install from a
+# LOCAL checkout — dev / offline), ABA_HOME.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -141,14 +143,15 @@ echo "   python:  $PYBOOT ($(py_ver "$PYBOOT"))"
 # exercised in isolation without the full install (see tests/test_setup_sh_python.py).
 [ -n "${ABA_RESOLVE_PYTHON_ONLY:-}" ] && { echo "RESOLVED_PYBOOT=$PYBOOT"; exit 0; }
 
-# --- the (private) aba repo: install from THIS checkout, not a re-clone ---
-export ABA_REPO_SRC="${ABA_REPO_SRC:-$REPO_ROOT}"
-echo "   aba source: local checkout ($ABA_REPO_SRC)"
-# create-env runs BEFORE clone-repos, so $REPO_DIR/aba isn't populated yet; with
-# a private/local install the playbook would otherwise fetch environment.yml from
-# a GitHub raw URL that 404s. We're installing from a checkout — hand both conda
-# specs to the playbook directly (the r-env step is post-clone, but set it too
-# for consistency and fully-offline installs).
+# --- aba repo source ---
+# aba is public: by default the playbook git-clones it over https into $REPO_DIR (like
+# the recipe pack), so the deployed repo is a real checkout and `aba update` git-pulls.
+# To install THIS working tree instead (dev / offline / un-pushed changes), export
+# ABA_REPO_SRC=. before running — clone-repos then rsyncs from it. Not the default.
+if [ -n "${ABA_REPO_SRC:-}" ]; then echo "   aba source: local checkout ($ABA_REPO_SRC)"; else echo "   aba source: git clone ${ABA_REPO_URL:-https://github.com/kharchenkolab/aba} @ ${ABA_REF:-main}"; fi
+# create-env runs BEFORE clone-repos, so $REPO_DIR/aba isn't populated yet — hand it the
+# env specs straight from this checkout (avoids a redundant raw-github fetch and works
+# offline; the r-env step is post-clone but set it too for consistency).
 export ABA_ENV_YML_SRC="${ABA_ENV_YML_SRC:-$REPO_ROOT/install/core/environment.yml}"
 export ABA_R_ENV_YML_SRC="${ABA_R_ENV_YML_SRC:-$REPO_ROOT/install/core/r-environment.yml}"
 
