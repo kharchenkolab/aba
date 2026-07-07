@@ -48,6 +48,29 @@ def _emit(name: str, payload: dict) -> None:
                     print(f"    {ln}", flush=True)
 
 
+def _bootstrap_repo_for_update() -> None:
+    """Bring the pulled repo to origin/main BEFORE loading the update playbook, so a
+    step added upstream takes effect on THIS `aba update`, not the next one. Mirrors
+    the playbook's own pull-aba (common git case); the in-playbook pull-aba then
+    re-runs idempotently (and covers the rsync / clone cases this skips). Skipped
+    when ABA_REPO_SRC is set (a local/offline install — pull-aba rsyncs from that
+    source). Non-fatal: on any failure we fall through and `_playbook_path` uses the
+    repo copy already on disk, else the bundled one."""
+    if os.environ.get("ABA_REPO_SRC"):
+        return
+    repo = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba")) / "repo" / "aba"
+    if not (repo / ".git").is_dir():
+        return
+    try:
+        subprocess.run(["git", "-C", str(repo), "fetch", "--depth", "1", "origin", "main"],
+                       check=True, capture_output=True, timeout=180)
+        subprocess.run(["git", "-C", str(repo), "reset", "--hard", "origin/main"],
+                       check=True, capture_output=True, timeout=60)
+        print("  (refreshed repo → origin/main so the current update playbook is used)", flush=True)
+    except Exception:  # noqa: BLE001 — best-effort; playbook resolution still has fallbacks
+        pass
+
+
 def run_playbook_headless(name: str, *, only=None, skip=None) -> int:
     """Load + run a playbook synchronously, streaming to stdout. Returns 0 on
     full success, 1 if a step failed (it stops there, remediation printed)."""
@@ -55,6 +78,8 @@ def run_playbook_headless(name: str, *, only=None, skip=None) -> int:
     from aba_installer import control
     if name == "install":
         control.prepare_install_artifacts()           # render the aba launcher template etc.
+    if name == "update":
+        _bootstrap_repo_for_update()                  # so we load THIS release's playbook, not last's
     pb = load_playbook(control._playbook_path(name))
     ids = [s.id for s in pb.steps]
     if skip:

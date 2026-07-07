@@ -49,9 +49,25 @@ _op_lock = threading.Lock()
 
 # ─── playbook locator ──────────────────────────────────────────────────────
 def _playbook_path(name: str) -> Path:
-    """Map a playbook name → bundled YAML path. Caller validates name."""
+    """Map a playbook name → its YAML path. Caller validates name.
+
+    For `update`, prefer the freshly PULLED repo's copy
+    (`$ABA_HOME/repo/aba/install/core/helper/src/aba_installer/update.yml`) over the
+    installed package's BUNDLED copy — so playbook changes (new steps, e.g.
+    `install-lstar-r`) take effect via `aba update` WITHOUT reinstalling the helper.
+    Otherwise the bundled copy is frozen at helper-install time and silently omits
+    any step added to the repo later (the trap that left the pagoda3 viewer deps
+    uninstalled). `install` always uses the bundled copy — it bootstraps a machine
+    that has no repo yet. Falls back to bundled if the repo copy is absent."""
     here = Path(__file__).resolve().parent
-    return here / f"{name}.yml"
+    bundled = here / f"{name}.yml"
+    if name == "update":
+        repo_pb = (Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
+                   / "repo" / "aba" / "install" / "core" / "helper" / "src"
+                   / "aba_installer" / f"{name}.yml")
+        if repo_pb.is_file():
+            return repo_pb
+    return bundled
 
 
 # ─── install artifacts the shell playbook can't render itself ───────────────
