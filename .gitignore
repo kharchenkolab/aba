@@ -33,9 +33,11 @@ frontend/dist/
 tests/e2e/screenshots/
 
 # Prompt-regression harness outputs — generated per-run, timestamped, ~MBs each
-tests/prompt_regression/results/raw/
-tests/prompt_regression/results/verdicts/
-tests/prompt_regression/results/*.log
+tests/prompt_regression/results/
+
+# OOD integration-test screenshots (generated per run)
+tests/ood/_shots/
+tests/ood/_dashboard.png
 
 # Large local-only assets (kept out of git)
 misc/ui3/*.png
@@ -46,6 +48,8 @@ misc/acquisition_research/
 
 # setuptools build dir from `pip install install/core/helper`
 install/core/helper/build/
-cont
 eval/
-.venv
+
+# Editor backups + local caches
+*.bak
+.pytest_cache/
