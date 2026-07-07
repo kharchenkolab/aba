@@ -5,8 +5,8 @@ system. Each doc explains **one coherent part**: what it's *for*, the invariants
 shape it, how it composes, and where the code is. These are **explanation, not API
 reference** — a map + compass, not a manual. [`envs.md`](envs.md) is the exemplar.
 
-> Status: index current as of 2026-07. Each doc carries its own status line and points at
-> its design/evolution log in `misc/`; these docs are the **maintained** orientation.
+> Status: index current as of 2026-07. Each doc carries its own status line; these docs
+> are the **maintained** orientation.
 
 ## The model in one breath
 
@@ -18,8 +18,7 @@ orbit it, each a producer/consumer of the waist — **Compute** (doing the scien
 attach uniformly to all of them — **knowledge/bundle**, **verifiability/provenance**,
 **context/memory**, **deployment/access**. The engine is domain-neutral; the domain
 (`content/bio`, the recipe pack) enters as **content, never core code**. See
-[`overview.md`](overview.md) for the full picture, and [`../../misc/modularity2.md`](../../misc/modularity2.md)
-for the conceptual essay behind it.
+[`overview.md`](overview.md) for the full picture.
 
 ## Index
 
@@ -56,7 +55,7 @@ code* to look.
 
 **Template (follow [`envs.md`](envs.md)):**
 1. **Title + a one-line "what this is."**
-2. **Status blockquote** — `current as of <YYYY-MM>`, "the maintained reference"; design/evolution log lives in `misc/<x>.md`.
+2. **Status blockquote** — `current as of <YYYY-MM>`, "the maintained reference".
 3. **`## Aims & principles`** — what it's for + the **load-bearing invariants as imperatives, each tied to the failure it prevents.** Lead here; derive the rest.
 4. **`## The model`** — the core abstractions (nouns) and how they relate; a small ASCII/mermaid diagram if the shape isn't obvious.
 5. **`## <approach>`** (1–3 sections) — how it actually works (verbs), principle-first.
@@ -65,9 +64,9 @@ code* to look.
 
 **Principles:**
 - **Principle over enumeration.** State the *one* imperative and derive the design from it (`envs.md`: "integrity-safe by construction" → every rule follows). Explain *why it must be so*, not a feature tour.
-- **Verify, don't assume.** Check every claim against the code; when a `misc/` log and the code disagree, **trust the code**. Unverifiable → a marked gap, never a guess.
+- **Verify, don't assume.** Check every claim against the code; when a design log and the code disagree, **trust the code**. Unverifiable → a marked gap, never a guess.
 - **Today, not the roadmap.** Describe what's true now; put designed-but-unbuilt in *Known gaps*.
-- **Point, don't duplicate.** Cite `path:line` and link the `misc/` log and sibling arch docs — the doc is the durable orientation, the log is the history. **Own your topic; where another doc owns something you touch, summarize in one line and link.**
+- **Point, don't duplicate.** Cite `path:line` and link sibling arch docs — the doc is the durable orientation. **Own your topic; where another doc owns something you touch, summarize in one line and link.**
 - **Succinct is an altitude, not a word count** (~150–250 lines). Longer → it's becoming a reference; cut or split. One coherent part per doc.
 - **Dense, present-tense, declarative.** Name invariants precisely; the reader should be able to *act* — extend safely, find the seam — after one read.
 

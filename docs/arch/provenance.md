@@ -3,10 +3,7 @@
 How every entity carries a typed, enforced record of *how* it was made and *who* made
 it — and how that recorded work is reproduced, revised, and recovered.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/provenance.md` (the reproducibility envelope + phases),
-> `misc/exec_records_and_versioning.md` (the exec-record cutover), and
-> `misc/modularity_audit2.md` §Phase 2 (the `derivation`/`actor` fields).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -155,18 +152,15 @@ it *verifiable*. The agent turn that binds `agent:<run_id>` is
 | `content/bio/lifecycle/revisions.py` | `make_revision`, `set_current_revision`, `delete_revision`, `reproduce_from_exec`, `diff_env`, `rebuild_env`, `export_bundle` |
 | `core/graph/provenance.py` | upstream/downstream walks + `promotion_record` (who/when/from) |
 | `content/bio/{mcp_servers/aba_core/tools,web/routes}/revisions.py` | agent (MCP) + HTTP surfaces for revise / reproduce / export |
-| `misc/provenance.md` · `misc/exec_records_and_versioning.md` · `misc/modularity_audit2.md` | design/evolution logs (envelope, phases, cutover, derivation/actor) |
 
 ## Known gaps
 
 - **Whole-Run replay (`reproduce_run`) is designed but not built.** `reproduce_from_exec`
   re-runs *one* artifact's exec; nothing replays an entire Run's exec chain step-by-step
   against the current env. The pieces exist (`list_by_run` + `aggregated_code_for_run`);
-  the driver does not — **confirmed absent from `backend/`**, specced only in
-  `misc/provenance.md:152`.
+  the driver does not — **confirmed absent from `backend/`**.
 - **`inputs` and `seed` are not captured yet.** `_write_exec_record` records code + env +
-  `produced` + timing, but **not** the run's inputs or RNG seed (both listed under "add" in
-  `misc/provenance.md:207`). So `export_bundle`'s `inputs.json` is thin, drift-vs-inputs
+  `produced` + timing, but **not** the run's inputs or RNG seed. So `export_bundle`'s `inputs.json` is thin, drift-vs-inputs
   isn't checkable, and a re-run isn't bit-stable — the reproduction envelope is *code+env*
   today, not the full `code/env/inputs/seed`. This is the substantive reason reproducibility
   trails field coverage.

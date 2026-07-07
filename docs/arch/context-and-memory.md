@@ -4,9 +4,7 @@ How the agent's working context is built each turn — as a **transient projecti
 durable entity model**, not a store in its own right — and how that context stays bounded,
 survives a reset, and remembers across sessions.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/evolution
-> logs live in `misc/history_compaction_redesign.md` (compaction), `misc/recovery.md`
-> (the FS archive), and `misc/provenance.md` (memory-wipe recovery validation).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -186,7 +184,6 @@ demand with `read_memory`.
 | `core/recovery/scribe.py` · `walker.py` | FS mirror (DB→FS) and rebuild (FS→DB) + backfill |
 | `core/recovery/report.py` · `drift.py` · `by_title.py` · `cli.py` | compat report · drift detector · symlink view · `aba-recover` |
 | `core/prompts.py` | prompt-provider registry (e.g. `thread_summary`) |
-| `misc/history_compaction_redesign.md` · `misc/recovery.md` · `misc/provenance.md` | design/evolution logs |
 
 ## Known gaps
 

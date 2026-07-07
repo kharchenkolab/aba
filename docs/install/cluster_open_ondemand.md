@@ -5,8 +5,7 @@ OnDemand (OOD) app: one image plus one config, and any number of scientists laun
 their own ABA session into their lab's space. (For a single-user install on a
 cluster you manage yourself, see [cluster_personal.md](cluster_personal.md).)
 
-The dev harness + end-to-end testing flow lives in `misc/ondemand_runbook.md`; this guide
-is the production deployment.
+This guide is the production deployment.
 
 ## The model
 
@@ -246,6 +245,5 @@ during active work, `-resume` caches stay valid, and only *new* sessions pick up
 
 ## Testing the deployment
 
-For the Dockerized OOD dev harness, the launch round-trip, and host-side SIF
-validation (`tests/ood/_sifval.py`, `round_trip.py`), see **`misc/ondemand_runbook.md`** —
-the developer runbook.
+The Dockerized OOD dev harness, the launch round-trip, and host-side SIF
+validation live under `tests/ood/` (`_sifval.py`, `round_trip.py`).

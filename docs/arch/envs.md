@@ -3,8 +3,7 @@
 How ABA provides the software a run executes in — Python and R — and how it adds
 packages on demand without corrupting shared state.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/env_refactor.md` (§0 "as-built") and `misc/capabilities.md`.
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -76,8 +75,7 @@ shared path.
   is caught, not reported ready.
 - **Background jobs** ([`jobs-and-hpc.md`](jobs-and-hpc.md)) run on the same base + overlay; the
   submitted job script clears `PYTHONHOME` + pins `PYTHONPATH` (`slurm_submitter.py:113`) so a
-  cluster `module load` can't shadow the interpreter (see `misc/deferred_jobs.md`, the
-  prj_6d986f40 incident).
+  cluster `module load` can't shadow the interpreter.
 
 ## GPU / accelerator (target hardware)
 
@@ -134,7 +132,7 @@ job runs on a GPU node ABA can't observe):
 - **BASE reachability under Slurm (`check_base_dir_shared`)** — the deeper rule: the Slurm `job.sh` runs
   **bare** on the compute node (`slurm_submitter.py:117`: `sys.executable -u -m core.jobs.slurm_entry`,
   no `apptainer exec` re-entry), so the base venv must be on **shared FS**, reachable by that bare job.
-  This makes the documented constraint enforceable (`misc/slim_sif_deploy.md`): **Slurm offload requires
+  This makes the documented constraint enforceable: **Slurm offload requires
   a slim SIF** (base on shared FS via `image.base_dir`) **or a native shared install**. A **fat SIF bakes
   the base in-image** (`sys.executable=/opt/aba-venv/...` → `overlay`/`squashfs` → node-local) — a bare
   compute-node job can't even find the interpreter, so `check_base_dir_shared` **fires under a `slurm`
@@ -160,7 +158,6 @@ toggle). The base spec (`environment.yml`) lives in the repo.
 | `core/exec/isolated_env.py` | isolated env build/run + per-env lock |
 | `content/bio/tools/discovery.py` | agent surface: `ensure_capability`, `propose_capability`, `search_bioconda`/`search_pypi` |
 | `core/exec/kernels/` · `core/exec/run.py` (run_python preamble) | assembles the run's `sys.path`: base + project overlay (see [`compute-execution.md`](compute-execution.md)) |
-| `misc/env_refactor.md` | design/evolution log (§0 as-built); `misc/capabilities.md`, `misc/capdat_impl.md` |
 
 ## Known gaps
 

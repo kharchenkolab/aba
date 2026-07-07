@@ -4,9 +4,7 @@ How one user message becomes an agent turn — the Reasoning-plane lifecycle tha
 streams text, calls tools, survives a client disconnect, and ends — plus the
 swappable LLM integration underneath it.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/durable_turns_plan.md` (the disconnect-survival
-> redesign) and `misc/agent_guidance.md` / `misc/prompt_quality_test_plan.md`.
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -18,8 +16,7 @@ domain-neutral so the science plugs in as content. So:
   asyncio task that emits into a per-turn event log; the SSE response is only a
   *subscriber*. A tab switch, network blip, or reload unsubscribes — it never
   cancels the work. Prevents the stranded-turn failure: a disconnect mid-tool
-  leaving a Turn in `executing_tools` forever with a permanent frontend spinner
-  (`misc/durable_turns_plan.md`, the C-1 motivation).
+  leaving a Turn in `executing_tools` forever with a permanent frontend spinner.
 - **Persist every transition; the DB is the truth, not memory.** A `Turn` row is
   checkpointed on every state change, so a restart can reap what was in flight
   and a resumed conversation reconstructs from durable state, not a live object.

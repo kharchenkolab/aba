@@ -3,10 +3,7 @@
 How the domain enters ABA as **content, never core code** — layered, curator-editable
 soft config composed into one `EffectiveBundle` that every consumer reads.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/
-> evolution log lives in `misc/bundle.md`, `misc/bundle_layering.md` (composition rules),
-> `misc/capabilities.md`, `misc/skill_cc_convergence.md`, and the modularity audits
-> (`misc/modularity_audit.md`, `misc/modularity_audit3.md`).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 

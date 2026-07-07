@@ -4,9 +4,7 @@ How the agent *acts*: every tool the Guide can call is one entry in a **registry
 single in-process MCP gateway**, rendered into the prompt by **one tiered presentation
 policy**, and dispatched through **one hook-driven path** — not hand-wired per agent.
 
-> Status: current as of 2026-07. This is the **maintained** reference; the design/evolution
-> log lives in `misc/phase6_mcp_wrapping.md` (the wrapping migration), `misc/tool_presentation.md`
-> (the tiering policy), and `misc/modularity_audit3.md` (the seam audit).
+> Status: current as of 2026-07. This is the **maintained** reference.
 
 ## Aims & principles
 
@@ -170,7 +168,6 @@ dispatch/steer path between them.
 | `core/runtime/hooks.py` | the Pre/Post/PostFailure hook registry (`Deny`/`Rewrite`, `run_pre`/`run_post`, `deny_to_result`) |
 | `guide.py:554` · `core/runtime/agent.py:61` | the catalog consumer (`list_tools(mode=spec.prompt_mode)` + `_PRIORITY_TOOLS`); `AgentSpec.prompt_mode` |
 | `tests/test_tool_presentation.py` · `regtest/placement/` | behavioral guards: contract-invariance across modes; tool-argument correctness for `standard` |
-| `misc/phase6_mcp_wrapping.md` · `misc/tool_presentation.md` · `misc/modularity_audit3.md` | design/evolution logs |
 
 ## Known gaps
 

@@ -3,9 +3,7 @@
 What ABA is, the one contract everything hinges on, how the parts fit, and where to go
 next. Start here, then follow a link.
 
-> Status: current as of 2026-07. This is the **maintained** orientation; the conceptual
-> essay is `misc/modularity2.md`, the architectural intent is `misc/arch3.md`, and the
-> latest structural assessment (grades + open coupling) is `misc/modularity_audit3.md`.
+> Status: current as of 2026-07. This is the **maintained** orientation.
 
 ## Aims & principles
 
@@ -116,8 +114,7 @@ promotion, bundle, exec record, …) — is in [`README.md`](README.md).
 
 ## Known gaps (architecture-level)
 
-These are cross-cutting; each subsystem doc carries its own local gaps. Full detail +
-grades in `misc/modularity_audit3.md`.
+These are cross-cutting; each subsystem doc carries its own local gaps.
 
 - **`guide → core.jobs` down-edge (up-edge dissolved).** The Compute→Reasoning *up*-edge is
   gone (Item 1): a finished job re-enters through `core/reasoning_port` (guide registers the
@@ -130,7 +127,7 @@ grades in `misc/modularity_audit3.md`.
   middleware in `core/web`. Remaining in main: the Reasoning-plane entries (which import guide)
   and the bio-coupled routes (→ `content/bio/web`, Item 2A.4). `guide.py`'s `stream_response`
   (~1089 loc) is still the un-split monolith (Item 2B). Seams are CI-guarded (route-table
-  snapshot + pin-coverage). Plan: `misc/item2_decomposition.md`.
+  snapshot + pin-coverage).
 - **Store read-port burn-down.** The typed read-port exists and is ratcheted, but some
   modules still reach raw SQL (multi-hop lineage walks have no edge-port yet). ([`entity-model.md`](entity-model.md))
 - **Identity is a reserved seam.** Single-user today (`human:local`); real multi-user
