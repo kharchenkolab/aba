@@ -237,3 +237,25 @@ def test_auto_install_status_endpoint(client):
     r = client.get("/api/install/auto")
     assert r.status_code == 200
     assert "status" in r.json() and "events" in r.json()
+
+
+def test_playbook_path_update_prefers_pulled_repo(tmp_path, monkeypatch):
+    """`aba update` must run the freshly-PULLED repo's update.yml, not the frozen
+    bundled copy — else steps added upstream (e.g. install-lstar-r) never run on a
+    deployed helper. install stays bundled (bootstrap; may have no repo yet)."""
+    from aba_installer import control as cm
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    repo_pb = (tmp_path / "repo" / "aba" / "install" / "core" / "helper" / "src"
+               / "aba_installer" / "update.yml")
+
+    # no repo copy yet → falls back to the bundled package copy
+    assert cm._playbook_path("update").resolve() == (
+        Path(cm.__file__).resolve().parent / "update.yml")
+    # install always uses the bundled copy, even if a repo copy exists
+    bundled_install = Path(cm.__file__).resolve().parent / "install.yml"
+    assert cm._playbook_path("install").resolve() == bundled_install.resolve()
+
+    # once the pulled repo has update.yml, update prefers it
+    repo_pb.parent.mkdir(parents=True)
+    repo_pb.write_text("steps: []\n")
+    assert cm._playbook_path("update") == repo_pb
