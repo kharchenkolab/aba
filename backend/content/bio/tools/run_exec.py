@@ -718,12 +718,15 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                         "note": f"Run was cancelled by the user "
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
             plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
+            from core.exec.run import harvest_intents
+            _intents = harvest_intents(cwd)   # aba.* write verbs (tool_library Phase 2)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
             from core.exec.output_cap import snip_middle
             out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
                    "returncode": res.returncode, "plots": plots, "tables": tables,
-                   "files": files, "execution_mode": "session"}
+                   "files": files, "execution_mode": "session",
+                   **({"intents": _intents} if _intents else {})}
             if env_name:
                 out["env"] = env_name
             # Stage 1 exec record — written after harvest so produced[] is

@@ -7,6 +7,7 @@ tools env (on PATH), killpg cancellation, and png/csv artifact harvest. Before
 P5 the background path was an older parallel copy that saw none of P1–P4.
 """
 from __future__ import annotations
+import os
 import shutil
 import sys
 import uuid
@@ -140,6 +141,7 @@ def run_python_code(
 
     plots, tables, files, warns = harvest_artifacts(scratch, since_ts=_since,
                                                     project_id=str(project_id))
+    _intents = harvest_intents(scratch)   # aba.* write verbs (tool_library Phase 2)
     from core.exec.output_cap import snip_middle
     # Provenance (provenance.md §3.1): snapshot the env DESCRIPTOR through the
     # interpreter that ran — the background/Slurm analog of the kernel-session
@@ -154,6 +156,7 @@ def run_python_code(
         "plots": plots,
         "tables": tables,
         "files": files,
+        **({"intents": _intents} if _intents else {}),
         # Self-contained one-shot script — its producing_code reproduces it alone.
         "execution_mode": "stateless",
         "cwd": str(scratch),
@@ -335,6 +338,62 @@ def _iter_kept(scratch: Path, suffixes: tuple[str, ...], since_ts: float):
         except OSError:
             continue
         yield f
+
+
+def harvest_intents(cwd) -> list:
+    """Execute the .aba_intents.jsonl the in-kernel `aba.*` write verbs emitted
+    (aba.create / aba.relate / aba.update), backend-side with full context —
+    provenance (derivation=manual, actor defaulted from the ambient turn context by
+    create_entity) and the entity write boundary. Local 'aba:new:N' refs from
+    create() resolve to the real ids minted here, so a create→relate chain in one
+    cell links correctly. Best-effort: a bad intent is recorded as an error and
+    skipped; the file is consumed. No-op (returns []) when no intents were emitted
+    — so this is safe to call on every run (tool_library Phase 2)."""
+    p = Path(cwd) / ".aba_intents.jsonl"
+    if not p.exists():
+        return []
+    import json
+    from core.graph.entities import create_entity, update_entity
+    from core.graph.edges import add_edge
+    from core.graph.derivation import manual
+    refs: dict = {}
+    out: list = []
+    for ln in p.read_text().splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            it = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        v = it.get("verb")
+        try:
+            if v == "create":
+                fields = it.get("fields") or {}
+                eid = create_entity(
+                    entity_type=it["type"], title=it["title"],
+                    derivation=manual(),
+                    metadata=fields or None,
+                )
+                if it.get("ref"):
+                    refs[it["ref"]] = eid
+                out.append({"verb": "create", "id": eid, "type": it["type"], "title": it["title"]})
+            elif v == "relate":
+                s = refs.get(it["source"], it["source"])
+                t = refs.get(it["target"], it["target"])
+                add_edge(s, t, it["rel"])
+                out.append({"verb": "relate", "source": s, "target": t, "rel": it["rel"]})
+            elif v == "update":
+                eid = refs.get(it["id"], it["id"])
+                update_entity(eid, **(it.get("fields") or {}))
+                out.append({"verb": "update", "id": eid})
+        except Exception as e:  # noqa: BLE001
+            out.append({"verb": v, "error": str(e)})
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    return out
 
 
 def harvest_artifacts(scratch: Path, since_ts: float = 0.0,

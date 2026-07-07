@@ -33,6 +33,7 @@ class _Aba:
 
     def __init__(self, db: Optional[str] = None):
         self._db = db or os.environ.get("ABA_PROJECT_DB")
+        self._n = 0  # local-ref counter for write intents (create → relate chaining)
 
     # -- internal --------------------------------------------------------
     def _rows(self, q: str, args: list) -> list[dict]:
@@ -111,5 +112,36 @@ class _Aba:
             "WHERE status != 'archived' GROUP BY type ORDER BY n DESC", []
         )
 
+    # -- write verbs (Phase 2): emit INTENTS, executed backend-side post-run ----
+    # The kernel never mutates the graph directly (no actor/provenance/SSE context
+    # here, and two processes must not write one SQLite). Instead each write appends
+    # an intent to $WORK_DIR/.aba_intents.jsonl; the backend's harvest_intents()
+    # executes them after the run with full context. create() returns a LOCAL REF
+    # ("aba:new:N") you can pass to relate() — refs resolve to real ids at harvest.
+    def _emit(self, intent: dict) -> None:
+        wd = os.environ.get("WORK_DIR") or os.getcwd()
+        with open(os.path.join(wd, ".aba_intents.jsonl"), "a") as f:
+            f.write(json.dumps(intent) + "\n")
+
+    def create(self, type: str, title: str, **fields: Any) -> str:  # noqa: A002
+        """Create a new entity (executed backend-side after this run, with
+        provenance + actor stamped there). Returns a local ref for relate()."""
+        ref = f"aba:new:{self._n}"; self._n += 1
+        print(f"[aba.create] type={type!r} title={title!r} -> {ref}", flush=True)
+        self._emit({"verb": "create", "ref": ref, "type": type, "title": title, "fields": fields})
+        return ref
+
+    def relate(self, source: str, rel: str, target: str) -> None:
+        """Add a typed edge `source -rel-> target`. Args are entity ids or local
+        refs returned by create() (resolved at harvest)."""
+        print(f"[aba.relate] {source} -{rel}-> {target}", flush=True)
+        self._emit({"verb": "relate", "source": source, "rel": rel, "target": target})
+
+    def update(self, entity_id: str, **fields: Any) -> None:
+        """Update fields (title/notes/tags/status/metadata) on an entity."""
+        print(f"[aba.update] {entity_id} {list(fields)}", flush=True)
+        self._emit({"verb": "update", "id": entity_id, "fields": fields})
+
     def __repr__(self) -> str:
-        return "<aba: entity-graph reads — .find(type=,status=,contains=), .get(id), .types()>"
+        return ("<aba: reads .find(type=,status=,contains=)/.get(id)/.types(); "
+                "writes .create(type,title,**)/.relate(src,rel,dst)/.update(id,**)>")
