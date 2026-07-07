@@ -39,12 +39,12 @@ tests/prompt_regression/results/
 tests/ood/_shots/
 tests/ood/_dashboard.png
 
-# Large local-only assets (kept out of git)
-misc/ui3/*.png
-eval/audits/vendor/
+# Private development notes — cloned separately from the private
+# kharchenkolab/aba-notes repo into misc/ (not part of the public repo).
+misc/
 
-# Local-only research/working notes (not project-track material)
-misc/acquisition_research/
+# Large local-only assets (kept out of git)
+eval/audits/vendor/
 
 # setuptools build dir from `pip install install/core/helper`
 install/core/helper/build/
