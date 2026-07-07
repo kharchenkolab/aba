@@ -30,6 +30,7 @@ run "seam — core/ does not import content/, name bio types, or import bio modu
 run "platform purity — platform sources free of top-level content imports"          "$PY" tests/check_platform_purity.py
 run "derivation — every create_entity supplies derivation= or exec_id="              "$PY" tests/check_derivation.py
 run "store port — _conn() confined to core/graph/ (store API elsewhere)"              "$PY" tests/check_store_port.py
+run "tool admission — JSON catalog doesn't grow without a boundary (tool_library)"    "$PY" tests/check_tool_admission.py
 # access-gate (no ungated entity mutation) is enforced by the pytest test
 # tests/test_project_pinning_coverage.py (all mutating routes + bio routes +
 # exemption table) — run via pytest in CI; not duplicated here (needs pytest).

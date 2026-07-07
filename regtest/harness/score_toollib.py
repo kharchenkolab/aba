@@ -108,7 +108,13 @@ def score(run_dir: str) -> dict:
 
 
 if __name__ == "__main__":
-    rows = [score(a) for a in sys.argv[1:]]
+    # --gate-reinvention: exit nonzero if any scored run shows raw-graph reinvention.
+    # The behavioral guardrail (tool_library Phase 6b) — run over the aba-scenario
+    # bundles in the weekly sweep so a regression that pushes the agent to reinvent
+    # graph access in raw code trips the sweep, the same way a science regression does.
+    gate = "--gate-reinvention" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    rows = [score(a) for a in args]
     for r in rows:
         m = r.get("mech") or {}
         print(f"{r['run']:<40} model={str(r.get('model')):<32} "
@@ -117,3 +123,8 @@ if __name__ == "__main__":
               f"| json_reads={r['json_read_total']} {r['json_reads']} "
               f"| aba_err={r['aba_errors']} | reinvention={r['reinvention']}")
     print(json.dumps(rows, indent=1))
+    if gate:
+        bad = [r["run"] for r in rows if r.get("reinvention", 0) > 0]
+        if bad:
+            print(f"REINVENTION REGRESSION: raw-graph access in {bad}", file=sys.stderr)
+            sys.exit(1)
