@@ -300,7 +300,13 @@ def _aba_helpers_py() -> str:
     """Inject the in-kernel `aba` read library (aba_inkernel.py) into the kernel
     namespace. The module is pure-stdlib (no backend import) and reads the project
     graph directly from $ABA_PROJECT_DB. Kept in a real file so it's testable +
-    lintable; injected as source because `core` isn't on the kernel's path."""
+    lintable; injected as source because `core` isn't on the kernel's path.
+
+    Phase-1 OPT-IN: only injected when ABA_TOOL_LIB is set (the tool-library
+    experiment / dual-run arm). Off by default so CONTROL runs are clean."""
+    import os
+    if not os.environ.get("ABA_TOOL_LIB"):
+        return ""
     from pathlib import Path
     src = (Path(__file__).parent / "aba_inkernel.py").read_text()
     return "\n# --- aba: in-kernel entity-graph reads (tool_library Phase 1) ---\n" + src + "\naba = _Aba()\n"

@@ -81,9 +81,11 @@ def run_python_code(
     # interactive kernel — so the surface is consistent (a fresh run that lost `aba`
     # would push the agent to reinvent the op in raw code). Pure-stdlib, reads
     # $ABA_PROJECT_DB (set in env_vars below). Safe mid-script (no __future__).
-    from pathlib import Path as _AbaP
-    _aba_src = (_AbaP(__file__).parent / "kernels" / "aba_inkernel.py").read_text()
-    lines.append(_aba_src + "\naba = _Aba()")
+    # Phase-1 OPT-IN: only when ABA_TOOL_LIB is set (matches the kernel path).
+    if os.environ.get("ABA_TOOL_LIB"):
+        from pathlib import Path as _AbaP
+        _aba_src = (_AbaP(__file__).parent / "kernels" / "aba_inkernel.py").read_text()
+        lines.append(_aba_src + "\naba = _Aba()")
     (scratch / "script.py").write_text("\n".join(lines) + "\n" + code)
     # Harvest only what THIS run produced. When run_id is the active Run, the
     # scratch IS the Run's work dir (shared with prior cells), so filter by the

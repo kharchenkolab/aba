@@ -127,6 +127,14 @@ def context_line() -> str:
             line += (". Long cells run interactively (raise timeout_s if needed); use "
                      "background=True only to parallelize independent jobs or when the user "
                      "asks — it's a fresh process with no kernel state.")
+        # tool_library Phase 1 (opt-in): the discovery cue for the in-kernel `aba`
+        # read library — a per-turn line that reaches every model tier uniformly
+        # (unlike a tool description, which lean tiers trim). Only when the flag is on.
+        if os.environ.get("ABA_TOOL_LIB"):
+            line += (". Entity reads: an `aba` object is in the run_python/run_r kernel — "
+                     "aba.find(type=…, status=…, contains=…), aba.get(id), aba.types() — "
+                     "read this project's entities directly in code instead of the "
+                     "list_entities / read_entity tools.")
         return line
     except Exception:  # noqa: BLE001
         return ""
