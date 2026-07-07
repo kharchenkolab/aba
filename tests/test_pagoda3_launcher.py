@@ -94,3 +94,55 @@ def test_convert_any_sets_lstar_rscript_env(monkeypatch, tmp_path):
     monkeypatch.setattr(pagoda3, "_rscript", lambda: sys.executable)
     pagoda3._convert_any(tmp_path / "x.rds", tmp_path / "o.building")
     assert seen["env"].get("LSTAR_RSCRIPT") == sys.executable   # bridge points at R
+
+
+def _make_store(d):
+    d.mkdir(parents=True); (d / ".zattrs").write_text("{}"); return d
+
+
+def test_serve_native_store_symlinks_in_project(tmp_path):
+    """A store inside the project (a run's work/ output) is SYMLINKED into the
+    served dir — no multi-GB copytree on every open."""
+    from content.bio.viewers.launchers import pagoda3
+    root = tmp_path / "proj"
+    store = _make_store(root / "work" / "ana" / "seurat.lstar.zarr")
+    cache = root / "pagoda3"
+    out = pagoda3._serve_native_store(store, cache, "seurat-abcd.lstar.zarr", root)
+    assert out.is_symlink()                          # linked, not copied
+    assert out.resolve() == store.resolve()
+    assert (out / ".zattrs").read_text() == "{}"     # served in place
+
+
+def test_serve_native_store_idempotent(tmp_path):
+    from content.bio.viewers.launchers import pagoda3
+    root = tmp_path / "proj"
+    store = _make_store(root / "work" / "ana" / "s.lstar.zarr")
+    cache = root / "pagoda3"
+    a = pagoda3._serve_native_store(store, cache, "s-abcd.lstar.zarr", root)
+    b = pagoda3._serve_native_store(store, cache, "s-abcd.lstar.zarr", root)
+    assert a == b and b.is_symlink() and b.resolve() == store.resolve()
+
+
+def test_serve_native_store_copies_when_outside_project(tmp_path):
+    """A store OUTSIDE the project can't be reached through the project sandbox,
+    so it's copied in (fallback) rather than symlinked."""
+    from content.bio.viewers.launchers import pagoda3
+    root = tmp_path / "proj"; root.mkdir()
+    store = _make_store(tmp_path / "external" / "e.lstar.zarr")
+    cache = root / "pagoda3"
+    out = pagoda3._serve_native_store(store, cache, "e-abcd.lstar.zarr", root)
+    assert not out.is_symlink() and out.is_dir()     # real copied tree
+    assert (out / ".zattrs").read_text() == "{}"
+
+
+def test_serve_native_store_replaces_stale_copy(tmp_path):
+    """An old copied tree at the target is replaced by a fresh symlink (e.g. after
+    this fix ships to a box whose cache still holds a pre-existing copy)."""
+    from content.bio.viewers.launchers import pagoda3
+    root = tmp_path / "proj"
+    store = _make_store(root / "work" / "ana" / "s.lstar.zarr")
+    cache = root / "pagoda3"; cache.mkdir(parents=True)
+    stale = cache / "s-abcd.lstar.zarr"; stale.mkdir(); (stale / "old").write_text("x")
+    out = pagoda3._serve_native_store(store, cache, "s-abcd.lstar.zarr", root)
+    assert out.is_symlink() and out.resolve() == store.resolve()
+    assert not (out / "old").exists()                # stale copy gone
