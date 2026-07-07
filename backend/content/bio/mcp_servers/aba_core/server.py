@@ -82,9 +82,20 @@ def make_server() -> FastMCP:
     # read TOOLS — so demote them from the catalog when the flag is on. Validated
     # safe by the Phase-1 forced arm (opus + haiku adopt aba cleanly, zero
     # reinvention, no quality regression). Seam-clean: bio names its own tools.
+    _demote = []
     if os.environ.get("ABA_TOOL_LIB"):
+        _demote += ["list_entities", "read_entity"]
+    # Write-flip (ABA_TOOL_LIB_WRITE_FLIP, requires ABA_TOOL_LIB): demote the write
+    # tools that the GENERIC aba verbs cover — register_dataset→aba.create,
+    # annotate_entity/update_entity_fields→aba.update, add_to_dataset→aba.relate.
+    # Richer lifecycle tools (promote_to_result/create_finding/create_claim) are NOT
+    # demoted — they have no generic aba equivalent yet (that's the content-provided
+    # aba.promote follow-on). Higher stakes than reads (persistent) — its own flag.
+    if os.environ.get("ABA_TOOL_LIB") and os.environ.get("ABA_TOOL_LIB_WRITE_FLIP"):
+        _demote += ["register_dataset", "annotate_entity", "update_entity_fields", "add_to_dataset"]
+    if _demote:
         tm = mcp._tool_manager
-        for _t in ("list_entities", "read_entity"):
+        for _t in _demote:
             try:
                 tm.remove_tool(_t)
             except Exception:

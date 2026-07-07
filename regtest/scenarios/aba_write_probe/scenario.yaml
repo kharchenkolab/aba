@@ -1,0 +1,70 @@
+id: aba_write_probe
+title: Entity-write probe (tool_library write-flip validation)
+domain: _infra
+gpu: false
+summary: >
+  A short, data-free arc that forces the agent to WRITE to the entity graph — annotate a
+  result (update), register a dataset (create), and link them (relate). Measures whether the
+  agent uses the in-kernel aba.update / aba.create / aba.relate under the write-flip
+  (ABA_TOOL_LIB=1 + ABA_TOOL_LIB_WRITE_FLIP=1, which demotes register_dataset / annotate_entity
+  / update_entity_fields / add_to_dataset) vs the JSON tools (control), and — critically —
+  whether it REINVENTS graph writes in raw code (should be zero). Metrics are extracted
+  post-hoc (regtest/harness/score_toollib.py); the checks here are coarse.
+data_files: []
+
+steps:
+  - id: s1
+    kind: analyze
+    actor: agent
+    prompt: >
+      Make a toy dataset in Python: 30 random (x, y) points with a positive correlation
+      (seed it). Scatter-plot x vs y titled "Scatter W" and save it as a PNG figure; show it.
+    expect:
+      produces: { figure: 1 }
+      checks: A scatter figure is produced and saved.
+
+  - id: s2
+    kind: pin
+    actor: user
+    target: { from_step: s1, select: figure }
+    expect:
+      state: { pinned_results_min: 1 }
+      checks: The figure is pinned — a Result entity now exists.
+
+  - id: s3
+    kind: analyze
+    actor: agent
+    prompt: >
+      Tag that result as "key-result" and add a note to it: "primary finding — revisit for
+      the paper". Confirm it's saved.
+    expect:
+      must_mention: ["key-result"]
+      checks: >
+        Updates the result entity's tags + notes. This is a WRITE — CONTROL uses
+        annotate_entity; the LIBRARY/flip agent should use aba.update(result_id, tags=…,
+        notes=…). Must NOT be done in raw sqlite.
+
+  - id: s4
+    kind: analyze
+    actor: agent
+    prompt: >
+      Also save those toy points to a CSV, register it as a dataset titled "toy points", and
+      link that dataset to the result as the data behind it.
+    expect:
+      must_mention: ["toy points"]
+      checks: >
+        Creates a dataset entity + a relation to the result. CONTROL uses register_dataset +
+        add_to_dataset; the flip agent should use aba.create(type="dataset", …) +
+        aba.relate(...). No raw-graph writes.
+
+  - id: s5
+    kind: examine
+    actor: agent
+    prompt: >
+      Confirm the state: what tag and note does the result carry, and is the "toy points"
+      dataset linked to it?
+    expect:
+      must_mention: ["key-result", "toy points"]
+      checks: >
+        Reads back the result's tags/note and the dataset link — via aba.get/aba.find (flip)
+        or read_entity/list_entities (control). Confirms the writes landed.
