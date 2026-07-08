@@ -75,6 +75,22 @@ def test_cli_bootstrap_honors_aba_ref(srcrepo, tmp_path, monkeypatch):
     assert _head_subject(repo) == "A"     # retargeted main → v1
 
 
+def test_cli_bootstrap_syncs_from_repo_src(srcrepo, tmp_path, monkeypatch):
+    """ABA_REPO_SRC (local / offline / dev) → the bootstrap rsyncs the source into the
+    deployed repo BEFORE the playbook loads, so an offline `aba update` runs THIS
+    release's playbook (no manual pre-sync — the trap the git path already avoided).
+    Excludes .git → the deployed copy stays a file-copy."""
+    from aba_installer import cli
+    deployed = tmp_path / "home" / "repo" / "aba"
+    deployed.mkdir(parents=True)
+    (deployed / "f").write_text("STALE")          # deployed lags the source
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ABA_REPO_SRC", str(srcrepo["path"]))
+    cli._bootstrap_repo_for_update()
+    assert (deployed / "f").read_text() == "B"    # synced from source (main HEAD)
+    assert not (deployed / ".git").exists()       # file-copy, not a checkout
+
+
 # ── post-public acquisition contract: default = git checkout (one-command update);
 #    ABA_REPO_SRC = file-copy override (dev/offline). See install/linux/setup.sh. ──
 

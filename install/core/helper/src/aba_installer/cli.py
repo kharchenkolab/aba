@@ -49,16 +49,34 @@ def _emit(name: str, payload: dict) -> None:
 
 
 def _bootstrap_repo_for_update() -> None:
-    """Bring the pulled repo to `$ABA_REF` (default main) BEFORE loading the update
-    playbook, so a step added at that ref takes effect on THIS `aba update`, not the
-    next one. Mirrors the playbook's own pull-aba (git case); the in-playbook pull-aba
-    then re-runs idempotently (and covers the rsync / clone cases this skips). Skipped
-    when ABA_REPO_SRC is set (a local/offline install — pull-aba rsyncs from source).
-    Non-fatal: on any failure we fall through and `_playbook_path` uses the repo copy
-    already on disk, else the bundled one."""
-    if os.environ.get("ABA_REPO_SRC"):
-        return
+    """Bring the deployed repo up to date BEFORE loading the update playbook, so a
+    step (or a fix to the playbook/installer) added upstream takes effect on THIS
+    `aba update`, not the next one. Mirrors the in-playbook pull-aba; pull-aba then
+    re-runs idempotently. Two source modes, matching pull-aba:
+      • ABA_REPO_SRC set (local / offline / dev) → rsync from that checkout.
+      • else a git checkout → shallow-fetch $ABA_REF and reset.
+    Non-fatal: on any failure we fall through and `_playbook_path` uses the on-disk
+    repo copy, else the bundled one."""
     repo = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba")) / "repo" / "aba"
+    src = os.environ.get("ABA_REPO_SRC")
+    if src:
+        # local/offline/dev install: pre-sync from the source checkout (same rsync +
+        # excludes as pull-aba) so we load THIS release's playbook, not the stale
+        # deployed copy — the manual-pre-sync trap the git path already avoids.
+        if not repo.is_dir():
+            return
+        try:
+            subprocess.run(
+                ["rsync", "-a",
+                 "--exclude", ".envs_cache", "--exclude", "_runs", "--exclude", "reports",
+                 "--exclude", ".git", "--exclude", ".venv", "--exclude", "node_modules",
+                 "--exclude", "dist", "--exclude", "__pycache__",
+                 f"{src.rstrip('/')}/", f"{repo}/"],
+                check=True, capture_output=True, timeout=300)
+            print(f"  (synced repo from {src} so the current update playbook is used)", flush=True)
+        except Exception:  # noqa: BLE001 — best-effort; _playbook_path falls back to on-disk/bundled
+            pass
+        return
     if not (repo / ".git").is_dir():
         return
     ref = os.environ.get("ABA_REF", "main")
