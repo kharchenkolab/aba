@@ -36,8 +36,12 @@ steps:
       until a manual reinstall. Takes effect on the NEXT run (this run's cli.py is already
       imported). Non-fatal: on failure the existing (working) helper stays in place.
     commands:
-      - 'VENV="$ABA_HOME/installer/venv"; H="$REPO_DIR/aba/install/core/helper"; if [ -x "$VENV/bin/pip" ] && [ -d "$H" ]; then "$VENV/bin/pip" install -q --force-reinstall --no-deps "$H" && echo "installer helper refreshed from $H" || echo "WARNING: helper refresh failed — keeping the existing installer helper"; else echo "no installer venv or helper source — skipping helper refresh"; fi'
-    timeout_seconds: 120
+      # BEST-EFFORT + NON-FATAL: this step must NEVER stop the update (a slow pip on a
+      # networked FS was blocking the real work). Time-bound pip (when `timeout` exists)
+      # and always `exit 0` — on failure the existing helper stays and it retries next
+      # update; installer fixes are infrequent, so an occasional skip is fine.
+      - 'VENV="$ABA_HOME/installer/venv"; H="$REPO_DIR/aba/install/core/helper"; msg="no installer venv/helper source — skipping helper refresh"; if [ -x "$VENV/bin/pip" ] && [ -d "$H" ]; then if command -v timeout >/dev/null 2>&1; then RUN="timeout 240"; else RUN=""; fi; if $RUN "$VENV/bin/pip" install -q --force-reinstall --no-deps "$H" >/dev/null 2>&1; then msg="installer helper refreshed from $H"; else msg="NOTE: helper refresh skipped (slow/failed) — existing helper kept; retries next update"; fi; fi; echo "$msg"; true'
+    timeout_seconds: 300
 
   - id: pull-recipes
     title: Update aba-recipe-pack
