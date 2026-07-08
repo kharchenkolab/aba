@@ -3,9 +3,9 @@
 **An AI-orchestrated workspace for biological data analysis.**
 
 ABA is a research environment where a biologist and an AI agent — **Guide** (powered by
-Claude) — work side by side on a real analysis project, from raw data all the way to
+a language model of your choice, such as Claude models) — work side by side on a real analysis project, from raw data all the way to
 results and conclusions. You describe what you want in plain language; Guide plans the
-analysis, runs the code, and produces results you can inspect, revise, and build on.
+analysis, runs the code, and produces results you can inspect, revise, and build on. 
 
 Unlike a chatbot bolted onto a notebook, ABA keeps your work as **structured, typed,
 persistent objects** — datasets, analyses, figures, findings — each stamped with the
@@ -36,7 +36,7 @@ its capabilities grow over time without changing the core application.
 ## Requirements
 
 - A **Mac or Linux** machine (or access to a Slurm cluster / Open OnDemand).
-- An **Anthropic API key** *or* a **Claude.ai subscription** to power the Guide agent.
+- An **Anthropic API key/subscription ** or access to some other language model to power the Guide agent.
 
 The installer bootstraps everything else it needs (Python, the analysis environment, and
 the interface) — you don't have to set those up by hand.
@@ -52,8 +52,7 @@ Pick the guide for your setup:
 | **Slurm cluster** (offload jobs to HPC) | [docs/install/cluster_personal.md](docs/install/cluster_personal.md) |
 | **Multi-user cluster** (admin setup via Open OnDemand) | [docs/install/cluster_open_ondemand.md](docs/install/cluster_open_ondemand.md) |
 
-Once installed, ABA opens in your browser. Sign in with your Anthropic API key or Claude.ai
-account, create a project, import your data, and start working with Guide.
+Once installed, ABA opens in your browser, configure Anthropic credentials or a custom LLM, create a project, import your data, and start working with Guide.
 
 ## Learn more
 
