@@ -42,8 +42,16 @@ class LauncherContext:
         }
 
 
-def default_context(port: int = DEFAULT_PORT) -> LauncherContext:
+def default_context(port: Optional[int] = None) -> LauncherContext:
     home = aba_home()
+    # Port precedence: explicit arg › $ABA_PORT (headless installers set it from
+    # setup.sh --port) › DEFAULT_PORT. Lets a 2nd install on one host pick a free
+    # port instead of colliding on 8000. (The mac tray path uses portpick instead.)
+    if port is None:
+        try:
+            port = int(os.getenv("ABA_PORT") or DEFAULT_PORT)
+        except ValueError:
+            port = DEFAULT_PORT
     return LauncherContext(
         aba_home=home,
         aba_runtime_dir=home / "runtime",

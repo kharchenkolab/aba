@@ -102,6 +102,21 @@ def test_default_context_resolves_under_aba_home(tmp_aba_home):
     assert ctx.aba_port == 8001
 
 
+def test_default_context_reads_aba_port_env(tmp_aba_home, monkeypatch):
+    """Headless installs bake the port from $ABA_PORT (setup.sh --port exports it),
+    so a 2nd install on one host can pick a free port instead of colliding on :8000.
+    Explicit arg wins; unset/garbage → DEFAULT_PORT."""
+    monkeypatch.setenv("ABA_PORT", "8123")
+    ctx = default_context()
+    assert ctx.aba_port == 8123
+    assert 'ABA_PORT="8123"' in render(ctx)          # baked into the launcher
+    assert default_context(port=9000).aba_port == 9000   # explicit arg overrides env
+    monkeypatch.delenv("ABA_PORT", raising=False)
+    assert default_context().aba_port == launcher.DEFAULT_PORT   # unset → 8000
+    monkeypatch.setenv("ABA_PORT", "notaport")
+    assert default_context().aba_port == launcher.DEFAULT_PORT   # garbage → safe default
+
+
 def test_rendered_launcher_has_known_subcommands():
     """The launcher's case statement must cover the actions we exposed in
     the Control UI: up / stop / status / logs / update / doctor / uninstall."""

@@ -6,6 +6,7 @@
 #   ./install/linux/setup.sh --install-dir /opt/aba          # put the WHOLE install elsewhere (default ~/.aba)
 #   ./install/linux/setup.sh --runtime-dir /data/$USER/aba   # just projects/data on a bigger disk
 #   ./install/linux/setup.sh --cluster-personal --runtime-dir /shared/$USER/aba   # Slurm offload
+#   ./install/linux/setup.sh --port 8100                     # backend port (default 8000; 2nd install on one host)
 #
 # aba + the recipe pack are public: the playbook git-clones both over https at
 # $ABA_REF / $RECIPES_REF (default main) into $ABA_HOME/repo — the deployed repo is a
@@ -27,7 +28,8 @@ while [ $# -gt 0 ]; do
     --install-dir)               INSTALL_DIR="${2:?--install-dir needs a path}"; shift ;;
     --runtime-dir)               RUNTIME_DIR="${2:?--runtime-dir needs a path}"; shift ;;
     --api-key)                   API_KEY="${2:?--api-key needs a value}"; shift ;;
-    -h|--help)                   sed -n '2,14p' "$0"; exit 0 ;;
+    --port)                      ABA_PORT="${2:?--port needs a value}"; shift ;;
+    -h|--help)                   sed -n '2,15p' "$0"; exit 0 ;;
     *)                           EXTRA+=("$1") ;;
   esac; shift
 done
@@ -41,6 +43,9 @@ echo "== ABA Linux installer =="
 echo "   repo:    $REPO_ROOT"
 echo "   home:    $ABA_HOME"
 echo "   profile: $PROFILE (headless=$HEADLESS)"
+# --port (or an exported ABA_PORT) bakes into the launcher (launcher.default_context reads
+# ABA_PORT; default 8000) — a 2nd install on one host can pick a free port instead of :8000.
+[ -n "${ABA_PORT:-}" ] && { export ABA_PORT; echo "   port:    $ABA_PORT (backend)"; }
 
 # --- prerequisites: git + curl (the rest — a modern Python — we stand up) ---
 miss=""
