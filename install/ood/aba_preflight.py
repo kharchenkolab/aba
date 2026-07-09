@@ -304,6 +304,20 @@ def main():
             lines.append(f"export ABA_BATCH_SUBMITTER={shq(jobs['submitter'])}")
         if jobs.get("hpc_config"):
             lines.append(f"export ABA_HPC_CONFIG={shq(ex(jobs['hpc_config']))}")
+        # host environment-modules (site.yaml `modules:`) — the site's Lmod init +
+        # the paths/libs to bind so in-session `module load` works inside the SIF.
+        # Emitted as plain space-joined strings (YAML parsed HERE, applied by
+        # script.sh.erb on the node: source init → bind → forward MODULEPATH/LMOD_*).
+        # Requires a base image whose glibc matches the nodes (see build.sh); no-op
+        # when absent. See docs/install + core/exec/modules.py.
+        mods = site.get("modules") or {}
+        if mods.get("enabled"):
+            if mods.get("init"):
+                lines.append(f"export ABA_MODULE_INIT={shq(ex(mods['init']))}")
+            if mods.get("binds"):
+                lines.append(f"export ABA_MODULE_BINDS={shq(' '.join(ex(b) for b in mods['binds']))}")
+            if mods.get("libs"):
+                lines.append(f"export ABA_MODULE_LIBS={shq(' '.join(str(l) for l in mods['libs']))}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file

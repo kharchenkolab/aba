@@ -66,6 +66,38 @@ def test_preflight_surfaces_glibc_warn():
         assert any(warn in w for w in (status.get("warnings") or [])), (r.stdout, r.stderr, status)
 
 
+def test_preflight_emits_module_config():
+    """A site.yaml `modules:` block → aba-env.sh exports ABA_MODULE_INIT/BINDS/LIBS
+    (space-joined), which script.sh.erb consumes on the node to bind the host Lmod +
+    modulefiles so in-session `module load` works inside the SIF."""
+    import yaml
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "site.yaml").write_text(
+            "site: {name: t}\n"
+            f"scopes:\n  user:\n    state_dir: {tdp}/state\n"
+            "credentials: {order: [], on_missing: demo_mode}\n"
+            "modules:\n  enabled: true\n  init: /etc/profile.d/lmod.sh\n"
+            "  binds: [/opt/ohpc, /software]\n  libs: [libtcl8.5.so]\n")
+        env = {**os.environ, "ABA_SITE_CONFIG": str(tdp / "site.yaml"),
+               "ABA_PF_STAGED": str(tdp), "ABA_PF_USER": "u", "ABA_PF_HOME": str(tdp), "ABA_PF_GROUP": ""}
+        subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
+        envsh = (tdp / "aba-env.sh").read_text()
+        assert "export ABA_MODULE_INIT='/etc/profile.d/lmod.sh'" in envsh, envsh
+        assert "export ABA_MODULE_BINDS='/opt/ohpc /software'" in envsh, envsh
+        assert "export ABA_MODULE_LIBS='libtcl8.5.so'" in envsh, envsh
+        # disabled / absent → no emission
+        (tdp / "site2.yaml").write_text(
+            "site: {name: t}\n"
+            f"scopes:\n  user:\n    state_dir: {tdp}/state2\n"
+            "credentials: {order: [], on_missing: demo_mode}\n"
+            "modules: {enabled: false, init: /x, binds: [/y]}\n")
+        env["ABA_SITE_CONFIG"] = str(tdp / "site2.yaml")
+        subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
+        assert "ABA_MODULE_" not in (tdp / "aba-env.sh").read_text()
+
+
 if __name__ == "__main__":
     test_glibc_floor_truth_table(); print("glibc_floor truth table: PASS")
     test_preflight_surfaces_glibc_warn(); print("preflight surfaces warn: PASS")
+    test_preflight_emits_module_config(); print("preflight emits module config: PASS")

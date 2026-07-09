@@ -124,6 +124,11 @@ image:
 jobs:                                     # background-job offload (omit → in-process on the session node)
   submitter: slurm
   hpc_config: /cluster/aba/hpc.yaml
+modules:                                  # OPTIONAL — expose the host Lmod modules IN-SESSION
+  enabled: true                           # (needs the SIF base OS to match the nodes; see §1)
+  init: /etc/profile.d/lmod.sh            # the cluster's Lmod init
+  binds: [/opt/ohpc, /software, /bin/lua, /usr/lib64/lua, /usr/share/lua]   # Lmod + modulefiles + tool trees + lua
+  libs:  [liblua-5.1.so, libreadline.so.6, libncurses.so.5, libncursesw.so.5, libtinfo.so.5, libtcl8.5.so]  # host libs the Lmod stack links
 scopes:
   institution: { bundle_path: /cluster/aba/installation }   # optional, over the baked pack
   group:

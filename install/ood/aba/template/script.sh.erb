@@ -109,6 +109,27 @@ if [ -n "${ABA_SIF:-}" ]; then
     else echo "ABA: WARNING offload backend not staged ($obd) — background Slurm jobs may fail"; fi
   fi
 
+  # --- Host environment-modules plumbing (site.yaml `modules:` → ABA_MODULE_* in
+  # aba-env.sh): bind the cluster's Lmod + modulefiles + tool trees so IN-SESSION
+  # `module load` works inside the SIF. Only sound when the base image's glibc matches
+  # the nodes' (build.sh enforces) — then these host EL libs are ABI-compatible; the
+  # backend's core/exec/modules.py then finds LMOD_PKG/init/bash (bound) and activates.
+  # Resolve on THIS node: source the init for MODULEPATH/LMOD_*, ldconfig the libs.
+  # No-op when unset. (Offloaded Slurm jobs load modules natively on the bare node.)
+  if [ -n "${ABA_MODULE_INIT:-}" ] && [ -f "${ABA_MODULE_INIT}" ]; then
+    ( . "${ABA_MODULE_INIT}" >/dev/null 2>&1
+      for v in MODULEPATH MODULESHOME LMOD_CMD LMOD_DIR LMOD_PKG LMOD_ROOT LMOD_SYSTEM_DEFAULT_MODULES; do
+        eval "_x=\${$v:-}"; [ -n "$_x" ] && echo "$v=$_x"; done ) > "${PWD}/.modenv"
+    while IFS='=' read -r _k _v; do [ -n "$_v" ] && envs+=( --env "${_k}=${_v}" ); done < "${PWD}/.modenv"
+    for b in ${ABA_MODULE_BINDS:-}; do [ -e "$b" ] && binds+=( --bind "$b" ); done
+    _hostlib=0
+    for l in ${ABA_MODULE_LIBS:-}; do
+      f=$(ldconfig -p 2>/dev/null | awk -v L="$l" '$1==L{print $NF; exit}')
+      [ -n "$f" ] && { binds+=( --bind "$f:/opt/hostlibs/$l" ); _hostlib=1; }
+    done
+    [ "$_hostlib" = 1 ] && envs+=( --env "LD_LIBRARY_PATH=/opt/hostlibs" )
+  fi
+
   apptainer run --containall "${binds[@]}" "${envs[@]}" "${ABA_SIF}" &
   UV=$!
 else
