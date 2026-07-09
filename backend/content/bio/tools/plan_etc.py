@@ -104,7 +104,21 @@ def _nextflow_env_blocker(pipeline: str, profile: Optional[str]) -> Optional[dic
     """F6: fail fast (instead of timing out) when the run can't possibly execute
     here. Two cases: (a) the profile names a container engine that isn't
     installed; (b) it's an nf-core pipeline with no backend profile and no
-    container engine on the box. Returns an error dict, or None to proceed."""
+    container engine on the box. Returns an error dict, or None to proceed.
+
+    On a Slurm cluster the head + tasks run on COMPUTE NODES that have the container
+    engine + the site profile (e.g. cbe) — NOT in this (possibly containerized)
+    process. So the in-process engine checks below would wrongly block a runnable
+    pipeline. Skip them when a scheduler is present (submitter=slurm); keep them only
+    for LOCAL installs (submitter=local), where the engine really must be on this box.
+    Keyed on the SUBMITTER, not nextflow's execution mode (which defaults to slurm even
+    on a laptop) — a cluster's nodes have the engine regardless of local/slurm fan-out."""
+    try:
+        from core.jobs.submitter import submitter_name
+        if submitter_name() == "slurm":
+            return None
+    except Exception:  # noqa: BLE001 — treat as local; fall through to the in-process checks
+        pass
     tokens = {t.strip() for t in (profile or "").split(",") if t.strip()}
     avail = _available_container_engines()
     requested = tokens & set(_CONTAINER_ENGINES)

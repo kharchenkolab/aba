@@ -78,7 +78,9 @@ def test_preflight_emits_module_config():
             f"scopes:\n  user:\n    state_dir: {tdp}/state\n"
             "credentials: {order: [], on_missing: demo_mode}\n"
             "modules:\n  enabled: true\n  init: /etc/profile.d/lmod.sh\n"
-            "  binds: [/opt/ohpc, /software]\n  libs: [libtcl8.5.so]\n")
+            "  binds: [/opt/ohpc, /software]\n  libs: [libtcl8.5.so]\n"
+            "nextflow:\n  module: nextflow/24.04.4\n  profiles: [cbe]\n"
+            "  config: /cluster/aba/nextflow/cbe.config\n")
         env = {**os.environ, "ABA_SITE_CONFIG": str(tdp / "site.yaml"),
                "ABA_PF_STAGED": str(tdp), "ABA_PF_USER": "u", "ABA_PF_HOME": str(tdp), "ABA_PF_GROUP": ""}
         subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
@@ -86,6 +88,10 @@ def test_preflight_emits_module_config():
         assert "export ABA_MODULE_INIT='/etc/profile.d/lmod.sh'" in envsh, envsh
         assert "export ABA_MODULE_BINDS='/opt/ohpc /software'" in envsh, envsh
         assert "export ABA_MODULE_LIBS='libtcl8.5.so'" in envsh, envsh
+        # nf-core: the nextflow block flips run_nextflow on + steers the offloaded head
+        assert "export ABA_NEXTFLOW_MODULE='nextflow/24.04.4'" in envsh, envsh
+        assert "export ABA_NEXTFLOW_PROFILES='cbe'" in envsh, envsh
+        assert "export ABA_NEXTFLOW_CONFIG='/cluster/aba/nextflow/cbe.config'" in envsh, envsh
         # disabled / absent → no emission
         (tdp / "site2.yaml").write_text(
             "site: {name: t}\n"

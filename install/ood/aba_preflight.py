@@ -318,6 +318,22 @@ def main():
                 lines.append(f"export ABA_MODULE_BINDS={shq(' '.join(ex(b) for b in mods['binds']))}")
             if mods.get("libs"):
                 lines.append(f"export ABA_MODULE_LIBS={shq(' '.join(str(l) for l in mods['libs']))}")
+        # nf-core / Nextflow (site.yaml `nextflow:`) — the cluster's nextflow module +
+        # site profile/config so the OFFLOADED head runs pipelines: detection flips
+        # run_nextflow True, and the Slurm head `module load`s nextflow + appends the
+        # site profile (e.g. cbe → tasks via apptainer on the nodes). nextflow_config()
+        # also reads hpc.yaml; this is the site.yaml route (consistent with modules:).
+        # No-op when absent → run_nextflow stays False (in-workspace only).
+        nf = site.get("nextflow") or {}
+        if nf.get("module"):
+            lines.append(f"export ABA_NEXTFLOW_MODULE={shq(nf['module'])}")
+        if nf.get("profiles"):
+            prof = nf["profiles"] if isinstance(nf["profiles"], str) else ",".join(nf["profiles"])
+            lines.append(f"export ABA_NEXTFLOW_PROFILES={shq(prof)}")
+        if nf.get("config"):
+            lines.append(f"export ABA_NEXTFLOW_CONFIG={shq(ex(nf['config']))}")
+        if nf.get("cachedir"):
+            lines.append(f"export ABA_NEXTFLOW_CACHEDIR={shq(ex(nf['cachedir']))}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file
