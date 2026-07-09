@@ -456,6 +456,32 @@ def test_job_body_bare_when_wrap_unset(monkeypatch, tmp_path):
     assert "/shared/base/bin/python -u -m core.jobs.slurm_entry" in body, body
 
 
+def test_nextflow_head_is_bare_bash(slurm, monkeypatch):
+    """A run_nextflow job submits a BARE bash head — `module load nextflow` +
+    `nextflow run …`, with NO python/backend/slurm_entry on the node — and stores
+    nf_harvest so poll() harvests the run dir server-side. Works fat AND slim; keeps
+    nf-core genuinely unwrapped/backend-independent (misc/fatagain.md)."""
+    import uuid
+    monkeypatch.setenv("ABA_NEXTFLOW_MODULE", "nextflow/24.04.4")
+    monkeypatch.setenv("ABA_NEXTFLOW_PROFILES", "cbe")
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-nf-head")["id"]
+    jid = f"job_{uuid.uuid4().hex[:10]}"
+    job = create_job(job_id=jid, kind="run_nextflow", title="t", focus_entity_id=None,
+                     params={"project_id": pid, "pipeline": "nf-core/demo",
+                             "revision": "1.0.2", "profile": "test", "timeout_s": 60},
+                     project_id=pid)
+    sub = SlurmSubmitter()
+    sub.submit(job)
+    jsh = (sub._run_dir(job) / "job.sh").read_text()
+    assert "module load nextflow/24.04.4" in jsh, jsh
+    assert "nextflow run nf-core/demo" in jsh and "test,cbe" in jsh, jsh
+    assert "slurm_entry" not in jsh and "aba-venv/bin/python" not in jsh, jsh
+    ctx = get_job(jid, project_id=pid)["params"].get("nf_harvest")
+    assert ctx and ctx["command"].startswith("nextflow run nf-core/demo"), ctx
+    assert ctx["profile"] == "test,cbe" and ctx["pipeline"] == "nf-core/demo", ctx
+
+
 def test_wrap_binds_module_dirs_present_only(monkeypatch, tmp_path):
     """Cluster-module tool trees (ABA_MODULE_BINDS) are identity-bound INTO the wrap so
     a module-resolved binary (gatk/samtools) resolves inside the SIF — but only paths

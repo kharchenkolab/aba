@@ -209,13 +209,28 @@ class SlurmSubmitter:
             "outdir": params.get("outdir"), "execution": params.get("execution"),
             "local_resources": params.get("local_resources"),
         }))
-        job_py, job_backend = _offload_runtime()   # bare-node interpreter + backend dir
         job_sh = run_dir / "job.sh"
-        job_sh.write_text(_job_body(
-            kind=kind, mods=mods, nf_path_line=_nf_path_line, spec_path=spec_path,
-            run_dir=run_dir, done_path=done_path,
-            gpu=bool((params.get("estimate") or {}).get("gpu")),
-            job_py=job_py, job_backend=job_backend))
+        if kind == "run_nextflow":
+            # nf-core head is a BARE bash job: `module load nextflow; nextflow run …`
+            # with no python/backend on the node (misc/fatagain.md). The ABA server
+            # harvests the run dir afterward (poll → harvest_nextflow_result), so
+            # parsing never runs on the node. Works identically under fat and slim.
+            from core.exec.nextflow import nextflow_head_script
+            body, nf_ctx = nextflow_head_script(
+                pipeline=params.get("pipeline") or "", project_id=str(pid),
+                run_id=params.get("run_id") or job["id"],
+                revision=params.get("revision"), profile=params.get("profile"),
+                params=params.get("nf_params") or {}, outdir=params.get("outdir"),
+                execution=params.get("execution"), local_resources=params.get("local_resources"))
+            job_sh.write_text(body)
+            params = {**params, "nf_harvest": nf_ctx}   # poll() harvests from these paths
+        else:
+            job_py, job_backend = _offload_runtime()   # bare-node interpreter + backend dir
+            job_sh.write_text(_job_body(
+                kind=kind, mods=mods, nf_path_line=_nf_path_line, spec_path=spec_path,
+                run_dir=run_dir, done_path=done_path,
+                gpu=bool((params.get("estimate") or {}).get("gpu")),
+                job_py=job_py, job_backend=job_backend))
         job_sh.chmod(0o755)
 
         if kind == "run_nextflow":
@@ -275,34 +290,80 @@ class SlurmSubmitter:
         params = job.get("params") or {}
         run_dir = Path(params.get("run_dir") or self._run_dir(job))
         done = run_dir / "done"
-        result = self._result_from_sentinel(run_dir)
-        if result is not None:                      # the sentinel is AUTHORITATIVE
-            return result
+        # A decoupled Nextflow head ran BARE bash (no python/backend, no result.json)
+        # — harvest its run dir SERVER-SIDE once `done` lands. Other jobs read the
+        # result.json the in-node slurm_entry wrote (the sentinel is AUTHORITATIVE).
+        nf_ctx = params.get("nf_harvest") if job.get("kind") == "run_nextflow" else None
+        if nf_ctx is not None:
+            if done.exists():
+                return self._harvest_nextflow(nf_ctx, run_dir, params)
+        else:
+            result = self._result_from_sentinel(run_dir)
+            if result is not None:
+                return result
         sid = params.get("slurm_id")
         if not sid:
             return None
-        # No sentinel yet. The job is still going if squeue (the LIVE state) lists
-        # it — do NOT consult sacct here: sacct can return a STALE/historical
-        # record for a reused job id (a dev cluster whose counter reset), which
-        # would wrongly fail a job that's about to run. Also grace the brief
-        # submit→scheduler window so a not-yet-queued job isn't mistaken for dead.
+        # Not done yet. The job is still going if squeue (the LIVE state) lists it — do
+        # NOT consult sacct here: sacct can return a STALE/historical record for a
+        # reused job id (a dev cluster whose counter reset), which would wrongly fail a
+        # job that's about to run. Also grace the brief submit→scheduler window.
         if self._in_squeue(sid) or self._too_young(job):
             return None
-        # Gone from squeue and past the grace: re-check the sentinel (it may have
-        # just landed on the shared FS), then treat an sacct FAIL as a real death.
-        result = self._result_from_sentinel(run_dir)
-        if result is not None:
-            return result
+        # Gone from squeue and past the grace: re-check completion (it may have just
+        # landed on the shared FS), then treat an sacct FAIL as a real death.
+        if nf_ctx is not None:
+            if done.exists():
+                return self._harvest_nextflow(nf_ctx, run_dir, params)
+        else:
+            result = self._result_from_sentinel(run_dir)
+            if result is not None:
+                return result
         st = self._sacct_state(sid)
         if st in _SACCT_TERMINAL_FAIL:
-            # The job was killed by Slurm (walltime/node-fail/preempt/cancel) and
-            # never wrote a result. `slurm_terminal_fail` marks this as an
-            # INFRASTRUCTURE death — distinct from a result.json that reports a
-            # non-zero exit (a real pipeline error). Lets the runner auto-resume a
-            # Nextflow head whose unpredictable lifetime outran its walltime.
+            # The job was killed by Slurm (walltime/node-fail/preempt/cancel) and never
+            # wrote `done`. `slurm_terminal_fail` marks this an INFRASTRUCTURE death —
+            # distinct from a completed run whose result reports a non-zero exit (a real
+            # pipeline error). Lets the runner auto-resume a Nextflow head whose
+            # unpredictable lifetime outran its walltime.
             return {"error": f"slurm job {st} (no result written)", "returncode": 1,
                     "slurm_terminal_fail": st}
         return None
+
+    def _harvest_nextflow(self, ctx: dict, run_dir: Path, params: dict) -> dict:
+        """Build the decoupled Nextflow head's result from its completed run dir. The
+        head ran `nextflow` bare, so ALL parsing/harvest (trace/MultiQC/failure/
+        artifacts) happens SERVER-SIDE here (misc/fatagain.md). stdout/stderr are the
+        head's sbatch-captured job.log/job.err; rc is the `done` sentinel."""
+        from core.exec.nextflow import harvest_nextflow_result
+        done = run_dir / "done"
+        try:
+            rc = int(((done.read_text().strip() if done.exists() else "") or "1"))
+        except ValueError:
+            rc = 1
+        nf_ver = ""
+        try:
+            import re as _re
+            vtxt = (Path(ctx["scratch"]) / "nf_version.txt").read_text()
+            m = _re.search(r"version\s+([0-9][0-9.]*)", vtxt)
+            nf_ver = m.group(1) if m else ""
+        except Exception:  # noqa: BLE001
+            pass
+        return harvest_nextflow_result(
+            scratch=ctx["scratch"], outdir=ctx["outdir"], reports=ctx["reports"],
+            returncode=rc, stdout=self._read_tail(run_dir / "job.log"),
+            stderr=self._read_tail(run_dir / "job.err"),
+            pipeline=ctx.get("pipeline") or "", revision=ctx.get("revision"),
+            profile=ctx.get("profile"), params=ctx.get("params") or {},
+            project_id=ctx.get("project_id") or str(params.get("project_id") or "default"),
+            run_id=ctx.get("run_id") or "", command=ctx.get("command") or "", nf_version=nf_ver)
+
+    @staticmethod
+    def _read_tail(p: Path, max_bytes: int = 200_000) -> str:
+        try:
+            return p.read_bytes()[-max_bytes:].decode("utf-8", "replace")
+        except OSError:
+            return ""
 
     def _result_from_sentinel(self, run_dir: Path) -> Optional[dict]:
         done = run_dir / "done"
