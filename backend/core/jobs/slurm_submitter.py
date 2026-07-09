@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,97 @@ def _offload_runtime() -> tuple[str, str]:
     py = os.environ.get("ABA_OFFLOAD_PYTHON") or sys.executable
     bd = os.environ.get("ABA_OFFLOAD_BACKEND_DIR") or _BACKEND_DIR
     return py, bd
+
+
+def _job_wrap_mode() -> str:
+    """``'sif'`` → offloaded env-jobs RE-ENTER the image via ``apptainer exec`` (a
+    FAT deployment, where the conda/R env + interpreter + backend live ONLY inside
+    the SIF, so a bare node can't reach them); ``''`` → run BARE on the node
+    (native / slim — the default, unchanged). Set by the OOD launch
+    (``ABA_JOB_WRAP=sif``) for a fat SIF. See misc/fatagain.md."""
+    return (os.environ.get("ABA_JOB_WRAP") or "").strip().lower()
+
+
+def _apptainer_tmpdir() -> str:
+    """Node-local tmp/cache for a wrapped job's apptainer. MUST be off NFS home —
+    apptainer hangs unkillably when its cache/tmp sit there (reproduced on CBE clip
+    nodes; see core/exec/nextflow.py). Overridable via ABA_APPTAINER_TMPDIR."""
+    return (os.environ.get("ABA_APPTAINER_TMPDIR")
+            or f"/tmp/aba-apptainer-{os.environ.get('USER') or os.environ.get('LOGNAME') or 'u'}")
+
+
+def _wrap_binds(run_dir: Path) -> list[str]:
+    """Identity binds a wrapped job needs visible inside the SIF: its run dir + the
+    per-user scope roots (runtime/envs/share) + the cluster shares, plus the
+    cluster-module tool trees (ABA_MODULE_BINDS) so a module-resolved binary is
+    reachable inside. Bound X→X so absolute paths match the bare node (the
+    environment-equivalence contract — misc/fatagain.md)."""
+    cands = [str(run_dir)]
+    for var in ("ABA_RUNTIME_DIR", "ABA_ENVS_DIR", "ABA_SHARE"):
+        v = os.environ.get(var)
+        if v:
+            cands.append(v)
+    for p in ("/groups", "/cluster/aba", "/resources"):
+        if os.path.isdir(p):
+            cands.append(p)
+    for m in (os.environ.get("ABA_MODULE_BINDS") or "").split():
+        if m and os.path.exists(m):
+            cands.append(m)
+    seen: set = set()
+    out: list = []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _job_body(*, kind: str, mods: list, nf_path_line: str, spec_path: Path,
+              run_dir: Path, done_path: Path, gpu: bool,
+              job_py: str, job_backend: str) -> str:
+    """Render the offloaded job.sh body.
+
+    BARE (default — native / slim): the offloaded interpreter runs slurm_entry
+    directly on the compute node against a shared-FS base + backend.
+
+    WRAPPED (``ABA_JOB_WRAP=sif`` AND an env-job): re-enter the fat SIF via
+    ``apptainer exec`` — under fat the interpreter/libs/backend exist ONLY in the
+    image, so a bare env-job would find no interpreter (misc/fatagain.md, the "fat
+    rule"). ``module load`` still runs on the HOST here: apptainer passes the host
+    env through and the module tool trees are bound in (``_wrap_binds``), so a
+    module-resolved binary resolves inside; PYTHONPATH is forced to the in-image
+    backend and PYTHONHOME unset so a module can't shadow the conda python
+    (prj_6d986f40). ``run_nextflow`` is NEVER wrapped (its head is handled
+    separately) — it falls through to the bare branch."""
+    from core.exec.modules import load_lines
+    head = f"#!/bin/bash\ncd {run_dir}\n{load_lines(mods)}{nf_path_line}"
+    sif = os.environ.get("ABA_SIF")
+    if _job_wrap_mode() == "sif" and kind in ("run_python", "run_r") and sif:
+        tmp = _apptainer_tmpdir()
+        binds = " ".join(f"--bind {shlex.quote(p)}" for p in _wrap_binds(run_dir))
+        nv = "--nv " if gpu else ""
+        return (
+            f"{head}"
+            f"export APPTAINER_TMPDIR={shlex.quote(tmp)} APPTAINER_CACHEDIR={shlex.quote(tmp)}\n"
+            f"mkdir -p {shlex.quote(tmp)}\n"
+            "unset PYTHONHOME\n"
+            # -u: unbuffered so slurm_entry's tee'd child output reaches job.log live.
+            f"apptainer exec {nv}{binds} --env PYTHONPATH=/opt/aba/backend "
+            f"{shlex.quote(sif)} /opt/aba-venv/bin/python -u -m core.jobs.slurm_entry {spec_path}\n"
+            f"echo $? > {done_path}\n"
+        )
+    # BARE (native / slim) — unchanged. Sanitize the interpreter env AFTER `module
+    # load`: a cluster module can set PYTHONHOME or prepend its own (ancient)
+    # PYTHONPATH, shadowing the conda env (prj_6d986f40). Clear PYTHONHOME + OVERWRITE
+    # PYTHONPATH with just the backend; module PATH/LD_LIBRARY_PATH/JAVA_HOME stay.
+    return (
+        f"{head}"
+        "unset PYTHONHOME\n"
+        f"export PYTHONPATH={job_backend}\n"
+        f"{job_py} -u -m core.jobs.slurm_entry {spec_path}\n"
+        f"echo $? > {done_path}\n"
+    )
+
 
 _SACCT_TERMINAL_FAIL = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY",
                         "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED"}
@@ -78,7 +170,7 @@ class SlurmSubmitter:
         # the name filter misses — can shadow the conda env's Python (the prj_6d986f40
         # incident), while the module's PATH/LD_LIBRARY_PATH/JAVA_HOME/etc. for tools
         # are preserved.
-        from core.exec.modules import load_lines, project_modules
+        from core.exec.modules import project_modules   # load_lines used in _job_body
         mods = list(params.get("modules") or [])
         for _m in project_modules(pid):
             if _m not in mods:
@@ -119,24 +211,11 @@ class SlurmSubmitter:
         }))
         job_py, job_backend = _offload_runtime()   # bare-node interpreter + backend dir
         job_sh = run_dir / "job.sh"
-        job_sh.write_text(
-            "#!/bin/bash\n"
-            f"cd {run_dir}\n"
-            f"{load_lines(mods)}"
-            f"{_nf_path_line}"
-            # Sanitize the Python interpreter env AFTER `module load`: a cluster module
-            # can set PYTHONHOME or prepend its own (ancient) PYTHONPATH, which would
-            # shadow the conda env this job runs on (the prj_6d986f40 numpy incident).
-            # Clear PYTHONHOME and OVERWRITE PYTHONPATH with just the backend (dropping
-            # any module-injected entries) — the env's python then uses its own stdlib +
-            # site-packages. Module PATH/LD_LIBRARY_PATH/JAVA_HOME/… for tools stay.
-            "unset PYTHONHOME\n"
-            f"export PYTHONPATH={job_backend}\n"
-            # -u: unbuffered stdout so slurm_entry's tee'd child output reaches
-            # job.log (sbatch -o) live, not only at exit.
-            f"{job_py} -u -m core.jobs.slurm_entry {spec_path}\n"
-            f"echo $? > {done_path}\n"
-        )
+        job_sh.write_text(_job_body(
+            kind=kind, mods=mods, nf_path_line=_nf_path_line, spec_path=spec_path,
+            run_dir=run_dir, done_path=done_path,
+            gpu=bool((params.get("estimate") or {}).get("gpu")),
+            job_py=job_py, job_backend=job_backend))
         job_sh.chmod(0o755)
 
         if kind == "run_nextflow":

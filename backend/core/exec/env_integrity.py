@@ -835,17 +835,31 @@ def check_envs_dir_shared() -> dict:
 
 
 def check_base_dir_shared() -> dict:
-    """Self-check: under a Slurm submitter the BASE venv must be on shared storage.
-    The generated job.sh runs BARE on the compute node (`sys.executable -u -m
-    core.jobs.slurm_entry`, no `apptainer exec` re-entry — slurm_submitter.py:117),
-    so an in-image (fat SIF) or node-local base is unreachable → the job can't even
-    find the interpreter. Fires only for the 'slurm' submitter. This is the guard
-    that makes the documented rule enforceable: **Slurm offload needs the env on
-    shared FS** — a slim SIF (`image.base_dir` on shared FS) or a native shared
-    install; a fat SIF is single-node / local-submitter only (misc/slim_sif_deploy.md)."""
+    """Self-check: under a Slurm submitter the BASE venv must be REACHABLE by an
+    offloaded job. How it's reached depends on the delivery mode:
+
+    - BARE offload (native / slim — the default): the generated job.sh runs the
+      interpreter directly on the compute node (`sys.executable -u -m
+      core.jobs.slurm_entry`, no container re-entry), so the base MUST be on shared
+      FS — a slim SIF (`image.base_dir` on shared FS) or a native shared install. An
+      in-image / node-local base is unreachable → the job can't even find the
+      interpreter.
+    - WRAPPED offload (`ABA_JOB_WRAP=sif`, a fat SIF): the job RE-ENTERS the image
+      via `apptainer exec` (slurm_submitter._job_body), so the baked in-image base is
+      exactly what runs — a node-local/in-image base is CORRECT, not a defect. Fat is
+      NOT single-node in this mode (misc/fatagain.md).
+
+    Fires only for the 'slurm' submitter."""
     from core.jobs.submitter import submitter_name
     if submitter_name() != "slurm":
         return {"ok": True, "severity": "info", "detail": "local submitter — base sharing N/A"}
+    # Fat + job-wrap: offloaded env-jobs re-enter the SIF, so the baked base is reachable
+    # (its being node-local/in-image is by design). Don't flag it as unreachable.
+    if (os.environ.get("ABA_JOB_WRAP") or "").strip().lower() == "sif":
+        return {"ok": True, "severity": "info",
+                "detail": ("fat SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded env-jobs re-enter the "
+                           "image via `apptainer exec`, so the baked in-image base is reachable — "
+                           "not single-node (misc/fatagain.md).")}
     kind, detail = base_fs_kind()
     if kind == "shared":
         return {"ok": True, "severity": "info", "detail": detail}

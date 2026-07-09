@@ -126,9 +126,44 @@ def test_launch_binds_sacctmgr():
         "script.sh.erb Slurm-client bind loop must include sacctmgr (QOS/account discovery)")
 
 
+def test_launch_forwards_job_wrap_env():
+    """script.sh.erb must FORWARD ABA_SIF + ABA_JOB_WRAP (+ ABA_MODULE_BINDS) into the
+    containall run. Under a fat deployment (ABA_JOB_WRAP=sif) the containerized backend's
+    slurm_submitter re-enters THIS image to wrap offloaded env-jobs — it can't do that if
+    ABA_SIF isn't visible inside. Guards the fat-wrap plumbing (misc/fatagain.md)."""
+    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    for v in ("ABA_SIF", "ABA_JOB_WRAP", "ABA_MODULE_BINDS"):
+        assert v in erb, f"script.sh.erb must forward {v} into the container env"
+
+
+def test_preflight_emits_job_wrap():
+    """aba_preflight derives ABA_JOB_WRAP: a FAT image (image.sif, no base_dir) → 'sif'
+    (offloaded env-jobs re-enter the SIF); a SLIM image (sif + base_dir) → unset (bare).
+    This is the single-source signal the submitter routes on."""
+    import yaml
+    base = ("site: {name: t}\nscopes:\n  user: {state_dir: %s/st}\n"
+            "credentials: {order: [], on_missing: demo_mode}\n")
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        fat = tdp / "fat.yaml"
+        fat.write_text(base % td + "image: {sif: /cluster/aba/aba.sif}\n")
+        env = {**os.environ, "ABA_SITE_CONFIG": str(fat), "ABA_PF_STAGED": str(tdp),
+               "ABA_PF_USER": "u", "ABA_PF_HOME": str(tdp), "ABA_PF_GROUP": ""}
+        subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
+        assert "export ABA_JOB_WRAP='sif'" in (tdp / "aba-env.sh").read_text()
+        # slim: sif + base_dir → NO wrap
+        slim = tdp / "slim.yaml"
+        slim.write_text(base % td + "image: {sif: /cluster/aba/aba.sif, base_dir: /cluster/aba/base}\n")
+        env["ABA_SITE_CONFIG"] = str(slim)
+        subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
+        assert "ABA_JOB_WRAP" not in (tdp / "aba-env.sh").read_text()
+
+
 if __name__ == "__main__":
     test_glibc_floor_truth_table(); print("glibc_floor truth table: PASS")
     test_preflight_surfaces_glibc_warn(); print("preflight surfaces warn: PASS")
     test_preflight_emits_module_config(); print("preflight emits module config: PASS")
     test_launch_forwards_nextflow_env(); print("launch forwards nextflow env: PASS")
     test_launch_binds_sacctmgr(); print("launch binds sacctmgr: PASS")
+    test_launch_forwards_job_wrap_env(); print("launch forwards job-wrap env: PASS")
+    test_preflight_emits_job_wrap(); print("preflight emits job-wrap: PASS")
