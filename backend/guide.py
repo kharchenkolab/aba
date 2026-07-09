@@ -1165,6 +1165,21 @@ async def stream_response(
                     turn.turn_index = turn_index
                     turn.usage_in = usage_in; turn.usage_out = usage_out
                     turn.usage_cache_read = usage_cr; turn.usage_cache_write = usage_cw
+                    # a1: one metric row per LLM generation (round-trip) — round-trips,
+                    # parallelism (tool_use blocks this gen), and per-gen cache tokens.
+                    try:
+                        from core.runtime.tool_telemetry import record_generation
+                        _ud = ev.usage_delta or {}
+                        record_generation(
+                            run_id=turn.run_id, agent_spec=turn.agent_spec_name,
+                            gen_index=turn_index,
+                            n_tool_uses=sum(1 for b in _assistant_blocks
+                                            if b.get("type") == "tool_use"),
+                            input_tokens=_ud.get("input", 0), output_tokens=_ud.get("output", 0),
+                            cache_read=_ud.get("cache_read", 0), cache_write=_ud.get("cache_write", 0),
+                            stop_reason=_stop_reason)
+                    except Exception:  # noqa: BLE001 — telemetry never breaks a turn
+                        pass
                     history = get_messages(entity_id, thread_id=store_tid)
                     if _stop_reason != "tool_use":
                         # No tools — outer loop will break via the

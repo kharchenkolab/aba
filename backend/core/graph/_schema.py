@@ -415,6 +415,28 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_name ON tool_invocations(tool_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tool_inv_when ON tool_invocations(started_at)")
 
+        # One row per LLM generation (round-trip). Lets us measure what the
+        # tool-catalog work is really about: round-trips per turn, parallelism
+        # (tool_use blocks emitted per generation), and prompt-cache effectiveness
+        # (cache_read vs cache_write — a cached catalog shows high read / ~zero write).
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS llm_generations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id        TEXT,
+                agent_spec    TEXT,
+                gen_index     INTEGER,     -- 0-based generation within the run
+                n_tool_uses   INTEGER,     -- tool_use blocks this generation (parallelism)
+                input_tokens  INTEGER,
+                output_tokens INTEGER,
+                cache_read    INTEGER,
+                cache_write   INTEGER,
+                stop_reason   TEXT,
+                started_at    TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_llm_gen_run ON llm_generations(run_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_llm_gen_when ON llm_generations(started_at)")
+
         # Bootstrap workspace entity (opaque type 'workspace' — the seam-check
         # tolerates this because workspace is not a bio entity kind).
         row = c.execute("SELECT id FROM entities WHERE id = ?", (WORKSPACE_ID,)).fetchone()

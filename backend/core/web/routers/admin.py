@@ -29,11 +29,18 @@ def admin_selfcheck():
 
 
 @router.get("/api/admin/tool_stats")
-def admin_tool_stats(days: int = 30):
-    """Per-tool aggregates: invocation count, ok/error/rejected/deferred
-    breakdown, average + max duration. Window defaults to 30 days."""
-    from core.runtime.tool_telemetry import stats
-    return stats(days=days)
+def admin_tool_stats(days: int = 30, project_id: str | None = None):
+    """Tool-catalog usage observability (tool_use a1). `tools`: per-tool invocation
+    aggregates (count, ok/error/rejected/deferred, avg+max duration). `generations`:
+    per-LLM-generation round-trips/turn, parallelism (tool_uses per generation), and
+    prompt-cache effectiveness (cache_read vs cache_write). Telemetry is per-project —
+    pass project_id to read a specific project's DB; window defaults to 30 days."""
+    import contextlib
+    from core import projects
+    from core.runtime.tool_telemetry import stats, generation_stats
+    cm = projects.bind(project_id) if project_id else contextlib.nullcontext()
+    with cm:
+        return {"tools": stats(days=days), "generations": generation_stats(days=days)}
 
 
 @router.get("/api/admin/tool_invocations")

@@ -52,6 +52,85 @@ def record(
         pass    # telemetry must never block real work
 
 
+def record_generation(
+    *,
+    run_id:        Optional[str],
+    agent_spec:    str,
+    gen_index:     int,
+    n_tool_uses:   int,
+    input_tokens:  int = 0,
+    output_tokens: int = 0,
+    cache_read:    int = 0,
+    cache_write:   int = 0,
+    stop_reason:   Optional[str] = None,
+) -> None:
+    """Write one row per LLM generation (round-trip). Best-effort — never raises.
+    Round-trips per turn = COUNT rows for a run_id; parallelism = n_tool_uses;
+    cache effectiveness = cache_read vs cache_write."""
+    try:
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO llm_generations "
+                "(run_id, agent_spec, gen_index, n_tool_uses, input_tokens, "
+                " output_tokens, cache_read, cache_write, stop_reason, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, agent_spec, gen_index, n_tool_uses, input_tokens,
+                 output_tokens, cache_read, cache_write, stop_reason, _now()),
+            )
+            c.commit()
+    except Exception:  # noqa: BLE001
+        pass    # telemetry must never block real work
+
+
+def generation_stats(days: int = 30) -> dict:
+    """Aggregate round-trip / parallelism / cache metrics over the last `days`.
+    Returns per-run round-trip distribution + fleet averages — the numbers that
+    tell us whether tool-use is efficient and whether the catalog is cached."""
+    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).isoformat()
+    _empty = {"n_runs": 0, "avg_round_trips_per_run": 0, "avg_tool_uses_per_run": 0,
+              "avg_parallelism": 0, "max_parallelism": 0, "cache_hit_frac": None,
+              "cache_read_total": 0, "cache_write_total": 0, "fresh_input_total": 0}
+    try:
+        with _conn() as c:
+            per_run = c.execute(
+                "SELECT run_id, agent_spec, "
+                "       COUNT(*) AS round_trips, "
+                "       SUM(n_tool_uses) AS tool_uses, "
+                "       MAX(n_tool_uses) AS max_parallel, "
+                "       SUM(cache_read) AS cache_read, "
+                "       SUM(cache_write) AS cache_write, "
+                "       SUM(input_tokens) AS input_tokens "
+                "FROM llm_generations WHERE started_at >= ? "
+                "GROUP BY run_id",
+                (cutoff,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — e.g. a project DB not yet migrated with the table
+        return _empty
+    runs = [dict(r) for r in per_run]
+    if not runs:
+        return _empty
+    n = len(runs) or 1
+    tot_gen = sum(r["round_trips"] or 0 for r in runs)
+    tot_tu = sum(r["tool_uses"] or 0 for r in runs)
+    # generations that emitted tools (round_trips minus the final answer-only gen
+    # per run) — parallelism is tool_uses / tool-emitting generations.
+    tool_gens = max(1, tot_gen - len(runs))
+    cr = sum(r["cache_read"] or 0 for r in runs)
+    cw = sum(r["cache_write"] or 0 for r in runs)
+    inp = sum(r["input_tokens"] or 0 for r in runs)
+    return {
+        "n_runs": len(runs),
+        "avg_round_trips_per_run": round(tot_gen / n, 2),
+        "avg_tool_uses_per_run": round(tot_tu / n, 2),
+        "avg_parallelism": round(tot_tu / tool_gens, 2),   # tool_uses per tool-emitting gen
+        "max_parallelism": max((r["max_parallel"] or 0 for r in runs), default=0),
+        # cache_read / (cache_read + cache_write + fresh input) → fraction of prompt
+        # tokens served from cache. High = the static catalog/system is being cached.
+        "cache_hit_frac": round(cr / (cr + cw + inp), 3) if (cr + cw + inp) else None,
+        "cache_read_total": cr, "cache_write_total": cw, "fresh_input_total": inp,
+    }
+
+
 def _summarize_input(input_: Any, max_len: int = 200) -> str:
     try:
         s = _json.dumps(input_, default=str)

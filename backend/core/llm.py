@@ -51,6 +51,26 @@ def _strip_cc(content):
     return out
 
 
+def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_marker: bool):
+    """Assemble the system + tools API blocks with prompt-cache breakpoints:
+    `cache_control` on the STABLE system prefix and on the LAST tool (which caches the
+    whole tool catalog array). The dynamic system tail (BM25 recipes) and the OAuth CC
+    marker stay UNCACHED, so per-turn dynamic content never busts the catalog/system
+    cache. Pure + side-effect-free so the tool_use a2 guard test can assert the cache
+    structure (and its invariance across turns) without opening a live stream."""
+    sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    if dynamic_system:
+        sys_blocks.append({"type": "text", "text": dynamic_system})   # uncached tail
+    if cc_marker:
+        sys_blocks = [_CC_MARKER_BLOCK, *sys_blocks]                  # uncached marker, first
+    _INTERNAL_KEYS = {"approval_policy"}
+    tool_blocks = [{k: v for k, v in t.items() if k not in _INTERNAL_KEYS} for t in (tools or [])]
+    if tool_blocks:
+        tool_blocks = [*tool_blocks[:-1],
+                       {**tool_blocks[-1], "cache_control": {"type": "ephemeral"}}]
+    return sys_blocks, tool_blocks
+
+
 # ---------- Real provider ----------
 
 class _RealStream:
@@ -74,25 +94,13 @@ class _RealStream:
     async def __aenter__(self):
         # Prompt caching: stable prefix (cache_control) + dynamic tail (no cache).
         # Up to 4 breakpoints total: stable system, tools, last-message — 3 used.
-        system = [{"type": "text", "text": self._system,
-                   "cache_control": {"type": "ephemeral"}}]
-        if self._dynamic_system:
-            system.append({"type": "text", "text": self._dynamic_system})
-        # oauth_cc credential mode: the server gates non-Haiku models on OAuth by
-        # checking that the first system block is byte-exactly this Claude Code
-        # marker. Without it, OAuth+Sonnet/Opus returns 429. Marker MUST be first,
-        # its own discrete block, and have NO cache_control (server check is
-        # byte-exact). The model still adopts our real system prompt as persona.
-        if _wants_cc_marker():
-            system = [_CC_MARKER_BLOCK, *system]
-        # Strip internal-only fields (approval_policy etc.) before sending to the
-        # Anthropic API — the API rejects unknown keys on tool definitions. The
-        # in-process layer (guide.py's per-tool approval gate) reads these fields
-        # off TOOL_SCHEMAS, not off the API request, so this is purely API hygiene.
-        _INTERNAL_KEYS = {"approval_policy"}
-        tools = [{k: v for k, v in t.items() if k not in _INTERNAL_KEYS} for t in (self._tools or [])]
-        if tools:
-            tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
+        # cache_control on the stable system + last tool; the dynamic system tail and
+        # the OAuth CC marker stay uncached (see build_cached_blocks). oauth_cc mode:
+        # the server gates non-Haiku on OAuth by a byte-exact first-system-block CC
+        # marker check — so the marker is first, its own block, and uncached.
+        # approval_policy etc. are stripped (API rejects unknown tool keys).
+        system, tools = build_cached_blocks(
+            self._system, self._dynamic_system, self._tools, cc_marker=_wants_cc_marker())
         # THE single history→API transform: {role, content} with UI-only blocks
         # (e.g. the `attachments` chip block) stripped. Anything that reaches the
         # Anthropic SDK passes through here, so the validity guard test
