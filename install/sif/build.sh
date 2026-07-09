@@ -56,6 +56,16 @@ echo "   stage:   $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -a "$REPO_ROOT/backend" "$STAGE/backend"
 cp -a "$REPO_ROOT/frontend/dist" "$STAGE/frontend-dist"
+# The SIF is the OOD/cluster artifact, and OOD serves the SPA under /rnode/<host>/<port>/.
+# The dist must therefore carry the /__OOD_PREFIX__/ base placeholder that script.sh.erb
+# rewrites per session (build the frontend with ABA_OOD_BASE=/__OOD_PREFIX__/). A dist built
+# with vite's default base='/' points its assets at the DASHBOARD root: the backend is healthy,
+# nothing errors, and the browser just renders a BLANK page. Warn loudly at build, not never.
+if ! grep -q '__OOD_PREFIX__' "$STAGE/frontend-dist/index.html" 2>/dev/null; then
+  echo "WARNING: frontend-dist/index.html has no __OOD_PREFIX__ placeholder — assets are rooted at '/'." >&2
+  echo "         Behind the OOD proxy this serves a BLANK page. Rebuild the frontend with:" >&2
+  echo "           cd frontend && ABA_OOD_BASE='/__OOD_PREFIX__/' npx vite build" >&2
+fi
 # drop broken links, then ancestor-cycle links (.claude -> .) that cp -fLr chokes on
 find "$STAGE" -type l | while read -r l; do readlink -e "$l" >/dev/null 2>&1 || rm -f "$l"; done
 find "$STAGE" -type l | while read -r l; do
