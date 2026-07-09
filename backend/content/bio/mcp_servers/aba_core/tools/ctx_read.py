@@ -26,6 +26,8 @@ minimal.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from mcp.server.fastmcp import FastMCP
 
 
@@ -58,16 +60,6 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
                           peek_ctx(aba_ctx_id))
 
     @mcp.tool()
-    def read_skill(name: str | None = None,
-                   aba_ctx_id: str | None = None) -> dict:
-        """Deprecated — use `Skill` instead. Loads the full body of a
-        registered skill by name. Kept one release for back-compat
-        with models that still emit the old name."""
-        from core.runtime.tool_ctx import peek_ctx
-        from content.bio.tools import read_skill as _impl
-        return _impl({"name": name}, peek_ctx(aba_ctx_id))
-
-    @mcp.tool()
     def list_entities(type: str | None = None, query: str | None = None,
                       limit: int = 30,
                       aba_ctx_id: str | None = None) -> dict:
@@ -84,27 +76,29 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
     # --- pure read tools (no ctx use) ---
 
     @mcp.tool()
-    def get_provenance(entity_id: str, max_depth: int = 8) -> dict:
-        """Provenance trace for an entity — what produced it
-        (upstream). Returns a graph + a human-readable summary.
+    def get_lineage(entity_id: str,
+                    direction: Literal["up", "down", "both"] = "up",
+                    max_depth: int = 8) -> dict:
+        """Lineage of an entity over the derivation graph. Returns a graph +
+        a human-readable summary.
 
-        `max_depth` (default 8) controls how far back the walk goes.
-        For a long revision chain (figure with many revisions), pass
-        a larger number — or use `list_revisions` directly, which is
-        depth-unbounded and pre-labels every entry with its v1…vN
-        version number. Use get_provenance for cross-type derivation
-        traces (figure → result → analysis → dataset)."""
-        from content.bio.tools import get_provenance as _impl
-        return _impl({"entity_id": entity_id, "max_depth": max_depth})
+        direction:
+          • 'up'   (default) — PROVENANCE: what produced this (figure → result →
+                    analysis → dataset). For a long revision chain, raise max_depth
+                    or use `list_revisions` (depth-unbounded, v1…vN labelled).
+          • 'down' — DEPENDENTS: what depends on this. Check before archive/supersede
+                    to spot what would orphan.
+          • 'both' — {'upstream': …, 'downstream': …}.
 
-    @mcp.tool()
-    def get_dependents(entity_id: str, max_depth: int = 8) -> dict:
-        """Downstream entities — what depends on this one. Useful
-        before archive/supersede to spot what would orphan.
-
-        `max_depth` (default 8) controls how far down the walk goes."""
-        from content.bio.tools import get_dependents as _impl
-        return _impl({"entity_id": entity_id, "max_depth": max_depth})
+        `max_depth` (default 8) bounds the walk in each direction."""
+        from content.bio.tools import get_provenance as _up
+        from content.bio.tools import get_dependents as _down
+        arg = {"entity_id": entity_id, "max_depth": max_depth}
+        if direction == "down":
+            return _down(arg)
+        if direction == "both":
+            return {"upstream": _up(arg), "downstream": _down(arg)}
+        return _up(arg)
 
     @mcp.tool()
     def read_capability(name: str) -> dict:

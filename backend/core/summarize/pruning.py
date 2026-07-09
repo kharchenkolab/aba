@@ -40,7 +40,7 @@ _ALWAYS_KEEP_TOOLS = frozenset({
     "list_data_files", "list_entities",
     "open_run", "close_run", "present_plan",
     "register_dataset", "register_reference",
-    "Skill", "read_skill",
+    "Skill",
 })
 
 

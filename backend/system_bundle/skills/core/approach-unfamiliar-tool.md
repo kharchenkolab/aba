@@ -2,9 +2,9 @@
 name: approach-unfamiliar-tool
 description: How to get external data or use a library/tool you don't have — discover the recipe + maintained package first, orient from its docs, recover smartly, and never fabricate.
 when_to_use: You need to acquire data from an external source/database (GEO, SRA, ENA, ArrayExpress, UniProt, …), OR use a package/tool you're not already fluent in and there's no obvious recipe. Skip only for tools you know well.
-requires_tools: [run_python, search_skills, search_pypi, ensure_capability]
+requires_tools: [run_python, search_skills, search_registry, ensure_capability]
 capabilities_needed: []
-keywords: [unfamiliar tool, get data, download, fetch, database, GEO, SRA, library, package, discover, search_skills, search_pypi, orient, documentation, vignette, recover, fallback, fabricate, meta]
+keywords: [unfamiliar tool, get data, download, fetch, database, GEO, SRA, library, package, discover, search_skills, search_registry, orient, documentation, vignette, recover, fallback, fabricate, meta]
 produces: []
 domain: meta
 ---
@@ -19,7 +19,7 @@ Before writing code to fetch external data or drive a library you don't already
 have loaded:
 1. **Is there a recipe?** `search_skills(<intent>)` → `Skill(skill=...)`. For a public
    database (GEO/SRA/ENA/ArrayExpress/…) there's almost always one. Follow it.
-2. **Find the maintained package.** `search_pypi` / `search_bioconda` /
+2. **Find the maintained package.** `search_registry(source='pypi'|'bioconda')` /
    `list_capabilities` (e.g. GEO → `GEOparse`; SRA → `pysradb`/`sra-tools`) →
    `ensure_capability(name)` → use it. A purpose-built library beats scraping a
    webpage every time.

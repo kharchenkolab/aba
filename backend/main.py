@@ -1188,7 +1188,7 @@ def turn_cancel(run_id: str, req: ResumeRequest):
 
 # ----- Skills (B2 read API) -----
 # Skill catalog is registered at import time by bio/skills/__init__.py.
-# The model reads it via the read_skill tool; the drawer reads it via
+# The model reads it via the Skill tool; the drawer reads it via
 # these endpoints so the user can see what procedures the agent can run.
 
 @app.get("/api/skills")

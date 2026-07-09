@@ -61,6 +61,20 @@ A tool must not expose **two params for one concept** (e.g. `search_pypi(query, 
 - **`describe_tool`** — the discoverability escape hatch; always standalone.
 - Typed ids (`result_id`/`dataset_id`/`reference_id`/…) — kept where the type constrains the argument.
 
+## De-duplication (what merged, what deliberately did NOT)
+
+Merges applied (real redundancy — identical or coherently-unified behavior):
+- `get_provenance` + `get_dependents` → **`get_lineage(entity_id, direction='up'|'down'|'both')`** (identical signature; direction is a natural param).
+- `search_pypi` + `search_bioconda` + `search_nf_core` + `search_mcp_registry` → **`search_registry(query, source='pypi'|'bioconda'|'nf_core'|'mcp')`**. `search_skills` (recipe library) and `list_capabilities` (curated catalog) stay SEPARATE — different corpora, different intents.
+- `read_skill` dropped (deprecated alias of `Skill`).
+
+Deliberately NOT merged (judgment: distinct behavior, not redundancy — merging would bury the distinction in a param, the fat-`op=` anti-pattern):
+- **`view_file` vs `view_artifact`** — `view_artifact` renders a PDF page as an *image* (vision-first, to verify figures); `view_file` extracts PDF *text* + hex-dumps binaries (read-first). Different intents.
+- **`find_reference` vs `describe_reference`** — a legitimate `list_`/`describe_` pair (search-by-facets vs detail-by-id), not a duplicate.
+- **`annotate_entity` vs `update_entity_fields`** — kept `annotate_entity`: its flat named fields (`tags`/`notes`/`title`/`status`) are more discoverable for the common curation case than a free-form `fields={}` dict. Count is cached, so the extra tool costs ~nothing.
+
+Principle: **merge only genuine redundancy; keep distinct behaviors explicit.** Tool count is not the cost (the catalog is cached); discoverability is.
+
 ## Enforcement
 
 - **Structural:** `tests/test_tool_conventions.py` enumerates the live catalog and

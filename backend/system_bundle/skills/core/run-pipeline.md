@@ -16,7 +16,7 @@ calling, a 10x cohort).
 
 ## The loop
 
-1. **Find** — `search_nf_core(query)` to choose the pipeline (e.g. `nf-core/rnaseq`).
+1. **Find** — `search_registry(query, source='nf_core')` to choose the pipeline (e.g. `nf-core/rnaseq`).
 2. **Inspect** — `describe_pipeline(pipeline)` returns the run parameters (required,
    types, allowed values, help), the latest release, **`input_format`** — the exact
    **samplesheet columns** (name, required, type, allowed values) the pipeline expects —

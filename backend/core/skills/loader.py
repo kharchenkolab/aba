@@ -677,8 +677,8 @@ def skills_index_block(query: Optional[str] = None, limit: Optional[int] = None,
     # (it's a recipe-adjacent hint, not a core-tier matter).
     if want_recipes:
         lines += ["",
-                  "Need a tool or pipeline that isn't listed? `search_nf_core`, "
-                  "`search_mcp_registry`, `search_pypi` / `search_bioconda` discover external ones."]
+                  "Need a tool or pipeline that isn't listed? "
+                  "`search_registry(query, source='pypi'|'bioconda'|'nf_core'|'mcp')` discovers external ones."]
     return "\n".join(lines)
 
 

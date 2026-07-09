@@ -152,24 +152,28 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                          "MCP server"}
 
     @mcp.tool()
-    def search_bioconda(query: str) -> dict:
-        """Check whether a tool exists on bioconda (awareness only —
-        installation goes through ensure_capability)."""
-        from content.bio.tools import search_bioconda as _impl
-        return _impl({"query": query})
-
-    @mcp.tool()
-    def search_nf_core(query: str, limit: int = 5) -> dict:
-        """Search the nf-core pipeline registry by name/keyword."""
-        from content.bio.tools import search_nf_core as _impl
-        return _impl({"query": query, "limit": limit})
-
-    @mcp.tool()
-    def search_mcp_registry(query: str, limit: int = 5) -> dict:
-        """Search the public MCP server registry — for finding an
-        external MCP server to add as a capability."""
-        from content.bio.tools import search_mcp_registry as _impl
-        return _impl({"query": query, "limit": limit})
+    def search_registry(query: str,
+                        source: Literal["pypi", "bioconda", "nf_core", "mcp"],
+                        limit: int = 5) -> dict:
+        """Search an EXTERNAL registry to see if something exists before you
+        ensure_capability / add it. Pick `source`:
+          • 'pypi'     — a Python package on PyPI (resolves PEP-503 variants).
+          • 'bioconda' — a bioinformatics tool on bioconda (awareness only).
+          • 'nf_core'  — an nf-core/Nextflow pipeline by name/keyword.
+          • 'mcp'      — a public MCP server to add as a capability.
+        For the CURATED catalog (already-known tools) use list_capabilities; for
+        recipes use search_skills. Installation always goes via ensure_capability."""
+        from content.bio.tools import (search_pypi, search_bioconda,
+                                       search_nf_core, search_mcp_registry)
+        if source == "pypi":
+            return search_pypi({"query": query})
+        if source == "bioconda":
+            return search_bioconda({"query": query})
+        if source == "nf_core":
+            return search_nf_core({"query": query, "limit": limit})
+        if source == "mcp":
+            return search_mcp_registry({"query": query, "limit": limit})
+        return {"error": f"unknown source {source!r}; use pypi|bioconda|nf_core|mcp"}
 
     # --- inspect + capability ops (ctx-using) ---
 

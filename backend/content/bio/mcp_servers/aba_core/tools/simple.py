@@ -42,11 +42,3 @@ def register_simple_tools(mcp: FastMCP) -> None:
         cite; verify against the live source before relying on specifics."""
         from content.bio.tools import read_memory_tool
         return read_memory_tool({"name": name})
-
-    @mcp.tool()
-    def search_pypi(query: str) -> dict:
-        """Look up a Python package on PyPI. Resolves PEP-503 / separator
-        variants. Use when list_capabilities didn't find a library and
-        you want to confirm it exists on PyPI before proposing it."""
-        from content.bio.tools import search_pypi as _impl
-        return _impl({"query": query})

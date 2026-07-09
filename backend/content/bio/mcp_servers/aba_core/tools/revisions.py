@@ -189,7 +189,7 @@ def register_revision_tools(mcp: FastMCP) -> None:
         v4") — call list_revisions first to map the version label to
         a concrete entity id, then pass that id to read_entity,
         view_artifact, set_current_revision, delete_revision, or
-        make_revision. Beats get_provenance for this purpose: depth-
+        make_revision. Beats get_lineage for this purpose: depth-
         unbounded, includes exec_id, and counts from the oldest.
 
         Accepts ANY id in the chain (head, anchor, or anything in
