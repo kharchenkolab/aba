@@ -161,7 +161,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
           • 'bioconda' — a bioinformatics tool on bioconda (awareness only).
           • 'nf_core'  — an nf-core/Nextflow pipeline by name/keyword.
           • 'mcp'      — a public MCP server to add as a capability.
-        For the CURATED catalog (already-known tools) use list_capabilities; for
+        For the CURATED catalog (already-known tools) use search_capabilities; for
         recipes use search_skills. Installation always goes via ensure_capability."""
         from content.bio.tools import (search_pypi, search_bioconda,
                                        search_nf_core, search_mcp_registry)
@@ -314,7 +314,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                            import_name: str | None = None,
                            tags: list[str] | None = None) -> dict:
         """Propose a NEW capability for the catalog (when nothing on
-        list_capabilities matches). User reviews before adoption.
+        search_capabilities matches). User reviews before adoption.
 
         Examples by archetype — copy the matching shape:
 

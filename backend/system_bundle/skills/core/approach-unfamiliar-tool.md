@@ -20,7 +20,7 @@ have loaded:
 1. **Is there a recipe?** `search_skills(<intent>)` → `Skill(skill=...)`. For a public
    database (GEO/SRA/ENA/ArrayExpress/…) there's almost always one. Follow it.
 2. **Find the maintained package.** `search_registry(source='pypi'|'bioconda')` /
-   `list_capabilities` (e.g. GEO → `GEOparse`; SRA → `pysradb`/`sra-tools`) →
+   `search_capabilities` (e.g. GEO → `GEOparse`; SRA → `pysradb`/`sra-tools`) →
    `ensure_capability(name)` → use it. A purpose-built library beats scraping a
    webpage every time.
 3. Only if neither exists do you write fetch/parse code yourself — and even then,

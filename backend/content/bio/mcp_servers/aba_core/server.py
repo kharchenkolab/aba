@@ -53,7 +53,7 @@ def make_server() -> FastMCP:
 
     # Per-cluster registrations — keeping them as explicit calls makes
     # the migration progress legible at a glance.
-    register_simple_tools(mcp)      # 6.B: list_capabilities, read_memory (search_pypi→search_registry)
+    register_simple_tools(mcp)      # 6.B: search_capabilities, read_memory (search_pypi→search_registry)
     register_ctx_read_tools(mcp)    # 6.C: Skill, list_entities, get_lineage,
                                     #      read_capability, read_csv_info
     register_curation_tools(mcp)    # 6.D: pin/promote/findings/claims/datasets/runs/refs

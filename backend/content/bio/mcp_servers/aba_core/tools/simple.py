@@ -2,7 +2,7 @@
 
 Phase 6.B (misc/phase6_mcp_wrapping.md): the FIRST migration cluster.
 Three tools whose signatures take only `input_: dict` today:
-`list_capabilities`, `read_memory`, `search_pypi`. None of them touch
+`search_capabilities`, `read_memory` (search moved to search_registry). None of them touch
 runtime objects (cancel_token, kernel session, progress queue, etc.) —
 ideal as the pattern-establisher.
 
@@ -27,11 +27,12 @@ def register_simple_tools(mcp: FastMCP) -> None:
     cheap (the factory runs on every reconnect)."""
 
     @mcp.tool()
-    def list_capabilities(query: str | None = None,
-                          tags: list[str] | None = None) -> dict:
-        """Search the capability catalog. Intent-ranked (BM25 + substring)
-        when a query is given, plain tag-filter otherwise. Returns a trimmed
-        view for the model."""
+    def search_capabilities(query: str | None = None,
+                            tags: list[str] | None = None) -> dict:
+        """Search the CURATED capability catalog (tools/packages ABA already knows).
+        Intent-ranked (BM25 + substring) when a query is given, plain tag-filter
+        otherwise. Returns a trimmed view for the model. (Companion searches:
+        search_skills for recipes, search_registry for external registries.)"""
         from content.bio.tools import list_capabilities_tool
         return list_capabilities_tool({"query": query, "tags": tags})
 

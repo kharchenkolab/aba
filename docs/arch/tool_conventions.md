@@ -20,7 +20,7 @@ One prefix per intent; boundaries are crisp so there's exactly one right verb.
 
 | prefix | intent | examples |
 |---|---|---|
-| `search_` | ranked find in a registry/catalog (external or curated) | `search_skills`, `search_pypi`, `search_bioconda`, `search_nf_core`, `search_mcp_registry` |
+| `search_` | ranked find in a registry/catalog (by corpus) | `search_skills` (recipes), `search_capabilities` (curated catalog), `search_registry(source=…)` (external) |
 | `list_` | enumerate project-local items (filter, not rank) | `list_entities`, `list_revisions`, `list_data_files`, `list_entity_operations` |
 | `get_` | return a **computed/derived** value | `get_lineage`, `get_job_status` |
 | `read_` | return **stored content verbatim** (file bytes, entity fields, memory) | `read_file`, `read_entity`, `read_memory` |
@@ -30,7 +30,7 @@ One prefix per intent; boundaries are crisp so there's exactly one right verb.
 | `update_` / `set_` | modify existing state | `update_entity_fields`, `set_active_env`, `set_current_revision` |
 | `run_` | execute code/a pipeline | `run_python`, `run_r`, `run_nextflow` |
 | `fetch_` | download external data into the workspace/store | `fetch_url`, `fetch_ensembl`, `fetch_reference` |
-| `view_` | inject visual/vision content into context | `view` (artifacts/files) |
+| `view_` | inject visual/vision content into context | `view_artifact`, `view_file` |
 
 Boundary notes that resolve the `read`/`get`/`describe`/`inspect` overlap:
 - `read_` = stored bytes/fields returned as-is. `get_` = a value we *compute* (a graph
@@ -57,7 +57,7 @@ A tool must not expose **two params for one concept** (e.g. `search_pypi(query, 
 - **`Skill`** — CapitalCase, native Claude affordance the model is trained to emit; sole recipe-invocation verb.
 - **`run_python` / `run_r`** — two tools, not `run(language=)`: language-specific install/kernel prose is load-bearing.
 - **`present_plan` / `ask_clarification`** — loop-suspending control tools intercepted before dispatch; keep names + typed `steps` contract.
-- **`view` (artifacts/files)** — carries the vision channel (`_vision_blocks`); the tool identity is a side-channel, not just data.
+- **`view_artifact` / `view_file`** — carry the vision channel (`_vision_blocks`); the tool identity is a side-channel, not just data.
 - **`describe_tool`** — the discoverability escape hatch; always standalone.
 - Typed ids (`result_id`/`dataset_id`/`reference_id`/…) — kept where the type constrains the argument.
 
@@ -65,7 +65,7 @@ A tool must not expose **two params for one concept** (e.g. `search_pypi(query, 
 
 Merges applied (real redundancy — identical or coherently-unified behavior):
 - `get_provenance` + `get_dependents` → **`get_lineage(entity_id, direction='up'|'down'|'both')`** (identical signature; direction is a natural param).
-- `search_pypi` + `search_bioconda` + `search_nf_core` + `search_mcp_registry` → **`search_registry(query, source='pypi'|'bioconda'|'nf_core'|'mcp')`**. `search_skills` (recipe library) and `list_capabilities` (curated catalog) stay SEPARATE — different corpora, different intents.
+- `search_pypi` + `search_bioconda` + `search_nf_core` + `search_mcp_registry` → **`search_registry(query, source='pypi'|'bioconda'|'nf_core'|'mcp')`**. `search_skills` (recipe library) and `search_capabilities` (curated catalog) stay SEPARATE — different corpora, different intents.
 - `read_skill` dropped (deprecated alias of `Skill`).
 
 Deliberately NOT merged (judgment: distinct behavior, not redundancy — merging would bury the distinction in a param, the fat-`op=` anti-pattern):
@@ -74,6 +74,35 @@ Deliberately NOT merged (judgment: distinct behavior, not redundancy — merging
 - **`annotate_entity` vs `update_entity_fields`** — kept `annotate_entity`: its flat named fields (`tags`/`notes`/`title`/`status`) are more discoverable for the common curation case than a free-form `fields={}` dict. Count is cached, so the extra tool costs ~nothing.
 
 Principle: **merge only genuine redundancy; keep distinct behaviors explicit.** Tool count is not the cost (the catalog is cached); discoverability is.
+
+## Functional clusters
+
+The catalog groups into these functional clusters (the durable organization —
+independent of which `tools/*.py` module currently registers each, which does NOT
+match cluster boundaries and is a known code-hygiene smell left for a later pass;
+the physical file moves are churn with no agent-facing benefit, so they were
+deliberately deferred rather than done under this reorg).
+
+| cluster | tools |
+|---|---|
+| entity reads | `list_entities`, `read_entity`, `list_entity_operations`, `get_lineage`, `read_csv_info` |
+| entity writes / curation | `promote_to_result`, `create_finding`, `create_claim`, `annotate_entity`, `update_entity_fields`, `update_member_caption`, `add_result_member`, `remove_result_member`, `archive_entity` |
+| datasets / uploads | `register_dataset`, `add_to_dataset`, `remove_from_dataset`, `check_import`, `inspect_upload`, `list_data_files` |
+| runs | `open_run`, `close_run` |
+| references | `register_reference`, `find_reference`, `fetch_reference`, `resolve_reference`, `promote_reference`, `describe_reference` |
+| discovery / search | `search_skills`, `search_registry`, `search_capabilities`, `read_capability`, `describe_tool`, `inspect_package` |
+| environment | `ensure_capability`, `propose_capability`, `inspect_env`, `make_isolated_env`, `set_active_env` |
+| external fetch | `fetch_url`, `fetch_ensembl`, `lookup_sra_runinfo` |
+| skills | `Skill` |
+| files | `read_file`, `write_file`, `edit_file`, `find_files`, `view_file` |
+| exec | `run_python`, `run_r`, `restart_kernel` |
+| jobs / compute | `describe_compute`, `get_job_status`, `cancel_job` |
+| pipelines | `run_nextflow`, `describe_pipeline`, `import_run` |
+| revisions / reproduction | `make_revision`, `list_revisions`, `set_current_revision`, `delete_revision`, `reproduce_from_exec`, `diff_env`, `rebuild_env`, `export_reproduction_bundle`, `pin_cell` |
+| viewers | `view_artifact`, `open_viewer` |
+| memory | `read_memory`, `write_memory` |
+| feedback | `read_aba_logs`, `read_client_context`, `build_bug_report` |
+| plan / control | `present_plan`, `ask_clarification` |
 
 ## Enforcement
 

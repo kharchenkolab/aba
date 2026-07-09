@@ -176,7 +176,7 @@ def read_capability(input_: dict) -> dict:
     cap = resolve_capability(name)
     if not cap:
         return {"status": "not_found",
-                "note": f"No capability '{name}'. Use list_capabilities to search."}
+                "note": f"No capability '{name}'. Use search_capabilities to search."}
     out = {
         "status": "ok",
         "name": cap.get("name"),
