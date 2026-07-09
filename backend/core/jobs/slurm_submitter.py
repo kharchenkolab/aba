@@ -14,6 +14,7 @@ through the SHARED completion path (artifacts + continuation), falling back to
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,24 @@ from core.graph.jobs import update_job
 from core.jobs.hpc_config import hpc_config, resolve_resources
 
 _BACKEND_DIR = str(Path(__file__).resolve().parents[2])   # the dir containing core/
+
+
+def _offload_runtime() -> tuple[str, str]:
+    """The Python interpreter + backend dir to bake into the offloaded job.sh.
+
+    The job runs on a BARE compute node, so both paths must exist there. Native /
+    linux-personal deploys run ABA directly on the host → ``sys.executable`` and
+    ``_BACKEND_DIR`` are already real shared-FS paths (unchanged, the default).
+
+    A SIF deploy runs ABA *inside a container* where those are container-internal
+    (``/opt/aba-venv/bin/python`` + ``/opt/aba/backend``) and absent on the bare
+    node. The launch sets ``ABA_OFFLOAD_PYTHON`` (the mounted base venv's real
+    path) + ``ABA_OFFLOAD_BACKEND_DIR`` (a shared-FS copy of the backend, staged
+    version-locked to the image) so offloaded jobs run bare — exactly like the
+    native path — with no per-job container (see misc/slim_sif_deploy.md)."""
+    py = os.environ.get("ABA_OFFLOAD_PYTHON") or sys.executable
+    bd = os.environ.get("ABA_OFFLOAD_BACKEND_DIR") or _BACKEND_DIR
+    return py, bd
 
 _SACCT_TERMINAL_FAIL = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY",
                         "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED"}
@@ -98,6 +117,7 @@ class SlurmSubmitter:
             "outdir": params.get("outdir"), "execution": params.get("execution"),
             "local_resources": params.get("local_resources"),
         }))
+        job_py, job_backend = _offload_runtime()   # bare-node interpreter + backend dir
         job_sh = run_dir / "job.sh"
         job_sh.write_text(
             "#!/bin/bash\n"
@@ -111,10 +131,10 @@ class SlurmSubmitter:
             # any module-injected entries) — the env's python then uses its own stdlib +
             # site-packages. Module PATH/LD_LIBRARY_PATH/JAVA_HOME/… for tools stay.
             "unset PYTHONHOME\n"
-            f"export PYTHONPATH={_BACKEND_DIR}\n"
+            f"export PYTHONPATH={job_backend}\n"
             # -u: unbuffered stdout so slurm_entry's tee'd child output reaches
             # job.log (sbatch -o) live, not only at exit.
-            f"{sys.executable} -u -m core.jobs.slurm_entry {spec_path}\n"
+            f"{job_py} -u -m core.jobs.slurm_entry {spec_path}\n"
             f"echo $? > {done_path}\n"
         )
         job_sh.chmod(0o755)

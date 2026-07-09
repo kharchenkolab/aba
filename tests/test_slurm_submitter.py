@@ -146,6 +146,33 @@ def test_job_sh_sanitizes_python_env(slurm):
         f"PYTHONPATH must be overwritten, not prepended: {m.group(0) if m else None}"
 
 
+def test_job_sh_offload_runtime_override(slurm, monkeypatch):
+    """SIF deploy: ABA_OFFLOAD_PYTHON / ABA_OFFLOAD_BACKEND_DIR steer the offloaded
+    job.sh onto shared-FS paths, because the bare compute node has no in-container
+    /opt/aba-venv or /opt/aba/backend. Unset (native / linux-personal) → the
+    in-process interpreter + backend dir, unchanged."""
+    import sys as _sys
+    from core.jobs.slurm_submitter import SlurmSubmitter, _BACKEND_DIR
+    # default (native): job.sh bakes the in-process interpreter + backend dir
+    monkeypatch.delenv("ABA_OFFLOAD_PYTHON", raising=False)
+    monkeypatch.delenv("ABA_OFFLOAD_BACKEND_DIR", raising=False)
+    sub = SlurmSubmitter()
+    job = _mk_job(projects.create_project("slurm-offload-native")["id"])
+    sub.submit(job)
+    jsh = (sub._run_dir(job) / "job.sh").read_text()
+    assert f"export PYTHONPATH={_BACKEND_DIR}\n" in jsh, jsh
+    assert f"{_sys.executable} -u -m core.jobs.slurm_entry" in jsh, jsh
+    # SIF deploy: the overrides win and NO container path leaks into the job
+    monkeypatch.setenv("ABA_OFFLOAD_PYTHON", "/shared/base/aba-venv/bin/python")
+    monkeypatch.setenv("ABA_OFFLOAD_BACKEND_DIR", "/shared/aba-backend")
+    job2 = _mk_job(projects.create_project("slurm-offload-sif")["id"])
+    sub.submit(job2)
+    jsh2 = (sub._run_dir(job2) / "job.sh").read_text()
+    assert "export PYTHONPATH=/shared/aba-backend\n" in jsh2, jsh2
+    assert "/shared/base/aba-venv/bin/python -u -m core.jobs.slurm_entry" in jsh2, jsh2
+    assert "/opt/aba-venv" not in jsh2 and "/opt/aba/backend" not in jsh2, jsh2
+
+
 def test_submit_passes_resource_flags(slurm, monkeypatch):
     from core.jobs.slurm_submitter import SlurmSubmitter
     args_file = Path(tempfile.mktemp())

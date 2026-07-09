@@ -54,7 +54,8 @@ if [ -n "${ABA_SIF:-}" ]; then
   # ABA_GROUP are forwarded below — so the backend resolves + reads refs with no
   # refs-specific bind or env. (If a site puts institution refs OUTSIDE
   # /cluster/aba, add a --bind for it here.)
-  binds=( --bind /groups --bind /cluster/aba --bind "${PWD}/dist" )
+  binds=( --bind /groups --bind "${PWD}/dist" )
+  [ -d /cluster/aba ] && binds+=( --bind /cluster/aba )   # institution refs tier (optional per site)
   # slim image: mount the shared conda base (+ R base) the image expects at /opt.
   [ -n "${ABA_BASE_DIR:-}" ] && binds+=( --bind "${ABA_BASE_DIR}:/opt/aba-venv" )
   [ -n "${ABA_TOOLS_DIR:-}" ] && [ -d "${ABA_TOOLS_DIR}" ] && binds+=( --bind "${ABA_TOOLS_DIR}:/opt/aba-envs/tools" )
@@ -64,6 +65,50 @@ if [ -n "${ABA_SIF:-}" ]; then
            ANTHROPIC_API_KEY ABA_LLM_CREDENTIAL CLAUDE_CODE_OAUTH_TOKEN; do
     eval "_v=\${$v:-}"; [ -n "${_v}" ] && envs+=( --env "$v=${_v}" )
   done
+
+  # --- Slurm offload plumbing: expose the host scheduler to the --containall
+  # backend so it can `sbatch` background jobs. Bind the client binaries + the
+  # libslurm plugin dir + SLURM_CONF + the munge socket/lib, plus a SYNTHESIZED
+  # passwd/group holding the runtime user + slurm/munge (via getent — LDAP users
+  # aren't in the image passwd and containall has no SSSD). Host RHEL binaries run
+  # on the image's newer glibc (backward-compatible). No-op off Slurm.
+  if command -v sbatch >/dev/null 2>&1; then
+    for b in sbatch squeue scancel sacct sinfo scontrol salloc srun; do
+      p=$(command -v "$b" 2>/dev/null) && binds+=( --bind "$p" )
+    done
+    sld=$(ldd "$(command -v sbatch)" 2>/dev/null | awk '/libslurm/{print $3}' | head -1)
+    [ -n "$sld" ] && binds+=( --bind "$(dirname "$sld")" )
+    scf="${SLURM_CONF:-/etc/slurm/slurm.conf}"
+    [ -f "$scf" ] && { binds+=( --bind "$(dirname "$scf")" ); envs+=( --env "SLURM_CONF=$scf" ); }
+    for m in /run/munge /var/run/munge; do [ -S "$m/munge.socket.2" ] && binds+=( --bind "$m" ); done
+    ml=$(ldconfig -p 2>/dev/null | awk '$1=="libmunge.so.2"{print $NF; exit}')
+    [ -n "$ml" ] && binds+=( --bind "$ml" )
+    nss="${PWD}/nss"; mkdir -p "$nss"
+    getent passwd "$(id -un)" slurm munge root nobody > "$nss/passwd" 2>/dev/null
+    getent group  "$(id -gn)" slurm munge root nobody   > "$nss/group"  2>/dev/null
+    [ -s "$nss/passwd" ] && binds+=( --bind "$nss/passwd:/etc/passwd" )
+    [ -s "$nss/group" ]  && binds+=( --bind "$nss/group:/etc/group" )
+  fi
+
+  # --- Option B offload: run offloaded jobs BARE on the compute node (misc/
+  # slim_sif_deploy.md). A background Slurm job runs OUTSIDE any container, where
+  # /opt/aba-venv + /opt/aba/backend (the in-image paths the backend would bake
+  # into job.sh) don't exist. Point offloaded jobs at the shared-FS base venv +
+  # a copy of the backend extracted from the image (cached per release under the
+  # user runtime, on a compute-node-visible FS). slurm_submitter._offload_runtime
+  # reads ABA_OFFLOAD_PYTHON / ABA_OFFLOAD_BACKEND_DIR; unset → native, unchanged.
+  if [ -n "${ABA_BASE_DIR:-}" ] && [ -x "${ABA_BASE_DIR}/bin/python" ]; then
+    obd="${ABA_RUNTIME_DIR}/.offload/${ABA_RELEASE_ID:-static}/backend"
+    if [ ! -d "$obd" ]; then
+      mkdir -p "$(dirname "$obd")"
+      apptainer exec --bind "$(dirname "$obd")":"$(dirname "$obd")" "${ABA_SIF}" \
+        cp -a /opt/aba/backend "$obd.$$" 2>/dev/null && mv -f "$obd.$$" "$obd" 2>/dev/null || true
+    fi
+    envs+=( --env "ABA_OFFLOAD_PYTHON=${ABA_BASE_DIR}/bin/python" )
+    if [ -d "$obd" ]; then envs+=( --env "ABA_OFFLOAD_BACKEND_DIR=${obd}" )
+    else echo "ABA: WARNING offload backend not staged ($obd) — background Slurm jobs may fail"; fi
+  fi
+
   apptainer run --containall "${binds[@]}" "${envs[@]}" "${ABA_SIF}" &
   UV=$!
 else
