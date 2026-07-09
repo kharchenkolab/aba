@@ -558,7 +558,7 @@ function renderBlocks(blocks: Block[], collapseTools: boolean, onRetry?: () => v
           </a>
         )
       }
-      // Viewer-launch links (open_viewer tool): same pill look as artifact
+      // Viewer-launch links (get_viewer_url tool): same pill look as artifact
       // links, always a new tab. /viewer-launch is NOT in the fetch auto-patch
       // list, so OOD-base-prefix it explicitly (mirrors viewers/launch.ts).
       if ((props.href || '').startsWith('/viewer-launch')) {

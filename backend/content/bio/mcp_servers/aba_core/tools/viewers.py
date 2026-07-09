@@ -12,14 +12,16 @@ from mcp.server.fastmcp import FastMCP
 def register_viewer_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    def open_viewer(entity_id: str | None = None,
-                    path: str | None = None,
-                    viewer_id: str | None = None,
-                    aba_ctx_id: str | None = None) -> dict:
-        """Get a launch link for an interactive EXTERNAL viewer of a single-cell
-        dataset, to show the user. Call this when the user wants to VIEW, EXPLORE,
-        or visually inspect a single-cell result (an .h5ad or .lstar.zarr) — pagoda3
-        opens it as an interactive UMAP / expression explorer in a new browser tab.
+    def get_viewer_url(entity_id: str | None = None,
+                       path: str | None = None,
+                       viewer_id: str | None = None,
+                       aba_ctx_id: str | None = None) -> dict:
+        """Construct a launch link (URL) for an interactive EXTERNAL viewer of a
+        single-cell dataset, and return it to show the user — this does NOT open
+        anything itself; it hands back a `viewer_url` the chat renders as a button.
+        Call it when the user wants to VIEW, EXPLORE, or visually inspect a
+        single-cell result (an .h5ad or .lstar.zarr) — pagoda3 then opens it as an
+        interactive UMAP / expression explorer in a new browser tab when clicked.
 
         Provide ONE of (if neither, the currently focused entity is used):
           • entity_id  — a dataset/result entity to view (preferred when it exists).

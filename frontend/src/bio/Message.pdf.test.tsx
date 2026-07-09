@@ -68,7 +68,7 @@ describe('Message — PDF chat-render path', () => {
     expect(a!.getAttribute('download')).toBe('umap_leiden.pdf')
   })
 
-  it('viewer-launch links render as a new-tab pill button (open_viewer)', () => {
+  it('viewer-launch links render as a new-tab pill button (get_viewer_url)', () => {
     const blocks: Block[] = [
       { type: 'text',
         text: '[Explore in pagoda3](/viewer-launch?viewer=pagoda3-anndata&project=p1&entity=ds_9)' },
