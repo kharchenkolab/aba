@@ -235,7 +235,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         return _impl({"name": name}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
-    def ensure_capability(name: str,
+    def ensure_capability(name: str | list[str],
                           source: str | None = None,
                           package: str | None = None,
                           ref: str | None = None,
@@ -246,6 +246,11 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         bioconda, MCP server, …). Long-running for installs — uses
         in_tool_ctx so progress.emit phase lines reach the handler-
         thread sink and stream to the chat as tool_progress events.
+
+        SEVERAL AT ONCE: pass a LIST of names — ensure_capability(["numpy",
+        "scipy", "pandas"]) — to make them all ready in one call; the result
+        carries a per-package `results` list. (The single-capability overrides
+        below apply only when ensuring ONE name.)
 
         R-package per-install override (no re-cataloguing): pass
         source='github', package='owner/repo', ref='<branch/tag>' to
@@ -258,14 +263,34 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         ({package, min_version}) telling you exactly what to upgrade."""
         from core.runtime.tool_ctx import in_tool_ctx
         from content.bio.tools import ensure_capability as _impl
-        _in: dict = {"name": name}
-        if source:  _in["source"] = source
-        if package: _in["package"] = package
-        if ref:     _in["ref"] = ref
-        if min_version: _in["min_version"] = min_version
-        if force:   _in["force"] = True
+        names = [name] if isinstance(name, str) else list(name or [])
+        names = [n for n in (str(s).strip() for s in names) if n]
+        if not names:
+            return {"status": "error", "note": "ensure_capability needs at least one name."}
+        overrides = {k: v for k, v in
+                     (("source", source), ("package", package), ("ref", ref),
+                      ("min_version", min_version)) if v}
+        if len(names) > 1 and overrides:
+            return {"status": "error", "note": (
+                "source/package/ref/min_version apply to a SINGLE capability — pass one "
+                "name with those overrides, or a list of names with none.")}
         with in_tool_ctx(aba_ctx_id) as ctx:
-            return _impl(_in, ctx)
+            if len(names) == 1:
+                _in: dict = {"name": names[0], **overrides}
+                if force:
+                    _in["force"] = True
+                return _impl(_in, ctx)
+            # Several packages: ensure each; aggregate a per-package result list.
+            _READY = {"ok", "ready", "reference", "available"}
+            results = [_impl({"name": n, **({"force": True} if force else {})}, ctx)
+                       for n in names]
+            not_ready = [r for r in results if r.get("status") not in _READY]
+            out = {"status": "ok" if not not_ready else "partial",
+                   "ensured": names, "results": results}
+            if not_ready:
+                out["note"] = "not ready: " + ", ".join(
+                    f"{r.get('name')}({r.get('status')})" for r in not_ready)
+            return out
 
     @mcp.tool()
     def propose_capability(name: str,
