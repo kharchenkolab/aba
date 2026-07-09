@@ -886,7 +886,8 @@ def harvest_nextflow_result(*, scratch: str, outdir: str, reports: str, returnco
 def nextflow_head_script(*, pipeline: str, project_id: str, run_id: str,
                          revision=None, profile=None, params: Optional[dict] = None,
                          outdir: Optional[str] = None, execution: Optional[str] = None,
-                         local_resources: Optional[dict] = None) -> "tuple[str, dict]":
+                         local_resources: Optional[dict] = None,
+                         done_path: Optional[str] = None) -> "tuple[str, dict]":
     """Build the BARE-bash job.sh body for an offloaded Nextflow head + the harvest
     context the server keeps for afterward.
 
@@ -975,12 +976,18 @@ def nextflow_head_script(*, pipeline: str, project_id: str, run_id: str,
         lines.append(f'export {_k}="$_ap"')
 
     quoted = " ".join(_shlex.quote(c) for c in cmd)
+    # `done` sentinel (rc of the nextflow run) — the completion signal poll() watches;
+    # its ABSENCE (+ sacct terminal) is the auto-resume infra-death trigger. Without it
+    # poll never finalizes a completed head. Default to the run's own dir when the
+    # submitter didn't pass a job-dir path.
+    done = done_path or str(scratch / "done")
     body = (
         "#!/bin/bash\n"
         f"cd {_shlex.quote(str(scratch))}\n"
         + "\n".join(lines) + "\n"
         f'nextflow -version > {_shlex.quote(str(scratch / "nf_version.txt"))} 2>&1 || true\n'
         f"{quoted}\n"
+        f"echo $? > {_shlex.quote(done)}\n"
     )
     ctx = {"scratch": str(scratch), "outdir": str(outdir), "reports": str(reports),
            "command": " ".join(cmd), "run_id": str(run_id), "project_id": str(project_id),

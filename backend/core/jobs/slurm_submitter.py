@@ -221,7 +221,8 @@ class SlurmSubmitter:
                 run_id=params.get("run_id") or job["id"],
                 revision=params.get("revision"), profile=params.get("profile"),
                 params=params.get("nf_params") or {}, outdir=params.get("outdir"),
-                execution=params.get("execution"), local_resources=params.get("local_resources"))
+                execution=params.get("execution"), local_resources=params.get("local_resources"),
+                done_path=str(done_path))   # completion sentinel in the JOB dir (poll watches it)
             job_sh.write_text(body)
             params = {**params, "nf_harvest": nf_ctx}   # poll() harvests from these paths
         else:
