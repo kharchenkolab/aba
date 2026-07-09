@@ -19,8 +19,8 @@ from pathlib import Path
 from core.viewers.launchers import register_launcher, LaunchResult
 from core.viewers.convert_cache import ensure_derived
 
-# Cache version = the installed lstar-sc version, so upgrading it (e.g. 0.1.0 →
-# 0.1.1, which changes the store layout / adds the viewer@0.1 profile) AUTOMATICALLY
+# Cache version = the installed lstar-sc version, so upgrading it (e.g. 0.1.x →
+# 0.2.0, which switched the on-disk store to zarr v3) AUTOMATICALLY
 # re-derives every cached store — no manual bump needed. Suffix `+N` here only if
 # THIS launcher's own conversion logic changes independently of lstar.
 def _launcher_version() -> str:

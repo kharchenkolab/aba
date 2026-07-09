@@ -87,10 +87,11 @@ dependencies:
 
       # ── viewer data layer ──────────────────────────────────────────────
       # lstar-sc: L* single-cell interchange behind the pagoda3 viewer (import
-      # name `lstar`; the bare `lstar` on PyPI is unrelated). Versioning notes +
-      # the .rds R-bridge setup: misc/pagoda3_integration.md §Viewer data layer.
-      - lstar-sc==0.1.7     # EXACT pin — lstar moves fast + isn't in a stable channel;
+      # name `lstar`; the bare `lstar` on PyPI is unrelated). The .rds R-bridge
+      # setup lives in the pagoda3 viewer launcher (backend/content/bio/viewers).
+      - lstar-sc==0.2.0     # EXACT pin — lstar moves fast + isn't in a stable channel;
                             #   deploy reproducibility beats floating. Co-versioned with the
-                            #   lstar R package at git tag v0.1.7 (same repo) and pagoda3 v0.1.1.
+                            #   lstar R package at git tag v0.2.0 (same repo) and pagoda3 v0.2.0
+                            #   (the 0.2.0 set switched the on-disk store to zarr v3).
                             #   Bump this + the R/pagoda3 pins together as a validated set.
       - zarr>=3.1            # lstar uses the zarr-python 3 library

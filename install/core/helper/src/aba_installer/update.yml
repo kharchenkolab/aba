@@ -115,7 +115,7 @@ steps:
       lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
       `.lstar.zarr`; only Seurat/SCE `.rds` conversion is affected. To install by
       hand: with the tools env's bin on PATH (for the compiler), run its Rscript:
-      `remotes::install_github("kharchenkolab/lstar", ref="v0.1.6", subdir="r")`.
+      `remotes::install_github("kharchenkolab/lstar", ref="v0.2.0", subdir="r")`.
 
   - id: fetch-pagoda3-dist
     title: Install the pagoda3 viewer bundle
@@ -131,11 +131,11 @@ steps:
       $ABA_PAGODA3_DIST_URL (air-gapped mirror / a newer pin). Non-fatal.
     commands:
       # Version-aware: the target URL is recorded in a .aba-dist-url marker, so a
-      # version bump (v0.1.0 → v0.1.1 …) re-fetches on `aba update` instead of
+      # version bump (v0.1.1 → v0.2.0 …) re-fetches on `aba update` instead of
       # skipping on "index.html present". Extract to a temp dir + atomic swap so a
       # failed download keeps the working dist (viewer never goes dark mid-update).
       # KEEP BYTE-IDENTICAL to install.yml's copy.
-      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.1.1/pagoda3-viewer-0.1.1.zip}\"; MARK=\"$DIST/.aba-dist-url\"; if [ -f \"$DIST/index.html\" ] && [ \"$(cat \"$MARK\" 2>/dev/null)\" = \"$URL\" ]; then echo \"pagoda3 dist already present ($URL) — skipping\"; elif ! command -v unzip >/dev/null 2>&1; then echo \"WARNING: unzip not found — cannot install pagoda3 dist ($URL)\"; else TMP=\"$(mktemp -d)\"; if curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$TMP/x\" && [ -f \"$TMP/x/index.html\" ]; then rm -rf \"$DIST\"; mkdir -p \"$(dirname \"$DIST\")\"; mv \"$TMP/x\" \"$DIST\"; printf '%s' \"$URL\" > \"$MARK\"; echo \"pagoda3 viewer dist installed to $DIST ($URL)\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — keeping any existing dist; interactive viewer needs a dist with index.html at $DIST\"; fi; rm -rf \"$TMP\"; fi"
+      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.0/pagoda3-viewer-0.2.0.zip}\"; MARK=\"$DIST/.aba-dist-url\"; if [ -f \"$DIST/index.html\" ] && [ \"$(cat \"$MARK\" 2>/dev/null)\" = \"$URL\" ]; then echo \"pagoda3 dist already present ($URL) — skipping\"; elif ! command -v unzip >/dev/null 2>&1; then echo \"WARNING: unzip not found — cannot install pagoda3 dist ($URL)\"; else TMP=\"$(mktemp -d)\"; if curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$TMP/x\" && [ -f \"$TMP/x/index.html\" ]; then rm -rf \"$DIST\"; mkdir -p \"$(dirname \"$DIST\")\"; mv \"$TMP/x\" \"$DIST\"; printf '%s' \"$URL\" > \"$MARK\"; echo \"pagoda3 viewer dist installed to $DIST ($URL)\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — keeping any existing dist; interactive viewer needs a dist with index.html at $DIST\"; fi; rm -rf \"$TMP\"; fi"
     timeout_seconds: 300
     remediation: |
       pagoda3 dist fetch failed — NON-FATAL; the interactive viewer won't work until a
