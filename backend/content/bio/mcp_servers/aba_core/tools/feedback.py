@@ -1,4 +1,4 @@
-"""Feedback tools cluster — build_bug_report (misc/feedback.md).
+"""Feedback tools cluster — get_bug_report_url (misc/feedback.md).
 
 Guide calls this when the user wants to report a bug / something broke. Guide
 supplies the human-readable parts; the impl stamps system facts, budgets the
@@ -26,7 +26,7 @@ def register_feedback_tools(mcp: FastMCP) -> None:
           • grep  — optional case-insensitive substring filter (e.g. 'error',
                     'Traceback', the entity/run id).
 
-        Use this when investigating a bug BEFORE calling build_bug_report: read the
+        Use this when investigating a bug BEFORE calling get_bug_report_url: read the
         logs, find the actual error/cause, then SUMMARIZE it in your diagnosis. Do
         NOT paste raw log lines into the report — it's strictly size-capped, so
         distill the evidence into a tight technical cause."""
@@ -45,14 +45,15 @@ def register_feedback_tools(mcp: FastMCP) -> None:
         return read_client_context_impl({})
 
     @mcp.tool()
-    def build_bug_report(headline: str,
-                         what_doing: str = "",
-                         diagnosis: str = "",
-                         error_tail: str = "",
-                         aba_ctx_id: str | None = None) -> dict:
-        """Compile a bug report and return a ready-to-click `mailto:` link the
-        user emails to the ABA team. Call this whenever the user wants to report a
-        bug or something that went wrong.
+    def get_bug_report_url(headline: str,
+                           what_doing: str = "",
+                           diagnosis: str = "",
+                           error_tail: str = "",
+                           aba_ctx_id: str | None = None) -> dict:
+        """Compile a bug report and return a ready-to-click `mailto:` URL the
+        user emails to the ABA team. This constructs and returns the link — it does
+        not send anything. Call it whenever the user wants to report a bug or
+        something that went wrong.
 
         AUDIENCE — read this carefully: the report is read by an ABA DEVELOPER (a
         bugfixer agent or engineer) who will REPRODUCE and FIX the issue. Write it

@@ -140,7 +140,7 @@ def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
         "ok": True, "which": which, "matched_by_source": by_source, "lines": lines,
         "_agent_hint": ("Lines are tagged by source. Find the actual error/root cause "
                         "and SUMMARIZE it (note which log) for the report's diagnosis. "
-                        "Do NOT paste raw log lines into build_bug_report — it's size-capped."),
+                        "Do NOT paste raw log lines into get_bug_report_url — it's size-capped."),
     }
 
 

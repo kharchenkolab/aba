@@ -1,8 +1,8 @@
 ---
 name: diagnose-aba-trouble
-description: How to diagnose an ABA problem and file a useful bug report — classify the symptom, pull the RIGHT evidence, form a grounded root-cause hypothesis, then call build_bug_report. Never fabricate.
-when_to_use: The user reports that something broke, behaved wrong, or wants to report a bug/problem with ABA itself (an error, a failed run/install, a UI glitch, the env, a recipe, or odd agent behavior) — OR you yourself observe behavior that looks like an ABA platform defect (not the user's code/data) and should offer to file a report. Run this before calling build_bug_report.
-requires_tools: [read_aba_logs, read_client_context, build_bug_report]
+description: How to diagnose an ABA problem and file a useful bug report — classify the symptom, pull the RIGHT evidence, form a grounded root-cause hypothesis, then call get_bug_report_url. Never fabricate.
+when_to_use: The user reports that something broke, behaved wrong, or wants to report a bug/problem with ABA itself (an error, a failed run/install, a UI glitch, the env, a recipe, or odd agent behavior) — OR you yourself observe behavior that looks like an ABA platform defect (not the user's code/data) and should offer to file a report. Run this before calling get_bug_report_url.
+requires_tools: [read_aba_logs, read_client_context, get_bug_report_url]
 capabilities_needed: []
 keywords: [bug, report, broken, error, failed, crash, doesn't work, not working, diagnose, troubleshoot, debug, install, environment, recipe, glitch, problem, meta]
 produces: []
@@ -48,7 +48,7 @@ for the missing piece (the traceback, which thread/project, the exact step). Onl
 file unsubstantiated if the user says to.
 
 ## Step 4 — file it
-Call `build_bug_report` with the bugfixer-register fields: `headline` (symptom),
+Call `get_bug_report_url` with the bugfixer-register fields: `headline` (symptom),
 `what_doing` (repro/context), `diagnosis` (your Step-2 hypothesis), `error_tail`
 (1–3 verbatim error lines). Keep each tight — the email is size-capped, so the
 *evidence stays in your reasoning* and only the distilled cause goes in. Then give

@@ -101,7 +101,7 @@ deliberately deferred rather than done under this reorg).
 | revisions / reproduction | `make_revision`, `list_revisions`, `set_current_revision`, `delete_revision`, `reproduce_from_exec`, `diff_env`, `rebuild_env`, `export_reproduction_bundle`, `pin_cell` |
 | viewers | `view_artifact`, `get_viewer_url` |
 | memory | `read_memory`, `write_memory` |
-| feedback | `read_aba_logs`, `read_client_context`, `build_bug_report` |
+| feedback | `read_aba_logs`, `read_client_context`, `get_bug_report_url` |
 | plan / control | `present_plan`, `ask_clarification` |
 
 ## Enforcement
