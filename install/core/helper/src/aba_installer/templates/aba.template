@@ -80,12 +80,35 @@ case "${1:-up}" in
     fi
     ;;
   uninstall)
-    "$0" stop
+    # macOS: unload + remove ALL ABA launchd agents (tray + helper) FIRST, so a
+    # KeepAlive agent can't respawn the backend mid-teardown. The glob covers any
+    # com.kharchenkolab.aba* label (no drift if one is renamed/added). No-op on
+    # Linux (nohup model, no persistent unit — `stop` below suffices there).
+    if [ -d "$HOME/Library/LaunchAgents" ]; then
+      for plist in "$HOME/Library/LaunchAgents"/com.kharchenkolab.aba*.plist; do
+        [ -e "$plist" ] || continue
+        label="$(basename "$plist" .plist)"
+        launchctl bootout "gui/$(id -u)/$label" 2>/dev/null \
+          || launchctl unload "$plist" 2>/dev/null || true
+        rm -f "$plist"
+      done
+    fi
+    "$0" stop 2>/dev/null || true
+    # The conda/micromamba env writes read-only dirs (site-packages is dr-xr-xr-x),
+    # and `rm -rf` can't unlink entries from a non-writable dir — it fails with
+    # "Directory not empty" and orphans ~1 GB. Make the tree writable (and clear
+    # macOS uchg flags — chflags is BSD-only, guarded) BEFORE removing.
+    chmod -R u+w "$ABA_HOME" 2>/dev/null || true
+    command -v chflags >/dev/null 2>&1 && chflags -R nouchg "$ABA_HOME" 2>/dev/null || true
     rm -rf "$ABA_HOME"
     # Launcher lives under $ABA_HOME (removed above); also clear any legacy
     # ~/bin or --global copies from older installs.
     rm -f "$HOME/bin/aba" /usr/local/bin/aba 2>/dev/null || true
-    echo "Uninstalled. Runtime files preserved at $ABA_HOME (if any remain)."
+    if [ -d "$ABA_HOME" ]; then
+      echo "Removed the aba launcher + launchd agents, but some files under $ABA_HOME resisted removal — delete it by hand."
+    else
+      echo "Uninstalled: removed $ABA_HOME (env, repo, runtime), the launchd agents, and the aba launcher."
+    fi
     ;;
   *)
     cat <<EOF

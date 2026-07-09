@@ -62,5 +62,6 @@ whatever is already in place.
 
 ## Uninstall
 
-`aba uninstall` removes ABA. Everything lives under `~/.aba`, so there's nothing
-scattered across your system.
+`aba uninstall` removes ABA — the `~/.aba` folder (environment, repo, runtime)
+plus the `aba` launcher and its menu-bar/login agents. Nothing else is left
+behind.

@@ -129,3 +129,56 @@ def test_rendered_launcher_has_known_subcommands():
         assert action in out, f"launcher missing subcommand: {action}"
     # update / doctor / auth / hpc-config share one case → the headless CLI (browserless).
     assert "update|doctor|auth|hpc-config)" in out, "launcher missing the headless-CLI subcommand"
+
+
+def test_rendered_uninstall_is_robust_and_honest():
+    """uninstall must (1) make the tree writable before `rm -rf` — conda's
+    read-only site-packages otherwise defeats it; (2) clear the launchd agents
+    by glob; (3) not claim it 'preserved' anything (it removes everything)."""
+    ctx = LauncherContext(aba_home=Path("/x"), aba_runtime_dir=Path("/x/runtime"),
+                          aba_env=Path("/x/env"), aba_repo=Path("/x/repo"))
+    out = render(ctx)
+    uninstall = out.split("uninstall)", 1)[1].split(";;", 1)[0]
+    assert 'chmod -R u+w "$ABA_HOME"' in uninstall
+    assert uninstall.index('chmod -R u+w') < uninstall.index('rm -rf "$ABA_HOME"'), \
+        "must chmod writable BEFORE rm -rf"
+    assert 'com.kharchenkolab.aba*.plist' in uninstall and 'launchctl' in uninstall
+    assert "Runtime files preserved" not in out    # no false claim
+
+
+def test_uninstall_removes_readonly_env_and_launchagents(tmp_path):
+    """Regression (2026-07): conda's read-only site-packages made `rm -rf
+    $ABA_HOME` fail with 'Directory not empty' (orphaning ~1 GB), and the
+    launchd agents were left behind pointing at deleted paths. The rendered
+    `aba uninstall` must fully remove ABA_HOME AND the com.kharchenkolab.aba*
+    agents, while leaving unrelated LaunchAgents alone."""
+    import subprocess
+    home = tmp_path / "home"; home.mkdir()
+    aba_home = home / ".aba"
+    sp = aba_home / "env" / "lib" / "python3.12" / "site-packages"
+    sp.mkdir(parents=True)
+    (sp / "foo.py").write_text("x")
+    (aba_home / "config.env").write_text("")
+    (aba_home / "bin").mkdir()
+    la = home / "Library" / "LaunchAgents"; la.mkdir(parents=True)
+    for name in ("com.kharchenkolab.aba.tray.plist",
+                 "com.kharchenkolab.aba.helper.plist",
+                 "com.unrelated.other.plist"):
+        (la / name).write_text("<plist/>")
+    os.chmod(sp, 0o555)                     # mimic conda: read-only site-packages
+
+    ctx = LauncherContext(aba_home=aba_home, aba_runtime_dir=aba_home / "runtime",
+                          aba_env=aba_home / "env", aba_repo=aba_home / "repo",
+                          aba_port=8000)
+    script = tmp_path / "aba"
+    script.write_text(render(ctx)); script.chmod(0o755)
+
+    r = subprocess.run(["bash", str(script), "uninstall"],
+                       env={"HOME": str(home), "PATH": os.environ["PATH"]},
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert not aba_home.exists(), \
+        f"ABA_HOME not fully removed: {[str(p) for p in aba_home.rglob('*')]}"
+    assert not (la / "com.kharchenkolab.aba.tray.plist").exists()
+    assert not (la / "com.kharchenkolab.aba.helper.plist").exists()
+    assert (la / "com.unrelated.other.plist").exists()    # unrelated agent untouched
