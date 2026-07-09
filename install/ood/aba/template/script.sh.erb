@@ -73,8 +73,14 @@ if [ -n "${ABA_SIF:-}" ]; then
   # passwd/group holding the runtime user + slurm/munge (via getent — LDAP users
   # aren't in the image passwd and containall has no SSSD). Host RHEL binaries run
   # on the image's newer glibc (backward-compatible). No-op off Slurm.
+  # NB `sacctmgr` is in the list, not just for symmetry: hpc_config.qos_account_live()
+  # shells out to it to discover the user's QOS + account + each QOS's MaxWall cap.
+  # Without it bound, discovery returns empty inside the SIF, jobs fall back to the
+  # cluster's DEFAULT QOS + uncapped walltime, and a long request (e.g. the 24h
+  # nextflow head) is rejected QOSMaxWallDurationPerJobLimit. Binding it lets the
+  # slim SIF self-configure QOS/account on any accounting cluster — no hpc.yaml.
   if command -v sbatch >/dev/null 2>&1; then
-    for b in sbatch squeue scancel sacct sinfo scontrol salloc srun; do
+    for b in sbatch squeue scancel sacct sacctmgr sinfo scontrol salloc srun; do
       p=$(command -v "$b" 2>/dev/null) && binds+=( --bind "$p" )
     done
     sld=$(ldd "$(command -v sbatch)" 2>/dev/null | awk '/libslurm/{print $3}' | head -1)

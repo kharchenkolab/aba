@@ -112,8 +112,23 @@ def test_launch_forwards_nextflow_env():
     assert "ABA_NEXTFLOW_MODULE" in erb, "script.sh.erb must forward ABA_NEXTFLOW_MODULE into apptainer run"
 
 
+def test_launch_binds_sacctmgr():
+    """script.sh.erb must bind `sacctmgr` into the containall SIF, not just the job
+    clients. hpc_config.qos_account_live() shells out to sacctmgr to discover the
+    user's QOS + account + each QOS's MaxWall; unbound, discovery returns empty in the
+    SIF and jobs fall back to the cluster DEFAULT QOS + uncapped walltime — a 24h
+    request (the nf-core head) is then rejected QOSMaxWallDurationPerJobLimit (the live
+    regression this guards). It belongs in the same bind loop as sbatch/squeue/sacct."""
+    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    import re
+    m = re.search(r"for b in ((?:sbatch|squeue|sacct|sacctmgr|scancel|sinfo|scontrol|salloc|srun|\s)+);", erb)
+    assert m and "sacctmgr" in m.group(1).split(), (
+        "script.sh.erb Slurm-client bind loop must include sacctmgr (QOS/account discovery)")
+
+
 if __name__ == "__main__":
     test_glibc_floor_truth_table(); print("glibc_floor truth table: PASS")
     test_preflight_surfaces_glibc_warn(); print("preflight surfaces warn: PASS")
     test_preflight_emits_module_config(); print("preflight emits module config: PASS")
     test_launch_forwards_nextflow_env(); print("launch forwards nextflow env: PASS")
+    test_launch_binds_sacctmgr(); print("launch binds sacctmgr: PASS")
