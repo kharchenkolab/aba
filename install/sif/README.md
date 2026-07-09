@@ -21,6 +21,30 @@ the mac/linux installers. The runtime is **per-user** (`<state_dir>/envs`, the g
 + project growth over the shared base); the shared base is the image (fat) or a
 config-pointed mount (slim). The manual recipe below is the background it automates.
 
+### Base image — MATCH your cluster's glibc (`--base` / `ABA_SIF_BASE`)
+The base supplies only the root filesystem (glibc, shell, coreutils) — there is **no
+`%post`**, so no package manager runs; CA certs + micromamba are baked from the host and
+the conda env is baked (fat) / mounted (slim). The **one hard rule**: the base image's
+glibc must **match your compute nodes'** (default `oraclelinux:7`, glibc 2.17 — the
+conda-forge floor, which runs on any current EL cluster). Why it matters:
+
+| base vs nodes | compiled-in-container tools on nodes | host modules (Lmod) in container |
+|---|---|---|
+| base **>** nodes (e.g. Debian 12 on EL7) | **fail** (`GLIBC_2.xx not found`) | **won't load** |
+| base **<** nodes | ok | won't load |
+| base **=** nodes | ok | **load** ✓ |
+
+So pin the base to your nodes' OS family (EL7 → `oraclelinux:7`; EL8 → `oraclelinux:8`; …).
+`build.sh` prints `glibc: image=… build-host=…` after a build and shows a loud banner if the
+image **overshoots** the build host (the dangerous direction). The comparison rule is one
+source of truth in `install/sif/glibc-floor.sh`; the OOD preflight mirrors it and surfaces
+a warning on the session card at launch (`ABA_PF_GLIBC_WARN`).
+
+> **Build host, rootless apptainer:** unpacking an EL base needs an `APPTAINER_TMPDIR` on a
+> hardlink-capable filesystem — **NFS works, beegfs does not** (`unpriv.link: operation not
+> permitted`). Debian bases masked this by lacking the tripping hardlinks. Set
+> `APPTAINER_TMPDIR` to an NFS path (or build where fakeroot/subuid or root is available).
+
 ## Toolchain (this box has no system apptainer)
 Bootstrapped rootless apptainer via micromamba (unprivileged user namespaces are
 enabled: `unprivileged_userns_clone=1`):

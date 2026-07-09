@@ -125,6 +125,12 @@ def main():
     gcfg, ucfg, icfg = scopes.get("group") or {}, scopes.get("user") or {}, scopes.get("institution") or {}
     creds = site.get("credentials") or {}
     warnings, blocked, blocked_reason = [], False, None
+    # glibc-floor: preflight.sh (on the node) compares the image's base glibc to the
+    # node's and passes a message here when the base is too new — surface it on the
+    # session card so a mis-based image is visible at launch, not mid-calculation.
+    _glibc_warn = (os.environ.get("ABA_PF_GLIBC_WARN") or "").strip()
+    if _glibc_warn:
+        warnings.append(_glibc_warn)
 
     def ex(s):
         return expand(s, user=user, group=group, home=home)

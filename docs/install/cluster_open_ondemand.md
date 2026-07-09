@@ -75,6 +75,28 @@ ABA_RECIPES_SRC=/path/to/aba-recipe-pack \
 Both bake CA certs + micromamba so the agent can install packages into the
 per-user growth env at run time.
 
+### ⚠️ Match the base image's glibc to your compute nodes
+The image base (`--base` / `ABA_SIF_BASE`, default `oraclelinux:7`) supplies the root
+filesystem, and its **glibc must equal your compute nodes'**. Get this wrong and it
+breaks *mid-analysis*, not at build:
+
+- base **newer** than nodes (e.g. the old `debian:12` default on an EL7 cluster) →
+  anything compiled in-container (`pip` sdists, `R CMD INSTALL`) fails on the nodes with
+  `GLIBC_2.xx not found`, **and** the nodes' `module load` (Lmod) won't run in-container.
+- base **older** than nodes → compiles are fine, but host modules still won't load.
+- base **= nodes** → both work.
+
+Pin it to your nodes' OS family in `aba-vbc/versions.env` (`ABA_SIF_BASE`): CBE/CLIP are
+EL7 → `oraclelinux:7` (glibc 2.17, the conda-forge floor). `build.sh` prints the image vs
+build-host glibc and warns loudly on an overshoot; the OOD preflight repeats the check per
+node at launch and flags it on the session card. This is what lets a slim deploy use the
+cluster's environment-modules for in-session tools (module-heavy or long work still offloads
+to Slurm, where it runs bare on the node regardless).
+
+> **Build host:** rootless `apptainer` needs `APPTAINER_TMPDIR` on a **hardlink-capable FS
+> (NFS)** to unpack an EL base — beegfs fails with `unpriv.link`. (Debian bases didn't hit
+> this; EL bases do.) Or build where fakeroot/subuid or root is available.
+
 ## 2. Place artifacts on shared storage
 
 Reachable by the compute nodes (e.g. under `/cluster/aba`):

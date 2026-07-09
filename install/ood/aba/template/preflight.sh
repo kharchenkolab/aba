@@ -56,6 +56,19 @@ if [ -n "${BASE}" ] && [ -d "${BASE}" ]; then
   echo "preflight.sh: slim base bound ${BASE} -> /opt/aba-venv" >> "$log"
 fi
 
+# glibc-floor check (mirrors install/sif/glibc-floor.sh): the image's base glibc must
+# be <= THIS node's, or in-container-compiled tools + host environment-modules break
+# here. Non-fatal — surfaced on the session card via ABA_PF_GLIBC_WARN. Catches a
+# mis-based image at launch even when it was built elsewhere.
+GLIBC_WARN=""
+_ng="$(getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+_sg="$(apptainer exec "${SIF}" getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+if [ -n "${_ng}" ] && [ -n "${_sg}" ] && [ "${_ng}" != "${_sg}" ] \
+   && [ "$(printf '%s\n%s\n' "${_sg}" "${_ng}" | sort -t. -k1,1n -k2,2n | tail -1)" = "${_sg}" ]; then
+  GLIBC_WARN="SIF base glibc ${_sg} exceeds this node's ${_ng} — tools compiled in-container and host modules (Lmod) will fail on the compute nodes; rebuild the image on a base with glibc <= ${_ng} (ABA_SIF_BASE)."
+  echo "preflight.sh: WARNING ${GLIBC_WARN}" >> "$log"
+fi
+
 # apptainer scrubs most host env → pass the preflight inputs explicitly.
 envs=(--env "ABA_SITE_CONFIG=${ABA_SITE_CONFIG}"
       --env "ABA_PF_GROUP=${ABA_PF_GROUP:-}"
@@ -63,6 +76,7 @@ envs=(--env "ABA_SITE_CONFIG=${ABA_SITE_CONFIG}"
       --env "ABA_PF_HOME=${ABA_PF_HOME:-}"
       --env "ABA_PF_STAGED=${staged}")
 [ -n "${ABA_PF_TOKEN:-}" ] && envs+=(--env "ABA_PF_TOKEN=${ABA_PF_TOKEN}")
+[ -n "${GLIBC_WARN}" ] && envs+=(--env "ABA_PF_GLIBC_WARN=${GLIBC_WARN}")
 
 echo "preflight.sh: apptainer exec ${SIF} python /opt/aba/ood/aba_preflight.py" >> "$log"
 apptainer exec "${binds[@]}" "${envs[@]}" "${SIF}" \
