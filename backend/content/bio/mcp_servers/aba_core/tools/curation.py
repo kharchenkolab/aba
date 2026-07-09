@@ -28,15 +28,15 @@ def register_curation_tools(mcp: FastMCP) -> None:
     belongs to comes from ctx)."""
 
     @mcp.tool()
-    def promote_to_result(figure_id: str, interpretation: str,
+    def promote_to_result(entity_id: str, interpretation: str,
                           title: str | None = None,
                           aba_ctx_id: str | None = None) -> dict:
         """Promote a figure to a Result with a written interpretation
-        — the deliberate 'this matters' gesture."""
+        — the deliberate 'this matters' gesture. `entity_id` is the figure."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import promote_to_result_tool
         return promote_to_result_tool(
-            {"figure_id": figure_id, "interpretation": interpretation,
+            {"figure_id": entity_id, "interpretation": interpretation,
              "title": title},
             peek_ctx(aba_ctx_id),
         )

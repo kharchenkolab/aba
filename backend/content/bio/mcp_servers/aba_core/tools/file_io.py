@@ -89,7 +89,7 @@ def register_file_io_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def find_files(pattern: str,
                    root: Literal["project", "work", "data", "artifacts"] = "project",
-                   max_results: int = 50,
+                   limit: int = 50,
                    aba_ctx_id: str | None = None) -> dict:
         """Glob-style file search across the project tree. Use this when
         you need to locate a file by name without remembering the exact
@@ -120,7 +120,7 @@ def register_file_io_tools(mcp: FastMCP) -> None:
                          - 'data'     — registered DATA_DIR datasets.
                          - 'artifacts' — harvested figures / tables
                            (artifacts/<pid>/).
-          max_results  Cap on matches returned (default 50). Newest
+          limit  Cap on matches returned (default 50). Newest
                        matches (by mtime) come first.
 
         Returns:
@@ -154,7 +154,7 @@ def register_file_io_tools(mcp: FastMCP) -> None:
                     f"pattern must be a basename glob (no '/' or leading "
                     f"'.'); got {pattern!r}. Examples: '*.rds', "
                     f"'umap_*.png', 'seurat_integrated.rds'."}
-        max_results = max(1, min(int(max_results), 500))
+        limit = max(1, min(int(limit), 500))
         # Resolve search root.
         if root == "project":
             from core.config import PROJECTS_DIR
@@ -202,8 +202,8 @@ def register_file_io_tools(mcp: FastMCP) -> None:
                 })
         # Newest first.
         matches.sort(key=lambda m: m["mtime"], reverse=True)
-        if len(matches) > max_results:
-            matches = matches[:max_results]
+        if len(matches) > limit:
+            matches = matches[:limit]
             truncated = True
         return {"root_path": str(search_root),
                 "pattern": pattern,

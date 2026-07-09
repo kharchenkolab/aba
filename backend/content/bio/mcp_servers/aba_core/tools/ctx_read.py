@@ -107,19 +107,18 @@ def register_ctx_read_tools(mcp: FastMCP) -> None:
         return _impl({"entity_id": entity_id, "max_depth": max_depth})
 
     @mcp.tool()
-    def read_capability(name: str | None = None,
-                        capability: str | None = None) -> dict:
+    def read_capability(name: str) -> dict:
         """Full detail for one capability by name — what it does, its
         inputs, and (for a reference entry) where the implementation
         lives. Mirrors read_skill: list/search stay trimmed; this
         expands one on demand."""
         from content.bio.tools import read_capability as _impl
-        return _impl({"name": name, "capability": capability})
+        return _impl({"name": name})
 
     @mcp.tool()
-    def read_csv_info(filename: str) -> dict:
+    def read_csv_info(path: str) -> dict:
         """CSV/TSV preview — first 5 rows + column types. Use after
         register_dataset to confirm the file shape before
-        run_python/run_r."""
+        run_python/run_r. `path` is a filename or path under the project."""
         from content.bio.tools import read_csv_info as _impl
-        return _impl({"filename": filename})
+        return _impl({"filename": path})

@@ -13,7 +13,7 @@ def register_viewer_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def open_viewer(entity_id: str | None = None,
-                    file_path: str | None = None,
+                    path: str | None = None,
                     viewer_id: str | None = None,
                     aba_ctx_id: str | None = None) -> dict:
         """Get a launch link for an interactive EXTERNAL viewer of a single-cell
@@ -23,7 +23,7 @@ def register_viewer_tools(mcp: FastMCP) -> None:
 
         Provide ONE of (if neither, the currently focused entity is used):
           • entity_id  — a dataset/result entity to view (preferred when it exists).
-          • file_path  — the data file. A bare filename ('processed.h5ad') is fine —
+          • path       — the data file. A bare filename ('processed.h5ad') is fine —
                          it's resolved against the project's files (basename or
                          partial path); you do NOT need the full tree path.
         Optionally viewer_id to force a specific viewer (default: best match).
@@ -44,6 +44,6 @@ def register_viewer_tools(mcp: FastMCP) -> None:
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import open_viewer_impl
         return open_viewer_impl(
-            {"entity_id": entity_id, "file_path": file_path, "viewer_id": viewer_id},
+            {"entity_id": entity_id, "file_path": path, "viewer_id": viewer_id},
             peek_ctx(aba_ctx_id),
         )

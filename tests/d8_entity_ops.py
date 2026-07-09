@@ -92,11 +92,11 @@ def main() -> int:
 
     print("promote_to_result")
     fig = create_entity(entity_type="figure", title="UMAP", metadata={"thread_id": "default"})
-    r = call("promote_to_result", figure_id=fig, interpretation="Monocyte expansion in COVID day 0.")
+    r = call("promote_to_result", entity_id=fig, interpretation="Monocyte expansion in COVID day 0.")
     check("figure -> result", r.get("status") == "ok" and r.get("result_id"), str(r))
     rid = r.get("result_id")
     check("  ...result entity exists", bool(get_entity(rid)) and get_entity(rid)["type"] == "result")
-    check("non-figure -> error", "error" in call("promote_to_result", figure_id=did, interpretation="x"))
+    check("non-figure -> error", "error" in call("promote_to_result", entity_id=did, interpretation="x"))
 
     print("create_finding + create_claim")
     r = call("create_finding", result_ids=[rid], text="COVID day-0 PBMCs show monocyte expansion.")

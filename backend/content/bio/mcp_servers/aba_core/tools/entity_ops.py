@@ -843,7 +843,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                 "removed_member_id": member_id}
 
     @mcp.tool()
-    def list_entity_operations(entity_type: str | None = None,
+    def list_entity_operations(type: str | None = None,
                                entity_id: str | None = None,
                                aba_ctx_id: str | None = None) -> dict:
         """List what the agent can do for an entity type — the generic
@@ -851,7 +851,7 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         the UI. Useful when the agent isn't sure whether the right move
         is update_entity_fields or a typed tool like make_revision.
 
-        Call with either an `entity_type` (e.g. 'result', 'claim') OR
+        Call with either a `type` (e.g. 'result', 'claim') OR
         an `entity_id` (the tool will look up its type).
 
         Returns:
@@ -870,15 +870,15 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         from core.entity_types import get_type
         from core.graph.entities import get_entity
 
-        if entity_type:
-            ftype = entity_type
+        if type:
+            ftype = type
         elif entity_id:
             e = get_entity(entity_id)
             if not e:
                 return {"error": f"entity {entity_id} not found"}
             ftype = e.get("type") or "entity"
         else:
-            return {"error": "pass entity_type or entity_id"}
+            return {"error": "pass type or entity_id"}
 
         spec = get_type(ftype)
         if not spec:
