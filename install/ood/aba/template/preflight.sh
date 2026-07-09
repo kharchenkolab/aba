@@ -21,7 +21,11 @@ fi
 # Binds: the staged dir (preflight writes aba-env.sh/status.yaml there), the site
 # config root, and — when present — the lab shares + the user's home.
 binds=(--bind "${staged}:${staged}")
-[ -d /cluster/aba ] && binds+=(--bind /cluster/aba:/cluster/aba)
+# The share root holds site.yaml (+ the image, skeleton, institution bundle). Derive
+# it from ABA_SITE_CONFIG rather than assuming /cluster/aba, so a site can root the
+# deployment anywhere its nodes can read (incl. a home dir, for a pilot).
+_share="${ABA_SHARE:-$(dirname "${ABA_SITE_CONFIG}")}"
+[ -d "${_share}" ] && binds+=(--bind "${_share}:${_share}")
 [ -d /groups ] && binds+=(--bind /groups:/groups)
 [ -n "${ABA_PF_HOME:-}" ] && [ -d "${ABA_PF_HOME}" ] && binds+=(--bind "${ABA_PF_HOME}:${ABA_PF_HOME}")
 
@@ -61,8 +65,12 @@ fi
 # here. Non-fatal — surfaced on the session card via ABA_PF_GLIBC_WARN. Catches a
 # mis-based image at launch even when it was built elsewhere.
 GLIBC_WARN=""
-_ng="$(getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
-_sg="$(apptainer exec "${SIF}" getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+# Use /usr/bin/getconf, not PATH's: a compat-layer userland (e.g. EESSI on /cvmfs)
+# shadows getconf and reports ITS glibc, not the node's — comparing against that
+# silently defeats the check.
+_gc=/usr/bin/getconf; [ -x "$_gc" ] || _gc=getconf
+_ng="$("$_gc" GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+_sg="$(apptainer exec "${SIF}" "$_gc" GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
 if [ -n "${_ng}" ] && [ -n "${_sg}" ] && [ "${_ng}" != "${_sg}" ] \
    && [ "$(printf '%s\n%s\n' "${_sg}" "${_ng}" | sort -t. -k1,1n -k2,2n | tail -1)" = "${_sg}" ]; then
   GLIBC_WARN="SIF base glibc ${_sg} exceeds this node's ${_ng} — tools compiled in-container and host modules (Lmod) will fail on the compute nodes; rebuild the image on a base with glibc <= ${_ng} (ABA_SIF_BASE)."

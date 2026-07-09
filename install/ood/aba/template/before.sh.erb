@@ -7,7 +7,10 @@ port=$(find_port ${host})
 # The preflight writes aba-env.sh (the env block) + status.yaml (the session
 # card), and sets ABA_SITE_CONFIG so ABA's own scope_resolver reads the SAME
 # site.yaml for the bundle scopes (no hand-set ABA_LAB_BUNDLE anymore).
-export ABA_SITE_CONFIG="/cluster/aba/site.yaml"
+# The deployment share root. deploy.sh rewrites this default for the site; an
+# already-exported ABA_SHARE (dev / manual launch) wins.
+export ABA_SHARE="${ABA_SHARE:-/cluster/aba}"
+export ABA_SITE_CONFIG="${ABA_SHARE}/site.yaml"
 export ABA_PF_GROUP="<%= context.aba_lab %>"
 export ABA_PF_USER="${USER:-$(whoami)}"
 export ABA_PF_HOME="${HOME}"

@@ -304,6 +304,12 @@ def main():
             lines.append(f"export ABA_BATCH_SUBMITTER={shq(jobs['submitter'])}")
         if jobs.get("hpc_config"):
             lines.append(f"export ABA_HPC_CONFIG={shq(ex(jobs['hpc_config']))}")
+        # extra host paths to bind into the --containall run (site.yaml `binds:`).
+        # script.sh.erb applies them. Needed when the group/user trees live outside
+        # the conventional /groups + share roots (e.g. a pilot rooted in a home dir).
+        xbinds = site.get("binds") or []
+        if xbinds:
+            lines.append(f"export ABA_EXTRA_BINDS={shq(' '.join(ex(b) for b in xbinds))}")
         # host environment-modules (site.yaml `modules:`) — the site's Lmod init +
         # the paths/libs to bind so in-session `module load` works inside the SIF.
         # Emitted as plain space-joined strings (YAML parsed HERE, applied by

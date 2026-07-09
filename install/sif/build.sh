@@ -184,9 +184,13 @@ echo "✓ built $OUT ($(du -h "$OUT" 2>/dev/null | cut -f1))"
 # ── glibc-floor check (install/sif/glibc-floor.sh): the base glibc must be <= the
 # compute nodes'. Compare the built image to THIS build host (a proxy for the nodes —
 # you build on/for the cluster). Loud but NON-FATAL — you may be building elsewhere.
-if command -v getconf >/dev/null 2>&1; then
-  _hg="$(getconf GNU_LIBC_VERSION 2>/dev/null)"
-  _sg="$("$APPTAINER" exec "$OUT" getconf GNU_LIBC_VERSION 2>/dev/null)"
+# NB /usr/bin/getconf, not PATH's: a compat-layer userland (e.g. EESSI on /cvmfs)
+# shadows getconf and reports ITS glibc rather than the host's, which would compare
+# the image against the wrong reference and suppress a real overshoot warning.
+_GC=/usr/bin/getconf; [ -x "$_GC" ] || _GC="$(command -v getconf 2>/dev/null || true)"
+if [ -n "$_GC" ]; then
+  _hg="$("$_GC" GNU_LIBC_VERSION 2>/dev/null)"
+  _sg="$("$APPTAINER" exec "$OUT" "$_GC" GNU_LIBC_VERSION 2>/dev/null)"
   echo "   glibc: image='${_sg:-?}'  build-host='${_hg:-?}'  (image must be <= your compute nodes')"
   if bash "$REPO_ROOT/install/sif/glibc-floor.sh" "$_sg" "$_hg"; then
     cat >&2 <<EOF

@@ -5,8 +5,15 @@
   # aba_preflight gates on). Unenrolled groups are omitted so a user can't launch
   # a session preflight would just block. All paths come from site.yaml.
   require 'yaml'; require 'etc'
-  site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || '/cluster/aba/site.yaml')) rescue nil) || {}
+  # Deployment share root. deploy.sh rewrites this default for the site; an exported
+  # ABA_SITE_CONFIG still wins.
+  site_default = '/cluster/aba/site.yaml'
+  site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || site_default)) rescue nil) || {}
   gcfg = (site['scopes'] || {})['group'] || {}
+  # GPU field — shown unless the site disables it (`form: {gpu: false}`). On a cluster
+  # with no GPU partition the checkbox only ever produces a --gres=gpu:1 submit failure.
+  fcfg     = site['form'] || {}
+  show_gpu = fcfg.key?('gpu') ? !!fcfg['gpu'] : true
   root_tmpl   = gcfg['root_path'] || '/groups/{group}/aba'
   groups_root = root_tmpl.split('/{group}').first         # e.g. /groups
   ui          = site['ui_text'] || {}
@@ -27,7 +34,9 @@ cluster: "dev-cluster"
 form:
   - aba_lab
   - aba_instance
+<%- if show_gpu -%>
   - has_gpu
+<%- end -%>
   - aba_token
 attributes:
   aba_instance:

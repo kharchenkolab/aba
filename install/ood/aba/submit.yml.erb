@@ -10,6 +10,7 @@ script:
     # are bare names here (NOT context.x — that's for the template/ scripts).
     - "-n"
     - "<%= aba_instance.to_s == 'heavy' ? '10' : '1' %>"
-<%- if has_gpu.to_s == '1' -%>
+<%- # `has_gpu` is absent from the struct when site.yaml sets form.gpu: false -%>
+<%- if defined?(has_gpu) && has_gpu.to_s == '1' -%>
     - "--gres=gpu:1"
 <%- end -%>
