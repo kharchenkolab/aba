@@ -85,7 +85,14 @@ PKG="$(dirname "$DESC")"
 
 # 3. compile INSIDE the activated env so the conda toolchain's zlib.h + CPPFLAGS/rpath
 #    are in effect (a bare PATH prepend does not run the compiler-activation scripts).
-if ! "$MM" run -p "$TOOLS_ENV" R CMD INSTALL --no-multiarch "$PKG"; then
+#    Scrub the caller's R env first: if ANOTHER R is active (an Lmod R module, or a
+#    build launched from an OOD RStudio session), R_HOME / R_LIBS_USER point into that
+#    installation and `R CMD INSTALL` targets ITS library dir — typically read-only,
+#    e.g. "no permission to install to directory '/cvmfs/.../R-bundle-CRAN/...'". Because
+#    this helper is non-fatal by contract, that failure only WARNS and the .rds viewer
+#    goes silently missing from the deploy.
+if ! env -u R_HOME -u R_LIBS -u R_LIBS_SITE -u R_LIBS_USER -u R_PROFILE -u R_PROFILE_USER \
+     "$MM" run -p "$TOOLS_ENV" R CMD INSTALL --no-multiarch "$PKG"; then
   echo "WARNING: lstar R compile failed — Seurat/SCE .rds viewer bridge unavailable (.h5ad/.lstar.zarr still work)"
   exit 0
 fi
