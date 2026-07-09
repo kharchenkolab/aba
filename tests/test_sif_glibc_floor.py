@@ -103,7 +103,17 @@ def test_preflight_emits_module_config():
         assert "ABA_MODULE_" not in (tdp / "aba-env.sh").read_text()
 
 
+def test_launch_forwards_nextflow_env():
+    """script.sh.erb must FORWARD ABA_NEXTFLOW_* into the containall run. aba_preflight
+    only EMITS them to aba-env.sh; without the forward the backend never sees
+    ABA_NEXTFLOW_MODULE, so run_nextflow silently stays False (the live regression this
+    guards — nf-core showed ✗ despite the config being present)."""
+    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    assert "ABA_NEXTFLOW_MODULE" in erb, "script.sh.erb must forward ABA_NEXTFLOW_MODULE into apptainer run"
+
+
 if __name__ == "__main__":
     test_glibc_floor_truth_table(); print("glibc_floor truth table: PASS")
     test_preflight_surfaces_glibc_warn(); print("preflight surfaces warn: PASS")
     test_preflight_emits_module_config(); print("preflight emits module config: PASS")
+    test_launch_forwards_nextflow_env(); print("launch forwards nextflow env: PASS")
