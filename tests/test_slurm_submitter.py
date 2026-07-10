@@ -426,6 +426,27 @@ def test_job_body_wraps_env_job_under_fat(monkeypatch, tmp_path):
     assert "export PYTHONPATH=/shared/backend" not in body, body
 
 
+def test_job_body_wrap_appends_host_path_for_module_bins(monkeypatch, tmp_path):
+    """The wrapped exec MUST forward the post-`module load` host PATH via
+    APPTAINERENV_APPEND_PATH. apptainer does not inherit the host PATH (the image's
+    baked %environment sets its own), so without this a module-resolved binary is
+    mounted by _wrap_binds yet `command not found` inside — verified on CBE-next,
+    apptainer 1.4.5 (a fat env-job shelling out to an EESSI-module tool failed). APPEND
+    (not prepend) keeps the baked /opt/aba-venv tools ahead of the module dirs, and the
+    export must sit AFTER `module load` (in `head`) so $PATH already carries them."""
+    monkeypatch.setenv("ABA_JOB_WRAP", "sif")
+    monkeypatch.setenv("ABA_SIF", "/cluster/aba/aba.sif")
+    body = _body(monkeypatch, tmp_path, kind="run_python", mods=["SAMtools/1.21"])
+    assert 'export APPTAINERENV_APPEND_PATH="$PATH"' in body, body
+    # must be exported BEFORE the exec (so apptainer sees it). The head (which holds any
+    # `module load`) is always rendered first, so $PATH already carries the module dirs
+    # by this point — the export just hands them to the container.
+    assert body.index("APPTAINERENV_APPEND_PATH") < body.index("apptainer exec "), body
+    # bare/slim must NOT get it (no container, host PATH already native)
+    monkeypatch.delenv("ABA_JOB_WRAP", raising=False)
+    assert "APPTAINERENV_APPEND_PATH" not in _body(monkeypatch, tmp_path, kind="run_python"), "bare leaked APPEND_PATH"
+
+
 def test_job_body_nv_only_for_gpu(monkeypatch, tmp_path):
     """--nv is added to the wrapped exec only when the job requested a GPU. The
     slurm_entry torch.cuda canary then guards a forgotten --nv (fails loud, not CPU)."""

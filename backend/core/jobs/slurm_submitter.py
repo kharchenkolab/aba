@@ -100,12 +100,16 @@ def _job_body(*, kind: str, mods: list, nf_path_line: str, spec_path: Path,
     WRAPPED (``ABA_JOB_WRAP=sif`` AND an env-job): re-enter the fat SIF via
     ``apptainer exec`` — under fat the interpreter/libs/backend exist ONLY in the
     image, so a bare env-job would find no interpreter (misc/fatagain.md, the "fat
-    rule"). ``module load`` still runs on the HOST here: apptainer passes the host
-    env through and the module tool trees are bound in (``_wrap_binds``), so a
-    module-resolved binary resolves inside; PYTHONPATH is forced to the in-image
-    backend and PYTHONHOME unset so a module can't shadow the conda python
-    (prj_6d986f40). ``run_nextflow`` is NEVER wrapped (its head is handled
-    separately) — it falls through to the bare branch."""
+    rule"). ``module load`` runs on the HOST in ``head`` and its tool trees are
+    bound in (``_wrap_binds``) — but apptainer does NOT inherit the host ``$PATH``:
+    the image's baked ``%environment`` sets its own PATH, so a module-resolved
+    binary would be visible on disk yet ``command not found`` inside. We therefore
+    ``APPTAINERENV_APPEND_PATH`` the post-``module load`` host PATH so those bin dirs
+    are APPENDED to the container PATH — reachable inside, while the baked env keeps
+    precedence (``/opt/aba-venv/bin`` stays first, so a module can't shadow the conda
+    python/tools). PYTHONPATH is forced to the in-image backend and PYTHONHOME unset
+    for the same reason (prj_6d986f40). ``run_nextflow`` is NEVER wrapped (its head
+    is handled separately) — it falls through to the bare branch."""
     from core.exec.modules import load_lines
     head = f"#!/bin/bash\ncd {run_dir}\n{load_lines(mods)}{nf_path_line}"
     sif = os.environ.get("ABA_SIF")
@@ -118,6 +122,12 @@ def _job_body(*, kind: str, mods: list, nf_path_line: str, spec_path: Path,
             f"export APPTAINER_TMPDIR={shlex.quote(tmp)} APPTAINER_CACHEDIR={shlex.quote(tmp)}\n"
             f"mkdir -p {shlex.quote(tmp)}\n"
             "unset PYTHONHOME\n"
+            # APPEND (not prepend) the host PATH — carries the `module load`ed tool
+            # bin dirs into the container as a FALLBACK, so the baked /opt/aba-venv
+            # tools still win. Without this apptainer drops the host PATH entirely
+            # (the image %environment sets its own) and module binaries are
+            # command-not-found despite _wrap_binds mounting their trees.
+            'export APPTAINERENV_APPEND_PATH="$PATH"\n'
             # -u: unbuffered so slurm_entry's tee'd child output reaches job.log live.
             f"apptainer exec {nv}{binds} --env PYTHONPATH=/opt/aba/backend "
             f"{shlex.quote(sif)} /opt/aba-venv/bin/python -u -m core.jobs.slurm_entry {spec_path}\n"
