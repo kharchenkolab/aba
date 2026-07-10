@@ -69,7 +69,7 @@ def test_openai_callback_flow():
     cfg = credentials.read()
     assert cfg.get("OPENAI_OAUTH_TOKEN") == "acc"
     assert cfg.get("ABA_OPENAI_ACCOUNT_ID") == "acct-1"
-    assert cfg.get("ABA_OPENAI_BASE_URL") == "https://chatgpt.com/backend-api/wham"
+    assert cfg.get("ABA_OPENAI_BASE_URL") == "https://chatgpt.com/backend-api/codex"
     assert out["flow_id"] not in oauth._FLOWS_LIVE
 
 
