@@ -1,0 +1,21 @@
+# Gate connection.yml on the server ACTUALLY listening, so OOD doesn't advertise
+# "Connect" before uvicorn is up.
+#
+# The batch_connect framework backgrounds script.sh (which starts uvicorn INSIDE the
+# SIF) and then calls create_yml immediately — and connection.yml is exactly what flips
+# the OOD card to a live "Connect" button. So the card reads "ready" the instant the
+# job is running, well before the server binds its port; the user's first click then
+# gets "Failed to connect to <host>:<port>". The window is worst under a FAT SIF:
+# squashfuse must mount a multi-GB image and startup loads the skill catalog + MCP
+# gateway before `Uvicorn running on http://0.0.0.0:<port>` — tens of seconds on a cold
+# or busy node. (Slim hit the same race occasionally; fat makes it reliable.)
+#
+# after.sh is sourced AFTER script.sh is backgrounded but BEFORE create_yml, in the
+# SAME shell — so $host/$port and the framework's exported wait_until_port_used helper
+# are in scope. Block here until the port accepts a connection; only then does
+# create_yml run and OOD show "Connect". Generous timeout for a cold fat image; on
+# timeout the helper returns non-zero and the framework writes connection.yml anyway
+# (fail-open — never worse than today, just no longer premature).
+echo "after.sh: waiting for ABA to bind ${host}:${port} (a cold fat SIF can take ~1 min)..."
+wait_until_port_used "${host}:${port}" 600
+echo "after.sh: ${host}:${port} is accepting connections — OK to advertise Connect."
