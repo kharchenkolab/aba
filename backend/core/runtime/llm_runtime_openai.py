@@ -723,7 +723,15 @@ class OpenAICompatibleRuntime:
         try:
             stream = await client.responses.create(**kwargs)
         except Exception as e:                                  # noqa: BLE001
-            yield TurnHalt(reason="error", detail={"message": str(e), "type": type(e).__name__})
+            msg = str(e)
+            # The most common cause is a model/credential mismatch: an API-key model
+            # (gpt-4o/4.1) picked while on a ChatGPT subscription (or vice-versa).
+            if "not supported when using Codex" in msg or "is not supported" in msg:
+                msg = (f"The model '{req.model}' isn't available on your ChatGPT/Codex "
+                       f"subscription. In Settings → Agent, pick a Codex model "
+                       f"(e.g. gpt-5.4-mini / gpt-5.5), or connect an OpenAI API key to "
+                       f"use gpt-4o / gpt-4.1.")
+            yield TurnHalt(reason="error", detail={"message": msg, "type": type(e).__name__})
             return
         try:
             async for ev in stream:
