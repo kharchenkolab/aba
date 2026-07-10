@@ -51,7 +51,12 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         return {
             "entity_id": e["id"],
             "entity_type": e["type"],
-            "name": e.get("title") or "",
+            # Match on the FILENAME (basename of artifact_path), not the entity
+            # title — viewers_for keys off `name or artifact_path`, and external
+            # viewers (pagoda3: .h5ad/.lstar.zarr) match by extension, which a
+            # title like "GSM… processed AnnData" lacks. Mirrors the get_viewer_url
+            # tool; without this, the launch link 404s ("no external viewer applies").
+            "name": Path(e.get("artifact_path") or "").name or e.get("title") or "",
             "artifact_path": e.get("artifact_path"),
             "size": None,
         }
