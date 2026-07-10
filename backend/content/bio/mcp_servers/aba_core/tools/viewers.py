@@ -19,9 +19,12 @@ def register_viewer_tools(mcp: FastMCP) -> None:
         """Construct a launch link (URL) for an interactive EXTERNAL viewer of a
         single-cell dataset, and return it to show the user — this does NOT open
         anything itself; it hands back a `viewer_url` the chat renders as a button.
-        Call it when the user wants to VIEW, EXPLORE, or visually inspect a
-        single-cell result (an .h5ad or .lstar.zarr) — pagoda3 then opens it as an
-        interactive UMAP / expression explorer in a new browser tab when clicked.
+        PROACTIVELY offer the link as soon as an analysis produces a viewable
+        single-cell object (clustering / UMAP / annotation on an .h5ad or
+        .lstar.zarr) — don't wait to be asked; hand it over once the result is
+        ready. Also call it any time the user wants to VIEW, EXPLORE, or inspect
+        one. pagoda3 opens it as an interactive UMAP / expression explorer in a
+        new browser tab when clicked.
 
         Provide ONE of (if neither, the currently focused entity is used):
           • entity_id  — a dataset/result entity to view (preferred when it exists).
