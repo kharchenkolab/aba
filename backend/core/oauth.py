@@ -95,10 +95,17 @@ def _gc(now: float) -> None:
 def _close_listener(flow: dict | None) -> None:
     srv = (flow or {}).get("_server")
     if srv is not None:
+        # shutdown() stops serve_forever; server_close() RELEASES the socket/port
+        # (without it the port stays bound → next sign-in "address already in use").
         try:
             srv.shutdown()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            srv.server_close()
+        except Exception:  # noqa: BLE001
+            pass
+        flow["_server"] = None
 
 
 def start(provider: str) -> dict:
@@ -138,6 +145,15 @@ def _start_callback_listener(flow: ProviderFlow, live: dict) -> None:
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from urllib.parse import urlparse, parse_qs
 
+    # Retry-safe: a prior sign-in the user abandoned may still hold this port —
+    # tear down any of OUR live listeners on it (a new attempt supersedes them)
+    # before binding. + allow_reuse_address so a just-closed socket in TIME_WAIT
+    # doesn't block the rebind.
+    for fid in [k for k, v in _FLOWS_LIVE.items()
+                if v is not live and (v.get("_server") is not None)
+                and v.get("provider") == flow.provider]:
+        _close_listener(_FLOWS_LIVE.pop(fid, None))
+
     expected_state = live["state"]
 
     class _H(BaseHTTPRequestHandler):
@@ -163,6 +179,7 @@ def _start_callback_listener(flow: ProviderFlow, live: dict) -> None:
             pass
 
     try:
+        HTTPServer.allow_reuse_address = True
         srv = HTTPServer(("127.0.0.1", flow.callback_port), _H)
     except OSError as e:
         raise ValueError(
