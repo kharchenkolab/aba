@@ -24,13 +24,36 @@ def infer_provider(model: str) -> str:
     return "anthropic"
 
 
+def infer_via(model: str, provider: str) -> str:
+    """Which CREDENTIAL kind a model needs — so the picker shows only usable models:
+      'apikey'       — needs an OpenAI API key (api.openai.com models: gpt-4o/4.1).
+      'subscription' — needs a ChatGPT/Codex subscription (Codex-backend gpt-5.x).
+      'any'          — works with either credential (Anthropic: key or OAuth).
+    Anthropic → any. OpenAI gpt-5.x (Codex slugs) → subscription, else apikey."""
+    if provider != "openai":
+        return "any"
+    m = (model or "").lower()
+    # Codex-backend slugs are gpt-5.x (gpt-5.4/5.5/5.6…); the classic API models
+    # (gpt-4o, gpt-4.1, o-series) go through an API key.
+    return "subscription" if m.startswith(("gpt-5", "codex")) else "apikey"
+
+
 # Mirrors backend/system_bundle/settings.yaml — the fallback when the bundle is
 # unavailable. Keep the model ids in sync with the gateway's accepted models.
 _FALLBACK: list[dict] = [
-    {"label": "Opus", "model": "claude-opus-4-7", "spec": "grounded_guide", "provider": "anthropic"},
-    {"label": "Sonnet", "model": "claude-sonnet-5", "spec": "grounded_guide", "provider": "anthropic"},
-    {"label": "Haiku", "model": "claude-haiku-4-5-20251001", "spec": "grounded_guide", "provider": "anthropic"},
+    {"label": "Opus", "model": "claude-opus-4-7", "spec": "grounded_guide", "provider": "anthropic", "via": "any"},
+    {"label": "Sonnet", "model": "claude-sonnet-5", "spec": "grounded_guide", "provider": "anthropic", "via": "any"},
+    {"label": "Haiku", "model": "claude-haiku-4-5-20251001", "spec": "grounded_guide", "provider": "anthropic", "via": "any"},
 ]
+
+
+def via_for_model(model: str) -> str:
+    """The credential kind a model needs (see infer_via). Reads the catalog."""
+    if model:
+        for m in llm_models():
+            if m["model"] == model:
+                return m.get("via") or infer_via(model, m.get("provider") or infer_provider(model))
+    return infer_via(model, infer_provider(model))
 
 
 def llm_models(provider: str | None = None) -> list[dict]:
@@ -46,10 +69,13 @@ def llm_models(provider: str | None = None) -> list[dict]:
                 if isinstance(m, dict) and (m.get("model") or "").strip():
                     mid = m["model"].strip()
                     prov = (m.get("provider") or "").strip().lower() or infer_provider(mid)
+                    prov = prov if prov in PROVIDERS else "anthropic"
+                    via = (m.get("via") or "").strip().lower() or infer_via(mid, prov)
                     rows.append({"label": m.get("label") or mid,
                                  "model": mid,
                                  "spec": (m.get("spec") or "").strip() or None,
-                                 "provider": prov if prov in PROVIDERS else "anthropic"})
+                                 "provider": prov,
+                                 "via": via if via in ("apikey", "subscription", "any") else "any"})
     except Exception:  # noqa: BLE001 — never let a bundle issue break a turn
         rows = []
     rows = rows or [dict(r) for r in _FALLBACK]

@@ -77,6 +77,22 @@ def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)
     return {"ok": True, "current": _llm_current(_pid)}
 
 
+class LlmPingRequest(BaseModel):
+    model: str = ""
+
+
+@router.post("/api/settings/llm/ping")
+def settings_llm_ping(req: LlmPingRequest, _pid: str = Depends(require_project)):
+    """Background model check for Settings → Agent: a cheap call confirming the current
+    credential can actually run `model` (defaults to the project's model). Returns
+    {ok, detail?} so the UI can show ✓ Ready / ✗ reason at select time instead of
+    failing on the first real message. Sync → FastAPI runs it off the event loop."""
+    from core.model_ping import ping_model
+    from core.config import current_model_for_project
+    model = (req.model or "").strip() or current_model_for_project(_pid)
+    return ping_model(model)
+
+
 class CredentialRequest(BaseModel):
     credential: str
     provider: str = "anthropic"

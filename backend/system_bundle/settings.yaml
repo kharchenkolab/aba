@@ -45,10 +45,12 @@ llm_models:
     model: gpt-4o
     spec: grounded_guide
     provider: openai
+    via: apikey
   - label: GPT-4.1
     model: gpt-4.1
     spec: grounded_guide
     provider: openai
+    via: apikey
   # OpenAI via Codex SUBSCRIPTION (chatgpt.com/backend-api/codex, Responses API).
   # These slugs are Codex-account-only + move over time (query codex/models);
   # they 400 on an API key, and gpt-4o/4.1 400 on the subscription.
@@ -56,7 +58,9 @@ llm_models:
     model: gpt-5.5
     spec: grounded_guide
     provider: openai
+    via: subscription
   - label: "GPT-5.4 mini (Codex)"
     model: gpt-5.4-mini
     spec: grounded_guide
     provider: openai
+    via: subscription

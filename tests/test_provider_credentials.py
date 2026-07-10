@@ -88,6 +88,70 @@ def test_anthropic_status_unchanged_shape():
     assert st["provider"] == "anthropic"
 
 
+def test_catalog_via_tagging():
+    """Each model carries the credential kind it needs, so the picker can hide the
+    ones the current auth can't run."""
+    from core.llm_catalog import llm_models, via_for_model, infer_via
+    rows = llm_models()
+    assert all(r.get("via") in ("apikey", "subscription", "any") for r in rows)
+    # Anthropic works with either credential.
+    assert infer_via("claude-opus-4-7", "anthropic") == "any"
+    assert via_for_model("claude-opus-4-7") == "any"
+    # OpenAI splits: classic API models need a key, Codex gpt-5.x slugs a subscription.
+    assert infer_via("gpt-4o", "openai") == "apikey"
+    assert infer_via("gpt-4.1", "openai") == "apikey"
+    assert infer_via("gpt-5.4-mini", "openai") == "subscription"
+    assert infer_via("gpt-5.5", "openai") == "subscription"
+
+
+def test_ping_anthropic_trusts_stored_validity(monkeypatch=None):
+    """Anthropic models are `any` + the credential is verified on save, so the ping
+    just reflects stored validity (no live call, no oauth_cc-marker gymnastics)."""
+    import types
+    from core import model_ping, credentials
+    orig = credentials.status
+    credentials.status = lambda provider="anthropic": {"valid": True}
+    try:
+        assert model_ping.ping_model("claude-opus-4-7") == {"ok": True}
+        credentials.status = lambda provider="anthropic": {"valid": False}
+        out = model_ping.ping_model("claude-opus-4-7")
+        assert out["ok"] is False and "Anthropic" in out["detail"]
+    finally:
+        credentials.status = orig
+
+
+def test_ping_openai_humanizes_codex_mismatch():
+    """An API-key model picked on a Codex subscription 400s 'not supported when using
+    Codex' — the ping turns that into an actionable message instead of a raw error."""
+    import sys, types
+    from core import model_ping
+    # Fake the openai SDK so the ping runs offline and the client raises a codex 400.
+    fake = types.ModuleType("openai")
+
+    class _Boom(Exception):
+        pass
+
+    class _Responses:
+        def create(self, **kw):
+            raise _Boom("The 'gpt-4.1' model is not supported when using Codex with a ChatGPT account.")
+
+    class _Client:
+        def __init__(self, **kw):
+            self.responses = _Responses()
+
+    fake.OpenAI = _Client
+    sys.modules["openai"] = fake
+    os.environ["ABA_OPENAI_BASE_URL"] = "https://chatgpt.com/backend-api/codex"
+    os.environ["OPENAI_OAUTH_TOKEN"] = "tok"
+    os.environ["ABA_OPENAI_ACCOUNT_ID"] = "acct"
+    try:
+        out = model_ping.ping_model("gpt-4.1")
+        assert out["ok"] is False
+        assert "subscription" in out["detail"] and "Codex model" in out["detail"]
+    finally:
+        sys.modules.pop("openai", None)
+
+
 if __name__ == "__main__":
     test_catalog_provider_and_filter(); print("ok  catalog provider + filter")
     test_make_runtime_routes_by_provider(); print("ok  runtime routes by provider")
@@ -95,4 +159,7 @@ if __name__ == "__main__":
     test_openai_set_key_persists(); print("ok  openai key persist + runtime env")
     test_openai_runtime_real_vs_vllm_flag(); print("ok  real-openai vs vllm flag")
     test_anthropic_status_unchanged_shape(); print("ok  anthropic status shape")
+    test_catalog_via_tagging(); print("ok  catalog via tagging")
+    test_ping_anthropic_trusts_stored_validity(); print("ok  ping anthropic")
+    test_ping_openai_humanizes_codex_mismatch(); print("ok  ping openai codex mismatch")
     print("all provider-credential tests passed")
