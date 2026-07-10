@@ -96,6 +96,16 @@ def test_env_build_isolates_from_user_site():
     assert "PYTHONNOUSERSITE=1" in refresh and 'micromamba" env update' in refresh
 
 
+def test_refresh_env_makes_site_packages_writable():
+    """micromamba links package dirs READ-ONLY, so a pip pin BUMP on `aba update`
+    fails ("Lacking write permission") — pip can't replace the old package dir.
+    refresh-env must chmod u+w site-packages BEFORE the env update that runs pip
+    (regression 2026-07-11: lstar-sc 0.2.0→0.2.1 upgrade failed on a live box)."""
+    refresh = _step_cmds("update.yml", "refresh-env")
+    assert "chmod -R u+w" in refresh and "site-packages" in refresh
+    assert refresh.index("chmod -R u+w") < refresh.index('micromamba" env update')
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on

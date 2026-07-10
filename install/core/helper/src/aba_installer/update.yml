@@ -87,7 +87,10 @@ steps:
       - 'if [ -f "$REPO_DIR/aba/install/core/inject-accelerator.sh" ]; then bash "$REPO_DIR/aba/install/core/inject-accelerator.sh" "$ABA_HOME/environment.yml"; fi'
       # PYTHONNOUSERSITE=1 + PIP_USER=0: build blind to ~/.local so a user-site pip
       # package can't shadow the env's pip: section (see install.yml create-env).
-      - 'if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA"; fi; PYTHONNOUSERSITE=1 PIP_USER=0 "$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
+      # chmod u+w site-packages FIRST: micromamba links package dirs READ-ONLY, so a
+      # pip pin BUMP (e.g. lstar-sc 0.2.0→0.2.1) fails on `aba update` with "Lacking
+      # write permission" — pip can't remove the old package dir (regression 2026-07-11).
+      - 'chmod -R u+w "$ENV_DIR"/lib/python*/site-packages 2>/dev/null || true; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA"; fi; PYTHONNOUSERSITE=1 PIP_USER=0 "$ABA_HOME/bin/micromamba" env update -p "$ENV_DIR" -f "$ABA_HOME/environment.yml" --prune'
     timeout_seconds: 900
 
   # NB: these two steps mirror install.yml (the engine has no include/compose) — they
