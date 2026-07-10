@@ -67,8 +67,9 @@ export default function AgentTab() {
   const [credInput, setCredInput] = useState('')
   const [credBusy, setCredBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
-  const [subFlow, setSubFlow] = useState<string | null>(null)   // active sign-in flow_id
+  const [subFlow, setSubFlow] = useState<string | null>(null)   // active paste-flow id
   const [subCode, setSubCode] = useState('')
+  const [subWaiting, setSubWaiting] = useState(false)           // callback-flow polling
   const [credMsg, setCredMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const loadCred = useCallback(async (p: Provider) => {
@@ -148,9 +149,29 @@ export default function AgentTab() {
         setCredMsg({ ok: false, text: d.detail || 'Sign-in is unavailable right now.' })
         return
       }
-      const { authorize_url, flow_id } = await r.json()
-      setSubFlow(flow_id); setSubCode('')
+      const { authorize_url, flow_id, mode } = await r.json()
       window.open(authorize_url, '_blank', 'noopener')
+      if (mode === 'callback') {
+        // OpenAI/Codex: the code returns to a localhost callback — poll for it.
+        setSubWaiting(true)
+        for (let i = 0; i < 150; i++) {
+          await new Promise(res => setTimeout(res, 2000))
+          const pr = await fetch(`/api/settings/credential/oauth/poll?flow_id=${flow_id}`)
+          if (!pr.ok) continue
+          const st = await pr.json()
+          if (st.state === 'done') {
+            setCred(st.credential); setEditing(false); setSubWaiting(false)
+            setCredMsg({ ok: true, text: 'Signed in.' }); return
+          }
+          if (st.state === 'error') {
+            setSubWaiting(false); setCredMsg({ ok: false, text: st.detail || 'Sign-in failed.' }); return
+          }
+        }
+        setSubWaiting(false); setCredMsg({ ok: false, text: 'Sign-in timed out — try again.' })
+      } else {
+        // Anthropic: paste-code — reveal the code input.
+        setSubFlow(flow_id); setSubCode('')
+      }
     } catch { setCredMsg({ ok: false, text: 'Sign-in failed.' }) }
     finally { setSubBusy(false) }
   }
@@ -256,14 +277,18 @@ export default function AgentTab() {
 
             <div className="cred-method">
               <div className="cred-method__title">Subscription</div>
-              {!subFlow ? (
+              {subWaiting ? (
+                <span className="cred-field__hint">
+                  Waiting for sign-in… complete it in the other tab, then return here.
+                </span>
+              ) : !subFlow ? (
                 <>
                   <button className="cred-sub" disabled={subBusy} onClick={startSubscription}>
                     {subBusy ? 'Opening sign-in…' : `${subLabel(provider)} →`}
                   </button>
                   <span className="cred-field__hint">
                     Use your {provider === 'openai' ? 'ChatGPT / Codex' : 'Claude.ai'} plan — opens a
-                    sign-in tab, then paste the code it shows.
+                    sign-in tab{provider === 'openai' ? '; ABA captures the result automatically.' : ', then paste the code it shows.'}
                   </span>
                 </>
               ) : (

@@ -307,11 +307,25 @@ def store_oauth_token(provider: str, token: dict) -> dict:
         raise ValueError("No access token to store.")
     entries = read()
     if provider == "openai":
+        # Subscription (Codex/ChatGPT): the access token is a Bearer used against
+        # the ChatGPT WHAM backend, with a ChatGPT-Account-Id header from the JWT.
+        acct = (token or {}).get("account_id") or ""
+        base = "https://chatgpt.com/backend-api/wham"
         entries["OPENAI_OAUTH_TOKEN"] = access
         entries["OPENAI_AUTH_FLOW"] = "subscription"
+        entries["ABA_OPENAI_BASE_URL"] = base
+        if acct:
+            entries["ABA_OPENAI_ACCOUNT_ID"] = acct
+        if (token or {}).get("refresh_token"):
+            entries["OPENAI_OAUTH_REFRESH"] = token["refresh_token"]
+        entries.pop("OPENAI_API_KEY", None)      # subscription supersedes a stored key
         write(entries)
         os.environ["OPENAI_OAUTH_TOKEN"] = access
         os.environ["OPENAI_AUTH_FLOW"] = "subscription"
+        os.environ["ABA_OPENAI_BASE_URL"] = base
+        if acct:
+            os.environ["ABA_OPENAI_ACCOUNT_ID"] = acct
+        os.environ.pop("OPENAI_API_KEY", None)
         return _openai_status()
     # anthropic — reuse the oauth_cc bearer path
     entries["CLAUDE_CODE_OAUTH_TOKEN"] = access

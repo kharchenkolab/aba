@@ -449,11 +449,19 @@ class OpenAICompatibleRuntime:
         self.base_url = (base_url
                          or os.environ.get("ABA_OPENAI_BASE_URL")
                          or "http://localhost:8001/v1")
-        # Real OpenAI (api.openai.com) rejects vLLM-only request extensions
-        # (chat_template_kwargs) — detect it so we can send a clean request there.
-        self._real_openai = "api.openai.com" in self.base_url
+        # Real OpenAI (api.openai.com / chatgpt.com backend) rejects vLLM-only
+        # request extensions (chat_template_kwargs) — detect it (any openai.com /
+        # chatgpt.com host) so we send a clean request there.
+        self._real_openai = ("api.openai.com" in self.base_url
+                             or "chatgpt.com" in self.base_url)
+        # Subscription (Codex/ChatGPT) uses the OAuth Bearer as the key + a
+        # ChatGPT-Account-Id header against the WHAM backend; a plain API key
+        # otherwise. Explicit api_key arg wins (tests / direct construction).
+        self._account_id = os.environ.get("ABA_OPENAI_ACCOUNT_ID") or None
         self.api_key  = (api_key
+                         or os.environ.get("OPENAI_OAUTH_TOKEN")
                          or os.environ.get("ABA_OPENAI_API_KEY")
+                         or os.environ.get("OPENAI_API_KEY")
                          or "none")
         # Qwen3-class models emit <think>…</think> reasoning by default,
         # spending ~5× more completion tokens than the actual answer
@@ -471,8 +479,10 @@ class OpenAICompatibleRuntime:
     def _get_client(self) -> Any:
         if self._client is None:
             import openai
+            headers = {"ChatGPT-Account-Id": self._account_id} if self._account_id else None
             self._client = openai.AsyncOpenAI(base_url=self.base_url,
-                                              api_key=self.api_key)
+                                              api_key=self.api_key,
+                                              default_headers=headers)
         return self._client
 
     async def run_turn(

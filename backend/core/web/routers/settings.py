@@ -125,13 +125,21 @@ class OAuthSubmitRequest(BaseModel):
 
 @router.post("/api/settings/credential/oauth/submit")
 def settings_oauth_submit(req: OAuthSubmitRequest):
-    """Exchange the pasted sign-in code for a token, verify + persist it, and return
-    the new credential status (same shape as GET /api/settings/credential)."""
+    """PASTE-flow (Anthropic): exchange the pasted sign-in code for a token, verify +
+    persist it, and return the new credential status."""
     from core import oauth
     try:
         return oauth.submit(req.flow_id, req.code)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/api/settings/credential/oauth/poll")
+def settings_oauth_poll(flow_id: str):
+    """CALLBACK-flow (OpenAI/Codex): poll until the localhost callback captures the
+    code and we exchange it. {state: pending|done|error, credential?, detail?}."""
+    from core import oauth
+    return oauth.poll(flow_id)
 
 
 class EnvGateRequest(BaseModel):
