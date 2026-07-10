@@ -2,7 +2,10 @@
   position: fixed; inset: 0;
   background: rgba(15, 23, 42, 0.5);
   z-index: 100;
-  display: flex; align-items: center; justify-content: center;
+  /* Anchor the panel near the top (not vertically centered) so it grows DOWNWARD as
+     content changes instead of re-centering — that recentring was the "it jumps" feel. */
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 7vh 16px 24px; overflow-y: auto;
 }
 .settings {
   background: var(--bg);
@@ -191,3 +194,67 @@
 .env-ok { color: var(--ok, #15803d); font-weight: 700; }
 .env-no { color: var(--warn-fg, #b45309); font-weight: 700; }
 .env-detail { color: var(--text-4, #6f6862); }
+
+/* ── tabbed body + Agent-tab account block (provider/credential) ───────────── */
+.settings__body { display: block; }
+
+/* provider segmented control */
+.provider-seg { display: inline-flex; margin: 4px 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 8px; overflow: hidden; background: #f8fafc; }
+.provider-seg__btn { padding: 6px 16px; border: none; background: transparent; font: inherit;
+  font-size: 13px; color: #475569; cursor: pointer; border-right: 1px solid #e2e8f0; }
+.provider-seg__btn:last-child { border-right: none; }
+.provider-seg__btn.is-active { background: #2563eb; color: #fff; font-weight: 600; }
+.provider-seg__btn:hover:not(.is-active) { background: #eef2ff; }
+
+/* credential editor: two methods (key / subscription) with an "or" divider */
+.cred-edit { margin-top: 6px; }
+.cred-edit__label { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 8px; }
+.cred-method { margin: 8px 0; }
+.cred-method__title { font-size: 12px; font-weight: 600; color: #64748b;
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 5px; }
+.cred-or { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; color: #94a3b8;
+  font-size: 12px; }
+.cred-or::before, .cred-or::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
+.cred-sub { padding: 9px 16px; border: 1px solid #2563eb; background: #fff; color: #2563eb;
+  border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+.cred-sub:hover:not(:disabled) { background: #eff6ff; }
+.cred-sub:disabled { opacity: .55; cursor: default; }
+.cred-linkbtn { background: none; border: none; color: #2563eb; cursor: pointer; font: inherit;
+  font-size: 12px; padding: 0; text-decoration: underline; }
+
+/* ── Agent tab: model status line + collapsible account ────────────────────── */
+/* Background-ping result under the Model dropdown. Fixed min-height (two lines)
+   so switching models never resizes the panel. */
+.model-status {
+  display: flex; align-items: flex-start; gap: 7px;
+  min-height: 34px; margin-top: 8px;
+  font-size: 12.5px; line-height: 1.45;
+}
+.model-status__text { color: #64748b; }
+.model-status__ico { font-weight: 700; line-height: 1.4; }
+.model-status.is-ok .model-status__ico { color: #16a34a; }
+.model-status.is-ok .model-status__text { color: #15803d; }
+.model-status.is-bad .model-status__ico { color: #dc2626; }
+.model-status.is-bad .model-status__text { color: #b91c1c; }
+.model-status__spin { color: #94a3b8; animation: model-status-spin 0.9s linear infinite; }
+@keyframes model-status-spin { to { transform: rotate(360deg); } }
+
+/* Collapsed provider + credential summary (the calm resting state). */
+.agent-summary { display: flex; align-items: center; gap: 8px; }
+.agent-summary__dot { font-size: 10px; line-height: 1; }
+.agent-summary__dot.is-ok { color: #16a34a; }
+.agent-summary__dot.is-bad { color: #dc2626; }
+.agent-summary__text { font-size: 13.5px; color: #334155; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.agent-summary__text strong { font-weight: 600; color: #0f172a; }
+.agent-summary__sep { color: #cbd5e1; }
+.agent-summary__toggle { margin-left: auto; padding: 5px 12px; border: 1px solid #cbd5e1;
+  background: #fff; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px;
+  color: #334155; white-space: nowrap; }
+.agent-summary__toggle:hover { background: #f8fafc; border-color: #94a3b8; }
+
+/* Expanded Manage panel. */
+.agent-manage { margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
+.agent-manage .settings__select-label:first-child { margin-top: 0; }
+.agent-manage .cred-status { margin-top: 6px; }

@@ -815,7 +815,7 @@ async def stream_response(
             # R-2.2: pick the runtime from the agent spec (default 'direct').
             # ABA_FAKE_SESSION / ABA_RUNTIME_OVERRIDE env vars take priority.
             from core.runtime.agent import make_runtime
-            _runtime = make_runtime(spec)
+            _runtime = make_runtime(spec, model=guide_model)
             # Reset per-turn state each iteration of the outer while.
             _tool_input_by_id: dict[str, dict] = {}
             _tool_name_by_id: dict[str, str] = {}
@@ -1300,6 +1300,20 @@ async def stream_response(
                         # cancel_token.cancelled and emit cancelled
                         # SSE on the next iteration's pre-check.
                         break
+                    elif ev.reason == 'error':
+                        # A runtime-level model error (e.g. an OpenAI/Codex 400).
+                        # Without this branch it was silently swallowed → the UI
+                        # rendered an empty message ("couldn't be displayed").
+                        _d = ev.detail if isinstance(ev.detail, dict) else {}
+                        _raw = _d.get("message") or "The model call failed."
+                        yield sse({"type": "error", "text": _raw, "detail": _d.get("type") or ""})
+                        turn.transition(TurnState.FAILED)
+                        turn.error = {"type": _d.get("type") or "ModelError", "message": _raw}
+                        checkpoint(turn)
+                        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                                   "cache_read": usage_cr, "cache_write": usage_cw})
+                        yield sse({"type": "done"})
+                        return
                 elif isinstance(ev, TurnDone):
                     # Phase ended; do nothing here (we already
                     # updated state in _StreamCompleted).

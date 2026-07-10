@@ -151,8 +151,8 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
     )
 
 
-def make_runtime(spec: AgentSpec):
-    """Pick the LLMRuntime implementation for this agent.
+def make_runtime(spec: AgentSpec, model: str | None = None):
+    """Pick the LLMRuntime implementation for this agent + resolved model.
 
     Selection precedence:
       1. env var ABA_FAKE_SESSION (any truthy value) → FakeRuntime,
@@ -161,7 +161,9 @@ def make_runtime(spec: AgentSpec):
       2. env var ABA_RUNTIME_OVERRIDE (one of direct/sdk/fake/openai)
          → that runtime, regardless of spec. For per-process A/B
          testing.
-      3. spec.runtime field (default "direct").
+      3. the resolved MODEL's provider (catalog): an `openai` model →
+         OpenAICompatibleRuntime (Settings → Agent provider drives this).
+      4. spec.runtime field (default "direct").
 
     Returns an instance implementing the LLMRuntime protocol. Lazy
     imports keep agent.py free of llm_runtime_* module weight on the
@@ -170,9 +172,19 @@ def make_runtime(spec: AgentSpec):
     import os
     if os.environ.get("ABA_FAKE_SESSION"):
         chosen = "fake"
+    elif os.environ.get("ABA_RUNTIME_OVERRIDE"):
+        chosen = os.environ["ABA_RUNTIME_OVERRIDE"].strip().lower()
+    elif model:
+        # Provider from the catalog decides the runtime — an OpenAI model routes
+        # through the OpenAI-compatible runtime; anything else keeps the spec's.
+        try:
+            from core.llm_catalog import provider_for_model
+            chosen = "openai" if provider_for_model(model) == "openai" else (spec.runtime or "direct")
+        except Exception:  # noqa: BLE001
+            chosen = (spec.runtime or "direct")
+        chosen = chosen.strip().lower()
     else:
-        chosen = (os.environ.get("ABA_RUNTIME_OVERRIDE")
-                  or spec.runtime or "direct").strip().lower()
+        chosen = (spec.runtime or "direct").strip().lower()
     if chosen == "direct":
         from core.runtime.llm_runtime_direct import DirectAPIRuntime
         return DirectAPIRuntime()
