@@ -363,6 +363,65 @@ class ThinkStripper:
         return out, ""
 
 
+def _tools_to_responses(tools: list[dict]) -> list[dict]:
+    """Anthropic tool schemas → Responses API function tools (flat shape:
+    the function fields are top-level, not nested under a `function` key)."""
+    out: list[dict] = []
+    for t in tools or []:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        out.append({"type": "function", "name": t["name"],
+                    "description": t.get("description") or "",
+                    "parameters": t.get("input_schema") or {"type": "object", "properties": {}}})
+    return out
+
+
+def _history_to_responses_input(messages: list[dict]) -> list[dict]:
+    """Anthropic-shape history → Responses API `input` items: user/assistant text
+    → message items (input_text / output_text); assistant tool_use → function_call;
+    user tool_result → function_call_output (a top-level item, no role)."""
+    import json as _json
+    items: list[dict] = []
+    for m in messages or []:
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, str):
+            ctype = "output_text" if role == "assistant" else "input_text"
+            if content:
+                items.append({"role": role, "content": [{"type": ctype, "text": content}]})
+            continue
+        if not isinstance(content, list):
+            continue
+        text_parts: list[str] = []
+
+        def _flush():
+            if text_parts:
+                ctype = "output_text" if role == "assistant" else "input_text"
+                items.append({"role": role, "content": [{"type": ctype, "text": "".join(text_parts)}]})
+                text_parts.clear()
+
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            bt = b.get("type")
+            if bt == "text":
+                text_parts.append(b.get("text") or "")
+            elif bt == "tool_use":
+                _flush()
+                items.append({"type": "function_call", "call_id": b.get("id") or "",
+                              "name": b.get("name") or "",
+                              "arguments": _json.dumps(b.get("input") or {})})
+            elif bt == "tool_result":
+                _flush()
+                out = b.get("content")
+                if isinstance(out, list):
+                    out = "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in out)
+                items.append({"type": "function_call_output", "call_id": b.get("tool_use_id") or "",
+                              "output": out if isinstance(out, str) else _json.dumps(out)})
+        _flush()
+    return items
+
+
 def _normalize_stop_reason(finish_reason: str | None) -> str:
     """Map OpenAI's finish_reason vocabulary onto the Anthropic-flavored
     stop_reason vocabulary guide.py's outer loop expects.
@@ -411,6 +470,138 @@ def _split_trailing_tag(text: str, tag: str) -> tuple[str, str]:
 # ─── 4. The runtime ─────────────────────────────────────────────────
 
 
+
+async def _emit_completion_and_dispatch(
+        req, visible_text_buf, tool_calls_state, finish_reason, usage,
+        tool_executor, halt_on_tools):
+    """Shared tail for both OpenAI paths (ChatCompletions + Codex Responses):
+    build the assistant blocks, emit _StreamCompleted, then dispatch tools +
+    emit ToolResult/TurnHalt/TurnDone. Populated locals are provider-specific."""
+    # 3. Build the assistant's blocks in Anthropic shape — text +
+    # tool_use blocks — so guide.py can append_message("assistant",
+    # blocks) and the NEXT outer iteration's history includes the
+    # tool_use to which the tool_result corresponds. Without this
+    # the loop sees a dangling tool_result and the model can never
+    # react to its own tool call.
+    assistant_blocks: list[dict] = []
+    full_text = "".join(visible_text_buf).strip()
+    if full_text:
+        assistant_blocks.append({"type": "text", "text": full_text})
+    tool_calls_in_order: list[str] = []
+    for idx in sorted(tool_calls_state.keys()):
+        tc = tool_calls_state[idx]
+        tool_name = tc["name"]
+        tool_use_id = tc["id"] or f"toolu_local_{idx}"
+        args_str = tc["args"] or "{}"
+        try:
+            tool_input = json.loads(args_str)
+        except json.JSONDecodeError:
+            # Keep the block in history with empty input so guide.py
+            # can still pair the eventual error tool_result with it.
+            tool_input = {}
+        assistant_blocks.append({"type":  "tool_use",
+                                 "id":    tool_use_id,
+                                 "name":  tool_name,
+                                 "input": tool_input})
+        tool_calls_in_order.append(tool_name)
+    normalized_stop = _normalize_stop_reason(finish_reason)
+
+    # Emit the private sentinel guide.py expects (parity with
+    # DirectAPIRuntime). `final_msg=None` because we don't have a
+    # provider-side terminal Message object — guide.py only uses
+    # this for cache-key debugging on the Anthropic path.
+    yield _StreamCompleted(
+        final_msg=None,
+        usage_delta=usage,
+        assistant_blocks=assistant_blocks,
+        stop_reason=normalized_stop,
+        tool_calls_this_turn=tool_calls_in_order,
+    )
+
+    # 4. No tool calls → natural end of turn.
+    if not tool_calls_state:
+        yield TurnDone(stop_reason=normalized_stop, usage=usage)
+        return
+
+    # 4. Tool dispatch loop. Mirrors DirectAPIRuntime envelope
+    #    handling so guide.py doesn't care which runtime served the
+    #    turn.
+    for idx in sorted(tool_calls_state.keys()):
+        tc = tool_calls_state[idx]
+        tool_name   = tc["name"]
+        tool_use_id = tc["id"] or f"toolu_local_{idx}"
+        args_str    = tc["args"] or "{}"
+        try:
+            tool_input = json.loads(args_str) if args_str else {}
+        except json.JSONDecodeError as e:
+            # Model emitted malformed JSON. Surface as an error
+            # tool_result so the orchestrator records the round-
+            # trip and the next turn can let the model retry.
+            yield ToolUseStart(tool_use_id=tool_use_id,
+                               tool_name=tool_name, input={})
+            yield ToolResult(tool_use_id=tool_use_id,
+                             tool_name=tool_name,
+                             result={"is_error": True,
+                                     "content":
+                                     f"invalid JSON in tool arguments: {e}"})
+            continue
+
+        yield ToolUseStart(tool_use_id=tool_use_id,
+                           tool_name=tool_name, input=tool_input)
+
+        if tool_name in halt_on_tools:
+            yield TurnHalt(reason="pending_tool", detail={
+                "tool_use_id": tool_use_id,
+                "tool_name":   tool_name,
+                "input":       tool_input,
+            })
+            return
+
+        exec_ctx = {**req.ctx, "tool_use_id": tool_use_id}
+        try:
+            result_obj = await tool_executor(tool_name, tool_input, exec_ctx)
+        except Exception as e:                              # noqa: BLE001
+            yield ToolResult(tool_use_id=tool_use_id,
+                             tool_name=tool_name,
+                             result={"is_error": True,
+                                     "content": f"tool exec failed: {e}"})
+            continue
+
+        halt_after: str | None = None
+        if isinstance(result_obj, dict):
+            if result_obj.get("deferred"):
+                yield TurnHalt(reason="deferred", detail={
+                    "tool_use_id": tool_use_id,
+                    "tool_name":   tool_name,
+                    "deferred_id": result_obj.get("deferred_id"),
+                    "timeout_s":   result_obj.get("timeout_s"),
+                })
+                return
+            if "_runtime_halt_before" in result_obj:
+                reason = result_obj.pop("_runtime_halt_before")
+                yield TurnHalt(reason=reason, detail={
+                    **result_obj,
+                    "tool_use_id": tool_use_id,
+                    "tool_name":   tool_name,
+                })
+                return
+            halt_after = result_obj.pop("_runtime_halt_after", None)
+
+        yield ToolResult(tool_use_id=tool_use_id,
+                         tool_name=tool_name, result=result_obj)
+
+        if halt_after:
+            yield TurnHalt(reason=halt_after, detail={
+                **(result_obj if isinstance(result_obj, dict) else {}),
+                "tool_use_id": tool_use_id,
+                "tool_name":   tool_name,
+            })
+            return
+
+    yield TurnDone(stop_reason=_normalize_stop_reason(finish_reason),
+                   usage=usage)
+
+
 class OpenAICompatibleRuntime:
     """LLMRuntime backed by any OpenAI-compatible Chat Completions
     endpoint. Today's target: a self-hosted vLLM serving Qwen3-8B on
@@ -454,9 +645,12 @@ class OpenAICompatibleRuntime:
         # chatgpt.com host) so we send a clean request there.
         self._real_openai = ("api.openai.com" in self.base_url
                              or "chatgpt.com" in self.base_url)
-        # Subscription (Codex/ChatGPT) uses the OAuth Bearer as the key + a
-        # ChatGPT-Account-Id header against the WHAM backend; a plain API key
-        # otherwise. Explicit api_key arg wins (tests / direct construction).
+        # Codex/ChatGPT subscription: chatgpt.com/backend-api/codex speaks the
+        # RESPONSES API (not ChatCompletions), needs originator + OpenAI-Beta
+        # headers, and only accepts the Codex model slugs (gpt-5.x).
+        self._responses_mode = "/backend-api/codex" in self.base_url
+        # Subscription uses the OAuth Bearer as the key + a ChatGPT-Account-Id
+        # header; a plain API key otherwise. Explicit api_key arg wins (tests).
         self._account_id = os.environ.get("ABA_OPENAI_ACCOUNT_ID") or None
         self.api_key  = (api_key
                          or os.environ.get("OPENAI_OAUTH_TOKEN")
@@ -479,11 +673,100 @@ class OpenAICompatibleRuntime:
     def _get_client(self) -> Any:
         if self._client is None:
             import openai
-            headers = {"ChatGPT-Account-Id": self._account_id} if self._account_id else None
+            headers: dict = {}
+            if self._account_id:
+                headers["ChatGPT-Account-Id"] = self._account_id
+            if self._responses_mode:
+                # What the Codex CLI sends so the ChatGPT backend accepts the call.
+                headers["originator"] = "codex_cli"
+                headers["OpenAI-Beta"] = "responses=experimental"
             self._client = openai.AsyncOpenAI(base_url=self.base_url,
                                               api_key=self.api_key,
-                                              default_headers=headers)
+                                              default_headers=headers or None)
         return self._client
+
+    async def _run_turn_responses(
+        self,
+        req: RuntimeRequest,
+        tool_executor: ToolExecutor,
+        halt_on_tools: frozenset[str] = frozenset(),
+    ) -> AsyncIterator[RuntimeEvent]:
+        """Codex/ChatGPT subscription path — the OpenAI RESPONSES API against
+        chatgpt.com/backend-api/codex. Translates the Anthropic-shape history/tools
+        into Responses `input`/`instructions`/`tools`, streams, and reuses the
+        shared completion+dispatch tail so guide.py sees identical events."""
+        instructions = req.system.stable or ""
+        if req.system.dynamic:
+            instructions = (instructions + "\n\n" + req.system.dynamic
+                            if instructions else req.system.dynamic)
+
+        input_items = _history_to_responses_input(req.history)
+        tools = _tools_to_responses(req.tools)
+
+        kwargs: dict = {
+            "model":       req.model,
+            "instructions": instructions,
+            "input":       input_items,
+            "stream":      True,
+            "store":       False,
+            "reasoning":   {"summary": "auto"},
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+            kwargs["parallel_tool_calls"] = True
+
+        client = self._get_client()
+        visible_text_buf: list[str] = []
+        tool_calls_state: dict[int, dict] = {}    # output_index → {id, name, args}
+        usage: dict = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        try:
+            stream = await client.responses.create(**kwargs)
+        except Exception as e:                                  # noqa: BLE001
+            yield TurnHalt(reason="error", detail={"message": str(e), "type": type(e).__name__})
+            return
+        try:
+            async for ev in stream:
+                if req.cancel is not None and getattr(req.cancel, "cancelled", False):
+                    yield TurnHalt(reason="cancelled", detail={})
+                    return
+                et = getattr(ev, "type", "")
+                if et == "response.output_text.delta":
+                    d = getattr(ev, "delta", "") or ""
+                    if d:
+                        visible_text_buf.append(d)
+                        yield TextDelta(text=d)
+                elif et == "response.output_item.added":
+                    item = getattr(ev, "item", None)
+                    if item is not None and getattr(item, "type", "") == "function_call":
+                        tool_calls_state[getattr(ev, "output_index", len(tool_calls_state))] = {
+                            "id": getattr(item, "call_id", "") or getattr(item, "id", ""),
+                            "name": getattr(item, "name", ""), "args": ""}
+                elif et == "response.function_call_arguments.delta":
+                    st = tool_calls_state.get(getattr(ev, "output_index", None))
+                    if st is not None:
+                        st["args"] += getattr(ev, "delta", "") or ""
+                elif et in ("response.completed", "response.incomplete"):
+                    u = getattr(getattr(ev, "response", None), "usage", None)
+                    if u is not None:
+                        usage["input"] = getattr(u, "input_tokens", 0) or 0
+                        usage["output"] = getattr(u, "output_tokens", 0) or 0
+                        det = getattr(u, "input_tokens_details", None)
+                        usage["cache_read"] = getattr(det, "cached_tokens", 0) or 0 if det else 0
+                elif et in ("response.failed", "error"):
+                    resp = getattr(ev, "response", ev)
+                    yield TurnHalt(reason="error", detail={"message": str(resp)[:300], "type": "responses_error"})
+                    return
+        except Exception as e:                                  # noqa: BLE001
+            yield TurnHalt(reason="error", detail={"message": f"stream error: {e}",
+                                                   "type": type(e).__name__})
+            return
+
+        finish_reason = "tool_calls" if tool_calls_state else "stop"
+        async for _ev in _emit_completion_and_dispatch(
+                req, visible_text_buf, tool_calls_state, finish_reason, usage,
+                tool_executor, halt_on_tools):
+            yield _ev
 
     async def run_turn(
         self,
@@ -504,6 +787,12 @@ class OpenAICompatibleRuntime:
         list in one assistant message (finish_reason='tool_calls'), so
         we collect all calls during streaming, then loop dispatch.
         """
+        # Codex/ChatGPT subscription speaks the Responses API — a different
+        # request/stream shape — so route to the dedicated path.
+        if self._responses_mode:
+            async for _ev in self._run_turn_responses(req, tool_executor, halt_on_tools):
+                yield _ev
+            return
         # 1. Build the outgoing payload.
         system_text = req.system.stable or ""
         if req.system.dynamic:
@@ -658,129 +947,11 @@ class OpenAICompatibleRuntime:
                     if finish_reason in (None, "stop"):
                         finish_reason = "tool_calls"
 
-        # 3. Build the assistant's blocks in Anthropic shape — text +
-        # tool_use blocks — so guide.py can append_message("assistant",
-        # blocks) and the NEXT outer iteration's history includes the
-        # tool_use to which the tool_result corresponds. Without this
-        # the loop sees a dangling tool_result and the model can never
-        # react to its own tool call.
-        assistant_blocks: list[dict] = []
-        full_text = "".join(visible_text_buf).strip()
-        if full_text:
-            assistant_blocks.append({"type": "text", "text": full_text})
-        tool_calls_in_order: list[str] = []
-        for idx in sorted(tool_calls_state.keys()):
-            tc = tool_calls_state[idx]
-            tool_name = tc["name"]
-            tool_use_id = tc["id"] or f"toolu_local_{idx}"
-            args_str = tc["args"] or "{}"
-            try:
-                tool_input = json.loads(args_str)
-            except json.JSONDecodeError:
-                # Keep the block in history with empty input so guide.py
-                # can still pair the eventual error tool_result with it.
-                tool_input = {}
-            assistant_blocks.append({"type":  "tool_use",
-                                     "id":    tool_use_id,
-                                     "name":  tool_name,
-                                     "input": tool_input})
-            tool_calls_in_order.append(tool_name)
-        normalized_stop = _normalize_stop_reason(finish_reason)
-
-        # Emit the private sentinel guide.py expects (parity with
-        # DirectAPIRuntime). `final_msg=None` because we don't have a
-        # provider-side terminal Message object — guide.py only uses
-        # this for cache-key debugging on the Anthropic path.
-        yield _StreamCompleted(
-            final_msg=None,
-            usage_delta=usage,
-            assistant_blocks=assistant_blocks,
-            stop_reason=normalized_stop,
-            tool_calls_this_turn=tool_calls_in_order,
-        )
-
-        # 4. No tool calls → natural end of turn.
-        if not tool_calls_state:
-            yield TurnDone(stop_reason=normalized_stop, usage=usage)
-            return
-
-        # 4. Tool dispatch loop. Mirrors DirectAPIRuntime envelope
-        #    handling so guide.py doesn't care which runtime served the
-        #    turn.
-        for idx in sorted(tool_calls_state.keys()):
-            tc = tool_calls_state[idx]
-            tool_name   = tc["name"]
-            tool_use_id = tc["id"] or f"toolu_local_{idx}"
-            args_str    = tc["args"] or "{}"
-            try:
-                tool_input = json.loads(args_str) if args_str else {}
-            except json.JSONDecodeError as e:
-                # Model emitted malformed JSON. Surface as an error
-                # tool_result so the orchestrator records the round-
-                # trip and the next turn can let the model retry.
-                yield ToolUseStart(tool_use_id=tool_use_id,
-                                   tool_name=tool_name, input={})
-                yield ToolResult(tool_use_id=tool_use_id,
-                                 tool_name=tool_name,
-                                 result={"is_error": True,
-                                         "content":
-                                         f"invalid JSON in tool arguments: {e}"})
-                continue
-
-            yield ToolUseStart(tool_use_id=tool_use_id,
-                               tool_name=tool_name, input=tool_input)
-
-            if tool_name in halt_on_tools:
-                yield TurnHalt(reason="pending_tool", detail={
-                    "tool_use_id": tool_use_id,
-                    "tool_name":   tool_name,
-                    "input":       tool_input,
-                })
-                return
-
-            exec_ctx = {**req.ctx, "tool_use_id": tool_use_id}
-            try:
-                result_obj = await tool_executor(tool_name, tool_input, exec_ctx)
-            except Exception as e:                              # noqa: BLE001
-                yield ToolResult(tool_use_id=tool_use_id,
-                                 tool_name=tool_name,
-                                 result={"is_error": True,
-                                         "content": f"tool exec failed: {e}"})
-                continue
-
-            halt_after: str | None = None
-            if isinstance(result_obj, dict):
-                if result_obj.get("deferred"):
-                    yield TurnHalt(reason="deferred", detail={
-                        "tool_use_id": tool_use_id,
-                        "tool_name":   tool_name,
-                        "deferred_id": result_obj.get("deferred_id"),
-                        "timeout_s":   result_obj.get("timeout_s"),
-                    })
-                    return
-                if "_runtime_halt_before" in result_obj:
-                    reason = result_obj.pop("_runtime_halt_before")
-                    yield TurnHalt(reason=reason, detail={
-                        **result_obj,
-                        "tool_use_id": tool_use_id,
-                        "tool_name":   tool_name,
-                    })
-                    return
-                halt_after = result_obj.pop("_runtime_halt_after", None)
-
-            yield ToolResult(tool_use_id=tool_use_id,
-                             tool_name=tool_name, result=result_obj)
-
-            if halt_after:
-                yield TurnHalt(reason=halt_after, detail={
-                    **(result_obj if isinstance(result_obj, dict) else {}),
-                    "tool_use_id": tool_use_id,
-                    "tool_name":   tool_name,
-                })
-                return
-
-        yield TurnDone(stop_reason=_normalize_stop_reason(finish_reason),
-                       usage=usage)
+        async for _ev in _emit_completion_and_dispatch(
+                req, visible_text_buf, tool_calls_state, finish_reason, usage,
+                tool_executor, halt_on_tools):
+            yield _ev
+        return
 
 
 def _conforms_to_protocol() -> bool:

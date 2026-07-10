@@ -310,7 +310,7 @@ def store_oauth_token(provider: str, token: dict) -> dict:
         # Subscription (Codex/ChatGPT): the access token is a Bearer used against
         # the ChatGPT WHAM backend, with a ChatGPT-Account-Id header from the JWT.
         acct = (token or {}).get("account_id") or ""
-        base = "https://chatgpt.com/backend-api/wham"
+        base = "https://chatgpt.com/backend-api/codex"   # Responses backend (not /wham)
         entries["OPENAI_OAUTH_TOKEN"] = access
         entries["OPENAI_AUTH_FLOW"] = "subscription"
         entries["ABA_OPENAI_BASE_URL"] = base
