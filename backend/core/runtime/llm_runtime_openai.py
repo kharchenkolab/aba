@@ -449,6 +449,9 @@ class OpenAICompatibleRuntime:
         self.base_url = (base_url
                          or os.environ.get("ABA_OPENAI_BASE_URL")
                          or "http://localhost:8001/v1")
+        # Real OpenAI (api.openai.com) rejects vLLM-only request extensions
+        # (chat_template_kwargs) — detect it so we can send a clean request there.
+        self._real_openai = "api.openai.com" in self.base_url
         self.api_key  = (api_key
                          or os.environ.get("ABA_OPENAI_API_KEY")
                          or "none")
@@ -513,14 +516,15 @@ class OpenAICompatibleRuntime:
         if openai_tools:
             kwargs["tools"]       = openai_tools
             kwargs["tool_choice"] = "auto"
-        # vLLM extension: Qwen3 thinking-mode toggle. When False (our
-        # default) the model skips the `<think>…</think>` chain-of-
-        # thought entirely — far cheaper, faster, and the visible
-        # answer + tool calls are unaffected. The ThinkStripper still
-        # runs (defense in depth) and is a no-op when no tags appear.
-        kwargs["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
-        }
+        # vLLM extension: Qwen3 thinking-mode toggle. When False (our default) the
+        # model skips the `<think>…</think>` CoT entirely — cheaper/faster, visible
+        # answer + tool calls unaffected. ONLY valid on a vLLM/local endpoint —
+        # api.openai.com rejects unknown body fields (400), so skip it there. The
+        # ThinkStripper still runs (defense in depth) and no-ops when no tags appear.
+        if not self._real_openai:
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+            }
 
         # 2. Open the stream + consume.
         client    = self._get_client()

@@ -191,3 +191,31 @@
 .env-ok { color: var(--ok, #15803d); font-weight: 700; }
 .env-no { color: var(--warn-fg, #b45309); font-weight: 700; }
 .env-detail { color: var(--text-4, #6f6862); }
+
+/* ── tabbed body + Agent-tab account block (provider/credential) ───────────── */
+.settings__body { display: block; }
+
+/* provider segmented control */
+.provider-seg { display: inline-flex; margin: 4px 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 8px; overflow: hidden; background: #f8fafc; }
+.provider-seg__btn { padding: 6px 16px; border: none; background: transparent; font: inherit;
+  font-size: 13px; color: #475569; cursor: pointer; border-right: 1px solid #e2e8f0; }
+.provider-seg__btn:last-child { border-right: none; }
+.provider-seg__btn.is-active { background: #2563eb; color: #fff; font-weight: 600; }
+.provider-seg__btn:hover:not(.is-active) { background: #eef2ff; }
+
+/* credential editor: two methods (key / subscription) with an "or" divider */
+.cred-edit { margin-top: 6px; }
+.cred-edit__label { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 8px; }
+.cred-method { margin: 8px 0; }
+.cred-method__title { font-size: 12px; font-weight: 600; color: #64748b;
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 5px; }
+.cred-or { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; color: #94a3b8;
+  font-size: 12px; }
+.cred-or::before, .cred-or::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
+.cred-sub { padding: 9px 16px; border: 1px solid #2563eb; background: #fff; color: #2563eb;
+  border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+.cred-sub:hover:not(:disabled) { background: #eff6ff; }
+.cred-sub:disabled { opacity: .55; cursor: default; }
+.cred-linkbtn { background: none; border: none; color: #2563eb; cursor: pointer; font: inherit;
+  font-size: 12px; padding: 0; text-decoration: underline; }

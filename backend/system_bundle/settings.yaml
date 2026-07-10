@@ -28,9 +28,23 @@ llm_models:
   - label: Opus
     model: claude-opus-4-7
     spec: grounded_guide
+    provider: anthropic
   - label: Sonnet
     model: claude-sonnet-5
     spec: grounded_guide
+    provider: anthropic
   - label: Haiku
     model: claude-haiku-4-5-20251001
     spec: grounded_guide
+    provider: anthropic
+  # OpenAI models — used when the Agent provider is set to OpenAI (needs an OpenAI
+  # key or Codex subscription in Settings → Agent). Routed through the
+  # OpenAICompatibleRuntime against api.openai.com.
+  - label: GPT-4o
+    model: gpt-4o
+    spec: grounded_guide
+    provider: openai
+  - label: GPT-4.1
+    model: gpt-4.1
+    spec: grounded_guide
+    provider: openai
