@@ -106,6 +106,30 @@ for c in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
   [ -f "$c" ] && { cp "$c" "$STAGE/ca-certificates.crt"; break; }
 done
 [ -f "$STAGE/ca-certificates.crt" ] && echo "   CA certs baked" || echo "WARNING: no host CA bundle found to bake"
+# `which`: EL8/EL9/EL10 minimal base images DROPPED it (EL7 shipped it, which is why the
+# old oraclelinux:7 default never hit this). R's `utils` package shells out to it from
+# .onLoad during loadNamespace(), so WITHOUT it every R kernel start dies with:
+#   Error: .onLoad failed in loadNamespace() for 'utils', details:
+#     call: system(paste(which, shQuote(names[i])), intern = TRUE, ignore.stderr = TRUE)
+# It resolves the ABSOLUTE path /usr/bin/which — putting a `which` on PATH does NOT
+# satisfy it (verified). There is no %post to dnf-install one (rootless builds have no
+# fakeroot), and copying the host binary would bind the image to the build host's glibc,
+# so ship a dependency-free POSIX shim.
+cat > "$STAGE/which" <<'WHICH_SHIM'
+#!/bin/sh
+# Minimal `which` — the base image omits it (EL8+). Prints the absolute path of each
+# external command, exits non-zero if any is not found. Shell builtins are NOT reported
+# as found, matching which(1) closely enough for R's utils/.onLoad probe.
+_st=0
+for _a in "$@"; do
+  case "$_a" in -*) continue ;; esac
+  _p=$(command -v "$_a" 2>/dev/null) || { _st=1; continue; }
+  case "$_p" in /*) printf '%s\n' "$_p" ;; *) _st=1 ;; esac
+done
+exit $_st
+WHICH_SHIM
+chmod 0755 "$STAGE/which"
+echo "   which shim baked (base images since EL8 omit it; R's utils needs /usr/bin/which)"
 MM_BIN="${MICROMAMBA:-$(command -v micromamba 2>/dev/null || true)}"
 if [ -x "$MM_BIN" ]; then mkdir -p "$STAGE/bin"; cp "$MM_BIN" "$STAGE/bin/micromamba"; echo "   micromamba baked"; else echo "NOTE: no micromamba to bake (runtime conda installs unavailable)"; fi
 
@@ -150,6 +174,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    $STAGE/ood/aba_preflight.py /opt/aba/ood/aba_preflight.py"
   [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
+  echo "    $STAGE/which /usr/bin/which"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
@@ -190,6 +215,16 @@ if [ "$STAGE_ONLY" = "1" ]; then echo "stage-only: skipping apptainer build"; ex
 echo "-- apptainer build --"
 "$APPTAINER" build --force "$OUT" "$DEF"
 echo "✓ built $OUT ($(du -h "$OUT" 2>/dev/null | cut -f1))"
+
+# ── runtime prerequisites the R kernel needs (cheap, catches a lean base image) ──
+# /usr/bin/which: R's utils .onLoad shells out to it; absent -> EVERY run_r dies at
+# kernel registration with a ".onLoad failed in loadNamespace() for 'utils'" that names
+# neither R nor `which`. Assert it here rather than discover it in a live session.
+if ! "$APPTAINER" exec "$OUT" /usr/bin/which sh >/dev/null 2>&1; then
+  echo "ERROR: /usr/bin/which is missing or broken in the image — R kernels will fail to start." >&2
+  exit 1
+fi
+echo "   checked: /usr/bin/which present (R utils prerequisite)"
 
 # ── glibc-floor check (install/sif/glibc-floor.sh): the base glibc must be <= the
 # compute nodes'. Compare the built image to THIS build host (a proxy for the nodes —
