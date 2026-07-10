@@ -22,12 +22,11 @@ assistant walks you through anything unexpected instead of dumping an error.
 
 1. Open **Terminal** and run:
    ```sh
-   git clone --depth 1 https://github.com/kharchenkolab/aba
-   open "aba/install/mac/setup.command"
+   bash <(curl -fsSL https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/setup.command)
    ```
-   This launches the installer in a new Terminal window. (A one-click download
-   installer is planned; for now the setup script bootstraps everything from the
-   public repo.)
+   This fetches the small bootstrap script and runs it — it clones ABA into
+   `~/.aba` and installs from there (no need to clone the repo yourself). (A
+   one-click download installer is planned.)
 2. **Choose how to sign in** when asked:
    - *Claude.ai subscription* — a browser opens to sign in (recommended).
    - *Anthropic API key* — paste your `sk-ant-…` key.
