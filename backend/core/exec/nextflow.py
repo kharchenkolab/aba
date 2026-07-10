@@ -783,6 +783,219 @@ def publish_multiqc_report(outdir, project_id: str, run_id: str) -> Optional[str
 
 
 # ── the reusable execution+harvest function ──────────────────────────────────
+def harvest_nextflow_result(*, scratch: str, outdir: str, reports: str, returncode: int,
+                            stdout: str, stderr: str, pipeline: str, revision, profile,
+                            params: Optional[dict], project_id: str, run_id: str,
+                            command: str, nf_version: str = "") -> dict:
+    """Post-run harvest + parse over a completed Nextflow run dir → the standard
+    background result_obj (returncode/stdout/stderr/plots/tables/files/…) + the
+    `workflow` provenance block. PURE over the filesystem (no live executor) so it runs
+    EITHER in-process (run_nextflow_code, local/inline) OR server-side after a bare
+    Slurm head finishes (slurm_submitter.poll → the head ran `nextflow` with no
+    python/backend on the node; misc/fatagain.md). stdout/stderr are the head's captured
+    output (job.log/job.err for the Slurm head)."""
+    from core.exec.run import harvest_artifacts
+    from core.exec.output_cap import snip_middle
+    op = Path(outdir)
+    reports = Path(reports)
+    scratch = Path(scratch)
+    plots, tables, files, out_files = [], [], [], []
+    if op.exists():
+        try:
+            plots, tables, files, _warns = harvest_artifacts(op, project_id=str(project_id))
+        except Exception:  # noqa: BLE001 — harvest is best-effort
+            plots, tables, files = [], [], []
+        out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
+    # P1: also harvest the run reports (report.html / timeline.html live in the
+    # reports dir, not --outdir) so they attach to the Run as pinnable artifacts.
+    try:
+        _rp, _rt, rep_files, _ = harvest_artifacts(reports, project_id=str(project_id))
+        files = list(files) + list(rep_files)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # P1: monitoring. Parse the trace once → a per-task summary; diagnose failures.
+    trace_rows = parse_trace_rows(reports / "trace.txt")
+    summary = trace_summary(trace_rows)
+    failure = {}
+    if returncode != 0:
+        failure = parse_failure(stderr or "", trace_rows, str(scratch / ".nextflow.log"))
+    # P3b: interpret the QC. Parse the pipeline's MultiQC general-stats into a per-sample
+    # summary + outliers the agent reasons over (best-effort; {} if no MultiQC).
+    multiqc = {}
+    if op.exists():
+        try:
+            multiqc = parse_multiqc(op)
+        except Exception:  # noqa: BLE001
+            multiqc = {}
+        # Publish the report to a servable /artifacts URL so the agent can hand the user a
+        # CLICKABLE report (not a dead file:// path). Kept alongside the parsed QC.
+        try:
+            _report_url = publish_multiqc_report(op, str(project_id), str(run_id))
+            if _report_url:
+                multiqc["report_url"] = _report_url
+        except Exception:  # noqa: BLE001
+            pass
+
+    reports_rel = {"trace": "nf_reports/trace.txt", "report": "nf_reports/report.html",
+                   "timeline": "nf_reports/timeline.html"}
+    out: dict = {
+        "returncode": returncode,
+        "stdout": snip_middle(stdout or ""),
+        "stderr": snip_middle(stderr or ""),
+        "plots": plots, "tables": tables, "files": files,
+        "cwd": str(scratch),
+        "outdir": str(outdir), "outputs": out_files,
+        "task_summary": summary,          # surfaced to the agent in the tool result
+        "multiqc": multiqc,               # P3b: per-sample QC the agent interprets
+        "execution_mode": "workflow",
+        # consumed by runner._write_exec_record_for_job (kind:workflow branch)
+        "workflow": {
+            "engine": {"name": "nextflow", "version": nf_version},
+            "per_process_images": parse_trace_containers(reports / "trace.txt"),
+            "pipeline": pipeline, "revision": revision, "profile": profile,
+            "params": params or {}, "outputs": out_files[:50], "command": command,
+            "task_summary": summary, "reports": reports_rel, "multiqc": multiqc,
+        },
+        "command": command,
+    }
+    # An actionable failure diagnosis → _finalize_job's failed-path note + the
+    # continuation, instead of a bare non-zero exit.
+    if returncode != 0:
+        out["workflow"]["failure"] = failure
+        procs = failure.get("failed_processes") or []
+        excerpt = failure.get("error_excerpt") or ""
+        abort = failure.get("abort_cause") or ""
+        if procs:
+            out["error"] = (f"Nextflow pipeline failed (exit {returncode}). Failed: "
+                            f"{', '.join(procs)}." + (f"\n{excerpt}" if excerpt else ""))
+        elif abort:
+            # No task ran — a params/input/config problem, NOT a compute failure. Tell the agent
+            # so it fixes the params (or the profile/input) instead of retrying the same command.
+            out["error"] = (f"Nextflow aborted before running any task (exit {returncode}) — a "
+                            f"parameter/input/config problem, not a compute failure:\n{abort}")
+        else:
+            out["error"] = (f"Nextflow pipeline failed (exit {returncode})."
+                            + (f"\n{excerpt}" if excerpt else ""))
+    else:
+        # Learn this pipeline's task count so the NEXT run's progress bar shows a real fraction.
+        record_task_count(pipeline, revision, profile, (summary or {}).get("total_tasks"))
+    return out
+
+
+def nextflow_head_script(*, pipeline: str, project_id: str, run_id: str,
+                         revision=None, profile=None, params: Optional[dict] = None,
+                         outdir: Optional[str] = None, execution: Optional[str] = None,
+                         local_resources: Optional[dict] = None,
+                         done_path: Optional[str] = None) -> "tuple[str, dict]":
+    """Build the BARE-bash job.sh body for an offloaded Nextflow head + the harvest
+    context the server keeps for afterward.
+
+    The head runs `nextflow run …` with NO python/backend on the node — it needs only
+    `nextflow` (a cluster module or a shared-FS install) + its own per-task
+    biocontainers — so it works identically under fat and slim, and nf-core stays
+    genuinely unwrapped/backend-independent (misc/fatagain.md). The ABA server harvests
+    the run dir afterward (harvest_nextflow_result), so no parsing runs on the node.
+
+    Side effects (shared FS, server-side at submit): creates the run/work/reports/
+    NXF_HOME dirs, clears stale report files, writes the local-executor config when
+    execution=local — mirrors run_nextflow_code's setup. Returns (bash_body, ctx);
+    ctx carries everything harvest_nextflow_result needs once `done` lands."""
+    import shlex as _shlex
+    from core.data.workspace import scratch_dir
+    scratch = Path(scratch_dir(str(project_id), str(run_id)))
+    cfg = nextflow_config()
+    prof = merged_profile(profile, cfg["profiles"])
+    outdir = outdir or str(scratch / "results")
+    if cfg["workdir_root"]:
+        work_dir = str(Path(os.path.expandvars(cfg["workdir_root"])) / str(run_id))
+    else:
+        work_dir = str(scratch / "work")
+    reports = scratch / "nf_reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    clear_stale_reports(reports)   # else -resume aborts on the prior run's report files
+    Path(work_dir).mkdir(parents=True, exist_ok=True)
+    nxf_home = cfg.get("home") or str(scratch / ".nextflow")
+    try:
+        Path(nxf_home).mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        nxf_home = str(scratch / ".nextflow")
+        Path(nxf_home).mkdir(parents=True, exist_ok=True)
+
+    mode = (execution or cfg.get("execution") or "slurm").lower()
+    extra_configs: list = []
+    if mode == "local":
+        loc = cfg.get("local") or {}
+        lr = local_resources or {}
+        cores = lr.get("cores") or loc.get("cores") or 8
+        mem_gb = lr.get("mem_gb") or loc.get("mem_gb") or 32
+        lc = scratch / "local_executor.config"
+        lc.write_text(local_executor_config(cores, mem_gb))
+        extra_configs.append(str(lc))
+
+    cmd = nextflow_command(pipeline, revision=revision, profile=prof, outdir=outdir,
+                           params=params, work_dir=work_dir, reports_dir=str(reports),
+                           config_file=cfg.get("config_file"), extra_configs=extra_configs)
+
+    lines: list = []
+    # `nextflow` onto PATH: a shared-FS install (bin) wins (prepend), else `module load`
+    # the site module (load_lines emits the Lmod init + load, so it works in a
+    # non-login sbatch shell). One of these must land it on PATH on the bare node.
+    nf_bin = nextflow_bin_dir(cfg.get("bin"))
+    if nf_bin:
+        lines.append(f'export PATH={_shlex.quote(nf_bin)}:"$PATH"')
+    elif cfg.get("module"):
+        # Load the nextflow module on the BARE node. Emitted UNCONDITIONALLY (not via
+        # load_lines, which gates on the SERVER's modules_active — irrelevant here): the
+        # node has Lmod, so bootstrap `module` if this non-login shell lacks it, then load.
+        # ABA_MODULE_INIT / LMOD_PKG expand at node runtime (candidates mirror _init_script).
+        lines.append(
+            'if ! command -v module >/dev/null 2>&1; then\n'
+            '  for _i in "${ABA_MODULE_INIT:-}" "$LMOD_PKG/init/bash" /etc/profile.d/lmod.sh '
+            '/etc/profile.d/z00_lmod.sh /etc/profile.d/modules.sh; do\n'
+            '    [ -n "$_i" ] && [ -f "$_i" ] && . "$_i" 2>/dev/null && break\n'
+            '  done\n'
+            'fi')
+        lines.append(f'module load {cfg["module"]}')
+    # Java ≥17 override AFTER `module load` (the module may pin Java 11): prepend our
+    # JDK's bin + lib/lib-server so its native libs win (mirrors java_env()).
+    jh = cfg.get("java_home")
+    if jh:
+        lines.append(f'export JAVA_HOME={_shlex.quote(jh)}')
+        lines.append(f'export PATH={_shlex.quote(jh + "/bin")}:"$PATH"')
+        lines.append(f'export LD_LIBRARY_PATH={_shlex.quote(jh + "/lib")}:'
+                     f'{_shlex.quote(jh + "/lib/server")}:"${{LD_LIBRARY_PATH:-}}"')
+    lines.append(f'export NXF_HOME={_shlex.quote(nxf_home)}')
+    lines.append('export NXF_SYNTAX_PARSER="${NXF_SYNTAX_PARSER:-v1}"')
+    if cfg.get("singularity_cachedir"):
+        lines.append(f'export NXF_SINGULARITY_CACHEDIR={_shlex.quote(cfg["singularity_cachedir"])}')
+    # apptainer/singularity tmp + cache MUST be node-local (off NFS home — the CBE
+    # file-lock hang). nextflow's per-task containers inherit these.
+    lines.append('_ap="${ABA_APPTAINER_TMPDIR:-/tmp/aba-apptainer-${USER:-u}}"; mkdir -p "$_ap"')
+    for _k in ("APPTAINER_TMPDIR", "SINGULARITY_TMPDIR", "APPTAINER_CACHEDIR", "SINGULARITY_CACHEDIR"):
+        lines.append(f'export {_k}="$_ap"')
+
+    quoted = " ".join(_shlex.quote(c) for c in cmd)
+    # `done` sentinel (rc of the nextflow run) — the completion signal poll() watches;
+    # its ABSENCE (+ sacct terminal) is the auto-resume infra-death trigger. Without it
+    # poll never finalizes a completed head. Default to the run's own dir when the
+    # submitter didn't pass a job-dir path.
+    done = done_path or str(scratch / "done")
+    body = (
+        "#!/bin/bash\n"
+        f"cd {_shlex.quote(str(scratch))}\n"
+        + "\n".join(lines) + "\n"
+        f'nextflow -version > {_shlex.quote(str(scratch / "nf_version.txt"))} 2>&1 || true\n'
+        f"{quoted}\n"
+        f"echo $? > {_shlex.quote(done)}\n"
+    )
+    ctx = {"scratch": str(scratch), "outdir": str(outdir), "reports": str(reports),
+           "command": " ".join(cmd), "run_id": str(run_id), "project_id": str(project_id),
+           "pipeline": pipeline, "revision": revision, "profile": prof,
+           "params": params or {}}
+    return body, ctx
+
+
 def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] = None,
                       revision: Optional[str] = None, profile: Optional[str] = None,
                       params: Optional[dict] = None, outdir: Optional[str] = None,
@@ -905,45 +1118,6 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
         return {"status": "cancelled",
                 "note": "Nextflow run was cancelled by the user. No further work happened."}
 
-    plots, tables, files, out_files = [], [], [], []
-    op = Path(outdir)
-    if op.exists():
-        try:
-            plots, tables, files, _warns = harvest_artifacts(op, project_id=str(project_id))
-        except Exception:  # noqa: BLE001 — harvest is best-effort
-            plots, tables, files = [], [], []
-        out_files = sorted(str(p.relative_to(op)) for p in op.rglob("*") if p.is_file())[:100]
-    # P1: also harvest the run reports (report.html / timeline.html live in the
-    # reports dir, not --outdir) so they attach to the Run as pinnable artifacts.
-    try:
-        _rp, _rt, rep_files, _ = harvest_artifacts(reports, project_id=str(project_id))
-        files = list(files) + list(rep_files)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # P1: monitoring. Parse the trace once → a per-task summary; diagnose failures.
-    trace_rows = parse_trace_rows(reports / "trace.txt")
-    summary = trace_summary(trace_rows)
-    failure = {}
-    if res.returncode != 0:
-        failure = parse_failure(res.stderr or "", trace_rows, str(Path(scratch) / ".nextflow.log"))
-    # P3b: interpret the QC. Parse the pipeline's MultiQC general-stats into a per-sample
-    # summary + outliers the agent reasons over (best-effort; {} if no MultiQC).
-    multiqc = {}
-    if op.exists():
-        try:
-            multiqc = parse_multiqc(op)
-        except Exception:  # noqa: BLE001
-            multiqc = {}
-        # Publish the report to a servable /artifacts URL so the agent can hand the user a
-        # CLICKABLE report (not a dead file:// path). Kept alongside the parsed QC.
-        try:
-            _report_url = publish_multiqc_report(op, str(project_id), str(run_id))
-            if _report_url:
-                multiqc["report_url"] = _report_url
-        except Exception:  # noqa: BLE001
-            pass
-
     nf_ver = ""
     try:
         vr = ex.exec(menv, ["nextflow", "-version"], cwd=str(scratch), timeout_s=30)
@@ -953,48 +1127,12 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     except Exception:  # noqa: BLE001
         nf_ver = ""
 
-    cmd_str = " ".join(cmd)
-    reports_rel = {"trace": "nf_reports/trace.txt", "report": "nf_reports/report.html",
-                   "timeline": "nf_reports/timeline.html"}
-    out: dict = {
-        "returncode": res.returncode,
-        "stdout": snip_middle(res.stdout or ""),
-        "stderr": snip_middle(res.stderr or ""),
-        "plots": plots, "tables": tables, "files": files,
-        "cwd": str(scratch),
-        "outdir": outdir, "outputs": out_files,
-        "task_summary": summary,          # surfaced to the agent in the tool result
-        "multiqc": multiqc,               # P3b: per-sample QC the agent interprets
-        "execution_mode": "workflow",
-        # consumed by runner._write_exec_record_for_job (kind:workflow branch)
-        "workflow": {
-            "engine": {"name": "nextflow", "version": nf_ver},
-            "per_process_images": parse_trace_containers(reports / "trace.txt"),
-            "pipeline": pipeline, "revision": revision, "profile": prof,
-            "params": params or {}, "outputs": out_files[:50], "command": cmd_str,
-            "task_summary": summary, "reports": reports_rel, "multiqc": multiqc,
-        },
-        "command": cmd_str,
-    }
-    # An actionable failure diagnosis → _finalize_job's failed-path note + the
-    # continuation, instead of a bare non-zero exit.
-    if res.returncode != 0:
-        out["workflow"]["failure"] = failure
-        procs = failure.get("failed_processes") or []
-        excerpt = failure.get("error_excerpt") or ""
-        abort = failure.get("abort_cause") or ""
-        if procs:
-            out["error"] = (f"Nextflow pipeline failed (exit {res.returncode}). Failed: "
-                            f"{', '.join(procs)}." + (f"\n{excerpt}" if excerpt else ""))
-        elif abort:
-            # No task ran — a params/input/config problem, NOT a compute failure. Tell the agent
-            # so it fixes the params (or the profile/input) instead of retrying the same command.
-            out["error"] = (f"Nextflow aborted before running any task (exit {res.returncode}) — a "
-                            f"parameter/input/config problem, not a compute failure:\n{abort}")
-        else:
-            out["error"] = (f"Nextflow pipeline failed (exit {res.returncode})."
-                            + (f"\n{excerpt}" if excerpt else ""))
-    else:
-        # Learn this pipeline's task count so the NEXT run's progress bar shows a real fraction.
-        record_task_count(pipeline, revision, profile, (summary or {}).get("total_tasks"))
-    return out
+    # Harvest + parse (trace/MultiQC/failure/artifacts) is a PURE post-run pass over the
+    # run dir — shared with the decoupled Slurm head, which runs `nextflow` bare (no
+    # python/backend on the node) and lets the ABA server harvest here (misc/fatagain.md).
+    return harvest_nextflow_result(
+        scratch=str(scratch), outdir=str(outdir), reports=str(reports),
+        returncode=res.returncode, stdout=res.stdout or "", stderr=res.stderr or "",
+        pipeline=pipeline, revision=revision, profile=prof, params=params,
+        project_id=str(project_id), run_id=str(run_id),
+        command=" ".join(cmd), nf_version=nf_ver)

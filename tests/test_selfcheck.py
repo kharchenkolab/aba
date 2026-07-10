@@ -207,6 +207,24 @@ def test_base_check_slurm_in_image_in_allocation_warns():
         os.environ.pop("ABA_BATCH_SUBMITTER", None)
 
 
+def test_base_check_slurm_wrap_mode_ok():
+    # fat SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded env-jobs RE-ENTER the image via
+    # apptainer exec, so a node-local/in-image base is reachable — the wrap flip must
+    # override what would otherwise be the 'single-node' HIGH on a bare submit node.
+    os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
+    os.environ["ABA_JOB_WRAP"] = "sif"
+    orig = _patch_base_kind("node_local", "/opt/aba-venv on squashfs (node-local / in-image)")
+    unslurm = _set_slurm(False)                      # worst case sans wrap → HIGH
+    try:
+        r = env_integrity.check_base_dir_shared()
+        assert r["ok"] is True and r["severity"] == "info", r
+        assert "wrap" in r["detail"].lower() or "re-enter" in r["detail"].lower(), r
+    finally:
+        unslurm(); env_integrity.base_fs_kind = orig
+        os.environ.pop("ABA_BATCH_SUBMITTER", None)
+        os.environ.pop("ABA_JOB_WRAP", None)
+
+
 def test_base_check_slurm_shared_passes():
     os.environ["ABA_BATCH_SUBMITTER"] = "slurm"
     orig = _patch_base_kind("shared", "/cluster/aba/base on nfs (shared)")

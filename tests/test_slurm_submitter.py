@@ -390,3 +390,107 @@ def test_submit_spec_carries_gpu_request(slurm):
     SlurmSubmitter().submit(cjob)
     rd2 = get_job(cjob["id"], project_id=pid)["params"]["run_dir"]
     assert json.loads((Path(rd2) / "job_spec.json").read_text())["gpu"] is False
+
+
+# ── fat SIF: wrap env-jobs, never nf-core (misc/fatagain.md) ──────────────────────
+# _job_body renders the offloaded job.sh. Tested as a pure function: BARE (default,
+# native/slim — unchanged) vs WRAPPED (ABA_JOB_WRAP=sif, a fat deployment where the
+# interpreter/libs/backend live only inside the SIF, so env-jobs must re-enter it).
+
+def _body(monkeypatch, tmp_path, *, kind="run_python", gpu=False,
+          job_py="/shared/base/bin/python", job_backend="/shared/backend",
+          nf_path_line="", mods=None):
+    from core.jobs.slurm_submitter import _job_body
+    return _job_body(kind=kind, mods=mods or [], nf_path_line=nf_path_line,
+                     spec_path=tmp_path / "job_spec.json", run_dir=tmp_path,
+                     done_path=tmp_path / "done", gpu=gpu,
+                     job_py=job_py, job_backend=job_backend)
+
+
+def test_job_body_wraps_env_job_under_fat(monkeypatch, tmp_path):
+    """ABA_JOB_WRAP=sif + a run_python/run_r job → job.sh re-enters the fat SIF via
+    `apptainer exec`, runs the IN-IMAGE interpreter with PYTHONPATH=/opt/aba/backend,
+    identity-binds the run dir, and pins APPTAINER_TMPDIR off NFS. The bare-node
+    interpreter/backend must NOT leak in."""
+    monkeypatch.setenv("ABA_JOB_WRAP", "sif")
+    monkeypatch.setenv("ABA_SIF", "/cluster/aba/aba.sif")
+    body = _body(monkeypatch, tmp_path, kind="run_python")
+    assert "apptainer exec " in body, body
+    assert "/cluster/aba/aba.sif" in body
+    assert "/opt/aba-venv/bin/python -u -m core.jobs.slurm_entry" in body, body
+    assert "--env PYTHONPATH=/opt/aba/backend" in body, body
+    assert f"--bind {tmp_path}" in body, body                 # run dir identity-bound
+    assert "APPTAINER_TMPDIR=" in body and "unset PYTHONHOME" in body, body
+    # the bare offload interpreter/backend must not appear
+    assert "/shared/base/bin/python -u -m" not in body, body
+    assert "export PYTHONPATH=/shared/backend" not in body, body
+
+
+def test_job_body_nv_only_for_gpu(monkeypatch, tmp_path):
+    """--nv is added to the wrapped exec only when the job requested a GPU. The
+    slurm_entry torch.cuda canary then guards a forgotten --nv (fails loud, not CPU)."""
+    monkeypatch.setenv("ABA_JOB_WRAP", "sif")
+    monkeypatch.setenv("ABA_SIF", "/s.sif")
+    assert "apptainer exec --nv " in _body(monkeypatch, tmp_path, gpu=True)
+    assert "--nv" not in _body(monkeypatch, tmp_path, gpu=False)
+
+
+def test_job_body_nextflow_never_wrapped(monkeypatch, tmp_path):
+    """nf-core is NEVER wrapped even under fat — the head needs nextflow (a module) +
+    its own per-task biocontainers, not our env. It falls through to the bare branch."""
+    monkeypatch.setenv("ABA_JOB_WRAP", "sif")
+    monkeypatch.setenv("ABA_SIF", "/s.sif")
+    body = _body(monkeypatch, tmp_path, kind="run_nextflow")
+    assert "apptainer exec" not in body, body
+    assert "/shared/base/bin/python -u -m core.jobs.slurm_entry" in body, body
+
+
+def test_job_body_bare_when_wrap_unset(monkeypatch, tmp_path):
+    """No ABA_JOB_WRAP (native / slim) → the bare path, unchanged: the offload
+    interpreter runs slurm_entry directly, no container."""
+    monkeypatch.delenv("ABA_JOB_WRAP", raising=False)
+    monkeypatch.setenv("ABA_SIF", "/s.sif")                   # present but ignored when not wrapping
+    body = _body(monkeypatch, tmp_path, kind="run_python")
+    assert "apptainer exec" not in body, body
+    assert "export PYTHONPATH=/shared/backend\n" in body, body
+    assert "/shared/base/bin/python -u -m core.jobs.slurm_entry" in body, body
+
+
+def test_nextflow_head_is_bare_bash(slurm, monkeypatch):
+    """A run_nextflow job submits a BARE bash head — `module load nextflow` +
+    `nextflow run …`, with NO python/backend/slurm_entry on the node — and stores
+    nf_harvest so poll() harvests the run dir server-side. Works fat AND slim; keeps
+    nf-core genuinely unwrapped/backend-independent (misc/fatagain.md)."""
+    import uuid
+    monkeypatch.setenv("ABA_NEXTFLOW_MODULE", "nextflow/24.04.4")
+    monkeypatch.setenv("ABA_NEXTFLOW_PROFILES", "cbe")
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    pid = projects.create_project("slurm-nf-head")["id"]
+    jid = f"job_{uuid.uuid4().hex[:10]}"
+    job = create_job(job_id=jid, kind="run_nextflow", title="t", focus_entity_id=None,
+                     params={"project_id": pid, "pipeline": "nf-core/demo",
+                             "revision": "1.0.2", "profile": "test", "timeout_s": 60},
+                     project_id=pid)
+    sub = SlurmSubmitter()
+    sub.submit(job)
+    jsh = (sub._run_dir(job) / "job.sh").read_text()
+    assert "module load nextflow/24.04.4" in jsh, jsh
+    assert "nextflow run nf-core/demo" in jsh and "test,cbe" in jsh, jsh
+    assert "slurm_entry" not in jsh and "aba-venv/bin/python" not in jsh, jsh
+    ctx = get_job(jid, project_id=pid)["params"].get("nf_harvest")
+    assert ctx and ctx["command"].startswith("nextflow run nf-core/demo"), ctx
+    assert ctx["profile"] == "test,cbe" and ctx["pipeline"] == "nf-core/demo", ctx
+
+
+def test_wrap_binds_module_dirs_present_only(monkeypatch, tmp_path):
+    """Cluster-module tool trees (ABA_MODULE_BINDS) are identity-bound INTO the wrap so
+    a module-resolved binary (gatk/samtools) resolves inside the SIF — but only paths
+    that exist (a stale entry is skipped, not bound)."""
+    modx = tmp_path / "software"
+    modx.mkdir()
+    monkeypatch.setenv("ABA_JOB_WRAP", "sif")
+    monkeypatch.setenv("ABA_SIF", "/s.sif")
+    monkeypatch.setenv("ABA_MODULE_BINDS", f"{modx} /no/such/module/tree")
+    body = _body(monkeypatch, tmp_path, kind="run_r")
+    assert f"--bind {modx}" in body, body
+    assert "/no/such/module/tree" not in body, body
