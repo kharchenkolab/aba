@@ -78,6 +78,24 @@ def test_fetch_pagoda3_dist_identical_across_playbooks():
     assert _fetch_pagoda3_cmd("install.yml") == _fetch_pagoda3_cmd("update.yml")
 
 
+def _step_cmds(playbook: str, step_id: str) -> str:
+    p = Path(__file__).resolve().parents[1] / "src/aba_installer" / playbook
+    step = next(s for s in load_playbook(p).steps if s.id == step_id)
+    return "\n".join(step.commands)
+
+
+def test_env_build_isolates_from_user_site():
+    """The conda env build (and its pip: section) MUST run with PYTHONNOUSERSITE=1
+    so a pip package already in the user's ~/.local can't shadow the env — else
+    micromamba's pip step skips it ("already satisfied"), env/bin/uvicorn is never
+    created, start-backend fails, and the installer loops rebuilding (regression
+    2026-07-10). Guard both the install (create) and update (env update) paths."""
+    create = _step_cmds("install.yml", "create-env")
+    assert "PYTHONNOUSERSITE=1" in create and 'micromamba" create' in create
+    refresh = _step_cmds("update.yml", "refresh-env")
+    assert "PYTHONNOUSERSITE=1" in refresh and 'micromamba" env update' in refresh
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on

@@ -106,7 +106,13 @@ steps:
       # nodes) but not on R450-R520 clusters. 11.8 keeps the widest driver floor and
       # avoids depending on minor-version compat. Set ABA_CUDA_VERSION=12 for the newer
       # runtime on a R525+ cluster; a future install-time probe will auto-pick.
-      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # PYTHONNOUSERSITE=1 + PIP_USER=0: run the env build (incl. its pip: section)
+      # BLIND to the user's ~/.local. Without it, a pip package already in ~/.local
+      # (e.g. a stray `pip install --user`, or a prior leaked ABA build) shadows the
+      # env: micromamba's pip step sees it "already satisfied" and skips installing
+      # it into the env, so env/bin/uvicorn is never created, start-backend fails,
+      # and the installer loops rebuilding forever. Keep in lock-step with update.yml.
+      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; PYTHONNOUSERSITE=1 PIP_USER=0 "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
     timeout_seconds: 1200
     remediation: |
       The conda solve/build failed — usually a network/channel hiccup or low
