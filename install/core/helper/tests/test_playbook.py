@@ -101,7 +101,7 @@ def test_fetch_pagoda3_dist_is_version_aware():
     # on "index.html present"), with an atomic swap that keeps the old dist on
     # failure. If the pin bumps, update BOTH the URL and this assertion together.
     cmd = _fetch_pagoda3_cmd("update.yml")
-    assert "pagoda3-viewer-0.2.0.zip" in cmd and "download/v0.2.0/" in cmd
+    assert "pagoda3-viewer-0.2.1.zip" in cmd and "download/v0.2.1/" in cmd
     assert ".aba-dist-url" in cmd                 # version marker gates the skip
     assert '"$(cat "$MARK" 2>/dev/null)" = "$URL"' in cmd
     assert "0.1." not in cmd                       # no stale 0.1.x pin left behind
