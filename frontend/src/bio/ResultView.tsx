@@ -93,6 +93,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }) {
   const members = (result.metadata?.members as ResultMember[]) ?? []
   const interpretation = (result.metadata?.interpretation as string) ?? ''
+  const interpOrigin = (result.metadata?.interpretation_origin as string) ?? ''
+  const titleOrigin = (result.metadata?.title_origin as string) ?? ''
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
@@ -372,7 +374,14 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
                onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
                onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
       ) : (
-        <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
+        <div className="rv__title-row">
+          <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
+          {titleOrigin === 'ai' && (
+            <span className="rv__ai-tag" title="Title suggested by Guide — edit to make it yours">
+              <AgentGlyph agent="guide" size={13} />
+            </span>
+          )}
+        </div>
       )}
 
       <div className="rv__members" ref={membersRef}>
@@ -397,18 +406,25 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
       </div>
 
       {/* Result-level synthesis across panels. Auto-generated at pin time (when
-          the agent's context is richest) and via the green-star Guide button
-          (generate / re-generate). The figure caption lives on the MEMBER; this
-          is the cross-panel take-home. */}
+          the agent's context is richest) and via the Guide button below
+          (generate / re-generate). AI-authored text carries the green Guide
+          glyph, which clears on the first user edit. The figure caption lives on
+          the MEMBER; this is the cross-panel take-home. */}
       {(reading.trim() || synthesisOpen || synthGen) ? (
-        <div className="rv__reading-row">
-          <textarea ref={readingRef} className="rv__reading" value={reading} disabled={synthGen}
-                    placeholder={synthGen ? 'Generating synthesis…' : 'Synthesis across panels (optional)…'}
-                    onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
-          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}
-                  title={reading.trim() ? 'Re-generate synthesis with Guide' : 'Generate synthesis with Guide'}>
-            <span className="rv__synth-star" aria-hidden>★</span>
-            {synthGen ? 'Generating…' : reading.trim() ? 'Re-generate' : 'Generate'}
+        <div className="rv__synth">
+          <div className="rv__synth-field">
+            <textarea ref={readingRef} className="rv__reading" value={reading} disabled={synthGen}
+                      placeholder={synthGen ? 'Generating synthesis…' : 'Synthesis across panels (optional)…'}
+                      onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+            {interpOrigin === 'ai' && !synthGen && reading.trim() && (
+              <span className="rv__ai-tag rv__ai-tag--field" title="Synthesis suggested by Guide — edit to make it yours">
+                <AgentGlyph agent="guide" size={13} />
+              </span>
+            )}
+          </div>
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}>
+            <AgentGlyph agent="guide" size={13} />
+            {synthGen ? 'Generating synthesis…' : reading.trim() ? 'Re-generate synthesis' : 'Generate synthesis'}
           </button>
         </div>
       ) : (
@@ -416,9 +432,9 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
           <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
             + Add a synthesis across panels (optional)
           </button>
-          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}
-                  title="Generate synthesis with Guide">
-            <span className="rv__synth-star" aria-hidden>★</span>{synthGen ? 'Generating…' : 'Generate'}
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}>
+            <AgentGlyph agent="guide" size={13} />
+            {synthGen ? 'Generating synthesis…' : 'Generate synthesis'}
           </button>
         </div>
       )}

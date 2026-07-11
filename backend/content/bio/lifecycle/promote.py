@@ -686,12 +686,16 @@ def auto_interpret(result_id: str) -> Optional[str]:
     # the Result (and the user hasn't already edited the title — i.e. the
     # Result isn't `invested`), update the title too. Skips when LLM didn't
     # supply a title (text-pluck fallback path) or the user has edited.
-    cur_md = cur.get("metadata") or {}
-    if new_title and not cur_md.get("invested"):
-        # update_entity with title — but we must NOT trip the
-        # entity-PATCH "invested" flip (auto_interpret is NOT a user
-        # action). Update title via the raw helper so invested stays False.
-        update_entity(result_id, title=new_title)
+    # Re-fetch: update_result_member just rewrote metadata.members, so the
+    # `cur` snapshot is stale — merge onto the CURRENT metadata, not `cur`.
+    fresh_md = (get_entity(result_id) or {}).get("metadata") or {}
+    if new_title and not fresh_md.get("invested"):
+        # update_entity with title — but we must NOT trip the entity-PATCH
+        # "invested" flip (auto_interpret is NOT a user action). Update via the
+        # raw helper so invested stays False. Stamp title_origin='ai' so the UI
+        # shows the green Guide glyph next to an auto-named title.
+        update_entity(result_id, title=new_title,
+                      metadata={**fresh_md, "title_origin": "ai"})
     # Push an out-of-band notification so the frontend refreshes
     # without polling. Best-effort — never breaks the daemon if the
     # event channel is unavailable.

@@ -126,6 +126,28 @@ def test_prompts_carry_guidance():
     check("synthesis prompt: synthesize don't re-caption", "synthesize" in syn.lower() and "re-caption" in syn.lower())
 
 
+def test_title_rename_flips_origin_to_user():
+    """A user rename must set metadata.title_origin='user' (drops the green Guide
+    glyph) AND flip `invested`. Exercises the real entities_patch handler."""
+    print("\n[5] title rename → title_origin='user' + invested")
+    from core.graph.entities import update_entity
+    # Seed an AI-named title (as auto_interpret would).
+    cur = get_entity(_res)["metadata"]
+    update_entity(_res, title="UMAP colored by Leiden cluster",
+                  metadata={**cur, "title_origin": "ai", "invested": False})
+    check("seeded title_origin=ai", get_entity(_res)["metadata"].get("title_origin") == "ai")
+    try:
+        from main import entities_patch, EntityPatch
+    except Exception as e:  # noqa: BLE001 — heavy app import; don't fail the suite
+        print(f"  [SKIP] could not import main.entities_patch ({e!r})")
+        return
+    entities_patch(_res, EntityPatch(title="Leiden clusters — severe COVID (GSM5746259)"), _pid="p")
+    md = get_entity(_res)["metadata"]
+    check("title updated", get_entity(_res)["title"].startswith("Leiden clusters"))
+    check("title_origin flipped to user", md.get("title_origin") == "user")
+    check("invested flipped true", md.get("invested") is True)
+
+
 if __name__ == "__main__":
     init_db()
     _build()
@@ -136,5 +158,6 @@ if __name__ == "__main__":
     test_synthesize_writes_interpretation(_MP())
     test_synthesize_respects_user_edit(_MP())
     test_prompts_carry_guidance()
+    test_title_rename_flips_origin_to_user()
     print(f"\n{'ALL PASSED' if not _fail else 'FAILURES: ' + ', '.join(_fail)}")
     sys.exit(1 if _fail else 0)

@@ -221,38 +221,41 @@
   border-color: var(--accent);
 }
 
-.rv__reading-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 10px;
-}
-.rv__reading-row .rv__reading {
-  flex: 1;
+/* Synthesis across panels — the field, its AI marker, and the Guide button
+   stacked below it (not inline), so a small field isn't crowded. */
+.rv__synth { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.rv__synth-field { position: relative; }
+.rv__synth-field .rv__reading {
   min-height: 30px;   /* baseline for empty placeholder; auto-resize grows beyond */
 }
 .rv__reading:disabled { opacity: 0.7; }
 
-/* Synthesis — Guide green-star generate / re-generate button. */
-.rv__synth-empty { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.rv__synth-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 10px; }
+/* Guide generate / re-generate button — quiet, sits below the field. */
 .rv__synth-gen {
   align-self: flex-start; flex: none;
   display: inline-flex; align-items: center; gap: 5px;
   background: none; border: 1px solid var(--border); border-radius: 8px;
-  padding: 5px 10px; font: inherit; font-size: 12px; color: var(--text-3);
+  padding: 4px 10px; font: inherit; font-size: 12px; color: var(--text-3);
   cursor: pointer; white-space: nowrap;
 }
-.rv__synth-gen:hover:not(:disabled) { border-color: #16a34a; color: #15803d; background: #f0fdf4; }
-.rv__synth-gen:disabled { opacity: 0.75; cursor: default; }
-.rv__synth-star { color: #16a34a; font-size: 13px; line-height: 1; }
+.rv__synth-gen:hover:not(:disabled) { border-color: var(--guide); color: var(--guide); background: rgba(18, 161, 80, 0.07); }
+.rv__synth-gen:disabled { opacity: 0.7; cursor: default; }
+.rv__synth-gen svg { color: var(--guide); }
+
+/* Title, with the green Guide glyph when the title was auto-named. */
+.rv__title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rv__title-row .rv__title { min-width: 0; }
+
+/* AI-authored marker — the green Guide glyph. Inline next to a title; absolute
+   top-right over the synthesis field (like a panel caption's tag). Clears on
+   the first user edit (origin flips to 'user' server-side). */
 .rv__ai-tag {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: #dbeafe;
-  color: #1e40af;
-  white-space: nowrap;
-  margin-top: 4px;
-  cursor: help;
+  display: inline-flex; align-items: center;
+  color: var(--guide, var(--accent)); opacity: 0.6;
+  cursor: help; user-select: none; flex: none;
+}
+.rv__ai-tag--field {
+  position: absolute; top: 5px; right: 7px;
+  opacity: 0.5; pointer-events: none; cursor: default;
 }
