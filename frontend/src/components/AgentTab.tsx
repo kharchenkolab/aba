@@ -93,6 +93,7 @@ function subLabel(p: Provider) {
 
 export default function AgentTab() {
   const [llm, setLlm] = useState<LlmState | null>(null)
+  const [llmLoaded, setLlmLoaded] = useState(false)   // fetch resolved (llm may be null: no project yet)
   const [provider, setProvider] = useState<Provider>('anthropic')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -161,12 +162,14 @@ export default function AgentTab() {
     ;(async () => {
       const l = await fetch('/api/settings/llm').then(r => (r.ok ? r.json() : null)).catch(() => null)
       if (cancelled) return
-      if (!l) { setErr('Could not load model settings.'); return }
-      setLlm(l)
-      const p: Provider = (l.current?.provider as Provider) || 'anthropic'
+      setLlm(l); setLlmLoaded(true)
+      // Provider/credential is GLOBAL, not project-scoped. `/api/settings/llm` needs an
+      // open project (412 → null on a fresh install with none) — but we must still load
+      // the credential so the first-run "connect a provider" flow works with no project.
+      const p: Provider = (l?.current?.provider as Provider) || 'anthropic'
       setProvider(p)
       loadCred(p)
-      pingModel(l.current?.model)
+      if (l?.current?.model) pingModel(l.current.model)
     })()
     return () => { cancelled = true }
   }, [loadCred, pingModel])
@@ -313,8 +316,10 @@ export default function AgentTab() {
           The model this project's assistant uses — effective on your next message.
         </p>
         {err && <div className="settings__error">{err}</div>}
-        {!llm ? (
+        {!llmLoaded ? (
           <div className="settings__empty">Loading…</div>
+        ) : !llm ? (
+          <div className="settings__empty">Open or create a project to choose its model — you can connect a provider below first.</div>
         ) : (
           <>
             <select className="settings-select" aria-label="Model" disabled={saving}
