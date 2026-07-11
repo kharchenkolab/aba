@@ -795,7 +795,10 @@ export default function App() {
       loading={chatLoading}
       streamMsg={streamMsg}
       onSend={(text: string, attachments?: Attachment[]) =>
-        streaming ? enqueue(text, attachments) : sendMessage(text, null, attachments)}
+        // Pass `undefined` (not null) for the annotation: null would OVERRIDE the
+        // sticky highlight (annotationRef) and drop it, so a circled region never
+        // reached the agent (regression from the attachments commit de0ff3c6).
+        streaming ? enqueue(text, attachments) : sendMessage(text, undefined, attachments)}
       onOpenData={() => openProjectSection('data')}
       focusedEntity={focused}
       annotation={annotation}

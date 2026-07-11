@@ -496,6 +496,9 @@ export function useChat(
       // Sticky: the marked region stays attached across follow-up messages
       // so the agent retains it; the user clears it explicitly via the chip.
       // An explicit per-call annotation (e.g. "chat about this plot") wins.
+      // SHARP EDGE: pass `undefined` to keep the sticky highlight; passing `null`
+      // explicitly CLEARS it (the composer once passed null → highlights never
+      // reached the agent, see App.tsx onSend).
       const annot = opts.annotation !== undefined ? opts.annotation : annotationRef.current
 
       try {
