@@ -97,6 +97,15 @@ async def on_startup():
     def _provision_r_base_bg():
         import time as _t
         try:
+            # Staged prewarm (lazy_env_init.md): while the base is still being built
+            # (boot|completing), the INSTALLER owns the R build (complete-r-env) —
+            # defer here so two micromamba solves don't race the same tools env. On
+            # the next boot (base ready) this runs and finds R already built (no-op).
+            from core.exec.env_integrity import base_stage
+            if base_stage() != "ready":
+                print("[r_base] base still staging — R build deferred to the installer "
+                      "(complete-r-env); will verify on next boot", flush=True)
+                return
             from content.bio.capabilities import provision_r_base
             t0 = _t.perf_counter()
             provision_r_base()

@@ -397,3 +397,10 @@ def test_staging_import_note_paths(monkeypatch):
     note = _ei_lazy.staging_import_note(trace, wait_s=0)
     assert note is not None and note["ready"] is False and note["module"] == "scanpy"
     assert "finishing setup" in note["note"]
+
+
+def test_lifespan_defers_r_provision_while_staging():
+    """The backend's startup R provisioning must defer while the base is staging,
+    so it can't race the installer's complete-r-env on the same tools env."""
+    lifespan = (ROOT / "backend" / "lifespan.py").read_text()
+    assert "base_stage()" in lifespan and '!= "ready"' in lifespan

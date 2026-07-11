@@ -150,6 +150,19 @@ def test_refresh_env_stamps_stage_ready():
     assert ".aba-base-stage" in refresh and "printf ready" in refresh
 
 
+def test_staged_stages_full_r_env_after_start():
+    """Staged must STAGE the full R env (not leave it on-demand): a complete-r-env
+    step builds r-environment.yml + the lstar .rds bridge AFTER start-backend (the
+    eager R steps skip pre-start)."""
+    from aba_installer.playbook import load_playbook
+    pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
+    ids = [s.id for s in pb.steps]
+    assert ids.index("complete-r-env") > ids.index("start-backend")
+    comp = _step_cmds("install.yml", "complete-r-env")
+    assert "r-environment.yml" in comp and "install-lstar-r.sh" in comp
+    assert "!= staged" in comp   # eager → no-op (R built before start)
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on

@@ -191,7 +191,7 @@ steps:
       # Staged prewarm DEFERS the eager R build: the backend background-provisions the
       # R tools env at server start (lifespan._provision_r_base_bg), in parallel with
       # the Python completion. Eager builds it here up front (unchanged).
-      - 'if [ "${ABA_ENV_PREWARM:-eager}" = staged ]; then echo "staged: R tools env deferred to background provisioning at server start"; else TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi; fi'
+      - 'if [ "${ABA_ENV_PREWARM:-eager}" = staged ]; then echo "staged: R tools env deferred to complete-r-env (after server start)"; else TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi; fi'
     timeout_seconds: 1800
     remediation: |
       The R toolchain build failed — this is NON-FATAL: ABA still runs and the
@@ -217,7 +217,7 @@ steps:
       # predates the helper just skips (the step stays non-fatal either way).
       # Staged prewarm defers this with the R env (installed on demand at first .rds
       # view). Eager installs it up front (unchanged).
-      - 'if [ "${ABA_ENV_PREWARM:-eager}" = staged ]; then echo "staged: lstar R viewer bridge deferred (installed on demand with the R env)"; else H="$REPO_DIR/aba/install/core/install-lstar-r.sh"; if [ -f "$H" ]; then bash "$H" "${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools" "$ABA_HOME/bin/micromamba"; else echo "no install-lstar-r.sh (stale checkout) — skipping lstar R"; fi; fi'
+      - 'if [ "${ABA_ENV_PREWARM:-eager}" = staged ]; then echo "staged: lstar R viewer bridge deferred to complete-r-env (after server start)"; else H="$REPO_DIR/aba/install/core/install-lstar-r.sh"; if [ -f "$H" ]; then bash "$H" "${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools" "$ABA_HOME/bin/micromamba"; else echo "no install-lstar-r.sh (stale checkout) — skipping lstar R"; fi; fi'
     timeout_seconds: 900
     remediation: |
       lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
@@ -332,3 +332,22 @@ steps:
       stage marker stays `completing`; re-run `aba update` (or the installer) to
       resume — it is idempotent (already-installed packages are skipped). Check
       ~10 GB free and that conda-forge/bioconda are reachable.
+
+  - id: complete-r-env
+    title: Finish the R toolchain
+    why: |
+      STAGED prewarm only. Build the full R tools env (r-environment.yml: r-base +
+      Seurat/Bioconductor) + the lstar R `.rds` viewer bridge AFTER the server is up
+      — the SAME env eager installs build before start, deferred here so it doesn't
+      block first boot (runs after the Python completion while the server serves).
+      The backend's own R provisioning (lifespan._provision_r_base_bg) defers while
+      the base is staging, so it can't race this. The R Jupyter kernel is installed
+      on demand by the kernel layer regardless. NON-FATAL: on failure the backend
+      provisions R on demand the first time it's needed.
+    commands:
+      - 'if [ "${ABA_ENV_PREWARM:-eager}" != staged ]; then echo "eager: R env built before start — skipping"; exit 0; fi; TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi; H="$REPO_DIR/aba/install/core/install-lstar-r.sh"; if [ -f "$H" ]; then bash "$H" "$TOOLS_ENV" "$ABA_HOME/bin/micromamba" || echo "WARNING: lstar R viewer bridge install failed (.rds viewing degraded; .h5ad/.lstar.zarr unaffected)"; else echo "no install-lstar-r.sh — skipping lstar R"; fi'
+    timeout_seconds: 1800
+    remediation: |
+      Building the R toolchain failed — NON-FATAL: Python works and the backend
+      provisions R on demand the first time it's needed. Ensure conda-forge/bioconda
+      are reachable and ~5 GB is free, then re-run `aba update`.
