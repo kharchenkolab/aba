@@ -41,8 +41,9 @@ dependencies:
   - nbformat
   - nbconvert
 
-  # ── backend runtime + viewer data layer — IDENTICAL to environment.yml's
-  #    pip: section (every entry is boot-tier). Keep in lock-step. ─────────
+  # ── backend runtime — IDENTICAL to environment.yml's pip: section (every entry
+  #    is platform-CORE). Keep in lock-step. The pagoda3 reader (lstar-sc/zarr) is
+  #    NOT here: it moved to the viewer-pagoda3 module (misc/modules.md Phase 6). ──
   - pip:
       - fastapi
       - uvicorn[standard]
@@ -55,5 +56,3 @@ dependencies:
       - python-dotenv
       - pypdfium2
       - pillow
-      - lstar-sc==0.2.1
-      - zarr>=3.1

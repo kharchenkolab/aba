@@ -55,9 +55,11 @@ def test_disable_remove_nonremovable_400():
 
 
 def test_disable_remove_deletes_artifacts(monkeypatch, tmp_path):
-    # lay down a fake pagoda3 dist, then remove it
+    # lay down a fake pagoda3 dist + reader, then remove it
+    monkeypatch.setattr(mgr, "_base_env", lambda: tmp_path / "env")
     dist = tmp_path / "vendor" / "pagoda3" / "dist"
     dist.mkdir(parents=True); (dist / "index.html").write_text("<html>")
+    (tmp_path / "env" / "lib" / "python3.12" / "site-packages" / "lstar").mkdir(parents=True)
     assert mgr.probe_ready(mgr.registry.get("viewer-pagoda3")) is True
     api.disable_module("viewer-pagoda3", remove=True)
     assert not dist.exists()

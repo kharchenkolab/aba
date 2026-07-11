@@ -26,8 +26,22 @@ def _tools_env() -> Path:
     return _runtime_dir() / "envs" / "tools"
 
 
+def _base_env() -> Path:
+    try:
+        from core.exec.env_integrity import _base_prefix
+        return _base_prefix()
+    except Exception:  # noqa: BLE001
+        return Path(os.environ.get("ENV_DIR", str(_aba_home() / "env")))
+
+
 def _pagoda3_dist() -> Path:
     return _aba_home() / "vendor" / "pagoda3" / "dist" / "index.html"
+
+
+def _lstar_reader_present() -> bool:
+    """Is the pagoda3 Python reader (lstar-sc → import name `lstar`) installed in the
+    base env? Cheap site-packages check, no import/subprocess."""
+    return bool(list((_base_env() / "lib").glob("python*/site-packages/lstar")))
 
 
 def probe_ready(spec: ModuleSpec) -> bool:
@@ -41,7 +55,7 @@ def probe_ready(spec: ModuleSpec) -> bool:
             t = _tools_env()
             return (t / "bin" / "Rscript").exists() and (t / "lib" / "R" / "library" / "Seurat").is_dir()
         if spec.id == "viewer-pagoda3":
-            return _pagoda3_dist().exists()
+            return _pagoda3_dist().exists() and _lstar_reader_present()
     except Exception:  # noqa: BLE001 — a probe must never raise into a request
         return False
     return False

@@ -89,13 +89,18 @@ def test_probe_python_bio_tracks_base_stage(monkeypatch, tmp_path):
     assert mgr.probe_ready(reg.get("python-bio")) is True
 
 
-def test_probe_pagoda3_tracks_dist(monkeypatch, tmp_path):
+def test_probe_pagoda3_needs_dist_and_reader(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    monkeypatch.setattr(mgr, "_base_env", lambda: tmp_path / "env")
     v = reg.get("viewer-pagoda3")
     assert mgr.probe_ready(v) is False
-    dist = tmp_path / "vendor" / "pagoda3" / "dist"
-    dist.mkdir(parents=True)
+    # dist present but reader missing → still not ready (Phase 6: reader is a module dep)
+    dist = tmp_path / "vendor" / "pagoda3" / "dist"; dist.mkdir(parents=True)
     (dist / "index.html").write_text("<html>")
+    assert mgr.probe_ready(v) is False
+    # add the lstar reader in the base env → ready
+    sp = tmp_path / "env" / "lib" / "python3.12" / "site-packages" / "lstar"
+    sp.mkdir(parents=True)
     assert mgr.probe_ready(v) is True
 
 

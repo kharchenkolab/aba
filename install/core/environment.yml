@@ -87,14 +87,6 @@ dependencies:
       - pypdfium2
       - pillow
 
-      # ── viewer data layer ──────────────────────────────────────────────
-      # lstar-sc: L* single-cell interchange behind the pagoda3 viewer (import
-      # name `lstar`; the bare `lstar` on PyPI is unrelated). The .rds R-bridge
-      # setup lives in the pagoda3 viewer launcher (backend/content/bio/viewers).
-      - lstar-sc==0.2.1     # EXACT pin — lstar moves fast + isn't in a stable channel;
-                            #   deploy reproducibility beats floating. Co-versioned with the
-                            #   lstar R package at git tag v0.2.1 (same repo) and pagoda3 v0.2.1
-                            #   (0.2.0 switched the on-disk store to zarr v3; 0.2.1 fixes the
-                            #   viewer's resizable-heap TextDecoder crash on Chrome 150+).
-                            #   Bump this + the R/pagoda3 pins together as a validated set.
-      - zarr>=3.1            # lstar uses the zarr-python 3 library
+      # NOTE: the pagoda3 viewer's Python reader (lstar-sc / zarr) is NOT in the core
+      # base anymore — it moved to the viewer-pagoda3 MODULE (misc/modules.md Phase 6),
+      # installed on first use / manual enable via install/core/modules/install-viewer-pagoda3.sh.
