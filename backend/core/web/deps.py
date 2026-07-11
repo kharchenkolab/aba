@@ -70,6 +70,30 @@ def require_project(
     return pid
 
 
+def optional_project(
+    project_id: str | None = Query(default=None),
+    x_project_id: str | None = Header(default=None, alias="X-Project-Id"),
+) -> str | None:
+    """Like require_project, but TOLERANT: returns the pinned pid, or None when there's
+    no project context (instead of 412). For install-wide settings that are meaningful
+    with no project open (e.g. the default model). Pins the pid when given and sets the
+    human actor, same as require_project."""
+    pid = project_id or x_project_id
+    if pid:
+        if _projects.current() != pid:
+            _projects.set_current(pid)
+        resolved: str | None = pid
+    else:
+        resolved = _projects.current()   # may be None on a fresh install
+    try:
+        from core.runtime.actor import set_actor
+        from core.graph.derivation import human_actor
+        set_actor(human_actor())
+    except Exception:  # noqa: BLE001 — actor attribution must never break a request
+        pass
+    return resolved
+
+
 def require_project_context(project_id: str | None) -> str:
     """Pin the project per-request for handlers that take project_id in the REQUEST
     BODY (chat/resume) — the ASGI middleware can't safely parse the body. For
@@ -81,4 +105,4 @@ def require_project_context(project_id: str | None) -> str:
     return _pin_or_412(project_id)
 
 
-__all__ = ["require_project", "require_project_context", "_pin_or_412"]
+__all__ = ["require_project", "optional_project", "require_project_context", "_pin_or_412"]

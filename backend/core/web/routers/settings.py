@@ -1,16 +1,16 @@
 """Settings routes — model/spec selection, LLM credential, analysis-environment
 gate. Extracted from main.py (Item 2A.3). Domain-neutral (core.* only).
 
-Pinning: the per-project LLM model routes pin via Depends(require_project); the
-credential + environment routes are server/user-scoped (exempt in the pin gate),
-matching their prior main.py behavior.
+Pinning: the LLM model routes pin via Depends(optional_project) — project-scoped when
+a project is open, install-wide (ABA_MODEL) when none. The credential + environment
+routes are server/user-scoped (exempt in the pin gate), matching prior main.py behavior.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core.web.deps import require_project
+from core.web.deps import optional_project
 
 router = APIRouter()
 
@@ -44,36 +44,40 @@ class LlmSelectRequest(BaseModel):
     model: str
 
 
-def _llm_current(pid: str) -> dict:
+def _llm_current(pid: str | None) -> dict:
     from core.llm_catalog import spec_for_model, label_for_model, provider_for_model
     from core.config import current_model_for_project
     from core import projects
     m = current_model_for_project(pid)
     return {"model": m, "spec": spec_for_model(m), "label": label_for_model(m),
             "provider": provider_for_model(m),
-            "pinned": bool(projects.project_model(pid))}
+            "pinned": bool(pid and projects.project_model(pid))}
 
 
 @router.get("/api/settings/llm")
-def settings_llm_get(_pid: str = Depends(require_project)):
-    """Model selector for the CURRENT project (Settings → LLM): the install-wide
-    catalog (model→spec, from system_bundle/settings.yaml) plus what's active now.
-    The user picks a model; the agent spec follows from the catalog."""
+def settings_llm_get(_pid: str | None = Depends(optional_project)):
+    """Model selector for Settings → Agent: the install-wide catalog (model→spec, from
+    system_bundle/settings.yaml) plus what's active now. Project-OPTIONAL — with a
+    project open, `current` is that project's model; with none (fresh install), it's the
+    install-wide default. The user picks a model; the agent spec follows from the catalog."""
     from core.llm_catalog import llm_models
     return {"options": llm_models(), "current": _llm_current(_pid)}
 
 
 @router.post("/api/settings/llm")
-def settings_llm_set(req: LlmSelectRequest, _pid: str = Depends(require_project)):
-    """Pin a model on the current project. Empty string clears the pin (revert to
-    the global/bundle default). Validated against the catalog; takes effect on the
-    next turn (resolution is live)."""
+def settings_llm_set(req: LlmSelectRequest, _pid: str | None = Depends(optional_project)):
+    """Select a model. With a project open → pin it on that project; with none → set the
+    INSTALL-WIDE default (ABA_MODEL in config.env), which new projects inherit. Empty
+    string clears the selection. Validated against the catalog; live on the next turn."""
     from core.llm_catalog import is_known_model
-    from core import projects
+    from core import projects, config
     model = (req.model or "").strip()
     if model and not is_known_model(model):
         raise HTTPException(400, f"unknown model: {model!r}")
-    projects.set_project_model(_pid, model)
+    if _pid:
+        projects.set_project_model(_pid, model)   # per-project pin
+    else:
+        config.set_default_model(model)           # install-wide default (no project)
     return {"ok": True, "current": _llm_current(_pid)}
 
 
@@ -82,11 +86,12 @@ class LlmPingRequest(BaseModel):
 
 
 @router.post("/api/settings/llm/ping")
-def settings_llm_ping(req: LlmPingRequest, _pid: str = Depends(require_project)):
+def settings_llm_ping(req: LlmPingRequest, _pid: str | None = Depends(optional_project)):
     """Background model check for Settings → Agent: a cheap call confirming the current
-    credential can actually run `model` (defaults to the project's model). Returns
-    {ok, detail?} so the UI can show ✓ Ready / ✗ reason at select time instead of
-    failing on the first real message. Sync → FastAPI runs it off the event loop."""
+    credential can actually run `model` (defaults to the project's model, or the
+    install-wide default when no project). Returns {ok, detail?} so the UI can show
+    ✓ Ready / ✗ reason at select time instead of failing on the first real message.
+    Sync → FastAPI runs it off the event loop."""
     from core.model_ping import ping_model
     from core.config import current_model_for_project
     model = (req.model or "").strip() or current_model_for_project(_pid)

@@ -313,7 +313,8 @@ export default function AgentTab() {
           {saved && <span className="agent-saved" role="status">Saved ✓</span>}
         </div>
         <p className="settings__hint">
-          The model this project's assistant uses — effective on your next message.
+          The default model Guide uses — effective on your next message. Open a project
+          to override it there.
         </p>
         {err && <div className="settings__error">{err}</div>}
         {!llmLoaded ? (

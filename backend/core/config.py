@@ -235,6 +235,34 @@ def set_user_pref(key: str, value) -> None:
     p.write_text(json.dumps(d, indent=2))
 
 
+def set_default_model(model: str) -> None:
+    """Persist the INSTALL-WIDE default model (ABA_MODEL) to $ABA_HOME/config.env and
+    apply it live in-process. Empty string clears the override (revert to the bundle
+    default). This is the no-project counterpart to a per-project pin — it's what the
+    Settings → Model picker writes when no project is open. Other config.env lines
+    (ABA_ENV_PREWARM, ABA_REF, …) are preserved."""
+    import re as _re
+    import shlex
+    model = (model or "").strip()
+    # Live in-process first, so the change takes effect on the next turn without a restart.
+    if model:
+        os.environ["ABA_MODEL"] = model
+    else:
+        os.environ.pop("ABA_MODEL", None)
+    home = Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    cfg = home / "config.env"
+    try:
+        lines = cfg.read_text(errors="replace").splitlines() if cfg.exists() else []
+    except Exception:  # noqa: BLE001
+        lines = []
+    pat = _re.compile(r"^\s*(?:export\s+)?ABA_MODEL\s*=")
+    lines = [ln for ln in lines if not pat.match(ln)]
+    if model:
+        lines.append(f"ABA_MODEL={shlex.quote(model)}")
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
 def _read_aba_model_from_config_env() -> str:
     """Parse ~/.aba/config.env for ABA_MODEL. Returns '' on any failure.
     Standalone (no aba_installer dep) so the backend can read it without
