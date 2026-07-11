@@ -100,6 +100,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const [title, setTitle] = useState(result.title)
   const [reading, setReading] = useState(interpretation)
   const [synthesisOpen, setSynthesisOpen] = useState(false)
+  const [synthGen, setSynthGen] = useState(false)          // synthesis being generated
+  const lastSyncedInterp = useRef(interpretation)
   const [picker, setPicker] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [focusMember, setFocusMember] = useState<string | null>(null)
@@ -128,7 +130,18 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
   useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setReading(interpretation); setTitle(result.title) }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setReading(interpretation); setTitle(result.title); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pick up a background-generated synthesis (auto at pin, or the Guide button via
+  // the entity_updated broadcast) WITHOUT clobbering an in-flight user edit — mirrors
+  // the caption sync in MemberPanel.
+  useEffect(() => {
+    setReading(prev => {
+      if (prev === lastSyncedInterp.current) { lastSyncedInterp.current = interpretation; return interpretation }
+      if (prev === interpretation) { lastSyncedInterp.current = interpretation; return prev }
+      return prev   // user has an unsaved edit → keep it
+    })
+  }, [interpretation])
 
   // Auto-resize the Result-level synthesis textarea (rarely used, but if
   // the user writes one we let it grow with the content like the figure
@@ -268,6 +281,19 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     if (reading !== interpretation)
       api(`/api/entities/${rid}`, 'PATCH', { interpretation: reading, interpretation_origin: 'user' })
   }
+  // Green-star Guide button: generate (or re-generate) the synthesis across panels.
+  // Async — the field shows a "generating…" status while it runs.
+  const generateSynthesis = async () => {
+    if (synthGen) return
+    setSynthGen(true); setSynthesisOpen(true)
+    try {
+      const r = await fetch(`/api/results/${rid}/synthesize`, { method: 'POST' })
+      if (r.ok) {
+        const d = await r.json()
+        if (d.interpretation) { setReading(d.interpretation); lastSyncedInterp.current = d.interpretation }
+      }
+    } catch { /* leave the field as-is on failure */ } finally { setSynthGen(false) }
+  }
   const addFigure = (cellId: string) => { setPicker(false); api(`/api/results/${rid}/members`, 'POST', { kind: 'figure', ref: cellId }) }
   const addNote = async () => {
     const r = await fetch(`/api/results/${rid}/members`, {
@@ -370,21 +396,31 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         {members.length === 0 && <div className="rv__empty">Empty result — add a panel or a note below.</div>}
       </div>
 
-      {/* Result-level synthesis — OPTIONAL. The figure caption lives on the
-          MEMBER (under the image, where it belongs); this textarea is only
-          for an explicit cross-evidence synthesis the user writes (e.g.
-          "the QC + clustering together suggest…"). Quiet by default —
-          collapsed to a small "+ Add synthesis" affordance until used. */}
-      {(reading.trim() || synthesisOpen) ? (
+      {/* Result-level synthesis across panels. Auto-generated at pin time (when
+          the agent's context is richest) and via the green-star Guide button
+          (generate / re-generate). The figure caption lives on the MEMBER; this
+          is the cross-panel take-home. */}
+      {(reading.trim() || synthesisOpen || synthGen) ? (
         <div className="rv__reading-row">
-          <textarea ref={readingRef} className="rv__reading" value={reading}
-                    placeholder="Synthesis across panels (optional)…"
+          <textarea ref={readingRef} className="rv__reading" value={reading} disabled={synthGen}
+                    placeholder={synthGen ? 'Generating synthesis…' : 'Synthesis across panels (optional)…'}
                     onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}
+                  title={reading.trim() ? 'Re-generate synthesis with Guide' : 'Generate synthesis with Guide'}>
+            <span className="rv__synth-star" aria-hidden>★</span>
+            {synthGen ? 'Generating…' : reading.trim() ? 'Re-generate' : 'Generate'}
+          </button>
         </div>
       ) : (
-        <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
-          + Add a synthesis across panels (optional)
-        </button>
+        <div className="rv__synth-empty">
+          <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
+            + Add a synthesis across panels (optional)
+          </button>
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}
+                  title="Generate synthesis with Guide">
+            <span className="rv__synth-star" aria-hidden>★</span>{synthGen ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
       )}
 
       <div className="rv__add">

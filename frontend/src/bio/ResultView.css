@@ -231,6 +231,20 @@
   flex: 1;
   min-height: 30px;   /* baseline for empty placeholder; auto-resize grows beyond */
 }
+.rv__reading:disabled { opacity: 0.7; }
+
+/* Synthesis — Guide green-star generate / re-generate button. */
+.rv__synth-empty { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.rv__synth-gen {
+  align-self: flex-start; flex: none;
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 10px; font: inherit; font-size: 12px; color: var(--text-3);
+  cursor: pointer; white-space: nowrap;
+}
+.rv__synth-gen:hover:not(:disabled) { border-color: #16a34a; color: #15803d; background: #f0fdf4; }
+.rv__synth-gen:disabled { opacity: 0.75; cursor: default; }
+.rv__synth-star { color: #16a34a; font-size: 13px; line-height: 1; }
 .rv__ai-tag {
   font-size: 10px;
   font-weight: 600;
