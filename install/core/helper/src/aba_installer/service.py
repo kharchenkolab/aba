@@ -64,6 +64,8 @@ def main() -> int:
     The chosen port is persisted to installer_dir/port.txt so the LaunchAgent
     + bookmarks remain stable across restarts."""
     _configure_logging()
+    from aba_installer.control import load_config_env
+    load_config_env()   # deploy knobs (ABA_ENV_PREWARM, …) → os.environ for all handlers
     pf = port_file()
     port = pick_port(state_file=pf)
     _log.info("listening on http://127.0.0.1:%d (port file: %s)", port, pf)

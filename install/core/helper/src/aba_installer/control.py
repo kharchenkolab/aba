@@ -96,7 +96,19 @@ def prepare_install_artifacts() -> Path:
 # That's why there's no "Install ABA" button: by the time auth finishes, the
 # install is done (or nearly), and the backend just starts. Only start-backend
 # is credential-gated (it boots uvicorn with the key from config.env).
-_BG_SKIP = {"start-backend"}
+_BG_SKIP = {"start-backend"}   # eager default: the service starts the backend after auth
+
+
+def _bg_skip() -> set:
+    """Steps the background installer does NOT run. Eager: skip start-backend (the
+    service starts it AFTER auth, credential in hand — unchanged). Staged: run
+    start-backend at its playbook position so the server comes up CREDENTIAL-LESS
+    right after the boot env; the app (Settings → Agent) connects a provider later
+    (lazy_env_init.md). Reads ABA_ENV_PREWARM (loaded from config.env at startup)."""
+    prewarm = (os.environ.get("ABA_ENV_PREWARM") or "eager").strip().lower()
+    return set() if prewarm == "staged" else set(_BG_SKIP)
+
+
 _bg_lock = threading.Lock()
 # step_status: {step_id -> "active"|"ok"|"fail"} — survives the event-buffer
 # eviction so the UI's checklist doesn't lose its checkmarks when create-env's
@@ -242,7 +254,7 @@ def load_config_env() -> None:
 def _bg_worker() -> None:
     load_config_env()   # deploy knobs (ABA_ENV_PREWARM, …) → playbook env, LaunchAgent-safe
     pb = load_playbook(_playbook_path("install"))
-    steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
+    steps = [s.id for s in pb.steps if s.id not in _bg_skip()]
 
     def on_event(ev: str, payload: dict) -> None:
         with _bg_lock:
@@ -264,7 +276,7 @@ def _bg_worker() -> None:
         # first event so the UI's event-replay sees it; /api/install/auto also
         # exposes the same list as a top-level field for late subscribers.
         on_event("step_planned", {
-            "steps": _planned_steps(pb, kind="install", skip=_BG_SKIP)
+            "steps": _planned_steps(pb, kind="install", skip=_bg_skip())
         })
         _run_preflight_if_enabled(pb, on_event, kind="install")
         results = Executor(pb, on_event=on_event,
@@ -306,7 +318,7 @@ def install_auto_status() -> dict:
     # buffer evicting the step_planned frame on long installs.
     try:
         pb = load_playbook(_playbook_path("install"))
-        active = [s for s in pb.steps if s.id not in _BG_SKIP]
+        active = [s for s in pb.steps if s.id not in _bg_skip()]
         steps = [{"id": s.id, "title": s.title} for s in active]
     except Exception:  # noqa: BLE001
         steps = []

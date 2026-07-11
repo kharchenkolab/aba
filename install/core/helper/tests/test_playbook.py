@@ -180,6 +180,19 @@ def test_load_config_env_reaches_playbook_env(tmp_path, monkeypatch):
     assert os.environ["ABA_ACCELERATOR"] == "cuda"    # live export not clobbered
 
 
+def test_bg_skip_conditional_on_prewarm(monkeypatch):
+    """Service bg-install: eager skips start-backend (the service starts it after
+    auth); staged runs it in the bg worker so the server comes up credential-less
+    right after the boot env. Absent ⇒ eager (current behaviour)."""
+    from aba_installer import control
+    monkeypatch.setenv("ABA_ENV_PREWARM", "eager")
+    assert control._bg_skip() == {"start-backend"}
+    monkeypatch.setenv("ABA_ENV_PREWARM", "staged")
+    assert control._bg_skip() == set()
+    monkeypatch.delenv("ABA_ENV_PREWARM", raising=False)
+    assert control._bg_skip() == {"start-backend"}
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on
