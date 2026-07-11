@@ -1064,6 +1064,13 @@ def staging_import_note(stderr: str, *, wait_s: float = 30.0) -> Optional[dict]:
         progress.emit("finishing environment setup (installing the scientific stack)…", phase="conda")
     except Exception:  # noqa: BLE001
         pass
+    # Guarantee the python-bio completion is actually running (first-use safety net:
+    # if the boot-time reconciler didn't start for any reason, this kicks it).
+    try:
+        from core.modules.reconciler import ensure_module
+        ensure_module("python-bio")
+    except Exception:  # noqa: BLE001
+        pass
     deadline = time.monotonic() + max(0.0, wait_s)
     while time.monotonic() < deadline and base_stage() != "ready":
         time.sleep(2.0)

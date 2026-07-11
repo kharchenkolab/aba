@@ -222,6 +222,17 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # (convert / optimize / unpack) rather than a static spinner. Only fires when
     # ensure_derived actually (re)builds — a cached store returns instantly.
     set_phase = ctx.get("set_phase") or (lambda *_: None)
+    # First-use gating (misc/modules.md): the pagoda3 viewer is a module. If its dist
+    # isn't installed, kick off the install now and surface a friendly "installing"
+    # message instead of handing back a /pagoda3/ URL that would 404.
+    if not (pagoda3_dist_path() / "index.html").is_file():
+        try:
+            from core.modules.first_use import ensure_for_trigger
+            note = ensure_for_trigger("pagoda3")
+        except Exception:  # noqa: BLE001
+            note = None
+        raise RuntimeError((note or {}).get("note")
+                           or "The pagoda3 viewer isn't installed yet — enable it in Settings → Modules.")
     src = _resolve_source(node, pid)
     if not src.exists():
         raise FileNotFoundError(
