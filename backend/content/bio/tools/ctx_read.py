@@ -59,8 +59,27 @@ def get_provenance(input_: dict) -> dict:
     # A 2026-06-11 live-session bug had the agent unable to count past v3
     # in a 7-revision chain because depth-3 silently truncated the trace.
     depth = int(input_.get("max_depth") or 8)
-    return {"text": provenance_text(eid, max_depth=depth),
-            "graph": neighborhood(eid, max_depth=depth)["upstream"]}
+    out = {"text": provenance_text(eid, max_depth=depth),
+           "graph": neighborhood(eid, max_depth=depth)["upstream"]}
+    # Prov2 — also return the structured EVIDENCE (how it was produced): method,
+    # inputs, a compact environment, attribution. Lets the agent answer "how was
+    # this made?" without a second lookup. Full code stays out (large; the code
+    # tools fetch it) — we surface code_hash/lines/recipe/language instead.
+    try:
+        from core.graph.provenance_evidence import evidence
+        ev = evidence(eid) or {}
+        m = dict(ev.get("method") or {})
+        m.pop("code", None)                       # keep the payload lean
+        env = ev.get("environment") or {}
+        out["method"] = m
+        out["inputs"] = ev.get("inputs") or []
+        out["environment"] = {k: env[k] for k in
+                              ("language", "language_version", "package_count",
+                               "key_packages", "env_fingerprint", "drift") if k in env}
+        out["attribution"] = ev.get("attribution") or {}
+    except Exception:  # noqa: BLE001 — evidence is best-effort; never break the tool
+        pass
+    return out
 
 
 def get_dependents(input_: dict) -> dict:

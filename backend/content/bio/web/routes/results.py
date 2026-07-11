@@ -201,12 +201,17 @@ def entities_history(entity_id: str):
 
 @router.get("/api/entities/{entity_id}/provenance")
 def entities_provenance(entity_id: str):
-    """Upstream/downstream neighborhood for the canvas Provenance panel."""
+    """Full provenance-EVIDENCE for the card's Provenance section: method (code/
+    command/recipe), inputs (datasets + versions), environment (language + packages),
+    attribution (who/when), lineage (up/down with edge labels), reproducibility.
+    Assembled from derivation+actor + the exec record + the edge graph. Keeps the
+    flat `upstream`/`downstream`/`promotion` keys for back-compat."""
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    from core.graph.provenance import neighborhood, promotion_record
-    out = neighborhood(entity_id)
-    out["promotion"] = promotion_record(get_entity(entity_id))   # Phase 2E: who/when/from
+    from core.graph.provenance_evidence import evidence
+    out = evidence(entity_id)
+    if out is None:
+        raise HTTPException(404, f"Entity {entity_id} not found")
     return out
 
 
