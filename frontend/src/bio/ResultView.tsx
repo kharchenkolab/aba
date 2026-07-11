@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
 import { EntityGlyph, AgentGlyph } from '../components/icons'
 import RevisionStrip, { useFigureRevisions, type RevisionAction } from './RevisionStrip'
+import ProvenanceSection from '../components/ProvenanceSection'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
 import './ResultView.css'
@@ -808,6 +809,12 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </span>
         )}
       </div>
+      {/* Per-panel provenance — this panel's own "how it was made". A Result groups
+          independent panels, so provenance lives HERE, not rolled up at the Result
+          level. Expanding it never changes focus (only chip clicks navigate). */}
+      {cell && (member.kind === 'figure' || member.kind === 'table') && (
+        <ProvenanceSection entity={cell} onFocus={onFocus} label="Source" className="prov--panel" />
+      )}
       {renderHlSurface()}
       {removeDialogs}
     </div>

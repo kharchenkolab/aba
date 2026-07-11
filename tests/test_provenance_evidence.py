@@ -149,14 +149,20 @@ def test_evidence_figure():
     check("figure is revisable", ev["reproducibility"]["revisable"] is True)
 
 
-def test_evidence_result_resolves_through_edges():
-    print("\n[4] evidence(result) — resolved via includes edge")
+def test_evidence_result_is_curation_only():
+    print("\n[4] evidence(result) — curation + lineage, NOT a panel rollup")
     ev = evidence(_res)
-    check("method.code resolved from member figure", bool(ev["method"].get("code")))
-    check("inputs resolved (dataset)", _ds in {i["ref"] for i in ev["inputs"]})
+    # A Result groups independent panels — no rolled-up method/inputs.
+    check("no rolled-up method (curation only)", not ev["method"].get("code"), str(ev["method"]))
+    check("no rolled-up inputs", ev["inputs"] == [], str(ev["inputs"]))
+    check("attribution = who assembled it", bool(ev["attribution"].get("actor")))
     up_rels = {(n["type"], n["rel"]) for n in ev["lineage"]["upstream"]}
-    check("lineage upstream has figure(includes)", ("figure", "includes") in up_rels, str(up_rels))
+    check("lineage still shows the panel(includes)", ("figure", "includes") in up_rels, str(up_rels))
     check("result not revisable", ev["reproducibility"]["revisable"] is False)
+    # per-panel provenance stays intact when you query the panel entity itself
+    pev = evidence(_fig)
+    check("panel's OWN evidence has method + inputs",
+          bool(pev["method"].get("code")) and _ds in {i["ref"] for i in pev["inputs"]})
 
 
 def test_evidence_analysis_aggregates_run():
@@ -335,7 +341,7 @@ if __name__ == "__main__":
     test_detect_seed()
     test_resolve_inputs()
     test_evidence_figure()
-    test_evidence_result_resolves_through_edges()
+    test_evidence_result_is_curation_only()
     test_evidence_analysis_aggregates_run()
     test_cross_session_pin()
     test_env_drift()

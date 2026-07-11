@@ -69,6 +69,12 @@ def _producing_execs(entity: dict, *, limit: int = 12) -> list[dict]:
         _add(entity["exec_id"])
     if entity.get("type") == "analysis":
         _add_run(entity.get("id"))
+    # A Result is a CURATION of independent panels grouped by scientific meaning —
+    # they may share no sources. Rolling their provenance into one "how it was made"
+    # is misleading, so a Result's evidence is curation + lineage only; each panel
+    # carries (and surfaces) its own provenance via its own exec_id.
+    if entity.get("type") == "result":
+        return execs
     if not execs:
         for e in edges_from(entity.get("id")):
             if e.get("rel_type") not in _PRODUCER_EDGES:
