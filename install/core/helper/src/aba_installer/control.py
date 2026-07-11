@@ -215,7 +215,32 @@ def _planned_steps(pb, *, kind: str, skip: set | None = None) -> list[dict]:
     return steps
 
 
+def load_config_env() -> None:
+    """Merge $ABA_HOME/config.env into os.environ (setdefault — a live export still
+    wins) before a playbook runs, so deploy-profile knobs the installer persisted
+    there (ABA_ENV_PREWARM, ABA_ACCELERATOR, ABA_RUNTIME_DIR, …) reach the playbook
+    even when the helper runs via a **LaunchAgent**, which does NOT inherit the setup
+    script's shell exports. Without this, mac's `ABA_ENV_PREWARM=staged` never reached
+    create-env and the base built eager. Idempotent; missing/garbled file is a no-op."""
+    cfg = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba")) / "config.env"
+    try:
+        text = cfg.read_text()
+    except Exception:  # noqa: BLE001 — no config.env yet is fine
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip(); v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
 def _bg_worker() -> None:
+    load_config_env()   # deploy knobs (ABA_ENV_PREWARM, …) → playbook env, LaunchAgent-safe
     pb = load_playbook(_playbook_path("install"))
     steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
 

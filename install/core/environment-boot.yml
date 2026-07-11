@@ -48,6 +48,7 @@ dependencies:
       - uvicorn[standard]
       - python-multipart
       - anthropic
+      - openai
       - httpx[http2]
       - mcp
       - pydantic

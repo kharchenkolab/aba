@@ -163,6 +163,23 @@ def test_staged_stages_full_r_env_after_start():
     assert "!= staged" in comp   # eager → no-op (R built before start)
 
 
+def test_load_config_env_reaches_playbook_env(tmp_path, monkeypatch):
+    """Deploy knobs written to config.env (ABA_ENV_PREWARM, …) must reach the
+    playbook env even when the helper runs via a LaunchAgent (no shell exports) —
+    the mac staged bug. A live export still wins over config.env."""
+    import os
+    from aba_installer import control
+    (tmp_path / "config.env").write_text(
+        '# c\nABA_ENV_PREWARM=staged\nexport ABA_ACCELERATOR=cpu\nABA_RUNTIME_DIR="/s/x"\nJUNK\n')
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    monkeypatch.setenv("ABA_ACCELERATOR", "cuda")     # a live value must WIN
+    monkeypatch.delenv("ABA_ENV_PREWARM", raising=False)
+    control.load_config_env()
+    assert os.environ["ABA_ENV_PREWARM"] == "staged"  # reached the env (LaunchAgent-safe)
+    assert os.environ["ABA_RUNTIME_DIR"] == "/s/x"    # quotes stripped
+    assert os.environ["ABA_ACCELERATOR"] == "cuda"    # live export not clobbered
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on
