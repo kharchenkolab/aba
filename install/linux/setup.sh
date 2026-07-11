@@ -217,6 +217,21 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   fi
   write_cfg ABA_BATCH_SUBMITTER slurm
   echo "-- cluster-personal: ABA_BATCH_SUBMITTER=slurm, runtime=$RUNTIME_DIR --"
+  # Eager profile (misc/modules.md): the heavy modules are part of a shared install,
+  # not opt-in — mark them enabled so Settings → Modules reflects that (and they don't
+  # read as reclaimable). python-bio is on by default; r-bio + viewer-pagoda3 are seeded.
+  if [ ! -f "$ABA_HOME/modules.json" ]; then
+    cat > "$ABA_HOME/modules.json" <<'JSON'
+{
+  "modules": {
+    "python-bio": {"desired": "enabled"},
+    "r-bio": {"desired": "enabled"},
+    "viewer-pagoda3": {"desired": "enabled"}
+  }
+}
+JSON
+    echo "-- seeded modules.json (python-bio, r-bio, viewer-pagoda3 enabled) --"
+  fi
   # Deployment-conditional base (docs/arch/envs.md): pick the CUDA torch build iff GPU
   # compute exists (a gpu partition), unless the admin pinned ABA_ACCELERATOR. Persist to
   # config.env (runtime reads it for gpu_usable) + export so create-env's

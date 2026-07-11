@@ -104,6 +104,17 @@ def test_probe_pagoda3_needs_dist_and_reader(monkeypatch, tmp_path):
     assert mgr.probe_ready(v) is True
 
 
+def test_eager_seed_enables_all(monkeypatch, tmp_path):
+    """The eager-profile installer seeds modules.json enabling the heavy modules
+    (cluster-personal / OOD). All read as enabled; python-bio isn't 'reclaimable'."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    (tmp_path / "modules.json").write_text(
+        '{"modules": {"python-bio": {"desired": "enabled"},'
+        ' "r-bio": {"desired": "enabled"}, "viewer-pagoda3": {"desired": "enabled"}}}')
+    for m in reg.all_modules():
+        assert mgr.is_enabled(m) is True
+
+
 def test_module_view_shape(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     views = mgr.list_modules()
