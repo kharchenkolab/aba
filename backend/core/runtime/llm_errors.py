@@ -32,6 +32,16 @@ def is_transient(exc: Exception) -> bool:
 
 def friendly_error(exc: Exception) -> str:
     s = str(exc).lower()
+    # No provider connected at all → point at Settings, not a raw 401. The backend
+    # serves credential-less; chat is gated on connecting a provider (lazy_env_init.md).
+    try:
+        from core import credentials
+        if not credentials.any_configured()["configured"]:
+            return ("No model provider is connected yet — open Settings → Agent to connect "
+                    "Anthropic or OpenAI (an API key or a subscription). Data management, "
+                    "file browsing, and viewers work without a model.")
+    except Exception:  # noqa: BLE001
+        pass
     # OAuth token expired/missing — surfaces both our pre-flight refusal
     # (OAuthTokenUnavailable) and a stale-token 401 that slipped through.
     from core.llm import OAuthTokenUnavailable, _credential_mode

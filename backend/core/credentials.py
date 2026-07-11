@@ -147,6 +147,20 @@ def status(provider: str = "anthropic") -> dict:
     }
 
 
+def any_configured() -> dict:
+    """Is ANY model provider usable right now? Drives the app's first-run gate and
+    the credential-less-start flow (the backend serves without a credential; chat is
+    gated until this is True — lazy_env_init.md). Returns
+    {"configured": bool, "provider": <first valid provider or None>}."""
+    for prov in ("anthropic", "openai"):
+        try:
+            if status(prov).get("valid"):
+                return {"configured": True, "provider": prov}
+        except Exception:  # noqa: BLE001
+            continue
+    return {"configured": False, "provider": None}
+
+
 def _claude_cli_expiry():
     """expiresAt (→ unix seconds) from ~/.claude/.credentials.json, or None."""
     import json

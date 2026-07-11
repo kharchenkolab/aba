@@ -107,6 +107,15 @@ def settings_credential_get(provider: str = "anthropic"):
     return credentials.status(provider if provider in ("anthropic", "openai") else "anthropic")
 
 
+@router.get("/api/settings/credential/any")
+def settings_credential_any():
+    """Whether ANY provider is connected — the app's first-run / skip-agent gate.
+    The backend serves credential-less (data mgmt / viewers work); chat is gated on
+    this. `{configured: bool, provider: str|None}`."""
+    from core import credentials
+    return credentials.any_configured()
+
+
 @router.post("/api/settings/credential")
 def settings_credential_set(req: CredentialRequest):
     """One field for both: auto-detects an API key vs a pasted token, VERIFIES it
