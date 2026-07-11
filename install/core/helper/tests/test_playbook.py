@@ -106,6 +106,50 @@ def test_refresh_env_makes_site_packages_writable():
     assert refresh.index("chmod -R u+w") < refresh.index('micromamba" env update')
 
 
+# ── lazy/staged env init (ABA_ENV_PREWARM) ──────────────────────────────────
+def test_staged_create_env_picks_boot_and_marks_stage():
+    create = _step_cmds("install.yml", "create-env")
+    assert "environment-boot.yml" in create and "ABA_ENV_PREWARM" in create
+    assert ".aba-base-stage" in create
+    # eager default = the full manifest
+    assert 'MANIFEST="$ABA_HOME/environment.yml"' in create
+
+
+def test_staged_defers_r_env_and_lstar():
+    rtools = _step_cmds("install.yml", "create-r-tools-env")
+    lstar = _step_cmds("install.yml", "install-lstar-r")
+    assert "staged" in rtools and "deferred" in rtools
+    assert "deferred" in lstar
+    # eager branch still builds them (unchanged)
+    assert "r-environment.yml" in rtools and "install-lstar-r.sh" in lstar
+
+
+def test_complete_base_env_after_start_and_safe():
+    from aba_installer.playbook import load_playbook
+    pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
+    ids = [s.id for s in pb.steps]
+    assert ids.index("complete-base-env") > ids.index("start-backend")
+    comp = _step_cmds("install.yml", "complete-base-env")
+    assert "env update" in comp and "completing" in comp and "ready" in comp
+    assert "chmod -R u+w" in comp and "PYTHONNOUSERSITE=1" in comp
+    assert "!= staged" in comp   # eager → no-op
+
+
+def test_eager_install_still_builds_full_base_before_start():
+    """Regression guard: eager (default; shared/OOD/cluster) still builds the full
+    base + both R steps BEFORE start-backend — unchanged behaviour."""
+    from aba_installer.playbook import load_playbook
+    pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
+    ids = [s.id for s in pb.steps]
+    for s in ("create-env", "create-r-tools-env", "install-lstar-r"):
+        assert ids.index(s) < ids.index("start-backend")
+
+
+def test_refresh_env_stamps_stage_ready():
+    refresh = _step_cmds("update.yml", "refresh-env")
+    assert ".aba-base-stage" in refresh and "printf ready" in refresh
+
+
 def test_fetch_pagoda3_dist_is_version_aware():
     # A pinned URL + a marker so a version bump re-fetches on update (not skipped
     # on "index.html present"), with an atomic swap that keeps the old dist on
