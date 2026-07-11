@@ -29,10 +29,20 @@ env_vars:
   #     the Mac bootstrap (install/mac/setup.command) accepts ABA_REPO_BRANCH /
   #     ABA_RECIPES_BRANCH as back-compat aliases; prefer ABA_REF / RECIPES_REF.
   #     To keep a pin across `aba update`, set it in ~/.aba/config.env.
-  # No other install knobs: the viewer stack (lstar-sc, lstar-R, pagoda3 dist)
-  # is version-pinned in its own manifests, and paths like the pagoda3 dist and
-  # the tools-env Rscript are DERIVED at runtime (env vars are optional overrides,
-  # not required settings) — don't add a knob for a value that can be derived.
+  #   ABA_ENV_PREWARM — env-build strategy (a deploy-profile knob, like
+  #     ABA_ACCELERATOR; lives in config.env). `eager` (default): build the FULL
+  #     base (+ the R tools env) BEFORE starting the server — right for
+  #     shared/OOD/cluster/read-only-image deploys (one build, warm cache, many
+  #     users). `staged`: create a minimal BOOT base, start the server, then finish
+  #     the scientific Python stack (T1 bio, then T2 scvi/torch) + the R env in the
+  #     background while the user works — personal mac / linux `local`. See
+  #     misc/lazy_env_init.md. Personal installers write `staged`; shared installers
+  #     write/leave `eager`. Absent/empty ⇒ eager (== current behavior).
+  # Deploy-profile knobs (ABA_ACCELERATOR, ABA_ENV_PREWARM) are config.env lines
+  # written by the installer per profile (see docs/arch/envs.md). Otherwise no
+  # install knobs: the viewer stack (lstar-sc, lstar-R, pagoda3 dist) is
+  # version-pinned in its own manifests, and paths like the pagoda3 dist and the
+  # tools-env Rscript are DERIVED at runtime — don't add a knob for a derivable value.
 
 steps:
   - id: preflight

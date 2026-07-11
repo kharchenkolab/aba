@@ -16,7 +16,37 @@ import pytest
 # test file lives at: install/core/helper/tests/<this>.py — parents[4] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SETUP_CMD = REPO_ROOT / "install/mac/setup.command"
+SETUP_SH = REPO_ROOT / "install/linux/setup.sh"
+INSTALL_YML = REPO_ROOT / "install/core/helper/src/aba_installer/install.yml"
 BUILD_DIR = REPO_ROOT / "install/mac/build"
+
+
+# ── ABA_ENV_PREWARM (staged vs eager) — the lazy-env-init knob ──────────────
+def test_install_yml_documents_prewarm_knob():
+    """The canonical env-var doc block must document ABA_ENV_PREWARM with the
+    eager default + the staged option (misc/lazy_env_init.md)."""
+    body = INSTALL_YML.read_text()
+    assert "ABA_ENV_PREWARM" in body
+    assert "eager" in body and "staged" in body
+
+
+def test_mac_defaults_prewarm_staged():
+    """A personal Mac defaults to staged and persists it to config.env, while
+    honoring an explicit override (the `${ABA_ENV_PREWARM:-staged}` form)."""
+    body = SETUP_CMD.read_text()
+    assert 'ABA_ENV_PREWARM="${ABA_ENV_PREWARM:-staged}"' in body
+    assert "config.env" in body and "ABA_ENV_PREWARM=" in body
+
+
+def test_linux_prewarm_per_profile():
+    """linux setup.sh: cluster-personal (Slurm/shared) → eager; local → staged;
+    an explicit ABA_ENV_PREWARM wins; persisted via write_cfg + exported."""
+    body = SETUP_SH.read_text()
+    assert 'PREWARM="eager"' in body and 'PREWARM="staged"' in body
+    assert "cluster-personal" in body
+    assert "write_cfg ABA_ENV_PREWARM" in body and "export ABA_ENV_PREWARM" in body
+    # explicit override respected
+    assert 'PREWARM="$ABA_ENV_PREWARM"' in body
 
 
 def test_setup_command_exists_and_has_shebang():

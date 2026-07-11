@@ -256,6 +256,19 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   fi
 fi
 
+# --- env-build strategy (misc/lazy_env_init.md) ---
+# staged = start the server on a minimal base, then finish the scientific Python
+# stack + R env in the background (personal); eager = full build before start
+# (shared/cluster). cluster-personal is Slurm/shared → eager; local (incl. a
+# headless single-user server) → staged. An explicit ABA_ENV_PREWARM wins. Persist
+# to config.env (runtime + `aba update` read it) + export so the install playbook's
+# create/complete steps see it.
+if [ -n "${ABA_ENV_PREWARM:-}" ]; then PREWARM="$ABA_ENV_PREWARM"
+elif [ "$PROFILE" = "cluster-personal" ]; then PREWARM="eager"
+else PREWARM="staged"; fi
+write_cfg ABA_ENV_PREWARM "$PREWARM"; export ABA_ENV_PREWARM="$PREWARM"
+echo "   env prewarm: $PREWARM"
+
 # --- run the install ---
 if [ "$HEADLESS" = 1 ]; then
   echo "-- running install (headless) --"

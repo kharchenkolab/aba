@@ -147,6 +147,15 @@ fi
 # substitution, so we render it through the helper's own code. If that fails
 # on this Mac, fall back to starting the helper directly.
 export ABA_HOME
+# Env-build strategy (misc/lazy_env_init.md): a personal Mac defaults to `staged`
+# — start the server on a minimal base, then finish the scientific Python stack +
+# R env in the background while the user works. Persist to config.env (the runtime
+# + `aba update` read it) and export so the install service's playbook sees it.
+# Override by exporting ABA_ENV_PREWARM=eager before running.
+export ABA_ENV_PREWARM="${ABA_ENV_PREWARM:-staged}"
+mkdir -p "$ABA_HOME"; touch "$ABA_HOME/config.env"
+grep -q '^ABA_ENV_PREWARM=' "$ABA_HOME/config.env" 2>/dev/null \
+  || echo "ABA_ENV_PREWARM=$ABA_ENV_PREWARM" >> "$ABA_HOME/config.env"
 if ! "$HELPER_DIR/venv/bin/python" -c \
      "from aba_installer.launchagent import install_launch_agent; install_launch_agent()"; then
   echo "Warning: could not install the auto-start LaunchAgent; starting the helper directly for this session." >&2
