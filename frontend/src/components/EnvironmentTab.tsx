@@ -31,23 +31,7 @@ function envEffectLine(env: EnvState): string {
 export default function EnvironmentTab() {
   const [env, setEnv] = useState<EnvState | null>(null)
   const [envSaving, setEnvSaving] = useState(false)
-  const [pw, setPw] = useState<
-    { prewarm: string; stage: string; setting_up: boolean;
-      modules: { id: string; label: string; ready: boolean }[] } | null
-  >(null)
-  useEffect(() => {
-    let stop = false
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/settings/environment/prewarm')
-        if (!r.ok || stop) return
-        const d = await r.json(); setPw(d)
-        if (d.setting_up && !stop) setTimeout(poll, 4000)   // live-refresh while completing
-      } catch { /* ignore */ }
-    }
-    poll()
-    return () => { stop = true }
-  }, [])
+  // Analysis-module install status ("Setting up…") now lives in Settings → Modules.
 
   const loadEnv = useCallback(async () => {
     try {
@@ -73,24 +57,6 @@ export default function EnvironmentTab() {
 
   return (
     <>
-    {pw && (pw.setting_up || pw.prewarm === 'staged') && (
-      <section className="settings__section">
-        <h3 className="settings__section-title">
-          {pw.setting_up ? 'Setting up analysis tools…' : 'Analysis modules'}
-        </h3>
-        <ul className="env-detected">
-          {pw.modules.map(m => (
-            <li key={m.id}>
-              <span className={m.ready ? 'env-ok' : 'env-no'} aria-hidden>{m.ready ? '✓' : '⏳'}</span>{' '}
-              {m.label}{!m.ready && pw.setting_up ? ' — installing…' : ''}
-            </li>
-          ))}
-        </ul>
-        {pw.setting_up && (
-          <p className="settings__hint">The app is usable now; these finish in the background.</p>
-        )}
-      </section>
-    )}
     <section className="settings__section">
       <h3 className="settings__section-title">Analysis environment</h3>
       {!env ? (

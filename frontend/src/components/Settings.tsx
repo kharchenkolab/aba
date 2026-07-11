@@ -1,19 +1,22 @@
 /**
  * Settings — a tabbed panel.
  *   • Agent       — provider (Anthropic / OpenAI), model, and credentials.
+ *   • Modules     — capability packs (Python stack, R, viewers): enable/disable + status.
  *   • Environment — what this workspace can run + the pipeline-suggestion gate.
  * (More tabs can slot in later.) Each tab owns its own data loading.
  */
 import { useState } from 'react'
 import './Settings.css'
 import AgentTab from './AgentTab'
+import ModulesTab from './ModulesTab'
 import EnvironmentTab from './EnvironmentTab'
 
 interface Props { onClose: () => void }
 
-type TabId = 'agent' | 'environment'
+type TabId = 'agent' | 'modules' | 'environment'
 const TABS: { id: TabId; label: string }[] = [
   { id: 'agent', label: 'Agent' },
+  { id: 'modules', label: 'Modules' },
   { id: 'environment', label: 'Environment' },
 ]
 
@@ -37,7 +40,9 @@ export default function Settings({ onClose }: Props) {
         </div>
 
         <div className="settings__body">
-          {tab === 'agent' ? <AgentTab /> : <EnvironmentTab />}
+          {tab === 'agent' ? <AgentTab />
+            : tab === 'modules' ? <ModulesTab />
+            : <EnvironmentTab />}
         </div>
       </div>
     </div>
