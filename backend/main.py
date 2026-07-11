@@ -109,6 +109,8 @@ from core.web.routers import jobs as _jobs_routes
 app.include_router(_jobs_routes.router)
 from core.web.routers import settings as _settings_routes
 app.include_router(_settings_routes.router)
+from core.web.routers import modules as _modules_routes
+app.include_router(_modules_routes.router)
 from core.web.routers import memory as _memory_routes
 app.include_router(_memory_routes.router)
 from core.web.routers import threads as _threads_routes

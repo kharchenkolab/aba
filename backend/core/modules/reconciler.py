@@ -143,6 +143,36 @@ def start(*, log: Callable[[str], None] = print) -> bool:
     return True
 
 
+def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> None:
+    import shutil
+    if spec.id == "r-bio":
+        target = manager._tools_env()
+    elif spec.id == "viewer-pagoda3":
+        target = manager._pagoda3_dist().parent          # the dist directory
+    else:
+        return
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+        log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
+
+
+def disable_module(module_id: str, *, remove: bool = False,
+                   log: Callable[[str], None] = print) -> dict | None:
+    """Set desired=disabled. With remove=True, also delete the module's on-disk
+    artifacts to reclaim space (removable modules only). Returns the view, or None for
+    an unknown id. Raises ValueError if remove is asked for a non-removable module."""
+    spec = registry.get(module_id)
+    if spec is None:
+        return None
+    state.set_desired(module_id, "disabled")
+    if remove:
+        if not spec.removable:
+            raise ValueError(f"{module_id} is not removable (it lives in the base env)")
+        _remove_artifacts(spec, log)
+        state.set_status(module_id, "idle")
+    return manager.get_view(module_id)
+
+
 def ensure_module(module_id: str, *, log: Callable[[str], None] = print) -> dict | None:
     """First-use / manual enable: persist desired=enabled and, if not already
     ready/installing, launch this module's install in a background thread. Returns the
