@@ -230,7 +230,7 @@ def submit(flow_id: str, code: str) -> dict:
 def _finish(flow_id: str, live: dict, code: str) -> dict:
     """Exchange the code, persist the token, tear down, return credential status."""
     flow = _FLOWS[live["provider"]]
-    token = _exchange(flow, code, live["verifier"])
+    token = _exchange(flow, code, live["verifier"], live.get("state"))
     _close_listener(live)
     _FLOWS_LIVE.pop(flow_id, None)
     from core import credentials
@@ -270,21 +270,40 @@ def _chatgpt_account_id(token: dict) -> str | None:
     return None
 
 
-def _exchange(flow: ProviderFlow, code: str, verifier: str) -> dict:
-    """POST the token endpoint (form-encoded — OAuth standard). Returns
-    {access_token, refresh_token?, id_token?, expires_at?, account_id?}."""
+# Anthropic's token endpoint sits behind Cloudflare, which 403s (error 1010) the
+# default Python-urllib User-Agent — any non-default UA gets through. Matches the
+# mac installer (install/core/helper/src/aba_installer/auth.py), the working reference.
+_OAUTH_USER_AGENT = "aba (kharchenkolab/aba)"
+
+
+def _exchange(flow: ProviderFlow, code: str, verifier: str, state: str | None = None) -> dict:
+    """POST the token endpoint. Returns {access_token, refresh_token?, id_token?,
+    expires_at?, account_id?}.
+
+    Provider-specific, matching each endpoint's real client:
+      - anthropic (console.anthropic.com): JSON body that MUST include `state` (it
+        400s without it) + a non-default User-Agent (else Cloudflare 403s w/ 1010).
+      - openai (auth.openai.com): the OAuth-standard form encoding (already working)."""
     import urllib.error
     import urllib.request
-    form = urlencode({
+    fields = {
         "grant_type": "authorization_code",
         "client_id": flow.client_id,
         "code": code,
         "redirect_uri": flow.redirect_uri,
         "code_verifier": verifier,
-    }).encode()
-    req = urllib.request.Request(
-        flow.token_url, data=form,
-        headers={"Content-Type": "application/x-www-form-urlencoded"})
+    }
+    if flow.provider == "anthropic":
+        if state:
+            fields["state"] = state          # required — the endpoint 400s without it
+        body = json.dumps(fields).encode()
+        headers = {"Content-Type": "application/json", "Accept": "application/json",
+                   "User-Agent": _OAUTH_USER_AGENT}
+    else:
+        body = urlencode(fields).encode()
+        headers = {"Content-Type": "application/x-www-form-urlencoded",
+                   "User-Agent": _OAUTH_USER_AGENT}
+    req = urllib.request.Request(flow.token_url, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read().decode())
