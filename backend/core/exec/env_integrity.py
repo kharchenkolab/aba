@@ -603,7 +603,7 @@ def _base_prefix() -> Path:
 
 def base_stage() -> str:
     """Install-time base-build stage from the `.aba-base-stage` marker (written by
-    the installer's create-env / complete-base-env under ABA_ENV_PREWARM=staged):
+    create-env + the backend python-bio module completion under ABA_ENV_PREWARM=staged):
     'boot' (minimal base, server started) | 'completing' (full stack installing) |
     'ready'. Absent ⇒ 'ready' — eager builds and every pre-staging install. Lets the
     startup self-heal avoid freezing/repairing a base that is intentionally still

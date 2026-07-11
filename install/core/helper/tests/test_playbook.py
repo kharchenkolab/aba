@@ -124,15 +124,25 @@ def test_staged_defers_r_env_and_lstar():
     assert "r-environment.yml" in rtools and "install-lstar-r.sh" in lstar
 
 
-def test_complete_base_env_after_start_and_safe():
+def test_post_start_completion_moved_to_backend_modules():
+    """Migration (misc/modules.md): the playbook's post-start `complete-base-env` /
+    `complete-r-env` steps are GONE — the backend module reconciler owns post-install.
+    start-backend is now the LAST step; the shared module scripts carry the logic."""
     from aba_installer.playbook import load_playbook
-    pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
+    root = Path(__file__).resolve().parents[1]
+    pb = load_playbook(root / "src/aba_installer/install.yml")
     ids = [s.id for s in pb.steps]
-    assert ids.index("complete-base-env") > ids.index("start-backend")
-    comp = _step_cmds("install.yml", "complete-base-env")
-    assert "env update" in comp and "completing" in comp and "ready" in comp
-    assert "chmod -R u+w" in comp and "PYTHONNOUSERSITE=1" in comp
-    assert "!= staged" in comp   # eager → no-op
+    assert "complete-base-env" not in ids and "complete-r-env" not in ids
+    assert ids[-1] == "start-backend"
+    # The install logic lives in standalone, idempotent module scripts now.
+    scripts = root.parent / "modules"
+    py = (scripts / "install-python-bio.sh").read_text()
+    assert "env update" in py and "completing" in py and "ready" in py
+    assert "chmod -R u+w" in py and "PYTHONNOUSERSITE=1" in py
+    r = (scripts / "install-r-bio.sh").read_text()
+    assert "r-environment.yml" in r and "install-lstar-r.sh" in r
+    pg = (scripts / "install-viewer-pagoda3.sh").read_text()
+    assert "pagoda3" in pg and "index.html" in pg
 
 
 def test_eager_install_still_builds_full_base_before_start():
@@ -150,17 +160,16 @@ def test_refresh_env_stamps_stage_ready():
     assert ".aba-base-stage" in refresh and "printf ready" in refresh
 
 
-def test_staged_stages_full_r_env_after_start():
-    """Staged must STAGE the full R env (not leave it on-demand): a complete-r-env
-    step builds r-environment.yml + the lstar .rds bridge AFTER start-backend (the
-    eager R steps skip pre-start)."""
+def test_staged_leaves_r_to_the_backend_module():
+    """Staged no longer builds R at install time: the eager R steps skip (defer to the
+    backend), and there's no post-start R step — the r-bio module (default off on
+    personal) installs on first use / manual enable via the reconciler."""
     from aba_installer.playbook import load_playbook
     pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
     ids = [s.id for s in pb.steps]
-    assert ids.index("complete-r-env") > ids.index("start-backend")
-    comp = _step_cmds("install.yml", "complete-r-env")
-    assert "r-environment.yml" in comp and "install-lstar-r.sh" in comp
-    assert "!= staged" in comp   # eager → no-op (R built before start)
+    assert "complete-r-env" not in ids
+    rtools = _step_cmds("install.yml", "create-r-tools-env")
+    assert "staged" in rtools and "deferred" in rtools     # staged pre-start build is a no-op
 
 
 def test_load_config_env_reaches_playbook_env(tmp_path, monkeypatch):

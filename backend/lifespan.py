@@ -81,6 +81,18 @@ async def on_startup():
                 print(f"[startup] isolated-env GC failed (non-fatal): {e}")
         await asyncio.to_thread(_work)
     asyncio.create_task(_bg_base_maintenance())
+
+    # Module reconciler (misc/modules.md): the backend — not the installer — owns
+    # post-install. Installs every enabled-but-missing module (default: the python-bio
+    # analysis stack completes the base here on a staged install; r-bio + pagoda3 are
+    # off, installed on first use / manual enable). Serial, background, non-blocking;
+    # ready modules are a fast no-op (eager/OOD already hold them).
+    try:
+        from core.modules import reconciler as _mods
+        if _mods.start():
+            print("[modules] reconciler started (installing enabled modules in the background)")
+    except Exception as e:  # noqa: BLE001 — never let module reconcile break startup
+        print(f"[modules] reconciler failed to start (non-fatal): {e}")
     # Capture the asyncio loop so worker-thread producers
     # (auto_interpret, background jobs) can push events to the
     # /api/notifications SSE channel.
@@ -98,13 +110,28 @@ async def on_startup():
         import time as _t
         try:
             # Staged prewarm (lazy_env_init.md): while the base is still being built
-            # (boot|completing), the INSTALLER owns the R build (complete-r-env) —
+            # (boot|completing), python-bio completion is in flight —
             # defer here so two micromamba solves don't race the same tools env. On
             # the next boot (base ready) this runs and finds R already built (no-op).
             from core.exec.env_integrity import base_stage
             if base_stage() != "ready":
-                print("[r_base] base still staging — R build deferred to the installer "
-                      "(complete-r-env); will verify on next boot", flush=True)
+                print("[r_base] base still staging — R build deferred; will verify on next boot",
+                      flush=True)
+                return
+            # r-bio is a module now (misc/modules.md). If the tools env is already
+            # present (eager/OOD built it pre-start), keep it healthy with the curated
+            # top-up below. If it's NOT present: disabled (default on personal) → skip
+            # (installs on first use); enabled → the reconciler owns the build
+            # (install-r-bio.sh), so defer this top-up to avoid two solves racing.
+            from core.modules import registry as _mreg, manager as _mmgr
+            _rbio = _mreg.get("r-bio")
+            if _rbio and _mmgr.actual_state(_rbio) != "ready":
+                if not _mmgr.is_enabled(_rbio):
+                    print("[r_base] r-bio disabled + not present — skipping (installs on first use)",
+                          flush=True)
+                else:
+                    print("[r_base] r-bio enabled but not built yet — reconciler owns the build; "
+                          "deferring curated top-up", flush=True)
                 return
             from content.bio.capabilities import provision_r_base
             t0 = _t.perf_counter()
