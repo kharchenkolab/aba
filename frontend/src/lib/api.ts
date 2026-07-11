@@ -64,10 +64,40 @@ export function apiUpload<T = unknown>(path: string, form: FormData): Promise<T>
 // --- Typed helpers for common endpoints (extend as the shell migrates) ---
 
 export interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }
+export interface ProvInput {
+  ref: string; kind: string; name?: string; title?: string; path?: string
+  version?: string; exists?: boolean
+}
+export interface ProvMethod {
+  kind?: string; tool_name?: string; executor?: string; language?: string
+  code?: string; code_hash?: string; code_lines?: number; steps?: number
+  exec_id?: string; command?: string[] | string
+  engine?: { name?: string; version?: string }
+  params?: Record<string, unknown>; recipe_id?: string; recipes?: string[]
+}
+export interface ProvEnvironment {
+  language?: string; language_version?: string; env_fingerprint?: string
+  package_count?: number; key_packages?: { name: string; version: string }[]
+  images?: string[]; backfilled?: boolean
+  drift?: { changed?: number; total?: number; moved?: boolean } | null
+}
+export interface ProvAttribution {
+  actor?: string | null; created_at?: string; started_at?: string
+  completed_at?: string; wall_time_s?: number; status?: string; seed?: number | null
+}
 export interface EntityProvenance {
+  // Flat keys kept for back-compat with the old panel.
   upstream: ProvNode[]
   downstream: ProvNode[]
   promotion?: { by?: string | null; at?: string | null; from?: string[] | null } | null
+  // Rich evidence (prov2): assembled from derivation+actor + the exec record + edges.
+  entity?: { id: string; type: string; title?: string }
+  method?: ProvMethod
+  inputs?: ProvInput[]
+  environment?: ProvEnvironment
+  attribution?: ProvAttribution
+  lineage?: { upstream: ProvNode[]; downstream: ProvNode[] }
+  reproducibility?: { has_exec: boolean; reproducible: boolean; backfilled: boolean; revisable: boolean }
 }
 
 export function getEntityProvenance(entityId: string): Promise<EntityProvenance> {

@@ -358,10 +358,15 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
                                      "name": a.get("original_name") or a.get("name")})
                 else:
                     produced.append({"kind": knd, "idx": i})
-        inputs: list[dict] = []
-        if job.get("focus_entity_id"):
-            inputs.append({"ref": job["focus_entity_id"], "kind": "entity"})
         with _projects.bind(str(lookup_pid or effective_pid)):
+            # Inputs: focus entity + datasets the code references (identity-level,
+            # provenance §3.2). Needs the project bound to list dataset entities.
+            from core.graph.run_inputs import resolve_inputs, detect_seed
+            inputs = resolve_inputs(code, job.get("focus_entity_id"))
+            # Prefer the executor-injected seed; fall back to one the code set.
+            _seed = result_obj.get("seed")
+            if _seed is None:
+                _seed = detect_seed(code)
             eid = _er.create(
                 thread_id=str(params.get("thread_id") or "default"),
                 run_id=params.get("run_id"),
@@ -380,7 +385,7 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
                     "language_version": langver,
                     "package_versions": pkg,
                     "env_fingerprint": env_fingerprint(langver, pkg),
-                    "seed": result_obj.get("seed"),
+                    "seed": _seed,
                     "inputs": inputs,
                     "produced": produced,
                     "stdout_tail": (result_obj.get("stdout") or "")[-2000:],
