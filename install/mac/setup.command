@@ -156,6 +156,11 @@ export ABA_ENV_PREWARM="${ABA_ENV_PREWARM:-staged}"
 mkdir -p "$ABA_HOME"; touch "$ABA_HOME/config.env"
 grep -q '^ABA_ENV_PREWARM=' "$ABA_HOME/config.env" 2>/dev/null \
   || echo "ABA_ENV_PREWARM=$ABA_ENV_PREWARM" >> "$ABA_HOME/config.env"
+# Subscription sign-in (Settings → Agent): a personal Mac is local, so both the
+# Anthropic paste flow and OpenAI's localhost:1455 callback work — let the user
+# connect a Claude.ai / ChatGPT-Codex plan instead of pasting an API key.
+grep -q '^ABA_SUBSCRIPTION_OAUTH=' "$ABA_HOME/config.env" 2>/dev/null \
+  || echo "ABA_SUBSCRIPTION_OAUTH=1" >> "$ABA_HOME/config.env"
 if ! "$HELPER_DIR/venv/bin/python" -c \
      "from aba_installer.launchagent import install_launch_agent; install_launch_agent()"; then
   echo "Warning: could not install the auto-start LaunchAgent; starting the helper directly for this session." >&2

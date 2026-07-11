@@ -103,8 +103,12 @@ def settings_credential_get(provider: str = "anthropic"):
     """LLM credential status for Settings → Agent, per provider. Never echoes the
     secret — only the mode, a 4-char key suffix, OAuth expiry, and a `valid` flag the
     UI uses to decide between showing status+Change and showing the input."""
-    from core import credentials
-    return credentials.status(provider if provider in ("anthropic", "openai") else "anthropic")
+    from core import credentials, oauth
+    st = credentials.status(provider if provider in ("anthropic", "openai") else "anthropic")
+    # Whether subscription sign-in (OAuth) is available on this deployment, so the UI can
+    # hide the Subscription tab instead of offering a button that 400s (oauth.enabled()).
+    st["oauth_enabled"] = oauth.enabled()
+    return st
 
 
 @router.get("/api/settings/credential/any")

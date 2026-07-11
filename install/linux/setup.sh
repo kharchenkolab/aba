@@ -269,6 +269,12 @@ else PREWARM="staged"; fi
 write_cfg ABA_ENV_PREWARM "$PREWARM"; export ABA_ENV_PREWARM="$PREWARM"
 echo "   env prewarm: $PREWARM"
 
+# Subscription sign-in (Settings → Agent): enable on a local desktop install, where
+# the browser can reach the OpenAI localhost:1455 callback (and Anthropic paste works
+# anywhere). Headless / cluster-personal is remote with no local browser → leave off
+# (a user there pastes an API key, or an operator sets ABA_SUBSCRIPTION_OAUTH=1).
+if [ "$HEADLESS" != "1" ]; then write_cfg ABA_SUBSCRIPTION_OAUTH 1; fi
+
 # --- run the install ---
 if [ "$HEADLESS" = 1 ]; then
   echo "-- running install (headless) --"

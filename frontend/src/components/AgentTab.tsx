@@ -32,6 +32,7 @@ interface CredStatus {
   oauth_source: string | null
   oauth_expires_at: number | null
   valid: boolean
+  oauth_enabled?: boolean   // deployment offers subscription sign-in (false → hide that tab)
 }
 
 type Ping = { state: 'idle' | 'checking' | 'ok' | 'bad'; detail?: string }
@@ -290,6 +291,10 @@ export default function AgentTab() {
   }
 
   const mode = credMode(cred)
+  // Subscription sign-in is deployment-gated (ABA_SUBSCRIPTION_OAUTH). Default to
+  // available until the status says otherwise, so the tab doesn't flicker on load.
+  const subAvailable = cred?.oauth_enabled !== false
+  const effMethod: 'subscription' | 'key' = subAvailable ? credMethod : 'key'
   const providerModels = (llm?.options || []).filter(o => o.provider === provider)
   const usableModels = providerModels.filter(o => modelUsable(o, mode))
   const models = usableModels.length ? usableModels : providerModels  // never empty the picker
@@ -380,17 +385,21 @@ export default function AgentTab() {
                   )}
                 </div>
 
-                {/* One method at a time (toggle) — compact, no tall stacked block. */}
+                {/* One method at a time (toggle) — compact, no tall stacked block.
+                   Subscription tab only when the deployment offers OAuth; otherwise
+                   we show API key alone (avoids a button that 400s). */}
                 <div className="cred-methods" role="tablist" aria-label="Credential method">
-                  <button role="tab" aria-selected={credMethod === 'subscription'}
-                    className={`cred-methods__tab ${credMethod === 'subscription' ? 'is-active' : ''}`}
-                    onClick={() => setCredMethod('subscription')}>Subscription</button>
-                  <button role="tab" aria-selected={credMethod === 'key'}
-                    className={`cred-methods__tab ${credMethod === 'key' ? 'is-active' : ''}`}
+                  {subAvailable && (
+                    <button role="tab" aria-selected={credMethod === 'subscription'}
+                      className={`cred-methods__tab ${credMethod === 'subscription' ? 'is-active' : ''}`}
+                      onClick={() => setCredMethod('subscription')}>Subscription</button>
+                  )}
+                  <button role="tab" aria-selected={effMethod === 'key'}
+                    className={`cred-methods__tab ${effMethod === 'key' ? 'is-active' : ''}`}
                     onClick={() => setCredMethod('key')}>API key</button>
                 </div>
 
-                {credMethod === 'key' ? (
+                {effMethod === 'key' ? (
                   <div className="cred-method">
                     <div className="cred-row">
                       <input

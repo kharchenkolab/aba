@@ -183,7 +183,7 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
         {pendingCount > 0 && <span className="rail__badge">{pendingCount}</span>}
       </button>
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
-      <FirstRunGate onOpenSettings={() => setSettingsOpen(true)} />
+      <FirstRunGate settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen(true)} />
     </aside>
   )
 }

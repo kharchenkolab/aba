@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const SKIP_KEY = 'aba:skip-provider-setup'
 
@@ -6,22 +6,37 @@ const SKIP_KEY = 'aba:skip-provider-setup'
  * First-run gate (lazy_env_init.md Phase C): the backend serves CREDENTIAL-LESS —
  * data management, file browsing, and viewers work without a model. When no provider
  * is connected we invite the user to connect one (chat needs it) via Settings → Agent,
- * or to skip for now. Non-blocking banner; dismissal is remembered (localStorage).
+ * or to skip for now. Non-blocking banner; dismissal (Skip) is remembered (localStorage).
+ *
+ * The banner reflects REAL state: opening Settings does NOT dismiss it — we re-derive
+ * from /api/settings/credential/any when Settings closes, so cancelling out (without
+ * connecting) keeps the banner up instead of looking as if it were solved.
  */
-export default function FirstRunGate({ onOpenSettings }: { onOpenSettings: () => void }) {
+export default function FirstRunGate(
+  { settingsOpen, onOpenSettings }: { settingsOpen: boolean; onOpenSettings: () => void },
+) {
   const [show, setShow] = useState(false)
+  const wasOpen = useRef(false)
 
-  useEffect(() => {
-    if (localStorage.getItem(SKIP_KEY) === '1') return
-    let cancelled = false
+  function recheck() {
+    if (localStorage.getItem(SKIP_KEY) === '1') { setShow(false); return }
     fetch('/api/settings/credential/any')
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (!cancelled && d && d.configured === false) setShow(true) })
-      .catch(() => { /* backend not ready / offline — stay hidden */ })
-    return () => { cancelled = true }
-  }, [])
+      .then(d => { if (d) setShow(d.configured === false) })
+      .catch(() => { /* backend not ready / offline — leave as-is */ })
+  }
 
-  if (!show) return null
+  useEffect(() => { recheck() }, [])
+  // Re-derive whenever Settings transitions open → closed (a connect there flips
+  // credential/any to configured; a cancel leaves it unconfigured → banner stays).
+  useEffect(() => {
+    if (wasOpen.current && !settingsOpen) recheck()
+    wasOpen.current = settingsOpen
+  }, [settingsOpen])
+
+  // Hide while Settings is open so the bar doesn't overlap the modal; state is
+  // re-derived on close.
+  if (!show || settingsOpen) return null
   return (
     <div
       role="status"
@@ -38,7 +53,7 @@ export default function FirstRunGate({ onOpenSettings }: { onOpenSettings: () =>
       </span>
       <span style={{ display: 'flex', gap: 8 }}>
         <button
-          onClick={() => { setShow(false); onOpenSettings() }}
+          onClick={() => onOpenSettings()}
           style={{
             padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
             background: '#3b82f6', color: '#fff', fontWeight: 600,
