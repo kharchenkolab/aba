@@ -74,6 +74,8 @@ dependencies:
       - uvicorn[standard]
       - python-multipart   # FastAPI UploadFile/File/Form on the upload routes
       - anthropic
+      - openai        # OpenAI/Codex provider (core/runtime/llm_runtime_openai.py):
+                      # api.openai.com ChatCompletions + the ChatGPT/Codex Responses API
       # anthropic's AsyncClient runs over HTTP/2 (see core/llm.py); without
       # httpx[http2]'s h2 extras every chat turn dies with `ImportError: ...
       # 'h2' package is not installed`. Pin to the [http2] extra so the dep

@@ -19,9 +19,15 @@ from pathlib import Path
 # Same patterns the helper validates against (install/.../auth.py).
 _API_KEY_RE = re.compile(r"^sk-ant-[a-zA-Z0-9_\-]{16,}$")
 _OAUTH_TOKEN_RE = re.compile(r"^sk-ant-oat[a-zA-Z0-9_\-]{16,}$")
+# OpenAI keys: legacy `sk-…` and project `sk-proj-…` (proj- is [A-Za-z0-9_-]).
+_OPENAI_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_\-]{20,}$")
 
 _CRED_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_FLOW",
-              "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL")
+              "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL",
+              "OPENAI_API_KEY", "ABA_OPENAI_API_KEY", "ABA_OPENAI_BASE_URL",
+              "OPENAI_AUTH_FLOW", "OPENAI_OAUTH_TOKEN")
+
+_OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
 
 
 def _config_env_path() -> Path:
@@ -82,9 +88,11 @@ def _clear_llm_client_cache() -> None:
         pass
 
 
-def status() -> dict:
-    """Current credential state for the UI. Never echoes the secret itself —
-    only a 4-char suffix, the mode, and (for refreshable OAuth) the expiry."""
+def status(provider: str = "anthropic") -> dict:
+    """Current credential state for a provider (Settings → Agent). Never echoes the
+    secret — only a 4-char suffix, the mode, and (for refreshable OAuth) expiry."""
+    if provider == "openai":
+        return _openai_status()
     cfg = read()
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY") or "")
     if not api_key:
@@ -125,6 +133,7 @@ def status() -> dict:
         source = "pasted_token" if pasted else None
     has_api_key = bool(api_key)
     return {
+        "provider": "anthropic",
         "mode": mode,
         "has_api_key": has_api_key,
         "key_suffix": api_key[-4:] if api_key else None,
@@ -227,11 +236,12 @@ def _test_credential(kind: str, cred: str) -> tuple[bool, str | None]:
         return False, f"Could not verify the credential ({type(e).__name__})."
 
 
-def set_credential(cred: str) -> dict:
-    """Single entry point for Settings → Model account: detect whether it's an API
-    key or a pasted OAuth token, VERIFY it against Anthropic, then persist + go
-    live. Raises ValueError (→ HTTP 400) on bad format or rejection — nothing is
-    written unless the credential actually works."""
+def set_credential(cred: str, provider: str = "anthropic") -> dict:
+    """Single entry point for Settings → Agent: detect key vs token, VERIFY it with
+    the provider, then persist + go live. Raises ValueError (→ HTTP 400) on bad
+    format or rejection — nothing is written unless the credential actually works."""
+    if provider == "openai":
+        return _openai_set_api_key(cred)
     cred = _sanitize_credential(cred)      # rescue terminal-wrapped / quoted pastes
     kind = _detect_kind(cred)
     if kind is None:
@@ -241,3 +251,112 @@ def set_credential(cred: str) -> dict:
     if not ok:
         raise ValueError(err or "The credential was rejected.")
     return set_oauth_token(cred) if kind == "oauth" else set_api_key(cred)
+
+
+# ── OpenAI provider ──────────────────────────────────────────────────────────
+
+def _openai_status() -> dict:
+    """OpenAI credential state (Settings → Agent, provider=OpenAI). Mirrors the
+    Anthropic status shape so the UI is provider-agnostic. Subscription (Codex
+    OAuth) fields are filled by the oauth roundtrip; Tier-1 is the API-key path."""
+    cfg = read()
+    key = (os.environ.get("OPENAI_API_KEY") or os.environ.get("ABA_OPENAI_API_KEY")
+           or cfg.get("OPENAI_API_KEY") or "")
+    oauth = (os.environ.get("OPENAI_OAUTH_TOKEN") or cfg.get("OPENAI_OAUTH_TOKEN") or "")
+    has_key, has_oauth = bool(key), bool(oauth)
+    return {
+        "provider": "openai",
+        "mode": "subscription" if has_oauth else "apikey",
+        "has_api_key": has_key,
+        "key_suffix": key[-4:] if key else None,
+        "has_oauth": has_oauth,
+        "oauth_source": "codex_subscription" if has_oauth else None,
+        "oauth_expires_at": None,
+        "valid": has_key or has_oauth,
+    }
+
+
+def _test_openai_credential(key: str) -> tuple[bool, str | None]:
+    """Confirm OpenAI accepts the key BEFORE persisting — a cheap `models.list()`
+    (auth-only, no tokens spent). (True, None) on success; (False, message) else."""
+    try:
+        import openai
+    except Exception:  # noqa: BLE001
+        return False, "The openai SDK isn't installed in this environment."
+    try:
+        client = openai.OpenAI(api_key=key, base_url=_OPENAI_DEFAULT_BASE)
+        client.models.list()
+        return True, None
+    except openai.AuthenticationError:
+        return False, "OpenAI rejected the key — authentication failed."
+    except openai.PermissionDeniedError:
+        return False, "OpenAI denied this key — permission denied."
+    except Exception as e:  # noqa: BLE001
+        return False, f"Could not verify the key ({type(e).__name__})."
+
+
+def store_oauth_token(provider: str, token: dict) -> dict:
+    """Persist a subscription OAuth token (from core.oauth) for a provider + go live.
+    `token` = {access_token, refresh_token?, expires_at?}. Returns status(provider).
+
+    Anthropic: stored as the oauth_cc bearer (same path as a pasted Claude.ai token).
+    OpenAI: stored as OPENAI_OAUTH_TOKEN in subscription mode (the runtime's
+    subscription-bearer path is a follow-up — see misc/model_providers.md)."""
+    access = (token or {}).get("access_token")
+    if not access:
+        raise ValueError("No access token to store.")
+    entries = read()
+    if provider == "openai":
+        # Subscription (Codex/ChatGPT): the access token is a Bearer used against
+        # the ChatGPT WHAM backend, with a ChatGPT-Account-Id header from the JWT.
+        acct = (token or {}).get("account_id") or ""
+        base = "https://chatgpt.com/backend-api/codex"   # Responses backend (not /wham)
+        entries["OPENAI_OAUTH_TOKEN"] = access
+        entries["OPENAI_AUTH_FLOW"] = "subscription"
+        entries["ABA_OPENAI_BASE_URL"] = base
+        if acct:
+            entries["ABA_OPENAI_ACCOUNT_ID"] = acct
+        if (token or {}).get("refresh_token"):
+            entries["OPENAI_OAUTH_REFRESH"] = token["refresh_token"]
+        entries.pop("OPENAI_API_KEY", None)      # subscription supersedes a stored key
+        write(entries)
+        os.environ["OPENAI_OAUTH_TOKEN"] = access
+        os.environ["OPENAI_AUTH_FLOW"] = "subscription"
+        os.environ["ABA_OPENAI_BASE_URL"] = base
+        if acct:
+            os.environ["ABA_OPENAI_ACCOUNT_ID"] = acct
+        os.environ.pop("OPENAI_API_KEY", None)
+        return _openai_status()
+    # anthropic — reuse the oauth_cc bearer path
+    entries["CLAUDE_CODE_OAUTH_TOKEN"] = access
+    entries["ABA_LLM_CREDENTIAL"] = "oauth_cc"
+    entries["ANTHROPIC_AUTH_FLOW"] = "oauth"
+    write(entries)
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
+    os.environ["ABA_LLM_CREDENTIAL"] = "oauth_cc"
+    _clear_llm_client_cache()
+    return status("anthropic")
+
+
+def _openai_set_api_key(key: str) -> dict:
+    """Verify + persist an OpenAI API key and point the OpenAI runtime at
+    api.openai.com. Sets OPENAI_API_KEY (SDK) + ABA_OPENAI_API_KEY/BASE_URL (what
+    OpenAICompatibleRuntime reads) so the change is live next turn."""
+    key = _sanitize_credential(key)
+    if not _OPENAI_KEY_RE.match(key):
+        raise ValueError("That doesn't look like an OpenAI API key (expected sk-…).")
+    ok, err = _test_openai_credential(key)
+    if not ok:
+        raise ValueError(err or "The key was rejected.")
+    entries = read()
+    entries["OPENAI_API_KEY"] = key
+    entries["ABA_OPENAI_API_KEY"] = key
+    entries["ABA_OPENAI_BASE_URL"] = _OPENAI_DEFAULT_BASE
+    entries["OPENAI_AUTH_FLOW"] = "api_key"
+    entries.pop("OPENAI_OAUTH_TOKEN", None)
+    write(entries)
+    os.environ["OPENAI_API_KEY"] = key
+    os.environ["ABA_OPENAI_API_KEY"] = key
+    os.environ["ABA_OPENAI_BASE_URL"] = _OPENAI_DEFAULT_BASE
+    os.environ.pop("OPENAI_OAUTH_TOKEN", None)
+    return _openai_status()

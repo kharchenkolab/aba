@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Entity } from '../types'
 import { getEntityProvenance } from '../lib/api'   // P3.4a: typed API client seam
+import type { EntityProvenance, ProvNode, ProvInput } from '../lib/api'
 import PromoteDialog from './PromoteDialog'
 import AnnotatedFigure from '../bio/AnnotatedFigure'
 import ThreadHeader from './ThreadHeader'
@@ -178,7 +179,7 @@ export default function FocusCanvas({ entity, entities, onChange, onFocus, onSel
         )}
       </div>
 
-      {!compact && <ProvenancePanel entity={entity} onFocus={onFocus} />}
+      {!compact && <ProvenanceSection entity={entity} onFocus={onFocus} />}
 
       {promote?.kind === 'figure-to-claim' && (
         <PromoteDialog
@@ -510,8 +511,6 @@ function HistoryDrawer({
   )
 }
 
-interface ProvNode { id: string; type: string; title: string; rel: string; depth: number }
-
 function fmtActor(a?: string | null): string {
   if (!a) return ''
   if (a === 'system') return 'the system'
@@ -536,22 +535,57 @@ function fmtDerivation(d?: Entity['derivation']): string {
 
 function fmtProvDate(iso?: string | null): string {
   if (!iso) return ''
-  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
+  try { return new Date(iso).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
 
-interface ProvData {
-  upstream: ProvNode[]
-  downstream: ProvNode[]
-  promotion?: { by?: string | null; at?: string | null; from?: string[] | null } | null
+function fmtDuration(s?: number | null): string {
+  if (s == null) return ''
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`
+  const m = Math.floor(s / 60), sec = Math.round(s % 60)
+  return `${m}m${sec ? ` ${sec}s` : ''}`
 }
 
-function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: string) => void }) {
-  const [data, setData] = useState<ProvData | null>(null)
+// A directional lineage arrow: upstream = "made from", downstream = "used by".
+function LineageChip({ n, dir, onFocus }: { n: ProvNode; dir: 'up' | 'down'; onFocus: (id: string) => void }) {
+  return (
+    <button className="prov-lin" onClick={() => onFocus(n.id)} title={`${n.rel} · ${n.id}`}>
+      <span className="prov-lin__arrow">{dir === 'up' ? '←' : '→'}</span>
+      <span className={`focus__type focus__type--${n.type}`}>{n.type}</span>
+      <span className="prov-lin__title">{n.title}</span>
+      {n.rel && <span className="prov-lin__rel">{n.rel === 'used' && dir === 'up' ? 'input' : n.rel}</span>}
+    </button>
+  )
+}
+
+// An input the run USED (dataset / file / reference), with its version on hover.
+function InputChip({ inp, onFocus }: { inp: ProvInput; onFocus: (id: string) => void }) {
+  const clickable = inp.exists !== false && !!inp.ref && inp.kind !== 'file'
+  const label = inp.name || inp.title || inp.ref
+  const tip = [inp.path, inp.version && `version ${inp.version}`, inp.ref].filter(Boolean).join('\n')
+  return (
+    <button className="prov-chip" disabled={!clickable} title={tip}
+            onClick={() => clickable && onFocus(inp.ref)}>
+      <span className={`focus__type focus__type--${inp.kind}`}>{inp.kind}</span>
+      <span className="prov-chip__label">{label}</span>
+    </button>
+  )
+}
+
+/**
+ * The card's Provenance section — unobtrusive when idle, informative on dive-in.
+ * Collapsed: one muted line naming the primary input + method. Expanded: a compact
+ * label→value grid (Inputs / Method / Environment / By·when / Lineage), each with a
+ * dive-deeper affordance (input chips click through, "show code", package list,
+ * lineage chips with edge labels). Fed by GET /api/entities/{id}/provenance.
+ */
+function ProvenanceSection({ entity, onFocus }: { entity: Entity; onFocus: (id: string) => void }) {
+  const [data, setData] = useState<EntityProvenance | null>(null)
   const [open, setOpen] = useState(false)
+  const [showCode, setShowCode] = useState(false)
 
   useEffect(() => {
-    setData(null)
+    setData(null); setShowCode(false)
     if (entity.type === 'workspace') return
     let cancelled = false
     getEntityProvenance(entity.id)
@@ -562,65 +596,119 @@ function ProvenancePanel({ entity, onFocus }: { entity: Entity; onFocus: (id: st
 
   if (entity.type === 'workspace') return null   // the root isn't a provenance-bearing entity
 
-  const up = data?.upstream ?? []
-  const down = data?.downstream ?? []
-  const promotion = data?.promotion
+  const inputs = data?.inputs ?? []
+  const method = data?.method ?? {}
+  const env = data?.environment ?? {}
+  const attr = data?.attribution ?? {}
+  const up = data?.lineage?.upstream ?? data?.upstream ?? []
+  const down = data?.lineage?.downstream ?? data?.downstream ?? []
   const originText = fmtDerivation(entity.derivation)
-  const actorText = fmtActor(entity.actor)
-  // Show the panel when there's a graph OR any attribution to display.
-  if (up.length === 0 && down.length === 0 && !originText && !actorText) return null
+  const actorText = fmtActor(attr.actor ?? entity.actor)
+
+  const hasMethod = !!(method.recipe_id || method.code || method.language || method.command)
+  const hasEnv = !!(env.language_version || (env.key_packages && env.key_packages.length))
+  const hasAny = inputs.length || hasMethod || hasEnv || up.length || down.length || originText || actorText
+  if (!hasAny) return null
+
+  // Collapsed summary — names the primary input + the method, so you can decide
+  // whether to dive in without expanding.
+  const via = method.recipe_id
+    || (method.language ? `${method.language}${env.language_version ? ' ' + env.language_version : ''}` : '')
+  const summaryBits: string[] = []
+  if (inputs.length) {
+    const first = inputs[0].name || inputs[0].title || inputs[0].kind
+    summaryBits.push(`from ${first}${inputs.length > 1 ? ` +${inputs.length - 1}` : ''}`)
+  }
+  if (via) summaryBits.push(`via ${via}`)
+  if (!summaryBits.length && originText) summaryBits.push(originText)
+  const summary = summaryBits.join('  ·  ')
+
+  const keyPkgs = env.key_packages ?? []
+  const extraPkgs = env.package_count ? Math.max(0, env.package_count - keyPkgs.length) : 0
 
   return (
     <div className={`prov ${open ? 'prov--open' : ''}`}>
       <button className="prov__toggle" onClick={() => setOpen(v => !v)}>
         <span className="prov__chev">{open ? '▾' : '▸'}</span>
         Provenance
-        <span className="prov__counts">
-          {up.length > 0 && `${up.length} up`}
-          {up.length > 0 && down.length > 0 && ' · '}
-          {down.length > 0 && `${down.length} down`}
-        </span>
+        {!open && summary && <span className="prov__summary">{summary}</span>}
+        {env.drift && ((env.drift.changed ?? 0) > 0 || env.drift.moved) && (
+          <span className="prov__badge prov__badge--warn"
+                title={env.drift.changed
+                  ? `The environment changed since this ran (${env.drift.changed} package${env.drift.changed === 1 ? '' : 's'})`
+                  : 'The environment changed since this ran'}>
+            ⚠ env drift
+          </span>
+        )}
       </button>
       {open && (
-        <>
-          {(originText || actorText) && (
-            <div style={{ padding: '2px 8px 6px', fontSize: 12, opacity: 0.72 }}>
-              {originText}{originText && actorText ? ' · ' : ''}{actorText && `by ${actorText}`}
-            </div>
+        <div className="prov__grid">
+          {inputs.length > 0 && (
+            <>
+              <div className="prov__k">Inputs</div>
+              <div className="prov__v prov__chips">
+                {inputs.map(i => <InputChip key={i.ref} inp={i} onFocus={onFocus} />)}
+              </div>
+            </>
           )}
-          {promotion && (
-            <div style={{ padding: '2px 8px 6px', fontSize: 12, opacity: 0.72 }}>
-              Promoted{promotion.by ? ` by ${fmtActor(promotion.by)}` : ''}
-              {promotion.from && promotion.from.length
-                ? ` from ${promotion.from.length} source${promotion.from.length === 1 ? '' : 's'}` : ''}
-              {promotion.at ? ` on ${fmtProvDate(promotion.at)}` : ''}
-            </div>
+
+          {hasMethod && (
+            <>
+              <div className="prov__k">Method</div>
+              <div className="prov__v">
+                {method.recipe_id && <span className="prov__recipe" title="recipe / pipeline">{method.recipe_id}</span>}
+                {method.language && <span>{method.language}{env.language_version ? ` ${env.language_version}` : ''}</span>}
+                {Array.isArray(method.command) && <code className="prov__cmd">{method.command.join(' ')}</code>}
+                {method.steps ? <span className="prov__dim">· {method.steps} steps</span> : null}
+                {method.code && (
+                  <button className="prov__link" onClick={() => setShowCode(v => !v)}>
+                    {showCode ? 'hide code' : 'show code'}
+                  </button>
+                )}
+                {method.code_lines ? <span className="prov__dim">({method.code_lines} lines)</span> : null}
+                {showCode && method.code && <pre className="prov__code">{method.code}</pre>}
+              </div>
+            </>
           )}
-          <div className="prov__cols">
-          <div className="prov__col">
-            <div className="prov__col-head">Made from</div>
-            {up.length === 0 && <div className="prov__empty">— nothing upstream</div>}
-            {up.map(n => (
-              <button key={n.id} className="prov__row" onClick={() => onFocus(n.id)}
-                      style={{ paddingLeft: 8 + (n.depth - 1) * 12 }}>
-                <span className={`focus__type focus__type--${n.type}`}>{n.type}</span>
-                <span className="prov__title">{n.title}</span>
-              </button>
-            ))}
-          </div>
-          <div className="prov__col">
-            <div className="prov__col-head">Used by</div>
-            {down.length === 0 && <div className="prov__empty">— nothing downstream</div>}
-            {down.map(n => (
-              <button key={n.id} className="prov__row" onClick={() => onFocus(n.id)}
-                      style={{ paddingLeft: 8 + (n.depth - 1) * 12 }}>
-                <span className={`focus__type focus__type--${n.type}`}>{n.type}</span>
-                <span className="prov__title">{n.title}</span>
-              </button>
-            ))}
-          </div>
+
+          {hasEnv && (
+            <>
+              <div className="prov__k">Environment</div>
+              <div className="prov__v prov__env">
+                {keyPkgs.map(p => <span key={p.name} className="prov__pkg">{p.name} {p.version}</span>)}
+                {extraPkgs > 0 && <span className="prov__dim">+{extraPkgs} pkgs</span>}
+                {env.images && env.images.length > 0 && (
+                  <span className="prov__dim" title={env.images.join('\n')}>{env.images.length} container image{env.images.length === 1 ? '' : 's'}</span>
+                )}
+                {env.backfilled && <span className="prov__dim" title="Reconstructed from a legacy record — versions may be incomplete">legacy record</span>}
+              </div>
+            </>
+          )}
+
+          {(actorText || attr.completed_at || attr.seed != null) && (
+            <>
+              <div className="prov__k">By · when</div>
+              <div className="prov__v prov__dim">
+                {[actorText,
+                  attr.completed_at ? fmtProvDate(attr.completed_at) : '',
+                  fmtDuration(attr.wall_time_s),
+                  attr.seed != null ? `seed ${attr.seed}` : '',
+                  attr.status && attr.status !== 'ok' ? attr.status : ''
+                ].filter(Boolean).join('  ·  ')}
+              </div>
+            </>
+          )}
+
+          {(up.length > 0 || down.length > 0) && (
+            <>
+              <div className="prov__k">Lineage</div>
+              <div className="prov__v prov__lineage">
+                {up.map(n => <LineageChip key={'u' + n.id} n={n} dir="up" onFocus={onFocus} />)}
+                {down.map(n => <LineageChip key={'d' + n.id} n={n} dir="down" onFocus={onFocus} />)}
+              </div>
+            </>
+          )}
         </div>
-        </>
       )}
     </div>
   )

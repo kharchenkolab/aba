@@ -180,8 +180,20 @@ def register_artifacts_from_tool_result(
         exec_id_ptr = result_obj.get("exec_id") if isinstance(result_obj, dict) else None
         if exec_id_ptr:
             try:
-                from core.graph.exec_records import attach_to_run
+                from core.graph.exec_records import attach_to_run, get as _get_exec
                 attach_to_run(exec_id_ptr, analysis_id)
+                # Prov2/Phase 2 — link every DATASET the run used (captured in the
+                # exec record's inputs) as `analysis --used--> dataset`, not just the
+                # focused entity. This is what lets a Result trace back to the dataset
+                # it analyzed even when the recipe read it by path with nothing focused.
+                rec = _get_exec(exec_id_ptr) or {}
+                for inp in rec.get("inputs") or []:
+                    ref = inp.get("ref")
+                    if inp.get("kind") == "dataset" and ref and ref != analysis_id and ref != focused:
+                        try:
+                            add_edge(analysis_id, ref, "used")
+                        except Exception as e:  # noqa: BLE001 — best-effort
+                            _log.debug("analysis -> used dataset edge failed: %s", e)
             except Exception as e:  # noqa: BLE001
                 _log.warning("exec_records.attach_to_run failed: %s", e)
 

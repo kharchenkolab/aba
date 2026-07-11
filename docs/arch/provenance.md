@@ -138,6 +138,24 @@ promotion) is owned by [`entity-model.md`](entity-model.md); this doc owns only 
 it *verifiable*. The agent turn that binds `agent:<run_id>` is
 [`agent-loop.md`](agent-loop.md).
 
+## Surfacing — the provenance evidence view (prov2, 2026-07)
+
+Descriptive/reproducible provenance is captured uniformly; a second concern is showing it to
+the *user* legibly. One assembler, `core/graph/provenance_evidence.evidence(entity_id)`, joins
+all three layers into a single view — **method** (code/command/recipe + code_hash), **inputs**
+(datasets/files + identity), **environment** (language + packages + a cheap drift flag),
+**attribution** (who/when/duration/seed), **lineage** (up/down with edge labels),
+**reproducibility** — resolving a Result/Run to its producing exec(s) when it has no `exec_id`
+of its own (via `includes`/`wasGeneratedBy` edges or `list_by_run`). It feeds three consumers:
+`GET /api/entities/{id}/provenance` (superset of the old neighbourhood; keeps
+`upstream`/`downstream`/`promotion` for back-compat), the agent's `get_provenance` MCP tool
+(so it can answer "how was this made?" in one call), and the frontend `ProvenanceSection`
+(`FocusCanvas.tsx`) — an unobtrusive card footer that expands to a labelled Inputs/Method/
+Environment/By·when/Lineage grid. The `used`-edge writer (`registry.py`) also links every
+dataset the code read (not just a focused one), so a Result traces back to its input dataset.
+Drift here is a cheap pure-sidecar compare against the latest same-thread run; the exact drift
+is still the live `reproduce_from_exec` check. Design: `misc/provenance2.md`.
+
 ## Key implementation references
 
 | Where | What |
@@ -159,11 +177,15 @@ it *verifiable*. The agent turn that binds `agent:<run_id>` is
   re-runs *one* artifact's exec; nothing replays an entire Run's exec chain step-by-step
   against the current env. The pieces exist (`list_by_run` + `aggregated_code_for_run`);
   the driver does not — **confirmed absent from `backend/`**.
-- **`inputs` and `seed` are not captured yet.** `_write_exec_record` records code + env +
-  `produced` + timing, but **not** the run's inputs or RNG seed. So `export_bundle`'s `inputs.json` is thin, drift-vs-inputs
-  isn't checkable, and a re-run isn't bit-stable — the reproduction envelope is *code+env*
-  today, not the full `code/env/inputs/seed`. This is the substantive reason reproducibility
-  trails field coverage.
+- **`inputs`/`seed` are captured at IDENTITY level, best-effort (prov2, 2026-07).**
+  `_write_exec_record` (interactive) and `_write_exec_record_for_job` (background/Slurm) now
+  record `inputs` (the focused entity + registered datasets the code references, via
+  `core/graph/run_inputs.resolve_inputs` — ids + path fingerprints, never bytes) and `seed`
+  (interactive: detected from a seed call in the code, *not* injected — injection would change
+  results; background: the executor-injected seed). Still NOT captured: ad-hoc files read by a
+  path that isn't a registered dataset, and a full content hash of inputs (that stays deferred
+  to `export_bundle`, on demand). So drift-vs-inputs still isn't bit-checkable, but "what
+  dataset did this use?" now answers.
 - **`execution_records` has no `actor` column.** Run-level attribution rides on `run_id`
   (→ `agent:<run_id>`) and the produced entity's own `actor`; a first-class actor on the
   exec row is deferred.
