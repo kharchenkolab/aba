@@ -758,11 +758,18 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # instead of a deep, misleading traceback.
             if res.returncode != 0:
                 try:
-                    from core.exec.env_integrity import env_root_cause
-                    rc = env_root_cause(res.stderr or "")
-                    if rc:
-                        out["env_root_cause"] = rc["note"]
-                        out["base_repair"] = rc["repair"]
+                    from core.exec.env_integrity import env_root_cause, staging_import_note
+                    # Staged prewarm: a missing import may just be the base still
+                    # finishing setup in the background — surface that (and briefly
+                    # wait) instead of "broken base" / a bare ModuleNotFoundError.
+                    st = staging_import_note(res.stderr or "")
+                    if st is not None:
+                        out["env_staging"] = st["note"]
+                    else:
+                        rc = env_root_cause(res.stderr or "")
+                        if rc:
+                            out["env_root_cause"] = rc["note"]
+                            out["base_repair"] = rc["repair"]
                 except Exception:  # noqa: BLE001
                     pass
             if getattr(sess, "_aba_cwd_just_switched", None):

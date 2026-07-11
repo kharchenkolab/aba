@@ -596,6 +596,30 @@ def _base_site_dir() -> Path:
     return Path(sysconfig.get_path("purelib"))
 
 
+def _base_prefix() -> Path:
+    """Base env prefix ($ABA_HOME/env): purelib is <prefix>/lib/pythonX.Y/site-packages."""
+    return _base_site_dir().parents[2]
+
+
+def base_stage() -> str:
+    """Install-time base-build stage from the `.aba-base-stage` marker (written by
+    the installer's create-env / complete-base-env under ABA_ENV_PREWARM=staged):
+    'boot' (minimal base, server started) | 'completing' (full stack installing) |
+    'ready'. Absent ⇒ 'ready' — eager builds and every pre-staging install. Lets the
+    startup self-heal avoid freezing/repairing a base that is intentionally still
+    being built (lazy_env_init.md), and lets the kernel path wait on a completing
+    base instead of erroring on a not-yet-installed import."""
+    try:
+        m = _base_prefix() / ".aba-base-stage"
+        if m.exists():
+            v = m.read_text().strip()
+            if v in ("boot", "completing", "ready"):
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    return "ready"
+
+
 # Known-harmless pip-check noise (optional extras that are intentionally absent).
 _PIPCHECK_IGNORE = ("tensorboard", "scvi-tools")
 _MISSING_RE = re.compile(r"requires (\S+?),? which is not installed", re.I)
@@ -941,6 +965,16 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
             log(f"[startup] ENV SELF-CHECK PROBLEM: {bad}")
     except Exception as e:  # noqa: BLE001 — a check must never block startup
         log(f"[startup] env self-check errored (non-fatal): {e}")
+    # Staged prewarm (lazy_env_init.md): the installer is still building the base
+    # (boot → completing → ready). Do NOT deep-verify/repair/freeze mid-write — a
+    # repair-from-lock would fight the in-flight `env update`, and a read-only freeze
+    # would make it fail ("Lacking write permission"). The installer owns the base
+    # until `ready`; the first boot AFTER completion has no stamp yet, so the normal
+    # deep verify + freeze + stamp runs then.
+    stage = base_stage()
+    if stage in ("boot", "completing"):
+        log(f"[startup] base staging in progress (stage={stage}) — skipping deep verify + freeze")
+        return {"skipped": "staging", "stage": stage}
     if base_is_readonly_fs():
         log("[startup] base on read-only filesystem (immutable image) — skipping deep verify")
         return {"skipped": "readonly_fs"}
@@ -1009,6 +1043,47 @@ def env_root_cause(stderr: str, *, repair: bool = True) -> Optional[dict]:
     else:
         note += ". Auto-repair did not fully succeed; the environment needs attention."
     return {"note": note, "base_problems": h["problems"], "repair": rep}
+
+
+def staging_import_note(stderr: str, *, wait_s: float = 30.0) -> Optional[dict]:
+    """During STAGED prewarm, a kernel import of a not-yet-installed base package
+    (scanpy/anndata/scvi/…) should read as 'environment still finishing setup', not
+    a code error or a broken base. If the base is boot/completing and `stderr` is a
+    missing-import, briefly wait for completion (emitting progress), then report
+    readiness. Returns None when not applicable (base ready, or not import-shaped) so
+    the normal env_root_cause / user-error path is unchanged. See lazy_env_init.md."""
+    import time
+    if not stderr or not _ENV_FAIL_RE.search(stderr):
+        return None
+    if base_stage() == "ready":
+        return None
+    m = re.search(r"No module named ['\"]([\w.]+)", stderr)
+    mod = (m.group(1).split(".")[0] if m else "")
+    try:
+        from core.runtime import progress
+        progress.emit("finishing environment setup (installing the scientific stack)…", phase="conda")
+    except Exception:  # noqa: BLE001
+        pass
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while time.monotonic() < deadline and base_stage() != "ready":
+        time.sleep(2.0)
+    if base_stage() == "ready":
+        if mod:
+            try:
+                ok, _ = verify_python_imports([mod])
+            except Exception:  # noqa: BLE001
+                ok = True
+            if not ok:
+                return None   # base complete but this is a genuine extra → ensure_capability
+        return {"note": ("The analysis environment just finished setting up"
+                         + (f" ({mod} is ready)" if mod else "")
+                         + " — re-run the cell."),
+                "ready": True, "module": mod}
+    return {"note": ("The analysis environment is still finishing setup in the background "
+                     "(installing the scientific + bio stack). "
+                     + (f"`{mod}` isn't available yet — " if mod else "")
+                     + "data management and basic Python already work; re-run this in a minute."),
+            "ready": False, "module": mod}
 
 
 def verify_r_library(libname: str, project_id: Optional[str] = None) -> tuple[bool, str]:
