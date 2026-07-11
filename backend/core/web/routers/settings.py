@@ -189,6 +189,44 @@ def settings_environment_get():
     }
 
 
+@router.get("/api/settings/environment/prewarm")
+def settings_environment_prewarm():
+    """Staged-prewarm status for the ambient 'setting up…' pill + EnvironmentTab
+    (lazy_env_init.md): the base-build stage and which module blocks are ready. Cheap
+    — find_spec presence + a tools-env check, no subprocess imports."""
+    import os
+    import importlib.util as _u
+    try:
+        from core.exec.env_integrity import base_stage
+        stage = base_stage()
+    except Exception:  # noqa: BLE001
+        stage = "ready"
+
+    def _spec(m: str) -> bool:
+        try:
+            return _u.find_spec(m) is not None
+        except Exception:  # noqa: BLE001
+            return False
+    try:
+        from core.exec.materialize import tools_env
+        r_ready = (tools_env() / "bin" / "Rscript").exists()
+    except Exception:  # noqa: BLE001
+        r_ready = False
+    modules = [
+        {"id": "single_cell", "label": "Single-cell (scanpy, anndata)", "ready": _spec("scanpy")},
+        {"id": "deep_learning", "label": "Deep learning (PyTorch, scVI)",
+         "ready": _spec("scvi") or _spec("torch")},
+        {"id": "r_bioc", "label": "R / Bioconductor (Seurat, DESeq2)", "ready": r_ready},
+    ]
+    prewarm = (os.environ.get("ABA_ENV_PREWARM") or "eager").strip().lower()
+    return {
+        "prewarm": prewarm,
+        "stage": stage,                                  # boot | completing | ready
+        "setting_up": stage in ("boot", "completing"),
+        "modules": modules,
+    }
+
+
 @router.post("/api/settings/environment")
 def settings_environment_set(req: EnvGateRequest):
     """Set the user's recipe-visibility preference (user scope). Empty string
