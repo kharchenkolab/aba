@@ -575,6 +575,21 @@ def status() -> dict:
     }
 
 
+@router.get("/auth/model")
+def control_get_model() -> dict:
+    """Control-page model selector — kept on /api/auth/model even though the credential
+    web routes are retired (lazy_env_init.md): re-homed here from auth.py's dropped
+    router. Config-only, no credential. Delegates to auth.get_model_tool."""
+    from aba_installer.auth import get_model_tool
+    return get_model_tool()
+
+
+@router.post("/auth/model")
+def control_set_model(payload: dict) -> dict:
+    from aba_installer.auth import set_model_tool
+    return set_model_tool(payload)
+
+
 @router.get("/logs")
 def logs(tail: int = 200) -> dict:
     """Recent backend log lines. UI displays them when the user clicks

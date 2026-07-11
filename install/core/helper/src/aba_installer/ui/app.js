@@ -41,9 +41,12 @@
     if (!status.installed) {
       fetch('/api/install/auto', { method: 'POST' }).catch(() => {});
     }
-    const authState = await fetchJSON('/api/auth/status');
-    if (!authState.credentials) return mountWelcome();        // sign in (install runs behind it)
-    if (!status.installed) return mountSetup();               // authed; install still finishing
+    // Credential setup is DEFERRED to the running app (Settings → Agent; the
+    // FirstRunGate prompts on first load). The installer no longer gates on auth —
+    // it installs, starts the backend CREDENTIAL-LESS, and opens the app, which works
+    // for any provider (Anthropic/OpenAI). See misc/lazy_env_init.md. (mountWelcome +
+    // the page-welcome template are now dead code — delete in a cleanup pass.)
+    if (!status.installed) return mountSetup();               // install still finishing
     if (!status.backend_running) {                            // installed → start the backend once
       if (!window._abaAutoStarted) {
         window._abaAutoStarted = true;
