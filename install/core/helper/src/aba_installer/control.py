@@ -128,17 +128,16 @@ def _is_installed() -> bool:
 
 
 def _agent_repair_enabled() -> bool:
-    """Default ON as of 2026-06-11. The agent-repair hook itself fails
-    soft when the `claude` CLI / ABA credentials aren't available (see
-    agent_repair.run_repair's no-credential and no-claude gates added in
-    Tier-0 commits d1d0812 + 318b29a), so a default-on policy doesn't
-    fail an install for users without a Claude session — it just turns
-    into a no-op. The user explicit opt-out is ABA_INSTALL_AGENT_REPAIR=0
-    (or 'false'/'no'/'off')."""
-    raw = (os.environ.get("ABA_INSTALL_AGENT_REPAIR") or "").lower().strip()
-    if raw in ("0", "false", "no", "off"):
-        return False
-    return True   # default ON
+    """RETIRED 2026-07-11 (lazy_env_init.md). The install-time agent repair drove
+    `claude -p` — Claude-ONLY (no OpenAI), needs the `claude` binary, and duplicated
+    the backend's OAuth/credential logic. Under the credential-deferral direction the
+    server starts credential-less and the running MULTI-PROVIDER agent will own any
+    post-start remediation (the Settings → Modules stage). So this is now always off:
+    the repair hook + preflight become no-ops and the install uses static remediation
+    (which is what the robust pre-server steps rely on anyway). Kept as a single seam
+    to flip if we ever reinstate an install-time agent; agent_repair.py is now dead
+    code (safe to delete in a cleanup). ABA_INSTALL_AGENT_REPAIR no longer enables it."""
+    return False
 
 
 def _repair_hook(on_event):
