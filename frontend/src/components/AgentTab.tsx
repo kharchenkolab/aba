@@ -5,8 +5,9 @@
  *  - MODEL is the hero: a dropdown showing only models the CURRENT credential can run
  *    (subscription → Codex gpt-5.x; API key → gpt-4o/4.1; Anthropic → all), plus a
  *    fixed-height status line that background-pings the picked model (✓ Ready / ✗ why).
- *  - PROVIDER + CREDENTIAL are rare, so they live in a compact one-line summary with a
- *    collapsible "Manage" panel (auto-opens only when the credential is missing/invalid).
+ *  - PROVIDER: a dropdown; switching it auto-picks that provider's best usable model.
+ *    Below it, the credential — the status stays visible, and "Change" opens an inline
+ *    editor with Cancel at the TOP and a Subscription | API-key TOGGLE (one at a time).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -48,6 +49,24 @@ function modelUsable(o: ModelOption, mode: CredMode): boolean {
   return o.via === 'any' || mode === 'none' || o.via === mode
 }
 
+// The best model to default to for a provider: the first one in catalog order (which
+// is authored best-first) that the given credential can actually run. Null when the
+// provider has no WORKING credential yet — we don't switch to an unrunnable model,
+// we prompt to connect first (`modelUsable` treats mode 'none' as "show all", which
+// is right for the picker but wrong for an auto-apply, hence the explicit gate).
+function bestUsableModel(options: ModelOption[], provider: Provider, cred: CredStatus | null): string | null {
+  if (!cred?.valid) return null
+  const mode = credMode(cred)
+  const usable = options.filter(o => o.provider === provider && modelUsable(o, mode))
+  return usable.length ? usable[0].model : null
+}
+
+// Which credential method to preselect when opening the editor: the one already in
+// use (a bare API key → "key"), else the subscription path (the common/recommended).
+function defaultMethod(c: CredStatus | null): 'subscription' | 'key' {
+  return c?.has_api_key && !c?.has_oauth ? 'key' : 'subscription'
+}
+
 function credStatusLine(c: CredStatus | null): string {
   if (!c) return 'Not connected'
   if (c.has_oauth) {
@@ -80,8 +99,8 @@ export default function AgentTab() {
   const pingSeq = useRef(0)
 
   const [cred, setCred] = useState<CredStatus | null>(null)
-  const [manageOpen, setManageOpen] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [credMethod, setCredMethod] = useState<'subscription' | 'key'>('subscription')
   const [credInput, setCredInput] = useState('')
   const [credBusy, setCredBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
@@ -89,6 +108,16 @@ export default function AgentTab() {
   const [subCode, setSubCode] = useState('')
   const [subWaiting, setSubWaiting] = useState(false)           // callback-flow polling
   const [credMsg, setCredMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // Transient "Saved" confirmation — makes immediate-apply legible so closing the
+  // panel reads as intentional (a model change otherwise applied silently).
+  const [saved, setSaved] = useState(false)
+  const savedTimer = useRef<number | undefined>(undefined)
+  const flashSaved = useCallback(() => {
+    setSaved(true)
+    if (savedTimer.current) window.clearTimeout(savedTimer.current)
+    savedTimer.current = window.setTimeout(() => setSaved(false), 2400)
+  }, [])
+  useEffect(() => () => { if (savedTimer.current) window.clearTimeout(savedTimer.current) }, [])
 
   // Background model check — confirms the current credential can run `model`. Guarded
   // by a sequence so a slow earlier ping can't overwrite a newer selection's result.
@@ -115,8 +144,8 @@ export default function AgentTab() {
       if (r.ok) {
         const d = (await r.json()) as CredStatus
         setCred(d)
-        setEditing(!d.valid)
-        if (!d.valid) setManageOpen(true)   // surface a broken/absent credential
+        if (!d.valid) setCredMethod(defaultMethod(d))
+        setEditing(!d.valid)   // a broken/absent credential opens the editor
         return d
       }
     } catch { /* ignore */ }
@@ -141,10 +170,25 @@ export default function AgentTab() {
     return () => { cancelled = true }
   }, [loadCred, pingModel])
 
-  function switchProvider(p: Provider) {
+  async function switchProvider(p: Provider) {
     if (p === provider) return
     setProvider(p); setCredInput(''); setCredMsg(null); setEditing(false); setSubFlow(null)
-    loadCred(p)
+    const c = await loadCred(p)
+    if (!llm) return
+    // Default to the best model available on the new provider, applied immediately —
+    // so switching provider never leaves you on a "choose a model" placeholder.
+    const best = bestUsableModel(llm.options, p, c)
+    if (best && best !== llm.current.model) pickModel(best)
+    else if (!best) { setCredMethod(defaultMethod(c)); setEditing(true) }   // needs a credential
+  }
+
+  function openEditor() {
+    setCredMsg(null); setCredInput(''); setSubFlow(null); setSubCode('')
+    setCredMethod(defaultMethod(cred))
+    setEditing(true)
+  }
+  function cancelEdit() {
+    setEditing(false); setCredInput(''); setCredMsg(null); setSubFlow(null); setSubCode('')
   }
 
   async function pickModel(model: string) {
@@ -158,6 +202,7 @@ export default function AgentTab() {
       if (r.ok) {
         const d = await r.json()
         setLlm(s => (s ? { ...s, current: d.current } : s))
+        flashSaved()
         pingModel(model)
       } else setErr('Could not change the model.')
     } catch { setErr('Could not change the model.') } finally { setSaving(false) }
@@ -255,7 +300,10 @@ export default function AgentTab() {
     <>
       {/* MODEL — the frequent control, up top */}
       <section className="settings__section agent-model">
-        <h3 className="settings__section-title">Model</h3>
+        <div className="agent-model__head">
+          <h3 className="settings__section-title">Model</h3>
+          {saved && <span className="agent-saved" role="status">Saved ✓</span>}
+        </div>
         <p className="settings__hint">
           The model this project's assistant uses — effective on your next message.
         </p>
@@ -296,108 +344,110 @@ export default function AgentTab() {
         )}
       </section>
 
-      {/* PROVIDER + CREDENTIAL — rare, so a compact summary with a collapsible panel */}
+      {/* PROVIDER + CREDENTIAL — its own section, always visible alongside Model */}
       <section className="settings__section agent-account">
-        <div className="agent-summary">
-          <span className={`agent-summary__dot ${dotClass}`} aria-hidden>●</span>
-          <span className="agent-summary__text">
-            <strong>{providerName(provider)}</strong>
-            <span className="agent-summary__sep"> · </span>
-            {credStatusLine(cred)}
-          </span>
-          <button className="agent-summary__toggle" aria-expanded={manageOpen}
-            onClick={() => { setCredMsg(null); setManageOpen(o => !o) }}>
-            {manageOpen ? 'Done' : 'Manage'}
-          </button>
-        </div>
+        <h3 className="settings__section-title">Provider</h3>
+        <select id="provider-select" className="settings-select" aria-label="Provider" value={provider}
+          onChange={e => switchProvider(e.target.value as Provider)}>
+          {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
 
-        {manageOpen && (
-          <div className="agent-manage">
-            <label className="settings__select-label" htmlFor="provider-select">Provider</label>
-            <select id="provider-select" className="settings-select" value={provider}
-              onChange={e => switchProvider(e.target.value as Provider)}>
-              {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </select>
+        <label className="settings__select-label">Credential</label>
+        {!cred ? (
+          <div className="settings__empty">Loading…</div>
+        ) : (
+          <>
+            {/* The current credential stays visible even while editing — you never
+                lose context, and the way out (Cancel) sits at the top of the editor. */}
+            <div className="cred-status">
+              <span className={`cred-status__dot ${dotClass}`} aria-hidden>●</span>
+              <span className="cred-status__text">{credStatusLine(cred)}</span>
+              {!editing && (
+                <button className="cred-status__edit" onClick={openEditor}>
+                  {cred.valid ? 'Change' : 'Connect'}
+                </button>
+              )}
+            </div>
 
-            <label className="settings__select-label">Credential</label>
-            {!cred ? (
-              <div className="settings__empty">Loading…</div>
-            ) : !editing ? (
-              <div className="cred-status">
-                <span className={`cred-status__dot ${dotClass}`} aria-hidden>●</span>
-                <span className="cred-status__text">{credStatusLine(cred)}</span>
-                <button className="cred-status__change"
-                  onClick={() => { setCredMsg(null); setEditing(true) }}>Change</button>
-              </div>
-            ) : (
+            {editing && (
               <div className="cred-edit">
-                <div className="cred-method">
-                  <div className="cred-method__title">API key or token</div>
-                  <div className="cred-row">
-                    <input
-                      type="password" placeholder={keyPlaceholder(provider)} autoComplete="off"
-                      value={credInput} disabled={credBusy}
-                      onChange={e => setCredInput(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') saveCred() }}
-                    />
-                    <button disabled={credBusy || !credInput.trim()} onClick={saveCred}>
-                      {credBusy ? 'Checking…' : 'Save'}
-                    </button>
-                  </div>
-                  <span className="cred-field__hint">{keyHint(provider)}</span>
-                </div>
-
-                <div className="cred-or"><span>or</span></div>
-
-                <div className="cred-method">
-                  <div className="cred-method__title">Subscription</div>
-                  {subWaiting ? (
-                    <span className="cred-field__hint">
-                      Waiting for sign-in… complete it in the other tab, then return here.
-                    </span>
-                  ) : !subFlow ? (
-                    <>
-                      <button className="cred-sub" disabled={subBusy} onClick={startSubscription}>
-                        {subBusy ? 'Opening sign-in…' : `${subLabel(provider)} →`}
-                      </button>
-                      <span className="cred-field__hint">
-                        Use your {provider === 'openai' ? 'ChatGPT / Codex' : 'Claude.ai'} plan — opens a
-                        sign-in tab{provider === 'openai' ? '; ABA captures the result automatically.' : ', then paste the code it shows.'}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <div className="cred-row">
-                        <input
-                          type="text" placeholder="Paste the code from the sign-in page" autoComplete="off"
-                          value={subCode} disabled={subBusy}
-                          onChange={e => setSubCode(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') submitSubscriptionCode() }}
-                        />
-                        <button disabled={subBusy || !subCode.trim()} onClick={submitSubscriptionCode}>
-                          {subBusy ? 'Connecting…' : 'Connect'}
-                        </button>
-                      </div>
-                      <span className="cred-field__hint">
-                        Signed in in the other tab? Paste the code shown there.{' '}
-                        <button className="cred-linkbtn" onClick={() => { setSubFlow(null); setSubCode('') }}>Cancel</button>
-                      </span>
-                    </>
+                <div className="cred-edit__head">
+                  <span className="cred-edit__title">
+                    {cred.valid ? 'Change credential' : `Connect ${providerName(provider)}`}
+                  </span>
+                  {!credBusy && !subBusy && (
+                    <button className="cred-linkbtn" onClick={cancelEdit}>Cancel</button>
                   )}
                 </div>
 
-                {cred.valid && !credBusy && !subBusy && (
-                  <button className="cred-cancel"
-                    onClick={() => { setEditing(false); setCredInput(''); setCredMsg(null) }}>
-                    Cancel
-                  </button>
+                {/* One method at a time (toggle) — compact, no tall stacked block. */}
+                <div className="cred-methods" role="tablist" aria-label="Credential method">
+                  <button role="tab" aria-selected={credMethod === 'subscription'}
+                    className={`cred-methods__tab ${credMethod === 'subscription' ? 'is-active' : ''}`}
+                    onClick={() => setCredMethod('subscription')}>Subscription</button>
+                  <button role="tab" aria-selected={credMethod === 'key'}
+                    className={`cred-methods__tab ${credMethod === 'key' ? 'is-active' : ''}`}
+                    onClick={() => setCredMethod('key')}>API key</button>
+                </div>
+
+                {credMethod === 'key' ? (
+                  <div className="cred-method">
+                    <div className="cred-row">
+                      <input
+                        type="password" placeholder={keyPlaceholder(provider)} autoComplete="off"
+                        value={credInput} disabled={credBusy}
+                        onChange={e => setCredInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveCred() }}
+                      />
+                      <button disabled={credBusy || !credInput.trim()} onClick={saveCred}>
+                        {credBusy ? 'Checking…' : 'Save'}
+                      </button>
+                    </div>
+                    <span className="cred-field__hint">{keyHint(provider)}</span>
+                  </div>
+                ) : (
+                  <div className="cred-method">
+                    {subWaiting ? (
+                      <span className="cred-field__hint">
+                        Waiting for sign-in… complete it in the other tab, then return here.
+                      </span>
+                    ) : !subFlow ? (
+                      <>
+                        <button className="cred-sub" disabled={subBusy} onClick={startSubscription}>
+                          {subBusy ? 'Opening sign-in…' : `${subLabel(provider)} →`}
+                        </button>
+                        <span className="cred-field__hint">
+                          Use your {provider === 'openai' ? 'ChatGPT / Codex' : 'Claude.ai'} plan — opens a
+                          sign-in tab{provider === 'openai' ? '; ABA captures the result automatically.' : ', then paste the code it shows.'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <div className="cred-row">
+                          <input
+                            type="text" placeholder="Paste the code from the sign-in page" autoComplete="off"
+                            value={subCode} disabled={subBusy}
+                            onChange={e => setSubCode(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') submitSubscriptionCode() }}
+                          />
+                          <button disabled={subBusy || !subCode.trim()} onClick={submitSubscriptionCode}>
+                            {subBusy ? 'Connecting…' : 'Connect'}
+                          </button>
+                        </div>
+                        <span className="cred-field__hint">
+                          Signed in in the other tab? Paste the code shown there.{' '}
+                          <button className="cred-linkbtn" onClick={() => { setSubFlow(null); setSubCode('') }}>Cancel</button>
+                        </span>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             )}
-            {credMsg && (
-              <div className={credMsg.ok ? 'settings__note' : 'settings__error'}>{credMsg.text}</div>
-            )}
-          </div>
+          </>
+        )}
+        {credMsg && (
+          <div className={credMsg.ok ? 'settings__note' : 'settings__error'}>{credMsg.text}</div>
         )}
       </section>
     </>

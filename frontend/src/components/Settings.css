@@ -173,12 +173,11 @@
 .cred-status__dot.is-ok { color: #16a34a; }
 .cred-status__dot.is-bad { color: #dc2626; }
 .cred-status__text { font-size: 14px; color: #334155; }
-.cred-status__change { margin-left: auto; padding: 5px 12px; border: 1px solid #cbd5e1;
-  background: #fff; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px; color: #334155; }
-.cred-status__change:hover { background: #f8fafc; border-color: #94a3b8; }
-.cred-cancel { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #475569;
-  border-radius: 6px; cursor: pointer; font: inherit; }
-.cred-cancel:hover { background: #f8fafc; }
+/* A quiet inline "Edit" — NOT a primary button, so it doesn't read as a confirm. */
+.cred-status__edit { margin-left: auto; padding: 4px 4px; border: none; background: none;
+  cursor: pointer; font: inherit; font-size: 12.5px; color: #2563eb; }
+.cred-status__edit:hover { text-decoration: underline; }
+.cred-status__edit:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; border-radius: 3px; }
 
 /* Compact dropdowns for the Model + pipeline-visibility settings (replace the
    overflow-prone radio lists in a narrow panel). */
@@ -196,26 +195,34 @@
 .env-detail { color: var(--text-4, #6f6862); }
 
 /* ── tabbed body + Agent-tab account block (provider/credential) ───────────── */
-.settings__body { display: block; }
+.settings__body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
-/* provider segmented control */
-.provider-seg { display: inline-flex; margin: 4px 0 12px; border: 1px solid #cbd5e1;
+/* Model section header + the transient "Saved ✓" confirmation. */
+.agent-model__head { display: flex; align-items: baseline; gap: 10px; }
+.agent-model__head .settings__section-title { margin-bottom: 0; }
+.agent-saved {
+  font-size: 11.5px; font-weight: 600; color: #15803d; background: #dcfce7;
+  padding: 1px 8px; border-radius: 9999px; animation: agent-saved-in 140ms ease-out;
+}
+@keyframes agent-saved-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .agent-saved { animation: none; } }
+
+/* credential editor: header (title + Cancel at the top) + a method TOGGLE so only
+   one method (Subscription | API key) shows at a time — compact, no tall stack. */
+.cred-edit { margin-top: 10px; }
+.cred-edit__head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px; }
+.cred-edit__title { font-size: 12.5px; font-weight: 600; color: #334155; }
+.cred-methods { display: inline-flex; margin: 0 0 12px; border: 1px solid #cbd5e1;
   border-radius: 8px; overflow: hidden; background: #f8fafc; }
-.provider-seg__btn { padding: 6px 16px; border: none; background: transparent; font: inherit;
-  font-size: 13px; color: #475569; cursor: pointer; border-right: 1px solid #e2e8f0; }
-.provider-seg__btn:last-child { border-right: none; }
-.provider-seg__btn.is-active { background: #2563eb; color: #fff; font-weight: 600; }
-.provider-seg__btn:hover:not(.is-active) { background: #eef2ff; }
-
-/* credential editor: two methods (key / subscription) with an "or" divider */
-.cred-edit { margin-top: 6px; }
-.cred-edit__label { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 8px; }
+.cred-methods__tab { padding: 5px 16px; border: none; background: transparent; font: inherit;
+  font-size: 12.5px; color: #475569; cursor: pointer; border-right: 1px solid #e2e8f0; }
+.cred-methods__tab:last-child { border-right: none; }
+.cred-methods__tab.is-active { background: #2563eb; color: #fff; font-weight: 600; }
+.cred-methods__tab:hover:not(.is-active) { background: #eef2ff; }
 .cred-method { margin: 8px 0; }
 .cred-method__title { font-size: 12px; font-weight: 600; color: #64748b;
   text-transform: uppercase; letter-spacing: .03em; margin-bottom: 5px; }
-.cred-or { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; color: #94a3b8;
-  font-size: 12px; }
-.cred-or::before, .cred-or::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
 .cred-sub { padding: 9px 16px; border: 1px solid #2563eb; background: #fff; color: #2563eb;
   border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
 .cred-sub:hover:not(:disabled) { background: #eff6ff; }
@@ -223,7 +230,7 @@
 .cred-linkbtn { background: none; border: none; color: #2563eb; cursor: pointer; font: inherit;
   font-size: 12px; padding: 0; text-decoration: underline; }
 
-/* ── Agent tab: model status line + collapsible account ────────────────────── */
+/* ── Agent tab: model status line ──────────────────────────────────────────── */
 /* Background-ping result under the Model dropdown. Fixed min-height (two lines)
    so switching models never resizes the panel. */
 .model-status {
@@ -239,22 +246,3 @@
 .model-status.is-bad .model-status__text { color: #b91c1c; }
 .model-status__spin { color: #94a3b8; animation: model-status-spin 0.9s linear infinite; }
 @keyframes model-status-spin { to { transform: rotate(360deg); } }
-
-/* Collapsed provider + credential summary (the calm resting state). */
-.agent-summary { display: flex; align-items: center; gap: 8px; }
-.agent-summary__dot { font-size: 10px; line-height: 1; }
-.agent-summary__dot.is-ok { color: #16a34a; }
-.agent-summary__dot.is-bad { color: #dc2626; }
-.agent-summary__text { font-size: 13.5px; color: #334155; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-.agent-summary__text strong { font-weight: 600; color: #0f172a; }
-.agent-summary__sep { color: #cbd5e1; }
-.agent-summary__toggle { margin-left: auto; padding: 5px 12px; border: 1px solid #cbd5e1;
-  background: #fff; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px;
-  color: #334155; white-space: nowrap; }
-.agent-summary__toggle:hover { background: #f8fafc; border-color: #94a3b8; }
-
-/* Expanded Manage panel. */
-.agent-manage { margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
-.agent-manage .settings__select-label:first-child { margin-top: 0; }
-.agent-manage .cred-status { margin-top: 6px; }
