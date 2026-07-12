@@ -108,6 +108,31 @@ def test_ensure_module_installs_without_changing_mode(monkeypatch):
     assert rec.ensure_module("does-not-exist") is None
 
 
+def test_refresh_installed_refreshes_on_and_installed_first_use(monkeypatch):
+    # aba update path: ON module + an already-INSTALLED first_use module refresh
+    # (re-run their version-aware installs); a not-installed first_use module is skipped.
+    # python-bio on. r-bio first_use + present (probe True). viewer-pagoda3 first_use + absent.
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: s.id in ("python-bio", "r-bio"))
+    calls = []
+    res = rec.refresh_installed(runner=_fake_runner(calls), log=lambda *_: None)
+    ran = {c[0].split("/")[-1] for c in calls}
+    assert "install-python-bio.sh" in ran                # ON → refreshed
+    assert "install-r-bio.sh" in ran                     # first_use + installed → refreshed
+    assert "install-viewer-pagoda3.sh" not in ran        # first_use + not installed → skipped
+    assert res["viewer-pagoda3"] == "skipped"
+    assert res["python-bio"] is True and res["r-bio"] is True
+
+
+def test_refresh_installed_skips_off_even_if_present(monkeypatch):
+    # OFF wins over presence: an update NEVER refreshes a module the user turned off.
+    st.set_desired("r-bio", "off")
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: True)   # artifacts happen to be on disk
+    calls = []
+    res = rec.refresh_installed(runner=_fake_runner(calls), log=lambda *_: None)
+    assert res["r-bio"] == "disabled"
+    assert "install-r-bio.sh" not in {c[0].split("/")[-1] for c in calls}
+
+
 def test_ensure_module_off_does_not_install(monkeypatch):
     monkeypatch.setattr(rec, "run_module", lambda *a, **k: None)
     monkeypatch.setattr(mgr, "probe_ready", lambda s: False)

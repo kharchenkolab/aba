@@ -127,6 +127,31 @@ def reconcile(*, runner: Runner = _default_runner, log: Callable[[str], None] = 
     return results
 
 
+def refresh_installed(*, runner: Runner = _default_runner,
+                      log: Callable[[str], None] = print) -> dict:
+    """Re-provision the modules the user ACTUALLY has — the `aba update` path.
+
+    Re-runs the (idempotent, version-aware) install for every module that is
+    ON or already INSTALLED, so an update picks up a pinned-artifact bump the
+    presence-based `ready` probe can't see (lstar git ref, pagoda3 dist zip).
+    SKIPS off modules and first_use modules that were never installed — an
+    update refreshes what you have, it never eagerly adds a module you didn't
+    ask for. (This is why the installer/updater no longer hardcodes the lstar /
+    pagoda3 steps — misc/modules.md: the reconciler owns modules.)"""
+    results: dict[str, object] = {}
+    for spec in registry.all_modules():
+        if manager.mode(spec) == "off":
+            results[spec.id] = "disabled"
+            continue
+        # on → always; first_use → only if it's already installed on this box.
+        if manager.mode(spec) != "on" and manager.actual_state(spec) != "ready":
+            results[spec.id] = "skipped"
+            continue
+        log(f"[modules] {spec.id}: refreshing (aba update)")
+        results[spec.id] = run_module(spec, runner=runner, log=log)
+    return results
+
+
 def start(*, log: Callable[[str], None] = print) -> bool:
     """Kick off a one-shot background reconcile in a daemon thread. Idempotent — a
     second call while one is running is a no-op. Returns True if it started a thread."""
