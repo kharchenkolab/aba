@@ -156,36 +156,52 @@ def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> None:
         log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
 
 
-def disable_module(module_id: str, *, remove: bool = False,
-                   log: Callable[[str], None] = print) -> dict | None:
-    """Set desired=disabled. With remove=True, also delete the module's on-disk
-    artifacts to reclaim space (removable modules only). Returns the view, or None for
-    an unknown id. Raises ValueError if remove is asked for a non-removable module."""
+def _kick_install(spec: ModuleSpec, *, log: Callable[[str], None]) -> None:
+    """Queue + launch a single module's install in a background thread (no-op if it's
+    already ready/installing)."""
+    if manager.actual_state(spec) in ("ready", "installing"):
+        return
+    state.set_status(spec.id, "queued")
+
+    def _work():
+        run_module(spec, log=log)
+
+    threading.Thread(target=_work, name=f"module_install_{spec.id}", daemon=True).start()
+
+
+def set_mode(module_id: str, new_mode: str, *, remove: bool = False,
+             log: Callable[[str], None] = print) -> dict | None:
+    """Set a module's state to on | first_use | off (the 3-state control). Effects:
+      • on        → persist + install now (background).
+      • first_use → persist only (installs when the capability is first used).
+      • off       → persist; with remove=True also delete artifacts to reclaim disk
+                    (removable modules only).
+    Returns the view, or None for an unknown id. Raises ValueError on a bad mode or a
+    remove of a non-removable module."""
     spec = registry.get(module_id)
     if spec is None:
         return None
-    state.set_desired(module_id, "disabled")
-    if remove:
-        if not spec.removable:
-            raise ValueError(f"{module_id} is not removable (it lives in the base env)")
-        _remove_artifacts(spec, log)
-        state.set_status(module_id, "idle")
+    if new_mode not in registry.STATES:
+        raise ValueError(f"bad module state {new_mode!r} (expected one of {registry.STATES})")
+    state.set_desired(module_id, new_mode)
+    if new_mode == "off":
+        if remove:
+            if not spec.removable:
+                raise ValueError(f"{module_id} is not removable (it lives in the base env)")
+            _remove_artifacts(spec, log)
+            state.set_status(module_id, "idle")
+    elif new_mode == "on":
+        _kick_install(spec, log=log)
     return manager.get_view(module_id)
 
 
 def ensure_module(module_id: str, *, log: Callable[[str], None] = print) -> dict | None:
-    """First-use / manual enable: persist desired=enabled and, if not already
-    ready/installing, launch this module's install in a background thread. Returns the
-    module view (with the freshly-updated status) or None for an unknown id."""
+    """First-use / retry: install this module NOW if its mode allows auto-install (on
+    or first_use) and it isn't ready/installing. Does NOT change the mode. Returns the
+    module view, or None for an unknown id. A module set to `off` is left untouched."""
     spec = registry.get(module_id)
     if spec is None:
         return None
-    state.set_desired(module_id, "enabled")
-    if manager.actual_state(spec) not in ("ready", "installing"):
-        state.set_status(module_id, "queued")
-
-        def _work():
-            run_module(spec, log=log)
-
-        threading.Thread(target=_work, name=f"module_install_{module_id}", daemon=True).start()
+    if manager.allows_auto_install(spec):
+        _kick_install(spec, log=log)
     return manager.get_view(module_id)

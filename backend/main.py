@@ -1282,30 +1282,61 @@ def viewer_launch_page():
 # pagoda3 bundle lives is bio/viewer domain knowledge — owned by the launcher, not
 # the app root; we just wire the mount at the right ordering point.
 from content.bio.viewers.launchers.pagoda3 import pagoda3_dist_path
-_PAGODA3_DIST = pagoda3_dist_path()
 
 
-class _IsolatedStatic(StaticFiles):
-    """StaticFiles that stamps cross-origin-isolation headers on every
-    response — pagoda3's compute workers use SharedArrayBuffer, which
-    requires COOP: same-origin + COEP: require-corp on the document.
-    (If isolation ever misbehaves, pagoda3's ?noiso=1 falls back to the
-    main thread.)"""
-    async def get_response(self, path, scope):
-        resp = await super().get_response(path, scope)
-        resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-        resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
-        resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-        # index.html has a stable URL but its content (hashed asset refs) changes
-        # every build — never let the browser heuristically cache it, or it keeps
-        # loading dead asset hashes → blank. Hashed assets stay cacheable.
-        if (resp.headers.get("content-type") or "").startswith("text/html"):
-            resp.headers["Cache-Control"] = "no-store, must-revalidate"
-        return resp
+def _pagoda3_iso(resp: Response) -> Response:
+    """Stamp cross-origin-isolation headers — pagoda3's compute workers use
+    SharedArrayBuffer, which needs COOP: same-origin + COEP: require-corp. HTML is
+    never cached (hashed asset refs change per build)."""
+    resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    resp.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    if (resp.headers.get("content-type") or "").startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
-if (_PAGODA3_DIST / "index.html").is_file():
-    app.mount("/pagoda3", _IsolatedStatic(directory=str(_PAGODA3_DIST), html=True), name="pagoda3")
+def _pagoda3_unavailable() -> HTMLResponse:
+    """The viewer dist isn't installed (module first_use/off/mid-install). Kick a
+    first-use install (unless off) and return a friendly page with a one-click
+    Enable/Retry — NEVER a 500. (viewer-pagoda3 is a module: misc/modules.md.)"""
+    note = None
+    try:
+        from core.modules.first_use import ensure_for_trigger
+        note = ensure_for_trigger("pagoda3") or {}
+    except Exception:  # noqa: BLE001
+        note = {}
+    msg = note.get("note") or "The pagoda3 viewer isn't installed yet."
+    if note.get("can_enable"):   # module is OFF → offer one-click enable
+        action = ("<button onclick=\"fetch('/api/modules/viewer-pagoda3/enable',{method:'POST'})"
+                  ".then(()=>setTimeout(()=>location.reload(),1500))\">Enable &amp; install</button>")
+    else:                        # installing → let the user retry shortly
+        action = "<button onclick=\"location.reload()\">Retry</button>"
+    html = (f"<!doctype html><meta charset=utf-8><title>pagoda3 viewer</title>"
+            f"<body style='font-family:system-ui;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#1f2937'>"
+            f"<h2>pagoda3 viewer</h2><p style='line-height:1.5'>{msg}</p>"
+            f"<p style='margin-top:1.25rem'>{action}</p></body>")
+    return HTMLResponse(html, status_code=503)
+
+
+@app.get("/pagoda3/{path:path}", include_in_schema=False)
+def pagoda3_app(path: str = ""):
+    """Serve pagoda3's static bundle live (resolved per request, not bound at startup)
+    so reclaiming / (re)installing the viewer module never leaves a dead 500 mount.
+    SPA fallback → index.html; path-contained to the dist."""
+    dist = pagoda3_dist_path()
+    if not (dist / "index.html").is_file():
+        return _pagoda3_unavailable()
+    from core.viewers.store_serve import resolve_within
+    target = dist / "index.html"
+    if path:
+        try:
+            cand = resolve_within(dist, path)
+            if cand.is_file():
+                target = cand
+        except ValueError:
+            pass                 # escapes dist → fall back to index.html (SPA route)
+    return _pagoda3_iso(FileResponse(str(target)))
 
 
 @app.get("/pagoda3-store/{pid}/{relpath:path}")

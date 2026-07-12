@@ -126,6 +126,16 @@ def _ensure_r_kernelspec() -> str:
     global _r_spec_ready
     if _r_spec_ready:
         return _R_SPEC_NAME
+    # Module gate (misc/modules.md): R is the r-bio module. If it isn't ready, refuse
+    # with a friendly note — off → nudge to enable; on/first_use → kick the install and
+    # ask to retry. Never silently build a partial R.
+    try:
+        from core.modules.first_use import gate_module
+        _note = gate_module("r-bio")
+    except Exception:  # noqa: BLE001 — the gate must never itself break R
+        _note = None
+    if _note is not None:
+        raise RuntimeError(_note["note"])
     from core.exec.materialize import tools_env
     tenv = tools_env()
     if _r_spec_points_into(_R_SPEC_NAME, tenv):

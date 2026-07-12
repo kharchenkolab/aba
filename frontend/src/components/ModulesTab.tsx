@@ -7,14 +7,21 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+type Mode = 'on' | 'first_use' | 'off'
 interface Module {
   id: string; title: string; description: string
   size: string; est_time: string
-  default_enabled: boolean; removable: boolean; first_use: string[]
-  enabled: boolean
+  default_state: Mode; removable: boolean; first_use: string[]
+  mode: Mode; enabled: boolean
   actual: 'ready' | 'installing' | 'queued' | 'failed' | 'not_installed'
   on_disk: boolean; progress: string | null; error: string | null; version: string | null
 }
+
+const MODE_LABELS: { key: Mode; label: string }[] = [
+  { key: 'on', label: 'On' },
+  { key: 'first_use', label: 'First use' },
+  { key: 'off', label: 'Off' },
+]
 
 function chip(m: Module): { text: string; cls: string } {
   switch (m.actual) {
@@ -22,9 +29,11 @@ function chip(m: Module): { text: string; cls: string } {
     case 'installing': return { text: '⏳ Installing…', cls: 'is-busy' }
     case 'queued': return { text: '• Queued', cls: 'is-busy' }
     case 'failed': return { text: '✗ Failed', cls: 'is-bad' }
-    default: return m.enabled
+    default: return m.mode === 'on'
       ? { text: 'Pending', cls: 'is-busy' }
-      : { text: 'Not installed', cls: 'is-off' }
+      : m.mode === 'first_use'
+        ? { text: 'Installs on first use', cls: 'is-off' }
+        : { text: 'Off', cls: 'is-off' }
   }
 }
 
@@ -60,6 +69,7 @@ export default function ModulesTab() {
       if (r.ok) { const v: Module = await r.json(); setMods(ms => ms?.map(m => m.id === id ? v : m) ?? ms) }
     } catch { /* ignore */ } finally { setBusy(null); load() }
   }
+  const setMode = (id: string, mode: Mode) => act(id, `mode?mode=${mode}`)
 
   if (!mods) return <div className="settings__empty">Loading…</div>
 
@@ -77,17 +87,21 @@ export default function ModulesTab() {
           return (
             <li key={m.id} className="mod-card">
               <div className="mod-card__head">
-                <label className="mod-toggle">
-                  <input type="checkbox" checked={m.enabled} disabled={busy === m.id || installing}
-                    onChange={() => act(m.id, m.enabled ? 'disable' : 'enable')} />
-                  <span className="mod-card__title">{m.title}</span>
-                </label>
+                <span className="mod-card__title">{m.title}</span>
                 <span className={`mod-chip ${c.cls}`}>{c.text}</span>
               </div>
               <p className="mod-card__desc">{m.description}</p>
               <div className="mod-card__meta">
                 <span>{m.size}</span><span>·</span><span>{m.est_time}</span>
-                {!m.enabled && m.first_use.length > 0 && <span>· installs on first use</span>}
+              </div>
+              <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
+                {MODE_LABELS.map(o => (
+                  <button key={o.key}
+                    className={`mod-seg__btn ${m.mode === o.key ? 'is-active' : ''}`}
+                    aria-pressed={m.mode === o.key}
+                    disabled={busy === m.id || m.mode === o.key}
+                    onClick={() => setMode(m.id, o.key)}>{o.label}</button>
+                ))}
               </div>
               {installing && m.progress && <div className="mod-card__progress">{m.progress}</div>}
               {m.actual === 'failed' && (
@@ -97,9 +111,9 @@ export default function ModulesTab() {
                     onClick={() => act(m.id, 'retry')}>Retry</button>
                 </div>
               )}
-              {!m.enabled && m.on_disk && m.removable && (
+              {m.mode === 'off' && m.on_disk && m.removable && (
                 <button className="mod-linkbtn mod-reclaim" disabled={busy === m.id}
-                  onClick={() => act(m.id, 'disable?remove=true')}>Reclaim disk space</button>
+                  onClick={() => act(m.id, 'mode?mode=off&remove=true')}>Reclaim disk space</button>
               )}
             </li>
           )

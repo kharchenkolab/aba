@@ -52,16 +52,24 @@ def _entry(d: dict[str, Any], module_id: str) -> dict[str, Any]:
     return d["modules"].setdefault(module_id, {})
 
 
+# Desired state is one of registry.STATES (on|first_use|off) or None (unset → default).
+# Back-compat: the old binary vocabulary maps enabled→on, disabled→off.
+_LEGACY = {"enabled": "on", "disabled": "off"}
+
+
 def get_desired(module_id: str) -> str | None:
-    """'enabled' | 'disabled' | None (unset → caller falls back to the registry default)."""
+    """'on' | 'first_use' | 'off' | None (unset → caller falls back to the registry
+    default). Legacy 'enabled'/'disabled' values are read as on/off."""
     v = load()["modules"].get(module_id, {}).get("desired")
-    return v if v in ("enabled", "disabled") else None
+    v = _LEGACY.get(v, v)
+    return v if v in ("on", "first_use", "off") else None
 
 
 def set_desired(module_id: str, desired: str | None) -> None:
+    desired = _LEGACY.get(desired, desired)
     d = load()
     e = _entry(d, module_id)
-    if desired in ("enabled", "disabled"):
+    if desired in ("on", "first_use", "off"):
         e["desired"] = desired
     else:
         e.pop("desired", None)

@@ -84,7 +84,7 @@ def test_reconcile_skips_ready(monkeypatch):
 
 
 def test_reconcile_installs_enabled_module(monkeypatch):
-    st.set_desired("r-bio", "enabled")                         # user turned it on
+    st.set_desired("r-bio", "on")                              # user turned it on
     ready = {"r-bio": False}
     monkeypatch.setattr(mgr, "probe_ready", lambda s: ready.get(s.id, False))
     def runner(cmd, env, log_path):
@@ -97,11 +97,32 @@ def test_reconcile_installs_enabled_module(monkeypatch):
     assert st.get_status("r-bio")["status"] == "idle"
 
 
-def test_ensure_module_persists_and_queues(monkeypatch):
+def test_ensure_module_installs_without_changing_mode(monkeypatch):
     monkeypatch.setattr(rec, "run_module", lambda *a, **k: None)   # don't spawn a real build
     monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    # r-bio default first_use → ensure installs, mode UNCHANGED (not forced to on)
     v = rec.ensure_module("r-bio", log=lambda *_: None)
     assert v and v["id"] == "r-bio"
-    assert st.get_desired("r-bio") == "enabled"                # intent persisted
-
+    assert st.get_desired("r-bio") is None and mgr.mode(reg.get("r-bio")) == "first_use"
+    assert st.get_status("r-bio")["status"] == "queued"           # install kicked
     assert rec.ensure_module("does-not-exist") is None
+
+
+def test_ensure_module_off_does_not_install(monkeypatch):
+    monkeypatch.setattr(rec, "run_module", lambda *a, **k: None)
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    st.set_desired("r-bio", "off")
+    rec.ensure_module("r-bio", log=lambda *_: None)
+    assert st.get_status("r-bio")["status"] == "idle"             # NOT queued — off blocks it
+
+
+def test_set_mode_on_installs_off_persists(monkeypatch):
+    monkeypatch.setattr(rec, "run_module", lambda *a, **k: None)
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    rec.set_mode("r-bio", "on", log=lambda *_: None)
+    assert st.get_desired("r-bio") == "on" and st.get_status("r-bio")["status"] == "queued"
+    rec.set_mode("r-bio", "off", log=lambda *_: None)
+    assert st.get_desired("r-bio") == "off"
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        rec.set_mode("r-bio", "bogus")

@@ -33,7 +33,16 @@ def test_list_modules_shape():
 
 def test_enable_persists_and_returns_view():
     v = api.enable_module("r-bio")
-    assert v["id"] == "r-bio" and st.get_desired("r-bio") == "enabled"
+    assert v["id"] == "r-bio" and st.get_desired("r-bio") == "on" and v["mode"] == "on"
+
+
+def test_set_mode_first_use():
+    v = api.set_module_mode("r-bio", "first_use")
+    assert v["mode"] == "first_use" and st.get_desired("r-bio") == "first_use"
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as ei:
+        api.set_module_mode("r-bio", "bogus")
+    assert ei.value.status_code == 400
 
 
 def test_enable_unknown_404():
@@ -43,9 +52,9 @@ def test_enable_unknown_404():
 
 
 def test_disable_keeps_on_disk_by_default(monkeypatch):
-    st.set_desired("r-bio", "enabled")
+    st.set_desired("r-bio", "on")
     v = api.disable_module("r-bio", remove=False)
-    assert st.get_desired("r-bio") == "disabled" and v["enabled"] is False
+    assert st.get_desired("r-bio") == "off" and v["mode"] == "off"
 
 
 def test_disable_remove_nonremovable_400():
@@ -55,21 +64,20 @@ def test_disable_remove_nonremovable_400():
 
 
 def test_disable_remove_deletes_artifacts(monkeypatch, tmp_path):
-    # lay down a fake pagoda3 dist + reader, then remove it
-    monkeypatch.setattr(mgr, "_base_env", lambda: tmp_path / "env")
+    # lay down a fake pagoda3 dist, then reclaim it (reader is core → not touched)
     dist = tmp_path / "vendor" / "pagoda3" / "dist"
     dist.mkdir(parents=True); (dist / "index.html").write_text("<html>")
-    (tmp_path / "env" / "lib" / "python3.12" / "site-packages" / "lstar").mkdir(parents=True)
     assert mgr.probe_ready(mgr.registry.get("viewer-pagoda3")) is True
     api.disable_module("viewer-pagoda3", remove=True)
     assert not dist.exists()
     assert mgr.probe_ready(mgr.registry.get("viewer-pagoda3")) is False
 
 
-def test_retry_is_enable_path():
+def test_retry_reinstalls_without_changing_mode():
     st.set_status("r-bio", "failed", error="boom")
-    v = api.retry_module("r-bio")
-    assert v["id"] == "r-bio" and st.get_desired("r-bio") == "enabled"
+    v = api.retry_module("r-bio")                              # r-bio default first_use → allowed
+    assert v["id"] == "r-bio" and v["mode"] == "first_use"    # mode unchanged
+    assert st.get_status("r-bio")["status"] == "queued"
 
 
 def test_module_log_tail(monkeypatch, tmp_path):

@@ -19,30 +19,32 @@ def list_modules() -> dict:
     return {"modules": manager.list_modules()}
 
 
-@router.post("/api/modules/{module_id}/enable")
-def enable_module(module_id: str) -> dict:
-    """Enable a module: persist the intent and launch its install in the background
-    (no-op if already ready/installing). Returns the updated view."""
-    from core.modules import reconciler
-    view = reconciler.ensure_module(module_id)
-    if view is None:
-        raise HTTPException(404, f"unknown module: {module_id!r}")
-    return view
-
-
-@router.post("/api/modules/{module_id}/disable")
-def disable_module(module_id: str, remove: bool = False) -> dict:
-    """Disable a module. Keeps it on disk by default (a 'reclaim space' affordance
-    stays available); pass ?remove=true to delete its artifacts now (removable modules
-    only — the base-resident python-bio can't be reclaimed)."""
+@router.post("/api/modules/{module_id}/mode")
+def set_module_mode(module_id: str, mode: str, remove: bool = False) -> dict:
+    """Set a module's state (the 3-state control): mode=on|first_use|off.
+      • on → install now; first_use → install on first use; off → don't auto-install.
+    ?remove=true with mode=off also reclaims disk (removable modules only)."""
     from core.modules import reconciler
     try:
-        view = reconciler.disable_module(module_id, remove=remove)
+        view = reconciler.set_mode(module_id, mode, remove=remove)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if view is None:
         raise HTTPException(404, f"unknown module: {module_id!r}")
     return view
+
+
+@router.post("/api/modules/{module_id}/enable")
+def enable_module(module_id: str) -> dict:
+    """Convenience: set the module to `on` (install now). Used by one-click 'Enable'
+    affordances (e.g. an off-refusal in the viewer/agent path)."""
+    return set_module_mode(module_id, "on")
+
+
+@router.post("/api/modules/{module_id}/disable")
+def disable_module(module_id: str, remove: bool = False) -> dict:
+    """Convenience: set the module to `off` (optionally reclaiming disk)."""
+    return set_module_mode(module_id, "off", remove=remove)
 
 
 @router.post("/api/modules/{module_id}/retry")

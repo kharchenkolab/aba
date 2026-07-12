@@ -29,18 +29,33 @@ def module_for_trigger(trigger: str) -> ModuleSpec | None:
     return None
 
 
-def ensure_for_trigger(trigger: str) -> dict | None:
-    """If `trigger` maps to a not-yet-ready module, start its install and return a note
-    dict {module, ready, note}. Returns None when no module matches or it's already
-    ready (caller proceeds normally)."""
-    spec = module_for_trigger(trigger)
+def gate_module(module_id: str) -> dict | None:
+    """Gate a capability on its module's state. Returns None when the module is unknown
+    or already ready (caller proceeds). Otherwise a note dict:
+      • off          → {module, mode:'off', ready:False, can_enable:True, note} — NOT installed.
+      • on/first_use → kicks the install and returns {module, mode, ready:False, note}.
+    can_enable lets the UI / viewer page / chat offer a one-click 'Enable & install'."""
+    spec = registry.get(module_id)
     if spec is None or manager.actual_state(spec) == "ready":
         return None
+    m = manager.mode(spec)
+    if m == "off":
+        return {
+            "module": spec.id, "mode": "off", "ready": False, "can_enable": True,
+            "note": (f"The {spec.title} is turned OFF (Settings → Modules). "
+                     f"Enable it (On or First use) to use this — it installs in ~{spec.est_time}."),
+        }
     reconciler.ensure_module(spec.id)
     return {
-        "module": spec.id,
-        "ready": False,
+        "module": spec.id, "mode": m, "ready": False, "can_enable": False,
         "note": (f"The {spec.title} is installing now (first use, ~{spec.est_time}). "
                  f"The rest of ABA keeps working — retry this once it's ready "
                  f"(watch Settings → Modules)."),
     }
+
+
+def ensure_for_trigger(trigger: str) -> dict | None:
+    """As gate_module, but resolves `trigger` (import name / ext / viewer id) to a
+    module first. Returns None when nothing matches or it's ready."""
+    spec = module_for_trigger(trigger)
+    return gate_module(spec.id) if spec else None

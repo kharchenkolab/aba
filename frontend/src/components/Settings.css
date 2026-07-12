@@ -275,3 +275,13 @@
 }
 .mod-linkbtn:disabled { opacity: 0.5; cursor: default; }
 .mod-reclaim { display: inline-block; margin-top: 8px; color: var(--text-3); }
+
+/* 3-state segmented control (On · First use · Off) */
+.mod-seg { display: inline-flex; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mod-seg__btn {
+  border: none; background: #fff; color: var(--text-2); cursor: pointer;
+  padding: 4px 12px; font-size: 12px; border-right: 1px solid var(--border);
+}
+.mod-seg__btn:last-child { border-right: none; }
+.mod-seg__btn.is-active { background: var(--accent); color: #fff; font-weight: 600; }
+.mod-seg__btn:disabled:not(.is-active) { opacity: 0.55; cursor: default; }

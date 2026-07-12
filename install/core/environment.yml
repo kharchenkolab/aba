@@ -87,6 +87,11 @@ dependencies:
       - pypdfium2
       - pillow
 
-      # NOTE: the pagoda3 viewer's Python reader (lstar-sc / zarr) is NOT in the core
-      # base anymore — it moved to the viewer-pagoda3 MODULE (misc/modules.md Phase 6),
-      # installed on first use / manual enable via install/core/modules/install-viewer-pagoda3.sh.
+      # ── viewer data layer (CORE) ───────────────────────────────────────
+      # lstar-sc: the .lstar.zarr reader/CONVERTER (import name `lstar`). Stays in core
+      # because it PRODUCES/reads the store format independent of the browser viewer —
+      # the toggleable viewer-pagoda3 module is just the dist (misc/modules.md).
+      - lstar-sc==0.2.1     # EXACT pin — lstar moves fast + isn't in a stable channel;
+                            #   co-versioned with the lstar R package (git tag v0.2.1) and
+                            #   pagoda3 v0.2.1. Bump this + the R/pagoda3 pins together.
+      - zarr>=3.1            # lstar uses the zarr-python 3 library

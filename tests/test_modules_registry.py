@@ -15,9 +15,9 @@ def test_registry_catalog_and_defaults():
     ids = reg.ids()
     assert set(ids) == {"python-bio", "r-bio", "viewer-pagoda3"}
     d = {m.id: m for m in reg.all_modules()}
-    assert d["python-bio"].default_enabled is True          # on: wave at boot
-    assert d["r-bio"].default_enabled is False              # off: first-use / manual
-    assert d["viewer-pagoda3"].default_enabled is False
+    assert d["python-bio"].default_state == "on"            # wave at boot
+    assert d["r-bio"].default_state == "first_use"          # installs on first use
+    assert d["viewer-pagoda3"].default_state == "first_use"
     assert d["python-bio"].removable is False               # base-update can't be reclaimed
     assert d["r-bio"].removable is True and d["viewer-pagoda3"].removable is True
     for m in reg.all_modules():                             # every module wires an install script
@@ -28,12 +28,19 @@ def test_registry_catalog_and_defaults():
 def test_state_desired_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     assert st.get_desired("r-bio") is None                  # unset → default applies
-    st.set_desired("r-bio", "enabled")
-    assert st.get_desired("r-bio") == "enabled"
-    st.set_desired("r-bio", "disabled")
-    assert st.get_desired("r-bio") == "disabled"
+    for m in ("on", "first_use", "off"):
+        st.set_desired("r-bio", m)
+        assert st.get_desired("r-bio") == m
     st.set_desired("r-bio", None)                           # clear
     assert st.get_desired("r-bio") is None
+
+
+def test_state_legacy_enabled_disabled_maps(monkeypatch, tmp_path):
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    (tmp_path / "modules.json").write_text(
+        '{"modules": {"r-bio": {"desired": "enabled"}, "viewer-pagoda3": {"desired": "disabled"}}}')
+    assert st.get_desired("r-bio") == "on"                  # legacy enabled → on
+    assert st.get_desired("viewer-pagoda3") == "off"        # legacy disabled → off
 
 
 def test_state_status_roundtrip_and_clear(monkeypatch, tmp_path):
@@ -56,14 +63,21 @@ def test_state_corrupt_file_reads_empty(monkeypatch, tmp_path):
 
 
 # ── manager: enabled intent + live actual state ───────────────────────────────
-def test_is_enabled_default_then_override(monkeypatch, tmp_path):
+def test_mode_and_enable_predicates(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     pybio = reg.get("python-bio")
     rbio = reg.get("r-bio")
-    assert mgr.is_enabled(pybio) is True and mgr.is_enabled(rbio) is False   # defaults
-    st.set_desired("r-bio", "enabled")
-    st.set_desired("python-bio", "disabled")
-    assert mgr.is_enabled(rbio) is True and mgr.is_enabled(pybio) is False   # overrides win
+    # defaults: python-bio on; r-bio first_use
+    assert mgr.mode(pybio) == "on" and mgr.is_enabled(pybio) is True
+    assert mgr.mode(rbio) == "first_use"
+    assert mgr.is_enabled(rbio) is False                    # not proactive
+    assert mgr.allows_auto_install(rbio) is True            # but installs on first use
+    # override to off → blocks auto-install
+    st.set_desired("r-bio", "off")
+    assert mgr.mode(rbio) == "off" and mgr.allows_auto_install(rbio) is False
+    # override python-bio to first_use → no longer a boot install
+    st.set_desired("python-bio", "first_use")
+    assert mgr.is_enabled(pybio) is False and mgr.allows_auto_install(pybio) is True
 
 
 def test_actual_state_probe_wins_over_stale_status(monkeypatch, tmp_path):
@@ -89,18 +103,13 @@ def test_probe_python_bio_tracks_base_stage(monkeypatch, tmp_path):
     assert mgr.probe_ready(reg.get("python-bio")) is True
 
 
-def test_probe_pagoda3_needs_dist_and_reader(monkeypatch, tmp_path):
+def test_probe_pagoda3_tracks_dist(monkeypatch, tmp_path):
+    # Module = the viewer dist only (reader is core). Ready ⟺ dist present.
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
-    monkeypatch.setattr(mgr, "_base_env", lambda: tmp_path / "env")
     v = reg.get("viewer-pagoda3")
     assert mgr.probe_ready(v) is False
-    # dist present but reader missing → still not ready (Phase 6: reader is a module dep)
     dist = tmp_path / "vendor" / "pagoda3" / "dist"; dist.mkdir(parents=True)
     (dist / "index.html").write_text("<html>")
-    assert mgr.probe_ready(v) is False
-    # add the lstar reader in the base env → ready
-    sp = tmp_path / "env" / "lib" / "python3.12" / "site-packages" / "lstar"
-    sp.mkdir(parents=True)
     assert mgr.probe_ready(v) is True
 
 
@@ -109,8 +118,8 @@ def test_eager_seed_enables_all(monkeypatch, tmp_path):
     (cluster-personal / OOD). All read as enabled; python-bio isn't 'reclaimable'."""
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     (tmp_path / "modules.json").write_text(
-        '{"modules": {"python-bio": {"desired": "enabled"},'
-        ' "r-bio": {"desired": "enabled"}, "viewer-pagoda3": {"desired": "enabled"}}}')
+        '{"modules": {"python-bio": {"desired": "on"},'
+        ' "r-bio": {"desired": "on"}, "viewer-pagoda3": {"desired": "on"}}}')
     for m in reg.all_modules():
         assert mgr.is_enabled(m) is True
 

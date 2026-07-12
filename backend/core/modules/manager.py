@@ -26,22 +26,8 @@ def _tools_env() -> Path:
     return _runtime_dir() / "envs" / "tools"
 
 
-def _base_env() -> Path:
-    try:
-        from core.exec.env_integrity import _base_prefix
-        return _base_prefix()
-    except Exception:  # noqa: BLE001
-        return Path(os.environ.get("ENV_DIR", str(_aba_home() / "env")))
-
-
 def _pagoda3_dist() -> Path:
     return _aba_home() / "vendor" / "pagoda3" / "dist" / "index.html"
-
-
-def _lstar_reader_present() -> bool:
-    """Is the pagoda3 Python reader (lstar-sc → import name `lstar`) installed in the
-    base env? Cheap site-packages check, no import/subprocess."""
-    return bool(list((_base_env() / "lib").glob("python*/site-packages/lstar")))
 
 
 def probe_ready(spec: ModuleSpec) -> bool:
@@ -55,20 +41,28 @@ def probe_ready(spec: ModuleSpec) -> bool:
             t = _tools_env()
             return (t / "bin" / "Rscript").exists() and (t / "lib" / "R" / "library" / "Seurat").is_dir()
         if spec.id == "viewer-pagoda3":
-            return _pagoda3_dist().exists() and _lstar_reader_present()
+            return _pagoda3_dist().exists()
     except Exception:  # noqa: BLE001 — a probe must never raise into a request
         return False
     return False
 
 
+def mode(spec: ModuleSpec) -> str:
+    """Effective state: explicit desired (modules.json) wins, else the registry
+    default. One of on | first_use | off."""
+    return state.get_desired(spec.id) or spec.default_state
+
+
 def is_enabled(spec: ModuleSpec) -> bool:
-    """Desired intent: explicit state wins, else the registry default."""
-    desired = state.get_desired(spec.id)
-    if desired == "enabled":
-        return True
-    if desired == "disabled":
-        return False
-    return spec.default_enabled
+    """True when the module should be installed PROACTIVELY (at boot) — i.e. mode==on.
+    (Kept as the reconciler's boot predicate.)"""
+    return mode(spec) == "on"
+
+
+def allows_auto_install(spec: ModuleSpec) -> bool:
+    """True when a first-use request may auto-install this module — mode on or
+    first_use. False for off (a request is refused with a nudge to enable)."""
+    return mode(spec) in ("on", "first_use")
 
 
 def actual_state(spec: ModuleSpec) -> str:
@@ -93,10 +87,11 @@ def module_view(spec: ModuleSpec) -> dict:
         "description": spec.description,
         "size": spec.size,
         "est_time": spec.est_time,
-        "default_enabled": spec.default_enabled,
+        "default_state": spec.default_state,
+        "mode": mode(spec),                     # on | first_use | off (the 3-state control)
         "removable": spec.removable,
         "first_use": list(spec.first_use),
-        "enabled": is_enabled(spec),
+        "enabled": is_enabled(spec),            # mode==on (back-compat)
         "actual": actual,
         "on_disk": ready,                       # ready ⟹ artifacts present (drives reclaim-space link)
         "progress": st["progress"],

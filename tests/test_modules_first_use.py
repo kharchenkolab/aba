@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 import pytest                                        # noqa: E402
 import core.modules.manager as mgr                   # noqa: E402
 import core.modules.reconciler as rec                # noqa: E402
+import core.modules.state as st                      # noqa: E402
 import core.modules.first_use as fu                  # noqa: E402
 
 
@@ -42,6 +43,45 @@ def test_ensure_for_trigger_installs_and_notes(monkeypatch):
     assert called == ["viewer-pagoda3"]                                          # install kicked
 
 
+def test_ensure_for_trigger_off_refuses_without_install(monkeypatch):
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    st.set_desired("viewer-pagoda3", "off")
+    called = []
+    monkeypatch.setattr(rec, "ensure_module", lambda mid, **k: called.append(mid))
+    note = fu.ensure_for_trigger("pagoda3")
+    assert note and note["mode"] == "off" and note["can_enable"] is True
+    assert "turned off" in note["note"].lower()
+    assert called == []                                         # off → NOT installed
+
+
 def test_ensure_for_trigger_unknown_returns_none():
     assert fu.ensure_for_trigger("totally-unknown") is None
     assert fu.ensure_for_trigger("") is None
+
+
+# ── gate_module (by id — used by the R kernel gate) ──────────────────────────
+def test_gate_module_ready_returns_none(monkeypatch):
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: True)
+    assert fu.gate_module("r-bio") is None                      # ready → proceed
+
+
+def test_gate_module_first_use_installs(monkeypatch):
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    called = []
+    monkeypatch.setattr(rec, "ensure_module", lambda mid, **k: called.append(mid))
+    note = fu.gate_module("r-bio")                              # default first_use
+    assert note["mode"] == "first_use" and called == ["r-bio"]
+    assert "installing" in note["note"].lower()
+
+
+def test_gate_module_off_blocks(monkeypatch):
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    st.set_desired("r-bio", "off")
+    called = []
+    monkeypatch.setattr(rec, "ensure_module", lambda mid, **k: called.append(mid))
+    note = fu.gate_module("r-bio")
+    assert note["mode"] == "off" and note["can_enable"] is True and called == []
+
+
+def test_gate_module_unknown_none():
+    assert fu.gate_module("nope") is None

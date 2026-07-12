@@ -224,9 +224,9 @@ if [ "$PROFILE" = "cluster-personal" ]; then
     cat > "$ABA_HOME/modules.json" <<'JSON'
 {
   "modules": {
-    "python-bio": {"desired": "enabled"},
-    "r-bio": {"desired": "enabled"},
-    "viewer-pagoda3": {"desired": "enabled"}
+    "python-bio": {"desired": "on"},
+    "r-bio": {"desired": "on"},
+    "viewer-pagoda3": {"desired": "on"}
   }
 }
 JSON
