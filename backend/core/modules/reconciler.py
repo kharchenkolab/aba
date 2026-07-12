@@ -41,7 +41,9 @@ def _repo_aba_root() -> Path:
 
 
 def _script_path(spec: ModuleSpec) -> Path:
-    return _repo_aba_root() / spec.install_script
+    # install_script is an ABSOLUTE path resolved by the registry from the manifest's
+    # own directory (forward-compatible with bundle-contributed module dirs).
+    return Path(spec.install_script)
 
 
 def _module_env(spec: ModuleSpec) -> dict[str, str]:

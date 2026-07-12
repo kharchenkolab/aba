@@ -59,7 +59,7 @@ def test_run_module_zero_exit_but_not_detected_fails(monkeypatch):
 
 
 def test_run_module_missing_script_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(rec, "_repo_aba_root", lambda: tmp_path / "nope")
+    monkeypatch.setattr(rec, "_script_path", lambda spec: tmp_path / "nope" / "install.sh")
     ok = rec.run_module(reg.get("python-bio"), runner=_fake_runner([]), log=lambda *_: None)
     assert ok is False
     assert "missing" in st.get_status("python-bio")["error"]

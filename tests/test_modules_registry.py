@@ -21,7 +21,7 @@ def test_registry_catalog_and_defaults():
     assert d["python-bio"].removable is False               # base-update can't be reclaimed
     assert d["r-bio"].removable is True and d["viewer-pagoda3"].removable is True
     for m in reg.all_modules():                             # every module wires an install script
-        assert m.install_script.startswith("install/core/modules/")
+        assert m.install_script.endswith(f"install-{m.id}.sh")
 
 
 # ── state file ──────────────────────────────────────────────────────────────

@@ -1,0 +1,17 @@
+id: viewer-pagoda3
+order: 30
+title: pagoda3 viewer
+description: >-
+  Interactive browser viewer for large single-cell embeddings (.lstar.zarr). The
+  reader/converter ships in core; this is the viewer bundle.
+size: ~40 MB
+est_time: under 1 min
+default_state: first_use
+removable: true
+env_target: assets
+first_use: [pagoda3, .lstar.zarr]
+install: install-viewer-pagoda3.sh
+ready:
+  path_exists: "$PAGODA3_DIST/index.html"    # ready ⟺ the dist bundle is present
+remove:
+  paths: ["$PAGODA3_DIST"]                   # reclaim = delete the viewer dist

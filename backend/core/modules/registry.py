@@ -1,21 +1,19 @@
-"""Module registry — the declarative catalog of capability packs (misc/modules.md).
+"""Module registry — the catalog of capability packs (misc/modules.md).
 
-Pure data: no imports of runtime state, so it's cheap and safe to import anywhere.
-Readiness probes + install execution live in manager.py / reconciler.py, keyed by
-module id, so this stays a plain manifest.
+DATA-DRIVEN: modules are declared as manifests (install/core/modules/*.yaml), loaded
+here at first use. Adding or reconfiguring a module needs no change to this file — drop
+a manifest (+ its install script) and it appears. Readiness probes + install/remove are
+declared in the manifest (interpreted by manager.py / reconciler.py), so there's no
+per-module Python.
 
-Each module has one of three STATES (misc/modules.md):
-  • on         → installed at boot (reconciler); proactive.
-  • first_use  → not at boot; auto-installs the first time the capability is used.
-  • off        → never auto-installs; a request is refused with a nudge to enable it.
-
-Defaults (decisions 2026-07-11): python-bio ON, r-bio + viewer-pagoda3 FIRST_USE on
-personal installs. Per-target overrides (OOD/cluster eager → all ON) are applied by
-the installer writing the initial modules.json — not here.
+Each module has one of three STATES: on (installed at boot), first_use (auto-installs
+on first demand), off (never auto-installs; a request is refused with a nudge to enable).
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 STATES = ("on", "first_use", "off")
 
@@ -27,66 +25,91 @@ class ModuleSpec:
     description: str
     size: str                      # human estimate, e.g. "~2 GB"
     est_time: str                  # human estimate, e.g. "3–5 min"
-    default_state: str             # on | first_use | off (the state when unset in modules.json)
+    default_state: str             # on | first_use | off (when unset in modules.json)
     env_target: str                # base-update | conda-tools | assets
-    install_script: str            # repo-relative script the reconciler/installer runs
-    removable: bool                # can be uninstalled to reclaim disk (base-update is not)
-    first_use: tuple[str, ...] = field(default_factory=tuple)  # trigger hints (import names / viewer types / file exts)
+    install_script: str            # ABSOLUTE path to the install script
+    removable: bool                # can be uninstalled to reclaim disk
+    order: int = 100               # display order in Settings → Modules
+    first_use: tuple[str, ...] = field(default_factory=tuple)  # trigger hints (imports / exts / viewer ids)
+    ready: dict = field(default_factory=dict)                  # declarative readiness probe (manager interprets)
+    remove: dict = field(default_factory=dict)                 # declarative reclaim (reconciler interprets)
 
 
-# Order = display order in Settings → Modules.
-MODULES: tuple[ModuleSpec, ...] = (
-    ModuleSpec(
-        id="python-bio",
-        title="Python analysis stack",
-        description="scanpy, anndata, scvi-tools (PyTorch), leidenalg, UMAP — single-cell / "
-                    "genomics analysis in Python.",
-        size="~3 GB",
-        est_time="4–8 min",
-        default_state="on",
-        env_target="base-update",
-        install_script="install/core/modules/install-python-bio.sh",
-        removable=False,           # lives in the read-only base; removal = rebuild boot
-        first_use=("scanpy", "anndata", "scvi", "scvi_tools", "leidenalg", "umap"),
-    ),
-    ModuleSpec(
-        id="r-bio",
-        title="R toolchain",
-        description="R 4.4 + Seurat + Bioconductor (DESeq2/edgeR/limma) + the lstar R viewer "
-                    "bridge — R-based analysis and .rds viewing.",
-        size="~4 GB",
-        est_time="~2–5 min",         # conda binaries (Seurat/Bioc) — measured ~90s + lstar-r compile
-        default_state="first_use",
-        env_target="conda-tools",
-        install_script="install/core/modules/install-r-bio.sh",
-        removable=True,
-        first_use=("seurat", "bioconductor", ".rds"),
-    ),
-    ModuleSpec(
-        id="viewer-pagoda3",
-        title="pagoda3 viewer",
-        description="Interactive browser viewer for large single-cell embeddings "
-                    "(.lstar.zarr). The reader/converter ships in core; this is the viewer bundle.",
-        size="~40 MB",
-        est_time="under 1 min",
-        default_state="first_use",
-        env_target="assets",
-        install_script="install/core/modules/install-viewer-pagoda3.sh",
-        removable=True,
-        first_use=("pagoda3", ".lstar.zarr"),
-    ),
-)
+def _manifest_dirs() -> list[Path]:
+    """Where module manifests live. Built-in dir today; bundle-scoped dirs slot in here
+    later (misc/modules.md Phase 3) without touching callers."""
+    here = Path(__file__).resolve()
+    dirs = [here.parents[3] / "install" / "core" / "modules"]           # repo checkout
+    dirs.append(Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+                / "repo" / "aba" / "install" / "core" / "modules")      # deployed layout
+    seen, out = set(), []
+    for d in dirs:
+        r = str(d.resolve()) if d.exists() else str(d)
+        if r not in seen:
+            seen.add(r); out.append(d)
+    return out
 
-_BY_ID = {m.id: m for m in MODULES}
+
+def _spec_from_manifest(path: Path, data: dict) -> ModuleSpec:
+    if not isinstance(data, dict) or not data.get("id"):
+        raise ValueError(f"module manifest missing 'id': {path}")
+    install = data.get("install") or ""
+    # YAML 1.1 reads bare on/off/yes/no as booleans — tolerate that for default_state.
+    _ds = data.get("default_state")
+    _ds = {True: "on", False: "off"}.get(_ds, _ds)
+    return ModuleSpec(
+        id=str(data["id"]),
+        title=str(data.get("title") or data["id"]),
+        description=str(data.get("description") or "").strip(),
+        size=str(data.get("size") or ""),
+        est_time=str(data.get("est_time") or ""),
+        default_state=(_ds if _ds in STATES else "first_use"),
+        env_target=str(data.get("env_target") or ""),
+        install_script=str((path.parent / install).resolve()) if install else "",
+        removable=bool(data.get("removable", False)),
+        order=int(data.get("order", 100)),
+        first_use=tuple(str(x) for x in (data.get("first_use") or ())),
+        ready=dict(data.get("ready") or {}),
+        remove=dict(data.get("remove") or {}),
+    )
+
+
+def _load() -> tuple[ModuleSpec, ...]:
+    import yaml
+    by_id: dict[str, ModuleSpec] = {}
+    for d in _manifest_dirs():
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.yaml")):
+            try:
+                spec = _spec_from_manifest(f, yaml.safe_load(f.read_text()) or {})
+            except Exception as e:  # noqa: BLE001 — a bad manifest must not break the whole registry
+                import sys
+                print(f"[modules] skipping bad manifest {f}: {e}", file=sys.stderr)
+                continue
+            by_id.setdefault(spec.id, spec)   # first dir wins (repo before deployed copy)
+    return tuple(sorted(by_id.values(), key=lambda m: (m.order, m.id)))
+
+
+_CACHE: tuple[ModuleSpec, ...] | None = None
 
 
 def all_modules() -> tuple[ModuleSpec, ...]:
-    return MODULES
+    global _CACHE
+    if _CACHE is None:
+        _CACHE = _load()
+    return _CACHE
+
+
+def reload() -> None:
+    """Drop the cache (tests / after a manifest sync)."""
+    global _CACHE
+    _CACHE = None
 
 
 def get(module_id: str) -> ModuleSpec | None:
-    return _BY_ID.get(module_id)
+    return next((m for m in all_modules() if m.id == module_id), None)
 
 
 def ids() -> tuple[str, ...]:
-    return tuple(_BY_ID)
+    return tuple(m.id for m in all_modules())
