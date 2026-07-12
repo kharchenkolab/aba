@@ -409,44 +409,8 @@
       runUpdate();
     }
 
-    // ── Model selector ────────────────────────────────────────────────
-    // Populate from /api/auth/model so the dropdown can't drift from the
-    // backend's accepted IDs (they're declared once in auth.py).
-    (async () => {
-      const sel = document.getElementById('model-select');
-      const noteEl = document.getElementById('model-note');
-      const restartEl = document.getElementById('model-restart');
-      if (!sel) return;       // page rendered without the selector — bail
-      let cur;
-      try {
-        cur = await fetchJSON('/api/auth/model');
-      } catch (e) { noteEl.textContent = 'Could not load model list.'; return; }
-      sel.innerHTML = '';
-      const byId = {};
-      for (const m of cur.available) {
-        const opt = document.createElement('option');
-        opt.value = m.id; opt.textContent = m.label;
-        sel.appendChild(opt);
-        byId[m.id] = m;
-      }
-      sel.value = cur.model;
-      noteEl.textContent = (byId[cur.model] || {}).note || '';
-      sel.addEventListener('change', async () => {
-        noteEl.textContent = (byId[sel.value] || {}).note || '';
-        try {
-          const res = await fetchJSON('/api/auth/model', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ model: sel.value }),
-          });
-          // Hot-switch contract: backend re-reads at the next turn boundary.
-          // Show a small "applied" toast that auto-clears on the next
-          // dropdown change.
-          restartEl.hidden = !res.applied_on_next_turn;
-        } catch (e) {
-          noteEl.textContent = 'Failed to save — ' + (e.message || '');
-        }
-      });
-    })();
+    // Model selection lives in the running app now — Settings → Agent (multi-provider).
+    // Removed from the control page (the tray's Model submenu still uses /api/auth/model).
     const diag = document.getElementById('diag');
     diag.addEventListener('toggle', () => { if (diag.open) loadDiag(); });
     document.getElementById('ctl-help').addEventListener('click', () => {

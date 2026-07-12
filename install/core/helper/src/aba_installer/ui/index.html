@@ -89,14 +89,8 @@
         <button class="btn link" id="ctl-help">🛟 Help</button>
         <button class="btn link" id="ctl-uninstall">Uninstall</button>
       </div>
-      <div class="model-row">
-        <label class="label" for="model-select">Model</label>
-        <select id="model-select" class="model-select"></select>
-        <p class="muted model-note" id="model-note"></p>
-        <p class="model-restart" id="model-restart" hidden>
-          Saved. New model takes effect on your next message — no restart needed.
-        </p>
-      </div>
+      <!-- Model selection moved to the running app: Settings → Agent (multi-provider).
+           The tray's Model submenu still uses /api/auth/model. -->
       <details id="diag">
         <summary>Show details</summary>
         <p class="muted" id="diag-meta"></p>
