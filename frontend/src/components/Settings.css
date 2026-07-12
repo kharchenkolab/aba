@@ -253,12 +253,12 @@
   border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
   background: #fafafb;
 }
-.mod-card__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.mod-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.mod-toggle input { cursor: pointer; }
+.mod-card__head { display: flex; align-items: baseline; gap: 8px; }
 .mod-card__title { font-weight: 600; color: var(--text); }
 .mod-card__desc { margin: 6px 0 4px; color: var(--text-2); font-size: 13px; line-height: 1.4; }
-.mod-card__meta { display: flex; gap: 6px; flex-wrap: wrap; color: var(--text-4); font-size: 12px; }
+/* size · est_time — sits next to the title (saves the standalone line). */
+.mod-card__meta { color: var(--text-4); font-size: 12px; }
+.mod-card__head .mod-chip { margin-left: auto; }   /* push the state chip to the right */
 .mod-card__progress { margin-top: 6px; font-size: 12px; color: var(--text-3); font-family: ui-monospace, monospace; }
 .mod-card__error { margin-top: 6px; font-size: 12px; color: #b91c1c; }
 .mod-chip {

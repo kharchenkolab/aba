@@ -88,12 +88,10 @@ export default function ModulesTab() {
             <li key={m.id} className="mod-card">
               <div className="mod-card__head">
                 <span className="mod-card__title">{m.title}</span>
+                <span className="mod-card__meta">{m.size} · {m.est_time}</span>
                 <span className={`mod-chip ${c.cls}`}>{c.text}</span>
               </div>
               <p className="mod-card__desc">{m.description}</p>
-              <div className="mod-card__meta">
-                <span>{m.size}</span><span>·</span><span>{m.est_time}</span>
-              </div>
               <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
                 {MODE_LABELS.map(o => (
                   <button key={o.key}
