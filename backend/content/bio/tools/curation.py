@@ -471,6 +471,21 @@ def _bundle_paths_into_data_dir(srcs: list[str], title: str) -> tuple[str, list[
     return dest, present, missing
 
 
+def _producing_exec_id(input_: dict, ctx: dict | None) -> str | None:
+    """The exec record to attach to a registered dataset so provenance shows the fetch
+    code + env (misc/provenance.md). Explicit `exec_id` (from the run_python that
+    produced the data) wins; else the most recent run in this thread — the fetch/download
+    that just executed. None when neither is available."""
+    explicit = (input_.get("exec_id") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from core.graph.exec_records import latest_exec_id_for_thread
+        return latest_exec_id_for_thread(_ctx_thread(ctx))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from core.config import DATA_DIR
@@ -584,6 +599,9 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         artifact_path=abspath if exists else None,
         derivation=imported(input_.get("source") or "external"),   # Phase 2B
         actor=agent_actor_for_thread(_ctx_thread(ctx)),            # Phase 2B
+        # Link the producing run's exec record (the fetch/download) so the dataset's
+        # provenance shows the code + env + source, not just "imported" (provenance.md).
+        exec_id=_producing_exec_id(input_, ctx),
         metadata=_md)
     if summary:
         # The dataset detail view shows `notes` as the description — populate it.
