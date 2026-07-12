@@ -27,7 +27,14 @@ R_LIBS_ROOT = _LazyDir(lambda: ENVS_DIR / "r_libs")
 
 # Minimum conda runtime to run R + install from any source (CRAN source compiles
 # need the toolchain; GitHub needs remotes; Bioconductor needs BiocManager).
-RUNTIME_SPECS = ["r-base", "r-remotes", "r-biocmanager", "compilers", "make", "pkg-config"]
+# r-base is PINNED to the SAME minor as install/core/r-environment.yml (the r-bio
+# module). Both conda paths write the same tools env; if this were unpinned it would
+# resolve the latest R (e.g. 4.5) while the module build pins 4.4, so the env's R
+# would flip-flop between provisioning calls and orphan every package compiled against
+# the other minor (the dotCall64 _MAYBE_SHARED ABI mismatch, 2026-07-12). Keep in
+# lock-step with r-environment.yml's `r-base=4.4.*`.
+R_BASE_PIN = "r-base=4.4.*"
+RUNTIME_SPECS = [R_BASE_PIN, "r-remotes", "r-biocmanager", "compilers", "make", "pkg-config"]
 
 # Foundational compiled R deps + system libs that most bioinformatics packages
 # share. Kept in the runtime as conda BINARIES so installs find them on
@@ -80,8 +87,39 @@ def r_runtime_ready() -> bool:
     return _rscript().exists()
 
 
+_r_runtime_tag_cache: Optional[str] = None
+
+
+def _r_runtime_tag() -> Optional[str]:
+    """`R-<major>.<minor>-<arch>` for the tools-env R (e.g. R-4.4-aarch64), or None if
+    it can't be determined yet. Cached — one cheap Rscript call. Used to SCOPE the
+    project library so packages built for one R minor/arch are never on .libPaths()
+    of a different one (the ABI-mismatch guard)."""
+    global _r_runtime_tag_cache
+    if _r_runtime_tag_cache is not None:
+        return _r_runtime_tag_cache or None
+    try:
+        proc = _run_rscript(
+            "v<-R.version; cat(v$major, strsplit(v$minor,'.',fixed=TRUE)[[1]][1], v$arch, sep='|')", 30)
+        parts = (proc.stdout or "").strip().split("|")
+        if proc.returncode == 0 and len(parts) == 3 and parts[0].isdigit():
+            _r_runtime_tag_cache = f"R-{parts[0]}.{parts[1]}-{parts[2]}"
+            return _r_runtime_tag_cache
+    except Exception:  # noqa: BLE001
+        pass
+    _r_runtime_tag_cache = ""     # cache the failure so we don't re-probe every call
+    return None
+
+
 def project_r_lib(project_id: Optional[str]) -> Path:
-    p = R_LIBS_ROOT / str(project_id or "default")
+    """Project-scoped R library, keyed by the tools-env R version+arch. A package built
+    for R 4.4/aarch64 lives under a different dir than one for 4.5, so a runtime change
+    (or a leftover from a prior minor) can NEVER be loaded into a mismatched R — it just
+    isn't on that R's path. Falls back to the flat path only when the R version is
+    undeterminable (R not built yet)."""
+    base = R_LIBS_ROOT / str(project_id or "default")
+    tag = _r_runtime_tag()
+    p = (base / tag) if tag else base
     p.mkdir(parents=True, exist_ok=True)
     return p
 
