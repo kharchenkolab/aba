@@ -710,11 +710,11 @@ def _r_module_block() -> dict | None:
         if spec and manager.mode(spec) == "off" and manager.actual_state(spec) != "ready":
             return {
                 "status": "blocked", "name": "R toolchain", "module": "r-bio",
-                "note": ("The R toolchain is turned OFF in Settings → Modules, so I did NOT "
-                         "install it. Ask the user whether to turn R on: they can set r-bio to "
-                         "**On** (install now) or **First use** (auto-install when needed) in "
-                         "Settings → Modules. Once it's enabled, re-run this — do not attempt to "
-                         "work around the off setting."),
+                "note": ("The R toolchain is turned OFF, so I did NOT install it. Ask the user "
+                         "to enable it by calling `ask_clarification(question=\"…\", "
+                         "enable_module=\"r-bio\")` — that shows one-click Enable buttons "
+                         "(On / First use). Do NOT paste Settings instructions or work around "
+                         "the off setting; once they enable it, re-run this."),
             }
     except Exception:  # noqa: BLE001 — the gate must never itself break provisioning
         pass

@@ -137,8 +137,10 @@ def _ensure_r_kernelspec() -> str:
         _spec, _not_ready = None, False
     if _not_ready:
         if _mm.mode(_spec) == "off":
-            raise RuntimeError("The R toolchain (r-bio module) is turned OFF in Settings → "
-                               "Modules. Ask the user to enable it (On or First use) to run R.")
+            raise RuntimeError("The R toolchain (r-bio module) is turned OFF. Ask the user to "
+                               "enable it by calling ask_clarification(question=\"…\", "
+                               "enable_module=\"r-bio\") — that shows one-click Enable buttons "
+                               "(On / First use). Don't paste Settings instructions.")
         from core.modules.reconciler import install_and_wait
         try:
             from core.runtime import progress as _prog

@@ -388,3 +388,17 @@
 .chat-welcome__body { display: flex; flex-direction: column; }
 .chat-welcome__body b { font-size: 14px; color: #0f172a; font-weight: 600; }
 .chat-welcome__hint { font-size: 12.5px; color: #64748b; }
+
+/* Option-1 module enable (misc/modules.md): one-click Enable buttons on a clarification */
+.clarify-bar--enable { display: flex; flex-direction: column; gap: 8px; }
+.clarify-bar__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.clarify-bar__enable {
+  padding: 5px 14px; border-radius: 6px; border: none; cursor: pointer;
+  background: var(--accent, #3b82f6); color: #fff; font-weight: 600; font-size: 13px;
+}
+.clarify-bar__enable:hover:not(:disabled) { filter: brightness(1.05); }
+.clarify-bar__decline {
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  background: transparent; color: var(--text-3, #64748b); border: 1px solid var(--border, #cbd5e1);
+}
+.clarify-bar__enable:disabled, .clarify-bar__decline:disabled { opacity: .5; cursor: default; }

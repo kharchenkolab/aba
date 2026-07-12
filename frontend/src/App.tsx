@@ -438,7 +438,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
-          pendingClarification, answerClarification,
+          pendingClarification, answerClarification, answerClarificationEnable,
           pendingApproval, respondApproval, stopTurn,
           queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
           eventLog, jobs, currentRunId } = useChat(
@@ -832,6 +832,7 @@ export default function App() {
       starters={compact ? undefined : (currentThread?.metadata?.orient_steps as string[] | undefined)}
       pendingClarification={pendingClarification}
       onAnswerClarification={answerClarification}
+      onAnswerClarificationEnable={answerClarificationEnable}
       pendingApproval={pendingApproval}
       onRespondApproval={respondApproval}
       onStop={stopTurn}

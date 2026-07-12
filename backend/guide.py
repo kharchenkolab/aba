@@ -910,15 +910,33 @@ async def stream_response(
                     if not question:
                         return {"status": "error",
                                 "note": "ask_clarification needs a non-empty `question`."}
+                    _post = {"type": "clarification_pending",
+                             "question": question,
+                             "tool_use_id": tool_use_id,
+                             "run_id": turn.run_id}
+                    # Option 1 enable-flow (misc/modules.md): when the question is about a
+                    # turned-off module, carry structured Enable options so the UI renders
+                    # one-click buttons (the USER enables — the agent never can). The turn
+                    # resumes when the user picks.
+                    _em = str(_inp.get("enable_module") or "").strip()
+                    if _em:
+                        try:
+                            from core.modules import registry as _mreg
+                            _ms = _mreg.get(_em)
+                            if _ms:
+                                _post["enable"] = {
+                                    "module": _ms.id, "title": _ms.title,
+                                    "options": [{"mode": "on", "label": "Enable · On"},
+                                                {"mode": "first_use", "label": "Enable · First use"}],
+                                }
+                        except Exception:  # noqa: BLE001
+                            pass
                     return {
                         "status": "asked",
                         "note": "Question shown to the user. Stop here and "
                                 "wait for their reply before continuing.",
                         "_runtime_halt_after": "clarify",
-                        "_emit_sse_post": {"type": "clarification_pending",
-                                           "question": question,
-                                           "tool_use_id": tool_use_id,
-                                           "run_id": turn.run_id},
+                        "_emit_sse_post": _post,
                     }
 
                 # Approval gate — halt BEFORE (no tool_result block;

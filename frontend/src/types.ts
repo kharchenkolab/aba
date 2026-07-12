@@ -195,11 +195,19 @@ export interface CancelledEvent {
 /** B1 — the Guide paused the turn on ask_clarification. The UI shows the
  *  one-line question with an inline answer input that posts to
  *  /api/turns/{run_id}/resume. */
+export interface ModuleEnableOffer {
+  module: string
+  title: string
+  options: { mode: 'on' | 'first_use'; label: string }[]
+}
 export interface ClarificationPendingEvent {
   type: 'clarification_pending'
   question: string
   tool_use_id: string
   run_id: string
+  /** Option-1 enable flow (misc/modules.md): render one-click Enable buttons for a
+   *  turned-off module; the user enables it, then the turn resumes. */
+  enable?: ModuleEnableOffer
 }
 
 /** Fix #5 — a tool returned {deferred:true, job_id}, halting the turn in
@@ -218,6 +226,7 @@ export interface DeferredToolPendingEvent {
 export interface PendingClarification {
   runId: string
   question: string
+  enable?: ModuleEnableOffer
 }
 
 /** P1 #3 — the Guide paused on a per-tool approval. Tool with

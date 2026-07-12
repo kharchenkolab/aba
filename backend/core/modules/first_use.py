@@ -42,8 +42,10 @@ def gate_module(module_id: str) -> dict | None:
     if m == "off":
         return {
             "module": spec.id, "mode": "off", "ready": False, "can_enable": True,
-            "note": (f"The {spec.title} is turned OFF (Settings → Modules). "
-                     f"Enable it (On or First use) to use this — it installs in ~{spec.est_time}."),
+            "note": (f"The {spec.title} is turned OFF. Ask the user to enable it by calling "
+                     f"`ask_clarification(question=\"…\", enable_module=\"{spec.id}\")` — that "
+                     f"shows one-click Enable buttons (On / First use). Don't paste Settings "
+                     f"steps; once enabled it installs in ~{spec.est_time}."),
         }
     prior = manager.actual_state(spec)          # failed | installing | queued | not_installed
     reconciler.ensure_module(spec.id)           # kick (or retry a failed attempt); no-op if installing
