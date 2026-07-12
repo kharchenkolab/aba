@@ -72,10 +72,17 @@ def _fetch_pagoda3_cmd(playbook: str) -> str:
     return step.commands[0]
 
 
-def test_fetch_pagoda3_dist_identical_across_playbooks():
-    # The engine has no include/compose, so this step is duplicated — it drifted
-    # once (install-only → dark viewer on update). Guard byte-identity.
-    assert _fetch_pagoda3_cmd("install.yml") == _fetch_pagoda3_cmd("update.yml")
+def test_install_yml_is_core_only():
+    """The installer builds only platform CORE (misc/modules.md). The R toolchain,
+    lstar bridge, and pagoda3 viewer dist are MODULES the backend reconciler owns —
+    none appear as install steps. update.yml still refreshes an installed pagoda3."""
+    from aba_installer.playbook import load_playbook
+    p = Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml"
+    ids = [s.id for s in load_playbook(p).steps]
+    for gone in ("create-r-tools-env", "install-lstar-r", "fetch-pagoda3-dist",
+                 "complete-base-env", "complete-r-env"):
+        assert gone not in ids, f"{gone} should not be an install step (module/reconciler owns it)"
+    assert "pagoda3-viewer-0.2.1.zip" in _fetch_pagoda3_cmd("update.yml")   # update still refreshes
 
 
 def _step_cmds(playbook: str, step_id: str) -> str:
@@ -115,13 +122,12 @@ def test_staged_create_env_picks_boot_and_marks_stage():
     assert 'MANIFEST="$ABA_HOME/environment.yml"' in create
 
 
-def test_staged_defers_r_env_and_lstar():
-    rtools = _step_cmds("install.yml", "create-r-tools-env")
-    lstar = _step_cmds("install.yml", "install-lstar-r")
-    assert "staged" in rtools and "deferred" in rtools
-    assert "deferred" in lstar
-    # eager branch still builds them (unchanged)
-    assert "r-environment.yml" in rtools and "install-lstar-r.sh" in lstar
+def test_r_and_viewer_build_lives_in_module_scripts():
+    """R + pagoda3 build is owned by the module scripts now (install-r-bio.sh even runs
+    the lstar bridge internally); the installer no longer has those steps."""
+    scripts = Path(__file__).resolve().parents[1].parent / "modules"
+    assert "install-lstar-r.sh" in (scripts / "install-r-bio.sh").read_text()
+    assert "index.html" in (scripts / "install-viewer-pagoda3.sh").read_text()
 
 
 def test_post_start_completion_moved_to_backend_modules():
@@ -145,31 +151,19 @@ def test_post_start_completion_moved_to_backend_modules():
     assert "pagoda3" in pg and "index.html" in pg
 
 
-def test_eager_install_still_builds_full_base_before_start():
-    """Regression guard: eager (default; shared/OOD/cluster) still builds the full
-    base + both R steps BEFORE start-backend — unchanged behaviour."""
+def test_eager_builds_full_base_before_start():
+    """Eager still builds the full base (create-env) before start-backend; R/pagoda3
+    now come from the backend reconciler post-start (modules seeded 'on'), not pre-start
+    install steps."""
     from aba_installer.playbook import load_playbook
     pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
     ids = [s.id for s in pb.steps]
-    for s in ("create-env", "create-r-tools-env", "install-lstar-r"):
-        assert ids.index(s) < ids.index("start-backend")
+    assert ids.index("create-env") < ids.index("start-backend")
 
 
 def test_refresh_env_stamps_stage_ready():
     refresh = _step_cmds("update.yml", "refresh-env")
     assert ".aba-base-stage" in refresh and "printf ready" in refresh
-
-
-def test_staged_leaves_r_to_the_backend_module():
-    """Staged no longer builds R at install time: the eager R steps skip (defer to the
-    backend), and there's no post-start R step — the r-bio module (default off on
-    personal) installs on first use / manual enable via the reconciler."""
-    from aba_installer.playbook import load_playbook
-    pb = load_playbook(Path(__file__).resolve().parents[1] / "src/aba_installer/install.yml")
-    ids = [s.id for s in pb.steps]
-    assert "complete-r-env" not in ids
-    rtools = _step_cmds("install.yml", "create-r-tools-env")
-    assert "staged" in rtools and "deferred" in rtools     # staged pre-start build is a no-op
 
 
 def test_load_config_env_reaches_playbook_env(tmp_path, monkeypatch):
