@@ -37,6 +37,17 @@ def test_install_scripts_are_absolute_and_exist():
         assert p.name == f"install-{m.id}.sh"
 
 
+def test_python_bio_env_update_has_no_channel_priority_flag():
+    """Regression (2026-07-12): `micromamba env update` rejects --channel-priority
+    ('arguments were not expected'), which left the staged base stuck on 'completing'.
+    Strict priority must ride the env var instead."""
+    reg.reload()
+    sh = Path(reg.get("python-bio").install_script).read_text()
+    assert "env update" in sh
+    assert "--channel-priority" not in sh, "env update must not pass --channel-priority (arg error)"
+    assert "CONDA_CHANNEL_PRIORITY=strict" in sh
+
+
 def test_probe_and_remove_declared():
     reg.reload()
     d = {m.id: m for m in reg.all_modules()}

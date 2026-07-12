@@ -34,7 +34,10 @@ if [ "${ABA_ACCELERATOR:-cpu}" = cuda ]; then
   echo "[python-bio] cuda base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA"
 fi
 
-if PYTHONNOUSERSITE=1 PIP_USER=0 "$MAMBA" env update --channel-priority strict \
+# NB: `env update` does NOT accept --channel-priority (only create/install do) — pass
+# it via the env var instead (micromamba honors CONDA_CHANNEL_PRIORITY), so the solve
+# stays strict without the arg error that left the base stuck on 'completing'.
+if CONDA_CHANNEL_PRIORITY=strict PYTHONNOUSERSITE=1 PIP_USER=0 "$MAMBA" env update \
      -p "$ENV_DIR" -f "$MANIFEST"; then
   printf ready > "$STAGE_FILE"
   echo "[python-bio] complete (stage=ready)"
