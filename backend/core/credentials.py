@@ -348,6 +348,22 @@ def store_oauth_token(provider: str, token: dict) -> dict:
     write(entries)
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
     os.environ["ABA_LLM_CREDENTIAL"] = "oauth_cc"
+    # Persist the REFRESHABLE store ($ABA_HOME/oauth.json) so the short-lived
+    # subscription access token auto-refreshes near expiry (_oauth_bearer priority 1)
+    # instead of lapsing into a 401 the next turn. Without this the token drops only
+    # into the static CLAUDE_CODE_OAUTH_TOKEN env (priority 2, NOT refreshable) — the
+    # bug behind "ping green but chat 401s once the token expires". Store whatever the
+    # exchange gave us; the bearer handles refresh / clean-expiry from expires_at.
+    try:
+        from core.llm import _save_oauth_store
+        st = {"access_token": access}
+        if (token or {}).get("refresh_token"):
+            st["refresh_token"] = token["refresh_token"]
+        if (token or {}).get("expires_at"):
+            st["expires_at"] = token["expires_at"]
+        _save_oauth_store(st)
+    except Exception:  # noqa: BLE001 — never let store persistence break sign-in
+        pass
     _clear_llm_client_cache()
     return status("anthropic")
 
