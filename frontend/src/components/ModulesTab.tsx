@@ -94,14 +94,20 @@ export default function ModulesTab() {
                 <span className={`mod-chip ${c.cls}`}>{c.text}</span>
               </div>
               <p className="mod-card__desc">{m.description}</p>
-              <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
-                {MODE_LABELS.map(o => (
-                  <button key={o.key}
-                    className={`mod-seg__btn ${m.mode === o.key ? 'is-active' : ''}`}
-                    aria-pressed={m.mode === o.key}
-                    disabled={busy === m.id || m.mode === o.key}
-                    onClick={() => setMode(m.id, o.key)}>{o.label}</button>
-                ))}
+              <div className="mod-controls">
+                <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
+                  {MODE_LABELS.map(o => (
+                    <button key={o.key}
+                      className={`mod-seg__btn ${m.mode === o.key ? 'is-active' : ''}`}
+                      aria-pressed={m.mode === o.key}
+                      disabled={busy === m.id || m.mode === o.key}
+                      onClick={() => setMode(m.id, o.key)}>{o.label}</button>
+                  ))}
+                </div>
+                {m.mode === 'off' && m.on_disk && m.removable && (
+                  <button className="mod-linkbtn mod-reclaim" disabled={busy === m.id}
+                    onClick={() => act(m.id, 'mode?mode=off&remove=true')}>Reclaim disk space</button>
+                )}
               </div>
               {installing && m.progress && <div className="mod-card__progress">{m.progress}</div>}
               {m.actual === 'failed' && (
@@ -110,10 +116,6 @@ export default function ModulesTab() {
                   <button className="mod-linkbtn" disabled={busy === m.id}
                     onClick={() => act(m.id, 'retry')}>Retry</button>
                 </div>
-              )}
-              {m.mode === 'off' && m.on_disk && m.removable && (
-                <button className="mod-linkbtn mod-reclaim" disabled={busy === m.id}
-                  onClick={() => act(m.id, 'mode?mode=off&remove=true')}>Reclaim disk space</button>
               )}
             </li>
           )

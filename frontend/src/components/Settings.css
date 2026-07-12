@@ -274,10 +274,12 @@
   color: var(--accent); font-size: 12px; text-decoration: underline;
 }
 .mod-linkbtn:disabled { opacity: 0.5; cursor: default; }
-.mod-reclaim { display: block; margin-top: 14px; color: var(--text-3); }
+/* segmented control + reclaim link on ONE row (saves vertical space) */
+.mod-controls { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.mod-reclaim { color: var(--text-3); }
 
 /* 3-state segmented control (On · First use · Off) */
-.mod-seg { display: inline-flex; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mod-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .mod-seg__btn {
   border: none; background: #fff; color: var(--text-2); cursor: pointer;
   padding: 4px 12px; font-size: 12px; border-right: 1px solid var(--border);
