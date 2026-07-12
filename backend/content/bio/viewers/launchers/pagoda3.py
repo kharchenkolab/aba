@@ -43,24 +43,17 @@ _ZIP_SUFFIX = ".lstar.zarr.zip"
 
 
 def pagoda3_dist_path() -> Path:
-    """Where pagoda3's built web bundle lives — the single source of truth for
-    every consumer (the `/pagoda3` static mount the app root wires up, and prep
-    below). First existing wins:
-      1. `$ABA_PAGODA3_DIST`                — explicit override (dev sets this)
-      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored release
-                                              bundle (deploy default; version
-                                              pinned in the fetch playbook)
-      3. `~/pagoda/pagoda3/web/dist`        — a dev checkout
-    Returns the override / deploy default even if absent, so a caller can report a
-    clean 'not present' against the expected location rather than guessing."""
+    """Where pagoda3's built web bundle lives — the single source of truth for every
+    consumer (the `/pagoda3` route + prep below). It is the viewer-pagoda3 MODULE's
+    vendored dist, kept ENTIRELY within $ABA_HOME (a deployed ABA never reaches into
+    other paths in $HOME). A developer can point ABA at a local build EXPLICITLY via
+    $ABA_PAGODA3_DIST — the only outside-$ABA_HOME path, and only when opted in.
+    Returns the expected location even if absent, so a caller can report a clean
+    'not present' (→ the module installs it) rather than guessing."""
     env = os.getenv("ABA_PAGODA3_DIST")
     if env:
         return Path(env)
     home = Path(os.getenv("ABA_HOME") or (Path.home() / ".aba"))
-    for cand in (home / "vendor" / "pagoda3" / "dist",
-                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
-        if (cand / "index.html").is_file():
-            return cand
     return home / "vendor" / "pagoda3" / "dist"
 
 

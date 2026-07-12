@@ -146,3 +146,17 @@ def test_serve_native_store_replaces_stale_copy(tmp_path):
     out = pagoda3._serve_native_store(store, cache, "s-abcd.lstar.zarr", root)
     assert out.is_symlink() and out.resolve() == store.resolve()
     assert not (out / "old").exists()                # stale copy gone
+
+
+def test_dist_path_stays_within_aba_home(monkeypatch, tmp_path):
+    """The viewer dist is the module's vendored bundle under $ABA_HOME — a deployed ABA
+    never reaches into other $HOME paths. Only $ABA_PAGODA3_DIST (explicit dev opt-in)
+    points elsewhere."""
+    from content.bio.viewers.launchers import pagoda3
+    monkeypatch.delenv("ABA_PAGODA3_DIST", raising=False)
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    assert pagoda3.pagoda3_dist_path() == tmp_path / "vendor" / "pagoda3" / "dist"
+    # explicit override is the ONLY outside-$ABA_HOME path
+    monkeypatch.setenv("ABA_PAGODA3_DIST", "/custom/build/dist")
+    from pathlib import Path
+    assert pagoda3.pagoda3_dist_path() == Path("/custom/build/dist")
