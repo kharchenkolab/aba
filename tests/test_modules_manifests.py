@@ -43,9 +43,10 @@ def test_python_bio_env_update_has_no_channel_priority_flag():
     Strict priority must ride the env var instead."""
     reg.reload()
     sh = Path(reg.get("python-bio").install_script).read_text()
-    assert "env update" in sh
-    assert "--channel-priority" not in sh, "env update must not pass --channel-priority (arg error)"
-    assert "CONDA_CHANNEL_PRIORITY=strict" in sh
+    code = "\n".join(l for l in sh.splitlines() if not l.lstrip().startswith("#"))  # ignore comments
+    assert "env update" in code
+    assert "--channel-priority" not in code, "env update must not pass --channel-priority (arg error)"
+    assert "CONDA_CHANNEL_PRIORITY=strict" in code
 
 
 def test_probe_and_remove_declared():
