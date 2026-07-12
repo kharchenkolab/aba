@@ -149,16 +149,19 @@ def start(*, log: Callable[[str], None] = print) -> bool:
 
 
 def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> None:
+    """Reclaim a module's on-disk artifacts per its manifest `remove` block
+    (misc/modules.md): {paths: [...]} rmtree'd (with $VARs expanded), optional
+    {script: ...} run. No per-module Python."""
     import shutil
-    if spec.id == "r-bio":
-        target = manager._tools_env()
-    elif spec.id == "viewer-pagoda3":
-        target = manager._pagoda3_dist().parent          # the dist directory
-    else:
-        return
-    if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-        log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
+    rm = spec.remove or {}
+    for p in rm.get("paths", []):
+        target = manager.expand_path(str(p))
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+            log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
+    if rm.get("script"):
+        import subprocess
+        subprocess.run(["bash", str(manager.expand_path(str(rm["script"])))], check=False)
 
 
 def _notify(spec: ModuleSpec, mstate: str, *, progress: str | None = None,

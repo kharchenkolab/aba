@@ -26,22 +26,56 @@ def _tools_env() -> Path:
     return _runtime_dir() / "envs" / "tools"
 
 
-def _pagoda3_dist() -> Path:
-    return _aba_home() / "vendor" / "pagoda3" / "dist" / "index.html"
+def _base_env() -> Path:
+    try:
+        from core.exec.env_integrity import _base_prefix
+        return _base_prefix()
+    except Exception:  # noqa: BLE001
+        return Path(os.environ.get("ENV_DIR", str(_aba_home() / "env")))
+
+
+def path_vars() -> dict[str, str]:
+    """Variables usable in a manifest's `ready`/`remove` paths ($ABA_HOME, $TOOLS_ENV,
+    …). One place so probes and removes agree."""
+    home = _aba_home()
+    return {
+        "ABA_HOME": str(home),
+        "ABA_RUNTIME_DIR": str(_runtime_dir()),
+        "ENV_DIR": str(_base_env()),
+        "TOOLS_ENV": str(_tools_env()),
+        "PAGODA3_DIST": str(home / "vendor" / "pagoda3" / "dist"),
+    }
+
+
+def expand_path(p: str) -> Path:
+    for k, v in path_vars().items():
+        p = p.replace("$" + k, v)
+    return Path(p)
 
 
 def probe_ready(spec: ModuleSpec) -> bool:
-    """Is the module's capability actually present right now? Cheap filesystem/marker
-    checks only — never a solve or a network call."""
+    """Is the module's capability present right now? Interprets the manifest's declarative
+    `ready` probe (misc/modules.md) — cheap filesystem/marker checks only, never a solve
+    or network call. Unknown/empty probe → False (not ready)."""
+    r = spec.ready or {}
     try:
-        if spec.id == "python-bio":
+        if "base_stage" in r:
             from core.exec.env_integrity import base_stage
-            return base_stage() == "ready"
-        if spec.id == "r-bio":
-            t = _tools_env()
-            return (t / "bin" / "Rscript").exists() and (t / "lib" / "R" / "library" / "Seurat").is_dir()
-        if spec.id == "viewer-pagoda3":
-            return _pagoda3_dist().exists()
+            return base_stage() == r["base_stage"]
+        if "path_exists" in r:
+            return expand_path(str(r["path_exists"])).exists()
+        if "r_package" in r:
+            rp = r["r_package"] or {}
+            env = _tools_env() if rp.get("env", "tools") == "tools" else _base_env()
+            pkg = str(rp.get("package") or "")
+            return (env / "bin" / "Rscript").exists() and (env / "lib" / "R" / "library" / pkg).is_dir()
+        if "python_import" in r:
+            name = str(r["python_import"])
+            return bool(list((_base_env() / "lib").glob(f"python*/site-packages/{name}")))
+        if "script" in r:
+            import subprocess
+            return subprocess.run(["bash", str(expand_path(str(r["script"])))],
+                                  capture_output=True).returncode == 0
     except Exception:  # noqa: BLE001 — a probe must never raise into a request
         return False
     return False
