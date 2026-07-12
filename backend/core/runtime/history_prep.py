@@ -56,12 +56,32 @@ ALLOWED_API_BLOCK_TYPES = frozenset({
 })
 
 
+def drop_empty_text_blocks(content):
+    """Remove empty/whitespace-only text blocks — the Anthropic API rejects them
+    ("text content blocks must be non-empty"). They appear e.g. as the bare leading
+    text block of an assistant turn that's really just a tool_use (an
+    ask_clarification / plan halt), and break the turn on resume. Non-lists pass
+    through."""
+    if not isinstance(content, list):
+        return content
+    return [b for b in content
+            if not (isinstance(b, dict) and b.get("type") == "text" and not (b.get("text") or "").strip())]
+
+
 def api_messages(history: list) -> list:
     """THE single history→API transform: strip internal-bookkeeping fields + UI-only
-    content blocks down to the bare {role, content} the Anthropic SDK accepts.
-    core/llm.py builds its `messages` from this — so the validity-guard test runs
-    here."""
-    return [{"role": m["role"], "content": strip_ui_blocks(m.get("content"))} for m in history]
+    content blocks + empty text blocks down to the bare {role, content} the Anthropic
+    SDK accepts. core/llm.py builds its `messages` from this — so the validity-guard
+    test runs here."""
+    out = []
+    for m in history:
+        content = drop_empty_text_blocks(strip_ui_blocks(m.get("content")))
+        # If dropping empties the content entirely, keep a minimal non-empty block so
+        # the turn (and user/assistant alternation) is preserved — never send [].
+        if isinstance(content, list) and not content:
+            content = [{"type": "text", "text": "(continuing)"}]
+        out.append({"role": m["role"], "content": content})
+    return out
 
 
 def is_interrupted_fill(block: dict) -> bool:
