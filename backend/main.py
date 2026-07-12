@@ -223,6 +223,8 @@ def entities_patch(entity_id: str, req: EntityPatch, _pid: str = Depends(require
         merged = {**(ent.get("metadata") or {}), **meta_updates}
         if user_edited_result:
             merged["invested"] = True
+            if "title" in fields:
+                merged["title_origin"] = "user"   # renamed → drop the Guide glyph
         fields["metadata"] = merged
     # status whitelist
     if "status" in fields and fields["status"] not in (

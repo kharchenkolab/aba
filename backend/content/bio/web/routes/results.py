@@ -126,6 +126,21 @@ def regenerate_interpretation(rid: str, _pid: str = Depends(require_project)):
     return {"ok": True, "wrote": bool(text), "preview": (text or "")[:200]}
 
 
+@router.post("/api/results/{rid}/synthesize")
+def synthesize_result_route(rid: str, _pid: str = Depends(require_project)):
+    """Generate (or re-generate) the Result's SYNTHESIS ACROSS PANELS via the Guide,
+    for the green-star button. An explicit user action, so `force=True` — it overrides
+    a prior AI synthesis (and a user-edited one, since the user asked to re-generate).
+    Returns {ok, interpretation}. Synchronous — the UI shows a 'generating…' status
+    while it awaits (a few seconds)."""
+    from content.bio.lifecycle.promote import synthesize_result
+    r = get_entity(rid)
+    if not r or r.get("type") != "result":
+        raise HTTPException(404, f"result {rid} not found")
+    text = synthesize_result(rid, force=True)
+    return {"ok": bool(text), "interpretation": text or ""}
+
+
 # --- Promotion + pin gestures (figure → result; pin/unpin entities) ---
 
 
