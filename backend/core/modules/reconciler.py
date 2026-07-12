@@ -86,14 +86,17 @@ def run_module(spec: ModuleSpec, *, runner: Runner = _default_runner,
         _INFLIGHT.add(spec.id)
     try:
         state.set_status(spec.id, "installing", progress=f"running {spec.install_script}", error="")
+        _notify(spec, "installing", progress=f"Installing {spec.title}…")
         log(f"[modules] {spec.id}: installing → {_log_path(spec)}")
         rc = runner(["bash", str(script)], _module_env(spec), _log_path(spec))
         if rc == 0 and manager.probe_ready(spec):
             state.set_status(spec.id, "idle")
+            _notify(spec, "ready")
             log(f"[modules] {spec.id}: ready")
             return True
         err = f"install script exited {rc}" + ("" if rc else " but capability not detected")
         state.set_status(spec.id, "failed", error=err)
+        _notify(spec, "failed", error=err)
         log(f"[modules] {spec.id}: FAILED ({err}) — see {_log_path(spec)}")
         return False
     finally:
@@ -156,12 +159,25 @@ def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> None:
         log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
 
 
+def _notify(spec: ModuleSpec, mstate: str, *, progress: str | None = None,
+            error: str | None = None) -> None:
+    """Push a module state-change onto the global /api/notifications channel so the UI
+    can toast + live-refresh. Best-effort; never raises."""
+    try:
+        from core.runtime.notifications import broadcast
+        broadcast({"type": "module", "id": spec.id, "title": spec.title,
+                   "state": mstate, "progress": progress, "error": error})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _kick_install(spec: ModuleSpec, *, log: Callable[[str], None]) -> None:
     """Queue + launch a single module's install in a background thread (no-op if it's
     already ready/installing)."""
     if manager.actual_state(spec) in ("ready", "installing"):
         return
     state.set_status(spec.id, "queued")
+    _notify(spec, "queued")
 
     def _work():
         run_module(spec, log=log)
@@ -193,6 +209,35 @@ def set_mode(module_id: str, new_mode: str, *, remove: bool = False,
     elif new_mode == "on":
         _kick_install(spec, log=log)
     return manager.get_view(module_id)
+
+
+def install_and_wait(module_id: str, *, timeout_s: float = 900.0,
+                     on_progress: Callable[[str], None] | None = None,
+                     poll_s: float = 2.0) -> tuple[bool, str | None]:
+    """Synchronously ensure a module is ready — kick its install (respecting mode) and
+    BLOCK until ready/failed/timeout. For callers on a background worker (e.g. the
+    pagoda3 viewer prepare job) that want to WAIT with progress and surface a failure
+    inline. Returns (ok, error). off → (False, reason) without installing."""
+    import time
+    spec = registry.get(module_id)
+    if spec is None:
+        return False, f"unknown module {module_id!r}"
+    if manager.actual_state(spec) == "ready":
+        return True, None
+    if not manager.allows_auto_install(spec):
+        return False, f"{spec.title} is turned off (Settings → Modules)."
+    if on_progress:
+        on_progress(f"Installing {spec.title}…")
+    ensure_module(module_id)
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while time.monotonic() < deadline:
+        st = manager.actual_state(spec)
+        if st == "ready":
+            return True, None
+        if st == "failed":
+            return False, state.get_status(module_id).get("error") or f"{spec.title} install failed"
+        time.sleep(poll_s)
+    return False, f"{spec.title} install timed out after {int(timeout_s)}s"
 
 
 def ensure_module(module_id: str, *, log: Callable[[str], None] = print) -> dict | None:

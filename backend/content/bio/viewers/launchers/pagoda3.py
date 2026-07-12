@@ -215,17 +215,16 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # (convert / optimize / unpack) rather than a static spinner. Only fires when
     # ensure_derived actually (re)builds — a cached store returns instantly.
     set_phase = ctx.get("set_phase") or (lambda *_: None)
-    # First-use gating (misc/modules.md): the pagoda3 viewer is a module, but the
-    # .lstar.zarr conversion below uses the CORE reader — so we still build the store
-    # and hand back the /pagoda3/ URL. If the viewer dist isn't installed, kick its
-    # install now so it's likely ready by the time the user lands; the /pagoda3/ route
-    # serves a friendly "installing / enable" page (never a 500) until it is.
+    # First-use gating (misc/modules.md): the pagoda3 viewer is a MODULE. If its dist
+    # isn't installed, install it HERE — on the prepare job — and WAIT with progress, so
+    # a failure surfaces as this job's error (→ the launch page routes it to Guide, the
+    # same seam as a conversion failure). The .lstar.zarr conversion below uses the CORE
+    # reader, independent of the viewer module.
     if not (pagoda3_dist_path() / "index.html").is_file():
-        try:
-            from core.modules.first_use import ensure_for_trigger
-            ensure_for_trigger("pagoda3")
-        except Exception:  # noqa: BLE001
-            pass
+        from core.modules.reconciler import install_and_wait
+        ok, err = install_and_wait("viewer-pagoda3", on_progress=lambda m: set_phase(m))
+        if not ok:
+            raise RuntimeError(err or "The pagoda3 viewer failed to install.")
     src = _resolve_source(node, pid)
     if not src.exists():
         raise FileNotFoundError(

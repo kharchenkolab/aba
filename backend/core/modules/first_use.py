@@ -6,7 +6,7 @@ thus install on first demand without the user visiting Settings → Modules.
 """
 from __future__ import annotations
 
-from core.modules import manager, reconciler, registry
+from core.modules import manager, reconciler, registry, state
 from core.modules.registry import ModuleSpec
 
 
@@ -45,7 +45,15 @@ def gate_module(module_id: str) -> dict | None:
             "note": (f"The {spec.title} is turned OFF (Settings → Modules). "
                      f"Enable it (On or First use) to use this — it installs in ~{spec.est_time}."),
         }
-    reconciler.ensure_module(spec.id)
+    prior = manager.actual_state(spec)          # failed | installing | queued | not_installed
+    reconciler.ensure_module(spec.id)           # kick (or retry a failed attempt); no-op if installing
+    if prior == "failed":
+        err = state.get_status(spec.id).get("error") or "see the module log"
+        return {
+            "module": spec.id, "mode": m, "ready": False, "failed": True, "error": err,
+            "note": (f"The {spec.title} failed to install ({err}). Retrying now — if it fails again, "
+                     f"the install log is at {reconciler._log_path(spec)}; I can inspect it and fix the cause."),
+        }
     return {
         "module": spec.id, "mode": m, "ready": False, "can_enable": False,
         "note": (f"The {spec.title} is installing now (first use, ~{spec.est_time}). "

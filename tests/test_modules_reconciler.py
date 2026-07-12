@@ -116,6 +116,27 @@ def test_ensure_module_off_does_not_install(monkeypatch):
     assert st.get_status("r-bio")["status"] == "idle"             # NOT queued — off blocks it
 
 
+def test_run_module_broadcasts_states(monkeypatch):
+    events = []
+    monkeypatch.setattr(rec, "_notify", lambda spec, mstate, **k: events.append(mstate))
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: True)
+    rec.run_module(reg.get("python-bio"), runner=_fake_runner([]), log=lambda *_: None)
+    assert events == ["installing", "ready"]
+    events.clear()
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    rec.run_module(reg.get("r-bio"), runner=_fake_runner([], rc=1), log=lambda *_: None)
+    assert events == ["installing", "failed"]
+
+
+def test_install_and_wait_ready_and_off(monkeypatch):
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: True)
+    assert rec.install_and_wait("python-bio") == (True, None)     # already ready
+    st.set_desired("viewer-pagoda3", "off")
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    ok, err = rec.install_and_wait("viewer-pagoda3", timeout_s=0)
+    assert ok is False and "turned off" in err.lower()            # off → no install
+
+
 def test_set_mode_on_installs_off_persists(monkeypatch):
     monkeypatch.setattr(rec, "run_module", lambda *a, **k: None)
     monkeypatch.setattr(mgr, "probe_ready", lambda s: False)

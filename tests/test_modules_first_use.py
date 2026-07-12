@@ -85,3 +85,16 @@ def test_gate_module_off_blocks(monkeypatch):
 
 def test_gate_module_unknown_none():
     assert fu.gate_module("nope") is None
+
+
+def test_gate_module_failed_surfaces_error(monkeypatch):
+    """Agent path: a failed module surfaces its error (so the turn can diagnose),
+    and retries in the background."""
+    monkeypatch.setattr(mgr, "probe_ready", lambda s: False)
+    st.set_status("r-bio", "failed", error="micromamba solve failed")
+    called = []
+    monkeypatch.setattr(rec, "ensure_module", lambda mid, **k: called.append(mid))
+    note = fu.gate_module("r-bio")
+    assert note["failed"] is True and "micromamba solve failed" in note["error"]
+    assert "failed to install" in note["note"].lower()
+    assert called == ["r-bio"]                                    # retry kicked

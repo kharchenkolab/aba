@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Settings from '../components/Settings'
 import FirstRunGate from '../components/FirstRunGate'
+import ModuleToasts from '../components/ModuleToasts'
 // Rail icons dispatch through the lib registry — bio registers its
 // glyph set at startup; the shell reads via lib/ to satisfy the
 // platform-purity lint (no `../bio/*` imports).
@@ -184,6 +185,7 @@ export default function Rail({ view, onNavigate, collapsed = false, projectTitle
       </button>
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
       <FirstRunGate settingsOpen={settingsOpen} onOpenSettings={() => setSettingsOpen(true)} />
+      <ModuleToasts />
     </aside>
   )
 }

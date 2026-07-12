@@ -285,3 +285,17 @@
 .mod-seg__btn:last-child { border-right: none; }
 .mod-seg__btn.is-active { background: var(--accent); color: #fff; font-weight: 600; }
 .mod-seg__btn:disabled:not(.is-active) { opacity: 0.55; cursor: default; }
+
+/* ── Module install toasts (misc/modules.md) ───────────────────────────────── */
+.mtoast-host { position: fixed; right: 16px; bottom: 16px; z-index: 1100; display: flex; flex-direction: column; gap: 8px; max-width: 340px; }
+.mtoast { background: #1f2937; color: #f9fafb; border-radius: 10px; padding: 10px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.3); font-size: 13px; }
+.mtoast--failed { background: #7f1d1d; }
+.mtoast__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mtoast__title { font-weight: 600; }
+.mtoast__x { background: none; border: none; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; opacity: .8; }
+.mtoast__body { margin-top: 4px; opacity: .95; line-height: 1.35; }
+.mtoast__ok { color: #86efac; }
+.mtoast__err { color: #fecaca; }
+.mtoast__actions { margin-top: 8px; display: flex; gap: 8px; }
+.mtoast__actions button { border: 1px solid rgba(255,255,255,.35); background: transparent; color: #fff; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+.mtoast__actions button:hover { background: rgba(255,255,255,.12); }

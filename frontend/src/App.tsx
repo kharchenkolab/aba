@@ -291,6 +291,8 @@ export default function App() {
       try {
         const ev = JSON.parse(msg.data)
         if (ev.type === 'entity_updated') refresh()
+        // Module install progress → ModuleToasts + the Modules tab listen for this.
+        else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))
       } catch {}
     }
     return () => { es.close() }

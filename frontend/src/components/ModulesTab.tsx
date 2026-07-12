@@ -52,7 +52,9 @@ export default function ModulesTab() {
   useEffect(() => {
     stop.current = false
     load()
-    return () => { stop.current = true }
+    const onEv = () => load()                 // live-refresh on module install events
+    window.addEventListener('aba:module', onEv)
+    return () => { stop.current = true; window.removeEventListener('aba:module', onEv) }
   }, [load])
 
   // Live-refresh while anything is installing/queued.
