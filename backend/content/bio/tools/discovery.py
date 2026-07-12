@@ -699,6 +699,28 @@ def _search_external_for_name(name: str,
     return candidates
 
 
+def _r_module_block() -> dict | None:
+    """R is the r-bio MODULE (misc/modules.md). If it's turned OFF (and not already
+    present), refuse to auto-install and tell the agent to ASK the user to enable it —
+    the whole point of an off toggle. Returns a blocked result, or None to proceed
+    (On / First use → auto-install is expected; already-ready → nothing to gate)."""
+    try:
+        from core.modules import registry, manager
+        spec = registry.get("r-bio")
+        if spec and manager.mode(spec) == "off" and manager.actual_state(spec) != "ready":
+            return {
+                "status": "blocked", "name": "R toolchain", "module": "r-bio",
+                "note": ("The R toolchain is turned OFF in Settings → Modules, so I did NOT "
+                         "install it. Ask the user whether to turn R on: they can set r-bio to "
+                         "**On** (install now) or **First use** (auto-install when needed) in "
+                         "Settings → Modules. Once it's enabled, re-run this — do not attempt to "
+                         "work around the off setting."),
+            }
+    except Exception:  # noqa: BLE001 — the gate must never itself break provisioning
+        pass
+    return None
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -871,6 +893,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                 "archetype": cap.get("archetype"), "import_name": imp, "note": note}
     if prov.get("conda"):
+        if (cap.get("archetype") == "r_package"):   # R via conda is still the r-bio module
+            _blk = _r_module_block()
+            if _blk:
+                return _blk
         # `_mod` (resolved + recorded up top) means a cluster module also covers this
         # CLI tool — it's loaded in the project's background jobs. We still build conda
         # for in-process use; a conda failure is non-fatal when `_mod` covers it.
@@ -934,6 +960,11 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                         f"run_nextflow(pipeline='{ref}', profile='test', ...). "
                         f"(Large runs will route to HPC/remote later — local only for now.)"}
     if prov.get("r"):
+        # Module gate (misc/modules.md): R is the r-bio module — honor an OFF toggle
+        # by asking the user instead of silently installing the toolchain.
+        _blk = _r_module_block()
+        if _blk:
+            return _blk
         # R package (r_provisioning.md): already on the library path → ready;
         # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
         # shared base is never mutated here — only curation grows it.
