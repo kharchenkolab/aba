@@ -3,8 +3,10 @@
 
 # Default model the primary chat agent uses when no env / config.env
 # override is set. ABA_PRIMARY_MODEL / ABA_MODEL still take precedence
-# per core.config.current_model_for_primary.
-default_model: claude-haiku-4-5-20251001
+# per core.config.current_model_for_primary. Opus is the intended default for
+# the primary chat (a subscription/API-key user gets the strongest model on
+# sign-in); a lab/institution bundle can override for cost policy.
+default_model: claude-opus-4-7
 # Model the advisor agents (skeptic / explorer / stylist / ...) use for
 # their one-shot calls. Same spirit as default_model but for advisors.
 advisor_model: claude-haiku-4-5-20251001
