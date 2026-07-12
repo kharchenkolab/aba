@@ -965,6 +965,24 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         _blk = _r_module_block()
         if _blk:
             return _blk
+        # RIGHT-WAY provisioning: if the R toolchain (r-bio module) isn't built yet,
+        # build it THROUGH the module (install-r-bio.sh: conda binaries for r-base +
+        # Seurat + Bioconductor) — one consistent path that also flips the module to
+        # ready in Settings → Modules — before any per-package install. Blocks with
+        # progress; a failure is surfaced (the turn/agent can diagnose).
+        try:
+            from core.modules import registry as _mreg, manager as _mmgr
+            _rspec = _mreg.get("r-bio")
+            if _rspec and _mmgr.actual_state(_rspec) != "ready":
+                from core.modules.reconciler import install_and_wait
+                from core.runtime import progress as _prog
+                _ok, _err = install_and_wait("r-bio", on_progress=lambda m: _prog.emit(m, phase="ensure"))
+                if not _ok:
+                    return {"status": "error", "name": name, "module": "r-bio",
+                            "note": f"The R toolchain (r-bio) failed to install: {_err}. "
+                                    f"The install log is at ~/.aba/logs/module-r-bio.log."}
+        except Exception:  # noqa: BLE001 — never let module wiring break the legacy path
+            pass
         # R package (r_provisioning.md): already on the library path → ready;
         # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
         # shared base is never mutated here — only curation grows it.
