@@ -274,7 +274,7 @@
   color: var(--accent); font-size: 12px; text-decoration: underline;
 }
 .mod-linkbtn:disabled { opacity: 0.5; cursor: default; }
-.mod-reclaim { display: inline-block; margin-top: 8px; color: var(--text-3); }
+.mod-reclaim { display: block; margin-top: 14px; color: var(--text-3); }
 
 /* 3-state segmented control (On · First use · Off) */
 .mod-seg { display: inline-flex; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
