@@ -126,16 +126,28 @@ def _ensure_r_kernelspec() -> str:
     global _r_spec_ready
     if _r_spec_ready:
         return _R_SPEC_NAME
-    # Module gate (misc/modules.md): R is the r-bio module. If it isn't ready, refuse
-    # with a friendly note — off → nudge to enable; on/first_use → kick the install and
-    # ask to retry. Never silently build a partial R.
+    # R is the r-bio module (misc/modules.md). OFF → refuse (the user must enable it).
+    # Otherwise install the toolchain INLINE, streaming progress to the turn — exactly
+    # like ensure_capability — instead of a "retry later" back-off, then proceed.
     try:
-        from core.modules.first_use import gate_module
-        _note = gate_module("r-bio")
-    except Exception:  # noqa: BLE001 — the gate must never itself break R
-        _note = None
-    if _note is not None:
-        raise RuntimeError(_note["note"])
+        from core.modules import registry as _mr, manager as _mm
+        _spec = _mr.get("r-bio")
+        _not_ready = _spec is not None and _mm.actual_state(_spec) != "ready"
+    except Exception:  # noqa: BLE001 — module wiring must never break R
+        _spec, _not_ready = None, False
+    if _not_ready:
+        if _mm.mode(_spec) == "off":
+            raise RuntimeError("The R toolchain (r-bio module) is turned OFF in Settings → "
+                               "Modules. Ask the user to enable it (On or First use) to run R.")
+        from core.modules.reconciler import install_and_wait
+        try:
+            from core.runtime import progress as _prog
+            _on_prog = lambda m: _prog.emit(m, phase="conda")
+        except Exception:  # noqa: BLE001
+            _on_prog = None
+        _ok, _err = install_and_wait("r-bio", timeout_s=1800, on_progress=_on_prog)
+        if not _ok:
+            raise RuntimeError(f"R toolchain install failed: {_err}")
     from core.exec.materialize import tools_env
     tenv = tools_env()
     if _r_spec_points_into(_R_SPEC_NAME, tenv):

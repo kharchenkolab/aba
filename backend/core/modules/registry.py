@@ -54,8 +54,8 @@ MODULES: tuple[ModuleSpec, ...] = (
         title="R toolchain",
         description="R 4.4 + Seurat + Bioconductor (DESeq2/edgeR/limma) + the lstar R viewer "
                     "bridge — R-based analysis and .rds viewing.",
-        size="~5 GB",
-        est_time="15–30 min",
+        size="~4 GB",
+        est_time="~2–5 min",         # conda binaries (Seurat/Bioc) — measured ~90s + lstar-r compile
         default_state="first_use",
         env_target="conda-tools",
         install_script="install/core/modules/install-r-bio.sh",
