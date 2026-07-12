@@ -15,14 +15,16 @@ sys.path.insert(0, str(ROOT / "backend"))
 import core.exec.r as r          # noqa: E402
 
 
-def test_r_base_pin_matches_r_environment_yml():
+def test_r_base_pin_derived_from_manifest():
+    """The R version lives ONLY in r-environment.yml; core code derives it (no
+    hardcoded version in .py). _r_base_pin() must read the manifest's pin."""
     yml = (ROOT / "install" / "core" / "r-environment.yml").read_text()
     m = re.search(r"^\s*-\s*r-base\s*=\s*(\S+)", yml, re.MULTILINE)
     assert m, "r-environment.yml has no r-base pin"
-    assert r.R_BASE_PIN == f"r-base={m.group(1)}", (
-        f"RUNTIME_SPECS pin {r.R_BASE_PIN!r} != r-environment.yml r-base={m.group(1)!r} "
-        f"— the two conda R paths would install different R minors into the same env")
-    assert r.R_BASE_PIN in r.RUNTIME_SPECS
+    assert r._r_base_pin() == f"r-base={m.group(1)}"
+    # no hardcoded r-base version anywhere in the module source (manifest is the source)
+    import inspect
+    assert "r-base=4" not in inspect.getsource(r)
 
 
 def test_project_lib_is_scoped_by_runtime_tag(monkeypatch, tmp_path):

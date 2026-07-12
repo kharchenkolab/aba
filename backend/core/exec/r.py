@@ -27,14 +27,31 @@ R_LIBS_ROOT = _LazyDir(lambda: ENVS_DIR / "r_libs")
 
 # Minimum conda runtime to run R + install from any source (CRAN source compiles
 # need the toolchain; GitHub needs remotes; Bioconductor needs BiocManager).
-# r-base is PINNED to the SAME minor as install/core/r-environment.yml (the r-bio
-# module). Both conda paths write the same tools env; if this were unpinned it would
-# resolve the latest R (e.g. 4.5) while the module build pins 4.4, so the env's R
-# would flip-flop between provisioning calls and orphan every package compiled against
-# the other minor (the dotCall64 _MAYBE_SHARED ABI mismatch, 2026-07-12). Keep in
-# lock-step with r-environment.yml's `r-base=4.4.*`.
-R_BASE_PIN = "r-base=4.4.*"
-RUNTIME_SPECS = [R_BASE_PIN, "r-remotes", "r-biocmanager", "compilers", "make", "pkg-config"]
+RUNTIME_SPECS = ["r-remotes", "r-biocmanager", "compilers", "make", "pkg-config"]
+
+
+def _r_base_pin() -> str:
+    """The r-base conda spec, read from the SINGLE source of truth: the r-bio module
+    manifest install/core/r-environment.yml. The R version is NOT declared in code —
+    both conda R paths (this runtime + the module build) must agree on the minor, else
+    the tools env's R flip-flops and orphans packages built against the other minor
+    (the dotCall64 _MAYBE_SHARED ABI mismatch, 2026-07-12). Falls back to bare 'r-base'
+    only if the manifest can't be read."""
+    import os
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "install" / "core" / "r-environment.yml",          # repo checkout
+        Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+            / "repo" / "aba" / "install" / "core" / "r-environment.yml",      # deployed layout
+    ]
+    for m in candidates:
+        try:
+            hit = re.search(r"^\s*-\s*(r-base\s*=\s*\S+)", m.read_text(), re.MULTILINE)
+            if hit:
+                return re.sub(r"\s+", "", hit.group(1))
+        except Exception:  # noqa: BLE001
+            continue
+    return "r-base"
 
 # Foundational compiled R deps + system libs that most bioinformatics packages
 # share. Kept in the runtime as conda BINARIES so installs find them on
@@ -130,7 +147,7 @@ def ensure_r_runtime(cancel_token=None) -> None:
     from core.exec.mamba import run_micromamba, installed_packages
     tenv = tools_env()
     have = installed_packages(tenv)
-    specs = RUNTIME_SPECS + R_CORE_DEPS
+    specs = [_r_base_pin(), *RUNTIME_SPECS, *R_CORE_DEPS]   # r-base pin ← r-environment.yml
     missing = [s for s in specs if s not in have]
     if not missing:
         return
