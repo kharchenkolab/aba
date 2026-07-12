@@ -37,7 +37,11 @@ dependencies:
   - cmake
 
   # ── scientific Python core ─────────────────────────────────────────────
-  - numpy
+  # numba (pulled transitively by scanpy/scvi-tools) requires numpy<2.5; left
+  # unpinned the solve picks the latest numpy (2.5.x) and ships a base that fails
+  # `import numba` — which the startup self-heal then has to downgrade. Pin it so
+  # the base is numba-compatible (and the ABI anchor correct) from the first build.
+  - numpy<2.5
   - pandas
   - scipy
   - matplotlib-base

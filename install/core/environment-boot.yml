@@ -29,7 +29,10 @@ dependencies:
   # ── ABI core — MUST live in the base: overlays ABI-anchor against the base
   #    numpy (docs/arch/envs.md), and pandas/numpy cover early data-management
   #    + light compute during background completion. ──────────────────────
-  - numpy
+  # Pin numpy<2.5 to match environment.yml (numba needs <2.5) so the boot base —
+  # and the ABI anchor derived from it — never starts on a numpy the full env
+  # update would have to walk back.
+  - numpy<2.5
   - pandas
   - scipy
   - pyyaml          # backend: `import yaml`

@@ -995,6 +995,19 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
     if h["ok"]:
         _write_verified_stamp(base_fingerprint())   # recompute: repair may have changed it
         log("[startup] base verified — stamped to skip next boot's deep check")
+        if repaired:
+            # A repair can MOVE the ABI anchor package (e.g. numpy downgraded to
+            # satisfy numba). env_selfcheck armed the anchor file from the AS-BUILT
+            # base, so it now names the pre-repair numpy — and overlay installs
+            # would pin transitive deps to a numpy the base no longer ships (which
+            # then tries to upgrade the read-only base and fails). Re-arm from the
+            # repaired base so the anchor reflects reality.
+            try:
+                a = abi_anchor_constraints(force=True)
+                log("[startup] ABI anchor re-armed after repair ("
+                    + (a.read_text().strip() if a else "unresolved") + ")")
+            except Exception as e:  # never let a re-arm failure crash startup
+                log(f"[startup] ABI anchor re-arm after repair failed: {e}")
     return {"ok": h["ok"], "repaired": repaired}
 
 
