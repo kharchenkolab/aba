@@ -204,3 +204,15 @@ credential/access scope.
 - **`config.env` has no schema validation** beyond `aba doctor`'s targeted checks
   (accelerator-vs-base, submitter-vs-Slurm-presence). A typo'd or stale operational toggle is
   caught only where a specific check exists, not by a general config-lint.
+- **Fat SIF is a frozen, read-only target — everything must be baked EAGER.** The modules +
+  lazy-env systems default to first-use/deferred install, which cannot work against a read-only
+  image. A fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R
+  tools env, pagoda3 dist, **and the module manifests** (`/opt/aba/install/core/modules`, else
+  the registry is empty), and wires three knobs so the runtime reads the baked artifacts as
+  ready instead of re-installing: `ABA_TOOLS_DIR` / `ABA_PAGODA3_DIST` (module readiness probes
+  in `core/modules/manager.py` honor these — else they look under `$ABA_RUNTIME_DIR`/`$ABA_HOME`
+  and miss the baked copies), `ABA_MODULES_EAGER` (promotes baked `first_use` modules to `on`),
+  and a baked `/opt/aba-venv/.aba-base-stage=ready` marker. The boot R-base top-up
+  (`lifespan._provision_r_base_bg`) skips when the tools env is a read-only mount. Get any of
+  these wrong and the symptom is silent: a first-use install fires against the read-only image
+  (a slow network rebuild into the writable runtime dir, or a hard read-only failure).
