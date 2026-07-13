@@ -110,9 +110,11 @@ def settings_credential_get(provider: str = "anthropic"):
     UI uses to decide between showing status+Change and showing the input."""
     from core import credentials, oauth
     st = credentials.status(provider if provider in ("anthropic", "openai") else "anthropic")
-    # Whether subscription sign-in (OAuth) is available on this deployment, so the UI can
-    # hide the Subscription tab instead of offering a button that 400s (oauth.enabled()).
-    st["oauth_enabled"] = oauth.enabled()
+    # Whether subscription sign-in (OAuth) is available FOR THIS PROVIDER on this deployment,
+    # so the UI hides the Subscription tab instead of offering a button that 400s. Per-provider
+    # + mode-aware: a proxied/OOD deploy can offer Anthropic (paste flow) while hiding OpenAI
+    # (localhost-callback flow the browser can't reach). See oauth.enabled().
+    st["oauth_enabled"] = oauth.enabled(provider if provider in ("anthropic", "openai") else "anthropic")
     return st
 
 

@@ -27,8 +27,33 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 
-def enabled() -> bool:
-    return (os.environ.get("ABA_SUBSCRIPTION_OAUTH") or "").strip().lower() in ("1", "true", "yes", "on")
+def enabled(provider: str = "anthropic") -> bool:
+    """Is subscription sign-in offered for `provider` on THIS deployment?
+
+    Gated by ABA_SUBSCRIPTION_OAUTH, read as a CAPABILITY LEVEL — because the two flow
+    shapes have different reachability needs (see the module docstring):
+
+      off (default / 0 / no / false)  — no subscription sign-in anywhere.
+      paste                           — PASTE-mode flows only (Anthropic). Safe behind a
+                                        reverse proxy / remote session (OOD): the code is
+                                        shown for the user to copy, no local listener.
+      1 / true / yes / on / all       — ALL flows, incl. CALLBACK-mode (OpenAI, which binds
+                                        localhost:1455). Only a LOCAL desktop — browser on the
+                                        ABA host — can complete that; behind OOD it never can.
+
+    Per-provider + mode-aware so a proxied deploy can offer Anthropic-subscription WITHOUT
+    dangling a broken OpenAI-subscription button. (The old gate was a single global bool, so
+    turning subscription on for Anthropic also advertised OpenAI's unreachable callback.)"""
+    raw = (os.environ.get("ABA_SUBSCRIPTION_OAUTH") or "").strip().lower()
+    if raw in ("", "0", "off", "no", "false"):
+        return False
+    flow = _FLOWS.get(provider)
+    if not flow:
+        return False
+    full = raw in ("1", "true", "yes", "on", "all")     # local desktop: callback reachable
+    if flow.mode == "callback":
+        return full                                     # callback needs a reachable localhost port
+    return full or raw in ("paste", "paste-only", "proxy")   # paste works at any enabled level
 
 
 @dataclass(frozen=True)
@@ -111,11 +136,18 @@ def _close_listener(flow: dict | None) -> None:
 def start(provider: str) -> dict:
     """Begin a subscription sign-in. Returns {flow_id, authorize_url, mode}. For a
     callback flow, also binds the local callback port to capture the code."""
-    if not enabled():
-        raise ValueError("Subscription sign-in isn't enabled on this deployment.")
     flow = _FLOWS.get(provider)
     if not flow:
         raise ValueError(f"No subscription sign-in for provider {provider!r}.")
+    if not enabled(provider):
+        if flow.mode == "callback":
+            raise ValueError(
+                f"{provider} subscription sign-in uses a localhost:{flow.callback_port} "
+                "callback the browser must reach on the ABA host — not possible in a "
+                "remote/OOD session. Paste an API key instead, or set "
+                "ABA_SUBSCRIPTION_OAUTH=all on a local desktop deployment.")
+        raise ValueError("Subscription sign-in isn't enabled on this deployment "
+                         "(set ABA_SUBSCRIPTION_OAUTH=paste to allow it).")
     now = time.time(); _gc(now)
     verifier, challenge = _pkce()
     state = secrets.token_urlsafe(24)

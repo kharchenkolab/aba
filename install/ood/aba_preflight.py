@@ -278,6 +278,32 @@ def main():
             lines.append(f"export ABA_GROUP={shq(group)}")
         lines.append(f"export ABA_RUNTIME_DIR={shq(state_dir)}")
         lines.append(f"export ABA_ENVS_DIR={shq(envs_dir)}")
+        # Subscription sign-in (Settings → Agent → Subscription): which OAuth flows the UI
+        # offers. aba-preflight ONLY runs under the OOD launch — a reverse-proxied session —
+        # so the safe maximum is `paste` (Anthropic's copy-code flow; core.oauth.enabled()
+        # still refuses OpenAI's localhost:1455 callback here, which the remote browser can't
+        # reach). ALWAYS emitted (not conditional): the container passthrough is forward-if-set,
+        # so a producer must exist or the Subscription tab silently never appears. site.yaml
+        # `credentials.subscription_signin` overrides — `off` to force API-key-only, or
+        # `paste` (default). YAML 1.1 reads bare on/off/yes/no as BOOLEANS, so
+        # `subscription_signin: off` arrives as False (not "off") — map it back, same as
+        # registry does for default_state. Without this, `off` would silently fall through
+        # to the paste default.
+        _sub = creds.get("subscription_signin")
+        _sub = {True: "all", False: "off"}.get(_sub, _sub)
+        sub_signin = str(_sub).strip().lower() if _sub not in (None, "") else "paste"
+        # This producer runs ONLY under the OOD launch — a reverse-proxied session — where a
+        # full/callback level (`all`, `on`, `1`) can never work: OpenAI's sign-in binds
+        # localhost:1455, which the remote browser can't reach. Cap it to `paste` here (a
+        # broken button is worse than a warning nobody reads); `all` belongs only to a
+        # non-proxied desktop deploy, which doesn't go through this preflight.
+        if sub_signin in ("1", "true", "yes", "on", "all"):
+            sys.stderr.write(
+                f"aba-preflight: credentials.subscription_signin={sub_signin!r} requests OpenAI's "
+                "localhost callback, unreachable in a proxied OOD session — capping to 'paste' "
+                "(Anthropic paste-flow only). Use 'all' only on a non-proxied desktop deploy.\n")
+            sub_signin = "paste"
+        lines.append(f"export ABA_SUBSCRIPTION_OAUTH={shq(sub_signin)}")
         # image: if site.yaml configures a SIF, the node launches FROM it; for a
         # slim image, base_dir/tools_dir are the shared base mounts it expects.
         # image.release_root (versioned deploy) takes precedence: pin this session to

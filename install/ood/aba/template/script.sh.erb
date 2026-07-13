@@ -72,7 +72,7 @@ if [ -n "${ABA_SIF:-}" ]; then
   # deployment (ABA_JOB_WRAP=sif). Unset/bare (slim) → offloaded jobs run bare, as before.
   for v in ABA_RUNTIME_DIR ABA_ENVS_DIR ABA_SITE_CONFIG ABA_GROUP ABA_MODEL ABA_HOME \
            ABA_SHARE ABA_RELEASE_ID ABA_SIF ABA_JOB_WRAP ABA_APPTAINER_TMPDIR \
-           ABA_MODULE_BINDS \
+           ABA_MODULE_BINDS ABA_SUBSCRIPTION_OAUTH \
            ABA_NEXTFLOW_MODULE ABA_NEXTFLOW_PROFILES ABA_NEXTFLOW_CONFIG ABA_NEXTFLOW_CACHEDIR \
            ANTHROPIC_API_KEY ABA_LLM_CREDENTIAL CLAUDE_CODE_OAUTH_TOKEN; do
     eval "_v=\${$v:-}"; [ -n "${_v}" ] && envs+=( --env "$v=${_v}" )
