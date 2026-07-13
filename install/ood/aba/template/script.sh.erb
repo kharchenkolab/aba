@@ -72,6 +72,13 @@ if [ -n "${ABA_SIF:-}" ]; then
   # ABA_SIF + ABA_JOB_WRAP: forwarded so the containerized backend's slurm_submitter
   # can wrap offloaded env-jobs by RE-ENTERING this image (apptainer exec) under a fat
   # deployment (ABA_JOB_WRAP=sif). Unset/bare (slim) → offloaded jobs run bare, as before.
+  #
+  # SOURCE OF TRUTH for this list = the backend settings registry's deploy_injected
+  # set (config.deploy_injected_keys(), = `aba settings --deploy-env`). ERB can't call
+  # Python at render, so this list is a MIRROR kept in sync by
+  # tests/test_deploy_forward_loop.py — add a var here AND mark it deploy_injected in
+  # core/config.py, or the guard fails. (ABA_FRONTEND_DIST + ABA_OFFLOAD_* are injected
+  # with computed values above / below; they're in the registry set too.)
   for v in ABA_RUNTIME_DIR ABA_ENVS_DIR ABA_SITE_CONFIG ABA_GROUP ABA_MODEL ABA_HOME \
            ABA_SHARE ABA_RELEASE_ID ABA_SIF ABA_JOB_WRAP ABA_APPTAINER_TMPDIR \
            ABA_MODULE_BINDS ABA_SUBSCRIPTION_OAUTH \

@@ -334,8 +334,91 @@ def doctor() -> int:
                 _ok, _msg = _probe_envs_visible_on_compute_node(_envs, home)
                 chk("provisioning dir visible from a compute node (Slurm probe)", _ok, _msg)
 
+    # Settings registry surface (env_reorg): the declared config + any UNKNOWN ABA_*
+    # env var present = a typo / stale knob. A drift here is worth surfacing even
+    # when everything else is green.
+    _n, _unknown = _settings_surface(home)
+    if _n:
+        print(f"  ✓ settings registry: {_n} declared "
+              f"(inspect with `aba settings`)", flush=True)
+        if _unknown:
+            chk(f"no unrecognized ABA_* in the environment ({len(_unknown)} found)",
+                False, f"unknown/typo'd: {', '.join(_unknown)} — "
+                "check config.env; run `aba settings` for the full surface")
+
     print(f"\n{'✓ all checks passed' if fails == 0 else f'✗ {fails} issue(s) — see the fixes above'}", flush=True)
     return 0 if fails == 0 else 1
+
+
+def _backend_python(home: Path) -> tuple[Path, Path] | tuple[None, None]:
+    """(python, backend_dir) for the install, or (None, None) if not resolvable."""
+    envpy = home / "env" / "bin" / "python"
+    backend = home / "repo" / "aba" / "backend"
+    if envpy.exists() and backend.exists():
+        return envpy, backend
+    return None, None
+
+
+def _run_in_backend(home: Path, script: str, timeout: int = 30):
+    """Run a snippet in the install's backend python (core.config importable)."""
+    envpy, backend = _backend_python(home)
+    if not envpy:
+        return None
+    env = dict(os.environ, PYTHONPATH=str(backend))
+    try:
+        return subprocess.run([str(envpy), "-c", script], capture_output=True,
+                              text=True, timeout=timeout, env=env)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _settings_surface(home: Path) -> tuple[int, list]:
+    """(#declared settings, [unknown ABA_* env vars]) via the backend registry.
+    Returns (0, []) if the backend isn't resolvable (best-effort in doctor)."""
+    r = _run_in_backend(home,
+        "import json;from core.config import list_settings;"
+        "d=list_settings();"
+        "print(json.dumps({'n':len(d['settings']),'unknown':d['unknown_env']}))")
+    if not r or r.returncode != 0 or not (r.stdout or "").strip():
+        return 0, []
+    try:
+        import json
+        d = json.loads(r.stdout.strip().splitlines()[-1])
+        return int(d.get("n", 0)), list(d.get("unknown", []))
+    except Exception:  # noqa: BLE001
+        return 0, []
+
+
+def settings_cmd(deploy_env: bool = False) -> int:
+    """Print the full declared settings surface (value + source + tags), or, with
+    --deploy-env, just the env keys the launcher must forward (the source of truth
+    for the OOD forward-loop). Reads the install's backend registry."""
+    _ensure_aba_home()
+    from aba_installer import paths
+    home = Path(paths.aba_home())
+    if deploy_env:
+        r = _run_in_backend(home,
+            "from core.config import deploy_injected_keys;"
+            "print('\\n'.join(deploy_injected_keys()))")
+        if not r or r.returncode != 0:
+            print("could not read the backend registry", flush=True)
+            return 1
+        print(r.stdout, end="", flush=True)
+        return 0
+    r = _run_in_backend(home,
+        "from core.config import list_settings;"
+        "d=list_settings();rows=d['settings'];"
+        "w=max((len(x['name']) for x in rows), default=4);"
+        "print(f\"{'name':<{w}}  {'value':<22} source        cat/weft/reduction\");"
+        "[print(f\"{x['name']:<{w}}  {str(x['value'])[:22]:<22} {x['source']:<13} \"\n"
+        "  f\"{x['category']}/{x['weft_fate']}/{x['reduction']}\") for x in rows];"
+        "print();"
+        "print('UNKNOWN ABA_* in env:', ', '.join(d['unknown_env']) or '(none)')")
+    if not r or r.returncode != 0:
+        print((r.stderr if r else "could not read the backend registry"), flush=True)
+        return 1
+    print(r.stdout, end="", flush=True)
+    return 0
 
 
 def _wall_to_h(val: str | None) -> int | None:
@@ -525,6 +608,9 @@ def main(argv=None) -> int:
     pi.add_argument("--skip", help="comma-separated step ids to skip")
     sub.add_parser("update", help="pull latest code + recipes, refresh env, rebuild UI")
     sub.add_parser("doctor", help="diagnose an existing install")
+    ps = sub.add_parser("settings", help="show the declared config settings surface (+ drift)")
+    ps.add_argument("--deploy-env", action="store_true",
+                    help="print only the env keys the launcher forwards (deploy_injected)")
     ph = sub.add_parser("hpc-config", help="write an optional hpc.yaml override (runtime discovers live)")
     ph.add_argument("--out", help="output path (default $ABA_HOME/hpc.yaml)")
     ph.add_argument("--print", dest="print_only", action="store_true",
@@ -545,6 +631,8 @@ def main(argv=None) -> int:
         return run_playbook_headless("update")
     if a.cmd == "doctor":
         return doctor()
+    if a.cmd == "settings":
+        return settings_cmd(deploy_env=a.deploy_env)
     return 2
 
 

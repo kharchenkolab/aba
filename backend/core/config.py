@@ -1074,6 +1074,31 @@ setting("state_dir", env="ABA_STATE_DIR", type="str", default=None, category="bu
 setting("scratch_dir", env="ABA_SCRATCH", type="str", default=None, category="bundle",
         weft_fate="keep", doc="Optional user scratch dir (else site config).")
 
+# ── Deploy-forwarded set ─────────────────────────────────────────────────────
+# The backend settings the OOD launcher injects into the server process (the
+# script.sh.erb `--env` forward-loop). Kept as DATA so the forward-loop is derived
+# and drift-guarded (tests/test_deploy_forward_loop.py) instead of a hand list that
+# silently desyncs when a var is added. `runtime_dir/envs_dir/home_dir/frontend_dist/
+# share_dir/release_id/sif` are already marked at declaration; add the rest here.
+for _n in ("site_config", "group", "model_snapshot", "job_wrap", "apptainer_tmpdir",
+           "module_binds", "subscription_oauth", "nextflow_module", "nextflow_profiles",
+           "nextflow_config", "nextflow_cachedir", "offload_python", "offload_backend_dir"):
+    _REGISTRY[_n].deploy_injected = True
+
+# Credential env vars the launcher also forwards but that the registry does NOT own
+# the naming of (third-party / mode selector). Listed here so the derived forward-loop
+# is complete without the registry claiming these names.
+DEPLOY_CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL")
+
+
+def deploy_injected_keys() -> list:
+    """Sorted env keys the launcher must forward into the backend process = every
+    setting tagged deploy_injected, plus the credential env vars. The single source
+    of truth for the OOD forward-loop (drift-guarded by test_deploy_forward_loop)."""
+    keys = {k for s in _REGISTRY.values() if s.deploy_injected for k in s.env_keys}
+    keys.update(DEPLOY_CREDENTIAL_ENV)
+    return sorted(keys)
+
 
 # current_project_id moved to core.projects (burn-down #1 — config is a leaf,
 # must not import projects).
