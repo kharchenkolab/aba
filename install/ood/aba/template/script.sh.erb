@@ -13,7 +13,9 @@ ABA=/home/pkharchenko/aba/aba
 VENV=/home/pkharchenko/aba/aba_runtime/.venv
 
 export HOME="${ABA_RUNTIME_DIR}/.home"; mkdir -p "$HOME"
-export ABA_MODEL="${ABA_MODEL:-claude-haiku-4-5-20251001}"
+# NB: do NOT hardcode a model here — that would override the bundle default
+# (system_bundle/settings.yaml `default_model`) and any per-user Settings choice for
+# EVERY session. ABA_MODEL is only forwarded if a site/user actually set it.
 
 # ABA_HOME = the per-user store, incl. the refreshable OAuth token store
 # ($ABA_HOME/oauth.json). Set explicitly so the OAuth auto-refresh tier activates.
