@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from core import config
 from core.config import ENVS_DIR, _LazyDir
 from core.exec.materialize import tools_env
 
@@ -41,7 +42,7 @@ def _r_base_pin() -> str:
     here = Path(__file__).resolve()
     candidates = [
         here.parents[3] / "install" / "core" / "r-environment.yml",          # repo checkout
-        Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+        config.aba_home()
             / "repo" / "aba" / "install" / "core" / "r-environment.yml",      # deployed layout
     ]
     for m in candidates:
@@ -555,7 +556,7 @@ def _ppm_distro() -> str:
     Explicit ABA_R_PPM_DISTRO wins (empty disables binaries); else auto-detect
     from /etc/os-release, but only if it's a PPM-supported distro."""
     import os
-    env = os.environ.get("ABA_R_PPM_DISTRO")
+    env = config.settings.r_ppm_distro.get()
     if env is not None:
         return env.strip()
     try:
@@ -572,8 +573,8 @@ def cran_repo() -> str:
     """The CRAN repo URL for installs — a PPM snapshot (binary-enabled when on a
     supported distro, else source). Override via ABA_R_PPM_BASE/SNAPSHOT/DISTRO."""
     import os
-    base = os.environ.get("ABA_R_PPM_BASE", _PPM_BASE).rstrip("/")
-    snap = os.environ.get("ABA_R_PPM_SNAPSHOT", "latest")
+    base = (config.settings.r_ppm_base.get() or _PPM_BASE).rstrip("/")
+    snap = config.settings.r_ppm_snapshot.get()
     distro = _ppm_distro()
     return f"{base}/__linux__/{distro}/{snap}" if distro else f"{base}/{snap}"
 
@@ -589,7 +590,7 @@ def build_jobs() -> int:
     """Parallel-build width for source compiles. Override via ABA_R_BUILD_JOBS;
     else #CPUs capped at 8 (diminishing returns + memory pressure beyond that)."""
     import os
-    env = os.environ.get("ABA_R_BUILD_JOBS")
+    env = config.settings.r_build_jobs.get()
     if env and env.isdigit():
         return max(1, int(env))
     return max(1, min(os.cpu_count() or 2, 8))

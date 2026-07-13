@@ -14,6 +14,8 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from core import config
+
 
 def register_discovery_tools(mcp: FastMCP) -> None:
     """Register the 10 discovery / search / fetch tools on `mcp`."""
@@ -26,8 +28,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     # small open models (Qwen3-30B class) that narrate-instead-of-
     # dispatch after seeing the result. Production (Anthropic) reads
     # the original docstring.
-    import os as _os
-    if _os.environ.get("ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS"):
+    if config.settings.experimental_prescriptive_search_skills.get():
 
         @mcp.tool()
         def search_skills(query: str, limit: int = 8) -> dict:
@@ -74,8 +75,7 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     # to isolate "chain length is the bottleneck" from other
     # explanations. NOT in production until we've shown the change
     # is net-positive.
-    import os as _os
-    if _os.environ.get("ABA_EXPERIMENTAL_FETCH_RECIPE"):
+    if config.settings.experimental_fetch_recipe.get():
 
         @mcp.tool()
         def fetch_recipe(query: str, args: str = "",

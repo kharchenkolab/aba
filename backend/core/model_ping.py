@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 
+from core import config
+
 
 def ping_model(model: str) -> dict:
     """{ok: bool, detail?: str}. Cheap; safe to call on model-select / panel-open."""
@@ -29,14 +31,14 @@ def _ping_openai(model: str) -> dict:
         import openai
     except Exception:  # noqa: BLE001
         return {"ok": False, "detail": "The openai SDK isn't installed in this environment."}
-    base = os.environ.get("ABA_OPENAI_BASE_URL") or "https://api.openai.com/v1"
-    key = (os.environ.get("OPENAI_OAUTH_TOKEN") or os.environ.get("ABA_OPENAI_API_KEY")
+    base = config.settings.openai_base_url.get() or "https://api.openai.com/v1"
+    key = (os.environ.get("OPENAI_OAUTH_TOKEN") or config.settings.openai_api_key.get()
            or os.environ.get("OPENAI_API_KEY") or "")
     if not key:
         return {"ok": False, "detail": "No OpenAI credential — connect one in Settings → Agent."}
     responses_mode = "/backend-api/codex" in base
     headers: dict = {}
-    acct = os.environ.get("ABA_OPENAI_ACCOUNT_ID")
+    acct = config.settings.openai_account_id.get()
     if acct:
         headers["ChatGPT-Account-Id"] = acct
     if responses_mode:

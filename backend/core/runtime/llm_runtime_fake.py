@@ -33,12 +33,12 @@ matches today's `_fake_factory` behavior.
 from __future__ import annotations
 
 import json
-import os
 import queue as _queue
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from core import config
 from core.runtime.llm_runtime import (
     RuntimeEvent,
     RuntimeRequest,
@@ -77,7 +77,7 @@ class _Cursor:
     def _ensure_loaded(cls) -> None:
         if cls._turns is not None:
             return
-        env = os.environ.get("ABA_FAKE_SESSION")
+        env = config.settings.fake_session.get()
         if not env:
             raise RuntimeError(
                 "FakeRuntime needs ABA_FAKE_SESSION pointing at a JSONL of "

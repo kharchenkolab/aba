@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Any
 
-import os
 import yaml
 
 
@@ -460,15 +459,16 @@ def _env_gate_policy() -> str:
     disables gating. Resolution, highest first: the user preference
     (`discovery.env_gate`, set via the settings card) → the ABA_DISCOVERY_ENV_GATE
     deployment/test override → a bundle-authored default → 'auto'."""
+    from core import config  # noqa: PLC0415 — deferred, like the core.config import below
     v = ""
     try:
         from core.config import get_user_pref, _read_setting_from_bundle
         v = (get_user_pref("discovery.env_gate")
-             or os.environ.get("ABA_DISCOVERY_ENV_GATE")
+             or config.settings.discovery_env_gate.get()
              or _read_setting_from_bundle("discovery.env_gate")
              or "")
     except Exception:  # noqa: BLE001 — never break discovery on a config read
-        v = os.environ.get("ABA_DISCOVERY_ENV_GATE") or ""
+        v = config.settings.discovery_env_gate.get() or ""
     v = (v or "").strip().lower()
     if v == "auto":
         return "soft"

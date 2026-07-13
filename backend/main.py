@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from core import config
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.graph._schema import init_db, gen_entity_id, WORKSPACE_ID
 from core.graph.edges import add_edge, remove_edge, edges_from, edges_to
@@ -645,7 +646,7 @@ def dev_last_turn_context(thread_id: str | None = None):
     guide.py:_dump_turn_context. If thread_id is set, returns the latest matching
     that thread; else just the most recent. Powers the drawer's Context tab."""
     import os, glob, json as _json
-    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    d = config.settings.turn_log_dir.get()
     if d.strip().lower() in ("", "off", "0", "false"):
         raise HTTPException(404, "turn-log dir disabled")
     files = sorted(glob.glob(os.path.join(d, "*_run_*.json")), reverse=True)
@@ -1270,7 +1271,7 @@ def viewer_launch_page():
     the viewer when ready (see core/viewers/launch_page). Reuses the SPA's CSS;
     no-store so it always references the current build's stylesheet."""
     from core.viewers.launch_page import render
-    dist = Path(os.environ.get("ABA_FRONTEND_DIST")
+    dist = Path(config.settings.frontend_dist.get()
                 or (Path(__file__).resolve().parent.parent / "frontend" / "dist"))
     return HTMLResponse(render(dist), headers={"Cache-Control": "no-store, must-revalidate"})
 
@@ -1446,7 +1447,7 @@ async def pagoda3_api_stream(payload: dict):
 # is a no-op in dev and only engages once `npm run build` has produced a
 # dist/. Registered last, so it never shadows the /api or /artifacts routes
 # above (Starlette matches routes in registration order).
-_FRONTEND_DIST = Path(os.environ.get("ABA_FRONTEND_DIST")
+_FRONTEND_DIST = Path(config.settings.frontend_dist.get()
                       or (Path(__file__).resolve().parent.parent / "frontend" / "dist"))
 if (_FRONTEND_DIST / "index.html").is_file():
     _assets_dir = _FRONTEND_DIST / "assets"

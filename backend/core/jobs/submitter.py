@@ -17,8 +17,9 @@ submitter only decides how it RUNS and how its status/cancel/monitoring resolve.
 """
 from __future__ import annotations
 
-import os
 from typing import Optional, Protocol, runtime_checkable
+
+from core import config
 
 
 @runtime_checkable
@@ -45,7 +46,7 @@ class BatchSubmitter(Protocol):
 
 
 def submitter_name() -> str:
-    return (os.environ.get("ABA_BATCH_SUBMITTER") or "local").strip().lower()
+    return config.settings.batch_submitter.get().strip().lower()
 
 
 def get_submitter() -> "BatchSubmitter":

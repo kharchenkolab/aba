@@ -19,6 +19,8 @@ import math
 import os
 from pathlib import Path
 
+from core import config
+
 # When NOTHING allocates CPUs for us (unscheduled workstation / bare SIF run on a
 # fat box), cap BLAS/OMP threads here: more than this on typical bio matrices is
 # slower (oversubscription) and collides with data-loader workers. This cap is
@@ -73,7 +75,7 @@ def _allocation_cpus() -> int | None:
     explicitly allocates CPUs for us (an unscheduled box). The minimum wins when
     several disagree."""
     cands: list[int] = []
-    ovr = os.environ.get("ABA_CPU_LIMIT", "").strip()
+    ovr = config.settings.cpu_limit.get().strip()
     if ovr.isdigit():
         cands.append(int(ovr))
     for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
@@ -111,7 +113,7 @@ def default_thread_cap() -> int:
     The failure this prevents: on a node allocated 1 of 56 CPUs, an uncapped
     OpenBLAS spawns 56 threads per kernel and dies on the per-user process
     limit (pthread EAGAIN)."""
-    ovr = os.environ.get("ABA_KERNEL_THREADS", "").strip()
+    ovr = config.settings.kernel_threads.get().strip()
     if ovr.isdigit() and int(ovr) > 0:
         return int(ovr)
     aff = _affinity_cpus()

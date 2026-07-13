@@ -28,6 +28,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 
 # ── site config ──────────────────────────────────────────────────────────────
 # Two execution modes (see run_nextflow_code / nextflow_config["execution"]):
@@ -39,33 +41,31 @@ from typing import Optional
 #                       is dwarfed by Slurm queue latency.
 _DEFAULT_HEAD = {"cores": 2, "mem_gb": 8, "qos": None, "partition": None, "walltime_h": 24}
 _DEFAULT_LOCAL = {"cores": 8, "mem_gb": 32, "qos": None, "partition": None, "walltime_h": 24}
-# env var → (name, caster) for per-field resource overrides (see nextflow_config).
+# field → registry setting for per-field resource overrides (see nextflow_config).
+# The setting bakes the caster (int/str) and the env key; env still wins over cfg.
 _HEAD_ENV_OVERRIDES = {
-    "cores": ("ABA_NEXTFLOW_HEAD_CORES", int),
-    "mem_gb": ("ABA_NEXTFLOW_HEAD_MEM_GB", int),
-    "walltime_h": ("ABA_NEXTFLOW_HEAD_WALLTIME_H", int),
-    "qos": ("ABA_NEXTFLOW_HEAD_QOS", str),
-    "partition": ("ABA_NEXTFLOW_HEAD_PARTITION", str),
+    "cores": "nextflow_head_cores",
+    "mem_gb": "nextflow_head_mem_gb",
+    "walltime_h": "nextflow_head_walltime_h",
+    "qos": "nextflow_head_qos",
+    "partition": "nextflow_head_partition",
 }
 _LOCAL_ENV_OVERRIDES = {
-    "cores": ("ABA_NEXTFLOW_LOCAL_CORES", int),
-    "mem_gb": ("ABA_NEXTFLOW_LOCAL_MEM_GB", int),
-    "walltime_h": ("ABA_NEXTFLOW_LOCAL_WALLTIME_H", int),
-    "qos": ("ABA_NEXTFLOW_LOCAL_QOS", str),
-    "partition": ("ABA_NEXTFLOW_LOCAL_PARTITION", str),
+    "cores": "nextflow_local_cores",
+    "mem_gb": "nextflow_local_mem_gb",
+    "walltime_h": "nextflow_local_walltime_h",
+    "qos": "nextflow_local_qos",
+    "partition": "nextflow_local_partition",
 }
 
 
 def _apply_env_overrides(base: dict, overrides: dict) -> dict:
     """Return `base` with each field replaced by its env override when set+castable."""
     out = dict(base)
-    for key, (envname, caster) in overrides.items():
-        raw = os.environ.get(envname)
-        if raw not in (None, ""):
-            try:
-                out[key] = caster(raw)
-            except (TypeError, ValueError):
-                pass
+    for key, sname in overrides.items():
+        val = config.get_setting(sname).get()  # already cast (int/str) per the setting
+        if val is not None:
+            out[key] = val
     return out
 
 
@@ -97,27 +97,27 @@ def nextflow_config() -> dict:
             return [str(x).strip() for x in v if str(x).strip()]
         return [t.strip() for t in str(v or "").split(",") if t.strip()]
 
-    module = os.environ.get("ABA_NEXTFLOW_MODULE", cfg.get("module"))
-    profiles = _csv(os.environ.get("ABA_NEXTFLOW_PROFILES")) or _csv(cfg.get("profiles"))
-    cachedir = os.environ.get("ABA_NEXTFLOW_CACHEDIR", cfg.get("singularity_cachedir"))
-    workdir_root = os.environ.get("ABA_NEXTFLOW_WORKDIR", cfg.get("workdir_root"))
+    module = config.settings.nextflow_module.get() or cfg.get("module")
+    profiles = _csv(config.settings.nextflow_profiles.get()) or _csv(cfg.get("profiles"))
+    cachedir = config.settings.nextflow_cachedir.get() or cfg.get("singularity_cachedir")
+    workdir_root = config.settings.nextflow_workdir.get() or cfg.get("workdir_root")
     # A site config (`-c <file>`) — e.g. an ABA-pinned cbe-derived profile that sets
     # the slurm executor/queue/QOS + singularity, WITHOUT nf-core/configs' stale
     # `process.module` loads. Applied to every run when set.
-    config_file = os.environ.get("ABA_NEXTFLOW_CONFIG", cfg.get("config_file"))
+    config_file = config.settings.nextflow_config.get() or cfg.get("config_file")
     # Standalone Nextflow on shared FS (slim SIF / cluster-personal) as an ALTERNATIVE to `module`:
     # a dir (or the launcher path) PREPENDED to the head's PATH so it runs a self-installed NF (e.g.
     # ≥25.04, past the module's version ceiling). Used ONLY when set → `module` stays the path for
     # fat SIF / personal installs, which are unaffected. See misc/nfcore.md §7d.
-    bin_ = os.environ.get("ABA_NEXTFLOW_BIN", cfg.get("bin"))
+    bin_ = config.settings.nextflow_bin.get() or cfg.get("bin")
     # Persistent NXF_HOME (plugins/assets/scm). None → the per-run scratch `.nextflow` (today's
     # behavior; re-fetches plugins every run). Set it to share plugins across a user's runs.
-    home = os.environ.get("ABA_NEXTFLOW_HOME", cfg.get("home"))
+    home = config.settings.nextflow_home.get() or cfg.get("home")
     # JAVA_HOME for the head: modern nf-core pipelines pull plugins (nf-schema) compiled
     # for Java 17+, but a cluster's `nextflow` module may pin an older Java. Point the head
     # at a Java ≥17 here (the run sets JAVA_HOME, which Nextflow honors). None → use whatever
     # the module/PATH provides.
-    java_home = os.environ.get("ABA_NEXTFLOW_JAVA_HOME", cfg.get("java_home"))
+    java_home = config.settings.nextflow_java_home.get() or cfg.get("java_home")
     # Per-field admin overrides for the head/local Slurm footprint (env wins over site config).
     # walltime_h is a scheduling knob: a head that requests a very long window backfills poorly
     # (the scheduler needs a guaranteed free slot ≥ walltime), so on a busy cluster a shorter
@@ -127,7 +127,7 @@ def nextflow_config() -> dict:
     local = _apply_env_overrides({**_DEFAULT_LOCAL, **(cfg.get("local") or {})}, _LOCAL_ENV_OVERRIDES)
     # Default execution mode (per-run param overrides this): slurm fan-out unless a site opts
     # into local (e.g. a single-node deploy) via ABA_NEXTFLOW_EXECUTION=local.
-    execution = (os.environ.get("ABA_NEXTFLOW_EXECUTION") or cfg.get("execution") or "slurm").lower()
+    execution = (config.settings.nextflow_execution.get() or cfg.get("execution") or "slurm").lower()
     if execution not in ("slurm", "local"):
         execution = "slurm"
     return {"module": module or None, "profiles": profiles,
@@ -448,8 +448,8 @@ def nextflow_job_progress(job: dict) -> dict:
 # watchdog (runner._inline_watchdog_loop) detects that from the FILESYSTEM + /proc — never from
 # in-memory monitor state — so it survives an ABA restart: a fresh instance just re-derives every
 # running head's health and keeps watching. These helpers are that verdict, kept pure/cheap.
-_INLINE_STALL_MIN = float(os.environ.get("ABA_INLINE_STALL_MIN") or 20)   # whole-run silence budget
-_STALL_CPU_SAMPLE_S = float(os.environ.get("ABA_INLINE_STALL_CPU_SAMPLE_S") or 3)
+_INLINE_STALL_MIN = config.settings.inline_stall_min.get()   # whole-run silence budget
+_STALL_CPU_SAMPLE_S = config.settings.inline_stall_cpu_sample_s.get()
 _STALL_CPU_MIN_JIFFIES = 5   # >~50ms of CPU across the resample ⇒ still computing, not deadlocked
 
 
@@ -1082,7 +1082,7 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     # and the inherited env had APPTAINER_TMPDIR on $HOME. Pin both to node-local /tmp (fast, off
     # NFS, present on every node) so container tasks actually run — inline AND Slurm (sbatch
     # inherits this env). This is what makes containerized local execution work here. Overridable.
-    _ap = (os.environ.get("ABA_APPTAINER_TMPDIR")
+    _ap = (config.settings.apptainer_tmpdir.get()
            or f"/tmp/aba-apptainer-{os.environ.get('USER') or os.environ.get('LOGNAME') or 'u'}")
     try:
         Path(_ap).mkdir(parents=True, exist_ok=True)

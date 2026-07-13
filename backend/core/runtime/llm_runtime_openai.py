@@ -31,6 +31,7 @@ import os
 import re
 from typing import Any, AsyncIterator
 
+from core import config
 from core.runtime.llm_runtime import (
     LLMRuntime,
     RuntimeEvent,
@@ -189,8 +190,7 @@ def translate_history_to_openai(messages: list[dict]) -> list[dict]:
 
     `arguments` MUST be a JSON-encoded string per the OpenAI spec.
     """
-    framing_mode = os.environ.get("ABA_OPENAI_TOOL_RESULT_FRAMING",
-                                  "none").strip().lower()
+    framing_mode = config.settings.openai_tool_result_framing.get().strip().lower()
     out: list[dict] = []
     for msg in messages or []:
         role = msg.get("role")
@@ -638,7 +638,7 @@ class OpenAICompatibleRuntime:
                  api_key:  str | None = None,
                  enable_thinking: bool | None = None) -> None:
         self.base_url = (base_url
-                         or os.environ.get("ABA_OPENAI_BASE_URL")
+                         or config.settings.openai_base_url.get()
                          or "http://localhost:8001/v1")
         # Real OpenAI (api.openai.com / chatgpt.com backend) rejects vLLM-only
         # request extensions (chat_template_kwargs) — detect it (any openai.com /
@@ -651,10 +651,10 @@ class OpenAICompatibleRuntime:
         self._responses_mode = "/backend-api/codex" in self.base_url
         # Subscription uses the OAuth Bearer as the key + a ChatGPT-Account-Id
         # header; a plain API key otherwise. Explicit api_key arg wins (tests).
-        self._account_id = os.environ.get("ABA_OPENAI_ACCOUNT_ID") or None
+        self._account_id = config.settings.openai_account_id.get() or None
         self.api_key  = (api_key
                          or os.environ.get("OPENAI_OAUTH_TOKEN")
-                         or os.environ.get("ABA_OPENAI_API_KEY")
+                         or config.settings.openai_api_key.get()
                          or os.environ.get("OPENAI_API_KEY")
                          or "none")
         # Qwen3-class models emit <think>…</think> reasoning by default,
@@ -665,7 +665,7 @@ class OpenAICompatibleRuntime:
         # so default OFF. Opt back in via ABA_OPENAI_ENABLE_THINKING=1
         # or by constructing with enable_thinking=True.
         if enable_thinking is None:
-            env = (os.environ.get("ABA_OPENAI_ENABLE_THINKING") or "").lower()
+            env = (config.settings.openai_enable_thinking.get() or "").lower()
             enable_thinking = env in ("1", "true", "yes", "on")
         self.enable_thinking = enable_thinking
         self._client: Any | None = None      # lazy
@@ -812,7 +812,7 @@ class OpenAICompatibleRuntime:
         messages.extend(translate_history_to_openai(req.history))
         openai_tools = translate_tools_to_openai(req.tools)
 
-        model = req.model or os.environ.get("ABA_OPENAI_MODEL") or "qwen3-8b"
+        model = req.model or config.settings.openai_model.get() or "qwen3-8b"
         kwargs: dict = {
             "model":      model,
             "messages":   messages,
@@ -911,7 +911,7 @@ class OpenAICompatibleRuntime:
         # Per-call timing breakdown — emitted as one log line, gated
         # by ABA_DEBUG_TIMING. The log can be grepped for
         # `[openai-timing]` to reconstruct what happened on each turn.
-        if os.environ.get("ABA_DEBUG_TIMING"):
+        if config.settings.debug_timing.get():
             _t_stream_done = _time.perf_counter()
             _create_ms = (_t_create_done - _t_create_begin) * 1000
             _ttft_ms = ((_t_first_chunk or _t_stream_done) - _t_create_done) * 1000

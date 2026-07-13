@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from core import config
 from core.graph.audit import add_advisor_note, list_advisor_notes
 from core.graph.edges import edges_to
 from core.graph.entities import get_entity
@@ -18,7 +19,7 @@ def advisors_enabled() -> bool:
     pending refinement — their suggestions aren't useful enough yet. The code is
     intact; re-enable with ABA_ADVISORS_ENABLED=1. Guarding the single _run()
     chokepoint means no advisor LLM call fires on any hook while paused."""
-    return (os.getenv("ABA_ADVISORS_ENABLED", "") or "").strip().lower() in ("1", "true", "yes", "on")
+    return config.settings.advisors_enabled.get()
 
 
 def _run(advisor_name: str, prompt: str, max_tokens: int = 400,

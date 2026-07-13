@@ -14,23 +14,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core import config  # import-safe leaf; the single ABA_* read path
+
 # ABA_DB_PATH_OVERRIDE is honored too: it's the e2e-harness "override the DB
 # path" signal (projects.py treats either as single-project mode). Without this
 # the override only flipped SINGLE mode while DB_PATH silently stayed aba.db —
 # so harnesses using it wrote to the real dev DB (test-isolation + DB-safety bug).
 def _default_db_path() -> Path:
-    """Default workspace DB: under ABA_RUNTIME_DIR if set/defaulted; otherwise the
-    legacy backend/aba.db (pre-runtime-split). Resolved lazily so an ABA_RUNTIME_DIR
-    env-var override at startup is honored without importing config here."""
-    rd = os.environ.get("ABA_RUNTIME_DIR")
-    if rd: return Path(rd) / "aba.db"
-    # Match core.config's default so the two stay in lockstep.
-    return Path("/workspace/aba-runtime") / "aba.db"
+    """Default workspace DB under the (live) runtime dir. Resolved via the config
+    registry so an ABA_RUNTIME_DIR override at startup is honored; config is a
+    dependency-free leaf so importing it here is cycle-safe."""
+    return Path(config.settings.runtime_dir.get()) / "aba.db"
 
 
 DB_PATH = Path(
-    os.environ.get("ABA_DB_PATH")
-    or os.environ.get("ABA_DB_PATH_OVERRIDE")
+    config.settings.db_path.get()
+    or config.settings.db_path_override.get()
     or _default_db_path()
 )
 
@@ -39,7 +38,7 @@ WORKSPACE_ID = "workspace"
 
 # Global default-disabled tools (comma-separated names). Operator kill-switch
 # read once at startup; layered under each agent's tool_allowlist.
-_GLOBAL_DISABLED = {t.strip() for t in os.environ.get("ABA_DISABLED_TOOLS", "").split(",") if t.strip()}
+_GLOBAL_DISABLED = set(config.settings.disabled_tools.get())
 
 
 def set_db_path(path) -> None:

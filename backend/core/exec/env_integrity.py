@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
+from core import config
+
 
 def verify_python_imports(
     import_names: Sequence[str],
@@ -188,7 +190,7 @@ def env_selfcheck(*, python_exe: Optional[str] = None) -> dict:
     # run on CPU on idle GPUs. Only checked when cuda is declared (a CPU deployment
     # legitimately has CPU-only torch).
     import os as _os
-    if (_os.environ.get("ABA_ACCELERATOR") or "").strip().lower() == "cuda":
+    if (config.settings.accelerator.get() or "").strip().lower() == "cuda":
         _cuda = torch_cuda_build()
         checks["accelerator_cuda"] = {
             "ok": _cuda is not None,
@@ -278,7 +280,7 @@ def canonical_lock_path() -> Optional[Path]:
     pin to the canonical versions (env_refactor.md P6, lazy-from-lock). None if
     not configured / missing."""
     import os
-    p = os.environ.get("ABA_BASE_LOCK")
+    p = config.settings.base_lock.get()
     return Path(p) if (p and Path(p).exists()) else None
 
 
@@ -879,7 +881,7 @@ def check_base_dir_shared() -> dict:
         return {"ok": True, "severity": "info", "detail": "local submitter — base sharing N/A"}
     # Fat + job-wrap: offloaded env-jobs re-enter the SIF, so the baked base is reachable
     # (its being node-local/in-image is by design). Don't flag it as unreachable.
-    if (os.environ.get("ABA_JOB_WRAP") or "").strip().lower() == "sif":
+    if (config.settings.job_wrap.get() or "").strip().lower() == "sif":
         return {"ok": True, "severity": "info",
                 "detail": ("fat SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded env-jobs re-enter the "
                            "image via `apptainer exec`, so the baked in-image base is reachable — "

@@ -25,6 +25,7 @@ import os
 import sqlite3
 from typing import Optional
 
+from core import config
 from core.graph._schema import _conn, _utcnow
 
 
@@ -151,9 +152,7 @@ def _summary_model() -> str:
     cheaper than Anthropic Haiku and the summarization workload
     doesn't need frontier quality.
     """
-    import os as _os
-    return (_os.environ.get("ABA_SUMMARY_MODEL")
-            or "claude-haiku-4-5-20251001").strip()
+    return config.settings.summary_model.get().strip()
 
 
 # Observable failure modes for Tier-2. Counters so the next "Tier-2

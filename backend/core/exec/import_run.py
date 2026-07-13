@@ -21,9 +21,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 # An outside results tree can hold hundreds of per-sample QC files. They stay fully browsable via
 # the Run manifest (no copy); we only entity-fy this many as pinnable high-signal artifacts.
-IMPORT_HARVEST_CAP = int(os.environ.get("ABA_IMPORT_HARVEST_CAP") or 40)
+IMPORT_HARVEST_CAP = config.settings.import_harvest_cap.get()
 
 
 def _detect_run_info(src: Path) -> dict:

@@ -18,6 +18,8 @@ import re
 import urllib.request
 from typing import Optional
 
+from core import config
+
 _TIMEOUT = 12
 # In-process caches (the tool call runs in the backend process; the head job on the
 # compute node never re-validates — validation is pre-submit).
@@ -339,7 +341,7 @@ def installed_nextflow_version() -> Optional[str]:
     """The Nextflow version pipelines run on here — from ABA_NEXTFLOW_MODULE
     ('nextflow/24.10.6' → '24.10.6'), else `nextflow -version`, else None (unknown → don't
     constrain revision inference)."""
-    m = re.search(r"(\d+\.\d+\.\d+)", os.environ.get("ABA_NEXTFLOW_MODULE") or "")
+    m = re.search(r"(\d+\.\d+\.\d+)", config.settings.nextflow_module.get() or "")
     if m:
         return m.group(1)
     try:

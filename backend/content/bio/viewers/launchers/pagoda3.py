@@ -18,6 +18,7 @@ from pathlib import Path
 
 from core.viewers.launchers import register_launcher, LaunchResult
 from core.viewers.convert_cache import ensure_derived
+from core import config
 
 # Cache version = the installed lstar-sc version, so upgrading it (e.g. 0.1.x →
 # 0.2.0, which switched the on-disk store to zarr v3) AUTOMATICALLY
@@ -50,10 +51,10 @@ def pagoda3_dist_path() -> Path:
     $ABA_PAGODA3_DIST — the only outside-$ABA_HOME path, and only when opted in.
     Returns the expected location even if absent, so a caller can report a clean
     'not present' (→ the module installs it) rather than guessing."""
-    env = os.getenv("ABA_PAGODA3_DIST")
+    env = config.settings.pagoda3_dist.get()
     if env:
         return Path(env)
-    home = Path(os.getenv("ABA_HOME") or (Path.home() / ".aba"))
+    home = Path(config.settings.home_dir.get() or (Path.home() / ".aba"))
     return home / "vendor" / "pagoda3" / "dist"
 
 

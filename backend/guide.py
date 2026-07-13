@@ -3,6 +3,7 @@ import asyncio
 import os
 from typing import AsyncGenerator
 
+from core import config
 from core.config import FAKE_SESSION
 from core.graph._schema import WORKSPACE_ID
 from core.graph.audit import log_context_assembly, session_assembly_summary, add_context_suggestion
@@ -504,7 +505,7 @@ def _build_system_prompt(prompts, active_tools, spec, guide_role, eff_intent,
     (mode + node capacity + Slurm landscape). The two-block split (CC-convergence
     Phase 4) keeps per-turn intent changes from invalidating the ~26K stable prefix."""
     import time as _time
-    _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
+    _debug_timing = config.settings.debug_timing.get()
     _t0 = _time.perf_counter()
     stable_sys, dynamic_sys = prompts["system"](
         active_tools, role=guide_role, intent=eff_intent, ctx=prompt_ctx,
@@ -652,7 +653,7 @@ async def stream_response(
         _prompts, active_tools, spec, guide_role, eff_intent, prompt_ctx,
         sidebar_text, focus_text, thread_text)
     import time as _time   # per-iteration timing in the loop below
-    _debug_timing = bool(os.environ.get("ABA_DEBUG_TIMING"))
+    _debug_timing = config.settings.debug_timing.get()
     # The user-message reminder injection (the 'reminder-only catalog' variant)
     # is OFF by default after the 2026-06-02 Haiku+Sonnet study showed both
     # models reject reminder-only catalogs (Haiku can't find them, Sonnet

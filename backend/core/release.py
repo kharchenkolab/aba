@@ -24,6 +24,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 
 def _version_key(ver: str):
     """Numeric-aware ordering so releases sort by version, not lexically (2024.11 > 2024.9,
@@ -33,7 +35,7 @@ def _version_key(ver: str):
 
 
 def share_root(share: Optional[str] = None) -> Optional[Path]:
-    s = share or os.environ.get("ABA_SHARE")
+    s = share or config.settings.share_dir.get()
     return Path(s) if s else None
 
 
@@ -154,7 +156,7 @@ def active_release_id() -> Optional[str]:
     """The release THIS process is pinned to — the pin-on-launch value. `ABA_RELEASE_ID` (stamped
     once by the OOD launcher / a job's env) wins; else a live read of `current`; else None (no
     release layout → personal/fat, nothing to pin)."""
-    return os.environ.get("ABA_RELEASE_ID") or resolve_current()
+    return config.settings.release_id.get() or resolve_current()
 
 
 def stamp_release(params: dict) -> dict:

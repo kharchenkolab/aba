@@ -24,18 +24,19 @@ layering is:
 This module does NO scope layering of its own — it consumes the composed map.
 """
 from __future__ import annotations
-import os
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+from core import config
 
 def _env_override_providers() -> dict[str, dict]:
     """Operator escape hatch: ``$ABA_REFSOURCES_DIR`` overrides/extends any
     provider ad-hoc, without touching the scope chain. A provider declared here
     wins over the composed bundle (used by tests + one-off operator overrides)."""
     out: dict[str, dict] = {}
-    env = os.environ.get("ABA_REFSOURCES_DIR")
+    env = config.settings.refsources_dir.get()
     if not env:
         return out
     d = Path(env)

@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Sequence
 
+from core import config
 from core.config import ENVS_DIR, _LazyDir
 
 MAMBA_BIN = _LazyDir(lambda: ENVS_DIR / "bin" / "micromamba")
@@ -52,7 +53,7 @@ def ensure_micromamba() -> str:
     use. Idempotent."""
     # Prefer the binary the installer already placed under $ABA_HOME/bin — it's
     # the right arch for this machine and isn't wiped with ENVS_DIR.
-    aba_home = os.environ.get("ABA_HOME")
+    aba_home = config.settings.home_dir.get()
     if aba_home:
         cand = Path(aba_home) / "bin" / "micromamba"
         if cand.exists() and _runs(cand):

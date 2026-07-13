@@ -19,12 +19,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
+
+from core import config
 
 
 def enabled(provider: str = "anthropic") -> bool:
@@ -44,7 +45,7 @@ def enabled(provider: str = "anthropic") -> bool:
     Per-provider + mode-aware so a proxied deploy can offer Anthropic-subscription WITHOUT
     dangling a broken OpenAI-subscription button. (The old gate was a single global bool, so
     turning subscription on for Anthropic also advertised OpenAI's unreachable callback.)"""
-    raw = (os.environ.get("ABA_SUBSCRIPTION_OAUTH") or "").strip().lower()
+    raw = (config.settings.subscription_oauth.get() or "").strip().lower()
     if raw in ("", "0", "off", "no", "false"):
         return False
     flow = _FLOWS.get(provider)
@@ -84,7 +85,7 @@ _FLOWS: dict[str, ProviderFlow] = {
     # ChatGPT WHAM. client_id + endpoints confirmed from the openai/codex CLI.
     "openai": ProviderFlow(
         provider="openai",
-        client_id=os.environ.get("ABA_OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
+        client_id=config.settings.openai_oauth_client_id.get(),
         authorize_url="https://auth.openai.com/oauth/authorize",
         token_url="https://auth.openai.com/oauth/token",
         redirect_uri="http://localhost:1455/auth/callback",

@@ -24,6 +24,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from core import config
 from core.llm import make_open_stream
 from core.runtime.llm_errors import is_transient
 from core.runtime.llm_runtime import (
@@ -139,9 +140,8 @@ async def open_and_consume_stream(
             return
         emitted = False
         try:
-            import os as _os
             import time as _time
-            _debug_timing = bool(_os.environ.get("ABA_DEBUG_TIMING"))
+            _debug_timing = config.settings.debug_timing.get()
             _t_create_begin = _time.perf_counter()
             async with _open_stream(history, tools, system,
                                     model=model,

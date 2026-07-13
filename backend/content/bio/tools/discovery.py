@@ -16,6 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 # Cross-cluster helpers — inspect_package dispatches to either run_python
 # or run_r (with the language-specific introspection snippet) depending
 # on the requested language. Both run functions live in run_exec.py;
@@ -400,8 +402,7 @@ def search_nf_core(input_: dict) -> dict:
 def _mcp_registry_url() -> str:
     """Public MCP server registry. Override via ABA_MCP_REGISTRY_URL to point at
     Smithery / an internal registry without code changes (read at call time)."""
-    import os
-    return os.environ.get("ABA_MCP_REGISTRY_URL", _DEFAULT_MCP_REGISTRY_URL)
+    return config.settings.mcp_registry_url.get() or _DEFAULT_MCP_REGISTRY_URL
 
 
 def _mcp_command_hint(server: dict) -> Optional[dict]:
@@ -1201,7 +1202,6 @@ def propose_capability_tool(input_: dict) -> dict:
 
 def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
     """Download a URL into the project's fetch scratch (P4). Size-gated + audited."""
-    import os as _os
     import urllib.request
     from core.data.workspace import scratch_dir
     from core.graph.audit import log_event
@@ -1214,7 +1214,7 @@ def fetch_url(input_: dict, ctx: dict | None = None) -> dict:
     project_id = projects.current() or "default"
     dest = scratch_dir(str(project_id), "fetch") / filename
     threshold = 5 * 1024 ** 3
-    mode = _os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+    mode = config.settings.capability_approval.get()
     # Some hosts (e.g. Bioconductor) 403 the default urllib user-agent.
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ABA)"})
     try:

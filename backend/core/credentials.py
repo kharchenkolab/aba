@@ -16,6 +16,8 @@ import re
 import shlex
 from pathlib import Path
 
+from core import config
+
 # Same patterns the helper validates against (install/.../auth.py).
 _API_KEY_RE = re.compile(r"^sk-ant-[a-zA-Z0-9_\-]{16,}$")
 _OAUTH_TOKEN_RE = re.compile(r"^sk-ant-oat[a-zA-Z0-9_\-]{16,}$")
@@ -31,8 +33,7 @@ _OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
 
 
 def _config_env_path() -> Path:
-    home = Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
-    return home / "config.env"
+    return config.aba_home() / "config.env"
 
 
 def _parse(text: str) -> dict:
@@ -105,7 +106,7 @@ def status(provider: str = "anthropic") -> dict:
         from core.llm import _credential_mode
         mode = _credential_mode()
     except Exception:  # noqa: BLE001
-        mode = (os.environ.get("ABA_LLM_CREDENTIAL") or cfg.get("ABA_LLM_CREDENTIAL")
+        mode = (config.settings.llm_credential.get() or cfg.get("ABA_LLM_CREDENTIAL")
                 or "apikey").lower()
     pasted = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
               or cfg.get("CLAUDE_CODE_OAUTH_TOKEN") or "")
@@ -274,7 +275,7 @@ def _openai_status() -> dict:
     Anthropic status shape so the UI is provider-agnostic. Subscription (Codex
     OAuth) fields are filled by the oauth roundtrip; Tier-1 is the API-key path."""
     cfg = read()
-    key = (os.environ.get("OPENAI_API_KEY") or os.environ.get("ABA_OPENAI_API_KEY")
+    key = (os.environ.get("OPENAI_API_KEY") or config.settings.openai_api_key.get()
            or cfg.get("OPENAI_API_KEY") or "")
     oauth = (os.environ.get("OPENAI_OAUTH_TOKEN") or cfg.get("OPENAI_OAUTH_TOKEN") or "")
     has_key, has_oauth = bool(key), bool(oauth)

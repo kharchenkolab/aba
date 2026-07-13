@@ -16,7 +16,9 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-FEEDBACK_TO = os.getenv("ABA_FEEDBACK_EMAIL", "pk.restricted@gmail.com")
+from core import config
+
+FEEDBACK_TO = config.settings.feedback_email.get()
 # Body budget: ~1050 chars keeps the encoded mailto URL near ~1750 (under the
 # ~1800 cross-client safe ceiling) — measured ratio ≈1.7. Raised from 900 once we
 # saw 900 force-trim the verbatim error + suggested fix out of real reports.
@@ -109,7 +111,7 @@ def read_aba_logs_impl(input_: dict, ctx: dict | None = None) -> dict:
         tail = 80
     grep = (input_.get("grep") or "").strip().lower()
 
-    home = Path(os.getenv("ABA_HOME", str(Path.home() / ".aba")))
+    home = Path(config.settings.home_dir.get() or (Path.home() / ".aba"))
     home_res = str(home.resolve())
     lines: list[str] = []
     by_source: dict[str, int] = {}
@@ -211,7 +213,7 @@ def build_bug_report_impl(input_: dict, ctx: dict | None = None) -> dict:
     # not the user). Positional schema:
     #   commit / os release / arch / node / user / project / model / thread / focus / report-id
     ctxline = (f"— {_aba_commit()}/{platform.system()} {platform.release()}/{platform.machine()}/"
-               f"{node}/{user}/{pid or '—'}/{os.getenv('ABA_MODEL', '?')}/{tid}/{focus}/{rid}")
+               f"{node}/{user}/{pid or '—'}/{(config.settings.model_snapshot.get() or '?')}/{tid}/{focus}/{rid}")
 
     body = _assemble(headline, what_doing, diagnosis, error_tail, ctxline)
     # Lead the subject with 🪲 so the team can filter on it (matches the bug

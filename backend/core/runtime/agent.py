@@ -18,6 +18,8 @@ from typing import Callable, Optional
 
 import yaml
 
+from core import config
+
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -101,7 +103,6 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
     Advisor models stay on their YAML-declared values (typically Haiku) —
     overriding ALL agents on a primary swap would 5×-cost every side task.
     """
-    import os as _os
     p = Path(spec_path)
     raw = yaml.safe_load(p.read_text()) or {}
     tools = raw.get("tool_allowlist", ())
@@ -109,8 +110,7 @@ def load_agent_spec(spec_path: str | Path) -> AgentSpec:
     model = raw.get("model", "claude-haiku-4-5-20251001")
     if role == "primary":
         yaml_model = model
-        override = (_os.environ.get("ABA_PRIMARY_MODEL")
-                    or _os.environ.get("ABA_MODEL"))
+        override = config.settings.primary_model.get()
         if override:
             model = override
         src = "env override" if override else "yaml"
@@ -169,11 +169,10 @@ def make_runtime(spec: AgentSpec, model: str | None = None):
     imports keep agent.py free of llm_runtime_* module weight on the
     paths that don't actually run turns.
     """
-    import os
-    if os.environ.get("ABA_FAKE_SESSION"):
+    if config.settings.fake_session.get():
         chosen = "fake"
-    elif os.environ.get("ABA_RUNTIME_OVERRIDE"):
-        chosen = os.environ["ABA_RUNTIME_OVERRIDE"].strip().lower()
+    elif config.settings.runtime_override.get():
+        chosen = config.settings.runtime_override.get().strip().lower()
     elif model:
         # Provider from the catalog decides the runtime — an OpenAI model routes
         # through the OpenAI-compatible runtime; anything else keeps the spec's.
@@ -238,8 +237,7 @@ def resolve_primary_spec_name() -> str:
     For the full per-turn chain (request override → thread pin → env
     → bundle → default) see resolve_spec_for_turn() below.
     """
-    import os
-    env_val = (os.environ.get("ABA_PRIMARY_SPEC") or "").strip()
+    env_val = config.settings.primary_spec.get().strip()
     if env_val:
         return env_val
     try:
@@ -408,8 +406,7 @@ def run_advisor_one_shot(
             # runtime. For the historical "direct" case we keep the
             # tight messages.create() call, which is cheaper (no async
             # bridge, no MCP overhead) for a non-streaming no-tool turn.
-            import os as _os
-            override = (_os.environ.get("ABA_RUNTIME_OVERRIDE") or "").strip().lower()
+            override = (config.settings.runtime_override.get() or "").strip().lower()
             chosen = override or (spec.runtime or "direct").strip().lower()
             if chosen == "sdk":
                 text, used_in, used_out = _advisor_via_runtime(

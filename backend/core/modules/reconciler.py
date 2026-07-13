@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from core import config
 from core.modules import manager, registry, state
 from core.modules.registry import ModuleSpec
 
@@ -27,7 +28,7 @@ _started = False
 
 
 def _aba_home() -> Path:
-    return Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    return config.aba_home()
 
 
 def _repo_aba_root() -> Path:

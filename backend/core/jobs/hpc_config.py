@@ -24,9 +24,10 @@ Config shape::
 from __future__ import annotations
 
 import math
-import os
 from pathlib import Path
 from typing import Optional
+
+from core import config
 
 _DEFAULTS = {"cores": 1, "mem_gb": 4, "walltime_h": 4}
 _BIG = 1 << 30
@@ -65,9 +66,9 @@ def hpc_config() -> dict:
     cfg: dict = {}
     # Explicit env path wins; otherwise an optional `$ABA_HOME/hpc.yaml` is picked up
     # automatically (so `aba hpc-config` "just works" without setting ABA_HPC_CONFIG).
-    path = os.environ.get("ABA_HPC_CONFIG")
+    path = config.settings.hpc_config.get()
     if not path:
-        home = os.environ.get("ABA_HOME")
+        home = config.aba_home()
         if home and (Path(home) / "hpc.yaml").exists():
             path = str(Path(home) / "hpc.yaml")
     if path and Path(path).exists():

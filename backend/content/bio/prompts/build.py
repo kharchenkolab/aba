@@ -23,6 +23,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
+from core import config
+
 _HERE = Path(__file__).parent
 # The system bundle is the real home for system policy/rules now (no symlinks).
 # build.py sources them via the bundle; this is the on-disk fallback location.
@@ -300,7 +302,7 @@ _GOTCHA_HDR = re.compile(
 
 
 def _current_arm() -> str:
-    return (os.environ.get("ABA_PROMPT_ARM") or "control").strip() or "control"
+    return config.settings.prompt_arm.get().strip() or "control"
 
 
 # ── prompt-STRUCTURE arm: 'nonneg' ───────────────────────────────────────────
@@ -389,10 +391,9 @@ def _discovery_directive_block(_tools: list[dict]) -> str:
     after identity/bundle_overlay so it sits at position 2-3 in the
     assembled system prompt — as early as we can get it without
     displacing the model's role framing."""
-    import os as _os
     current_mode = _MODE.get("full")
     if (current_mode == "lean_small"
-            or _os.environ.get("ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE")):
+            or config.settings.experimental_discovery_directive.get()):
         return _H5_DISCOVERY_DIRECTIVE
     return ""
 
@@ -674,7 +675,7 @@ _BLOCKS: tuple[_Block, ...] = (
     # position (like plan_first). Toggle off with ABA_DATA_SUMMARY=off (for eval
     # isolation); on by default live.
     _Block("data_orientation", frozenset({"primary"}), None, _rule("data_orientation.md"),
-           gate=lambda c: (os.environ.get("ABA_DATA_SUMMARY") or "on").lower() != "off"),
+           gate=lambda c: config.settings.data_summary.get().lower() != "off"),
     _Block("plan_first",   frozenset({"primary"}), "present_plan",   _rule("plan_first.md")),
     # Agent-declared recipes pinned for the rest of the thread (#324 Phase 2).
     # Renders only when the agent has populated >=1 step.skill on present_plan.
@@ -721,9 +722,7 @@ def build_system(active_tools: list[dict], role: str = "primary", intent: str = 
         # Env-gated block ablation (kept for ad-hoc experiments).
         # Comma-separated block names to drop on top of the mode's
         # built-in drops.
-        _ablate = {n.strip() for n in
-                   (os.environ.get("ABA_EXPERIMENTAL_ABLATE_BLOCKS") or "")
-                   .split(",") if n.strip()}
+        _ablate = set(config.settings.experimental_ablate_blocks.get())
         # Pick the mode-specific drop set.
         #   - lean_small: lean's drops + skills_core + conventions
         #   - lean:       static drops only (heavy/dynamic blocks)

@@ -8,9 +8,9 @@ P0; BM25 retrieval (capabilities.md §9.2) arrives when the catalog grows past
 ~25 entries.
 """
 from __future__ import annotations
-import os
 from typing import Optional
 
+from core import config
 from core.data.handles import ExecContext
 from core.graph.entities import create_entity, get_entity, list_entities, update_entity
 from core.graph.audit import log_event
@@ -82,7 +82,7 @@ def register_capability(spec: dict) -> str:
 
 def _approval_mode() -> str:
     """Read dynamically so tests / deployments can flip it at runtime."""
-    return os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+    return config.settings.capability_approval.get()
 
 
 def capability_status(cap_id: str) -> Optional[str]:

@@ -25,6 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from core import config
 from core.graph._schema import _conn, _utcnow
 
 _log = logging.getLogger(__name__)
@@ -428,7 +429,6 @@ def backfill_legacy_producing_code(*, dry_run: bool = False) -> dict:
     operators evaluating the upgrade impact.
     """
     import hashlib
-    import os
     from datetime import datetime, timezone
     log = logging.getLogger("exec_records.backfill")
 
@@ -447,7 +447,7 @@ def backfill_legacy_producing_code(*, dry_run: bool = False) -> dict:
     if not candidates:
         return {"backfilled": 0, "scanned": 0, "skipped_no_code": 0, "errors": 0}
 
-    backfill_root_env = os.environ.get("ABA_RUNTIME_DIR") or "/workspace/aba-runtime"
+    backfill_root_env = str(config.RUNTIME_DIR)
     backfill_dir = Path(backfill_root_env) / "exec-backfill"
     if not dry_run:
         backfill_dir.mkdir(parents=True, exist_ok=True)

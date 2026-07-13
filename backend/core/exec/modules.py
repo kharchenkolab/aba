@@ -22,6 +22,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from core import config
+
 # Env vars a `module load` typically mutates that matter for executing tools.
 # PYTHONPATH / PYTHONHOME are deliberately EXCLUDED: a module's Python path would
 # shadow the conda env's site-packages (the prj_6d986f40 numpy incident), and the
@@ -53,7 +55,7 @@ def _init_script() -> str | None:
     """A sourceable module-init script, or None. Honors hpc.yaml `init_path` /
     $ABA_LMOD_INIT, else the same candidate list as install/linux/setup.sh."""
     cfg = _mod_cfg()
-    cands = [cfg.get("init_path") or os.environ.get("ABA_LMOD_INIT") or "",
+    cands = [cfg.get("init_path") or config.settings.lmod_init.get() or "",
              os.environ.get("LMOD_PKG", "") + "/init/bash" if os.environ.get("LMOD_PKG") else "",
              os.environ.get("MODULESHOME", "") + "/init/bash" if os.environ.get("MODULESHOME") else "",
              "/etc/profile.d/lmod.sh", "/etc/profile.d/z00_lmod.sh", "/etc/profile.d/modules.sh"]
@@ -68,14 +70,14 @@ def _is_cluster() -> bool:
         from core.jobs.submitter import submitter_name
         return submitter_name() == "slurm"
     except Exception:  # noqa: BLE001
-        return os.environ.get("ABA_BATCH_SUBMITTER", "").strip().lower() == "slurm"
+        return config.settings.batch_submitter.get().strip().lower() == "slurm"
 
 
 def modules_active() -> bool:
     """The single gate. True iff: a Slurm (cluster) install + a usable module
     system + not disabled. Everything else early-returns on this, so the provider
     is inert on local installs and when no module system is present."""
-    if os.environ.get("ABA_MODULES_ENABLED") == "0":
+    if config.settings.modules_enabled.get() == "0":
         return False
     if (_mod_cfg().get("prefer") or "").lower() == "off":
         return False

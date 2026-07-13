@@ -10,16 +10,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from core import config
 from core.modules import registry, state
 from core.modules.registry import ModuleSpec
 
 
 def _aba_home() -> Path:
-    return Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    return config.aba_home()
 
 
 def _runtime_dir() -> Path:
-    return Path(os.environ.get("ABA_RUNTIME_DIR", str(_aba_home() / "runtime")))
+    return Path(config.RUNTIME_DIR)
 
 
 def _tools_env() -> Path:
@@ -30,7 +31,7 @@ def _tools_env() -> Path:
     # RE-INSTALLS the whole R stack into the writable runtime dir at runtime — a slow,
     # network-dependent rebuild that defeats the frozen image. Unset (dev/normal install) →
     # identical to before.
-    override = os.environ.get("ABA_TOOLS_DIR")
+    override = config.settings.tools_dir.get()
     if override and override.strip():
         return Path(override).resolve()
     return _runtime_dir() / "envs" / "tools"
@@ -53,7 +54,7 @@ def path_vars() -> dict[str, str]:
     # the dist at /opt/aba/vendor/pagoda3/dist and exports the var; without this the
     # viewer-pagoda3 readiness PROBE looks under $ABA_HOME/vendor/... , misses it, and
     # first-use re-fetches the dist from GitHub at runtime. Unset → identical to before.
-    pagoda3_dist = os.environ.get("ABA_PAGODA3_DIST") or str(home / "vendor" / "pagoda3" / "dist")
+    pagoda3_dist = config.settings.pagoda3_dist.get() or str(home / "vendor" / "pagoda3" / "dist")
     return {
         "ABA_HOME": str(home),
         "ABA_RUNTIME_DIR": str(_runtime_dir()),
@@ -104,7 +105,7 @@ def _eager_override(module_id: str) -> str | None:
     deferred first-use install). Value: space/comma-separated module ids, or `all`/`*`.
     Write-free and lowest-precedence: an explicit user choice in modules.json still wins,
     so a user can still turn a baked module off. Unset → no effect (normal installs)."""
-    raw = (os.environ.get("ABA_MODULES_EAGER") or "").strip()
+    raw = (config.settings.modules_eager.get() or "").strip()
     if not raw:
         return None
     ids = {t for t in raw.replace(",", " ").split()}

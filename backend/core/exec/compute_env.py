@@ -15,6 +15,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 
 def _cgroup_mem_limit_gb() -> Optional[float]:
     """Memory ceiling from the cgroup (v2 memory.max / v1 limit_in_bytes), or
@@ -220,8 +222,8 @@ def _build_env_profile() -> dict:
     engines = [e for e in _CONTAINER_ENGINES if shutil.which(e)]
     cluster = bool(shutil.which("sbatch") or shutil.which("sinfo"))
     nextflow = bool(shutil.which("nextflow")
-                    or os.environ.get("ABA_NEXTFLOW_BIN")
-                    or os.environ.get("ABA_NEXTFLOW_MODULE"))
+                    or config.settings.nextflow_bin.get()
+                    or config.settings.nextflow_module.get())
     # nf-core needs a software backend (container engine) OR a cluster to run for
     # real; a bare `nextflow` binary with neither is not a real pipeline env.
     run_nextflow = nextflow and (bool(engines) or cluster)

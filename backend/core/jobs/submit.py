@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import uuid
 
+from core import config
 from core.graph.jobs import create_job
 
 
@@ -120,9 +121,8 @@ def _running_inline_cores() -> float:
 # cluster and long jobs want Slurm's durability (inline dies with ABA). Explicit execution=local
 # bypasses this ceiling (the user asked for local); the physical-fit + concurrency checks always apply.
 def _auto_inline_ceiling() -> tuple[float, float]:
-    import os
-    return (float(os.environ.get("ABA_INLINE_AUTO_MAX_CORES") or 8),
-            float(os.environ.get("ABA_INLINE_AUTO_MAX_MEM_GB") or 32))
+    return (config.settings.inline_auto_max_cores.get(),
+            config.settings.inline_auto_max_mem_gb.get())
 
 
 def resolve_submission_target(requested: str, heaviest: dict | None, capacity: dict) -> tuple[str, str]:

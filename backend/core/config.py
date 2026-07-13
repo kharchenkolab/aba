@@ -164,6 +164,13 @@ class Setting:
     def get(self):
         return self.resolve()[0]
 
+    def is_set(self) -> bool:
+        """True iff an env key for this setting is present with a truthy (non-empty)
+        value — exactly `any(os.environ.get(k) for k in env_keys)`. Lets callers
+        replicate the old `if os.environ.get(k):` guard (e.g. SIF binds) without
+        reading os.environ directly."""
+        return any(os.environ.get(k) for k in self.env_keys)
+
     def __repr__(self):
         return f"Setting({self.name!r}, env={self.env_keys})"
 
@@ -741,19 +748,18 @@ def project_artifacts_dir(pid: str) -> Path:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── Paths / deploy plumbing ──────────────────────────────────────────────────
-def _resolve_aba_home() -> Path:
-    return Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
-
-
-HOME_DIR = _path_setting(
-    "home_dir", "ABA_HOME", _resolve_aba_home,
-    doc="Install home ($ABA_HOME, default ~/.aba): config.env, oauth store, vendor.",
-    deploy_injected=True)
+# ABA_HOME is declared as a RAW str (None when unset) so callers that rely on the
+# "explicitly set?" semantics (llm._oauth_store_path) keep working; aba_home()
+# applies the ~/.aba fallback for the common "default to ~/.aba" reads.
+setting("home_dir", env="ABA_HOME", type="str", default=None, category="paths",
+        deploy_injected=True, weft_fate="keep",
+        doc="Install home ($ABA_HOME): config.env, oauth store, vendor. None → ~/.aba.")
 
 
 def aba_home() -> Path:
-    """The install home as a plain Path (live). Preferred over reading ABA_HOME."""
-    return Path(_resolve_aba_home())
+    """The install home as a plain Path (live), with the ~/.aba fallback applied.
+    Preferred over reading ABA_HOME directly."""
+    return Path(settings.home_dir.get() or (Path.home() / ".aba"))
 
 
 setting("tools_dir", env="ABA_TOOLS_DIR", type="str", default=None,
@@ -961,8 +967,8 @@ setting("r_future_plan", env="ABA_R_FUTURE_PLAN", type="str", default="sequentia
         category="tuning", weft_fate="move:envspec", reduction="merge:r",
         doc="future::plan for R (sequential/multicore/…).")
 setting("r_future_globals_maxsize", env="ABA_R_FUTURE_GLOBALS_MAXSIZE", type="str",
-        default=None, category="tuning", weft_fate="move:envspec", reduction="merge:r",
-        doc="future.globals.maxSize for R (bytes; else R default).")
+        default=str(8 * 1024 ** 3), category="tuning", weft_fate="move:envspec",
+        reduction="merge:r", doc="future.globals.maxSize for R in bytes (default 8 GiB).")
 setting("r_build_jobs", env="ABA_R_BUILD_JOBS", type="str", default=None,
         category="tuning", weft_fate="move:envspec", reduction="merge:r",
         doc="Parallel jobs for R source builds (MAKEFLAGS -j).")

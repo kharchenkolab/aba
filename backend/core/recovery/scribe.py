@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import queue
 import subprocess
 import threading
@@ -109,7 +108,8 @@ def _aba_fingerprint() -> tuple[str, str]:
             commit = r.stdout.strip()
     except Exception:
         pass
-    version = os.environ.get("ABA_VERSION", "dev")
+    from core import config  # noqa: PLC0415 — deferred to avoid an import cycle
+    version = config.settings.version.get()
     _FINGERPRINT_CACHE = (commit, version)
     return _FINGERPRINT_CACHE
 
@@ -590,4 +590,5 @@ def get_scribe():
 
 
 def disabled() -> bool:
-    return bool(os.environ.get("ABA_RECOVERY_DISABLED"))
+    from core import config  # noqa: PLC0415 — deferred to avoid an import cycle
+    return config.settings.recovery_disabled.get()

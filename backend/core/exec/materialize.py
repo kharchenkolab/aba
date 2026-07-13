@@ -30,6 +30,7 @@ import sysconfig
 from pathlib import Path
 from typing import Optional, Sequence
 
+from core import config
 from core.config import ENVS_DIR, _LazyDir
 from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
@@ -53,7 +54,7 @@ def _resolve_tools_env() -> Path:
     every lab. Growth (``r_libs``, ``pylib``) stays under ``ENVS_DIR``
     regardless of where the base resolves.
     """
-    override = os.environ.get("ABA_TOOLS_DIR")
+    override = config.settings.tools_dir.get()
     if override and override.strip():
         return Path(override).resolve()
     return ENVS_DIR / "tools"

@@ -16,12 +16,13 @@ Both are best-effort: never raise, just swallow on I/O failure. Set
 """
 from __future__ import annotations
 
+from core import config
+
 
 def _log_dir() -> str:
     """Resolve the turnlog directory. Returns empty string when
     logging is disabled."""
-    import os
-    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    d = config.settings.turn_log_dir.get()
     if d.strip().lower() in ("", "off", "0", "false"):
         return ""
     return d

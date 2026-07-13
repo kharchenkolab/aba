@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core import config as _cfg
 from core.web.deps import optional_project
 
 router = APIRouter()
@@ -205,7 +206,6 @@ def settings_environment_prewarm():
     """Staged-prewarm status for the ambient 'setting up…' pill + EnvironmentTab
     (lazy_env_init.md): the base-build stage and which module blocks are ready. Cheap
     — find_spec presence + a tools-env check, no subprocess imports."""
-    import os
     import importlib.util as _u
     try:
         from core.exec.env_integrity import base_stage
@@ -229,7 +229,7 @@ def settings_environment_prewarm():
          "ready": _spec("scvi") or _spec("torch")},
         {"id": "r_bioc", "label": "R / Bioconductor (Seurat, DESeq2)", "ready": r_ready},
     ]
-    prewarm = (os.environ.get("ABA_ENV_PREWARM") or "eager").strip().lower()
+    prewarm = _cfg.settings.env_prewarm.get().strip().lower()
     return {
         "prewarm": prewarm,
         "stage": stage,                                  # boot | completing | ready

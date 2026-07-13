@@ -11,9 +11,10 @@ on first demand), off (never auto-installs; a request is refused with a nudge to
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core import config
 
 STATES = ("on", "first_use", "off")
 
@@ -40,7 +41,7 @@ def _manifest_dirs() -> list[Path]:
     later (misc/modules.md Phase 3) without touching callers."""
     here = Path(__file__).resolve()
     dirs = [here.parents[3] / "install" / "core" / "modules"]           # repo checkout
-    dirs.append(Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    dirs.append(config.aba_home()
                 / "repo" / "aba" / "install" / "core" / "modules")      # deployed layout
     seen, out = set(), []
     for d in dirs:

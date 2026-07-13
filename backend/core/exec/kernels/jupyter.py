@@ -15,11 +15,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from core import config
+
 # After Stop, how long to let a cell abort cleanly under SIGINT (which preserves
 # the kernel + its state) before hard-killing the session. A cell wedged in
 # native code ignores SIGINT, so without this ceiling execute() would block for
 # the full timeout_s — the "Stop button does nothing" failure.
-_CANCEL_GRACE_S = float(os.environ.get("ABA_KERNEL_CANCEL_GRACE_S", "3"))
+_CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 from core.config import DATA_DIR, ARTIFACTS_DIR
 from core.exec.base import ExecResult
@@ -218,7 +220,7 @@ def _r_setup_code(cwd: str) -> str:
     # plot gets upscaled much more than a 960-px one. ABA_R_PLOT_RES
     # overrides for the rare case where a project wants different defaults.
     try:
-        _res = max(40, int(_os.environ.get("ABA_R_PLOT_RES", "120")))
+        _res = max(40, config.settings.r_plot_res.get())
     except ValueError:
         _res = 120
     plotline = f"options(repr.plot.res={_res})\n"
@@ -420,9 +422,8 @@ def _kernel_env(lang: str, cwd: str) -> dict:
         # in its own R code (which override these env defaults). Applies to in-process
         # run_r AND Slurm jobs (slurm_entry → run_r_code → this same kernel env).
         # Tune via ABA_R_FUTURE_PLAN / ABA_R_FUTURE_GLOBALS_MAXSIZE.
-        env["R_FUTURE_PLAN"] = os.environ.get("ABA_R_FUTURE_PLAN", "sequential")
-        env["R_FUTURE_GLOBALS_MAXSIZE"] = os.environ.get(
-            "ABA_R_FUTURE_GLOBALS_MAXSIZE", str(8 * 1024 ** 3))
+        env["R_FUTURE_PLAN"] = config.settings.r_future_plan.get()
+        env["R_FUTURE_GLOBALS_MAXSIZE"] = config.settings.r_future_globals_maxsize.get()
     return env
 
 

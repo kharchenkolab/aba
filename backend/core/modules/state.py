@@ -14,13 +14,14 @@ Robust: a missing/corrupt file reads as empty; writes are atomic (tmp + replace)
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
+from core import config
+
 
 def _aba_home() -> Path:
-    return Path(os.environ.get("ABA_HOME", str(Path.home() / ".aba")))
+    return config.aba_home()
 
 
 def _path() -> Path:

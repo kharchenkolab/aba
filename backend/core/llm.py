@@ -32,6 +32,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator, List, Dict, Any
 
+from core import config
 from core.config import API_KEY, MODEL, FAKE_SESSION
 
 
@@ -139,7 +140,7 @@ class _RealStream:
         # off mid-input, the SDK can't parse the partial JSON, and the tool_use
         # ends up with empty input — silent fail downstream (verified live
         # 2026-06-01, prj_8d699668 thr_97a96441). Env override so it's tunable.
-        max_tok = int(os.environ.get("ABA_MAX_TOKENS", "16000"))
+        max_tok = config.settings.max_tokens.get()
         # Debug: persist the EXACT, replayable ("callable") request — the
         # structured system (list with cache_control on the stable prefix),
         # tools (cache_control on the last), and messages (cache_control on
@@ -150,7 +151,7 @@ class _RealStream:
         # / "0" / "" disables.
         import os as _os, hashlib as _hashlib, time as _time
         import json as _json
-        _rawdir = _os.environ.get("ABA_RAW_REQUEST_DIR", "/tmp/aba_llm_sent")
+        _rawdir = config.settings.raw_request_dir.get()
         if _rawdir and _rawdir.lower() not in ("off", "0", "false", ""):
             try:
                 _os.makedirs(_rawdir, exist_ok=True)
@@ -215,7 +216,7 @@ def _credential_mode() -> str:
     'just works' on the subscription with no paste. Logged once (not silent); save
     an API key or set ABA_LLM_CREDENTIAL=apikey to opt out. NB: oauth_cc bills the
     subscription, so this is a personal/dev convenience."""
-    explicit = os.environ.get("ABA_LLM_CREDENTIAL")
+    explicit = config.settings.llm_credential.get()
     if explicit:
         return explicit.lower()
     # No explicit mode AND no API key: prefer a detected subscription token over a
@@ -258,7 +259,7 @@ _oauth_lock = threading.Lock()     # one refresh at a time (refresh tokens are s
 
 
 def _oauth_store_path():
-    home = os.environ.get("ABA_HOME")
+    home = config.settings.home_dir.get()  # raw: None when ABA_HOME unset (no store)
     return os.path.join(home, "oauth.json") if home else None
 
 

@@ -17,6 +17,7 @@ import os
 import re
 from typing import Optional
 
+from core import config
 from core.exec.nextflow_schema import _get
 
 _RES_CACHE: dict = {}
@@ -136,8 +137,8 @@ def parse_max_caps(config_text: str) -> dict:
 def single_node_ceiling() -> dict:
     """Largest single-node allocation local mode will request (also the local-viability
     bound). Overridable for the deploy's node sizes."""
-    cores = _f(os.environ.get("ABA_NEXTFLOW_LOCAL_MAX_CORES")) or 36
-    mem = _f(os.environ.get("ABA_NEXTFLOW_LOCAL_MAX_MEM_GB")) or 180.0
+    cores = config.settings.nextflow_local_max_cores.get() or 36
+    mem = config.settings.nextflow_local_max_mem_gb.get() or 180.0
     return {"cores": int(cores), "mem_gb": float(mem)}
 
 

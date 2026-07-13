@@ -27,12 +27,13 @@ from core.graph.entities import update_entity
 # Per-project state is consolidated under PROJECTS_DIR/<pid>/ (data, work,
 # artifacts, project.db) — see core.config.project_root() and friends.
 # ABA_PROJECTS_DIR overrides the location for tests/eval-audit isolation.
+from core import config  # noqa: E402
 from core.config import PROJECTS_DIR, _LazyDir  # noqa: E402 — kept here so legacy `from core.projects import PROJECTS_DIR` keeps working
 # Lazy so an ABA_PROJECTS_DIR / ABA_RUNTIME_DIR override set after import (tests,
 # runtime swaps) is honored — these resolve PROJECTS_DIR live on every use.
 REGISTRY = _LazyDir(lambda: PROJECTS_DIR / "registry.json")
 SCRATCH = _LazyDir(lambda: PROJECTS_DIR / "_scratch.db")   # parked here when no project is active
-SINGLE = bool(os.environ.get("ABA_DB_PATH") or os.environ.get("ABA_DB_PATH_OVERRIDE"))
+SINGLE = bool(config.settings.db_path.get() or config.settings.db_path_override.get())
 
 _state = {"current": None}
 

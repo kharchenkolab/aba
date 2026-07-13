@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from core import config
 from core.data.workspace import scratch_dir
 from core.graph.jobs import update_job
 from core.jobs.hpc_config import hpc_config, resolve_resources
@@ -41,8 +42,8 @@ def _offload_runtime() -> tuple[str, str]:
     path) + ``ABA_OFFLOAD_BACKEND_DIR`` (a shared-FS copy of the backend, staged
     version-locked to the image) so offloaded jobs run bare — exactly like the
     native path — with no per-job container (see misc/slim_sif_deploy.md)."""
-    py = os.environ.get("ABA_OFFLOAD_PYTHON") or sys.executable
-    bd = os.environ.get("ABA_OFFLOAD_BACKEND_DIR") or _BACKEND_DIR
+    py = config.settings.offload_python.get() or sys.executable
+    bd = config.settings.offload_backend_dir.get() or _BACKEND_DIR
     return py, bd
 
 
@@ -52,14 +53,14 @@ def _job_wrap_mode() -> str:
     the SIF, so a bare node can't reach them); ``''`` → run BARE on the node
     (native / slim — the default, unchanged). Set by the OOD launch
     (``ABA_JOB_WRAP=sif``) for a fat SIF. See misc/fatagain.md."""
-    return (os.environ.get("ABA_JOB_WRAP") or "").strip().lower()
+    return (config.settings.job_wrap.get() or "").strip().lower()
 
 
 def _apptainer_tmpdir() -> str:
     """Node-local tmp/cache for a wrapped job's apptainer. MUST be off NFS home —
     apptainer hangs unkillably when its cache/tmp sit on an NFS home (see
     core/exec/nextflow.py). Overridable via ABA_APPTAINER_TMPDIR."""
-    return (os.environ.get("ABA_APPTAINER_TMPDIR")
+    return (config.settings.apptainer_tmpdir.get()
             or f"/tmp/aba-apptainer-{os.environ.get('USER') or os.environ.get('LOGNAME') or 'u'}")
 
 
@@ -70,14 +71,17 @@ def _wrap_binds(run_dir: Path) -> list[str]:
     reachable inside. Bound X→X so absolute paths match the bare node (the
     environment-equivalence contract — misc/fatagain.md)."""
     cands = [str(run_dir)]
-    for var in ("ABA_RUNTIME_DIR", "ABA_ENVS_DIR", "ABA_SHARE"):
-        v = os.environ.get(var)
-        if v:
-            cands.append(v)
+    # Bind a scope root only when its env var was EXPLICITLY set (matches the old
+    # `for var in (...): if os.environ.get(var)` guard — a resolved default path
+    # may not exist on the node, so don't bind it unconditionally).
+    for name in ("runtime_dir", "envs_dir", "share_dir"):
+        s = config.get_setting(name)
+        if s.is_set():
+            cands.append(str(s.get()))
     for p in ("/groups", "/cluster/aba", "/resources"):
         if os.path.isdir(p):
             cands.append(p)
-    for m in (os.environ.get("ABA_MODULE_BINDS") or "").split():
+    for m in (config.settings.module_binds.get() or "").split():
         if m and os.path.exists(m):
             cands.append(m)
     seen: set = set()
@@ -112,7 +116,7 @@ def _job_body(*, kind: str, mods: list, nf_path_line: str, spec_path: Path,
     is handled separately) — it falls through to the bare branch."""
     from core.exec.modules import load_lines
     head = f"#!/bin/bash\ncd {run_dir}\n{load_lines(mods)}{nf_path_line}"
-    sif = os.environ.get("ABA_SIF")
+    sif = config.settings.sif.get()
     if _job_wrap_mode() == "sif" and kind in ("run_python", "run_r") and sif:
         tmp = _apptainer_tmpdir()
         binds = " ".join(f"--bind {shlex.quote(p)}" for p in _wrap_binds(run_dir))

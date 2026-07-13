@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 from core.config import DATA_DIR, ARTIFACTS_DIR
+from core import config
 
 # ---------- Tool schemas ----------
 #
@@ -517,7 +518,7 @@ def _preexec_veto(name: str, input_: dict, ctx: dict | None) -> dict | None:
     else None. Heuristic + conservative (each branch guarded to keep false-blocks low)."""
     if name not in ("run_python", "run_r"):
         return None
-    if (os.environ.get("ABA_PREEXEC_VETO") or "on").lower() == "off":
+    if config.settings.preexec_veto.get().lower() == "off":
         return None   # eval isolation only; veto is ON by default (live)
     code = (input_ or {}).get("code") or ""
     if not code.strip():
@@ -895,11 +896,11 @@ def _feedlog(msg: str) -> None:
     """Concise debug trace of every tool dispatch + hook event. Writes to BOTH the rolling
     /tmp/aba_turnlog/live.log (the file the turn-event logger writes — so it's all in one
     place to tail) AND backend stdout. On unless ABA_FEED_LOG=off."""
-    if os.environ.get("ABA_FEED_LOG", "on").lower() == "off":
+    if config.settings.feed_log.get().lower() == "off":
         return
     line = f"[feed] {msg}"
     print(line, flush=True)
-    d = os.environ.get("ABA_TURN_LOG_DIR", "/tmp/aba_turnlog")
+    d = config.settings.turn_log_dir.get()
     if d.strip().lower() in ("", "off", "0", "false"):
         return
     try:
