@@ -11,6 +11,7 @@ Standalone-runnable (no bio content / conftest needed):  python tests/test_sif_g
 """
 from __future__ import annotations
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -110,6 +111,68 @@ def test_launch_forwards_nextflow_env():
     guards — nf-core showed ✗ despite the config being present)."""
     erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
     assert "ABA_NEXTFLOW_MODULE" in erb, "script.sh.erb must forward ABA_NEXTFLOW_MODULE into apptainer run"
+
+
+def _run_preflight_envsh(subscription_signin: str | None = None) -> str:
+    """Run the REAL aba_preflight against a minimal site.yaml (optionally with a
+    credentials.subscription_signin override); return the emitted aba-env.sh text."""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        extra = f", subscription_signin: {subscription_signin}" if subscription_signin else ""
+        (tdp / "site.yaml").write_text(
+            "site: {name: t}\n"
+            f"scopes:\n  user:\n    state_dir: {tdp}/state\n"
+            f"credentials: {{order: [], on_missing: demo_mode{extra}}}\n")
+        env = {**os.environ, "ABA_SITE_CONFIG": str(tdp / "site.yaml"),
+               "ABA_PF_STAGED": str(tdp), "ABA_PF_USER": "u", "ABA_PF_HOME": str(tdp), "ABA_PF_GROUP": ""}
+        subprocess.run([sys.executable, str(PREFLIGHT)], env=env, capture_output=True, text=True)
+        return (tdp / "aba-env.sh").read_text()
+
+
+def test_preflight_always_produces_subscription_oauth_value():
+    """The OOD template MUST emit a NON-EMPTY ABA_SUBSCRIPTION_OAUTH — the container
+    passthrough in script.sh.erb is forward-if-set, so with no producer the Subscription
+    tab silently never appears. Default is `paste` (aba_preflight only runs under the
+    proxied OOD launch → Anthropic paste flow is the safe max). This guards the exact
+    'gated on an unset var' gap from silently recurring when a deploy path is added."""
+    envsh = _run_preflight_envsh()
+    m = re.search(r"export ABA_SUBSCRIPTION_OAUTH='([^']*)'", envsh)
+    assert m, f"aba-env.sh must set ABA_SUBSCRIPTION_OAUTH — got:\n{envsh}"
+    assert m.group(1).strip(), "ABA_SUBSCRIPTION_OAUTH must be NON-EMPTY (an empty value = hidden tab)"
+    assert m.group(1) == "paste", m.group(1)
+
+
+def test_preflight_subscription_signin_override():
+    """site.yaml credentials.subscription_signin overrides the default (off | paste | all)."""
+    assert "export ABA_SUBSCRIPTION_OAUTH='off'" in _run_preflight_envsh("off")
+    assert "export ABA_SUBSCRIPTION_OAUTH='all'" in _run_preflight_envsh("all")
+
+
+def test_launch_forwards_subscription_oauth():
+    """script.sh.erb must FORWARD ABA_SUBSCRIPTION_OAUTH into the containall run — aba_preflight
+    only EMITS it to aba-env.sh. Without the forward the backend never sees it → oauth.enabled()
+    is False → the Subscription tab stays hidden despite the deployment enabling it."""
+    erb = (ROOT / "install" / "ood" / "aba" / "template" / "script.sh.erb").read_text()
+    assert "ABA_SUBSCRIPTION_OAUTH" in erb, "script.sh.erb must forward ABA_SUBSCRIPTION_OAUTH into apptainer run"
+
+
+def test_preflight_default_yields_anthropic_subscription_gating():
+    """End-to-end: the value aba_preflight emits by default must make oauth.enabled() open
+    Anthropic (paste, proxy-safe) and keep OpenAI (localhost callback) closed on OOD."""
+    envsh = _run_preflight_envsh()
+    val = re.search(r"export ABA_SUBSCRIPTION_OAUTH='([^']*)'", envsh).group(1)
+    import os as _os
+    from core import oauth
+    prev = _os.environ.get("ABA_SUBSCRIPTION_OAUTH")
+    try:
+        _os.environ["ABA_SUBSCRIPTION_OAUTH"] = val
+        assert oauth.enabled("anthropic") is True
+        assert oauth.enabled("openai") is False
+    finally:
+        if prev is None:
+            _os.environ.pop("ABA_SUBSCRIPTION_OAUTH", None)
+        else:
+            _os.environ["ABA_SUBSCRIPTION_OAUTH"] = prev
 
 
 def test_launch_binds_sacctmgr():
