@@ -217,6 +217,21 @@ if [ "$PROFILE" = "cluster-personal" ]; then
   fi
   write_cfg ABA_BATCH_SUBMITTER slurm
   echo "-- cluster-personal: ABA_BATCH_SUBMITTER=slurm, runtime=$RUNTIME_DIR --"
+  # Eager profile (misc/modules.md): the heavy modules are part of a shared install,
+  # not opt-in — mark them enabled so Settings → Modules reflects that (and they don't
+  # read as reclaimable). python-bio is on by default; r-bio + viewer-pagoda3 are seeded.
+  if [ ! -f "$ABA_HOME/modules.json" ]; then
+    cat > "$ABA_HOME/modules.json" <<'JSON'
+{
+  "modules": {
+    "python-bio": {"desired": "on"},
+    "r-bio": {"desired": "on"},
+    "viewer-pagoda3": {"desired": "on"}
+  }
+}
+JSON
+    echo "-- seeded modules.json (python-bio, r-bio, viewer-pagoda3 enabled) --"
+  fi
   # Deployment-conditional base (docs/arch/envs.md): pick the CUDA torch build iff GPU
   # compute exists (a gpu partition), unless the admin pinned ABA_ACCELERATOR. Persist to
   # config.env (runtime reads it for gpu_usable) + export so create-env's
@@ -255,6 +270,25 @@ if [ "$PROFILE" = "cluster-personal" ]; then
     echo "    or run 'aba hpc-config' on a submit-capable node to write an override)"
   fi
 fi
+
+# --- env-build strategy (misc/lazy_env_init.md) ---
+# staged = start the server on a minimal base, then finish the scientific Python
+# stack + R env in the background (personal); eager = full build before start
+# (shared/cluster). cluster-personal is Slurm/shared → eager; local (incl. a
+# headless single-user server) → staged. An explicit ABA_ENV_PREWARM wins. Persist
+# to config.env (runtime + `aba update` read it) + export so the install playbook's
+# create/complete steps see it.
+if [ -n "${ABA_ENV_PREWARM:-}" ]; then PREWARM="$ABA_ENV_PREWARM"
+elif [ "$PROFILE" = "cluster-personal" ]; then PREWARM="eager"
+else PREWARM="staged"; fi
+write_cfg ABA_ENV_PREWARM "$PREWARM"; export ABA_ENV_PREWARM="$PREWARM"
+echo "   env prewarm: $PREWARM"
+
+# Subscription sign-in (Settings → Agent): enable on a local desktop install, where
+# the browser can reach the OpenAI localhost:1455 callback (and Anthropic paste works
+# anywhere). Headless / cluster-personal is remote with no local browser → leave off
+# (a user there pastes an API key, or an operator sets ABA_SUBSCRIPTION_OAUTH=1).
+if [ "$HEADLESS" != "1" ]; then write_cfg ABA_SUBSCRIPTION_OAUTH 1; fi
 
 # --- run the install ---
 if [ "$HEADLESS" = 1 ]; then

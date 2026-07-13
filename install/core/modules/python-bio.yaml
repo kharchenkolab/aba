@@ -1,0 +1,17 @@
+# Module manifest (misc/modules.md). Declarative — the backend registry loads every
+# install/core/modules/*.yaml at startup; adding a module needs no core-code change.
+id: python-bio
+order: 10
+title: Python analysis stack
+description: >-
+  scanpy, anndata, scvi-tools (PyTorch), leidenalg, UMAP — single-cell / genomics
+  analysis in Python.
+size: ~3 GB
+est_time: 4–8 min
+default_state: "on"          # on | first_use | off  (quoted — YAML reads bare on/off as booleans)
+removable: false             # lives in the read-only base; removal = rebuild boot
+env_target: base-update
+first_use: [scanpy, anndata, scvi, scvi_tools, leidenalg, umap]
+install: install-python-bio.sh
+ready:
+  base_stage: ready          # ready ⟺ env_integrity.base_stage() == "ready"

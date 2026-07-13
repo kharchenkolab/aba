@@ -291,6 +291,8 @@ export default function App() {
       try {
         const ev = JSON.parse(msg.data)
         if (ev.type === 'entity_updated') refresh()
+        // Module install progress → ModuleToasts + the Modules tab listen for this.
+        else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))
       } catch {}
     }
     return () => { es.close() }
@@ -436,7 +438,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
   const { messages, streaming, streamMsg, sendMessage, retryLast, loading: chatLoading, manifest,
-          pendingClarification, answerClarification,
+          pendingClarification, answerClarification, answerClarificationEnable,
           pendingApproval, respondApproval, stopTurn,
           queuedMessages, enqueue, dropQueue, dropQueueAt, steer,
           eventLog, jobs, currentRunId } = useChat(
@@ -795,7 +797,10 @@ export default function App() {
       loading={chatLoading}
       streamMsg={streamMsg}
       onSend={(text: string, attachments?: Attachment[]) =>
-        streaming ? enqueue(text, attachments) : sendMessage(text, null, attachments)}
+        // Pass `undefined` (not null) for the annotation: null would OVERRIDE the
+        // sticky highlight (annotationRef) and drop it, so a circled region never
+        // reached the agent (regression from the attachments commit de0ff3c6).
+        streaming ? enqueue(text, attachments) : sendMessage(text, undefined, attachments)}
       onOpenData={() => openProjectSection('data')}
       focusedEntity={focused}
       annotation={annotation}
@@ -827,6 +832,7 @@ export default function App() {
       starters={compact ? undefined : (currentThread?.metadata?.orient_steps as string[] | undefined)}
       pendingClarification={pendingClarification}
       onAnswerClarification={answerClarification}
+      onAnswerClarificationEnable={answerClarificationEnable}
       pendingApproval={pendingApproval}
       onRespondApproval={respondApproval}
       onStop={stopTurn}

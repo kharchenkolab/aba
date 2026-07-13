@@ -182,6 +182,22 @@ def attach_to_run(exec_id: str, run_id: str) -> bool:
     return True
 
 
+def latest_exec_id_for_thread(thread_id: str) -> Optional[str]:
+    """The most recent exec record for a thread (by start time). Used to auto-link a
+    just-registered dataset to the run that fetched/created it (misc/provenance.md), so
+    its provenance surfaces the fetch code + env. None if the thread has no exec records."""
+    if not thread_id:
+        return None
+    try:
+        with _conn() as c:
+            r = c.execute(
+                "SELECT exec_id FROM execution_records WHERE thread_id = ? "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1", (thread_id,)).fetchone()
+        return r["exec_id"] if r else None
+    except Exception:  # noqa: BLE001 — a lookup failure just means no auto-link
+        return None
+
+
 def get(exec_id: str) -> Optional[dict]:
     """Fetch the full exec record (DB index + JSON body merged).
 

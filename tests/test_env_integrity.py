@@ -352,3 +352,55 @@ def test_verify_r_library_real_load(monkeypatch):
     assert ok, "baked base package Matrix should load"
     ok2, detail = verify_r_library("NoSuchRPkgXyz")
     assert not ok2 and "does not load" in detail
+
+
+# ── lazy/staged env init (ABA_ENV_PREWARM) — lazy_env_init.md ────────────────
+import core.exec.env_integrity as _ei_lazy  # noqa: E402
+
+
+def test_base_stage_reads_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(_ei_lazy, "_base_prefix", lambda: tmp_path)
+    marker = tmp_path / ".aba-base-stage"
+    assert _ei_lazy.base_stage() == "ready"           # absent ⇒ ready (eager/pre-staging)
+    for v in ("boot", "completing", "ready"):
+        marker.write_text(v)
+        assert _ei_lazy.base_stage() == v
+    marker.write_text("garbage")
+    assert _ei_lazy.base_stage() == "ready"           # unknown ⇒ ready (safe default)
+
+
+def test_self_heal_skips_while_staging(tmp_path, monkeypatch):
+    """The installer owns the base until `ready`; startup self-heal must NOT
+    deep-verify/repair/freeze mid-write (it would fight the in-flight env update)."""
+    site = tmp_path / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True)
+    monkeypatch.setattr(_ei_lazy, "_base_site_dir", lambda: site)
+    monkeypatch.setattr(_ei_lazy, "env_selfcheck",
+                        lambda: {"ok": True, "checks": {"abi_anchor_armed": {"ok": True, "detail": "ok"}}})
+    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "completing")
+    def _boom(**k):
+        raise AssertionError("must not deep-verify the base mid-staging")
+    monkeypatch.setattr(_ei_lazy, "base_health", _boom)
+    res = _ei_lazy.self_heal_base(log=lambda *_a, **_k: None)
+    assert res.get("skipped") == "staging" and res.get("stage") == "completing"
+
+
+def test_staging_import_note_paths(monkeypatch):
+    trace = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'scanpy'\n"
+    # ready base → not applicable (normal env_root_cause / user-error path)
+    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "ready")
+    assert _ei_lazy.staging_import_note(trace, wait_s=0) is None
+    # non-import failure → not applicable even while completing
+    monkeypatch.setattr(_ei_lazy, "base_stage", lambda: "completing")
+    assert _ei_lazy.staging_import_note("ValueError: bad input", wait_s=0) is None
+    # completing base + missing import → 'finishing setup' note naming the module
+    note = _ei_lazy.staging_import_note(trace, wait_s=0)
+    assert note is not None and note["ready"] is False and note["module"] == "scanpy"
+    assert "finishing setup" in note["note"]
+
+
+def test_lifespan_defers_r_provision_while_staging():
+    """The backend's startup R provisioning must defer while the base is staging,
+    so it can't race the installer's complete-r-env on the same tools env."""
+    lifespan = (ROOT / "backend" / "lifespan.py").read_text()
+    assert "base_stage()" in lifespan and '!= "ready"' in lifespan

@@ -61,6 +61,7 @@ interface Props {
    *  to /api/turns/{run_id}/resume. */
   pendingClarification?: PendingClarification | null
   onAnswerClarification?: (text: string) => void
+  onAnswerClarificationEnable?: (module: string, mode: 'on' | 'first_use' | null) => void
   /** P1 #3 — if set, a flagged tool wants explicit approval before
    *  running. Replaces the main composer with an Approve / Reject bar. */
   pendingApproval?: PendingApproval | null
@@ -118,6 +119,7 @@ export default function ChatPane({
   starters,
   pendingClarification,
   onAnswerClarification,
+  onAnswerClarificationEnable,
   pendingApproval,
   onRespondApproval,
   onStop,
@@ -509,6 +511,24 @@ export default function ChatPane({
                   Allow this thread
                 </button>
               )}
+            </div>
+          </div>
+        ) : pendingClarification && pendingClarification.enable && onAnswerClarificationEnable ? (
+          // Option-1 module enable (misc/modules.md): one-click Enable buttons — the
+          // USER turns the module on, then the turn resumes.
+          <div className="clarify-bar clarify-bar--enable">
+            <div className="clarify-bar__q">{pendingClarification.question}</div>
+            <div className="clarify-bar__actions">
+              {pendingClarification.enable.options.map(o => (
+                <button key={o.mode} type="button" className="clarify-bar__enable" disabled={streaming}
+                        onClick={() => onAnswerClarificationEnable(pendingClarification.enable!.module, o.mode)}>
+                  {o.label}
+                </button>
+              ))}
+              <button type="button" className="clarify-bar__decline" disabled={streaming}
+                      onClick={() => onAnswerClarificationEnable(pendingClarification.enable!.module, null)}>
+                Not now
+              </button>
             </div>
           </div>
         ) : pendingClarification && onAnswerClarification ? (

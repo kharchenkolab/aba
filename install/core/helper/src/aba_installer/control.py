@@ -96,7 +96,19 @@ def prepare_install_artifacts() -> Path:
 # That's why there's no "Install ABA" button: by the time auth finishes, the
 # install is done (or nearly), and the backend just starts. Only start-backend
 # is credential-gated (it boots uvicorn with the key from config.env).
-_BG_SKIP = {"start-backend"}
+_BG_SKIP = {"start-backend"}   # eager default: the service starts the backend after auth
+
+
+def _bg_skip() -> set:
+    """Steps the background installer does NOT run. Eager: skip start-backend (the
+    service starts it AFTER auth, credential in hand — unchanged). Staged: run
+    start-backend at its playbook position so the server comes up CREDENTIAL-LESS
+    right after the boot env; the app (Settings → Agent) connects a provider later
+    (lazy_env_init.md). Reads ABA_ENV_PREWARM (loaded from config.env at startup)."""
+    prewarm = (os.environ.get("ABA_ENV_PREWARM") or "eager").strip().lower()
+    return set() if prewarm == "staged" else set(_BG_SKIP)
+
+
 _bg_lock = threading.Lock()
 # step_status: {step_id -> "active"|"ok"|"fail"} — survives the event-buffer
 # eviction so the UI's checklist doesn't lose its checkmarks when create-env's
@@ -116,17 +128,16 @@ def _is_installed() -> bool:
 
 
 def _agent_repair_enabled() -> bool:
-    """Default ON as of 2026-06-11. The agent-repair hook itself fails
-    soft when the `claude` CLI / ABA credentials aren't available (see
-    agent_repair.run_repair's no-credential and no-claude gates added in
-    Tier-0 commits d1d0812 + 318b29a), so a default-on policy doesn't
-    fail an install for users without a Claude session — it just turns
-    into a no-op. The user explicit opt-out is ABA_INSTALL_AGENT_REPAIR=0
-    (or 'false'/'no'/'off')."""
-    raw = (os.environ.get("ABA_INSTALL_AGENT_REPAIR") or "").lower().strip()
-    if raw in ("0", "false", "no", "off"):
-        return False
-    return True   # default ON
+    """RETIRED 2026-07-11 (lazy_env_init.md). The install-time agent repair drove
+    `claude -p` — Claude-ONLY (no OpenAI), needs the `claude` binary, and duplicated
+    the backend's OAuth/credential logic. Under the credential-deferral direction the
+    server starts credential-less and the running MULTI-PROVIDER agent will own any
+    post-start remediation (the Settings → Modules stage). So this is now always off:
+    the repair hook + preflight become no-ops and the install uses static remediation
+    (which is what the robust pre-server steps rely on anyway). Kept as a single seam
+    to flip if we ever reinstate an install-time agent; agent_repair.py is now dead
+    code (safe to delete in a cleanup). ABA_INSTALL_AGENT_REPAIR no longer enables it."""
+    return False
 
 
 def _repair_hook(on_event):
@@ -215,9 +226,34 @@ def _planned_steps(pb, *, kind: str, skip: set | None = None) -> list[dict]:
     return steps
 
 
+def load_config_env() -> None:
+    """Merge $ABA_HOME/config.env into os.environ (setdefault — a live export still
+    wins) before a playbook runs, so deploy-profile knobs the installer persisted
+    there (ABA_ENV_PREWARM, ABA_ACCELERATOR, ABA_RUNTIME_DIR, …) reach the playbook
+    even when the helper runs via a **LaunchAgent**, which does NOT inherit the setup
+    script's shell exports. Without this, mac's `ABA_ENV_PREWARM=staged` never reached
+    create-env and the base built eager. Idempotent; missing/garbled file is a no-op."""
+    cfg = Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba")) / "config.env"
+    try:
+        text = cfg.read_text()
+    except Exception:  # noqa: BLE001 — no config.env yet is fine
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip(); v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
 def _bg_worker() -> None:
+    load_config_env()   # deploy knobs (ABA_ENV_PREWARM, …) → playbook env, LaunchAgent-safe
     pb = load_playbook(_playbook_path("install"))
-    steps = [s.id for s in pb.steps if s.id not in _BG_SKIP]
+    steps = [s.id for s in pb.steps if s.id not in _bg_skip()]
 
     def on_event(ev: str, payload: dict) -> None:
         with _bg_lock:
@@ -239,7 +275,7 @@ def _bg_worker() -> None:
         # first event so the UI's event-replay sees it; /api/install/auto also
         # exposes the same list as a top-level field for late subscribers.
         on_event("step_planned", {
-            "steps": _planned_steps(pb, kind="install", skip=_BG_SKIP)
+            "steps": _planned_steps(pb, kind="install", skip=_bg_skip())
         })
         _run_preflight_if_enabled(pb, on_event, kind="install")
         results = Executor(pb, on_event=on_event,
@@ -281,7 +317,7 @@ def install_auto_status() -> dict:
     # buffer evicting the step_planned frame on long installs.
     try:
         pb = load_playbook(_playbook_path("install"))
-        active = [s for s in pb.steps if s.id not in _BG_SKIP]
+        active = [s for s in pb.steps if s.id not in _bg_skip()]
         steps = [{"id": s.id, "title": s.title} for s in active]
     except Exception:  # noqa: BLE001
         steps = []
@@ -537,6 +573,21 @@ def status() -> dict:
         "credentials": config_present,
         "launcher": str(_aba_launcher()) if _aba_launcher() else None,
     }
+
+
+@router.get("/auth/model")
+def control_get_model() -> dict:
+    """Control-page model selector — kept on /api/auth/model even though the credential
+    web routes are retired (lazy_env_init.md): re-homed here from auth.py's dropped
+    router. Config-only, no credential. Delegates to auth.get_model_tool."""
+    from aba_installer.auth import get_model_tool
+    return get_model_tool()
+
+
+@router.post("/auth/model")
+def control_set_model(payload: dict) -> dict:
+    from aba_installer.auth import set_model_tool
+    return set_model_tool(payload)
 
 
 @router.get("/logs")

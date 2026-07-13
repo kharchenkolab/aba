@@ -1,0 +1,79 @@
+/* ===== Provenance section (prov2) — unobtrusive, informative on dive-in ===== */
+.prov { border-top: 1px solid var(--border); padding-top: 8px; }
+.prov__toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-3); padding: 2px 0; text-align: left;
+}
+.prov__toggle:hover { color: var(--text-2); }
+.prov__chev { font-size: 9px; color: var(--text-4); }
+.prov__summary {
+  text-transform: none; font-weight: 400; color: var(--text-4);
+  letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1;
+}
+.prov__badge {
+  text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 10.5px;
+  padding: 1px 7px; border-radius: 9999px; margin-left: auto; white-space: nowrap;
+}
+.prov__badge--warn { color: #b45309; background: #fef3c7; }
+
+/* label → value grid — the fold-out panel. A subtly different background shade
+   (softer than the card) sets the expanded provenance apart as its own inset. */
+.prov__grid {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 6px 14px; margin-top: 8px; align-items: baseline;
+  background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px;
+}
+.prov__k {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-4); padding-top: 3px; white-space: nowrap;
+}
+.prov__v {
+  font-size: 12.5px; color: var(--text-2);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0;
+}
+.prov__dim { color: var(--text-4); }
+.prov__recipe {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  background: var(--tree-active-bg); color: var(--text); padding: 1px 7px; border-radius: 5px;
+}
+.prov__cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  color: var(--text-2); background: var(--tree-active-bg); padding: 1px 6px; border-radius: 4px;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.prov__link {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font: inherit; font-size: 12px; padding: 0; text-decoration: underline;
+}
+.prov__code {
+  grid-column: 1 / -1; width: 100%; box-sizing: border-box; margin: 6px 0 2px;
+  background: #0f172a; color: #e2e8f0; padding: 9px 11px; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.5; max-height: 260px; overflow: auto; white-space: pre;
+}
+.prov__env { gap: 2px 10px; }
+.prov__pkg { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+
+/* input + lineage chips */
+.prov__chips { gap: 6px; }
+.prov-chip, .prov-lin {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-2);
+  font-size: 12px; padding: 3px 9px; border-radius: 8px; cursor: pointer; max-width: 100%;
+}
+.prov-chip:hover:not(:disabled), .prov-lin:hover { background: var(--tree-active-bg); border-color: var(--accent-border); color: var(--text); }
+.prov-chip:disabled { cursor: default; opacity: 0.75; }
+.prov-chip__label, .prov-lin__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov__lineage { gap: 6px; }
+.prov-lin__arrow { color: var(--text-4); font-size: 12px; }
+.prov-lin__rel { font-size: 10.5px; color: var(--text-4); text-transform: lowercase; }
+
+/* Per-panel variant (inside a Result panel): a quiet "Source" line, no card-footer
+   rule, tighter — the provenance belongs to the panel, not the whole Result. */
+.prov--panel { border-top: none; padding-top: 2px; margin-top: 2px; }
+.prov--panel .prov__toggle { font-size: 10px; color: var(--text-4); }
+.prov--panel .prov__grid { margin-top: 6px; padding: 9px 11px; }

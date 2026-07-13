@@ -1,0 +1,19 @@
+id: r-bio
+order: 20
+title: R toolchain
+description: >-
+  R 4.4 + Seurat + Bioconductor (DESeq2/edgeR/limma) + the lstar R viewer bridge —
+  R-based analysis and .rds viewing.
+size: ~4 GB
+est_time: ~2–5 min
+default_state: first_use
+removable: true
+env_target: conda-tools
+first_use: [seurat, bioconductor, .rds]
+install: install-r-bio.sh
+ready:
+  r_package:                 # ready ⟺ the tools env has this R package
+    env: tools
+    package: Seurat
+remove:
+  paths: ["$TOOLS_ENV"]      # reclaim = delete the R tools env

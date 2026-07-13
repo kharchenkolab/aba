@@ -71,6 +71,25 @@ def build_cached_blocks(system: str, dynamic_system: str, tools: list, *, cc_mar
     return sys_blocks, tool_blocks
 
 
+def _mark_last_block_cached(messages: list) -> list:
+    """Set cache_control on the last message's last block — the 3rd caching breakpoint —
+    UNLESS that block is an EMPTY text block. Anthropic 400s on cache_control over an
+    empty text block ("cache_control cannot be set for empty text blocks"), which the
+    last message can end in after an ask_clarification / plan halt+resume (a bare text
+    block). Skipping the marker there is harmless (one fewer cache breakpoint that turn);
+    sending it is a hard request failure. Returns messages (tail replaced in place)."""
+    if not (messages and isinstance(messages[-1].get("content"), list) and messages[-1]["content"]):
+        return messages
+    c = messages[-1]["content"]
+    last = c[-1]
+    if not isinstance(last, dict):
+        return messages
+    if last.get("type") == "text" and not (last.get("text") or "").strip():
+        return messages                                   # empty text block → don't mark
+    messages[-1] = {**messages[-1], "content": [*c[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
+    return messages
+
+
 # ---------- Real provider ----------
 
 class _RealStream:
@@ -113,11 +132,7 @@ class _RealStream:
         # payload reflects what the API actually sees (was previously
         # written without this marker, which made the dump misleading
         # about caching behavior).
-        if messages and isinstance(messages[-1]["content"], list) and messages[-1]["content"] \
-                and isinstance(messages[-1]["content"][-1], dict):
-            c = messages[-1]["content"]
-            messages[-1] = {**messages[-1],
-                            "content": [*c[:-1], {**c[-1], "cache_control": {"type": "ephemeral"}}]}
+        messages = _mark_last_block_cached(messages)
         # max_tokens caps a single assistant turn's output. 4096 was too tight:
         # when the agent emits a tool_use with large `code` content (e.g.
         # writing a multi-KB markdown recipe via run_python), the stream cuts

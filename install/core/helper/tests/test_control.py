@@ -259,3 +259,15 @@ def test_playbook_path_update_prefers_pulled_repo(tmp_path, monkeypatch):
     repo_pb.parent.mkdir(parents=True)
     repo_pb.write_text("steps: []\n")
     assert cm._playbook_path("update") == repo_pb
+
+
+def test_web_auth_routes_retired_model_preserved(client):
+    """Auth-UI removal (lazy_env_init.md): the installer's credential web routes are
+    retired — credential setup moves to the running app's Settings → Agent (the
+    backend serves credential-less). The control-page model selector stays on
+    /api/auth/model, re-homed onto control_router. auth.py stays for the CLI `aba auth`."""
+    assert client.get("/api/status").status_code == 200               # control intact
+    assert client.get("/api/auth/model").status_code == 200           # model selector preserved
+    assert client.post("/api/auth/apikey", json={}).status_code == 404  # credential route gone
+    assert client.get("/api/auth/status").status_code == 404
+    assert client.get("/callback").status_code == 404

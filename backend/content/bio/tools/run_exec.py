@@ -516,6 +516,18 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
         else:
             status = "ok"
 
+        # Inputs + seed (provenance §3.2/§3.3) — identity-level, best-effort. The
+        # focused entity + datasets the code references; a seed only if the code set
+        # one (we don't inject on the interactive path — that would change results).
+        from core.graph.run_inputs import resolve_inputs, detect_seed
+        inputs = resolve_inputs(code or "", (ctx or {}).get("focus_entity_id"))
+        # Recipe/pipeline the agent read THIS turn (recipe_ctx tracks Skill/read_skill
+        # uptake). Descriptive only — attributes the run to a method it likely used.
+        recipes: list[str] = []
+        _rc = (ctx or {}).get("recipe_ctx")
+        if isinstance(_rc, dict) and _rc.get("read"):
+            recipes = sorted(_rc["read"])
+
         eid = _er.create(
             thread_id=thread_id,
             run_id=run_id_ent,
@@ -529,10 +541,15 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
             cwd=cwd,
             payload={
                 "executor": f"kernel:{lang}",
+                "kind": "script",
                 "language": lang,
                 "language_version": lang_ver,
                 "package_versions": pkg,
                 "env_fingerprint": ef,
+                "inputs": inputs,
+                "seed": detect_seed(code or ""),
+                "recipe_id": recipes[0] if recipes else None,
+                "recipes": recipes or None,
                 "produced": produced,
                 "stdout_tail": snip_middle(res.stdout or ""),
                 "stderr_tail": snip_middle(res.stderr or ""),
@@ -758,11 +775,18 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # instead of a deep, misleading traceback.
             if res.returncode != 0:
                 try:
-                    from core.exec.env_integrity import env_root_cause
-                    rc = env_root_cause(res.stderr or "")
-                    if rc:
-                        out["env_root_cause"] = rc["note"]
-                        out["base_repair"] = rc["repair"]
+                    from core.exec.env_integrity import env_root_cause, staging_import_note
+                    # Staged prewarm: a missing import may just be the base still
+                    # finishing setup in the background — surface that (and briefly
+                    # wait) instead of "broken base" / a bare ModuleNotFoundError.
+                    st = staging_import_note(res.stderr or "")
+                    if st is not None:
+                        out["env_staging"] = st["note"]
+                    else:
+                        rc = env_root_cause(res.stderr or "")
+                        if rc:
+                            out["env_root_cause"] = rc["note"]
+                            out["base_repair"] = rc["repair"]
                 except Exception:  # noqa: BLE001
                     pass
             if getattr(sess, "_aba_cwd_just_switched", None):

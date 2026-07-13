@@ -89,11 +89,17 @@ def register_plan_etc_tools(mcp: FastMCP) -> None:
                       "assumptions": assumptions, "rationale": rationale})
 
     @mcp.tool()
-    def ask_clarification(question: str) -> dict:
+    def ask_clarification(question: str, enable_module: str | None = None) -> dict:
         """Pause the turn on a one-line question to the user. Lighter
-        weight than present_plan — no plan entity, no validator."""
+        weight than present_plan — no plan entity, no validator.
+
+        enable_module: when the question is about a capability MODULE that's
+        turned off (e.g. 'r-bio'), pass its id — the question renders with
+        one-click Enable buttons (On / First use) the user clicks to turn it
+        on, and the turn resumes automatically. Use this instead of telling
+        the user to open Settings → Modules by hand."""
         from content.bio.tools import ask_clarification as _impl
-        return _impl({"question": question})
+        return _impl({"question": question, "enable_module": enable_module})
 
     @mcp.tool()
     def write_memory(name: str,

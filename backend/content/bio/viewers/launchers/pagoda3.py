@@ -43,24 +43,17 @@ _ZIP_SUFFIX = ".lstar.zarr.zip"
 
 
 def pagoda3_dist_path() -> Path:
-    """Where pagoda3's built web bundle lives — the single source of truth for
-    every consumer (the `/pagoda3` static mount the app root wires up, and prep
-    below). First existing wins:
-      1. `$ABA_PAGODA3_DIST`                — explicit override (dev sets this)
-      2. `$ABA_HOME/vendor/pagoda3/dist`    — the installer's vendored release
-                                              bundle (deploy default; version
-                                              pinned in the fetch playbook)
-      3. `~/pagoda/pagoda3/web/dist`        — a dev checkout
-    Returns the override / deploy default even if absent, so a caller can report a
-    clean 'not present' against the expected location rather than guessing."""
+    """Where pagoda3's built web bundle lives — the single source of truth for every
+    consumer (the `/pagoda3` route + prep below). It is the viewer-pagoda3 MODULE's
+    vendored dist, kept ENTIRELY within $ABA_HOME (a deployed ABA never reaches into
+    other paths in $HOME). A developer can point ABA at a local build EXPLICITLY via
+    $ABA_PAGODA3_DIST — the only outside-$ABA_HOME path, and only when opted in.
+    Returns the expected location even if absent, so a caller can report a clean
+    'not present' (→ the module installs it) rather than guessing."""
     env = os.getenv("ABA_PAGODA3_DIST")
     if env:
         return Path(env)
     home = Path(os.getenv("ABA_HOME") or (Path.home() / ".aba"))
-    for cand in (home / "vendor" / "pagoda3" / "dist",
-                 Path.home() / "pagoda" / "pagoda3" / "web" / "dist"):
-        if (cand / "index.html").is_file():
-            return cand
     return home / "vendor" / "pagoda3" / "dist"
 
 
@@ -222,6 +215,16 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     # (convert / optimize / unpack) rather than a static spinner. Only fires when
     # ensure_derived actually (re)builds — a cached store returns instantly.
     set_phase = ctx.get("set_phase") or (lambda *_: None)
+    # First-use gating (misc/modules.md): the pagoda3 viewer is a MODULE. If its dist
+    # isn't installed, install it HERE — on the prepare job — and WAIT with progress, so
+    # a failure surfaces as this job's error (→ the launch page routes it to Guide, the
+    # same seam as a conversion failure). The .lstar.zarr conversion below uses the CORE
+    # reader, independent of the viewer module.
+    if not (pagoda3_dist_path() / "index.html").is_file():
+        from core.modules.reconciler import install_and_wait
+        ok, err = install_and_wait("viewer-pagoda3", on_progress=lambda m: set_phase(m))
+        if not ok:
+            raise RuntimeError(err or "The pagoda3 viewer failed to install.")
     src = _resolve_source(node, pid)
     if not src.exists():
         raise FileNotFoundError(

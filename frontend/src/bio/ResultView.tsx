@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Entity, ResultMember } from '../types'
 import { EntityGlyph, AgentGlyph } from '../components/icons'
 import RevisionStrip, { useFigureRevisions, type RevisionAction } from './RevisionStrip'
+import ProvenanceSection from '../components/ProvenanceSection'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { HILITE, captureHighlight, type Pt } from '../components/highlightTools'
 import './ResultView.css'
@@ -92,6 +93,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
 }) {
   const members = (result.metadata?.members as ResultMember[]) ?? []
   const interpretation = (result.metadata?.interpretation as string) ?? ''
+  const interpOrigin = (result.metadata?.interpretation_origin as string) ?? ''
+  const titleOrigin = (result.metadata?.title_origin as string) ?? ''
   const threadId = result.metadata?.thread_id as string | undefined
   const cellById = (id?: string) => (id ? entities.find(e => e.id === id) : undefined)
 
@@ -99,6 +102,8 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   const [title, setTitle] = useState(result.title)
   const [reading, setReading] = useState(interpretation)
   const [synthesisOpen, setSynthesisOpen] = useState(false)
+  const [synthGen, setSynthGen] = useState(false)          // synthesis being generated
+  const lastSyncedInterp = useRef(interpretation)
   const [picker, setPicker] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [focusMember, setFocusMember] = useState<string | null>(null)
@@ -127,7 +132,18 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
   // signals an annotation-clear (avoids stale ✏️-on state after Esc).
   useEffect(() => { setHighlighting(false) }, [result.id, annotClear])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setReading(interpretation); setTitle(result.title) }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setReading(interpretation); setTitle(result.title); lastSyncedInterp.current = interpretation }, [result.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pick up a background-generated synthesis (auto at pin, or the Guide button via
+  // the entity_updated broadcast) WITHOUT clobbering an in-flight user edit — mirrors
+  // the caption sync in MemberPanel.
+  useEffect(() => {
+    setReading(prev => {
+      if (prev === lastSyncedInterp.current) { lastSyncedInterp.current = interpretation; return interpretation }
+      if (prev === interpretation) { lastSyncedInterp.current = interpretation; return prev }
+      return prev   // user has an unsaved edit → keep it
+    })
+  }, [interpretation])
 
   // Auto-resize the Result-level synthesis textarea (rarely used, but if
   // the user writes one we let it grow with the content like the figure
@@ -267,6 +283,19 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
     if (reading !== interpretation)
       api(`/api/entities/${rid}`, 'PATCH', { interpretation: reading, interpretation_origin: 'user' })
   }
+  // Green-star Guide button: generate (or re-generate) the synthesis across panels.
+  // Async — the field shows a "generating…" status while it runs.
+  const generateSynthesis = async () => {
+    if (synthGen) return
+    setSynthGen(true); setSynthesisOpen(true)
+    try {
+      const r = await fetch(`/api/results/${rid}/synthesize`, { method: 'POST' })
+      if (r.ok) {
+        const d = await r.json()
+        if (d.interpretation) { setReading(d.interpretation); lastSyncedInterp.current = d.interpretation }
+      }
+    } catch { /* leave the field as-is on failure */ } finally { setSynthGen(false) }
+  }
   const addFigure = (cellId: string) => { setPicker(false); api(`/api/results/${rid}/members`, 'POST', { kind: 'figure', ref: cellId }) }
   const addNote = async () => {
     const r = await fetch(`/api/results/${rid}/members`, {
@@ -345,7 +374,14 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
                onChange={e => setTitle(e.target.value)} onBlur={saveTitle}
                onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') { setTitle(result.title); setTitleEdit(false) } }} />
       ) : (
-        <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
+        <div className="rv__title-row">
+          <h1 className="rv__title" onClick={() => setTitleEdit(true)} title="Click to rename">{result.title}</h1>
+          {titleOrigin === 'ai' && (
+            <span className="rv__ai-tag" title="Title suggested by Guide — edit to make it yours">
+              <AgentGlyph agent="guide" size={13} />
+            </span>
+          )}
+        </div>
       )}
 
       <div className="rv__members" ref={membersRef}>
@@ -369,21 +405,38 @@ export default function ResultView({ result, entities, onChange, onFocus, onAsk,
         {members.length === 0 && <div className="rv__empty">Empty result — add a panel or a note below.</div>}
       </div>
 
-      {/* Result-level synthesis — OPTIONAL. The figure caption lives on the
-          MEMBER (under the image, where it belongs); this textarea is only
-          for an explicit cross-evidence synthesis the user writes (e.g.
-          "the QC + clustering together suggest…"). Quiet by default —
-          collapsed to a small "+ Add synthesis" affordance until used. */}
-      {(reading.trim() || synthesisOpen) ? (
-        <div className="rv__reading-row">
-          <textarea ref={readingRef} className="rv__reading" value={reading}
-                    placeholder="Synthesis across panels (optional)…"
-                    onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+      {/* Result-level synthesis across panels. Auto-generated at pin time (when
+          the agent's context is richest) and via the Guide button below
+          (generate / re-generate). AI-authored text carries the green Guide
+          glyph, which clears on the first user edit. The figure caption lives on
+          the MEMBER; this is the cross-panel take-home. */}
+      {(reading.trim() || synthesisOpen || synthGen) ? (
+        <div className="rv__synth">
+          <div className="rv__synth-field">
+            <textarea ref={readingRef} className="rv__reading" value={reading} disabled={synthGen}
+                      placeholder={synthGen ? 'Generating synthesis…' : 'Synthesis across panels (optional)…'}
+                      onChange={e => setReading(e.target.value)} onBlur={saveReading} rows={1} />
+            {interpOrigin === 'ai' && !synthGen && reading.trim() && (
+              <span className="rv__ai-tag rv__ai-tag--field" title="Synthesis suggested by Guide — edit to make it yours">
+                <AgentGlyph agent="guide" size={13} />
+              </span>
+            )}
+          </div>
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}>
+            <AgentGlyph agent="guide" size={13} />
+            {synthGen ? 'Generating synthesis…' : reading.trim() ? 'Re-generate synthesis' : 'Generate synthesis'}
+          </button>
         </div>
       ) : (
-        <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
-          + Add a synthesis across panels (optional)
-        </button>
+        <div className="rv__synth-empty">
+          <button className="rv__add-synthesis" onClick={() => setSynthesisOpen(true)}>
+            + Add a synthesis across panels (optional)
+          </button>
+          <button className="rv__synth-gen" onClick={generateSynthesis} disabled={synthGen}>
+            <AgentGlyph agent="guide" size={13} />
+            {synthGen ? 'Generating synthesis…' : 'Generate synthesis'}
+          </button>
+        </div>
       )}
 
       <div className="rv__add">
@@ -808,6 +861,12 @@ function MemberPanel({ member, idx, count, cell, autoFocus, onZoom, onRemove, on
           </span>
         )}
       </div>
+      {/* Per-panel provenance — this panel's own "how it was made". A Result groups
+          independent panels, so provenance lives HERE, not rolled up at the Result
+          level. Expanding it never changes focus (only chip clicks navigate). */}
+      {cell && (member.kind === 'figure' || member.kind === 'table') && (
+        <ProvenanceSection entity={cell} onFocus={onFocus} label="Source" className="prov--panel" />
+      )}
       {renderHlSurface()}
       {removeDialogs}
     </div>

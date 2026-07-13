@@ -37,7 +37,11 @@ dependencies:
   - cmake
 
   # ── scientific Python core ─────────────────────────────────────────────
-  - numpy
+  # numba (pulled transitively by scanpy/scvi-tools) requires numpy<2.5; left
+  # unpinned the solve picks the latest numpy (2.5.x) and ships a base that fails
+  # `import numba` — which the startup self-heal then has to downgrade. Pin it so
+  # the base is numba-compatible (and the ABI anchor correct) from the first build.
+  - numpy<2.5
   - pandas
   - scipy
   - matplotlib-base
@@ -74,6 +78,8 @@ dependencies:
       - uvicorn[standard]
       - python-multipart   # FastAPI UploadFile/File/Form on the upload routes
       - anthropic
+      - openai        # OpenAI/Codex provider (core/runtime/llm_runtime_openai.py):
+                      # api.openai.com ChatCompletions + the ChatGPT/Codex Responses API
       # anthropic's AsyncClient runs over HTTP/2 (see core/llm.py); without
       # httpx[http2]'s h2 extras every chat turn dies with `ImportError: ...
       # 'h2' package is not installed`. Pin to the [http2] extra so the dep
@@ -85,13 +91,11 @@ dependencies:
       - pypdfium2
       - pillow
 
-      # ── viewer data layer ──────────────────────────────────────────────
-      # lstar-sc: L* single-cell interchange behind the pagoda3 viewer (import
-      # name `lstar`; the bare `lstar` on PyPI is unrelated). The .rds R-bridge
-      # setup lives in the pagoda3 viewer launcher (backend/content/bio/viewers).
-      - lstar-sc==0.2.0     # EXACT pin — lstar moves fast + isn't in a stable channel;
-                            #   deploy reproducibility beats floating. Co-versioned with the
-                            #   lstar R package at git tag v0.2.0 (same repo) and pagoda3 v0.2.0
-                            #   (the 0.2.0 set switched the on-disk store to zarr v3).
-                            #   Bump this + the R/pagoda3 pins together as a validated set.
+      # ── viewer data layer (CORE) ───────────────────────────────────────
+      # lstar-sc: the .lstar.zarr reader/CONVERTER (import name `lstar`). Stays in core
+      # because it PRODUCES/reads the store format independent of the browser viewer —
+      # the toggleable viewer-pagoda3 module is just the dist (misc/modules.md).
+      - lstar-sc==0.2.1     # EXACT pin — lstar moves fast + isn't in a stable channel;
+                            #   co-versioned with the lstar R package (git tag v0.2.1) and
+                            #   pagoda3 v0.2.1. Bump this + the R/pagoda3 pins together.
       - zarr>=3.1            # lstar uses the zarr-python 3 library

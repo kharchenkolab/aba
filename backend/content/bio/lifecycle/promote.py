@@ -432,19 +432,22 @@ def _llm_annotation_request(
         return ""
 
 
-def annotate_figure(disk_path, producing_code: str, chat_context: str, title_hint: str) -> dict:
+def annotate_figure(disk_path, producing_code: str, chat_context: str, title_hint: str,
+                    extras: dict | None = None) -> dict:
     """LAYER 2 — figure-specific annotation. Returns
     `{"title": str, "caption": str}`. Empty dict on any failure.
 
     Uses _llm_annotation_request with the figure annotation system prompt
-    (asks for JSON), then parses. Future Layer-2 annotators (table
-    summaries, claim refinement, dataset descriptions) follow the same
-    shape: pick a system prompt + a parser for the return value.
+    (asks for JSON), then parses. `extras` is a dict of labeled context blocks
+    (e.g. the input dataset + existing project titles) that lets the prompt make
+    the title DISTINCTIVE rather than a generic type description. Future Layer-2
+    annotators (table summaries, claim refinement, dataset descriptions) follow
+    the same shape: pick a system prompt + a parser for the return value.
     """
     import json as _json, re as _re
     raw = _llm_annotation_request(
         disk_path=disk_path, producing_code=producing_code,
-        chat_context=chat_context, title_hint=title_hint,
+        chat_context=chat_context, title_hint=title_hint, extras=extras,
         system_prompt=_load_annotation_prompt("figure"),
         max_tokens=400,
     )
@@ -488,6 +491,48 @@ def _artifact_url_to_disk(url: str):
     if len(parts) == 1 and parts[0] and ".." not in parts[0]:
         return _Path(ARTIFACTS_DIR) / parts[0]
     return None
+
+
+def _naming_context(ev: dict, result_id: str) -> dict:
+    """Distinguishing anchors for a figure's TITLE — so the LLM makes it distinct
+    instead of a generic type description: the input dataset(s) the figure was made
+    from (from the exec record's captured inputs) + the titles of other entities in
+    this project (to differentiate against / avoid duplicating). Best-effort → {}."""
+    extras: dict = {}
+    try:
+        eid = ev.get("exec_id")
+        if eid:
+            from core.graph.exec_records import get as _get_exec
+            rec = _get_exec(eid) or {}
+            names: list[str] = []
+            for it in rec.get("inputs") or []:
+                if it.get("kind") != "dataset":
+                    continue
+                nm = it.get("name")
+                if not nm and it.get("ref"):
+                    nm = (get_entity(it["ref"]) or {}).get("title")
+                if nm:
+                    names.append(nm)
+            if names:
+                extras["Input data (name the sample/condition in the title)"] = "; ".join(names[:5])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from core.graph.entities import list_entities
+        sibs: list[str] = []
+        for e in list_entities(include_archived=False):
+            if e.get("id") in (ev.get("id"), result_id):
+                continue
+            if e.get("type") in ("figure", "result", "dataset", "analysis"):
+                t = (e.get("title") or "").strip()
+                if t:
+                    sibs.append(f"- {e['type']}: {t}")
+        if sibs:
+            extras["Existing entities in this project (make THIS title distinct from these)"] = \
+                "\n".join(sibs[-25:])
+    except Exception:  # noqa: BLE001
+        pass
+    return extras
 
 
 def auto_interpret(result_id: str) -> Optional[str]:
@@ -593,9 +638,12 @@ def auto_interpret(result_id: str) -> Optional[str]:
     producing_code = lookup_code_for_entity(ev)[:6000]
     title_hint = (ev.get("title") or "").strip()
 
-    # 1) LLM annotation path — title + caption together.
+    # 1) LLM annotation path — title + caption together. Feed distinguishing
+    #    anchors (input dataset + existing project titles) so the title is
+    #    distinct, not a generic "UMAP colored by Leiden cluster".
     ann = annotate_figure(_artifact_url_to_disk(art) if art else None,
-                          producing_code, chat_context, title_hint)
+                          producing_code, chat_context, title_hint,
+                          extras=_naming_context(ev, result_id))
     text = (ann.get("caption") or "").strip()
     new_title = (ann.get("title") or "").strip()
 
@@ -638,12 +686,16 @@ def auto_interpret(result_id: str) -> Optional[str]:
     # the Result (and the user hasn't already edited the title — i.e. the
     # Result isn't `invested`), update the title too. Skips when LLM didn't
     # supply a title (text-pluck fallback path) or the user has edited.
-    cur_md = cur.get("metadata") or {}
-    if new_title and not cur_md.get("invested"):
-        # update_entity with title — but we must NOT trip the
-        # entity-PATCH "invested" flip (auto_interpret is NOT a user
-        # action). Update title via the raw helper so invested stays False.
-        update_entity(result_id, title=new_title)
+    # Re-fetch: update_result_member just rewrote metadata.members, so the
+    # `cur` snapshot is stale — merge onto the CURRENT metadata, not `cur`.
+    fresh_md = (get_entity(result_id) or {}).get("metadata") or {}
+    if new_title and not fresh_md.get("invested"):
+        # update_entity with title — but we must NOT trip the entity-PATCH
+        # "invested" flip (auto_interpret is NOT a user action). Update via the
+        # raw helper so invested stays False. Stamp title_origin='ai' so the UI
+        # shows the green Guide glyph next to an auto-named title.
+        update_entity(result_id, title=new_title,
+                      metadata={**fresh_md, "title_origin": "ai"})
     # Push an out-of-band notification so the frontend refreshes
     # without polling. Best-effort — never breaks the daemon if the
     # event channel is unavailable.
@@ -651,6 +703,97 @@ def auto_interpret(result_id: str) -> Optional[str]:
         from core.runtime.notifications import broadcast
         broadcast({"type": "entity_updated", "entity_id": result_id,
                    "reason": "caption_ready"})
+    except Exception:  # noqa: BLE001
+        pass
+    # Also generate the Result-level SYNTHESIS ACROSS PANELS — pin time is when the
+    # agent's pipeline context is richest. Reuse the context we already gathered.
+    # Skips if the user has written a synthesis (interpretation_origin=='user').
+    try:
+        synthesize_result(result_id, chat_context=chat_context, producing_code=producing_code)
+    except Exception:  # noqa: BLE001
+        pass
+    return text
+
+
+def _recent_thread_context(thread_id, n: int = 10) -> str:
+    """The last ~n turns of a thread as `[USER]/[AGENT] …` text — grounding for
+    the Result synthesis (works at pin time AND for the re-generate button)."""
+    if not thread_id:
+        return ""
+    try:
+        from core.graph.messages import get_messages
+        from core.graph._schema import WORKSPACE_ID
+        msgs = get_messages(WORKSPACE_ID, thread_id=thread_id)
+    except Exception:  # noqa: BLE001
+        return ""
+    chunks: list[str] = []
+    for m in msgs[-n:]:
+        role = m.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        t = " ".join(b.get("text", "") for b in m.get("content", [])
+                     if isinstance(b, dict) and b.get("type") == "text").strip()
+        if t:
+            chunks.append(f"[{'USER' if role == 'user' else 'AGENT'}] {t}")
+    return "\n\n".join(chunks)[:3000]
+
+
+def synthesize_result(result_id: str, *, force: bool = False,
+                      chat_context: Optional[str] = None,
+                      producing_code: Optional[str] = None) -> Optional[str]:
+    """Generate the Result-level SYNTHESIS ACROSS PANELS and store it in the
+    Result's `interpretation` (origin='ai'). Called at pin time (auto_interpret,
+    which passes its already-gathered context) and by the explicit generate/
+    re-generate button (self-gathers). Skips if the user has edited the synthesis
+    (interpretation_origin=='user') unless `force=True`. Returns the text or None."""
+    r = get_entity(result_id)
+    if not r or r["type"] != "result":
+        return None
+    md = r.get("metadata") or {}
+    if not force and md.get("interpretation_origin") == "user":
+        return None
+    members = md.get("members") or []
+    panel_lines: list[str] = []
+    first_fig = None
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        kind = m.get("kind") or "panel"
+        ent = get_entity(m["ref"]) if m.get("ref") else None
+        ttl = (ent or {}).get("title") or kind
+        cap = (m.get("caption") or m.get("text") or "").strip()
+        if kind in ("figure", "table") and ent is not None and first_fig is None:
+            first_fig = ent
+        panel_lines.append(f"- {kind} '{ttl}'" + (f": {cap}" if cap else ""))
+    if not panel_lines:
+        return None
+    if producing_code is None:
+        from core.graph.exec_records import lookup_code_for_entity
+        producing_code = (lookup_code_for_entity(first_fig)[:6000] if first_fig else "")
+    if chat_context is None:
+        chat_context = _recent_thread_context(md.get("thread_id"))
+    art = first_fig.get("artifact_path") if first_fig else None
+    disk = _artifact_url_to_disk(art) if (art and str(art).startswith("/artifacts/")) else art
+    extras = {"Result title": r.get("title") or "",
+              "Panels (each already captioned)": "\n".join(panel_lines)}
+    text = _llm_annotation_request(
+        disk_path=disk, producing_code=producing_code or "", chat_context=chat_context or "",
+        extras=extras, system_prompt=_load_annotation_prompt("result_synthesis"),
+        max_tokens=300).strip()
+    if not text:
+        return None
+    # Re-fetch (the user may have edited while we ran) and merge — update_entity
+    # REPLACES metadata, so build the full dict; preserve `invested` and everything else.
+    cur = get_entity(result_id)
+    cur_md = (cur or {}).get("metadata") or {}
+    if not force and cur_md.get("interpretation_origin") == "user":
+        return None
+    update_entity(result_id, metadata={**cur_md, "interpretation": text,
+                                       "interpretation_origin": "ai"})
+    try:
+        from core.runtime.notifications import broadcast
+        broadcast({"type": "entity_updated", "entity_id": result_id,
+                   "reason": "synthesis_ready"})
     except Exception:  # noqa: BLE001
         pass
     return text

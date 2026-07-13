@@ -496,6 +496,9 @@ export function useChat(
       // Sticky: the marked region stays attached across follow-up messages
       // so the agent retains it; the user clears it explicitly via the chip.
       // An explicit per-call annotation (e.g. "chat about this plot") wins.
+      // SHARP EDGE: pass `undefined` to keep the sticky highlight; passing `null`
+      // explicitly CLEARS it (the composer once passed null → highlights never
+      // reached the agent, see App.tsx onSend).
       const annot = opts.annotation !== undefined ? opts.annotation : annotationRef.current
 
       try {
@@ -745,7 +748,7 @@ export function useChat(
               // /api/turns/{run_id}/resume.
               streamingBlocks.push({ type: 'notice', text: `?  ${ev.question}` })
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
-              setPendingClarification({ runId: ev.run_id, question: ev.question })
+              setPendingClarification({ runId: ev.run_id, question: ev.question, enable: ev.enable })
             } else if (ev.type === 'approval_pending') {
               // P1 #3 — a flagged tool wants explicit approval before running.
               // Rare by design; the ApprovalBar surfaces the tool name + a
@@ -954,6 +957,30 @@ export function useChat(
     [streaming, pendingClarification, runStream],
   )
 
+  // Option-1 enable flow (misc/modules.md): the user clicked an Enable button on a
+  // module clarification. `mode` = 'on'|'first_use' enables it (user action — the
+  // agent never can); null = "not now". Then resume the paused turn so the agent
+  // retries with the module now enabled (or continues without it).
+  const answerClarificationEnable = useCallback(
+    async (module: string, mode: 'on' | 'first_use' | null) => {
+      if (streaming || !pendingClarification) return
+      const rid = pendingClarification.runId
+      let text: string
+      if (mode) {
+        try {
+          await fetch(`/api/modules/${encodeURIComponent(module)}/mode?mode=${mode}`, { method: 'POST' })
+        } catch { /* the resume still tells the agent what we intended */ }
+        text = `I enabled ${module} (${mode === 'first_use' ? 'First use' : 'On'}). Please continue.`
+      } else {
+        text = `Leave ${module} off for now — continue without it.`
+      }
+      streamingRef.current = true
+      setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', blocks: [{ type: 'text', text }] }])
+      await runStream({ text, resumeRunId: rid })
+    },
+    [streaming, pendingClarification, runStream],
+  )
+
   // Cancel the in-flight turn. Stop = pure cancel; queue is DROPPED
   // (user reasserts control). The 'cancelled' SSE handler sees
   // steerFlushRef=false and clears the queue without sending it.
@@ -1037,7 +1064,7 @@ export function useChat(
 
   return {
     messages, streaming, streamMsg, sendMessage, retryLast, loading, manifest,
-    pendingClarification, answerClarification,
+    pendingClarification, answerClarification, answerClarificationEnable,
     pendingApproval, respondApproval,
     stopTurn,
     queuedMessages, enqueue, dropQueue, dropQueueAt, steer,

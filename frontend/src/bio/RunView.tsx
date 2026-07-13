@@ -312,7 +312,8 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           browse/bulk are dropped; the FileBrowser below owns all files. */}
       {plotOutputs.length > 0 && (
         <section className="runview__outputs">
-          <div className="runview__outputs-head">Plots</div>
+          {/* No section heading here — ResultList renders its own "Plots N" group
+              head (with a count), so a second "Plots" label would just duplicate it. */}
           <ResultList items={plotOutputs} runId={run.id} onPin={pinOutput} onChat={chatOutput}
             onChatAnnotated={(it, annot) => onChatResult?.(it.label, undefined, annot)}
             onRegister={registerOutput}

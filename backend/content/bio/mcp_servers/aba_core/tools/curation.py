@@ -105,17 +105,26 @@ def register_curation_tools(mcp: FastMCP) -> None:
                          summary: str | None = None,
                          source: str | None = None,
                          organism: str | None = None,
+                         exec_id: str | None = None,
                          producing_code: str | None = None,
                          aba_ctx_id: str | None = None) -> dict:
         """Register a file or folder (or list of files) as a Dataset
         entity. Use after a fetch/download so the data joins the
-        project's pinnable surface."""
+        project's pinnable surface.
+
+        For a downloaded/derived dataset, pass `exec_id` — the id from the
+        run_python that fetched/produced it (it's in that call's result) —
+        so the dataset's provenance shows the fetch code, environment, and
+        source. If omitted, the most recent run in this thread is linked
+        automatically; pass it explicitly when the fetch wasn't the run
+        right before this call. Also give a specific `source`
+        (e.g. 'GEO:GSE192391'), not just the provider."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import register_dataset_tool
         return register_dataset_tool(
             {"title": title, "path": path, "paths": paths,
              "summary": summary, "source": source, "organism": organism,
-             "producing_code": producing_code},
+             "exec_id": exec_id, "producing_code": producing_code},
             peek_ctx(aba_ctx_id),
         )
 

@@ -3,8 +3,10 @@
 
 # Default model the primary chat agent uses when no env / config.env
 # override is set. ABA_PRIMARY_MODEL / ABA_MODEL still take precedence
-# per core.config.current_model_for_primary.
-default_model: claude-haiku-4-5-20251001
+# per core.config.current_model_for_primary. Opus is the intended default for
+# the primary chat (a subscription/API-key user gets the strongest model on
+# sign-in); a lab/institution bundle can override for cost policy.
+default_model: claude-opus-4-7
 # Model the advisor agents (skeptic / explorer / stylist / ...) use for
 # their one-shot calls. Same spirit as default_model but for advisors.
 advisor_model: claude-haiku-4-5-20251001
@@ -28,9 +30,39 @@ llm_models:
   - label: Opus
     model: claude-opus-4-7
     spec: grounded_guide
+    provider: anthropic
   - label: Sonnet
     model: claude-sonnet-5
     spec: grounded_guide
+    provider: anthropic
   - label: Haiku
     model: claude-haiku-4-5-20251001
     spec: grounded_guide
+    provider: anthropic
+  # OpenAI models — used when the Agent provider is set to OpenAI (needs an OpenAI
+  # key or Codex subscription in Settings → Agent). Routed through the
+  # OpenAICompatibleRuntime against api.openai.com.
+  # OpenAI via API KEY (api.openai.com, ChatCompletions):
+  - label: GPT-4o
+    model: gpt-4o
+    spec: grounded_guide
+    provider: openai
+    via: apikey
+  - label: GPT-4.1
+    model: gpt-4.1
+    spec: grounded_guide
+    provider: openai
+    via: apikey
+  # OpenAI via Codex SUBSCRIPTION (chatgpt.com/backend-api/codex, Responses API).
+  # These slugs are Codex-account-only + move over time (query codex/models);
+  # they 400 on an API key, and gpt-4o/4.1 400 on the subscription.
+  - label: "GPT-5.5 (Codex)"
+    model: gpt-5.5
+    spec: grounded_guide
+    provider: openai
+    via: subscription
+  - label: "GPT-5.4 mini (Codex)"
+    model: gpt-5.4-mini
+    spec: grounded_guide
+    provider: openai
+    via: subscription

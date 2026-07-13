@@ -469,30 +469,8 @@
   color: var(--text-4);
 }
 
-.prov { border-top: 1px solid var(--border); padding-top: 8px; }
-.prov__toggle {
-  display: flex; align-items: center; gap: 6px;
-  background: none; border: none; cursor: pointer;
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--text-3); padding: 2px 0;
-}
-.prov__toggle:hover { color: var(--text-2); }
-.prov__chev { font-size: 9px; color: var(--text-4); }
-.prov__counts { text-transform: none; font-weight: 500; color: var(--text-4); letter-spacing: 0; }
-.prov__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
-.prov__col-head {
-  font-size: 10px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--text-4); margin-bottom: 4px;
-}
-.prov__empty { font-size: 12px; color: var(--text-4); padding: 4px 8px; }
-.prov__row {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 5px 8px; border: none; background: transparent;
-  border-radius: 5px; cursor: pointer; text-align: left;
-  font-size: 12.5px; color: var(--text-2);
-}
-.prov__row:hover { background: var(--tree-active-bg); }
-.prov__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Provenance section styles moved to ProvenanceSection.css (shared by the card
+   footer here + the per-panel "Source" line in ResultView). */
 
 /* ===== Finding view (M7) ===== */
 .fv { display: flex; flex-direction: column; gap: 4px; }

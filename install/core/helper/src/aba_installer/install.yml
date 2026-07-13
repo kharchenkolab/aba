@@ -29,10 +29,20 @@ env_vars:
   #     the Mac bootstrap (install/mac/setup.command) accepts ABA_REPO_BRANCH /
   #     ABA_RECIPES_BRANCH as back-compat aliases; prefer ABA_REF / RECIPES_REF.
   #     To keep a pin across `aba update`, set it in ~/.aba/config.env.
-  # No other install knobs: the viewer stack (lstar-sc, lstar-R, pagoda3 dist)
-  # is version-pinned in its own manifests, and paths like the pagoda3 dist and
-  # the tools-env Rscript are DERIVED at runtime (env vars are optional overrides,
-  # not required settings) — don't add a knob for a value that can be derived.
+  #   ABA_ENV_PREWARM — env-build strategy (a deploy-profile knob, like
+  #     ABA_ACCELERATOR; lives in config.env). `eager` (default): build the FULL
+  #     base (+ the R tools env) BEFORE starting the server — right for
+  #     shared/OOD/cluster/read-only-image deploys (one build, warm cache, many
+  #     users). `staged`: create a minimal BOOT base, start the server, then finish
+  #     the scientific Python stack (T1 bio, then T2 scvi/torch) + the R env in the
+  #     background while the user works — personal mac / linux `local`. See
+  #     misc/lazy_env_init.md. Personal installers write `staged`; shared installers
+  #     write/leave `eager`. Absent/empty ⇒ eager (== current behavior).
+  # Deploy-profile knobs (ABA_ACCELERATOR, ABA_ENV_PREWARM) are config.env lines
+  # written by the installer per profile (see docs/arch/envs.md). Otherwise no
+  # install knobs: the viewer stack (lstar-sc, lstar-R, pagoda3 dist) is
+  # version-pinned in its own manifests, and paths like the pagoda3 dist and the
+  # tools-env Rscript are DERIVED at runtime — don't add a knob for a derivable value.
 
 steps:
   - id: preflight
@@ -78,6 +88,10 @@ steps:
       # Prefer an explicit override, then the env.yml from the cloned repo
       # (the common case — setup.command already cloned it), then a URL fetch.
       - 'if [ -n "${ABA_ENV_YML_SRC:-}" ]; then cp "$ABA_ENV_YML_SRC" "$ABA_HOME/environment.yml"; elif [ -f "$REPO_DIR/aba/install/core/environment.yml" ]; then cp "$REPO_DIR/aba/install/core/environment.yml" "$ABA_HOME/environment.yml"; else curl -fsSLo "$ABA_HOME/environment.yml" "${ABA_ENV_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment.yml}"; fi'
+      # Staged prewarm also needs the minimal BOOT manifest (the create step below
+      # picks it when ABA_ENV_PREWARM=staged). Non-fatal if absent — create falls
+      # back to the full manifest.
+      - 'if [ -f "$REPO_DIR/aba/install/core/environment-boot.yml" ]; then cp "$REPO_DIR/aba/install/core/environment-boot.yml" "$ABA_HOME/environment-boot.yml"; elif [ "${ABA_ENV_PREWARM:-eager}" = staged ]; then curl -fsSLo "$ABA_HOME/environment-boot.yml" "${ABA_ENV_BOOT_YML_URL:-https://raw.githubusercontent.com/kharchenkolab/aba/main/install/core/environment-boot.yml}" || echo "no boot manifest available — will build the full base"; fi'
       # Deployment-conditional base: when config.env declares ABA_ACCELERATOR=cuda, inject
       # the GPU torch pin so scvi-tools resolves the CUDA build (else conda-forge picks the
       # CPU-only default and GPU jobs silently run on CPU). No-op for a CPU deployment.
@@ -106,7 +120,19 @@ steps:
       # nodes) but not on R450-R520 clusters. 11.8 keeps the widest driver floor and
       # avoids depending on minor-version compat. Set ABA_CUDA_VERSION=12 for the newer
       # runtime on a R525+ cluster; a future install-time probe will auto-pick.
-      - 'if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$ABA_HOME/environment.yml"; fi'
+      # PYTHONNOUSERSITE=1 + PIP_USER=0: run the env build (incl. its pip: section)
+      # BLIND to the user's ~/.local. Without it, a pip package already in ~/.local
+      # (e.g. a stray `pip install --user`, or a prior leaked ABA build) shadows the
+      # env: micromamba's pip step sees it "already satisfied" and skips installing
+      # it into the env, so env/bin/uvicorn is never created, start-backend fails,
+      # and the installer loops rebuilding forever. Keep in lock-step with update.yml.
+      # Staged (ABA_ENV_PREWARM=staged) builds the minimal BOOT base so the server
+      # starts fast; the backend reconciler (python-bio module) finishes the stack afterwards. Eager
+      # builds the full environment.yml up front (unchanged behaviour). Writes a
+      # `.aba-base-stage` marker (boot|completing|ready) that gates the backend's
+      # base self-heal + the kernel import-wait (misc/lazy_env_init.md). Staged with
+      # no boot manifest falls back to the full build (stage=ready).
+      - 'MANIFEST="$ABA_HOME/environment.yml"; STAGE=ready; if [ "${ABA_ENV_PREWARM:-eager}" = staged ] && [ -f "$ABA_HOME/environment-boot.yml" ]; then MANIFEST="$ABA_HOME/environment-boot.yml"; STAGE=boot; fi; if [ -x "$ENV_DIR/bin/uvicorn" ]; then echo "environment already present — skipping create"; else rm -rf "$ENV_DIR"; if [ "${ABA_ACCELERATOR:-cpu}" = "cuda" ]; then export CONDA_OVERRIDE_CUDA="${ABA_CUDA_VERSION:-11.8}"; echo "[accelerator] CUDA base: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA (satisfies __cuda on a GPU-less build node)"; fi; PYTHONNOUSERSITE=1 PIP_USER=0 "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$ENV_DIR" -f "$MANIFEST" && printf "%s" "$STAGE" > "$ENV_DIR/.aba-base-stage" && echo "[env] built base from $(basename "$MANIFEST") (stage=$STAGE)"; fi'
     timeout_seconds: 1200
     remediation: |
       The conda solve/build failed — usually a network/channel hiccup or low
@@ -150,76 +176,10 @@ steps:
       is missing or incomplete. Confirm that directory exists (re-run the clone
       step if not), check $HOME has free space, then re-run.
 
-  - id: create-r-tools-env
-    title: Build the R toolchain
-    why: |
-      Pre-builds R + IRkernel + Seurat/Bioconductor into the backend's tools
-      env ($ABA_RUNTIME_DIR/envs/tools) so the agent's R work uses it directly,
-      instead of the slow Bioconductor-scale solve the backend would otherwise
-      run on first R use. Kept separate from the Python env so the two stay
-      decoupled (see r-environment.yml). Non-fatal: if it fails, Python still
-      works and the backend falls back to provisioning R on demand. Marker is
-      Seurat (a late, heavy package) so a half-built env rebuilds rather than
-      being mistaken for complete.
-    commands:
-      - 'TOOLS_ENV="${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools"; RYML="${ABA_R_ENV_YML_SRC:-$REPO_DIR/aba/install/core/r-environment.yml}"; if [ -x "$TOOLS_ENV/bin/Rscript" ] && [ -d "$TOOLS_ENV/lib/R/library/Seurat" ]; then echo "R tools env already present — skipping"; else rm -rf "$TOOLS_ENV"; mkdir -p "$(dirname "$TOOLS_ENV")" && { "$ABA_HOME/bin/micromamba" create -y -v --channel-priority strict -p "$TOOLS_ENV" -f "$RYML" || echo "WARNING: R tools env build failed; the backend will provision R on demand"; }; fi'
-    timeout_seconds: 1800
-    remediation: |
-      The R toolchain build failed — this is NON-FATAL: ABA still runs and the
-      backend provisions R on demand the first time it's needed. To pre-build it
-      now, ensure conda-forge/bioconda are reachable and ~5 GB is free, then
-      re-run.
-
-  - id: install-lstar-r
-    title: Install the lstar R viewer bridge
-    why: |
-      The pagoda3 viewer opens Seurat / SingleCellExperiment `.rds` results by
-      bridging through the tools env's Rscript, which needs the lstar R package.
-      It is NOT on CRAN (lstar moves fast); we pin a git tag (authoritative in
-      `install-lstar-r.sh`) — the SAME release moment as the Python `lstar-sc`
-      (same repo, `subdir=r`) and the pagoda3 dist, so writer/reader/store-format
-      stay a matched set. Bump those pins together. Source-compiles (cpp11), so the
-      conda compiler must be on PATH (the tools env ships it). Non-fatal: without it
-      `.h5ad` / `.lstar.zarr` viewing still works; only `.rds` conversion degrades.
-    commands:
-      # Delegates to the shared install/core/install-lstar-r.sh — pin, idempotency
-      # (RemoteRef, not packageVersion) and non-fatal semantics all live there, so the
-      # installers and the SIF builders never drift. Guarded: a stale checkout that
-      # predates the helper just skips (the step stays non-fatal either way).
-      - 'H="$REPO_DIR/aba/install/core/install-lstar-r.sh"; if [ -f "$H" ]; then bash "$H" "${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}/envs/tools" "$ABA_HOME/bin/micromamba"; else echo "no install-lstar-r.sh (stale checkout) — skipping lstar R"; fi'
-    timeout_seconds: 900
-    remediation: |
-      lstar R install failed — NON-FATAL. The viewer still opens `.h5ad` and
-      `.lstar.zarr`; only Seurat/SCE `.rds` conversion is affected. To install by
-      hand: with the tools env's bin on PATH (for the compiler), run its Rscript:
-      `remotes::install_github("kharchenkolab/lstar", ref="v0.2.0", subdir="r")`.
-
-  - id: fetch-pagoda3-dist
-    title: Install the pagoda3 viewer bundle
-    why: |
-      pagoda3 is a static web app ABA serves under /pagoda3. We grab the PRE-BUILT
-      viewer dist attached to the pagoda3 GitHub release (built once, on node >= 22,
-      and published as a release asset — so no node/glibc toolchain is needed here;
-      old-glibc hosts can't build it). The backend mounts /pagoda3 only if the dist
-      is present, so without this the interactive viewer is silently unavailable
-      (conversion still works; only the interactive view is gated). node >= 22 is
-      needed only for the OPTIONAL runtime viewer-optimize (prep.ts) — without it the
-      viewer still opens, just un-optimized. Override the asset URL with
-      $ABA_PAGODA3_DIST_URL (air-gapped mirror / a newer pin). Non-fatal.
-    commands:
-      # Version-aware: the target URL is recorded in a .aba-dist-url marker, so a
-      # version bump (v0.1.1 → v0.2.0 …) re-fetches on `aba update` instead of
-      # skipping on "index.html present". Extract to a temp dir + atomic swap so a
-      # failed download keeps the working dist (viewer never goes dark mid-update).
-      # KEEP BYTE-IDENTICAL to update.yml's copy.
-      - "DIST=\"$ABA_HOME/vendor/pagoda3/dist\"; URL=\"${ABA_PAGODA3_DIST_URL:-https://github.com/kharchenkolab/pagoda3/releases/download/v0.2.0/pagoda3-viewer-0.2.0.zip}\"; MARK=\"$DIST/.aba-dist-url\"; if [ -f \"$DIST/index.html\" ] && [ \"$(cat \"$MARK\" 2>/dev/null)\" = \"$URL\" ]; then echo \"pagoda3 dist already present ($URL) — skipping\"; elif ! command -v unzip >/dev/null 2>&1; then echo \"WARNING: unzip not found — cannot install pagoda3 dist ($URL)\"; else TMP=\"$(mktemp -d)\"; if curl -fsSL \"$URL\" -o \"$TMP/pg3.zip\" && unzip -q -o \"$TMP/pg3.zip\" -d \"$TMP/x\" && [ -f \"$TMP/x/index.html\" ]; then rm -rf \"$DIST\"; mkdir -p \"$(dirname \"$DIST\")\"; mv \"$TMP/x\" \"$DIST\"; printf '%s' \"$URL\" > \"$MARK\"; echo \"pagoda3 viewer dist installed to $DIST ($URL)\"; else echo \"WARNING: pagoda3 dist fetch/unzip failed ($URL; needs curl+unzip) — keeping any existing dist; interactive viewer needs a dist with index.html at $DIST\"; fi; rm -rf \"$TMP\"; fi"
-    timeout_seconds: 300
-    remediation: |
-      pagoda3 dist fetch failed — NON-FATAL; the interactive viewer won't work until a
-      dist with index.html at its root sits at $ABA_HOME/vendor/pagoda3/dist. Needs
-      `curl` + `unzip`. The default asset is the pagoda3-viewer-<ver>.zip on the GitHub
-      release (index.html at the zip root); set $ABA_PAGODA3_DIST_URL to a reachable
-      mirror / newer pin, or unzip a built dist there by hand, then re-run.
+  # NOTE: R toolchain / lstar bridge / pagoda3 viewer dist are NOT installed here.
+  # They're modules (misc/modules.md) the BACKEND reconciler owns: personal installs
+  # get them first-use; eager profiles (cluster/OOD) seed them 'on' in modules.json so
+  # the reconciler builds them post-start. Keeps the installer core-only.
 
   - id: build-frontend
     title: Build the interface
@@ -275,3 +235,9 @@ steps:
       The backend didn't come up. Check the log under $ABA_HOME/logs/, confirm a
       credential is set in $ABA_HOME/config.env, and run `aba doctor` for a full
       diagnosis of the install.
+
+  # NOTE: post-start env completion (formerly `complete-base-env` / `complete-r-env`)
+  # now lives in the BACKEND module reconciler (misc/modules.md): the installer just
+  # brings the server up on the boot base; the python-bio module completes the base in
+  # the background, and r-bio / viewer-pagoda3 install on first use or manual enable.
+  # Shared scripts: install/core/modules/install-*.sh.

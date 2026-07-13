@@ -815,7 +815,7 @@ async def stream_response(
             # R-2.2: pick the runtime from the agent spec (default 'direct').
             # ABA_FAKE_SESSION / ABA_RUNTIME_OVERRIDE env vars take priority.
             from core.runtime.agent import make_runtime
-            _runtime = make_runtime(spec)
+            _runtime = make_runtime(spec, model=guide_model)
             # Reset per-turn state each iteration of the outer while.
             _tool_input_by_id: dict[str, dict] = {}
             _tool_name_by_id: dict[str, str] = {}
@@ -910,15 +910,33 @@ async def stream_response(
                     if not question:
                         return {"status": "error",
                                 "note": "ask_clarification needs a non-empty `question`."}
+                    _post = {"type": "clarification_pending",
+                             "question": question,
+                             "tool_use_id": tool_use_id,
+                             "run_id": turn.run_id}
+                    # Option 1 enable-flow (misc/modules.md): when the question is about a
+                    # turned-off module, carry structured Enable options so the UI renders
+                    # one-click buttons (the USER enables — the agent never can). The turn
+                    # resumes when the user picks.
+                    _em = str(_inp.get("enable_module") or "").strip()
+                    if _em:
+                        try:
+                            from core.modules import registry as _mreg
+                            _ms = _mreg.get(_em)
+                            if _ms:
+                                _post["enable"] = {
+                                    "module": _ms.id, "title": _ms.title,
+                                    "options": [{"mode": "on", "label": "Enable · On"},
+                                                {"mode": "first_use", "label": "Enable · First use"}],
+                                }
+                        except Exception:  # noqa: BLE001
+                            pass
                     return {
                         "status": "asked",
                         "note": "Question shown to the user. Stop here and "
                                 "wait for their reply before continuing.",
                         "_runtime_halt_after": "clarify",
-                        "_emit_sse_post": {"type": "clarification_pending",
-                                           "question": question,
-                                           "tool_use_id": tool_use_id,
-                                           "run_id": turn.run_id},
+                        "_emit_sse_post": _post,
                     }
 
                 # Approval gate — halt BEFORE (no tool_result block;
@@ -1300,6 +1318,20 @@ async def stream_response(
                         # cancel_token.cancelled and emit cancelled
                         # SSE on the next iteration's pre-check.
                         break
+                    elif ev.reason == 'error':
+                        # A runtime-level model error (e.g. an OpenAI/Codex 400).
+                        # Without this branch it was silently swallowed → the UI
+                        # rendered an empty message ("couldn't be displayed").
+                        _d = ev.detail if isinstance(ev.detail, dict) else {}
+                        _raw = _d.get("message") or "The model call failed."
+                        yield sse({"type": "error", "text": _raw, "detail": _d.get("type") or ""})
+                        turn.transition(TurnState.FAILED)
+                        turn.error = {"type": _d.get("type") or "ModelError", "message": _raw}
+                        checkpoint(turn)
+                        yield sse({"type": "usage", "input": usage_in, "output": usage_out,
+                                   "cache_read": usage_cr, "cache_write": usage_cw})
+                        yield sse({"type": "done"})
+                        return
                 elif isinstance(ev, TurnDone):
                     # Phase ended; do nothing here (we already
                     # updated state in _StreamCompleted).

@@ -20,8 +20,13 @@ The installer is **AI-guided**: it inspects your Mac, installs everything into a
 self-contained folder (your system Python, R, and PATH are never touched), and an
 assistant walks you through anything unexpected instead of dumping an error.
 
-1. Run the ABA installer (double-click `setup.command` from the download, or paste
-   the one-line command from the ABA site into Terminal).
+1. Open **Terminal** and run:
+   ```sh
+   bash <(curl -fsSL https://raw.githubusercontent.com/kharchenkolab/aba/main/install/mac/setup.command)
+   ```
+   This fetches the small bootstrap script and runs it — it clones ABA into
+   `~/.aba` and installs from there (no need to clone the repo yourself). (A
+   one-click download installer is planned.)
 2. **Choose how to sign in** when asked:
    - *Claude.ai subscription* — a browser opens to sign in (recommended).
    - *Anthropic API key* — paste your `sk-ant-…` key.

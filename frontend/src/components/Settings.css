@@ -2,7 +2,10 @@
   position: fixed; inset: 0;
   background: rgba(15, 23, 42, 0.5);
   z-index: 100;
-  display: flex; align-items: center; justify-content: center;
+  /* Anchor the panel near the top (not vertically centered) so it grows DOWNWARD as
+     content changes instead of re-centering — that recentring was the "it jumps" feel. */
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 7vh 16px 24px; overflow-y: auto;
 }
 .settings {
   background: var(--bg);
@@ -170,12 +173,11 @@
 .cred-status__dot.is-ok { color: #16a34a; }
 .cred-status__dot.is-bad { color: #dc2626; }
 .cred-status__text { font-size: 14px; color: #334155; }
-.cred-status__change { margin-left: auto; padding: 5px 12px; border: 1px solid #cbd5e1;
-  background: #fff; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px; color: #334155; }
-.cred-status__change:hover { background: #f8fafc; border-color: #94a3b8; }
-.cred-cancel { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #475569;
-  border-radius: 6px; cursor: pointer; font: inherit; }
-.cred-cancel:hover { background: #f8fafc; }
+/* A quiet inline "Edit" — NOT a primary button, so it doesn't read as a confirm. */
+.cred-status__edit { margin-left: auto; padding: 4px 4px; border: none; background: none;
+  cursor: pointer; font: inherit; font-size: 12.5px; color: #2563eb; }
+.cred-status__edit:hover { text-decoration: underline; }
+.cred-status__edit:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; border-radius: 3px; }
 
 /* Compact dropdowns for the Model + pipeline-visibility settings (replace the
    overflow-prone radio lists in a narrow panel). */
@@ -191,3 +193,111 @@
 .env-ok { color: var(--ok, #15803d); font-weight: 700; }
 .env-no { color: var(--warn-fg, #b45309); font-weight: 700; }
 .env-detail { color: var(--text-4, #6f6862); }
+
+/* ── tabbed body + Agent-tab account block (provider/credential) ───────────── */
+.settings__body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* Model section header + the transient "Saved ✓" confirmation. */
+.agent-model__head { display: flex; align-items: baseline; gap: 10px; }
+.agent-model__head .settings__section-title { margin-bottom: 0; }
+.agent-saved {
+  font-size: 11.5px; font-weight: 600; color: #15803d; background: #dcfce7;
+  padding: 1px 8px; border-radius: 9999px; animation: agent-saved-in 140ms ease-out;
+}
+@keyframes agent-saved-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .agent-saved { animation: none; } }
+
+/* credential editor: header (title + Cancel at the top) + a method TOGGLE so only
+   one method (Subscription | API key) shows at a time — compact, no tall stack. */
+.cred-edit { margin-top: 10px; }
+.cred-edit__head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px; }
+.cred-edit__title { font-size: 12.5px; font-weight: 600; color: #334155; }
+.cred-methods { display: inline-flex; margin: 0 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 8px; overflow: hidden; background: #f8fafc; }
+.cred-methods__tab { padding: 5px 16px; border: none; background: transparent; font: inherit;
+  font-size: 12.5px; color: #475569; cursor: pointer; border-right: 1px solid #e2e8f0; }
+.cred-methods__tab:last-child { border-right: none; }
+.cred-methods__tab.is-active { background: #2563eb; color: #fff; font-weight: 600; }
+.cred-methods__tab:hover:not(.is-active) { background: #eef2ff; }
+.cred-method { margin: 8px 0; }
+.cred-method__title { font-size: 12px; font-weight: 600; color: #64748b;
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 5px; }
+.cred-sub { padding: 9px 16px; border: 1px solid #2563eb; background: #fff; color: #2563eb;
+  border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+.cred-sub:hover:not(:disabled) { background: #eff6ff; }
+.cred-sub:disabled { opacity: .55; cursor: default; }
+.cred-linkbtn { background: none; border: none; color: #2563eb; cursor: pointer; font: inherit;
+  font-size: 12px; padding: 0; text-decoration: underline; }
+
+/* ── Agent tab: model status line ──────────────────────────────────────────── */
+/* Background-ping result under the Model dropdown. Fixed min-height (two lines)
+   so switching models never resizes the panel. */
+.model-status {
+  display: flex; align-items: flex-start; gap: 7px;
+  min-height: 34px; margin-top: 8px;
+  font-size: 12.5px; line-height: 1.45;
+}
+.model-status__text { color: #64748b; }
+.model-status__ico { font-weight: 700; line-height: 1.4; }
+.model-status.is-ok .model-status__ico { color: #16a34a; }
+.model-status.is-ok .model-status__text { color: #15803d; }
+.model-status.is-bad .model-status__ico { color: #dc2626; }
+.model-status.is-bad .model-status__text { color: #b91c1c; }
+.model-status__spin { color: #94a3b8; animation: model-status-spin 0.9s linear infinite; }
+@keyframes model-status-spin { to { transform: rotate(360deg); } }
+
+/* ── Modules tab (misc/modules.md) ─────────────────────────────────────────── */
+.mod-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.mod-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  background: #fafafb;
+}
+.mod-card__head { display: flex; align-items: baseline; gap: 8px; }
+.mod-card__title { font-weight: 600; color: var(--text); }
+.mod-card__desc { margin: 6px 0 4px; color: var(--text-2); font-size: 13px; line-height: 1.4; }
+/* size · est_time — sits next to the title (saves the standalone line). */
+.mod-card__meta { color: var(--text-4); font-size: 12px; }
+.mod-card__head .mod-chip { margin-left: auto; }   /* push the state chip to the right */
+.mod-card__progress { margin-top: 6px; font-size: 12px; color: var(--text-3); font-family: ui-monospace, monospace; }
+.mod-card__error { margin-top: 6px; font-size: 12px; color: #b91c1c; }
+.mod-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 9999px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.mod-chip.is-ok   { color: #166534; background: #dcfce7; }
+.mod-chip.is-busy { color: #92400e; background: #fef3c7; }
+.mod-chip.is-bad  { color: #b91c1c; background: #fee2e2; }
+.mod-chip.is-off  { color: var(--text-4); background: var(--tree-active-bg); }
+.mod-linkbtn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: 12px; text-decoration: underline;
+}
+.mod-linkbtn:disabled { opacity: 0.5; cursor: default; }
+/* segmented control + reclaim link on ONE row (saves vertical space) */
+.mod-controls { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.mod-reclaim { color: var(--text-3); }
+
+/* 3-state segmented control (On · First use · Off) */
+.mod-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mod-seg__btn {
+  border: none; background: #fff; color: var(--text-2); cursor: pointer;
+  padding: 4px 12px; font-size: 12px; border-right: 1px solid var(--border);
+}
+.mod-seg__btn:last-child { border-right: none; }
+.mod-seg__btn.is-active { background: var(--accent); color: #fff; font-weight: 600; }
+.mod-seg__btn:disabled:not(.is-active) { opacity: 0.55; cursor: default; }
+
+/* ── Module install toasts (misc/modules.md) ───────────────────────────────── */
+.mtoast-host { position: fixed; right: 16px; bottom: 16px; z-index: 1100; display: flex; flex-direction: column; gap: 8px; max-width: 340px; }
+.mtoast { background: #1f2937; color: #f9fafb; border-radius: 10px; padding: 10px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.3); font-size: 13px; }
+.mtoast--failed { background: #7f1d1d; }
+.mtoast__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mtoast__title { font-weight: 600; }
+.mtoast__x { background: none; border: none; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; opacity: .8; }
+.mtoast__body { margin-top: 4px; opacity: .95; line-height: 1.35; }
+.mtoast__ok { color: #86efac; }
+.mtoast__err { color: #fecaca; }
+.mtoast__actions { margin-top: 8px; display: flex; gap: 8px; }
+.mtoast__actions button { border: 1px solid rgba(255,255,255,.35); background: transparent; color: #fff; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+.mtoast__actions button:hover { background: rgba(255,255,255,.12); }

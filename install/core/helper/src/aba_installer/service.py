@@ -42,10 +42,10 @@ def build_app() -> FastAPI:
         return {"ok": True, "version": __version__}
 
     from aba_installer.control import router as control_router
-    from aba_installer.auth import router as auth_router, callback_router as oauth_callback_router
     app.include_router(control_router)
-    app.include_router(auth_router)
-    app.include_router(oauth_callback_router)  # /callback for Sign in with Claude.ai
+    # Web auth routers retired (lazy_env_init.md): credential setup is deferred to the
+    # running app (Settings → Agent). auth.py is kept for the CLI `aba auth` (headless);
+    # only its HTTP routers are no longer mounted.
 
     # Static UI bundle. Serves /ui/<file> and / (returns index.html).
     ui_dir = Path(__file__).resolve().parent / "ui"
@@ -64,6 +64,8 @@ def main() -> int:
     The chosen port is persisted to installer_dir/port.txt so the LaunchAgent
     + bookmarks remain stable across restarts."""
     _configure_logging()
+    from aba_installer.control import load_config_env
+    load_config_env()   # deploy knobs (ABA_ENV_PREWARM, …) → os.environ for all handlers
     pf = port_file()
     port = pick_port(state_file=pf)
     _log.info("listening on http://127.0.0.1:%d (port file: %s)", port, pf)

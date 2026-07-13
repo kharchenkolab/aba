@@ -126,6 +126,21 @@ def regenerate_interpretation(rid: str, _pid: str = Depends(require_project)):
     return {"ok": True, "wrote": bool(text), "preview": (text or "")[:200]}
 
 
+@router.post("/api/results/{rid}/synthesize")
+def synthesize_result_route(rid: str, _pid: str = Depends(require_project)):
+    """Generate (or re-generate) the Result's SYNTHESIS ACROSS PANELS via the Guide,
+    for the green-star button. An explicit user action, so `force=True` — it overrides
+    a prior AI synthesis (and a user-edited one, since the user asked to re-generate).
+    Returns {ok, interpretation}. Synchronous — the UI shows a 'generating…' status
+    while it awaits (a few seconds)."""
+    from content.bio.lifecycle.promote import synthesize_result
+    r = get_entity(rid)
+    if not r or r.get("type") != "result":
+        raise HTTPException(404, f"result {rid} not found")
+    text = synthesize_result(rid, force=True)
+    return {"ok": bool(text), "interpretation": text or ""}
+
+
 # --- Promotion + pin gestures (figure → result; pin/unpin entities) ---
 
 
@@ -201,12 +216,17 @@ def entities_history(entity_id: str):
 
 @router.get("/api/entities/{entity_id}/provenance")
 def entities_provenance(entity_id: str):
-    """Upstream/downstream neighborhood for the canvas Provenance panel."""
+    """Full provenance-EVIDENCE for the card's Provenance section: method (code/
+    command/recipe), inputs (datasets + versions), environment (language + packages),
+    attribution (who/when), lineage (up/down with edge labels), reproducibility.
+    Assembled from derivation+actor + the exec record + the edge graph. Keeps the
+    flat `upstream`/`downstream`/`promotion` keys for back-compat."""
     if not get_entity(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
-    from core.graph.provenance import neighborhood, promotion_record
-    out = neighborhood(entity_id)
-    out["promotion"] = promotion_record(get_entity(entity_id))   # Phase 2E: who/when/from
+    from core.graph.provenance_evidence import evidence
+    out = evidence(entity_id)
+    if out is None:
+        raise HTTPException(404, f"Entity {entity_id} not found")
     return out
 
 

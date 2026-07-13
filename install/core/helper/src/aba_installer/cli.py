@@ -103,6 +103,7 @@ def run_playbook_headless(name: str, *, only=None, skip=None) -> int:
     full success, 1 if a step failed (it stops there, remediation printed)."""
     _ensure_aba_home()
     from aba_installer import control
+    control.load_config_env()   # deploy knobs from config.env → playbook env (LaunchAgent-safe)
     if name == "install":
         control.prepare_install_artifacts()           # render the aba launcher template etc.
     if name == "update":

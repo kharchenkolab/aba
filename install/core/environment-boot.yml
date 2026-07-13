@@ -1,0 +1,64 @@
+# ABA BOOT environment — the minimal base that lets the SERVER start under the
+# `staged` prewarm strategy (ABA_ENV_PREWARM=staged; see misc/lazy_env_init.md).
+#
+# Strict SUBSET of environment.yml: language toolchains + the ABI core
+# (numpy/scipy/pandas) + the backend runtime + the Jupyter kernel + the viewer
+# data layer — enough to serve the UI, run data-management + light Python in a
+# kernel, and open the pagoda3 viewer. The heavier scientific + bio stack
+# (scanpy/anndata/scvi-tools→torch/leidenalg/…) is added AFTERWARDS, while the
+# server is already up, by `micromamba env update -f environment.yml` — so the
+# completed base is the SAME end state as the eager (full-up-front) build.
+#
+# Drift guard: install/core/helper/tests/test_env_boot_subset.py asserts this is a
+# subset of environment.yml (same pins) and that the pip: section is identical.
+# Edit the tiering here and keep that test green. The pip: block must stay
+# byte-for-byte the same list as environment.yml's (it is ALL boot-tier).
+
+name: aba
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # ── language toolchains (+ frontend build) ─────────────────────────────
+  - python=3.12.*
+  - nodejs=20.*
+  - pip
+  - pnpm
+
+  # ── ABI core — MUST live in the base: overlays ABI-anchor against the base
+  #    numpy (docs/arch/envs.md), and pandas/numpy cover early data-management
+  #    + light compute during background completion. ──────────────────────
+  # Pin numpy<2.5 to match environment.yml (numba needs <2.5) so the boot base —
+  # and the ABI anchor derived from it — never starts on a numpy the full env
+  # update would have to walk back.
+  - numpy<2.5
+  - pandas
+  - scipy
+  - pyyaml          # backend: `import yaml`
+  - tabulate        # pandas.DataFrame.to_markdown() (ctx_read + describe tools)
+
+  # ── Python Jupyter kernel (run_python runs here from first boot) ───────
+  - jupyter_client
+  - ipykernel
+  - nbformat
+  - nbconvert
+
+  # ── backend runtime + viewer data layer — IDENTICAL to environment.yml's pip:
+  #    section (every entry is platform-CORE). Keep in lock-step. lstar-sc/zarr are
+  #    the .lstar.zarr reader/converter — core (used to PRODUCE stores, independent of
+  #    the browser viewer, which is the toggleable viewer-pagoda3 module). ──
+  - pip:
+      - fastapi
+      - uvicorn[standard]
+      - python-multipart
+      - anthropic
+      - openai
+      - httpx[http2]
+      - mcp
+      - pydantic
+      - python-dotenv
+      - pypdfium2
+      - pillow
+      - lstar-sc==0.2.1
+      - zarr>=3.1
