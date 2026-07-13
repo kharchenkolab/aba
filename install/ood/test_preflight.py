@@ -2,6 +2,8 @@
 import importlib
 from pathlib import Path
 
+import pytest
+
 
 def _parse_env(text):
     out = {}
@@ -57,6 +59,41 @@ credentials: {{order: [], on_missing: demo_mode}}
     assert env["ABA_SIF"] == "/cluster/aba/aba.sif"
     assert env["ABA_BATCH_SUBMITTER"] == "slurm"
     assert env["ABA_HPC_CONFIG"] == "/cluster/aba/hpc.yaml"
+
+
+# ── subscription sign-in level (Settings → Agent → Subscription) ────────────
+# The emission itself is the guard: the container passthrough is forward-if-set, so
+# the preflight MUST produce ABA_SUBSCRIPTION_OAUTH or the tab silently never appears
+# (the original OOD bug). Also pins the YAML-bool coercion + the OOD paste-cap.
+def _sub_site(g, cred_extra=""):
+    return f"""
+site: {{name: test}}
+scopes:
+  group: {{enabled: true, root_path: "{g}/{{group}}/aba", auto_create_skeleton: true}}
+  user:  {{state_dir: "{g}/{{group}}/aba/users/{{user}}"}}
+credentials: {{order: [], on_missing: demo_mode{cred_extra}}}
+"""
+
+
+def test_subscription_signin_always_emitted_default_paste(tmp_path, monkeypatch):
+    # no site override → the producer must still emit a value (default paste), else the
+    # forward-if-set passthrough has nothing to forward and the Subscription tab vanishes.
+    env = _run(tmp_path, monkeypatch, _sub_site(tmp_path / "groups"))
+    assert env["ABA_SUBSCRIPTION_OAUTH"] == "paste"
+
+
+def test_subscription_signin_off_from_yaml_bool(tmp_path, monkeypatch):
+    # YAML 1.1 parses bare `off` as False → must map back to "off", NOT fall through to paste.
+    env = _run(tmp_path, monkeypatch, _sub_site(tmp_path / "groups", ", subscription_signin: off"))
+    assert env["ABA_SUBSCRIPTION_OAUTH"] == "off"
+
+
+@pytest.mark.parametrize("level", ["all", "on", "1"])
+def test_subscription_signin_full_level_capped_to_paste_on_ood(tmp_path, monkeypatch, level):
+    # aba-preflight runs ONLY under the proxied OOD launch, where OpenAI's localhost:1455
+    # callback can't be reached — so a full/callback level is capped to paste here.
+    env = _run(tmp_path, monkeypatch, _sub_site(tmp_path / "groups", f", subscription_signin: {level}"))
+    assert env["ABA_SUBSCRIPTION_OAUTH"] == "paste"
 
 
 # ── enrollment gate ────────────────────────────────────────────────────────
