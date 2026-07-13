@@ -10,24 +10,51 @@
   site_default = '/cluster/aba/site.yaml'
   site = (YAML.safe_load(File.read(ENV['ABA_SITE_CONFIG'] || site_default)) rescue nil) || {}
   gcfg = (site['scopes'] || {})['group'] || {}
+  ucfg = (site['scopes'] || {})['user']  || {}
   # GPU field — shown unless the site disables it (`form: {gpu: false}`). On a cluster
   # with no GPU partition the checkbox only ever produces a --gres=gpu:1 submit failure.
   fcfg     = site['form'] || {}
   show_gpu = fcfg.key?('gpu') ? !!fcfg['gpu'] : true
-  root_tmpl   = gcfg['root_path'] || '/groups/{group}/aba'
-  groups_root = root_tmpl.split('/{group}').first         # e.g. /groups
+  root_tmpl   = gcfg['root_path'] || '/groups/{group_dir}/aba'
+  strip       = gcfg['strip_suffix'].to_s                 # strip a site suffix: unix group → folder
   ui          = site['ui_text'] || {}
   markers     = ['.aba-workspace', '.bundle', '.envs']    # == aba_preflight OURS_MARKERS
+  me          = ENV['USER'] || (Etc.getpwuid(Process.uid).name rescue 'user')
+  myhome      = ENV['HOME'] || (Dir.home rescue '/tmp')
+
+  # {group_dir} = on-disk folder name (strip the site suffix); {group} = unix group name.
+  gdir     = ->(g) { (strip != '' && g.end_with?(strip)) ? g[0...-strip.length] : g }
+  grp_root = ->(g) { root_tmpl.gsub('{group_dir}', gdir.call(g)).gsub('{group}', g) }
+  # The user's session $ABA_HOME for a group, mirroring aba_preflight: <state_dir>/.home/.aba.
+  state_tmpl = ucfg['state_dir'] || (myhome + '/.aba/state')
+  aba_home = ->(g) {
+    sd = state_tmpl.gsub('{group_dir}', gdir.call(g)).gsub('{group}', g)
+                   .gsub('{user}', me).gsub('{home}', myhome)
+    File.join(sd, '.home', '.aba')
+  }
+  # A personal credential OVERRIDE is present iff the app persisted one to $ABA_HOME
+  # (Settings → config.env key/token, or subscription → oauth.json, or legacy json).
+  has_personal = ->(g) {
+    h = aba_home.call(g)
+    (File.exist?(File.join(h, 'oauth.json')) ||
+     File.exist?(File.join(h, 'credentials.json')) ||
+     (File.exist?(File.join(h, 'config.env')) &&
+      File.read(File.join(h, 'config.env')) =~ /ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN/)) ? true : false
+  } rescue ->(g) { false }
 
   user_groups = (Process.groups + [Process.gid]).uniq.map { |gid|
     (Etc.getgrgid(gid).name rescue nil) }.compact.sort     # the user's own groups (primary + supplementary)
+  # ENROLLED = the group's on-disk folder (strip suffix) carries an ABA marker.
   enrolled = gcfg['enabled'] ? user_groups.select { |g|
-    markers.any? { |m| File.exist?(File.join(groups_root, g, 'aba', m)) } } : []
-  lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }
+    markers.any? { |m| (File.exist?(File.join(grp_root.call(g), m)) rescue false) } } : []
+  lab_opts = enrolled.map { |g| ["#{g}  ✓", g] }            # VALUE stays the unix group name
   if lab_opts.empty?
     contact = ui['enroll_contact'] || 'your ABA admin'
     lab_opts = [["— no enrolled groups (contact #{contact} to join the ABA pilot)", ""]]
   end
+  # Show the "reset to the group credential" checkbox ONLY when a personal override exists
+  # (for some enrolled group). Fail-safe: any probe error → hidden (never breaks the form).
+  show_reset = (enrolled.any? { |g| has_personal.call(g) } rescue false)
 -%>
 ---
 cluster: "dev-cluster"
@@ -37,7 +64,9 @@ form:
 <%- if show_gpu -%>
   - has_gpu
 <%- end -%>
-  - aba_token
+<%- if show_reset -%>
+  - reset_credential
+<%- end -%>
 attributes:
   aba_instance:
     widget: "select"
@@ -57,8 +86,11 @@ attributes:
   has_gpu:
     widget: "check_box"
     label: "Request a GPU"
-  aba_token:
-    widget: "text_field"
-    label: "Anthropic API key or OAuth token"
-    value: ""
-    help: "Paste an API key (sk-ant-api…) or a Claude Code OAuth token (sk-ant-oat…, from `claude setup-token`) to enable chat — auto-detected. Leave blank to use a saved/lab credential. The UI loads either way."
+  # No credential field: the group credential (set up in the group's ABA folder) is used by
+  # default, and a user connects their OWN key/subscription in-session via Settings → Agent.
+  # This box (shown only when you already have a personal credential saved) discards it so the
+  # session uses the lab's shared credential instead. Unchecked = keep using your personal one.
+  reset_credential:
+    widget: "check_box"
+    label: "Use the group credential (clear my personal key/subscription)"
+    help: "You have a personal credential saved from a previous session. Check to discard it and use the lab's shared credential this session."

@@ -27,10 +27,14 @@ OURS_MARKERS = (".aba-workspace", ".bundle", ".envs")
 BLOCKED_EXIT = 10
 
 
-def expand(s, *, user, group, home):
+def expand(s, *, user, group, home, group_dir=None):
     if not isinstance(s, str):
         return s
+    # {group}     = the unix group name — identity, ownership.
+    # {group_dir} = the on-disk folder name — see scopes.group.strip_suffix. Defaults to
+    #               {group} when no suffix strip is configured.
     return (s.replace("{user}", user or "").replace("{group}", group or "")
+             .replace("{group_dir}", (group_dir if group_dir is not None else group) or "")
              .replace("{home}", str(home or "")))
 
 
@@ -51,6 +55,74 @@ def read_cred_file(p):
     if d.get("claude_code_oauth_token"):
         return ("oauth", d["claude_code_oauth_token"])
     return (None, None)
+
+
+# The user's own credential (an OVERRIDE of the group default) lives in the SESSION
+# $ABA_HOME the backend actually writes — Settings → Agent writes config.env, subscription
+# sign-in writes oauth.json (a refreshable store the backend auto-uses). $ABA_HOME resolves
+# to <state_dir>/.home/.aba at launch (script.sh.erb), so preflight reads the SAME place.
+# We NEVER read ~/.claude here: seeding from the Claude Code CLI store rotates its refresh
+# token and logs the user out of their CLI (the user_oauth trap — misc/lazy_env_init.md).
+_CRED_ENV_KEYS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY",
+                  "OPENAI_OAUTH_TOKEN", "ABA_LLM_CREDENTIAL")
+
+
+def _parse_config_env(p):
+    """Parse $ABA_HOME/config.env (`export K=<shlex-quoted>` lines) → dict. Tolerant."""
+    out = {}
+    try:
+        for line in Path(p).read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def read_user_override(user_home):
+    """The user's in-app credential override, from the SESSION $ABA_HOME (never ~/.claude).
+    Returns ('apikey'|'oauth'|'oauth_env', value|None) | (None, None). Order: an explicit
+    key/token in config.env (Settings editor) → a subscription store (oauth.json, backend
+    refreshes it) → a legacy credentials.json."""
+    ce = _parse_config_env(Path(user_home) / "config.env")
+    if ce.get("ANTHROPIC_API_KEY"):
+        return ("apikey", ce["ANTHROPIC_API_KEY"])
+    if ce.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return ("oauth", ce["CLAUDE_CODE_OAUTH_TOKEN"])
+    if (Path(user_home) / "oauth.json").is_file():
+        return ("oauth_env", None)          # backend finds + refreshes it via $ABA_HOME
+    return read_cred_file(Path(user_home) / "credentials.json")
+
+
+def reset_user_credential(user_home, warnings):
+    """Launch-card 'use the group credential' reset: drop the user's in-app override so this
+    session falls back to group_shared. Strips ONLY the credential keys from config.env
+    (keeps ABA_MODEL and other settings), and removes oauth.json + the legacy credentials.json."""
+    uh = Path(user_home)
+    ce = uh / "config.env"
+    if ce.is_file():
+        kept = []
+        for line in ce.read_text().splitlines():
+            body = line[7:] if line.strip().startswith("export ") else line
+            key = body.partition("=")[0].strip()
+            if key in _CRED_ENV_KEYS:
+                continue                    # drop the credential line
+            kept.append(line)
+        ce.write_text("\n".join(kept) + ("\n" if kept else ""))
+    removed = False
+    for f in ("oauth.json", "credentials.json"):
+        try:
+            (uh / f).unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+    warnings.append("personal credential cleared at launch — using the group credential")
+    return removed
 
 
 def ensure_group_writable(path, group_name, warnings):
@@ -124,6 +196,11 @@ def main():
     scopes = site.get("scopes") or {}
     gcfg, ucfg, icfg = scopes.get("group") or {}, scopes.get("user") or {}, scopes.get("institution") or {}
     creds = site.get("credentials") or {}
+    # On-disk group FOLDER name vs the unix GROUP name. Some sites suffix the unix group
+    # name while the shared folder omits it. Strip a site-declared suffix to get {group_dir};
+    # a no-op when the group lacks the suffix (or none is configured).
+    _strip = str(gcfg.get("strip_suffix") or "")
+    group_dir = group[:-len(_strip)] if (_strip and group.endswith(_strip)) else group
     warnings, blocked, blocked_reason = [], False, None
     # glibc-floor: preflight.sh (on the node) compares the image's base glibc to the
     # node's and passes a message here when the base is too new — surface it on the
@@ -133,7 +210,7 @@ def main():
         warnings.append(_glibc_warn)
 
     def ex(s):
-        return expand(s, user=user, group=group, home=home)
+        return expand(s, user=user, group=group, home=home, group_dir=group_dir)
 
     # ---- group scope (enrollment gate + safety check) ----
     # A group is ENROLLED when /groups/<group>/aba exists with an ABA marker
@@ -227,16 +304,24 @@ def main():
     inst_state = "absent" if not inst_path else ("ok" if Path(ex(inst_path)).is_dir() else "missing")
 
     # ---- credentials (chain from site.yaml; api-key OR oauth) ----
-    user_key = Path(ex(creds.get("user_key_path") or f"{home}/.aba/credentials.json"))
+    # The user's OWN credential (an override of the group default) is whatever the running
+    # app persisted to the SESSION $ABA_HOME (= <state_dir>/.home/.aba): Settings → Agent
+    # (config.env) or subscription sign-in (oauth.json). `user_saved`/`user_oauth` read THAT,
+    # so a personal override sticks across sessions and wins over `group_shared`.
+    user_home = state_dir / ".home" / ".aba"
     group_key = ex(creds.get("group_key_path")) if creds.get("group_key_path") else None
     order = creds.get("order") or ["user_saved", "user_form_paste"]
+    # Launch-card reset (ABA_PF_RESET_CREDENTIAL, from the "use the group credential" box):
+    # drop the personal override BEFORE resolving so `group_shared` wins this session.
+    if (os.environ.get("ABA_PF_RESET_CREDENTIAL") or "").strip().lower() in ("1", "true", "yes", "on"):
+        reset_user_credential(user_home, warnings)
     cred_mode = cred_val = cred_source = None
     if not blocked:
         for src in order:
             if cred_mode:
                 break
             if src == "user_saved":
-                m, v = read_cred_file(user_key)
+                m, v = read_user_override(user_home)
                 if m:
                     cred_mode, cred_val, cred_source = m, v, "user_saved"
             elif src == "group_shared" and group_key:
@@ -244,10 +329,9 @@ def main():
                 if m:
                     cred_mode, cred_val, cred_source = m, v, "group_shared"
             elif src == "user_oauth":
-                for p in (f"{home}/.aba/oauth.json", f"{home}/.claude/.credentials.json"):
-                    if Path(p).is_file():
-                        cred_mode, cred_source = "oauth_env", "user_oauth"
-                        break
+                # in-app subscription store ONLY — never ~/.claude (rotates the CLI login)
+                if (user_home / "oauth.json").is_file():
+                    cred_mode, cred_source = "oauth_env", "user_oauth"
             elif src == "user_form_paste" and token:
                 # Auto-detect what was pasted: Claude Code OAuth tokens are
                 # `sk-ant-oat…`, API keys `sk-ant-api…`. An OAuth token pasted
@@ -261,14 +345,16 @@ def main():
                 else:
                     cred_mode, cred_val, cred_source = "apikey", token, "user_form_paste"
                     saved = {"anthropic_api_key": token}
-                user_key.parent.mkdir(parents=True, exist_ok=True)
+                # Persist to the unified user store (what user_saved reads next launch).
+                paste_key = user_home / "credentials.json"
+                paste_key.parent.mkdir(parents=True, exist_ok=True)
                 old = os.umask(0o077)
                 try:
-                    user_key.write_text(json.dumps(saved) + "\n")
+                    paste_key.write_text(json.dumps(saved) + "\n")
                 finally:
                     os.umask(old)
         if not cred_mode and creds.get("on_missing") != "demo_mode":
-            warnings.append("no credentials resolved — paste a key on the launch form")
+            warnings.append("no credential resolved — connect one in Settings → Agent")
 
     # ---- write aba-env.sh (unless blocked) ----
     if not blocked:

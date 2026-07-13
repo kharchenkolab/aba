@@ -15,8 +15,10 @@ export ABA_PF_GROUP="<%= context.aba_lab %>"
 export ABA_PF_USER="${USER:-$(whoami)}"
 export ABA_PF_HOME="${HOME}"
 export ABA_PF_STAGED="${PWD}"
-<%- unless context.aba_token.to_s.strip.empty? -%>
-export ABA_PF_TOKEN="<%= context.aba_token %>"
+<%- if context.respond_to?(:reset_credential) && context.reset_credential.to_s == '1' -%>
+# The "use the group credential" box was checked → aba-preflight clears the personal
+# override (config.env key/token + oauth.json) so this session falls back to the group key.
+export ABA_PF_RESET_CREDENTIAL="1"
 <%- end -%>
 
 echo "before.sh: PWD=${PWD}" > "${PWD}/preflight.log"

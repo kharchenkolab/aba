@@ -50,7 +50,16 @@ def main(argv=None):
 
     site = yaml.safe_load(Path(a.site).read_text()) or {}
     gcfg = (site.get("scopes") or {}).get("group") or {}
-    group_root = Path((gcfg.get("root_path") or "/groups/{group}/aba").replace("{group}", a.group))
+    # On-disk FOLDER name vs the unix GROUP name: some sites suffix the unix group name
+    # while the shared folder omits it, so strip a site-declared suffix. {group_dir} = the
+    # folder; {group} stays the unix name for ownership (step 4). No-op when unset/absent.
+    strip = str(gcfg.get("strip_suffix") or "")
+    group_dir = a.group[:-len(strip)] if (strip and a.group.endswith(strip)) else a.group
+
+    def _ex(s):
+        return s.replace("{group_dir}", group_dir).replace("{group}", a.group)
+
+    group_root = Path(_ex(gcfg.get("root_path") or "/groups/{group}/aba"))
     tmpl = gcfg.get("skeleton_template")
 
     # 1) workspace
@@ -81,7 +90,7 @@ def main(argv=None):
         gkey = (site.get("credentials") or {}).get("group_key_path")
         if not gkey:
             sys.exit("credentials.group_key_path not set in site.yaml — cannot place a lab key.")
-        gkey_path = Path(gkey.replace("{group}", a.group))
+        gkey_path = Path(_ex(gkey))
         gkey_path.parent.mkdir(parents=True, exist_ok=True)
         if a.cred_file:
             data = Path(a.cred_file).read_text()
