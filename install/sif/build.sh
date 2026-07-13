@@ -73,6 +73,20 @@ find "$STAGE" -type l | while read -r l; do
   [ -d "$t" ] && case "$d/" in "$t/"*) rm -f "$l" ;; esac
 done
 
+# ── bake the module manifests (install/core/modules/*.yaml + install-*.sh) ──
+# The modules registry (core/modules/registry.py) discovers manifests at
+# <repo>/install/core/modules — which in the image is $backend/../../install/core/modules
+# = /opt/aba/install/core/modules (parents[3] of registry.py at /opt/aba/backend/...).
+# Without these baked, reg.ids() is EMPTY in the image: no modules catalog, so the
+# Settings→Modules UI is blank and first-use gating is a no-op. Bake the whole dir
+# (manifests + their install-*.sh, which install_script resolves relative to) so the
+# registry populates and readiness probes run. (Install scripts never FIRE in a fat
+# deploy — everything's baked + probes ready — but a valid path keeps the spec well-formed.)
+if [ -d "$REPO_ROOT/install/core/modules" ]; then
+  mkdir -p "$STAGE/modules"; cp -a "$REPO_ROOT/install/core/modules/." "$STAGE/modules/"
+  echo "   module manifests baked: $(ls "$STAGE/modules"/*.yaml 2>/dev/null | wc -l | tr -d ' ')"
+fi
+
 # ── bake recipes as the SYSTEM bundle (built-in skills + the recipe pack) ──
 SB="$STAGE/system_bundle"; mkdir -p "$SB/skills/recipes" "$SB/catalog"
 if [ -d "$REPO_ROOT/backend/system_bundle" ]; then cp -a "$REPO_ROOT/backend/system_bundle/." "$SB/" 2>/dev/null || true; fi
@@ -194,6 +208,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   echo "    $STAGE/backend /opt/aba/backend"
   echo "    $STAGE/frontend-dist /opt/aba/frontend-dist"
   echo "    $STAGE/system_bundle /opt/aba/system_bundle"
+  [ -d "$STAGE/modules" ] && echo "    $STAGE/modules /opt/aba/install/core/modules"
   echo "    $STAGE/ood/aba_preflight.py /opt/aba/ood/aba_preflight.py"
   [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
