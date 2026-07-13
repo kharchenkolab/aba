@@ -1,0 +1,16 @@
+{
+  "anthropic_api_key": "",
+  "capability_approval": "auto",
+  "fake_session": "",
+  "history_k_text_keep": 12,
+  "history_k_tool_keep": 30,
+  "history_summary_threshold_chars": 400000,
+  "kernel_enabled": true,
+  "kernel_hard_max": 8,
+  "kernel_idle_ttl_s": 3600,
+  "kernel_max_live": 5,
+  "model_snapshot": "claude-haiku-4-5-20251001",
+  "tool_output_cap_chars": 50000,
+  "tool_stream_flush_bytes": 10240,
+  "tool_stream_flush_interval_s": 0.5
+}

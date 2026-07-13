@@ -1,6 +1,28 @@
 """Platform configuration: paths, env, model selection.
 
 Domain-neutral. Bio-specific prompt text lives in content/bio/.
+
+Settings registry (env_reorg)
+=============================
+Every ``ABA_*`` setting the backend consumes is DECLARED here via ``setting()``
+and read through the resulting accessor — this module is the single, enforced
+read path. ``tests/test_env_registry_guard.py`` fails the build if any inline
+``os.environ``/``os.getenv`` read of an ``ABA_*`` name survives in ``backend/``
+outside this file, so ``list_settings()`` can never silently under-report.
+
+Each declaration also carries migration metadata:
+  * ``weft_fate`` ∈ {keep, retire, move:site, move:envspec, revisit} — what the
+    later weft rewrite does with it (this ledger is weft's move/delete checklist).
+  * ``reduction``  ∈ {keep, dead, resolve-flag, merge:<g>, derive:<from>,
+    relocate:<layer>} — the fewer-better-variables plan (§6 of env_reorg.md).
+
+Stdlib-only, import-safe: this module loads very early, so the registry must not
+import bundle/graph/runtime. Resolution is LAZY by default — every ``.get()``
+re-reads the environment — matching the historical ``_LazyDir`` contract the
+test harness relies on (it sets ``ABA_RUNTIME_DIR``/``ABA_DB_PATH`` after import).
+Path settings additionally bind their public name to a ``_LazyDir`` (unchanged
+runtime behavior); scalar settings bind the frozen ``.get()`` value so the ~60
+modules importing these names see no change.
 """
 import os
 from pathlib import Path
@@ -8,6 +30,210 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent.parent  # backend/ — SOURCE root, never written at runtime
 load_dotenv(BASE_DIR.parent / ".env")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Settings registry primitives
+# ═══════════════════════════════════════════════════════════════════════════
+_REGISTRY: "dict[str, Setting]" = {}
+_MISSING = object()
+
+_TRUE_TOKENS = ("1", "true", "yes", "on")
+
+
+def _coerce_bool_default_on(raw):
+    """Historical 'on unless explicitly disabled' idiom (``not in {0,false,''}``)."""
+    return str(raw) not in ("0", "false", "")
+
+
+def _coerce_bool(raw):
+    """Standard 'off unless explicitly enabled' idiom."""
+    return str(raw).strip().lower() in _TRUE_TOKENS
+
+
+def _coerce_int(raw):
+    return int(raw)
+
+
+def _coerce_float(raw):
+    return float(raw)
+
+
+def _coerce_str(raw):
+    return str(raw)
+
+
+def _coerce_path(raw):
+    return Path(raw).resolve()
+
+
+def _coerce_csv(raw):
+    """Comma-separated → tuple of trimmed non-empty tokens."""
+    return tuple(t.strip() for t in str(raw).split(",") if t.strip())
+
+
+_COERCERS = {"bool": _coerce_bool, "int": _coerce_int, "float": _coerce_float,
+             "str": _coerce_str, "path": _coerce_path, "csv": _coerce_csv}
+
+
+class Setting:
+    """One declared configuration setting: metadata + a resolution path.
+
+    Read the live value with ``.get()`` (re-resolves each call unless
+    ``resolve='once'``). ``resolve()`` returns ``(value, source)`` for
+    introspection (``list_settings`` / ``aba doctor``). A ``resolver`` callable,
+    when given, fully owns resolution (used for composite settings like the model
+    or credential precedence chains); otherwise the first present env key wins,
+    else the declared default.
+    """
+    __slots__ = ("name", "env_keys", "type", "default", "_coerce", "resolver",
+                 "category", "doc", "branches", "deploy_injected", "secret",
+                 "weft_fate", "reduction", "enum", "resolve_mode",
+                 "_cache", "_has_cache")
+
+    def __init__(self, *, name, env, type, default, coerce, resolver, category,
+                 doc, branches, deploy_injected, secret, weft_fate, reduction,
+                 enum, resolve_mode):
+        self.name = name
+        self.env_keys = [env] if isinstance(env, str) else list(env or [])
+        self.type = type
+        self.default = default
+        self._coerce = coerce or _COERCERS.get(type, _coerce_str)
+        self.resolver = resolver
+        self.category = category
+        self.doc = doc
+        self.branches = branches
+        self.deploy_injected = deploy_injected
+        self.secret = secret
+        self.weft_fate = weft_fate
+        self.reduction = reduction
+        self.enum = enum
+        self.resolve_mode = resolve_mode
+        self._cache = _MISSING
+        self._has_cache = False
+
+    def resolve(self):
+        """Return ``(value, source)``. source ∈ {``env:KEY``, ``resolver``, ``default``}."""
+        if self.resolve_mode == "once" and self._has_cache:
+            return self._cache
+        pair = self._resolve_fresh()
+        if self.resolve_mode == "once":
+            self._cache = pair
+            self._has_cache = True
+        return pair
+
+    def _resolve_fresh(self):
+        if self.resolver is not None:
+            v = self.resolver()
+            if isinstance(v, tuple) and len(v) == 2:
+                return v
+            return v, "resolver"
+        for k in self.env_keys:
+            if k not in os.environ:
+                continue
+            raw = os.environ[k]
+            # An explicitly-empty numeric/path env value is treated as unset
+            # (historically `int(os.environ.get(k, "5"))` would crash on "");
+            # str/csv accept "" as a real value (matching os.environ.get(k, "")).
+            if raw == "" and self.type not in ("str", "csv"):
+                continue
+            try:
+                v = self._coerce(raw)
+            except Exception:  # noqa: BLE001 — malformed value → default, never crash
+                return self.default, f"env:{k}(coerce-failed)"
+            # enum is ADVISORY in the mechanical pass: an out-of-enum value still
+            # passes through (matching the historical inline read), but the source
+            # is flagged so `aba doctor` surfaces the drift.
+            if self.enum and v not in self.enum:
+                return v, f"env:{k}(not-in-enum)"
+            return v, f"env:{k}"
+        return self.default, "default"
+
+    def get(self):
+        return self.resolve()[0]
+
+    def __repr__(self):
+        return f"Setting({self.name!r}, env={self.env_keys})"
+
+
+def setting(name, *, env=None, type="str", default=None, coerce=None,
+            resolver=None, category="", doc="", branches=False,
+            deploy_injected=False, secret=False, weft_fate="keep",
+            reduction="keep", enum=None, resolve="lazy"):
+    """Declare a setting once; register it and return the ``Setting`` accessor.
+
+    Callers read the live value via the returned object's ``.get()`` or via
+    ``settings.<name>.get()``. Scalar back-compat module constants bind the frozen
+    ``.get()`` value; path tiers go through ``_path_setting`` (see below)."""
+    if name in _REGISTRY:
+        raise ValueError(f"setting {name!r} already declared")
+    s = Setting(name=name, env=env, type=type, default=default, coerce=coerce,
+                resolver=resolver, category=category, doc=doc, branches=branches,
+                deploy_injected=deploy_injected, secret=secret,
+                weft_fate=weft_fate, reduction=reduction, enum=enum,
+                resolve_mode=resolve)
+    _REGISTRY[name] = s
+    return s
+
+
+class _SettingsFacade:
+    """Attribute access to registered settings: ``settings.kernel_enabled.get()``."""
+    def __getattr__(self, name):
+        try:
+            return _REGISTRY[name]
+        except KeyError:
+            raise AttributeError(f"no setting {name!r} registered")
+
+    def __iter__(self):
+        return iter(_REGISTRY.values())
+
+    def __contains__(self, name):
+        return name in _REGISTRY
+
+
+settings = _SettingsFacade()
+
+
+def get_setting(name):
+    return _REGISTRY[name]
+
+
+_SECRET_REDACTION = "••••"
+
+
+def _redact(val):
+    s = str(val or "")
+    if not s:
+        return ""
+    return (s[:2] + _SECRET_REDACTION + s[-2:]) if len(s) > 6 else _SECRET_REDACTION
+
+
+def list_settings(*, include_unknown=True, reveal_secrets=False):
+    """Full declared surface with resolved values + sources, for ``aba doctor``.
+
+    Secrets are redacted unless ``reveal_secrets``. When ``include_unknown``, also
+    lists ``ABA_*`` env vars present in the process that are NOT declared — the
+    drift / typo detector that a bypass-proof registry makes trustworthy."""
+    rows = []
+    for s in _REGISTRY.values():
+        try:
+            val, src = s.resolve()
+        except Exception as e:  # noqa: BLE001
+            val, src = f"<error: {e}>", "error"
+        shown = _redact(val) if (s.secret and not reveal_secrets) else val
+        rows.append({
+            "name": s.name, "env": s.env_keys, "value": shown, "source": src,
+            "type": s.type, "category": s.category, "branches": s.branches,
+            "deploy_injected": s.deploy_injected, "secret": s.secret,
+            "weft_fate": s.weft_fate, "reduction": s.reduction, "doc": s.doc,
+        })
+    rows.sort(key=lambda r: (r["category"], r["name"]))
+    result = {"settings": rows}
+    if include_unknown:
+        declared = {k for s in _REGISTRY.values() for k in s.env_keys}
+        result["unknown_env"] = sorted(
+            k for k in os.environ
+            if k.startswith("ABA_") and k not in declared)
+    return result
 
 # ABA_RUNTIME_DIR is the roof for all mutable runtime state (data, work, artifacts,
 # envs, projects, the workspace DB). Hard-separated from the source tree so:
@@ -82,21 +308,49 @@ def _resolve_under_runtime(env_key: str, *parts: str) -> Path:
     return base.resolve()
 
 
-RUNTIME_DIR = _LazyDir(_resolve_runtime_dir)
+def _path_setting(name, env, resolver, *, doc="", deploy_injected=False,
+                  weft_fate="keep", reduction="keep"):
+    """Register a path tier in the settings registry and return a ``_LazyDir``
+    bound to the SAME resolver, so the public name stays byte-for-byte the lazy
+    proxy it always was (the test harness repoints these via env after import).
+    The registered ``Setting`` shares the resolver purely for introspection."""
+    setting(name, env=env, type="path", default=None, resolver=resolver,
+            category="paths", doc=doc, deploy_injected=deploy_injected,
+            weft_fate=weft_fate, reduction=reduction)
+    return _LazyDir(resolver)
+
+
+RUNTIME_DIR = _path_setting(
+    "runtime_dir", "ABA_RUNTIME_DIR", _resolve_runtime_dir,
+    doc="Root for all mutable runtime state (projects, envs, refs, workspace DB).",
+    deploy_injected=True)
 
 # Legacy workspace-level dirs (pre-2026-05-31-reorg). Post-reorg these point at
 # the per-project equivalents of `_workspace` (the no-project-active fallback),
 # so files don't strand at the runtime root. New code goes through
 # project_{data,artifacts,work}_dir(pid) instead; these are kept as the fallback
 # for callers without a project context (background jobs, materialize helpers).
-DATA_DIR = _LazyDir(lambda: _resolve_under_runtime("DATA_DIR", "projects", "_workspace", "data"))
-ARTIFACTS_DIR = _LazyDir(lambda: _resolve_under_runtime("ARTIFACTS_DIR", "projects", "_workspace", "artifacts"))
-WORK_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_WORK_DIR", "projects", "_workspace", "work"))
+DATA_DIR = _path_setting(
+    "data_dir", "DATA_DIR",
+    lambda: _resolve_under_runtime("DATA_DIR", "projects", "_workspace", "data"),
+    doc="Workspace-level data dir (no-project fallback).")
+ARTIFACTS_DIR = _path_setting(
+    "artifacts_dir", "ARTIFACTS_DIR",
+    lambda: _resolve_under_runtime("ARTIFACTS_DIR", "projects", "_workspace", "artifacts"),
+    doc="Workspace-level artifacts dir (no-project fallback).")
+WORK_DIR = _path_setting(
+    "work_dir", "ABA_WORK_DIR",
+    lambda: _resolve_under_runtime("ABA_WORK_DIR", "projects", "_workspace", "work"),
+    doc="Workspace-level work dir (no-project fallback).")
 # ENVS_DIR is the materialized-tools area (capabilities.md / capdat_impl.md P1):
 # wipeable as a whole (rm -rf → repopulates on demand), kept OUT of the system
 # .venv so the backend's env stays pristine. Holds the pylib overlay (one
 # shared pip --target dir for Python libs) and conda envs for CLI tools.
-ENVS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_ENVS_DIR", "envs"))
+ENVS_DIR = _path_setting(
+    "envs_dir", "ABA_ENVS_DIR",
+    lambda: _resolve_under_runtime("ABA_ENVS_DIR", "envs"),
+    doc="Materialized-tools area (conda envs + pylib overlay); wipeable whole.",
+    deploy_injected=True, weft_fate="move:envspec")
 # Kernelspecs hardcode the interpreter's absolute path, so they must live and die
 # with the env they point at. Scope ABA's Jupyter data dir under ENVS_DIR (not the
 # user's global ~/.local/share/jupyter): prod stays self-consistent, and tests —
@@ -107,12 +361,24 @@ os.environ["JUPYTER_DATA_DIR"] = str(ENVS_DIR / "jupyter")
 # REFS_DIR is the content-addressed reference store (data.md §4.3): shared,
 # deduplicated reference data (genomes, transcriptomes, indices, annotations).
 # Distinct from the per-project artifact store; reused across projects.
-REFS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_REFS_DIR", "refs"))
+REFS_DIR = _path_setting(
+    "refs_dir", "ABA_REFS_DIR",
+    lambda: _resolve_under_runtime("ABA_REFS_DIR", "refs"),
+    doc="Content-addressed shared reference store (genomes, indices, annotations).")
 
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+API_KEY = setting(
+    "anthropic_api_key", env="ANTHROPIC_API_KEY", type="str", default="",
+    category="model", secret=True, weft_fate="keep",
+    doc="Anthropic API key — module-load snapshot (live reads go via core.llm).",
+).get()
 # Module-load snapshot, kept as the "baseline" — process-startup default + the
 # fallback for callers that don't pass one to current_model_for_primary().
-MODEL = os.environ.get("ABA_MODEL", "claude-haiku-4-5-20251001")
+MODEL = setting(
+    "model_snapshot", env="ABA_MODEL", type="str",
+    default="claude-haiku-4-5-20251001", category="model", branches=True,
+    weft_fate="keep", reduction="merge:model",
+    doc="Process-startup model snapshot; last-resort fallback in the model resolver.",
+).get()
 
 
 def current_model_for_primary(default: str = "") -> str:
@@ -285,20 +551,47 @@ def _read_aba_model_from_config_env() -> str:
     if not m:
         return ""
     return (m.group(1) or m.group(2) or m.group(3) or "").strip()
-FAKE_SESSION = os.environ.get("ABA_FAKE_SESSION", "")
+FAKE_SESSION = setting(
+    "fake_session", env="ABA_FAKE_SESSION", type="str", default="",
+    category="mode", branches=True, weft_fate="keep",
+    doc="Non-empty → deterministic fake LLM session (tests / demos).",
+).get()
 # Capability proposal approval (capdat_impl.md P2′): "auto" publishes a
 # proposed capability immediately (solo/dev; every add still audited), "ask"
 # leaves it proposed for human review (multi-user seam).
-CAPABILITY_APPROVAL = os.environ.get("ABA_CAPABILITY_APPROVAL", "auto")
+CAPABILITY_APPROVAL = setting(
+    "capability_approval", env="ABA_CAPABILITY_APPROVAL", type="str",
+    default="auto", enum=("auto", "ask"), category="behavior", branches=True,
+    weft_fate="keep",
+    doc="'auto' publishes proposed capabilities immediately; 'ask' holds for review.",
+).get()
 # Persistent kernels (kernels.md): conservative defaults — lazy start, short
 # idle TTL, small per-user cap with LRU eviction.
-KERNEL_ENABLED = os.environ.get("ABA_KERNEL_ENABLED", "1") not in ("0", "false", "")
-KERNEL_IDLE_TTL_S = int(os.environ.get("ABA_KERNEL_IDLE_TTL_S", "3600"))  # 1 h (was 15 min — too eager; state-bearing kernels are expensive to rebuild)
-KERNEL_MAX_LIVE = int(os.environ.get("ABA_KERNEL_MAX_LIVE", "5"))         # per user — SOFT cap (evict idle LRU)
+KERNEL_ENABLED = setting(
+    "kernel_enabled", env="ABA_KERNEL_ENABLED", type="bool", default=True,
+    coerce=_coerce_bool_default_on, category="behavior", branches=True,
+    weft_fate="revisit",
+    doc="Master switch for the interactive kernel lane; off → stateless one-shot exec.",
+).get()
+KERNEL_IDLE_TTL_S = setting(
+    "kernel_idle_ttl_s", env="ABA_KERNEL_IDLE_TTL_S", type="int", default=3600,
+    category="tuning", weft_fate="revisit", reduction="merge:kernel",
+    doc="Idle kernel time-to-live in seconds before LRU eviction.",
+).get()
+KERNEL_MAX_LIVE = setting(
+    "kernel_max_live", env="ABA_KERNEL_MAX_LIVE", type="int", default=5,
+    category="tuning", weft_fate="revisit", reduction="merge:kernel",
+    doc="Per-user SOFT cap on live kernels (evict idle LRU past this).",
+).get()
 # Absolute ceiling. The soft cap only evicts IDLE kernels; when all live kernels
 # are busy we allow a bounded burst above the soft cap rather than kill running
 # work, refusing only past this hard cap. Keep it modest on shared systems.
-KERNEL_HARD_MAX = int(os.environ.get("ABA_KERNEL_HARD_MAX", str(KERNEL_MAX_LIVE + 3)))
+KERNEL_HARD_MAX = setting(
+    "kernel_hard_max", env="ABA_KERNEL_HARD_MAX", type="int",
+    default=KERNEL_MAX_LIVE + 3, category="tuning", weft_fate="revisit",
+    reduction="derive:kernel_max_live",
+    doc="Absolute ceiling on live kernels (default = kernel_max_live + 3).",
+).get()
 
 # ── History compaction + tool-output cap ────────────────────────────────────
 # Two layers (misc/history_compaction_redesign.md):
@@ -314,19 +607,39 @@ KERNEL_HARD_MAX = int(os.environ.get("ABA_KERNEL_HARD_MAX", str(KERNEL_MAX_LIVE 
 #     message tail with a synthesized block) so the threshold sits high. 400K
 #     chars ≈ 100K tokens at ~4 chars/token — matches CC's autoCompactWindow
 #     default. Override via env to raise on Sonnet (200K ctx) or higher.
-HISTORY_K_TOOL_KEEP = int(os.environ.get("ABA_HISTORY_K_TOOL_KEEP", "30"))
-HISTORY_K_TEXT_KEEP = int(os.environ.get("ABA_HISTORY_K_TEXT_KEEP", "12"))
-HISTORY_SUMMARY_THRESHOLD_CHARS = int(
-    os.environ.get("ABA_HISTORY_SUMMARY_THRESHOLD_CHARS", "400000")
-)
+HISTORY_K_TOOL_KEEP = setting(
+    "history_k_tool_keep", env="ABA_HISTORY_K_TOOL_KEEP", type="int", default=30,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="Layer-A window: number of recent tool_result blocks kept verbatim.",
+).get()
+HISTORY_K_TEXT_KEEP = setting(
+    "history_k_text_keep", env="ABA_HISTORY_K_TEXT_KEEP", type="int", default=12,
+    category="tuning", weft_fate="keep", reduction="merge:history",
+    doc="Layer-A window: number of recent text turns kept verbatim.",
+).get()
+HISTORY_SUMMARY_THRESHOLD_CHARS = setting(
+    "history_summary_threshold_chars", env="ABA_HISTORY_SUMMARY_THRESHOLD_CHARS",
+    type="int", default=400000, category="tuning", weft_fate="keep",
+    reduction="merge:history",
+    doc="Layer-B trigger: summarize when pruned history still exceeds this many chars.",
+).get()
 
 # Live-tail of run_r/run_python output: chunks emitted from the kernel are
 # coalesced before being forwarded as `tool_chunk` SSE events, so a chatty
 # cell (R progress bars, install logs, tqdm) doesn't flood the wire AND the
 # UI gets human-readable bursts instead of a stream-per-millisecond jitter.
 # Flush fires when EITHER cap is hit, whichever first. Tunable via env.
-TOOL_STREAM_FLUSH_BYTES = int(os.environ.get("ABA_TOOL_STREAM_FLUSH_BYTES", "10240"))
-TOOL_STREAM_FLUSH_INTERVAL_S = float(os.environ.get("ABA_TOOL_STREAM_FLUSH_INTERVAL_S", "0.5"))
+TOOL_STREAM_FLUSH_BYTES = setting(
+    "tool_stream_flush_bytes", env="ABA_TOOL_STREAM_FLUSH_BYTES", type="int",
+    default=10240, category="tuning", weft_fate="keep", reduction="merge:tool_stream",
+    doc="Coalesce kernel output into a tool_chunk SSE event once this many bytes buffer.",
+).get()
+TOOL_STREAM_FLUSH_INTERVAL_S = setting(
+    "tool_stream_flush_interval_s", env="ABA_TOOL_STREAM_FLUSH_INTERVAL_S",
+    type="float", default=0.5, category="tuning", weft_fate="keep",
+    reduction="merge:tool_stream",
+    doc="Max seconds to hold buffered kernel output before flushing a tool_chunk.",
+).get()
 
 # Per-tool stdout/stderr cap applied AT INPUT TIME — when a kernel result
 # becomes a tool_result block. Capped text is what enters history and what
@@ -335,7 +648,12 @@ TOOL_STREAM_FLUSH_INTERVAL_S = float(os.environ.get("ABA_TOOL_STREAM_FLUSH_INTER
 # preserves the informative head AND tail — both are signal in scientific
 # output (df.head() at the top, summary/return value at the bottom; middle is
 # typically repetition or progress lines). Set to 0 to disable capping.
-TOOL_OUTPUT_CAP_CHARS = int(os.environ.get("ABA_TOOL_OUTPUT_CAP_CHARS", "50000"))
+TOOL_OUTPUT_CAP_CHARS = setting(
+    "tool_output_cap_chars", env="ABA_TOOL_OUTPUT_CAP_CHARS", type="int",
+    default=50000, category="tuning", weft_fate="keep",
+    doc="Per-tool stdout/stderr cap (middle-snip) applied when a kernel result "
+        "becomes a tool_result block. 0 disables capping.",
+).get()
 
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
