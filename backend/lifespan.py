@@ -133,6 +133,18 @@ async def on_startup():
                     print("[r_base] r-bio enabled but not built yet — reconciler owns the build; "
                           "deferring curated top-up", flush=True)
                 return
+            # Read-only baked base (a fat SIF bakes the R tools env into the immutable image
+            # at $ABA_TOOLS_DIR). The curated top-up installs into that env — impossible on a
+            # read-only mount, and unnecessary: the baked env IS the curated base, frozen at
+            # build time. Attempting it would burn a micromamba solve and log a failure on
+            # every launch. Skip cleanly; the env is authoritative.
+            import os as _os
+            from core.exec.materialize import tools_env as _tenv
+            _te = _tenv()
+            if _te.exists() and not _os.access(_te, _os.W_OK):
+                print(f"[r_base] tools env {_te} is read-only (baked image) — "
+                      "skipping curated top-up; the baked R base is authoritative", flush=True)
+                return
             from content.bio.capabilities import provision_r_base
             t0 = _t.perf_counter()
             provision_r_base()

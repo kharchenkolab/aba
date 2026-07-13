@@ -80,6 +80,29 @@ def test_mode_and_enable_predicates(monkeypatch, tmp_path):
     assert mgr.is_enabled(pybio) is False and mgr.allows_auto_install(pybio) is True
 
 
+def test_eager_override_promotes_baked_modules_to_on(monkeypatch, tmp_path):
+    """ABA_MODULES_EAGER (a fat SIF bakes r-bio/viewer-pagoda3 in) promotes first_use
+    modules to `on` — but only where the user hasn't chosen, and only for listed ids."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    rbio, pg3, pybio = reg.get("r-bio"), reg.get("viewer-pagoda3"), reg.get("python-bio")
+    # unset → registry defaults
+    assert mgr.mode(rbio) == "first_use" and mgr.mode(pg3) == "first_use"
+    # eager list → those become on; an unlisted module keeps its default
+    monkeypatch.setenv("ABA_MODULES_EAGER", "r-bio viewer-pagoda3")
+    assert mgr.mode(rbio) == "on" and mgr.is_enabled(rbio) is True
+    assert mgr.mode(pg3) == "on"
+    assert mgr.mode(pybio) == "on"                          # already on by default
+    # explicit user choice still WINS over the eager override
+    st.set_desired("r-bio", "off")
+    assert mgr.mode(rbio) == "off"
+    # "all" form
+    monkeypatch.setenv("ABA_MODULES_EAGER", "all")
+    assert mgr.mode(pg3) == "on"
+    # unset again → back to defaults (write-free: nothing persisted for pg3)
+    monkeypatch.delenv("ABA_MODULES_EAGER")
+    assert mgr.mode(pg3) == "first_use"
+
+
 def test_actual_state_probe_wins_over_stale_status(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     rbio = reg.get("r-bio")

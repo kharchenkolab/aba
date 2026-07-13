@@ -23,6 +23,16 @@ def _runtime_dir() -> Path:
 
 
 def _tools_env() -> Path:
+    # Honor ABA_TOOLS_DIR — same override contract as core.exec.materialize._resolve_tools_env
+    # (the R/CLI base is identical for every group, so a fat SIF / OOD deploy points this at a
+    # pre-baked, image-resident copy at /opt/aba-envs/tools). Without this the r-bio readiness
+    # PROBE looks under $ABA_RUNTIME_DIR/envs/tools, misses the baked env, and first-use then
+    # RE-INSTALLS the whole R stack into the writable runtime dir at runtime — a slow,
+    # network-dependent rebuild that defeats the frozen image. Unset (dev/normal install) →
+    # identical to before.
+    override = os.environ.get("ABA_TOOLS_DIR")
+    if override and override.strip():
+        return Path(override).resolve()
     return _runtime_dir() / "envs" / "tools"
 
 
@@ -38,12 +48,18 @@ def path_vars() -> dict[str, str]:
     """Variables usable in a manifest's `ready`/`remove` paths ($ABA_HOME, $TOOLS_ENV,
     …). One place so probes and removes agree."""
     home = _aba_home()
+    # PAGODA3_DIST honors $ABA_PAGODA3_DIST — same contract as the viewer launcher's
+    # pagoda3_dist_path() (backend/content/bio/viewers/launchers/pagoda3.py). A fat SIF bakes
+    # the dist at /opt/aba/vendor/pagoda3/dist and exports the var; without this the
+    # viewer-pagoda3 readiness PROBE looks under $ABA_HOME/vendor/... , misses it, and
+    # first-use re-fetches the dist from GitHub at runtime. Unset → identical to before.
+    pagoda3_dist = os.environ.get("ABA_PAGODA3_DIST") or str(home / "vendor" / "pagoda3" / "dist")
     return {
         "ABA_HOME": str(home),
         "ABA_RUNTIME_DIR": str(_runtime_dir()),
         "ENV_DIR": str(_base_env()),
         "TOOLS_ENV": str(_tools_env()),
-        "PAGODA3_DIST": str(home / "vendor" / "pagoda3" / "dist"),
+        "PAGODA3_DIST": pagoda3_dist,
     }
 
 
@@ -81,10 +97,24 @@ def probe_ready(spec: ModuleSpec) -> bool:
     return False
 
 
+def _eager_override(module_id: str) -> str | None:
+    """`ABA_MODULES_EAGER` seeds heavy modules to `on` for an EAGER deploy — a fat SIF
+    bakes r-bio/viewer-pagoda3 (whose registry default is `first_use`) into the frozen
+    image, so they should read as `on` (permanently present, shown enabled, not a
+    deferred first-use install). Value: space/comma-separated module ids, or `all`/`*`.
+    Write-free and lowest-precedence: an explicit user choice in modules.json still wins,
+    so a user can still turn a baked module off. Unset → no effect (normal installs)."""
+    raw = (os.environ.get("ABA_MODULES_EAGER") or "").strip()
+    if not raw:
+        return None
+    ids = {t for t in raw.replace(",", " ").split()}
+    return "on" if (module_id in ids or "all" in ids or "*" in ids) else None
+
+
 def mode(spec: ModuleSpec) -> str:
-    """Effective state: explicit desired (modules.json) wins, else the registry
-    default. One of on | first_use | off."""
-    return state.get_desired(spec.id) or spec.default_state
+    """Effective state: explicit desired (modules.json) wins, else the eager-deploy
+    override (ABA_MODULES_EAGER), else the registry default. One of on | first_use | off."""
+    return state.get_desired(spec.id) or _eager_override(spec.id) or spec.default_state
 
 
 def is_enabled(spec: ModuleSpec) -> bool:

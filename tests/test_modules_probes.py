@@ -48,6 +48,44 @@ def test_probe_r_package(monkeypatch, tmp_path):
     assert mgr.probe_ready(s) is True
 
 
+def test_probe_r_package_honors_ABA_TOOLS_DIR(monkeypatch, tmp_path):
+    """A fat SIF bakes the R tools env into the image at $ABA_TOOLS_DIR (/opt/aba-envs/tools),
+    NOT under $ABA_RUNTIME_DIR/envs/tools. The r-bio readiness probe MUST look there, else it
+    reports the baked env as missing and first-use re-installs the whole R stack into the
+    writable runtime dir at runtime (a network-dependent rebuild that defeats the frozen image).
+    """
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    monkeypatch.setenv("ABA_RUNTIME_DIR", str(tmp_path / "runtime"))
+    baked = tmp_path / "image" / "aba-envs" / "tools"
+    monkeypatch.setenv("ABA_TOOLS_DIR", str(baked))
+    s = _spec(ready={"r_package": {"env": "tools", "package": "Seurat"}})
+    # runtime/envs/tools has it, but ABA_TOOLS_DIR wins and is empty → not ready
+    rt = tmp_path / "runtime" / "envs" / "tools"
+    (rt / "bin").mkdir(parents=True); (rt / "bin" / "Rscript").write_text("#!/bin/sh\n")
+    (rt / "lib" / "R" / "library" / "Seurat").mkdir(parents=True)
+    assert mgr.probe_ready(s) is False, "probe must read the baked $ABA_TOOLS_DIR, not runtime/envs/tools"
+    # populate the baked path → ready (no runtime rebuild fires)
+    (baked / "bin").mkdir(parents=True); (baked / "bin" / "Rscript").write_text("#!/bin/sh\n")
+    (baked / "lib" / "R" / "library" / "Seurat").mkdir(parents=True)
+    assert mgr.probe_ready(s) is True
+
+
+def test_probe_pagoda3_honors_ABA_PAGODA3_DIST(monkeypatch, tmp_path):
+    """viewer-pagoda3's readiness probe ($PAGODA3_DIST/index.html) must honor $ABA_PAGODA3_DIST,
+    which a fat SIF sets to the baked dist (/opt/aba/vendor/pagoda3/dist). Else the probe misses
+    the baked dist and first-use re-fetches it from GitHub at runtime."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    baked = tmp_path / "image" / "pagoda3" / "dist"
+    monkeypatch.setenv("ABA_PAGODA3_DIST", str(baked))
+    s = _spec(ready={"path_exists": "$PAGODA3_DIST/index.html"})
+    assert mgr.probe_ready(s) is False
+    baked.mkdir(parents=True); (baked / "index.html").write_text("<html>")
+    assert mgr.probe_ready(s) is True
+    # and the default (var unset) still resolves under $ABA_HOME
+    monkeypatch.delenv("ABA_PAGODA3_DIST")
+    assert mgr.path_vars()["PAGODA3_DIST"] == str(tmp_path / "vendor" / "pagoda3" / "dist")
+
+
 def test_probe_python_import(monkeypatch, tmp_path):
     monkeypatch.setenv("ABA_HOME", str(tmp_path))
     monkeypatch.setattr(mgr, "_base_env", lambda: tmp_path / "env")

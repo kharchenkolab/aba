@@ -158,6 +158,12 @@ if [ "$PROFILE" = "fat" ]; then
   # so Seurat/SCE .rds viewing works in the deploy — shared helper with the installers. The
   # helper rewrites the built .so rpath $ORIGIN-relative so it survives the stage→image move.
   bash "$REPO_ROOT/install/core/install-lstar-r.sh" "$STAGE/aba-tools" "$MM"
+  # Mark the baked base COMPLETE so env_integrity.base_stage() reads `ready` explicitly
+  # (it defaults to ready when the marker is absent, but a frozen image should be explicit:
+  # the whole scientific stack is baked, so nothing must run staged base-completion at
+  # runtime against the read-only mount). The python-bio module's readiness probe is
+  # `base_stage: ready`, so this keeps it satisfied without any first-use env-update.
+  printf 'ready\n' > "$STAGE/aba-venv/.aba-base-stage"
 fi
 
 # ── generate the .def for this profile ──
@@ -206,6 +212,12 @@ DEF="$STAGE/aba-$PROFILE.def"
   # /opt/aba/bin carries the baked micromamba (runtime conda/CLI materialization).
   echo "    export PATH=/opt/aba/bin:/opt/aba-venv/bin:\$PATH"
   echo "    export ABA_TOOLS_DIR=\${ABA_TOOLS_DIR:-/opt/aba-envs/tools}"
+  # EAGER plugin state: the heavy modules (r-bio, viewer-pagoda3) are BAKED into this fat
+  # image, so they should read as `on` (permanently present) rather than their `first_use`
+  # registry default. manager._eager_override honors this; combined with the probe paths
+  # above (ABA_TOOLS_DIR / ABA_PAGODA3_DIST) the reconciler sees them ready and installs
+  # nothing at runtime. Fat only — slim mounts a shared base and keeps first-use semantics.
+  [ "$PROFILE" = "fat" ] && echo "    export ABA_MODULES_EAGER=\${ABA_MODULES_EAGER:-python-bio r-bio viewer-pagoda3}"
   echo "    export SSL_CERT_FILE=\${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
   echo "    export REQUESTS_CA_BUNDLE=\${REQUESTS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
   echo ""
