@@ -71,6 +71,16 @@ def _coerce_csv(raw):
     return tuple(t.strip() for t in str(raw).split(",") if t.strip())
 
 
+def _coerce_truthy_presence(raw):
+    """Any non-empty value → True (matches ``bool(os.environ.get(k))``; note "0"
+    is truthy here, exactly as the historical reads treated it)."""
+    return bool(raw)
+
+
+def _coerce_lower_strip(raw):
+    return str(raw).strip().lower()
+
+
 _COERCERS = {"bool": _coerce_bool, "int": _coerce_int, "float": _coerce_float,
              "str": _coerce_str, "path": _coerce_path, "csv": _coerce_csv}
 
@@ -88,11 +98,11 @@ class Setting:
     __slots__ = ("name", "env_keys", "type", "default", "_coerce", "resolver",
                  "category", "doc", "branches", "deploy_injected", "secret",
                  "weft_fate", "reduction", "enum", "resolve_mode",
-                 "_cache", "_has_cache")
+                 "empty_is_unset", "_cache", "_has_cache")
 
     def __init__(self, *, name, env, type, default, coerce, resolver, category,
                  doc, branches, deploy_injected, secret, weft_fate, reduction,
-                 enum, resolve_mode):
+                 enum, resolve_mode, empty_is_unset):
         self.name = name
         self.env_keys = [env] if isinstance(env, str) else list(env or [])
         self.type = type
@@ -108,6 +118,7 @@ class Setting:
         self.reduction = reduction
         self.enum = enum
         self.resolve_mode = resolve_mode
+        self.empty_is_unset = empty_is_unset
         self._cache = _MISSING
         self._has_cache = False
 
@@ -131,10 +142,12 @@ class Setting:
             if k not in os.environ:
                 continue
             raw = os.environ[k]
-            # An explicitly-empty numeric/path env value is treated as unset
-            # (historically `int(os.environ.get(k, "5"))` would crash on "");
-            # str/csv accept "" as a real value (matching os.environ.get(k, "")).
-            if raw == "" and self.type not in ("str", "csv"):
+            # An empty env value is treated as unset when empty_is_unset (the
+            # `os.environ.get(k) or default` idiom), or for numeric/path types
+            # (historically `int(os.environ.get(k, "5"))` would crash on ""). A
+            # single-key str/csv setting keeps "" as a real value (matching the
+            # `os.environ.get(k, "")` idiom).
+            if raw == "" and (self.empty_is_unset or self.type not in ("str", "csv")):
                 continue
             try:
                 v = self._coerce(raw)
@@ -158,19 +171,22 @@ class Setting:
 def setting(name, *, env=None, type="str", default=None, coerce=None,
             resolver=None, category="", doc="", branches=False,
             deploy_injected=False, secret=False, weft_fate="keep",
-            reduction="keep", enum=None, resolve="lazy"):
+            reduction="keep", enum=None, resolve="lazy", empty_is_unset=False):
     """Declare a setting once; register it and return the ``Setting`` accessor.
 
     Callers read the live value via the returned object's ``.get()`` or via
     ``settings.<name>.get()``. Scalar back-compat module constants bind the frozen
-    ``.get()`` value; path tiers go through ``_path_setting`` (see below)."""
+    ``.get()`` value; path tiers go through ``_path_setting`` (see below).
+
+    ``empty_is_unset`` — an empty env value falls through to the next key/default
+    (the ``os.environ.get(k) or default`` idiom); needed for precedence lists."""
     if name in _REGISTRY:
         raise ValueError(f"setting {name!r} already declared")
     s = Setting(name=name, env=env, type=type, default=default, coerce=coerce,
                 resolver=resolver, category=category, doc=doc, branches=branches,
                 deploy_injected=deploy_injected, secret=secret,
                 weft_fate=weft_fate, reduction=reduction, enum=enum,
-                resolve_mode=resolve)
+                resolve_mode=resolve, empty_is_unset=empty_is_unset)
     _REGISTRY[name] = s
     return s
 
@@ -667,7 +683,10 @@ REFS_DIR.mkdir(parents=True, exist_ok=True)
 # directory you can back up, export, or delete atomically. Workspace-level
 # fallback dirs (the legacy DATA_DIR etc.) are kept for the "no project active"
 # case (background jobs without context, the workspace registry, scratch DBs).
-PROJECTS_DIR = _LazyDir(lambda: _resolve_under_runtime("ABA_PROJECTS_DIR", "projects"))
+PROJECTS_DIR = _path_setting(
+    "projects_dir", "ABA_PROJECTS_DIR",
+    lambda: _resolve_under_runtime("ABA_PROJECTS_DIR", "projects"),
+    doc="Per-project consolidated roots (projects/<pid>/).")
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -709,6 +728,345 @@ def project_artifacts_dir(pid: str) -> Path:
     p = project_root(pid) / "artifacts"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Full env surface (env_reorg Phase 3)
+# ---------------------------------------------------------------------------
+# Every ABA_* setting the backend reads, declared once. Consumers read via
+# `config.settings.<name>.get()`. Grouped by category; each carries weft_fate
+# (weft's move/delete checklist) and reduction (the fewer-better-vars plan).
+# Callers keep any surrounding transform (.strip()/.lower()/`or <dynamic>`);
+# static defaults are baked into the setting.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Paths / deploy plumbing ──────────────────────────────────────────────────
+def _resolve_aba_home() -> Path:
+    return Path(os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
+
+
+HOME_DIR = _path_setting(
+    "home_dir", "ABA_HOME", _resolve_aba_home,
+    doc="Install home ($ABA_HOME, default ~/.aba): config.env, oauth store, vendor.",
+    deploy_injected=True)
+
+
+def aba_home() -> Path:
+    """The install home as a plain Path (live). Preferred over reading ABA_HOME."""
+    return Path(_resolve_aba_home())
+
+
+setting("tools_dir", env="ABA_TOOLS_DIR", type="str", default=None,
+        category="paths", weft_fate="move:envspec",
+        doc="Override for the materialized-tools dir (else derived under ENVS_DIR).")
+setting("refsources_dir", env="ABA_REFSOURCES_DIR", type="str", default=None,
+        category="paths", weft_fate="move:site",
+        doc="Override for the reference-sources catalog dir.")
+setting("frontend_dist", env="ABA_FRONTEND_DIST", type="str", default=None,
+        category="paths", deploy_injected=True, weft_fate="keep",
+        doc="Built frontend dist dir served by the backend.")
+setting("pagoda3_dist", env="ABA_PAGODA3_DIST", type="str", default=None,
+        category="paths", weft_fate="move:site",
+        doc="pagoda3 viewer dist dir (else derived under $ABA_HOME/vendor).")
+setting("turn_log_dir", env="ABA_TURN_LOG_DIR", type="str", default="/tmp/aba_turnlog",
+        category="paths", weft_fate="keep",
+        doc="Directory for per-turn structured logs.")
+setting("raw_request_dir", env="ABA_RAW_REQUEST_DIR", type="str",
+        default="/tmp/aba_llm_sent", category="paths", weft_fate="keep",
+        doc="Debug dump dir for raw LLM requests (diagnostics only).")
+setting("share_dir", env="ABA_SHARE", type="str", default=None, category="paths",
+        deploy_injected=True, weft_fate="move:site",
+        doc="Shared install tree ($ABA_SHARE) for immutable releases; unset on personal/slim.")
+setting("release_id", env="ABA_RELEASE_ID", type="str", default=None,
+        category="paths", deploy_injected=True, weft_fate="move:site",
+        doc="Active release id under $ABA_SHARE/releases (else resolve_current()).")
+
+# ── Container / offload / modules deploy wiring (mostly move:site under weft) ──
+setting("sif", env="ABA_SIF", type="str", default=None, category="deploy",
+        deploy_injected=True, weft_fate="move:site",
+        doc="Path to the fat/slim SIF image used to wrap jobs.")
+setting("job_wrap", env="ABA_JOB_WRAP", type="str", default="", category="deploy",
+        branches=True, weft_fate="move:site",
+        doc="Job wrapper mode ('sif' → run jobs via apptainer exec <SIF>).")
+setting("base_lock", env="ABA_BASE_LOCK", type="str", default=None,
+        category="deploy", weft_fate="move:envspec",
+        doc="Path to the base environment lock (integrity check).")
+setting("offload_python", env="ABA_OFFLOAD_PYTHON", type="str", default=None,
+        category="deploy", weft_fate="retire", reduction="derive:sif",
+        doc="Python interpreter for offloaded (sbatch) jobs; else sys.executable.")
+setting("offload_backend_dir", env="ABA_OFFLOAD_BACKEND_DIR", type="str",
+        default=None, category="deploy", weft_fate="retire", reduction="derive:sif",
+        doc="Backend dir made importable in offloaded jobs; else the live backend dir.")
+setting("apptainer_tmpdir", env="ABA_APPTAINER_TMPDIR", type="str", default=None,
+        category="deploy", weft_fate="move:site",
+        doc="TMPDIR for apptainer/singularity build+run scratch.")
+setting("module_binds", env="ABA_MODULE_BINDS", type="str", default="",
+        category="deploy", weft_fate="move:site",
+        doc="Space-separated bind mounts injected when wrapping jobs in the SIF.")
+setting("module_init", env="ABA_MODULE_INIT", type="str", default=None,
+        category="deploy", weft_fate="move:site",
+        doc="Lmod init snippet path for module-based nextflow/tool execution.")
+setting("lmod_init", env="ABA_LMOD_INIT", type="str", default="", category="deploy",
+        weft_fate="move:site",
+        doc="Lmod init script path (else from site config init_path).")
+setting("modules_enabled", env="ABA_MODULES_ENABLED", type="str", default=None,
+        category="deploy", branches=True, weft_fate="move:site",
+        doc="'0' disables the environment-modules integration.")
+setting("modules_eager", env="ABA_MODULES_EAGER", type="str", default="",
+        category="deploy", weft_fate="move:site",
+        doc="Eagerly materialize module manifests at startup (fat-SIF baked artifacts).")
+setting("accelerator", env="ABA_ACCELERATOR", type="str", default="",
+        category="deploy", branches=True, weft_fate="move:site", reduction="derive:gpu-probe",
+        doc="Accelerator hint ('cuda' → CUDA-aware paths); else CPU / probe-derived.")
+
+# ── DB / process modes ───────────────────────────────────────────────────────
+setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",
+        branches=True, weft_fate="keep", reduction="merge:db_path",
+        doc="Explicit workspace DB path → SINGLE mode (tests / single-user).")
+setting("db_path_override", env="ABA_DB_PATH_OVERRIDE", type="str", default=None,
+        category="mode", branches=True, weft_fate="keep", reduction="merge:db_path",
+        doc="e2e-harness DB override (also triggers SINGLE mode). Alias of db_path.")
+setting("runtime_override", env="ABA_RUNTIME_OVERRIDE", type="str", default=None,
+        category="mode", branches=True, weft_fate="keep",
+        enum=("direct", "sdk", "fake", "openai"),
+        doc="Force the LLM runtime backend for the process (direct/sdk/fake/openai).")
+setting("disabled_tools", env="ABA_DISABLED_TOOLS", type="csv", default=(),
+        category="mode", branches=True, weft_fate="keep",
+        doc="Comma-separated global tool kill-switch (layered under agent allowlists).")
+setting("version", env="ABA_VERSION", type="str", default="dev", category="mode",
+        weft_fate="keep", doc="Deployed ABA version label (provenance stamp).")
+
+# ── Model / LLM (Reasoning plane — aba-owned; model resolver unified in Phase 7) ─
+setting("primary_model", env=["ABA_PRIMARY_MODEL", "ABA_MODEL"], type="str",
+        default=None, empty_is_unset=True, category="model", branches=True,
+        weft_fate="keep", reduction="merge:model",
+        doc="Targeted primary-model override (ABA_PRIMARY_MODEL, else ABA_MODEL).")
+setting("primary_spec", env="ABA_PRIMARY_SPEC", type="str", default="",
+        empty_is_unset=True, category="model", weft_fate="keep",
+        doc="Force a specific agent spec for the primary lane.")
+setting("summary_model", env="ABA_SUMMARY_MODEL", type="str",
+        default="claude-haiku-4-5-20251001", empty_is_unset=True, category="model",
+        weft_fate="keep", reduction="merge:model",
+        doc="Model used for Tier-2 history summarization.")
+setting("max_tokens", env="ABA_MAX_TOKENS", type="int", default=16000,
+        category="model", weft_fate="keep",
+        doc="Max output tokens for primary LLM calls.")
+
+# ── OpenAI-compatible provider ───────────────────────────────────────────────
+setting("openai_api_key", env="ABA_OPENAI_API_KEY", type="str", default=None,
+        category="credentials", secret=True, weft_fate="keep", reduction="merge:openai",
+        doc="OpenAI-compatible API key (ABA-scoped).")
+setting("openai_base_url", env="ABA_OPENAI_BASE_URL", type="str", default=None,
+        category="credentials", weft_fate="keep", reduction="merge:openai",
+        doc="OpenAI-compatible base URL (else provider default).")
+setting("openai_account_id", env="ABA_OPENAI_ACCOUNT_ID", type="str", default=None,
+        category="credentials", weft_fate="keep", reduction="merge:openai",
+        doc="ChatGPT-Account-Id for the Codex subscription backend.")
+setting("openai_model", env="ABA_OPENAI_MODEL", type="str", default=None,
+        category="model", weft_fate="keep", reduction="merge:openai",
+        doc="Default model for the OpenAI-compatible runtime (else caller default).")
+setting("openai_enable_thinking", env="ABA_OPENAI_ENABLE_THINKING", type="str",
+        default="", category="model", weft_fate="keep", reduction="merge:openai",
+        doc="Opt into 'thinking' for the OpenAI runtime (1/true/yes/on).")
+setting("openai_tool_result_framing", env="ABA_OPENAI_TOOL_RESULT_FRAMING",
+        type="str", default="none", category="model", weft_fate="keep",
+        reduction="merge:openai",
+        doc="How tool results are framed for the OpenAI runtime.")
+setting("openai_oauth_client_id", env="ABA_OPENAI_OAUTH_CLIENT_ID", type="str",
+        default="app_EMoamEEZ73f0CkXaXp7hrann", category="credentials",
+        weft_fate="keep", reduction="merge:openai",
+        doc="OAuth client id for the Codex subscription sign-in.")
+
+# ── Credentials (mode selectors; the secret STORE unification is Phase 7) ─────
+setting("llm_credential", env="ABA_LLM_CREDENTIAL", type="str", default=None,
+        category="credentials", weft_fate="keep",
+        doc="Credential MODE selector (e.g. 'oauth_cc'/'apikey') — not the secret itself.")
+setting("subscription_oauth", env="ABA_SUBSCRIPTION_OAUTH", type="str", default="",
+        category="credentials", weft_fate="keep",
+        doc="Gates the subscription (Claude.ai/Codex) sign-in flow.")
+
+# ── Behavior toggles / feature flags ─────────────────────────────────────────
+setting("advisors_enabled", env="ABA_ADVISORS_ENABLED", type="bool", default=False,
+        category="behavior", branches=True, weft_fate="keep",
+        doc="Enable the advisor sub-agents pass.")
+setting("preexec_veto", env="ABA_PREEXEC_VETO", type="str", default="on",
+        empty_is_unset=True, category="behavior", branches=True, weft_fate="keep",
+        doc="Pre-exec safety veto; 'off' disables it.")
+setting("feed_log", env="ABA_FEED_LOG", type="str", default="on", category="behavior",
+        weft_fate="keep", doc="Feedback event logging; 'off' disables it.")
+setting("data_summary", env="ABA_DATA_SUMMARY", type="str", default="on",
+        empty_is_unset=True, category="behavior", branches=True, weft_fate="keep",
+        doc="Inject the data-summary prompt block; 'off' disables it.")
+setting("prompt_arm", env="ABA_PROMPT_ARM", type="str", default="control",
+        empty_is_unset=True, category="behavior", branches=True, weft_fate="keep",
+        doc="A/B prompt arm selector (default 'control').")
+setting("discovery_env_gate", env="ABA_DISCOVERY_ENV_GATE", type="str", default=None,
+        category="behavior", branches=True, weft_fate="keep",
+        reduction="relocate:userpref",
+        doc="Env-gate for capability discovery (also a user preference).")
+setting("recovery_disabled", env="ABA_RECOVERY_DISABLED", type="bool", default=False,
+        coerce=_coerce_truthy_presence, empty_is_unset=True, category="behavior",
+        branches=True, weft_fate="keep",
+        doc="Any value disables the scribe recovery journal.")
+setting("debug_timing", env="ABA_DEBUG_TIMING", type="bool", default=False,
+        coerce=_coerce_truthy_presence, empty_is_unset=True, category="behavior",
+        weft_fate="keep", doc="Emit per-stage timing diagnostics.")
+setting("env_prewarm", env="ABA_ENV_PREWARM", type="str", default="eager",
+        empty_is_unset=True, category="behavior", branches=True, weft_fate="revisit",
+        doc="Environment prewarm policy ('eager'/'lazy'/…).")
+
+# ── Experimental gates (Phase-7 resolve-flag targets) ────────────────────────
+setting("experimental_prescriptive_search_skills",
+        env="ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS", type="bool", default=False,
+        coerce=_coerce_truthy_presence, empty_is_unset=True, category="experimental",
+        branches=True, weft_fate="keep", reduction="resolve-flag",
+        doc="Experimental: prescriptive search-skills behavior.")
+setting("experimental_fetch_recipe", env="ABA_EXPERIMENTAL_FETCH_RECIPE",
+        type="bool", default=False, coerce=_coerce_truthy_presence,
+        empty_is_unset=True, category="experimental", branches=True, weft_fate="keep",
+        reduction="resolve-flag", doc="Experimental: fetch-recipe discovery path.")
+setting("experimental_discovery_directive", env="ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE",
+        type="bool", default=False, coerce=_coerce_truthy_presence,
+        empty_is_unset=True, category="experimental", branches=True, weft_fate="keep",
+        reduction="resolve-flag", doc="Experimental: discovery directive prompt block.")
+setting("experimental_ablate_blocks", env="ABA_EXPERIMENTAL_ABLATE_BLOCKS",
+        type="csv", default=(), category="experimental", branches=True,
+        weft_fate="keep", reduction="resolve-flag",
+        doc="Experimental: comma-separated prompt blocks to ablate.")
+
+# ── Numeric / tuning knobs ───────────────────────────────────────────────────
+setting("kernel_threads", env="ABA_KERNEL_THREADS", type="str", default="",
+        category="tuning", weft_fate="revisit", reduction="merge:kernel",
+        doc="Override thread count for kernels (else CPU-derived).")
+setting("kernel_cancel_grace_s", env="ABA_KERNEL_CANCEL_GRACE_S", type="float",
+        default=3.0, category="tuning", weft_fate="revisit", reduction="merge:kernel",
+        doc="Grace period (s) before force-killing a cancelled kernel cell.")
+setting("cpu_limit", env="ABA_CPU_LIMIT", type="str", default="", category="tuning",
+        weft_fate="move:site", doc="Override detected CPU limit (else cgroup/os probe).")
+setting("import_harvest_cap", env="ABA_IMPORT_HARVEST_CAP", type="int", default=40,
+        category="tuning", weft_fate="keep",
+        doc="Max symbols harvested from an import for the tool catalog.")
+setting("mcp_registry_url", env="ABA_MCP_REGISTRY_URL", type="str", default=None,
+        category="tuning", weft_fate="keep",
+        doc="MCP registry URL override (else the built-in default).")
+setting("feedback_email", env="ABA_FEEDBACK_EMAIL", type="str",
+        default="pk.restricted@gmail.com", category="tuning", weft_fate="keep",
+        doc="Destination address for in-app feedback.")
+
+# ── R runtime knobs (mostly → weft EnvSpec) ──────────────────────────────────
+setting("r_plot_res", env="ABA_R_PLOT_RES", type="int", default=120,
+        category="tuning", weft_fate="move:envspec", reduction="merge:r",
+        doc="R plot DPI (floored at 40 by the caller).")
+setting("r_future_plan", env="ABA_R_FUTURE_PLAN", type="str", default="sequential",
+        category="tuning", weft_fate="move:envspec", reduction="merge:r",
+        doc="future::plan for R (sequential/multicore/…).")
+setting("r_future_globals_maxsize", env="ABA_R_FUTURE_GLOBALS_MAXSIZE", type="str",
+        default=None, category="tuning", weft_fate="move:envspec", reduction="merge:r",
+        doc="future.globals.maxSize for R (bytes; else R default).")
+setting("r_build_jobs", env="ABA_R_BUILD_JOBS", type="str", default=None,
+        category="tuning", weft_fate="move:envspec", reduction="merge:r",
+        doc="Parallel jobs for R source builds (MAKEFLAGS -j).")
+setting("r_ppm_base", env="ABA_R_PPM_BASE", type="str", default=None,
+        category="tuning", weft_fate="move:envspec", reduction="merge:r_ppm",
+        doc="Posit Package Manager base URL (else built-in default).")
+setting("r_ppm_distro", env="ABA_R_PPM_DISTRO", type="str", default=None,
+        category="tuning", weft_fate="move:envspec", reduction="merge:r_ppm",
+        doc="PPM binary distro tag (else auto-detected).")
+setting("r_ppm_snapshot", env="ABA_R_PPM_SNAPSHOT", type="str", default="latest",
+        category="tuning", weft_fate="move:envspec", reduction="merge:r_ppm",
+        doc="PPM snapshot date/tag ('latest' or YYYY-MM-DD).")
+
+# ── Cluster / jobs (weft owns placement/exec → mostly retire) ─────────────────
+setting("batch_submitter", env="ABA_BATCH_SUBMITTER", type="str", default="local",
+        coerce=_coerce_lower_strip, empty_is_unset=True, category="cluster",
+        branches=True, weft_fate="retire",
+        doc="Batch backend: 'local' or 'slurm'.")
+setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
+        category="cluster", weft_fate="retire", reduction="relocate:hpc.yaml",
+        doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml).")
+setting("slurm_mem_frac", env="ABA_SLURM_MEM_FRAC", type="float", default=0.85,
+        category="cluster", weft_fate="retire",
+        doc="Fraction of node memory an inline job may use before offloading.")
+setting("slurm_walltime_frac", env="ABA_SLURM_WALLTIME_FRAC", type="float",
+        default=0.8, category="cluster", weft_fate="retire",
+        doc="Fraction of walltime an inline job may use before offloading.")
+setting("inline_stall_min", env="ABA_INLINE_STALL_MIN", type="float", default=20.0,
+        category="cluster", weft_fate="retire", reduction="merge:inline",
+        doc="Whole-run silence budget (min) before an inline run is deemed stalled.")
+setting("inline_stall_cpu_sample_s", env="ABA_INLINE_STALL_CPU_SAMPLE_S",
+        type="float", default=3.0, category="cluster", weft_fate="retire",
+        reduction="merge:inline", doc="CPU sampling window (s) for stall detection.")
+setting("inline_auto_max_cores", env="ABA_INLINE_AUTO_MAX_CORES", type="float",
+        default=8.0, category="cluster", weft_fate="retire", reduction="merge:inline",
+        doc="Max cores an auto-inline job may claim before offloading.")
+setting("inline_auto_max_mem_gb", env="ABA_INLINE_AUTO_MAX_MEM_GB", type="float",
+        default=32.0, category="cluster", weft_fate="retire", reduction="merge:inline",
+        doc="Max memory (GB) an auto-inline job may claim before offloading.")
+
+# ── Nextflow (self-contained compute subsystem; retire/move:site under weft) ──
+setting("nextflow_module", env="ABA_NEXTFLOW_MODULE", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Lmod module providing nextflow (else site config).")
+setting("nextflow_profiles", env="ABA_NEXTFLOW_PROFILES", type="str", default=None,
+        category="nextflow", weft_fate="retire", reduction="merge:nextflow",
+        doc="Comma-separated nextflow profiles (else site config).")
+setting("nextflow_cachedir", env="ABA_NEXTFLOW_CACHEDIR", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Singularity cache dir for nextflow (else site config).")
+setting("nextflow_workdir", env="ABA_NEXTFLOW_WORKDIR", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Nextflow work dir root (else site config).")
+setting("nextflow_config", env="ABA_NEXTFLOW_CONFIG", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Extra nextflow -c config file (else site config).")
+setting("nextflow_bin", env="ABA_NEXTFLOW_BIN", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Dir/launcher for a self-installed nextflow prepended to PATH.")
+setting("nextflow_home", env="ABA_NEXTFLOW_HOME", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="Persistent NXF_HOME (plugins/assets); else per-run scratch.")
+setting("nextflow_java_home", env="ABA_NEXTFLOW_JAVA_HOME", type="str", default=None,
+        category="nextflow", weft_fate="move:site", reduction="merge:nextflow",
+        doc="JAVA_HOME for the nextflow head (Java ≥17).")
+setting("nextflow_execution", env="ABA_NEXTFLOW_EXECUTION", type="str", default=None,
+        empty_is_unset=True, category="nextflow", branches=True, weft_fate="retire",
+        reduction="merge:nextflow",
+        doc="Nextflow execution mode ('slurm'/'local'; else site config).")
+setting("nextflow_local_max_cores", env="ABA_NEXTFLOW_LOCAL_MAX_CORES", type="float",
+        default=None, category="nextflow", weft_fate="retire", reduction="merge:nextflow",
+        doc="Ceiling on cores for local nextflow execution (else 36).")
+setting("nextflow_local_max_mem_gb", env="ABA_NEXTFLOW_LOCAL_MAX_MEM_GB",
+        type="float", default=None, category="nextflow", weft_fate="retire",
+        reduction="merge:nextflow",
+        doc="Ceiling on memory (GB) for local nextflow execution (else 180).")
+# Per-field head/local Slurm footprint overrides (dict-driven in nextflow.py).
+for _tier in ("head", "local"):
+    for _field, _ty in (("cores", "int"), ("mem_gb", "int"), ("walltime_h", "int"),
+                        ("qos", "str"), ("partition", "str")):
+        setting(f"nextflow_{_tier}_{_field}",
+                env=f"ABA_NEXTFLOW_{_tier.upper()}_{_field.upper()}", type=_ty,
+                default=None, category="nextflow", weft_fate="retire",
+                reduction="merge:nextflow",
+                doc=f"Per-field {_tier} Slurm override for nextflow ({_field}).")
+
+# ── Bundle scope resolution (read via a passed env dict in scope_resolver;
+#    declared for `aba doctor` visibility). ────────────────────────────────────
+setting("site_config", env="ABA_SITE_CONFIG", type="str", default=None,
+        category="bundle", weft_fate="keep",
+        doc="Path to the deployment site.yaml (scopes, credentials, paths).")
+for _scope in ("system", "institution", "lab", "user"):
+    setting(f"{_scope}_bundle", env=f"ABA_{_scope.upper()}_BUNDLE", type="str",
+            default=None, category="bundle", weft_fate="keep",
+            doc=f"Override path for the {_scope} bundle scope.")
+setting("composed_bundle_path", env="ABA_COMPOSED_BUNDLE_PATH", type="str",
+        default=None, category="bundle", weft_fate="keep",
+        doc="Precomposed effective-bundle path (future marker).")
+setting("group", env="ABA_GROUP", type="str", default=None, category="bundle",
+        weft_fate="keep", doc="Group/lab id for group-scoped bundle + credentials.")
+setting("state_dir", env="ABA_STATE_DIR", type="str", default=None, category="bundle",
+        weft_fate="keep", doc="User state dir (else $ABA_HOME/state or site config).")
+setting("scratch_dir", env="ABA_SCRATCH", type="str", default=None, category="bundle",
+        weft_fate="keep", doc="Optional user scratch dir (else site config).")
 
 
 # current_project_id moved to core.projects (burn-down #1 — config is a leaf,

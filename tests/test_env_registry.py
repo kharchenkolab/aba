@@ -9,7 +9,8 @@ Three guarantees:
   3. Type coercion behaves (bool idioms, int/float, csv, path, enum-advisory).
 
 The snapshot lives at tests/data/env_registry_snapshot.json. Regenerate
-deliberately with ABA_REGEN_ENV_SNAPSHOT=1 when adding settings (review the diff).
+deliberately with REGEN_ENV_SNAPSHOT=1 when adding settings (review the diff).
+(Non-ABA_ name so the env-cleaning fixture doesn't strip it.)
 """
 from __future__ import annotations
 
@@ -46,6 +47,8 @@ def _resolved_defaults():
         # absolute path (RUNTIME_DIR differs per box/test-tmp).
         if row["type"] == "path":
             continue
+        if isinstance(val, tuple):  # JSON has no tuple → normalize to list
+            val = list(val)
         out[row["name"]] = val
     return out
 
@@ -62,9 +65,10 @@ def test_all_settings_resolve_and_have_metadata():
 
 
 def test_default_resolution_snapshot(monkeypatch):
+    regen = os.environ.get("REGEN_ENV_SNAPSHOT") == "1"  # read BEFORE cleaning
     _clean_env(monkeypatch)
     current = _resolved_defaults()
-    if os.environ.get("ABA_REGEN_ENV_SNAPSHOT") == "1" or not SNAPSHOT.exists():
+    if regen or not SNAPSHOT.exists():
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
         pytest.skip(f"(re)wrote snapshot with {len(current)} settings")
