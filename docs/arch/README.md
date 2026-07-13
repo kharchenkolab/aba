@@ -45,6 +45,7 @@ attach uniformly to all of them — **knowledge/bundle**, **verifiability/proven
 - [`bundle-and-content.md`](bundle-and-content.md) — the scope-chain (system → installation → lab → user → `EffectiveBundle`), skills/recipes, capabilities, and **the content-pack seam** (`core ↛ content`).
 - [`context-and-memory.md`](context-and-memory.md) — the agent's context as a transient projection of the durable model; history compaction; memory-wipe recovery.
 - [`deployment-and-access.md`](deployment-and-access.md) — the deployment-agnostic core, config topology, and the reserved identity/access seam.
+  - [`settings-reference.md`](settings-reference.md) — **generated** catalogue of every `ABA_*` setting (env, type, default, `weft_fate`, `reduction`); produced from the `config.py` registry by `scripts/gen_settings_reference.py`. Not hand-edited.
 
 ## Writing an arch doc
 

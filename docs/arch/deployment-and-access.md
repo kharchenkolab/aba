@@ -18,11 +18,18 @@ without the planes knowing which target they run on or who is acting. Four imper
   never reaches the cluster. (The only `platform.system()` reads in the tree pick a micromamba
   binary for the arch — `core/exec/mamba.py:29` — and stamp a bug-report line — a compute/ABI
   and a diagnostic concern, not business logic.)
-- **Config is driven, not hardcoded.** Every mutable-state root and every operational toggle
+- **Config is driven, not hardcoded — and declared in one enforced place.** Every mutable-state
+  root and every operational toggle is a **typed setting declared once** in `core/config.py`'s
+  registry (`setting(...)`), read through a single accessor (`config.settings.<name>.get()`) that
   resolves **from the environment at use-time** — lazy dirs re-read on each access, per-tier
   overrides, a re-parsed `config.env`. A test harness or a new deployment repoints a tier
-  *without editing code*. Prevents import-time-frozen paths (a test poisoning the global
-  Jupyter dir) and toggles scattered as literals.
+  *without editing code*. The single read path is a **CI invariant**
+  (`tests/test_env_registry_guard.py` fails on any inline `os.environ`/`getenv` read of an
+  `ABA_*` var in `backend/` outside `config.py`), so the surface is knowable, not scattered:
+  `list_settings()` / `aba settings` render every setting with its value, source, and migration
+  tags, and flag any unrecognized `ABA_*` var present in the environment. Prevents
+  import-time-frozen paths (a test poisoning the global Jupyter dir) and toggles scattered as
+  literals that no `doctor` can see.
 - **Access is a cross-cut, not a thread.** Who-may-act and who-*did*-act attach at the
   **boundary** — a per-request project pin + an ambient actor — not sprinkled through business
   logic. **No mutating route is un-gated** — enforced as a CI invariant. Prevents the
@@ -59,24 +66,37 @@ Three things compose, all pivoting on a **deployment-agnostic core**:
 
 ## The deployment-agnostic core (config resolution)
 
-`core/config.py` is the single home for mutable-state roots. `RUNTIME_DIR` is the roof for
-*all* runtime state, **hard-separated from the source tree** so `git status` stays clean and
-`--reload` doesn't die when an install writes under `envs/` (`core/config.py:12-20`). Every
-root is a **`_LazyDir`** (`core/config.py:21`) — a `PathLike` proxy that **re-resolves from
-the environment on every use**, so a harness or a runtime swap that sets `ABA_RUNTIME_DIR`
-*after* import is honored instead of a value frozen at import (`RUNTIME_DIR`
-`core/config.py:85`; `ENVS_DIR` `:99`). Each tier also carries its **own** env override
-(`DATA_DIR`, `ABA_ENVS_DIR`, `ABA_PROJECTS_DIR`…) so one tier repoints without moving the
-rest (`_resolve_under_runtime`, `core/config.py:78`). Everything a project owns consolidates
-under `projects/<pid>/` — one dir to back up, export, or delete atomically
-(`project_root`, `core/config.py:336`).
+`core/config.py` is the single home for mutable-state roots **and the typed settings registry**
+— the one place any `ABA_*` var is read. A setting is **declared once** with `setting(name,
+env=…, type=…, default=…, …)` (`core/config.py:178`), which registers it (`_REGISTRY`, `:37`)
+and returns a `Setting` accessor (`:88`); callers read the live value via
+`config.settings.<name>.get()`, and nothing in `backend/` reads `os.environ` for an `ABA_*`
+name directly (the Phase-4 guard enforces it). Each declaration also carries **migration
+metadata** — `weft_fate` (what the future weft compute-substrate rewrite does with it) and
+`reduction` (the fewer-better-vars plan) — so the surface doubles as a migration ledger.
+`list_settings()` (`:233`) renders it all (value + source + tags, secrets redacted) for
+`aba settings` / `aba doctor`, and reports any unrecognized `ABA_*` env var as drift. The full
+catalogue is generated into [`settings-reference.md`](settings-reference.md).
+
+`RUNTIME_DIR` is the roof for *all* runtime state, **hard-separated from the source tree** so
+`git status` stays clean and `--reload` doesn't die when an install writes under `envs/`
+(`core/config.py:12-20`). Path tiers are `type="path"` settings whose public name stays a
+**`_LazyDir`** (`:270`) — a `PathLike` proxy that **re-resolves from the environment on every
+use**, so a harness or a runtime swap that sets `ABA_RUNTIME_DIR` *after* import is honored
+instead of a value frozen at import (`RUNTIME_DIR` `:346`; `ENVS_DIR` `:372`). Scalar settings
+bind their frozen `.get()` value at import (so the ~60 modules importing `KERNEL_ENABLED`/`MODEL`
+see no change), while `config.settings.<name>.get()` stays live — the two timings the codebase
+relies on, both preserved. Each path tier carries its **own** env override (`DATA_DIR`,
+`ABA_ENVS_DIR`, `ABA_PROJECTS_DIR`…) so one tier repoints without moving the rest
+(`_resolve_under_runtime`, `:327`). Everything a project owns consolidates under `projects/<pid>/`
+— one dir to back up, export, or delete atomically (`project_root`, `:708`).
 
 Two whole-system modes ride the same env-driven resolution: **`SINGLE`** — when
-`ABA_DB_PATH` is set, the e2e/eval harness owns one DB and the multi-project registry is
-bypassed (`core/projects.py:35`, `current()` returns `"single"` `:214`); and **`FAKE`** —
-`ABA_FAKE_SESSION` swaps the live LLM for a recorded transcript (`core/config.py:260`,
-consumed in `core/llm.py:597`). Neither is a code branch in business logic — both are
-config the core reads at its seams.
+`ABA_DB_PATH` (or `ABA_DB_PATH_OVERRIDE`) is set, the e2e/eval harness owns one DB and the
+multi-project registry is bypassed (`core/projects.py:36`, both resolved via the settings
+registry); and **`FAKE`** — `ABA_FAKE_SESSION` swaps the live LLM for a recorded transcript
+(`fake_session` setting, consumed in `core/llm.py`). Neither is a code branch in business
+logic — both are config the core reads at its seams.
 
 **Target-conditionals live at the compute seam, and only there.** Exactly two facts differ
 by target, both resolved from `config.env`, never from a `if target==…`:
@@ -125,6 +145,14 @@ how-to for each target is owned by [`docs/install/README.md`](../install/README.
 four per-target guides. What matters here is the invariant they all uphold: an install writes
 *config*, never a code fork.
 
+The OOD launcher additionally **forwards** a set of backend env vars into the containerized
+server (`script.sh.erb`'s `--env` loop). That set is not a hand-maintained list: it is the
+registry's **`deploy_injected`** surface (`config.deploy_injected_keys()`, = `aba settings
+--deploy-env`), mirrored into the template and drift-guarded by
+`tests/test_deploy_forward_loop.py` — add a forwarded var without declaring it `deploy_injected`
+(or vice-versa) and CI fails. This closes the "add a var, forget to forward it" desync the
+fat-SIF work kept hitting across `script.sh.erb`/`before.sh.erb`/`after.sh.erb`.
+
 ## The access seam (identity, gating, scope)
 
 Access attaches at two boundaries and nowhere else, so business logic never carries an
@@ -153,8 +181,9 @@ are owned by [`provenance.md`](provenance.md); here it is the *who* half of the 
 
 **The reserved principal.** `human_actor(uid="local")` (`core/graph/derivation.py:64`)
 hardcodes `uid="local"`: single-user today, but the `human:<uid>` shape is the reserved seam
-for real identity. Likewise `CAPABILITY_APPROVAL` (`core/config.py:264`)
-defaults `"auto"` (solo) with `"ask"` reserved as the multi-user review gate.
+for real identity. Likewise `CAPABILITY_APPROVAL` (the `capability_approval` setting,
+`core/config.py:585`) defaults `"auto"` (solo) with `"ask"` reserved as the multi-user
+review gate.
 
 **Scope isolation is ambient-DB.** A project's isolation is *physical*: each project is its
 own SQLite under `projects/<pid>/project.db`. `set_current(pid)` repoints `db.DB_PATH`
@@ -179,7 +208,10 @@ credential/access scope.
 
 | Where | What |
 |---|---|
-| `core/config.py` | `_LazyDir` env-live roots (`RUNTIME_DIR`/`ENVS_DIR`/…), per-tier overrides, `project_root`, `SINGLE`/`FAKE`/`CAPABILITY_APPROVAL`, live `config.env` model reparse |
+| `core/config.py` | the **settings registry**: `setting()`/`Setting`/`settings`/`list_settings()`/`deploy_injected_keys()`; `_LazyDir` env-live path tiers (`RUNTIME_DIR`/`ENVS_DIR`/…), per-tier overrides, `project_root`, `FAKE_SESSION`/`capability_approval`, live `config.env` model reparse |
+| `tests/test_env_registry_guard.py` | the single-read-path CI invariant: no inline `ABA_*` `os.environ`/`getenv` read in `backend/` outside `config.py` |
+| `tests/test_env_registry.py` · `tests/test_deploy_forward_loop.py` | resolved-value snapshot (no behavior drift) + the deploy forward-loop mirrors `deploy_injected` |
+| `aba settings [--deploy-env]` (`install/…/cli.py`) | operator view of the full declared surface (value/source/`weft_fate`/`reduction`) + unknown-var drift; or just the launcher-forwarded keys |
 | `core/web/deps.py` | `require_project` — per-request project pin (412 on no-context) + ambient `human:local` |
 | `tests/test_project_pinning_coverage.py` | the access-gate CI invariant: every mutating route pinned or justified-exempt |
 | `core/runtime/actor.py` · `core/runtime/tool_ctx.py` | ambient actor contextvar; why the agent path attributes explicitly across the MCP boundary |
@@ -201,9 +233,14 @@ credential/access scope.
   SQLite files + contextvar binding; there is no live `store._scope_of` filter over a shared
   tenant store. A genuinely shared multi-tenant server would need the principal threaded to the
   data layer *and* a scope predicate — neither exists today.
-- **`config.env` has no schema validation** beyond `aba doctor`'s targeted checks
-  (accelerator-vs-base, submitter-vs-Slurm-presence). A typo'd or stale operational toggle is
-  caught only where a specific check exists, not by a general config-lint.
+- **Setting VALUES aren't deep-validated, though the surface now is.** The registry gives every
+  toggle a declared type, default, and (for some) an `enum`, and `aba settings` / `aba doctor`
+  flag any **unrecognized** `ABA_*` var in the environment (typo / stale knob) — the general
+  config-lint that didn't exist before. But a *recognized* setting with a semantically-wrong
+  value (an enum mismatch passes through advisory-flagged; a path that doesn't exist) is still
+  only caught where a specific `doctor` check exists (accelerator-vs-base, submitter-vs-Slurm).
+  Enum enforcement is advisory in the mechanical pass to preserve behavior; tightening it to
+  hard-reject is a reduction-wave follow-up.
 - **Fat SIF is a frozen, read-only target — everything must be baked EAGER.** The modules +
   lazy-env systems default to first-use/deferred install, which cannot work against a read-only
   image. A fat SIF (`install/sif/build.sh --profile fat`) bakes the full python base, the R

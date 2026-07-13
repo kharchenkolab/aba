@@ -12,4 +12,7 @@ Pick the guide that matches your setup:
 Every install is self-contained (it never touches your system Python/PATH), pulls
 the latest code + curated recipe library, and updates in place (`aba update`, or the
 Mac menu-bar app). When in doubt, `aba doctor` checks the install and tells you how
-to fix any problem.
+to fix any problem — including flagging any **unrecognized `ABA_*` variable** in your
+`config.env` (a typo or stale knob). To see every configurable setting with its current
+value and where it came from, run **`aba settings`** (the full catalogue lives in
+[`docs/arch/settings-reference.md`](../arch/settings-reference.md)).
