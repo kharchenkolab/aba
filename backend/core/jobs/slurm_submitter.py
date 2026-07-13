@@ -57,8 +57,8 @@ def _job_wrap_mode() -> str:
 
 def _apptainer_tmpdir() -> str:
     """Node-local tmp/cache for a wrapped job's apptainer. MUST be off NFS home —
-    apptainer hangs unkillably when its cache/tmp sit there (reproduced on CBE clip
-    nodes; see core/exec/nextflow.py). Overridable via ABA_APPTAINER_TMPDIR."""
+    apptainer hangs unkillably when its cache/tmp sit on an NFS home (see
+    core/exec/nextflow.py). Overridable via ABA_APPTAINER_TMPDIR."""
     return (os.environ.get("ABA_APPTAINER_TMPDIR")
             or f"/tmp/aba-apptainer-{os.environ.get('USER') or os.environ.get('LOGNAME') or 'u'}")
 

@@ -969,7 +969,7 @@ def nextflow_head_script(*, pipeline: str, project_id: str, run_id: str,
     lines.append('export NXF_SYNTAX_PARSER="${NXF_SYNTAX_PARSER:-v1}"')
     if cfg.get("singularity_cachedir"):
         lines.append(f'export NXF_SINGULARITY_CACHEDIR={_shlex.quote(cfg["singularity_cachedir"])}')
-    # apptainer/singularity tmp + cache MUST be node-local (off NFS home — the CBE
+    # apptainer/singularity tmp + cache MUST be node-local (off NFS home — the NFS
     # file-lock hang). nextflow's per-task containers inherit these.
     lines.append('_ap="${ABA_APPTAINER_TMPDIR:-/tmp/aba-apptainer-${USER:-u}}"; mkdir -p "$_ap"')
     for _k in ("APPTAINER_TMPDIR", "SINGULARITY_TMPDIR", "APPTAINER_CACHEDIR", "SINGULARITY_CACHEDIR"):
@@ -1076,8 +1076,8 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
     env_vars.update(module_overlay)          # nextflow (+ its module's java/deps) onto PATH for inline
     if cfg["singularity_cachedir"]:
         env_vars["NXF_SINGULARITY_CACHEDIR"] = cfg["singularity_cachedir"]
-    # Apptainer/Singularity hang INDEFINITELY when their working tmp/cache sit on this cluster's
-    # NFS home (file-lock stall — reproduced on CBE clip nodes: even `apptainer exec <img> true`
+    # Apptainer/Singularity hang INDEFINITELY when their working tmp/cache sit on an
+    # NFS home (file-lock stall — observed: even `apptainer exec <img> true`
     # never returns and ignores SIGKILL). The default APPTAINER_CACHEDIR is $HOME/.apptainer/cache
     # and the inherited env had APPTAINER_TMPDIR on $HOME. Pin both to node-local /tmp (fast, off
     # NFS, present on every node) so container tasks actually run — inline AND Slurm (sbatch

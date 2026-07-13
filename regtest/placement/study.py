@@ -18,8 +18,10 @@ import sys
 import time
 from pathlib import Path
 
-INSTALL = Path("/users/peter.kharchenko/data/aba/install")
-REPO = Path("/groups/tanaka/People/current/PeterK/aba/aba")
+# Repo root derived from this file's location; the install/config dir from the env
+# (ABA_INSTALL or ABA_HOME), so nothing is hardcoded to one machine.
+REPO = Path(__file__).resolve().parents[2]
+INSTALL = Path(os.environ.get("ABA_INSTALL") or os.environ.get("ABA_HOME") or (Path.home() / ".aba"))
 
 
 # ── 1. config.env (creds + ABA_HOME + bundles), like the launcher sources it ──
