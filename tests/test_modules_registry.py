@@ -156,3 +156,27 @@ def test_module_view_shape(monkeypatch, tmp_path):
               "on_disk", "removable", "first_use"):
         assert k in v
     assert v["enabled"] is False and v["actual"] == "not_installed"
+
+
+def test_deployment_immutable_locks_modules(monkeypatch, tmp_path):
+    """A baked read-only base (fat SIF): manager.deployment_immutable() is True, every
+    module view is `locked`, and reconciler.set_mode REFUSES — the UI disables the controls
+    and the backend rejects a mutation (the image must be rebuilt to change what's baked)."""
+    monkeypatch.setenv("ABA_HOME", str(tmp_path))
+    import core.modules.reconciler as rec
+    ro = tmp_path / "ro-base"; ro.mkdir()
+    monkeypatch.setattr(mgr, "_base_env", lambda: ro)
+    # writable base → not immutable, controls live (unchanged behavior)
+    assert mgr.deployment_immutable() is False
+    assert mgr.module_view(reg.get("r-bio"))["locked"] is False
+    # flip the base read-only → immutable → locked + refused
+    import os, stat
+    os.chmod(ro, stat.S_IRUSR | stat.S_IXUSR)          # r-x, no write
+    try:
+        assert mgr.deployment_immutable() is True
+        assert all(v["locked"] for v in mgr.list_modules())
+        import pytest
+        with pytest.raises(ValueError, match="read-only image"):
+            rec.set_mode("r-bio", "off", remove=True)
+    finally:
+        os.chmod(ro, stat.S_IRWXU)                      # restore so tmp cleanup works

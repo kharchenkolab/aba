@@ -229,6 +229,12 @@ def set_mode(module_id: str, new_mode: str, *, remove: bool = False,
         return None
     if new_mode not in registry.STATES:
         raise ValueError(f"bad module state {new_mode!r} (expected one of {registry.STATES})")
+    # A baked, read-only deployment (fat SIF): modules are frozen in the image — install/
+    # remove would hit the read-only mount, and a mode flip is meaningless. Refuse (the UI
+    # also locks the controls); the image must be rebuilt to change what's baked.
+    if manager.deployment_immutable():
+        raise ValueError("modules are baked into this read-only image and can't be changed "
+                         "here — rebuild the image to add or remove capabilities.")
     state.set_desired(module_id, new_mode)
     if new_mode == "off":
         if remove:

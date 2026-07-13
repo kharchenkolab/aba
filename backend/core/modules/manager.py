@@ -141,6 +141,18 @@ def actual_state(spec: ModuleSpec) -> str:
     return "not_installed"
 
 
+def deployment_immutable() -> bool:
+    """A frozen/baked deployment (a fat SIF): the base env is a READ-ONLY mount, so modules
+    cannot be installed, removed, or toggled at runtime — the image must be rebuilt to change
+    them. When True the UI locks the module controls and the reconciler refuses mutations.
+    False for a normal (writable) install → modules stay toggleable, unchanged behavior."""
+    try:
+        be = _base_env()
+        return be.exists() and not os.access(be, os.W_OK)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def module_view(spec: ModuleSpec) -> dict:
     st = state.get_status(spec.id)
     actual = actual_state(spec)
@@ -158,6 +170,7 @@ def module_view(spec: ModuleSpec) -> dict:
         "enabled": is_enabled(spec),            # mode==on (back-compat)
         "actual": actual,
         "on_disk": ready,                       # ready ⟹ artifacts present (drives reclaim-space link)
+        "locked": deployment_immutable(),       # baked read-only image → UI disables toggle/reclaim
         "progress": st["progress"],
         "error": st["error"],
         "version": st["version"],

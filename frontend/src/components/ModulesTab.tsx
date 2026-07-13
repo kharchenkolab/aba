@@ -15,6 +15,7 @@ interface Module {
   mode: Mode; enabled: boolean
   actual: 'ready' | 'installing' | 'queued' | 'failed' | 'not_installed'
   on_disk: boolean; progress: string | null; error: string | null; version: string | null
+  locked?: boolean   // baked read-only image (fat SIF): can't install/remove/toggle here
 }
 
 const MODE_LABELS: { key: Mode; label: string }[] = [
@@ -95,18 +96,28 @@ export default function ModulesTab() {
               </div>
               <p className="mod-card__desc">{m.description}</p>
               <div className="mod-controls">
-                <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
-                  {MODE_LABELS.map(o => (
-                    <button key={o.key}
-                      className={`mod-seg__btn ${m.mode === o.key ? 'is-active' : ''}`}
-                      aria-pressed={m.mode === o.key}
-                      disabled={busy === m.id || m.mode === o.key}
-                      onClick={() => setMode(m.id, o.key)}>{o.label}</button>
-                  ))}
-                </div>
-                {m.mode === 'off' && m.on_disk && m.removable && (
-                  <button className="mod-linkbtn mod-reclaim" disabled={busy === m.id}
-                    onClick={() => act(m.id, 'mode?mode=off&remove=true')}>Reclaim disk space</button>
+                {m.locked ? (
+                  // Baked read-only image (fat SIF): the capability is frozen in the image —
+                  // install/remove/toggle isn't possible here (rebuild the image to change it).
+                  <span className="mod-locked" title="Baked into this deployment's image; rebuild to change.">
+                    🔒 Included in this deployment (read-only image)
+                  </span>
+                ) : (
+                  <>
+                    <div className="mod-seg" role="group" aria-label={`${m.title} mode`}>
+                      {MODE_LABELS.map(o => (
+                        <button key={o.key}
+                          className={`mod-seg__btn ${m.mode === o.key ? 'is-active' : ''}`}
+                          aria-pressed={m.mode === o.key}
+                          disabled={busy === m.id || m.mode === o.key}
+                          onClick={() => setMode(m.id, o.key)}>{o.label}</button>
+                      ))}
+                    </div>
+                    {m.mode === 'off' && m.on_disk && m.removable && (
+                      <button className="mod-linkbtn mod-reclaim" disabled={busy === m.id}
+                        onClick={() => act(m.id, 'mode?mode=off&remove=true')}>Reclaim disk space</button>
+                    )}
+                  </>
                 )}
               </div>
               {installing && m.progress && <div className="mod-card__progress">{m.progress}</div>}
