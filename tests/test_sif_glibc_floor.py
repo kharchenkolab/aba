@@ -143,9 +143,12 @@ def test_preflight_always_produces_subscription_oauth_value():
 
 
 def test_preflight_subscription_signin_override():
-    """site.yaml credentials.subscription_signin overrides the default (off | paste | all)."""
+    """site.yaml credentials.subscription_signin overrides the default. `off` forces
+    API-key-only; a full/callback level (`all`) is CAPPED to `paste` here because this
+    producer runs only under the proxied OOD launch, where OpenAI's localhost callback
+    can't be reached (main 7badb538). Canonical coverage: install/ood/test_preflight.py."""
     assert "export ABA_SUBSCRIPTION_OAUTH='off'" in _run_preflight_envsh("off")
-    assert "export ABA_SUBSCRIPTION_OAUTH='all'" in _run_preflight_envsh("all")
+    assert "export ABA_SUBSCRIPTION_OAUTH='paste'" in _run_preflight_envsh("all")
 
 
 def test_launch_forwards_subscription_oauth():
