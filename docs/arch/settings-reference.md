@@ -12,9 +12,28 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**124 settings** across 11 categories.  
-weft_fate — `keep` 62, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 7.  
-reduction — `derive` 4, `keep` 61, `merge` 53, `relocate` 2, `resolve-flag` 4.
+**125 settings** across 11 categories.  
+weft_fate — `keep` 63, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 7.  
+reduction — `derive` 4, `keep` 62, `merge` 53, `relocate` 2, `resolve-flag` 4.
+
+### Tag vocabularies
+
+**`weft_fate`** — what the planned [weft](https://github.com/kharchenkolab/weft) compute-substrate migration does with a setting (advisory metadata; changes nothing today):
+
+- `keep` — aba-native, survives weft (model/LLM, behavior flags, paths aba keeps).
+- `retire` — weft owns the concern; the var goes away (placement, offload, most nextflow).
+- `move:site` — becomes weft **site-registration** config (SIF/module/bind/accelerator wiring).
+- `move:envspec` — becomes part of a weft **EnvSpec** (tools dir, base lock, R repos/pins).
+- `revisit` — genuinely ambiguous; decide at weft time (kernel lifecycle, prewarm).
+
+**`reduction`** — the fewer-better-variables plan (each is a guarded, reviewable cut once the anti-bypass guard proves read-site completeness):
+
+- `keep` — genuinely a per-process env knob; leave it.
+- `dead` — read but effectively never set / feature gone → delete.
+- `resolve-flag` — a feature flag that has won (→ always-on, drop the flag) or lost (→ delete with its branch).
+- `merge:<group>` — fold a family of flat vars into one structured setting (surface, not count).
+- `derive:<from>` — compute the value instead of configuring it (drop the knob).
+- `relocate:<layer>` — move a mis-homed knob to where it's curated (bundle `settings.yaml`, `hpc.yaml`, user prefs).
 
 ## paths
 
@@ -69,6 +88,7 @@ reduction — `derive` 4, `keep` 61, `merge` 53, `relocate` 2, `resolve-flag` 4.
 | `disabled_tools` | `ABA_DISABLED_TOOLS` | csv | () | keep | keep | branches | Comma-separated global tool kill-switch (layered under agent allowlists). |
 | `fake_session` | `ABA_FAKE_SESSION` | str |  | keep | keep | branches | Non-empty → deterministic fake LLM session (tests / demos). |
 | `runtime_override` | `ABA_RUNTIME_OVERRIDE` | str |  | keep | keep | branches | Force the LLM runtime backend for the process (direct/sdk/fake/openai). |
+| `settings_strict` | `ABA_SETTINGS_STRICT` | bool | False | keep | keep | branches | Any value → validate_settings() RAISES on out-of-enum/coerce-fail at startup instead of warning (CI / hardened deploys). |
 | `version` | `ABA_VERSION` | str | dev | keep | keep |  | Deployed ABA version label (provenance stamp). |
 
 ## model

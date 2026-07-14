@@ -78,6 +78,16 @@ metadata** — `weft_fate` (what the future weft compute-substrate rewrite does 
 `aba settings` / `aba doctor`, and reports any unrecognized `ABA_*` env var as drift. The full
 catalogue is generated into [`settings-reference.md`](settings-reference.md).
 
+**Scope of "single source of truth": the backend process config, not every `ABA_*` string.**
+The registry + guard own the vars the **backend** reads. `ABA_*` deliberately also appears in
+three *other* contracts the guard does **not** police, and shouldn't: the **installer / OOD
+launcher shell** (`install/…`, `ABA_PF_*` preflight — a deploy-time contract that *feeds* the
+backend; its backend-facing subset is the `deploy_injected` forward-loop), a little **frontend
+TS** (build/runtime knobs it reads itself), **bundle `settings.yaml`** (deployment policy the
+backend reads via the bundle, not env), and **recipe/tool shell** (`ABA_HOME` etc. inside
+executed recipes). Those are separate, intentional surfaces; the registry is authoritative for
+the backend server process specifically.
+
 `RUNTIME_DIR` is the roof for *all* runtime state, **hard-separated from the source tree** so
 `git status` stays clean and `--reload` doesn't die when an install writes under `envs/`
 (`core/config.py:12-20`). Path tiers are `type="path"` settings whose public name stays a
@@ -90,6 +100,17 @@ relies on, both preserved. Each path tier carries its **own** env override (`DAT
 `ABA_ENVS_DIR`, `ABA_PROJECTS_DIR`…) so one tier repoints without moving the rest
 (`_resolve_under_runtime`, `:327`). Everything a project owns consolidates under `projects/<pid>/`
 — one dir to back up, export, or delete atomically (`project_root`, `:708`).
+
+**Read live vs frozen — the one rule to remember.** Two access forms coexist:
+`config.settings.<name>.get()` re-resolves the environment on **every** call (live); a
+module-level constant (`from core.config import KERNEL_ENABLED`) is a **frozen import-time
+snapshot**. So anything **hot-swappable at runtime must be read via `.get()` (or a live
+resolver), never the frozen constant.** Today only the **model** is hot-swapped (Settings →
+Model, `set_default_model` rewrites `ABA_MODEL` in `config.env` + `os.environ`): the primary
+chat lane already resolves it live via `current_model_for_primary` / `current_model_for_project`,
+and the frozen `MODEL` is only the last-resort fallback. Every other `branches=True` toggle
+(`KERNEL_ENABLED`, `CAPABILITY_APPROVAL`, `FAKE_SESSION`, …) is a deploy-time decision set
+before boot, so a frozen read is correct. New hot-swappable settings must use `.get()`.
 
 Two whole-system modes ride the same env-driven resolution: **`SINGLE`** — when
 `ABA_DB_PATH` (or `ABA_DB_PATH_OVERRIDE`) is set, the e2e/eval harness owns one DB and the

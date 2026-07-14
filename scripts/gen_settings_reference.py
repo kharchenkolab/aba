@@ -91,6 +91,29 @@ def main():
     w("weft_fate — " + ", ".join(f"`{k}` {v}" for k, v in sorted(wf.items())) + ".  ")
     w("reduction — " + ", ".join(f"`{k}` {v}" for k, v in sorted(rd.items())) + ".")
     w("")
+    # Self-contained tag vocabularies so `reduction: merge:kernel` is actionable
+    # here, without the (separate-repo) design log.
+    w("### Tag vocabularies")
+    w("")
+    w("**`weft_fate`** — what the planned [weft](https://github.com/kharchenkolab/weft) "
+      "compute-substrate migration does with a setting (advisory metadata; changes nothing today):")
+    w("")
+    w("- `keep` — aba-native, survives weft (model/LLM, behavior flags, paths aba keeps).")
+    w("- `retire` — weft owns the concern; the var goes away (placement, offload, most nextflow).")
+    w("- `move:site` — becomes weft **site-registration** config (SIF/module/bind/accelerator wiring).")
+    w("- `move:envspec` — becomes part of a weft **EnvSpec** (tools dir, base lock, R repos/pins).")
+    w("- `revisit` — genuinely ambiguous; decide at weft time (kernel lifecycle, prewarm).")
+    w("")
+    w("**`reduction`** — the fewer-better-variables plan (each is a guarded, reviewable cut once "
+      "the anti-bypass guard proves read-site completeness):")
+    w("")
+    w("- `keep` — genuinely a per-process env knob; leave it.")
+    w("- `dead` — read but effectively never set / feature gone → delete.")
+    w("- `resolve-flag` — a feature flag that has won (→ always-on, drop the flag) or lost (→ delete with its branch).")
+    w("- `merge:<group>` — fold a family of flat vars into one structured setting (surface, not count).")
+    w("- `derive:<from>` — compute the value instead of configuring it (drop the knob).")
+    w("- `relocate:<layer>` — move a mis-homed knob to where it's curated (bundle `settings.yaml`, `hpc.yaml`, user prefs).")
+    w("")
 
     for cat in CAT_ORDER + [x for x in by_cat if x not in CAT_ORDER]:
         if cat not in by_cat:

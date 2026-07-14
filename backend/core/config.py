@@ -10,11 +10,14 @@ read path. ``tests/test_env_registry_guard.py`` fails the build if any inline
 ``os.environ``/``os.getenv`` read of an ``ABA_*`` name survives in ``backend/``
 outside this file, so ``list_settings()`` can never silently under-report.
 
-Each declaration also carries migration metadata:
+Each declaration also carries migration metadata (vocabularies + operational
+meaning are defined in ``docs/arch/settings-reference.md`` and
+``docs/arch/deployment-and-access.md``):
   * ``weft_fate`` ∈ {keep, retire, move:site, move:envspec, revisit} — what the
-    later weft rewrite does with it (this ledger is weft's move/delete checklist).
+    planned weft compute-substrate migration does with it (its move/delete checklist).
   * ``reduction``  ∈ {keep, dead, resolve-flag, merge:<g>, derive:<from>,
-    relocate:<layer>} — the fewer-better-variables plan (§6 of env_reorg.md).
+    relocate:<layer>} — the fewer-better-variables plan (reduce the surface once the
+    guard proves read-site completeness).
 
 Stdlib-only, import-safe: this module loads very early, so the registry must not
 import bundle/graph/runtime. Resolution is LAZY by default — every ``.get()``
