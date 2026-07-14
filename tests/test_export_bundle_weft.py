@@ -112,7 +112,8 @@ def test_weft_export_import_round_trip():
     projects.set_current(pid)
 
     # A real finished weft task with a recorded output = the exportable job.
-    # NB: weft declared outputs are DIRECTORIES (hash-tree walks a tree).
+    # (Declared outputs may be dirs OR plain files since weft 3972cc2; the
+    # results/ dir stays the convention for multi-artifact steps.)
     w = ad.get_compute()
     sub = w.sync_call("task_submit", {
         "command": "mkdir -p results && echo repro-payload > results/out.txt",
