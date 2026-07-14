@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_p0int_")
 os.environ["ABA_FAKE_SESSION"] = str(ROOT / "tests/fixtures/produce_hist.jsonl")
-os.environ["ABA_DB_PATH_OVERRIDE"] = str(Path(_tmp) / "p0.db")
+os.environ["ABA_DB_PATH"] = str(Path(_tmp) / "p0.db")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 os.environ["DATA_DIR"] = str(ROOT / "backend/data")     # holds cells.csv for the fixture

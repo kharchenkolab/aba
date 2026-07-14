@@ -113,9 +113,10 @@ and the frozen `MODEL` is only the last-resort fallback. Every other `branches=T
 before boot, so a frozen read is correct. New hot-swappable settings must use `.get()`.
 
 Two whole-system modes ride the same env-driven resolution: **`SINGLE`** — when
-`ABA_DB_PATH` (or `ABA_DB_PATH_OVERRIDE`) is set, the e2e/eval harness owns one DB and the
-multi-project registry is bypassed (`core/projects.py:36`, both resolved via the settings
-registry); and **`FAKE`** — `ABA_FAKE_SESSION` swaps the live LLM for a recorded transcript
+`ABA_DB_PATH` is set, the e2e/eval harness owns one DB and the multi-project registry is
+bypassed (`core/projects.py`, resolved via the settings registry; the former
+`ABA_DB_PATH_OVERRIDE` alias was merged into `ABA_DB_PATH`); and **`FAKE`** —
+`ABA_FAKE_SESSION` swaps the live LLM for a recorded transcript
 (`fake_session` setting, consumed in `core/llm.py`). Neither is a code branch in business
 logic — both are config the core reads at its seams.
 

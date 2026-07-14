@@ -5,9 +5,9 @@ and uploaded data stay global (content-addressed), so only the DB path is
 per-project. The active project's path is published to ``db.DB_PATH`` and every
 ``db.*`` function operates on it.
 
-Bypassed entirely in single-project / test mode — when ``ABA_DB_PATH`` or
-``ABA_DB_PATH_OVERRIDE`` is set, the e2e harness owns ``db.DB_PATH`` and this
-layer just runs ``init_db`` on it.
+Bypassed entirely in single-project / test mode — when ``ABA_DB_PATH`` is set,
+the e2e harness owns ``db.DB_PATH`` and this layer just runs ``init_db`` on it.
+(The former ``ABA_DB_PATH_OVERRIDE`` alias was merged into ``ABA_DB_PATH``.)
 """
 from __future__ import annotations
 import fcntl
@@ -33,7 +33,7 @@ from core.config import PROJECTS_DIR, _LazyDir  # noqa: E402 — kept here so le
 # runtime swaps) is honored — these resolve PROJECTS_DIR live on every use.
 REGISTRY = _LazyDir(lambda: PROJECTS_DIR / "registry.json")
 SCRATCH = _LazyDir(lambda: PROJECTS_DIR / "_scratch.db")   # parked here when no project is active
-SINGLE = bool(config.settings.db_path.get() or config.settings.db_path_override.get())
+SINGLE = bool(config.settings.db_path.get())
 
 _state = {"current": None}
 

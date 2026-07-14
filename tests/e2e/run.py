@@ -89,7 +89,7 @@ def main() -> int:
     shim_dir.mkdir()
     (shim_dir / "usercustomize.py").write_text(
         "import os\n"
-        "_override = os.environ.get('ABA_DB_PATH_OVERRIDE')\n"
+        "_override = os.environ.get('ABA_DB_PATH')\n"
         "if _override:\n"
         "    try:\n"
         "        import db, pathlib\n"
@@ -103,7 +103,7 @@ def main() -> int:
         "ABA_FAKE_SESSION": str(FIXTURE),
         "ARTIFACTS_DIR": str(artifacts_dir),
         "DATA_DIR": str(ROOT / "backend/data"),
-        "ABA_DB_PATH_OVERRIDE": str(db_path),
+        "ABA_DB_PATH": str(db_path),
         "PYTHONPATH": str(shim_dir) + os.pathsep + str(ROOT / "backend"),
     }
 

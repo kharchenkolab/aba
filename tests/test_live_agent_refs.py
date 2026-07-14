@@ -42,7 +42,7 @@ if not (Path("~/.claude/.credentials.json").expanduser().exists()
 ROOT = Path(__file__).resolve().parents[1]
 _TMP = tempfile.mkdtemp(prefix="aba_liveagent_")
 os.environ.pop("ABA_DB_PATH", None)
-os.environ.pop("ABA_DB_PATH_OVERRIDE", None)
+os.environ.pop("ABA_DB_PATH", None)
 os.environ["ABA_RUNTIME_DIR"] = _TMP
 os.environ["ABA_PROJECTS_DIR"] = _TMP + "/projects"
 os.environ["ABA_ENVS_DIR"] = _TMP + "/envs"

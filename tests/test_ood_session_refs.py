@@ -47,7 +47,7 @@ def _secondary_group():
 
 _ACTOR = r'''
 import os, sys, json
-os.environ.pop("ABA_DB_PATH", None); os.environ.pop("ABA_DB_PATH_OVERRIDE", None)
+os.environ.pop("ABA_DB_PATH", None)
 sys.path.insert(0, os.environ["ABA_BACKEND"])
 from core import projects
 import content.bio  # noqa

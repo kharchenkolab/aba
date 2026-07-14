@@ -16,10 +16,6 @@ from typing import Optional
 
 from core import config  # import-safe leaf; the single ABA_* read path
 
-# ABA_DB_PATH_OVERRIDE is honored too: it's the e2e-harness "override the DB
-# path" signal (projects.py treats either as single-project mode). Without this
-# the override only flipped SINGLE mode while DB_PATH silently stayed aba.db —
-# so harnesses using it wrote to the real dev DB (test-isolation + DB-safety bug).
 def _default_db_path() -> Path:
     """Default workspace DB under the (live) runtime dir. Resolved via the config
     registry so an ABA_RUNTIME_DIR override at startup is honored; config is a
@@ -27,11 +23,11 @@ def _default_db_path() -> Path:
     return Path(config.settings.runtime_dir.get()) / "aba.db"
 
 
-DB_PATH = Path(
-    config.settings.db_path.get()
-    or config.settings.db_path_override.get()
-    or _default_db_path()
-)
+# ABA_DB_PATH: an explicit DB path → SINGLE mode (tests / single-user / e2e
+# harness). The former ABA_DB_PATH_OVERRIDE alias was merged into this
+# (env_reorg §6): they did the same thing since the historical two-path bug was
+# fixed, so one canonical name replaces the pair.
+DB_PATH = Path(config.settings.db_path.get() or _default_db_path())
 
 # Root entity that hosts any chat not yet scoped to a specific entity.
 WORKSPACE_ID = "workspace"

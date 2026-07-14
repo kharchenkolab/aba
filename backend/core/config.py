@@ -872,11 +872,10 @@ setting("accelerator", env="ABA_ACCELERATOR", type="str", default="",
 
 # ── DB / process modes ───────────────────────────────────────────────────────
 setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",
-        branches=True, weft_fate="keep", reduction="merge:db_path",
-        doc="Explicit workspace DB path → SINGLE mode (tests / single-user).")
-setting("db_path_override", env="ABA_DB_PATH_OVERRIDE", type="str", default=None,
-        category="mode", branches=True, weft_fate="keep", reduction="merge:db_path",
-        doc="e2e-harness DB override (also triggers SINGLE mode). Alias of db_path.")
+        branches=True, weft_fate="keep",
+        doc="Explicit workspace DB path → SINGLE mode (tests / single-user / e2e "
+            "harness). The former ABA_DB_PATH_OVERRIDE alias was merged into this "
+            "(env_reorg §6 reduction).")
 setting("runtime_override", env="ABA_RUNTIME_OVERRIDE", type="str", default=None,
         category="mode", branches=True, weft_fate="keep",
         enum=("direct", "sdk", "fake", "openai"),

@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.pop("ABA_DB_PATH", None)
-os.environ.pop("ABA_DB_PATH_OVERRIDE", None)
+os.environ.pop("ABA_DB_PATH", None)
 _TMP = tempfile.mkdtemp(prefix="aba_refproj_")
 os.environ["ABA_RUNTIME_DIR"] = _TMP
 os.environ["ABA_PROJECTS_DIR"] = os.path.join(_TMP, "projects")

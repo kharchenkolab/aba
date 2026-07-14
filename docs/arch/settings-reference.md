@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**123 settings** across 11 categories.  
-weft_fate — `keep` 62, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
-reduction — `derive` 3, `keep` 62, `merge` 52, `relocate` 2, `resolve-flag` 4.
+**122 settings** across 11 categories.  
+weft_fate — `keep` 61, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
+reduction — `derive` 3, `keep` 63, `merge` 50, `relocate` 2, `resolve-flag` 4.
 
 ### Tag vocabularies
 
@@ -83,8 +83,7 @@ reduction — `derive` 3, `keep` 62, `merge` 52, `relocate` 2, `resolve-flag` 4.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `db_path` | `ABA_DB_PATH` | str |  | keep | merge:db_path | branches | Explicit workspace DB path → SINGLE mode (tests / single-user). |
-| `db_path_override` | `ABA_DB_PATH_OVERRIDE` | str |  | keep | merge:db_path | branches | e2e-harness DB override (also triggers SINGLE mode). Alias of db_path. |
+| `db_path` | `ABA_DB_PATH` | str |  | keep | keep | branches | Explicit workspace DB path → SINGLE mode (tests / single-user / e2e harness). The former ABA_DB_PATH_OVERRIDE alias was merged into this (env_reorg §6 reduction). |
 | `disabled_tools` | `ABA_DISABLED_TOOLS` | csv | () | keep | keep | branches | Comma-separated global tool kill-switch (layered under agent allowlists). |
 | `fake_session` | `ABA_FAKE_SESSION` | str |  | keep | keep | branches | Non-empty → deterministic fake LLM session (tests / demos). |
 | `runtime_override` | `ABA_RUNTIME_OVERRIDE` | str |  | keep | keep | branches | Force the LLM runtime backend for the process (direct/sdk/fake/openai). |

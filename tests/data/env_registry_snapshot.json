@@ -10,7 +10,6 @@
   "cpu_limit": "",
   "data_summary": "on",
   "db_path": null,
-  "db_path_override": null,
   "debug_timing": false,
   "disabled_tools": [],
   "discovery_env_gate": null,

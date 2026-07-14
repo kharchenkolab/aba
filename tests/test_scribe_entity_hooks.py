@@ -29,8 +29,8 @@ os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
 # Multi-project mode required — create_project + rename_project are no-ops
-# in SINGLE mode (ABA_DB_PATH / ABA_DB_PATH_OVERRIDE set). Strip them.
-for k in ("ABA_DB_PATH", "ABA_DB_PATH_OVERRIDE"):
+# in SINGLE mode (ABA_DB_PATH set). Strip them.
+for k in ("ABA_DB_PATH",):
     os.environ.pop(k, None)
 
 sys.path.insert(0, str(ROOT / "backend"))

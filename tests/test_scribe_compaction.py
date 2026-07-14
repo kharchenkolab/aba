@@ -21,7 +21,7 @@ os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ["ABA_WORK_DIR"] = str(Path(_tmp) / "work")
-for k in ("ABA_DB_PATH", "ABA_DB_PATH_OVERRIDE"):
+for k in ("ABA_DB_PATH",):
     os.environ.pop(k, None)
 
 sys.path.insert(0, str(ROOT / "backend"))
