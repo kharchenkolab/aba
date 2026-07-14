@@ -176,6 +176,47 @@ steps:
       is missing or incomplete. Confirm that directory exists (re-run the clone
       step if not), check $HOME has free space, then re-run.
 
+  - id: provision-weft
+    title: Provision the compute substrate (pixi + weft)
+    why: |
+      weft is the environment/execution substrate the backend drives through its
+      compute ports (misc/weft_rewrite.md): pixi (+pack/unpack, pinned static
+      binaries) solves and realizes environments; the weft Python package embeds
+      in the backend. Binaries land in $ABA_HOME/tools/pixi/bin — where the
+      backend looks by default (no config needed); the package installs from a
+      pinned checkout under $REPO_DIR, the same private-repo pattern as the
+      aba/recipe-pack clones (the user's git access does the fetch). The final
+      command is the verification gate: the substrate must configure cleanly
+      (workspace + local site) at INSTALL time, not on the first turn.
+    commands:
+      - 'mkdir -p "$ABA_HOME/tools/pixi/bin"'
+      # pixi — os/arch-aware release asset, version-pinned (override:
+      # ABA_PIXI_VERSION / ABA_PIXI_PLATFORM). Idempotent on matching version.
+      - 'V="${ABA_PIXI_VERSION:-v0.72.2}"; P="${ABA_PIXI_PLATFORM:-$(case "$(uname -s)/$(uname -m)" in (Darwin/arm64) echo "aarch64-apple-darwin";; (Darwin/*) echo "x86_64-apple-darwin";; (Linux/aarch64|Linux/arm64) echo "aarch64-unknown-linux-musl";; (*) echo "x86_64-unknown-linux-musl";; esac)}"; B="$ABA_HOME/tools/pixi/bin"; if "$B/pixi" --version 2>/dev/null | grep -q "${V#v}"; then echo "pixi $V already installed"; else echo "pixi platform: $P"; curl -fsSL "https://github.com/prefix-dev/pixi/releases/download/$V/pixi-$P.tar.gz" | tar -xz -C "$B"; fi; "$B/pixi" --version'
+      # pixi-pack AND pixi-unpack — plain binaries, one release. BOTH are
+      # required: unpack drives packed/offline realizations and its absence
+      # fails obscurely at realize time.
+      - 'V="${ABA_PIXI_PACK_VERSION:-v0.7.10}"; P="${ABA_PIXI_PLATFORM:-$(case "$(uname -s)/$(uname -m)" in (Darwin/arm64) echo "aarch64-apple-darwin";; (Darwin/*) echo "x86_64-apple-darwin";; (Linux/aarch64|Linux/arm64) echo "aarch64-unknown-linux-musl";; (*) echo "x86_64-unknown-linux-musl";; esac)}"; B="$ABA_HOME/tools/pixi/bin"; for T in pixi-pack pixi-unpack; do if "$B/$T" --version 2>/dev/null | grep -q "${V#v}"; then echo "$T $V already installed"; else curl -fsSLo "$B/$T" "https://github.com/Quantco/pixi-pack/releases/download/$V/$T-$P" && chmod +x "$B/$T"; fi; "$B/$T" --version; done'
+      # weft checkout — WEFT_REF (default main; pin a SHA/tag in config.env for
+      # reproducible deploys) + ABA_WEFT_URL / ABA_WEFT_SRC overrides, exactly
+      # like the aba clone above.
+      - 'if [ -d "$REPO_DIR/weft" ]; then :; elif [ -n "${ABA_WEFT_SRC:-}" ]; then mkdir -p "$REPO_DIR/weft" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi "$ABA_WEFT_SRC/" "$REPO_DIR/weft/"; else R="${WEFT_REF:-main}"; U="${ABA_WEFT_URL:-https://github.com/kharchenkolab/weft}"; git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/weft" 2>/dev/null || { git clone "$U" "$REPO_DIR/weft" && git --git-dir="$REPO_DIR/weft/.git" --work-tree="$REPO_DIR/weft" checkout "$R"; }; fi'
+      - '"$ENV_DIR/bin/python" -m pip install --quiet --no-user "$REPO_DIR/weft"'
+      # Verification gate — configure() creates the weft workspace + registers
+      # the local site (also pre-warms what the backend does at boot).
+      - 'PYTHONPATH="$REPO_DIR/aba/backend" "$ENV_DIR/bin/python" -c "from core.compute import adapter; st = adapter.configure(); assert st[\"ok\"], st[\"detail\"]; print(\"compute substrate:\", st[\"detail\"])"'
+    timeout_seconds: 300
+    remediation: |
+      The compute substrate didn't provision. Common causes:
+        • binary download failed → check network to github.com; wrong arch →
+          set ABA_PIXI_PLATFORM (x86_64/aarch64 -unknown-linux-musl or
+          -apple-darwin) and re-run.
+        • weft clone failed (private repo) → use SSH:
+          ABA_WEFT_URL=git@github.com:kharchenkolab/weft.git, or a local
+          checkout: ABA_WEFT_SRC=/path/to/weft.
+        • the verification gate names the exact problem (missing pixi, bad
+          workspace path) — fix and re-run; the step is idempotent.
+
   # NOTE: R toolchain / lstar bridge / pagoda3 viewer dist are NOT installed here.
   # They're modules (misc/modules.md) the BACKEND reconciler owns: personal installs
   # get them first-use; eager profiles (cluster/OOD) seed them 'on' in modules.json so
