@@ -42,6 +42,7 @@ def run_python_code(
     # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
     # from the env's lock transparently at realize time.
     interp: Optional[str] = None
+    _base_default = False
     if env:
         from core.compute import named_envs
         from core.compute.errors import ComputeError
@@ -54,6 +55,18 @@ def run_python_code(
             return {"error": f"isolated env {env!r} is not available "
                              f"(project {project_id}): {e}"}
         interp = str(py)
+    else:
+        # W3.0: a bundle-declared base pack replaces the served base for the
+        # default lane — the pack's own python, standalone (no overlay).
+        from core.compute import base_env
+        from core.compute.errors import ComputeError
+        try:
+            if base_env.active("python"):
+                interp = str(base_env.interpreter("python"))
+                _base_default = True
+        except ComputeError as ce:
+            return {"error": f"the declared python base pack is not available: "
+                             f"{ce.detail or ce.code}"}
 
     # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
     # appended (the .venv wins, overlay fills gaps). An isolated env is
@@ -65,8 +78,10 @@ def run_python_code(
     _pid = str(project_id)
     _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    if not env:
-        # §11.4: project overlay PREPENDED (project wins); shared overlay folded into base.
+    if not env and not _base_default:
+        # §11.4: project overlay PREPENDED (project wins); shared overlay folded
+        # into base. (Served-base lane only — a base-PACK run is standalone,
+        # additions layer via extends_env, never path-stacking.)
         for _p in reversed(list(project_pylib_paths(_pid))):
             lines.append(f"_sys.path.insert(0, {str(_p)!r})")
     # Provenance (provenance.md §3.3): seed the stateless run so a zero-delta
@@ -199,12 +214,27 @@ def run_r_code(
             return {"error": f"isolated R env {env!r} is not available "
                              f"(project {project_id}): {e}"}
     else:
-        rscript = _rscript()
-        if not rscript.exists():
-            return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
-        lib_expr = libpaths_expr(str(project_id))
-        if lib_expr:
-            lib_lines.append(lib_expr)
+        # W3.0: a bundle-declared R base pack replaces the tools-env R for the
+        # default lane — the pack's own Rscript, standalone (no libpaths stack).
+        from core.compute import base_env
+        from core.compute.errors import ComputeError
+        try:
+            _base_r = base_env.active("r")
+        except Exception:  # noqa: BLE001
+            _base_r = False
+        if _base_r:
+            try:
+                rscript = base_env.interpreter("r")
+            except ComputeError as ce:
+                return {"error": f"the declared R base pack is not available: "
+                                 f"{ce.detail or ce.code}"}
+        else:
+            rscript = _rscript()
+            if not rscript.exists():
+                return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
+            lib_expr = libpaths_expr(str(project_id))
+            if lib_expr:
+                lib_lines.append(lib_expr)
     preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run

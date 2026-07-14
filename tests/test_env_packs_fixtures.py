@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from core.bundle.loader import _compose_envs, Provenance     # noqa: E402
 from core.bundle.scope_resolver import ScopeBundle           # noqa: E402
 
-FIXTURE = ROOT / "tests" / "fixtures" / "installation"
+FIXTURE = ROOT / "tests" / "fixtures" / "env-packs"
 
 
 def _packs():

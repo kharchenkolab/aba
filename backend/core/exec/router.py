@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Optional
 
 
 @dataclass
@@ -87,16 +87,3 @@ def decide(*, env: Optional[dict] = None,
     if reasons:
         return ExecutorChoice("background", "Slurm: " + "; ".join(reasons))
     return ExecutorChoice("local", "fits this node — interactive")
-
-
-class ExecutionRouter(Protocol):
-    def route(self, **kwargs) -> ExecutorChoice: ...
-
-
-class LocalRouter:
-    """Thin object wrapper over `decide` (kept for the existing call sites)."""
-
-    def route(self, *, env: Optional[dict] = None,
-              estimate: Optional[dict] = None,
-              override: Optional[str] = None, **_ignored) -> ExecutorChoice:
-        return decide(env=env, estimate=estimate, override=override)

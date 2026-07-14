@@ -67,6 +67,83 @@ def _ensure_python_kernelspec() -> str:
 _env_specs_ready: set = set()
 
 
+def _ensure_base_python_kernelspec() -> str:
+    """W3.0 (weft rewrite): the DEFAULT python kernel runs the bundle-declared
+    base pack's realized python — not the backend's own interpreter. The pack
+    MUST bake ipykernel (weft envs are frozen; nothing is installed here). The
+    spec name is keyed by EnvID so a pack upgrade (new EnvID) re-registers and
+    new kernels follow it. Caller realizes the prefix BEFORE the pool lock."""
+    import re as _re
+    import subprocess
+    from core.compute import base_env
+    py = base_env.interpreter("python")
+    eid = base_env.env_id("python") or ""
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-base-{eid[-12:]}".lower())
+    if spec_name in _env_specs_ready:
+        return spec_name
+    if subprocess.run([str(py), "-c", "import ipykernel"],
+                      capture_output=True).returncode != 0:
+        raise RuntimeError(
+            f"base pack {base_env.pack_name('python')!r} has no ipykernel — "
+            f"a python base pack must include `ipykernel` in its spec "
+            f"(the kernel runs as the pack's python; frozen envs are never "
+            f"installed into)")
+    subprocess.run(
+        [str(py), "-m", "ipykernel", "install", "--user",
+         "--name", spec_name, "--display-name", "ABA Python (base pack)"],
+        capture_output=True, text=True, timeout=120)
+    _env_specs_ready.add(spec_name)
+    return spec_name
+
+
+def _ensure_base_r_kernelspec() -> str:
+    """W3.0: the DEFAULT R kernel from the bundle-declared R base pack (must
+    bake r-irkernel). Registered per-EnvID; standalone — no tools-env, no
+    module machinery."""
+    import re as _re
+    import subprocess
+    from core.compute import base_env
+    rs = base_env.interpreter("r")            # <prefix>/bin/Rscript
+    eid = base_env.env_id("r") or ""
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-base-r-{eid[-12:]}".lower())
+    if spec_name in _env_specs_ready:
+        return spec_name
+    import os
+    env = os.environ.copy()
+    # IRkernel::installspec shells out to `jupyter kernelspec install`; the
+    # jupyter CLI lives in the backend env, so put it on PATH (same trick as
+    # the tools-env spec below).
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
+    proc = subprocess.run(
+        [str(rs), "-e",
+         f'IRkernel::installspec(name="{spec_name}", displayname="ABA R (base pack)", user=TRUE)'],
+        capture_output=True, text=True, timeout=300, env=env)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"base pack {base_env.pack_name('r')!r} could not register its "
+            f"IRkernel spec — an R base pack must include `r-irkernel`. "
+            f"Detail: {(proc.stderr or proc.stdout or '')[-400:]}")
+    _env_specs_ready.add(spec_name)
+    return spec_name
+
+
+def _base_r_setup_code(cwd: str) -> str:
+    """First cell for a base-PACK R kernel: standalone env (its own library —
+    no .libPaths() juggling; R additions layer via extends_env), keeping the
+    CRAN repo default, plot DPI, and harvest helpers."""
+    from core.exec.r import cran_repo, _ppm_ua_expr
+    repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
+    try:
+        _res = max(40, config.settings.r_plot_res.get())
+    except ValueError:
+        _res = 120
+    data_dir, _ = _project_data_artifacts()
+    return (f"{repoline}options(repr.plot.res={_res})\n"
+            f"DATA_DIR <- {str(data_dir)!r}\n"
+            f"WORK_DIR <- {str(cwd)!r}\nsetwd({str(cwd)!r})\n"
+            + _harvest_helpers_r())
+
+
 def _ensure_env_python_kernelspec(env_name: str) -> str:
     """Register a kernelspec whose interpreter is the ISOLATED (weft) env's
     python (so a kernel launched from it sees that env's packages, standalone —
@@ -418,7 +495,16 @@ def _kernel_env(lang: str, cwd: str) -> dict:
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
         env[var] = nthreads
     if lang == "r":
-        tenv = tools_env()
+        # W3.0: a base-PACK R kernel is self-contained (conda env layout — its
+        # own lib/ resolves .so deps via rpath); prepending the tools env would
+        # shadow the pack's libs with foreign versions. Served-base R keeps the
+        # tools-env injection (r_provisioning.md F5).
+        from core.compute import base_env as _be
+        try:
+            _pack_prefix = _be.prefix("r") if _be.active("r") else None
+        except Exception:  # noqa: BLE001 — surfaced on the kernel path itself
+            _pack_prefix = None
+        tenv = _pack_prefix or tools_env()
         env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         env["PATH"] = str(tenv / "bin") + os.pathsep + env.get("PATH", "")
         # R `future` defaults (Seurat/IntegrateLayers etc.): sequential plan + a
@@ -444,19 +530,31 @@ class JupyterKernelSession:
         self.alive = False
         self._cancel_grace_s = _CANCEL_GRACE_S
         Path(cwd).mkdir(parents=True, exist_ok=True)
-        if lang == "r":
+        # W3.0 (weft rewrite): a bundle-declared base pack replaces the served
+        # base for the DEFAULT lanes — data-driven (no pack declared → today's
+        # behavior, byte for byte).
+        from core.compute import base_env as _base
+        _base_py = lang != "r" and not env_name and _base.active("python")
+        _base_r = lang == "r" and _base.active("r")
+        if _base_r:
+            kernel_name, setup, setup_to = _ensure_base_r_kernelspec(), _base_r_setup_code(cwd), 60
+        elif lang == "r":
             kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
         elif env_name:  # §11.3 isolated-env kernel: the env's python, standalone setup
             kernel_name, setup, setup_to = _ensure_env_python_kernelspec(env_name), _env_setup_code(cwd), 60
+        elif _base_py:  # base-pack kernel: the pack's python, standalone setup
+            kernel_name, setup, setup_to = _ensure_base_python_kernelspec(), _env_setup_code(cwd), 60
         else:
             kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
         kenv = _kernel_env(lang, cwd)
-        # §11.4: the default python kernel gets the project overlay on PYTHONPATH so
-        # it's prepended at interpreter STARTUP — before jupyter imports anything —
-        # so a project's overridden package version wins even over a base package
-        # the kernel itself imports. (Isolated env kernels are standalone; R N/A.)
-        if lang != "r" and not env_name:
+        # §11.4: the SERVED-base default python kernel gets the project overlay on
+        # PYTHONPATH so it's prepended at interpreter STARTUP — before jupyter
+        # imports anything — so a project's overridden package version wins even
+        # over a base package the kernel itself imports. (Isolated-env and
+        # base-PACK kernels are standalone — a pack kernel's additions layer via
+        # extends_env, never path-stacking; R N/A.)
+        if lang != "r" and not env_name and not _base_py:
             from core.exec.materialize import project_pylib_paths
             from core import projects as _pj
             _ov = [str(p) for p in project_pylib_paths(_pj.current())]

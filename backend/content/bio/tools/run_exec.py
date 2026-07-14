@@ -639,7 +639,6 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     here, so the agent can revisit its working files."""
     import time as _time
     from core.exec.run import run_python_code, harvest_artifacts
-    from core.exec import LocalRouter
     from core.config import KERNEL_ENABLED
     from core import projects
 
@@ -693,7 +692,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
            "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
     from core.exec.compute_env import compute_env
-    choice = LocalRouter().route(env=compute_env(), estimate=est, override=override)
+    from core.exec.router import decide
+    choice = decide(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_python_job
         from content.bio.lifecycle.runs import active_run_id
@@ -732,6 +732,18 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # scope-key + the env's python); the shared thread scratch cwd is
             # reused so files hand off to/from the default kernel.
             scope_key = str(thread_id) if not env_name else f"{thread_id}::env::{env_name}"
+            # W3.0: base-pack default lane — realize BEFORE the pool lock (a
+            # first-use realize under it would wedge every kernel acquisition).
+            if not env_name:
+                from core.compute import base_env
+                from core.compute.errors import ComputeError
+                try:
+                    if base_env.active("python"):
+                        base_env.prefix("python")
+                except ComputeError as ce:
+                    return {"status": "error", "error": ce.to_payload(),
+                            "note": f"the declared python base pack is not "
+                                    f"available: {ce.detail or ce.code}"}
             from core.exec.kernels import KernelCapacityError
             try:
                 sess = get_pool().get_or_start(scope_key, "python",
@@ -867,7 +879,6 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     background mode (see B1-B6 design 2026-06-08)."""
     import time as _time
     from core.exec.run import harvest_artifacts
-    from core.exec import LocalRouter
     from core.config import KERNEL_ENABLED
     from core import projects
 
@@ -888,7 +899,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
            "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
     from core.exec.compute_env import compute_env
-    choice = LocalRouter().route(env=compute_env(), estimate=est, override=override)
+    from core.exec.router import decide
+    choice = decide(env=compute_env(), estimate=est, override=override)
     if choice.location == "background":
         from core.jobs.runner import submit_r_job
         from content.bio.lifecycle.runs import active_run_id
@@ -930,6 +942,16 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         cwd = _run_scratch_cwd(str(project_id), str(thread_id))
         start_ts = _time.time()
         started_iso = _dt.now(_tz.utc).isoformat()
+        # W3.0: base-pack R lane — realize before the pool lock (see python lane).
+        from core.compute import base_env
+        from core.compute.errors import ComputeError
+        try:
+            if base_env.active("r"):
+                base_env.prefix("r")
+        except ComputeError as ce:
+            return {"status": "error", "error": ce.to_payload(),
+                    "note": f"the declared R base pack is not available: "
+                            f"{ce.detail or ce.code}"}
         from core.exec.kernels import KernelCapacityError
         try:
             sess = get_pool().get_or_start(str(thread_id), "r",
