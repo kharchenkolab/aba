@@ -55,13 +55,25 @@ async def on_startup():
     except ValueError:
         print("[startup] ABA_SETTINGS_STRICT set — refusing to boot with bad config:")
         raise
+    # Compute substrate (weft) — W0.4 wiring (misc/weft_rewrite.md §3/§7). Best-
+    # effort: a missing weft/pixi records a degraded status; the selfcheck below
+    # surfaces it. Becomes load-bearing when envs cut over (W1).
+    try:
+        from core import compute as _compute
+        _cs = _compute.configure()
+        print(f"[startup] compute substrate: "
+              f"{'ok — ' if _cs['ok'] else 'OFFLINE — '}{_cs['detail']}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] compute substrate wiring failed (non-fatal): {e}")
     try:
         from core.runtime import selfcheck
         from core.exec.env_integrity import check_envs_dir_shared, check_base_dir_shared
         from core.config import check_settings_valid
+        from core.compute import check_compute
         selfcheck.register("envs_dir_shared", check_envs_dir_shared)
         selfcheck.register("base_dir_shared", check_base_dir_shared)
         selfcheck.register("settings_valid", check_settings_valid)
+        selfcheck.register("compute_substrate", check_compute)
         for _r in selfcheck.run():
             if not _r["ok"]:
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")
@@ -307,6 +319,14 @@ async def on_shutdown():
                     if not t.done():
                         t.cancel()
     _kill_owned_kernels()   # 5. belt + braces — reap any kernel started since
+    # 6. Compute substrate: release the adapter's thread pool. weft's own
+    #    pollers are daemon threads; detached jobs keep running and reconcile()
+    #    picks them back up on next boot.
+    try:
+        from core import compute as _compute
+        _compute.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def register_lifecycle(app) -> None:
