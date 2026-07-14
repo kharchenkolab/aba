@@ -773,6 +773,22 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     "note": f"Provided by cluster module '{_mod}', loaded in background "
                             f"Slurm jobs; not installed in-process. Invoke it from "
                             f"run_python(background=True) / a Slurm step."}
+        # (A) Already importable? An uncatalogued name can still be satisfied — a
+        # core/base package (e.g. `lstar` ← the base `lstar-sc`) or one a prior
+        # session materialized into the overlay. Verify a REAL import on the runtime
+        # path BEFORE routing to external registries; if it loads, the capability the
+        # agent needs (to `import` it) is already there — returning "candidates" here
+        # was the bug that made the agent try to re-install (or bail on) a package it
+        # already had. verify_python_imports (not find_spec): a present-but-unloadable
+        # package has a spec but explodes on import. Guard on isidentifier() so only a
+        # plausible import name is probed (a pip name like `scikit-learn` isn't one).
+        if name.isidentifier():
+            from core.exec.env_integrity import verify_python_imports
+            _ok, _ = verify_python_imports([name])
+            if _ok:
+                return {"status": "ready", "name": name, "import_name": name,
+                        "note": f"Already available — `import {name}` works in run_python "
+                                f"(provided by the base env or a prior install); no install needed."}
         # E-1: parallel-search external registries for an exact-name match
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
@@ -782,13 +798,18 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             return {
                 "status": "candidates",
                 "name": name,
+                "installable": True,
                 "suggestions": suggestions,
                 "note": (
-                    "Not in the catalog yet, but matched on external "
-                    "registries. Pick one and call propose_capability "
-                    "with the matching fields (source/archetype/package "
-                    "etc. on each suggestion are already shaped for it), "
-                    "then re-call ensure_capability."),
+                    f"'{name}' isn't pre-catalogued, but it IS installable — this is the "
+                    "normal two-step path, not a dead end: pick the suggestion whose "
+                    "`summary` matches what you actually need, call propose_capability with "
+                    "its fields (already shaped for it), then re-call ensure_capability. "
+                    "CAUTION — these are NAME matches across ecosystems, and a shared name "
+                    "can be an UNRELATED package: verify each candidate's `summary` fits "
+                    "your use before proposing (a PyPI hit is often a namesake), and mind "
+                    "the language — a CRAN/Bioconductor match runs via the R kernel, a PyPI "
+                    "match via Python."),
             }
         return {
             "status": "not_found", "name": name,

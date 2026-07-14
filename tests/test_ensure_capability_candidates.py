@@ -226,7 +226,9 @@ def test_search_external_returns_each_source_strict_match():
                                   "package": "X"})):
         cands = _search_external_for_name("X")
     sources = [c["source"] for c in cands]
-    assert sources == ["cran", "bioconductor", "pypi", "bioconda"], sources
+    # a conda-forge R alternative (r-<pkg>) is auto-appended when a cran/bioc R hit
+    # is present, ordered right after the R sources.
+    assert sources == ["cran", "bioconductor", "conda", "pypi", "bioconda"], sources
 
 
 def test_search_external_filters_none_sources():
@@ -238,8 +240,8 @@ def test_search_external_filters_none_sources():
          patch("content.bio.tools.discovery._bioc_exact", return_value=None), \
          patch("content.bio.tools.discovery._bioconda_exact", return_value=None):
         cands = _search_external_for_name("Seurat")
-    assert len(cands) == 1
-    assert cands[0]["source"] == "cran"
+    # cran hit → orchestrator also appends a conda-forge R alternative (r-<pkg>)
+    assert [c["source"] for c in cands] == ["cran", "conda"], cands
 
 
 def test_search_external_empty_when_all_miss():
@@ -261,8 +263,8 @@ def test_search_external_swallows_per_source_exceptions():
          patch("content.bio.tools.discovery._bioc_exact", return_value=None), \
          patch("content.bio.tools.discovery._bioconda_exact", return_value=None):
         cands = _search_external_for_name("ok")
-    assert len(cands) == 1
-    assert cands[0]["source"] == "cran"
+    # pypi raised (swallowed); cran hit → cran + its conda-R alternative
+    assert [c["source"] for c in cands] == ["cran", "conda"], cands
 
 
 def test_search_external_language_filter_python_only():
@@ -343,6 +345,55 @@ def test_ensure_capability_catalog_hit_unchanged():
     assert out.get("status") != "candidates"
     # Sanity: this 'proposed' cap hits the awaiting_approval branch.
     assert out.get("status") == "awaiting_approval"
+
+
+# ─── A: import-first short-circuit + B: reframed candidates ─────────────────
+def test_importable_uncatalogued_resolves_ready_not_candidates():
+    """A — an uncatalogued name that ALREADY imports (a core/base package like
+    `lstar`←`lstar-sc`, or one a prior session materialized) must resolve 'ready',
+    NOT be routed to external registries. This was the reported bug: ensure_capability
+    returned 'candidates' for a package the agent already had."""
+    called = {"searched": False}
+    def _search_spy(*a, **k):
+        called["searched"] = True
+        return [{"source": "pypi", "archetype": "library", "package": "lstar"}]
+    with patch("core.catalog.resolve_capability", return_value=None), \
+         patch("core.exec.env_integrity.verify_python_imports", return_value=(True, {})), \
+         patch("content.bio.tools.discovery._search_external_for_name", side_effect=_search_spy):
+        out = ensure_capability({"name": "lstar"})
+    assert out["status"] == "ready", out
+    assert out.get("import_name") == "lstar"
+    assert called["searched"] is False, "an importable name must short-circuit before external search"
+
+
+def test_nonimportable_uncatalogued_falls_through_to_candidates():
+    """A must NOT swallow real misses: a name that doesn't import still reaches the
+    external search."""
+    with patch("core.catalog.resolve_capability", return_value=None), \
+         patch("core.exec.env_integrity.verify_python_imports", return_value=(False, {"foo": "no"})), \
+         patch("content.bio.tools.discovery._search_external_for_name",
+               return_value=[{"source": "pypi", "archetype": "library", "package": "foo"}]):
+        out = ensure_capability({"name": "foobarbaz"})
+    assert out["status"] == "candidates", out
+
+
+def test_candidates_response_is_reframed_positive_with_collision_caution():
+    """B — the candidates response must read as an actionable install path (not a
+    dead-end 'not in the catalog'), flag that a shared name can be an UNRELATED
+    package, and still point at propose_capability."""
+    fake = [{"source": "pypi", "archetype": "library", "package": "lstar",
+             "summary": "Python implementation of lstar automata learning algorithm."}]
+    with patch("core.catalog.resolve_capability", return_value=None), \
+         patch("core.exec.env_integrity.verify_python_imports", return_value=(False, {})), \
+         patch("content.bio.tools.discovery._search_external_for_name", return_value=fake):
+        out = ensure_capability({"name": "lstar"})
+    assert out["status"] == "candidates"
+    assert out.get("installable") is True
+    note = out["note"]
+    assert "installable" in note.lower()
+    assert ("unrelated" in note.lower() or "namesake" in note.lower()), "must warn on name collisions"
+    assert "propose_capability" in note
+    assert "not in the catalog yet" not in note.lower(), "drop the dead-end framing"
 
 
 # ─── runner ────────────────────────────────────────────────────────────────
