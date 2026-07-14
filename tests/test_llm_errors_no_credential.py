@@ -39,6 +39,29 @@ def _sdk_no_auth() -> TypeError:
     )
 
 
+@pytest.fixture(autouse=True)
+def _provider_connected(monkeypatch):
+    """`friendly_error` FIRST short-circuits to a 'connect a provider' message when NO
+    credential is configured — and `credentials.any_configured()` sniffs the AMBIENT
+    environment, so on a clean machine (no key/token) that branch would swallow every
+    error and these downstream-branch assertions would fail non-deterministically. Pin a
+    connected provider here (same reason the 401 test pins `_credential_mode`); the
+    short-circuit itself is covered by test_no_provider_connected_short_circuits."""
+    from core import credentials
+    monkeypatch.setattr(credentials, "any_configured",
+                        lambda: {"configured": True, "provider": "anthropic"})
+
+
+def test_no_provider_connected_short_circuits(monkeypatch):
+    """With NO provider connected, ANY model error resolves to the actionable
+    connect-a-provider message — not a raw 401 or the generic pill."""
+    from core import credentials
+    monkeypatch.setattr(credentials, "any_configured", lambda: {"configured": False})
+    msg = friendly_error(RuntimeError("kaboom"))
+    assert "Something went wrong" not in msg
+    assert "provider" in msg.lower() and "Settings" in msg
+
+
 def test_missing_credential_is_actionable_not_generic():
     msg = friendly_error(_sdk_no_auth())
     assert "Something went wrong" not in msg
