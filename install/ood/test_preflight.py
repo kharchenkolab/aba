@@ -247,10 +247,12 @@ def test_personal_config_env_override_wins_over_group(tmp_path, monkeypatch):
 
 
 def test_personal_oauth_json_resolves_as_oauth_env(tmp_path, monkeypatch):
-    """A subscription store (oauth.json) → oauth_env: no static key emitted; the backend
-    finds + refreshes it via $ABA_HOME. Wins over the group key."""
+    """A subscription store (oauth.json) → oauth_cc: no static key emitted; the backend
+    finds + refreshes it via $ABA_HOME. Wins over the group key. Mode is oauth_cc (NOT plain
+    oauth): these are Claude Code subscription bearers, and oauth_cc prepends the CC system
+    marker so non-Haiku models (the Opus default) work — plain oauth is Haiku-only and 429s."""
     env, _ = _run_creds(tmp_path, monkeypatch, personal=("oauth_json", "acc-tok"))
-    assert env.get("ABA_LLM_CREDENTIAL") == "oauth"
+    assert env.get("ABA_LLM_CREDENTIAL") == "oauth_cc"
     assert "ANTHROPIC_API_KEY" not in env                       # no static key for a subscription
     assert "sk-ant-GROUP" not in "".join(env.values())
 

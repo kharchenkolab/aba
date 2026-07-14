@@ -20,6 +20,29 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 BUILD_SH = REPO / "install/sif/build.sh"
 PREFLIGHT_SH = REPO / "install/ood/aba/template/preflight.sh"
+SCRIPT_ERB = REPO / "install/ood/aba/template/script.sh.erb"
+
+
+def test_script_forwards_slurm_selector_into_containall():
+    """Regression: the --containall backend only sees env vars this loop forwards.
+    ABA_BATCH_SUBMITTER is the local-vs-slurm SELECTOR — if it's not forwarded,
+    submitter_name() reads unset → 'local' inside the SIF, so every "background"
+    job runs in-process on the session node (never Slurm) and run_nextflow refuses
+    nf-core with 'unsupported_environment' (no container engine on PATH inside the
+    image). The preflight EMITS it into aba-env.sh (test_preflight_writes_env), but
+    that's host-side; this guards the forward step that actually reaches the backend.
+    Live incident: nf-core blocked in the fat SIF because this var wasn't in the list."""
+    src = SCRIPT_ERB.read_text()
+    # isolate the env-forward loop: the `for v in … ; do` block whose body evals --env
+    import re
+    m = re.search(r"for v in\s+(.+?);\s*do\s*\n\s*eval[^\n]*--env", src, re.DOTALL)
+    assert m, "could not find the env-forward `for v in … ; do … --env` loop in script.sh.erb"
+    forwarded = set(m.group(1).replace("\\", " ").split())
+    for v in ("ABA_BATCH_SUBMITTER", "ABA_HPC_CONFIG", "ABA_SIF", "ABA_JOB_WRAP",
+              "ABA_NEXTFLOW_MODULE", "ABA_NEXTFLOW_CONFIG", "ABA_MODULE_INIT"):
+        # ABA_MODULE_INIT: an offloaded bare job (nf-core Nextflow head) re-inits the site
+        # module system from it; without it `module load` fails and the head exits 127.
+        assert v in forwarded, f"script.sh.erb env-forward loop dropped {v} (breaks Slurm offload / nf-core)"
 
 
 def test_build_bakes_preflight():
