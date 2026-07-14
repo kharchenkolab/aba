@@ -352,15 +352,14 @@ def make_revision(
     # new chevrons appear on the focused Result. Best-effort: a failed
     # broadcast must not roll back the revision.
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        broadcast({
-            "type": "entity_updated",
-            "entity_id": new_eid,
-            "reason": "revision_created",
-            "wasRevisionOf": entity_id,
-            "superseded": superseded_ids,
-            "reanchored": [m["result_id"] for m in reanchored],
-        })
+        broadcast(wire.entity_updated(
+            entity_id=new_eid,
+            reason="revision_created",
+            wasRevisionOf=entity_id,
+            superseded=superseded_ids,
+            reanchored=[m["result_id"] for m in reanchored]))
     except Exception:  # noqa: BLE001
         pass
 
@@ -520,18 +519,17 @@ def delete_revision(entity_id: str) -> dict:
     # Broadcast so the focused Result re-fetches and the chevrons
     # rebuild against the new chain.
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
         for rid, _ in _result_members_referencing(new_anchor) if new_anchor else []:
-            broadcast({"type": "entity_updated",
-                       "entity_id": rid,
-                       "reason": "revision_deleted",
-                       "deleted_revision": entity_id})
-        broadcast({"type": "entity_updated",
-                   "entity_id": new_anchor or entity_id,
-                   "reason": "revision_deleted",
-                   "deleted_revision": entity_id,
-                   "re_parented_children": re_parented,
-                   "re_anchored_members": re_anchored})
+            broadcast(wire.entity_updated(entity_id=rid,
+                                          reason="revision_deleted",
+                                          deleted_revision=entity_id))
+        broadcast(wire.entity_updated(entity_id=new_anchor or entity_id,
+                                      reason="revision_deleted",
+                                      deleted_revision=entity_id,
+                                      re_parented_children=re_parented,
+                                      re_anchored_members=re_anchored))
     except Exception:  # noqa: BLE001
         pass
 
@@ -625,6 +623,7 @@ def set_current_revision(entity_id: str) -> dict:
         entity_id, chain_ids, created_by="set_current_revision")
 
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
         seen_results: set[str] = set()
         for ra in re_anchored:
@@ -632,16 +631,14 @@ def set_current_revision(entity_id: str) -> dict:
             if rid in seen_results:
                 continue
             seen_results.add(rid)
-            broadcast({"type": "entity_updated",
-                       "entity_id": rid,
-                       "reason": "revision_anchor_changed",
-                       "new_current": entity_id})
-        broadcast({"type": "entity_updated",
-                   "entity_id": entity_id,
-                   "reason": "revision_anchor_changed",
-                   "superseded": superseded_now,
-                   "restored": restored_now,
-                   "re_anchored_members": re_anchored})
+            broadcast(wire.entity_updated(entity_id=rid,
+                                          reason="revision_anchor_changed",
+                                          new_current=entity_id))
+        broadcast(wire.entity_updated(entity_id=entity_id,
+                                      reason="revision_anchor_changed",
+                                      superseded=superseded_now,
+                                      restored=restored_now,
+                                      re_anchored_members=re_anchored))
     except Exception:  # noqa: BLE001
         pass
 

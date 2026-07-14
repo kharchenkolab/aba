@@ -195,9 +195,10 @@ def _notify(spec: ModuleSpec, mstate: str, *, progress: str | None = None,
     """Push a module state-change onto the global /api/notifications channel so the UI
     can toast + live-refresh. Best-effort; never raises."""
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        broadcast({"type": "module", "id": spec.id, "title": spec.title,
-                   "state": mstate, "progress": progress, "error": error})
+        broadcast(wire.module(id=spec.id, title=spec.title,
+                              state=mstate, progress=progress, error=error))
     except Exception:  # noqa: BLE001
         pass
 

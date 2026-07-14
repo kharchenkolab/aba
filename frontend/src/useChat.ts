@@ -220,7 +220,7 @@ function logFor(ev: SSEEvent): LogEntry | null {
   const t = Date.now()
   switch (ev.type) {
     case 'delta': return null
-    case 'tool_progress': return { t, type: ev.type, label: ev.message, level: 1 }
+    case 'tool_progress': return { t, type: ev.type, label: ev.message ?? '', level: 1 }
     case 'tool_chunk':    return { t, type: ev.type, label: `${ev.stream}+${ev.text.length}B (${(ev.bytes_total/1024).toFixed(1)}KB total)`, level: 3 }
     case 'plan': return { t, type: ev.type, label: ev.title || 'plan', level: 1 }
     case 'notice': return { t, type: ev.type, label: ev.text, level: 1 }
@@ -657,7 +657,7 @@ export function useChat(
                     && (b as { tool_use_id?: string }).tool_use_id === ev.tool_use_id)
                 : streamingBlocks[streamingBlocks.length - 1]
               if (target && target.type === 'tool_start') {
-                ;(target as { type: 'tool_start'; progress?: string }).progress = ev.message
+                ;(target as { type: 'tool_start'; progress?: string }).progress = ev.message ?? undefined
                 setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               }
             } else if (ev.type === 'tool_chunk') {
@@ -757,7 +757,7 @@ export function useChat(
               setStreamMsg({ id: assistantId, role: 'assistant', blocks: [...streamingBlocks] })
               setPendingApproval({
                 runId: ev.run_id, toolName: ev.tool_name,
-                summary: ev.summary, policy: ev.policy,
+                summary: ev.summary, policy: ev.policy ?? '',
               })
             } else if (ev.type === 'manifest') {
               // T2.4: drawer sidecar. Also carries run_id so Stop can

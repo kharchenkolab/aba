@@ -700,9 +700,10 @@ def auto_interpret(result_id: str) -> Optional[str]:
     # without polling. Best-effort — never breaks the daemon if the
     # event channel is unavailable.
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        broadcast({"type": "entity_updated", "entity_id": result_id,
-                   "reason": "caption_ready"})
+        broadcast(wire.entity_updated(entity_id=result_id,
+                                      reason="caption_ready"))
     except Exception:  # noqa: BLE001
         pass
     # Also generate the Result-level SYNTHESIS ACROSS PANELS — pin time is when the
@@ -791,9 +792,10 @@ def synthesize_result(result_id: str, *, force: bool = False,
     update_entity(result_id, metadata={**cur_md, "interpretation": text,
                                        "interpretation_origin": "ai"})
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        broadcast({"type": "entity_updated", "entity_id": result_id,
-                   "reason": "synthesis_ready"})
+        broadcast(wire.entity_updated(entity_id=result_id,
+                                      reason="synthesis_ready"))
     except Exception:  # noqa: BLE001
         pass
     return text

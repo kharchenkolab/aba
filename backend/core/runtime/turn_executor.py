@@ -57,8 +57,9 @@ async def _drain(gen: AsyncGenerator[dict, None], sink: "_ts.TurnSink",
         # token, and that's checked inside the loop, not via task cancel).
         # Best-effort note to subscribers before the sentinel.
         try:
-            sink.push({"type": "error", "text": "turn cancelled",
-                       "detail": "executor task cancelled"})
+            from core.runtime import wire
+            sink.push(wire.error(text="turn cancelled",
+                                 detail="executor task cancelled"))
         except Exception:  # noqa: BLE001
             pass
         raise
@@ -66,9 +67,10 @@ async def _drain(gen: AsyncGenerator[dict, None], sink: "_ts.TurnSink",
         # The generator's own try/except should have already emitted a
         # `done` (or `error`); this catches anything that slipped past.
         try:
-            sink.push({"type": "error", "text": str(e),
-                       "detail": f"{type(e).__name__}: {e}"})
-            sink.push({"type": "done"})
+            from core.runtime import wire
+            sink.push(wire.error(text=str(e),
+                                 detail=f"{type(e).__name__}: {e}"))
+            sink.push(wire.done())
         except Exception:  # noqa: BLE001
             pass
     finally:

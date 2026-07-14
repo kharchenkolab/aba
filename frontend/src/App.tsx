@@ -289,7 +289,7 @@ export default function App() {
     const es = new EventSource('/api/notifications')
     es.onmessage = (msg) => {
       try {
-        const ev = JSON.parse(msg.data)
+        const ev = JSON.parse(msg.data) as import('./wire').NotificationEvent
         if (ev.type === 'entity_updated') refresh()
         // Module install progress → ModuleToasts + the Modules tab listen for this.
         else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))

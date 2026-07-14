@@ -300,15 +300,14 @@ def _broadcast_member_change(result_id: str, member_id: str | None,
     """Fire an entity_updated SSE so the focused Result card re-fetches.
     Best-effort — broadcast must NEVER fail the write."""
     try:
+        from core.runtime import wire
         from core.runtime.notifications import broadcast
-        payload = {"type": "entity_updated",
-                   "entity_id": result_id,
-                   "reason": reason}
+        extra: dict = {}
         if member_id:
-            payload["member_id"] = member_id
+            extra["member_id"] = member_id
         if entity_id:
-            payload["attached_entity_id"] = entity_id
-        broadcast(payload)
+            extra["attached_entity_id"] = entity_id
+        broadcast(wire.entity_updated(entity_id=result_id, reason=reason, **extra))
     except Exception:  # noqa: BLE001
         pass
 
@@ -504,9 +503,10 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
         # Mirrors the typed-tool broadcast pattern in
         # lifecycle/promote.py:549 and lifecycle/revisions.py:408.
         try:
+            from core.runtime import wire
             from core.runtime.notifications import broadcast
-            broadcast({"type": "entity_updated", "entity_id": entity_id,
-                       "reason": "agent_update"})
+            broadcast(wire.entity_updated(entity_id=entity_id,
+                                          reason="agent_update"))
         except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
             pass
 
@@ -621,11 +621,11 @@ def register_entity_ops_tools(mcp: FastMCP) -> None:
                     f"update_result_member failed for "
                     f"{result_id}/{member_id}"}
         try:
+            from core.runtime import wire
             from core.runtime.notifications import broadcast
-            broadcast({"type": "entity_updated",
-                       "entity_id": result_id,
-                       "reason": "member_caption_updated",
-                       "member_id": member_id})
+            broadcast(wire.entity_updated(entity_id=result_id,
+                                          reason="member_caption_updated",
+                                          member_id=member_id))
         except Exception:  # noqa: BLE001 — broadcast must NEVER fail the write
             pass
         return {"status": "ok",
