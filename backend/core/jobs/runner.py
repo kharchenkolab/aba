@@ -107,14 +107,15 @@ def _utcnow() -> str:
 
 
 def _is_slurm_params(params_text) -> bool:
-    """True if a job row's params JSON marks it Slurm-submitted. Such jobs run
-    independently on the cluster and survive an ABA restart, so reconcile must
-    NOT reap (running) or re-enqueue (queued) them — the poll loop re-adopts
-    them via the shared-FS sentinel."""
+    """True if a job row's params JSON marks it EXTERNALLY submitted (Slurm, or
+    a weft task — W2). Such jobs run independently of this process and survive
+    an ABA restart, so reconcile must NOT reap (running) or re-enqueue (queued)
+    them — the matching poll loop re-adopts them (shared-FS sentinel for Slurm;
+    weft's own durable job state for weft tasks)."""
     if not params_text:
         return False
     try:
-        return (json.loads(params_text) or {}).get("submitter") == "slurm"
+        return (json.loads(params_text) or {}).get("submitter") in ("slurm", "weft")
     except Exception:  # noqa: BLE001
         return False
 
@@ -224,10 +225,18 @@ def _submitter_for_job(job: dict):
     (submitter/slurm_id), else the deployment default (legacy rows predating IP)."""
     from core.jobs.submitter import get_submitter_for
     params = job.get("params") or {}
-    target = params.get("submission")
-    if target in ("inline", "slurm"):
-        return get_submitter_for(target)
+    # HARD evidence first (W2): how the job actually went out beats the target
+    # resolved at submit — an 'inline' job may have gone to weft OR (substrate
+    # offline) the in-process worker, and cancel must hit the owner.
+    if params.get("submitter") == "weft" or params.get("weft_id"):
+        from core.jobs.weft_submitter import WeftSubmitter
+        return WeftSubmitter()
     if params.get("submitter") == "slurm" or params.get("slurm_id"):
+        return get_submitter_for("slurm")
+    target = params.get("submission")
+    if target == "inline":
+        return LocalSubmitter()      # ran in-process (no weft/slurm marker)
+    if target == "slurm":
         return get_submitter_for("slurm")
     return get_submitter()
 
@@ -367,6 +376,27 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
             _seed = result_obj.get("seed")
             if _seed is None:
                 _seed = detect_seed(code)
+            payload = {
+                "executor": f"background:{lang}",
+                "kind": "script",
+                "language": lang,
+                "language_version": langver,
+                "package_versions": pkg,
+                "env_fingerprint": env_fingerprint(langver, pkg),
+                "seed": _seed,
+                "inputs": inputs,
+                "produced": produced,
+                "stdout_tail": (result_obj.get("stdout") or "")[-2000:],
+                "stderr_tail": (result_obj.get("stderr") or "")[-2000:],
+                "exit_code": result_obj.get("returncode"),
+            }
+            # W2 (weft rewrite §4d): executions that went through the compute
+            # substrate carry a weft-sourced compute block — task identity +
+            # placement {site,node,…} + env grade. Placement is circumstance,
+            # never identity; the fingerprint fields above remain the env
+            # identity until the W3 base cutover makes EnvID primary.
+            if isinstance(result_obj.get("compute"), dict):
+                payload["compute"] = result_obj["compute"]
             eid = _er.create(
                 thread_id=str(params.get("thread_id") or "default"),
                 run_id=params.get("run_id"),
@@ -378,20 +408,7 @@ def _write_exec_record_for_job(job: dict, result_obj: dict,
                 started_at=job.get("started_at") or _utcnow(),
                 completed_at=_utcnow(),
                 cwd=cwd,
-                payload={
-                    "executor": f"background:{lang}",
-                    "kind": "script",
-                    "language": lang,
-                    "language_version": langver,
-                    "package_versions": pkg,
-                    "env_fingerprint": env_fingerprint(langver, pkg),
-                    "seed": _seed,
-                    "inputs": inputs,
-                    "produced": produced,
-                    "stdout_tail": (result_obj.get("stdout") or "")[-2000:],
-                    "stderr_tail": (result_obj.get("stderr") or "")[-2000:],
-                    "exit_code": result_obj.get("returncode"),
-                },
+                payload=payload,
             )
         if eid:
             result_obj["exec_id"] = eid
@@ -950,6 +967,69 @@ async def _slurm_poll_loop() -> None:
         await asyncio.sleep(_SLURM_POLL_S)
 
 
+_WEFT_POLL_S = 5.0
+
+
+def _active_weft_jobs() -> list[dict]:
+    """Queued/running jobs (across project DBs) that went out as weft tasks —
+    the rows _weft_poll_loop watches. Mirrors _active_slurm_jobs."""
+    from core.config import PROJECTS_DIR
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    out: list[dict] = []
+    if not PROJECTS_DIR.exists():
+        return out
+    for proj_dir in sorted(PROJECTS_DIR.iterdir()):
+        db_file = proj_dir / "project.db"
+        if not proj_dir.is_dir() or not db_file.exists() or proj_dir.name.startswith("_"):
+            continue
+        try:
+            c = sqlite3.connect(db_file)
+            c.row_factory = sqlite3.Row
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+                c.close()
+                continue
+            for r in c.execute("SELECT * FROM jobs WHERE status IN ('queued','running')").fetchall():
+                job = _row_to_job(r)
+                if (job.get("params") or {}).get("submitter") == "weft":
+                    job["project_id"] = proj_dir.name
+                    out.append(job)
+            c.close()
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _weft_poll_loop() -> None:
+    """Watch weft-submitted background jobs for completion (W2 — the local
+    background lane). Started unconditionally; idles while the compute
+    substrate is offline (it may configure after the worker starts, and a
+    fallback deployment simply never has weft rows to poll). Completion routes
+    through the SHARED _finalize_job (artifacts + continuation), exactly like
+    the local worker and the Slurm sentinel loop."""
+    from core.jobs.weft_submitter import WeftSubmitter, weft_available
+    sub = WeftSubmitter()
+    announced = False
+    while True:
+        try:
+            if weft_available():
+                if not announced:
+                    print("[jobs.weft] poll loop live", flush=True)
+                    announced = True
+                for job in _active_weft_jobs():
+                    pid = job.get("project_id")
+                    result = sub.poll(job)
+                    if result is not None:
+                        await _finalize_job(job, result, pid, str(pid or "default"))
+                    elif job.get("status") == "queued":
+                        if (sub.info(job) or {}).get("state") == "RUNNING":
+                            update_job(job["id"], project_id=pid, status="running",
+                                       started_at=_utcnow())
+        except Exception as e:  # noqa: BLE001
+            _record_worker_failure("weft-poll", None, e)
+        await asyncio.sleep(_WEFT_POLL_S)
+
+
 _INLINE_WATCH_S = 30.0    # hangs unfold over minutes — a slow cadence keeps this near-free
 
 
@@ -1061,3 +1141,6 @@ def start_worker() -> None:
     from core.jobs.submitter import submitter_name
     if submitter_name() == "slurm":
         asyncio.get_event_loop().create_task(_slurm_poll_loop())
+    # W2: watch weft-submitted jobs. Always started — it idles until the
+    # compute substrate configures (lifespan does that after start_worker).
+    asyncio.get_event_loop().create_task(_weft_poll_loop())

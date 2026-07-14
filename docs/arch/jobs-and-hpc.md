@@ -199,6 +199,23 @@ boundary*.
 | `core/graph/jobs.py` | the `jobs` table: `create_job`/`update_job`/`get_job` |
 | `content/bio/tools/run_exec.py` · `guide.py` | callers of `submit_*_job` (background routing; the estimate) |
 
+## The weft local lane (W2 — misc/weft_rewrite.md)
+
+The **local background lane defaults to a bare weft task** when the compute substrate is up
+(`core/jobs/weft_submitter.py`): `submit_*_job` with target `inline` (and the deployment
+default when `ABA_BATCH_SUBMITTER=local`) hands the job to `WeftSubmitter`, whose task runs
+the SAME node entry as the Slurm lane (`python -m core.jobs.slurm_entry job_spec.json`) — so
+`result.json`, harvest, and exec records stay identical. `runner._weft_poll_loop` (always
+started; idles while the substrate is offline) watches for terminal states and routes through
+the SHARED `_finalize_job` → continuation. The exec record additionally carries a
+**weft-sourced `compute` block** — task identity + `placement {site, node, allocation_id,
+node_truth, ran_at}` + wall/rss — placement is circumstance, never identity. Substrate
+offline → loud fallback to the legacy in-process worker; `ABA_BATCH_SUBMITTER=worker` forces
+it. Reconcile treats weft rows like Slurm rows (external — never reaped/re-enqueued); cancel
+routes by hard evidence (`params.weft_id` → `task_cancel`). Note the lane also FIXED a
+long-standing default: `execution=None` on a non-slurm deployment used to resolve to
+`sbatch` (dead on personal installs); it now resolves to the local lane.
+
 ## Known gaps
 
 - **`runner.py` is a ~1300-line god-module** fusing five responsibilities: the local async

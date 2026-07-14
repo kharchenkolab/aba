@@ -49,6 +49,20 @@ def submitter_name() -> str:
     return config.settings.batch_submitter.get().strip().lower()
 
 
+def _local_lane() -> "BatchSubmitter":
+    """The local background lane (weft rewrite W2): a bare weft task when the
+    compute substrate is up — durable across restarts, placement-bearing exec
+    records — else the legacy in-process worker, loudly (transparent
+    degradation, never silent)."""
+    from core.jobs.weft_submitter import WeftSubmitter, weft_available
+    if weft_available():
+        return WeftSubmitter()
+    print("[jobs] compute substrate offline — background job falls back to the "
+          "in-process worker (no durable state across restarts)")
+    from core.jobs.runner import LocalSubmitter
+    return LocalSubmitter()
+
+
 def get_submitter() -> "BatchSubmitter":
     """The active submitter for this deployment. Lazy imports avoid a cycle
     (runner ⇆ submitter) and keep Slurm code off the import path when local."""
@@ -56,19 +70,21 @@ def get_submitter() -> "BatchSubmitter":
     if name == "slurm":
         from core.jobs.slurm_submitter import SlurmSubmitter
         return SlurmSubmitter()
-    from core.jobs.runner import LocalSubmitter
-    return LocalSubmitter()
+    if name == "worker":     # explicit legacy escape hatch (in-process worker)
+        from core.jobs.runner import LocalSubmitter
+        return LocalSubmitter()
+    return _local_lane()
 
 
 def get_submitter_for(target: str) -> "BatchSubmitter":
     """Submitter for a per-job submission target (see in-place submission,
-    misc/inplace_submission.md): 'inline' → LocalSubmitter (run the job in ABA's own
-    process/allocation, no sbatch); 'slurm' → SlurmSubmitter. Anything else → the
-    deployment default. This is the seam that lets a small job run in-place even when
-    the deployment default is Slurm."""
+    misc/inplace_submission.md): 'inline' → the local lane (run the job on THIS
+    node — a bare weft task, or the in-process worker when the substrate is
+    offline); 'slurm' → SlurmSubmitter. Anything else → the deployment default.
+    This is the seam that lets a small job run in-place even when the
+    deployment default is Slurm."""
     if target == "inline":
-        from core.jobs.runner import LocalSubmitter
-        return LocalSubmitter()
+        return _local_lane()
     if target == "slurm":
         from core.jobs.slurm_submitter import SlurmSubmitter
         return SlurmSubmitter()

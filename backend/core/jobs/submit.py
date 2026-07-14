@@ -14,10 +14,17 @@ from core.graph.jobs import create_job
 
 def _bg_submission(execution: str | None, estimate: dict | None) -> tuple[str, str | None]:
     """Submission target for a plain background job (python/r), shared with the nf path via
-    resolve_submission_target. execution None/'slurm' → 'slurm' (sbatch, today's default);
+    resolve_submission_target. execution 'slurm' → sbatch; None → the deployment default
+    (sbatch when ABA_BATCH_SUBMITTER=slurm, else the local lane — W2: a bare weft task);
     'local'/'auto' → 'inline' when the job's estimate fits ABA's allocation, else 'slurm'."""
     if (execution or "").lower() not in ("local", "auto"):
-        return "slurm", None
+        from core.jobs.submitter import submitter_name
+        if (execution or "").lower() == "slurm" or submitter_name() == "slurm":
+            return "slurm", None
+        # Non-slurm deployment, no explicit ask: the local background lane.
+        # (Pre-W2 this returned 'slurm' unconditionally — a plain background=True
+        # on a personal install died on a missing sbatch.)
+        return "inline", "local deployment — background runs on the local lane"
     from core.exec.hpc_session import aba_allocation_capacity
     heaviest = {"cpus": (estimate or {}).get("cores"), "mem_gb": (estimate or {}).get("mem_gb"),
                 "gpu": (estimate or {}).get("gpu")}

@@ -97,6 +97,21 @@ class WeftAdapter:
             raise AttributeError(f"WeftAdapter: {name!r} is not a weft tool")
         return functools.partial(self._call, name)
 
+    def sync_call(self, name: str, /, *args: Any, **kw: Any) -> Any:
+        """SYNCHRONOUS pass-through for FAST weft calls (store reads/writes:
+        task_submit with a known env, task_status, task_cancel) from contexts
+        that cannot await — e.g. the job submitters, which today run on the
+        event-loop thread. NEVER use for solves/realizations (env_ensure on a
+        fresh spec) — those block for minutes and belong on the async port.
+        Same error conversion as the async path."""
+        target = getattr(type(self._weft), name, None)
+        if target is None or not getattr(target, "_weft_tool", False):
+            raise AttributeError(f"WeftAdapter: {name!r} is not a weft tool")
+        out = getattr(self._weft, name)(*args, **kw)
+        if is_error_payload(out):
+            raise ComputeError.from_payload(out)
+        return out
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 

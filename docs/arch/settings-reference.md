@@ -181,7 +181,7 @@ reduction — `derive` 3, `keep` 66, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches deploy | Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the local-vs-slurm SELECTOR; unset inside the container → every background job silently runs in-process on the session node. |
+| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches deploy | Batch backend: 'local' (the local lane — a bare weft task when the compute substrate is up, else the in-process worker), 'slurm', or 'worker' (force the legacy in-process worker). Forwarded into the SIF — it's the placement SELECTOR; unset inside the container → every background job silently runs in-process on the session node. |
 | `hpc_config` | `ABA_HPC_CONFIG` | str |  | retire | relocate:hpc.yaml | deploy | Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). Forwarded into the SIF alongside the submitter (partition/QOS catalog). |
 | `inline_auto_max_cores` | `ABA_INLINE_AUTO_MAX_CORES` | float | 8.0 | retire | merge:inline |  | Max cores an auto-inline job may claim before offloading. |
 | `inline_auto_max_mem_gb` | `ABA_INLINE_AUTO_MAX_MEM_GB` | float | 32.0 | retire | merge:inline |  | Max memory (GB) an auto-inline job may claim before offloading. |

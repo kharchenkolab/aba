@@ -1042,9 +1042,11 @@ setting("r_ppm_snapshot", env="ABA_R_PPM_SNAPSHOT", type="str", default="latest"
 setting("batch_submitter", env="ABA_BATCH_SUBMITTER", type="str", default="local",
         coerce=_coerce_lower_strip, empty_is_unset=True, category="cluster",
         branches=True, weft_fate="retire", deploy_injected=True,
-        doc="Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the "
-            "local-vs-slurm SELECTOR; unset inside the container → every background job "
-            "silently runs in-process on the session node.")
+        doc="Batch backend: 'local' (the local lane — a bare weft task when the "
+            "compute substrate is up, else the in-process worker), 'slurm', or "
+            "'worker' (force the legacy in-process worker). Forwarded into the SIF — "
+            "it's the placement SELECTOR; unset inside the container → every "
+            "background job silently runs in-process on the session node.")
 setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
         category="cluster", weft_fate="retire", reduction="relocate:hpc.yaml",
         deploy_injected=True,
