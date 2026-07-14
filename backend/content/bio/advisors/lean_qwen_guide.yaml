@@ -40,8 +40,8 @@ manifest_role: primary
 #       interferers identified in H8). See _LEAN_SMALL_DROP.
 #   (b) _behavior_block prepends _H5_DISCOVERY_DIRECTIVE — the
 #       explicit "search_skills FIRST → Skill" decision-tree with
-#       a few-shot example. Built-in for this mode (does not
-#       require ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE).
+#       a few-shot example. Built-in for this mode (driven by the
+#       lean_small prompt_mode).
 #   (c) Catalog rendering follows the same compact policy as `lean`.
 prompt_mode: lean_small
 # Full reach — all tools visible to the model.
