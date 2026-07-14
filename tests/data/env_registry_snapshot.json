@@ -16,7 +16,6 @@
   "env_prewarm": "eager",
   "experimental_ablate_blocks": [],
   "experimental_fetch_recipe": false,
-  "experimental_prescriptive_search_skills": false,
   "fake_session": "",
   "feed_log": "on",
   "feedback_email": "pk.restricted@gmail.com",

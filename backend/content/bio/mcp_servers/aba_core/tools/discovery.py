@@ -22,50 +22,20 @@ def register_discovery_tools(mcp: FastMCP) -> None:
 
     # --- search (all pure, no ctx) ---
 
-    # H6 experiment — env-gated prescriptive docstring. When
-    # ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS is set, register the
-    # search_skills tool with a directive-shaped description aimed at
-    # small open models (Qwen3-30B class) that narrate-instead-of-
-    # dispatch after seeing the result. Production (Anthropic) reads
-    # the original docstring.
-    if config.settings.experimental_prescriptive_search_skills.get():
+    @mcp.tool()
+    def search_skills(query: str, limit: int = 8) -> dict:
+        """Intent search over the skill (recipe) library.
 
-        @mcp.tool()
-        def search_skills(query: str, limit: int = 8) -> dict:
-            """STEP 1 of a MANDATORY two-step recipe-discovery flow.
+        Pass a short natural-language `query` like "fetch GEO data",
+        "single-cell QC", or "differential expression". Returns up
+        to `limit` skills ranked by relevance.
 
-            Your IMMEDIATE NEXT call after this MUST be:
-                Skill(skill="<name from the top result>", args="...")
-
-            Do not stop after this call to summarize what you found.
-            Do not switch to run_python before dispatching Skill.
-            Do not invent a recipe name — only use names that appear
-            in the `skills[*].name` list this returns.
-
-            Pass `query` as a short natural-language phrase like
-            "fetch GEO data", "single-cell QC", "differential
-            expression". Returns up to `limit` skills ranked by
-            relevance — each entry's `invoke_with` field shows the
-            exact call shape for step 2."""
-            from content.bio.tools import search_skills_tool
-            return search_skills_tool({"query": query, "limit": limit})
-
-    else:
-
-        @mcp.tool()
-        def search_skills(query: str, limit: int = 8) -> dict:
-            """Intent search over the skill (recipe) library.
-
-            Pass a short natural-language `query` like "fetch GEO data",
-            "single-cell QC", or "differential expression". Returns up
-            to `limit` skills ranked by relevance.
-
-            Returns: {"skills": [{"name": "...", "description": "..."}]}.
-            The names in this result are SKILL NAMES, not tool names —
-            invoke each one via `Skill(skill="<name>", args="...")`.
-            Calling `<name>(...)` directly will fail with "Unknown tool"."""
-            from content.bio.tools import search_skills_tool
-            return search_skills_tool({"query": query, "limit": limit})
+        Returns: {"skills": [{"name": "...", "description": "..."}]}.
+        The names in this result are SKILL NAMES, not tool names —
+        invoke each one via `Skill(skill="<name>", args="...")`.
+        Calling `<name>(...)` directly will fail with "Unknown tool"."""
+        from content.bio.tools import search_skills_tool
+        return search_skills_tool({"query": query, "limit": limit})
 
     # ── Experimental: combined fetch_recipe ─────────────────────────
     # Gated by ABA_EXPERIMENTAL_FETCH_RECIPE because it's an open

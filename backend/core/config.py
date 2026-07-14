@@ -970,19 +970,15 @@ setting("env_prewarm", env="ABA_ENV_PREWARM", type="str", default="eager",
         doc="Environment prewarm policy ('eager'/'lazy'/…).")
 
 # ── Experimental gates (Phase-7 resolve-flag targets) ────────────────────────
-setting("experimental_prescriptive_search_skills",
-        env="ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS", type="bool", default=False,
-        coerce=_coerce_truthy_presence, empty_is_unset=True, category="experimental",
-        branches=True, weft_fate="keep", reduction="resolve-flag",
-        doc="Experimental: prescriptive search-skills behavior.")
 setting("experimental_fetch_recipe", env="ABA_EXPERIMENTAL_FETCH_RECIPE",
         type="bool", default=False, coerce=_coerce_truthy_presence,
         empty_is_unset=True, category="experimental", branches=True, weft_fate="keep",
         reduction="resolve-flag", doc="Experimental: fetch-recipe discovery path.")
 setting("experimental_ablate_blocks", env="ABA_EXPERIMENTAL_ABLATE_BLOCKS",
         type="csv", default=(), category="experimental", branches=True,
-        weft_fate="keep", reduction="resolve-flag",
-        doc="Experimental: comma-separated prompt blocks to ablate.")
+        weft_fate="keep", reduction="keep",
+        doc="Debug/regression knob (off by default): comma-separated system-prompt "
+            "block names to drop, on top of the mode's built-in drops.")
 
 # ── Numeric / tuning knobs ───────────────────────────────────────────────────
 setting("kernel_threads", env="ABA_KERNEL_THREADS", type="str", default="",

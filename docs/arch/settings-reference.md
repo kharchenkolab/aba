@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**121 settings** across 11 categories.  
-weft_fate — `keep` 60, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
-reduction — `derive` 3, `keep` 63, `merge` 50, `relocate` 2, `resolve-flag` 3.
+**120 settings** across 11 categories.  
+weft_fate — `keep` 59, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
+reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 ### Tag vocabularies
 
@@ -142,9 +142,8 @@ reduction — `derive` 3, `keep` 63, `merge` 50, `relocate` 2, `resolve-flag` 3.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `experimental_ablate_blocks` | `ABA_EXPERIMENTAL_ABLATE_BLOCKS` | csv | () | keep | resolve-flag | branches | Experimental: comma-separated prompt blocks to ablate. |
+| `experimental_ablate_blocks` | `ABA_EXPERIMENTAL_ABLATE_BLOCKS` | csv | () | keep | keep | branches | Debug/regression knob (off by default): comma-separated system-prompt block names to drop, on top of the mode's built-in drops. |
 | `experimental_fetch_recipe` | `ABA_EXPERIMENTAL_FETCH_RECIPE` | bool | False | keep | resolve-flag | branches | Experimental: fetch-recipe discovery path. |
-| `experimental_prescriptive_search_skills` | `ABA_EXPERIMENTAL_PRESCRIPTIVE_SEARCH_SKILLS` | bool | False | keep | resolve-flag | branches | Experimental: prescriptive search-skills behavior. |
 
 ## tuning
 
