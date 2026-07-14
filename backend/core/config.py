@@ -816,6 +816,14 @@ setting("refsources_dir", env="ABA_REFSOURCES_DIR", type="str", default=None,
 setting("frontend_dist", env="ABA_FRONTEND_DIST", type="str", default=None,
         category="paths", deploy_injected=True, weft_fate="keep",
         doc="Built frontend dist dir served by the backend.")
+# LAUNCHER-ONLY (see tests/test_deploy_forward_loop.py LAUNCHER_ONLY): the OOD launcher
+# injects it and the image %runscript consumes it (`uvicorn --port ${ABA_PORT:-8000}`) — no
+# Python reads it, so it is NOT deploy_injected. It must still be DECLARED, or
+# validate_settings() reports "unrecognized env var ABA_PORT (typo, or a stale/removed
+# knob)" on every OOD session, leaving /api/health permanently `degraded` on a false alarm.
+setting("port", env="ABA_PORT", type="int", default=8000, category="deploy",
+        weft_fate="keep",
+        doc="TCP port the backend binds (uvicorn); injected by the OOD launcher.")
 setting("pagoda3_dist", env="ABA_PAGODA3_DIST", type="str", default=None,
         category="paths", weft_fate="move:site",
         doc="pagoda3 viewer dist dir (else derived under $ABA_HOME/vendor).")
