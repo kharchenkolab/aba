@@ -88,6 +88,19 @@ def import_name_for(capability: str) -> Optional[str]:
     return None
 
 
+def import_names_for_package(package: str) -> list[str]:
+    """Reverse alias lookup (§4b(i)): the import names a package is used
+    under, per any pack's ``import_names`` map — so a capability asked for by
+    PACKAGE name (often not a valid identifier, e.g. 'scikit-learn') can still
+    be probed by a real `import`."""
+    out: list[str] = []
+    for doc in _packs().values():
+        mapping = doc.get("import_names")
+        if isinstance(mapping, dict):
+            out.extend(k for k, v in mapping.items() if str(v) == package)
+    return list(dict.fromkeys(out))
+
+
 def packs_providing(import_name: str) -> list[str]:
     """Which packs declare (in deps or import_names) a given import name — used
     to tell the agent 'that's already in base python-bio', not 'not installable'."""

@@ -797,21 +797,53 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                             f"Slurm jobs; not installed in-process. Invoke it from "
                             f"run_python(background=True) / a Slurm step."}
         # (A) Already importable? An uncatalogued name can still be satisfied — a
-        # core/base package (e.g. `lstar` ← the base `lstar-sc`) or one a prior
-        # session materialized into the overlay. Verify a REAL import on the runtime
-        # path BEFORE routing to external registries; if it loads, the capability the
-        # agent needs (to `import` it) is already there — returning "candidates" here
-        # was the bug that made the agent try to re-install (or bail on) a package it
-        # already had. verify_python_imports (not find_spec): a present-but-unloadable
-        # package has a spec but explodes on import. Guard on isidentifier() so only a
-        # plausible import name is probed (a pip name like `scikit-learn` isn't one).
-        if name.isidentifier():
+        # core/base package or one a prior session materialized into the overlay.
+        # Verify a REAL import on the runtime path BEFORE routing to external
+        # registries; if it loads, the capability the agent needs (to `import` it)
+        # is already there — returning "candidates" here was the bug that made the
+        # agent try to re-install (or bail on) a package it already had.
+        # verify_python_imports (not find_spec): a present-but-unloadable package
+        # has a spec but explodes on import. Probe names: the name itself (if a
+        # plausible identifier — a pip name like `scikit-learn` isn't one) PLUS
+        # any import aliases the env packs declare for it (#11: asked by package
+        # name, probed by real import name).
+        _probes = [name] if name.isidentifier() else []
+        try:
+            from core.compute import env_packs as _ep
+            _probes += [a for a in _ep.import_names_for_package(name)
+                        if a not in _probes]
+        except Exception:  # noqa: BLE001
+            pass
+        if _probes:
             from core.exec.env_integrity import verify_python_imports
-            _ok, _ = verify_python_imports([name])
-            if _ok:
-                return {"status": "ready", "name": name, "import_name": name,
-                        "note": f"Already available — `import {name}` works in run_python "
-                                f"(provided by the base env or a prior install); no install needed."}
+            for _p in _probes:
+                _ok, _ = verify_python_imports([_p])
+                if _ok:
+                    return {"status": "ready", "name": name, "import_name": _p,
+                            "note": f"Already available — `import {_p}` works in run_python "
+                                    f"(provided by the base env or a prior install); no install needed."}
+        # (B) Declared by an env pack? (#11 already-provided recognition.) The
+        # bundle's env packs declare base contents + import aliases; if a pack
+        # provides this name, the answer is that pack — NEVER an external
+        # registry, where a same-name hit is often an unrelated package.
+        try:
+            from core.compute import env_packs as _ep
+            _provider_packs = _ep.packs_providing(name)
+            for _p in _probes:
+                _provider_packs += [x for x in _ep.packs_providing(_p)
+                                    if x not in _provider_packs]
+        except Exception:  # noqa: BLE001
+            _provider_packs = []
+        if _provider_packs:
+            return {"status": "provided_by_pack", "name": name,
+                    "packs": _provider_packs,
+                    "import_name": _probes[0] if _probes else None,
+                    "note": (f"'{name}' is declared by the environment pack(s) "
+                             f"{', '.join(repr(p) for p in _provider_packs)} — it is part of a "
+                             f"curated base, not something to install from an external "
+                             f"registry. If the import failed just now, the pack isn't "
+                             f"materialized yet: enable/materialize it (Settings → Modules, "
+                             f"or ask the user), then retry.")}
         # E-1: parallel-search external registries for an exact-name match
         # instead of pointing at list_capabilities (which would also be
         # empty for an uncatalogued name). Returns suggestions shaped for
@@ -858,6 +890,33 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                         f"runnable here. Implement it with ABA capabilities (search the "
                         f"catalogue / propose_capability for the real libraries), using "
                         f"read_capability for its inputs."}
+    # Role-aware framing (#11): a viewer/converter is used differently from a
+    # library — say so on every ready response, so the agent doesn't try to
+    # `import` a viewer or hand a converter to the user as an app. Provisioning
+    # below is role-agnostic (a converter is often just a library to install).
+    from core.catalog import capability_role
+    _role = capability_role(cap)
+    _role_note = ""
+    if _role == "viewer":
+        _vb = cap.get("viewer") or {}
+        _opens = ", ".join(list(_vb.get("extensions") or []) +
+                           list(_vb.get("entity_types") or [])) or "its declared formats"
+        _role_note = (f" ROLE: viewer — it opens {_opens} visually for the USER "
+                      f"(offered on matching entities' Open-with); it is not an "
+                      f"importable analysis library.")
+    elif _role == "converter":
+        _cb = cap.get("converter") or {}
+        _role_note = (f" ROLE: converter — transforms "
+                      f"{', '.join(_cb.get('from') or ['?'])} → "
+                      f"{', '.join(_cb.get('to') or ['?'])}; use it to change formats, "
+                      f"typically feeding a viewer or another tool.")
+
+    def _ready(payload: dict) -> dict:
+        payload.setdefault("role", _role)
+        if _role_note and payload.get("status") == "ready":
+            payload["note"] = (payload.get("note") or "") + _role_note
+        return payload
+
     from core.runtime import progress
     progress.emit(f"Materializing '{cap.get('name')}'…", phase="ensure")
     prov = cap.get("provisioning") or {}
@@ -878,9 +937,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         if _imp0:
             _ok, _ = verify_python_imports([_imp0])
             if _ok:
-                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
-                        "note": f"Already available; `import {_imp0}` works in run_python."}
+                        "note": f"Already available; `import {_imp0}` works in run_python."})
         from core.exec import MaterializingExecutor, Provisioning
         try:
             from core import projects as _projects
@@ -935,8 +994,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                     _sess.execute("import importlib as _il; _il.invalidate_caches()", timeout_s=15)
         except Exception:  # noqa: BLE001
             pass
-        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"), "import_name": imp, "note": note}
+        return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"), "import_name": imp, "note": note})
     if prov.get("conda"):
         if (cap.get("archetype") == "r_package"):   # R via conda is still the r-bio module
             _blk = _r_module_block()
@@ -950,17 +1009,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             if _mod:
-                return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "module": _mod,
                         "note": f"Provided by cluster module '{_mod}' (loaded in background Slurm "
-                                f"jobs); the conda install isn't needed there and failed: {e}"}
+                                f"jobs); the conda install isn't needed there and failed: {e}"})
             return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
         _note = ("Installed into the conda tools env; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")
         if _mod:
             _note += f" Background Slurm jobs also load cluster module '{_mod}'."
-        return {"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                "archetype": cap.get("archetype"), "note": _note, "module": _mod}
+        return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
+                "archetype": cap.get("archetype"), "note": _note, "module": _mod})
     if prov.get("mcp_server"):
         # Live adoption: connect the external server now so its tools become
         # callable as 'server:tool' for the rest of this session.
@@ -981,10 +1040,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         res = add_server(cfg)
         if res.get("status") in ("connected", "already_connected"):
             tools = res.get("tools") or []
-            return {"status": "ready", "name": cap.get("name"), "archetype": "mcp_server",
+            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "mcp_server",
                     "tools": tools,
                     "note": f"Connected; {len(tools)} tool(s) now callable: "
-                            f"{', '.join(tools[:8])}{'…' if len(tools) > 8 else ''}."}
+                            f"{', '.join(tools[:8])}{'…' if len(tools) > 8 else ''}."})
         return {"status": "error", "name": cap.get("name"), "archetype": "mcp_server",
                 "note": f"Could not connect MCP server: {res.get('note')}"}
     if prov.get("pipeline"):
@@ -1000,10 +1059,10 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             return {"status": "error", "name": cap.get("name"), "archetype": "pipeline",
                     "note": f"Could not install nextflow: {e}"}
         ref = pl.get("nf_core") or cap.get("name")
-        return {"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
+        return _ready({"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
                 "note": f"nextflow installed and on PATH. Run this pipeline with "
                         f"run_nextflow(pipeline='{ref}', profile='test', ...). "
-                        f"(Large runs will route to HPC/remote later — local only for now.)"}
+                        f"(Large runs will route to HPC/remote later — local only for now.)"})
     if prov.get("r"):
         # Module gate (misc/modules.md): R is the r-bio module — honor an OFF toggle
         # by asking the user instead of silently installing the toolchain.
@@ -1065,9 +1124,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         satisfied = installed_ver is not None and (
             not min_version or rexec.version_ge(installed_ver, min_version))
         if satisfied and not force and not override:
-            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "r_package",
                     "library": libname, "version": installed_ver,
-                    "note": f"Already available — library({libname}) {installed_ver} works in run_r."}
+                    "note": f"Already available — library({libname}) {installed_ver} works in run_r."})
         # (Re)install. force=TRUE so install_github replaces an already-present-but-
         # stale build; required whenever we're upgrading or honoring an override.
         do_force = force or override or (installed_ver is not None and min_version is not None)
@@ -1089,8 +1148,8 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             if not unloaded and installed_ver and new_ver and installed_ver != new_ver:
                 note += (" A prior load may be cached in the R session — restart_kernel "
                          "so the new version takes effect.")
-            return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "version": new_ver, "note": note}
+            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+                    "library": libname, "version": new_ver, "note": note})
         # Error → surface the actionable diagnostic (missing-system-lib hint) AND,
         # crucially, any unmet VERSION requirement so the agent upgrades the dep in
         # ONE step instead of inferring the whole dance.

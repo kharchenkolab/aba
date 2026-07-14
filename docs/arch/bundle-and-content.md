@@ -76,6 +76,17 @@ one precedence rule, chosen by whether it is a *floor* (additive) or a *choice* 
 | `knowhow/refsources/*.yaml` | **override by `provider:` name**, narrowest wins | narrowest-first |
 | `settings.yaml`/`.json` | **deep dict-merge**: scalars narrowest-wins, lists extend | broadest→narrowest |
 
+Capability specs carry a **`role`** (`library | tool | viewer | converter` — weft rewrite #11,
+`core.catalog.capability_role`): explicit, else derived from `archetype` (cli/mcp/pipeline →
+tool, else library). Roles say how an entry is USED, orthogonal to how it's provisioned.
+`viewer`-role entries carry a declarative `viewer:` block (mode/extensions/entity_types/
+launcher/priority) and project LIVE into the viewers registry
+(`core/viewers/registry.viewers_from_catalog` — an external viewer's registration is catalog
+data; canvas/modal rows stay `viewers.yaml`, they're frontend components). `converter`-role
+entries declare `converter: {from, to}` — behind `core.catalog.converters_for` ("what converts
+X?") and role-aware `ensure_capability` responses. Format example:
+`tests/fixtures/installation/catalog/roles_example.yaml`.
+
 Catalog dispatch is by *content*, not filename: a `catalog/*.yaml` with a `capabilities:`
 list contributes specs; one with `packages:` contributes R-base — so the system seed and a
 future imported pack compose identically (`loader.py:641`). The loader is **defensive**: a
