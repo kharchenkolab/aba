@@ -38,22 +38,21 @@ def run_python_code(
     scratch = scratch_dir(str(project_id), str(run_id))
 
     # §11: an ISOLATED env (run_python(env=…, background=True)) runs STANDALONE —
-    # its OWN python, no project overlay — matching the interactive isolated-env
-    # kernel. bind the project so ensure_env_built / env_python resolve THIS
-    # project's env (the background worker doesn't pin a project, and a Slurm node
-    # shares the FS + lock so it can use or rebuild the env).
+    # its OWN python (a weft-realized prefix), no project overlay — matching the
+    # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
+    # from the env's lock transparently at realize time.
     interp: Optional[str] = None
     if env:
-        from core.exec import isolated_env as iso
-        from core import projects as _projects
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
         try:
-            with _projects.bind(str(project_id)):
-                iso.ensure_env_built(env)       # rebuild from lock if a GC reclaimed it
-        except Exception:  # noqa: BLE001
-            pass
-        py = iso.env_python(env, str(project_id))
-        if not py.exists():
-            return {"error": f"isolated env {env!r} is not available (project {project_id})."}
+            py = named_envs.interpreter(str(project_id), env)
+        except ComputeError as ce:
+            return {"error": f"isolated env {env!r} is not available "
+                             f"(project {project_id}): {ce.detail or ce.code}"}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"isolated env {env!r} is not available "
+                             f"(project {project_id}): {e}"}
         interp = str(py)
 
     # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
@@ -183,22 +182,26 @@ def run_r_code(
     # Authoritative project (see run_python_code) — not the _workspace ambient.
     _data_dir = project_data_dir(str(project_id))
 
-    rscript = _rscript()
-    if not rscript.exists():
-        return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
-
     # R preamble — kept short. The agent's own script.R follows verbatim.
     lib_lines: list[str] = []
     if env:
-        # §11: isolated R env — its lib dir FIRST on .libPaths(), then the base
-        # (standalone, NOT the project lib), matching iso.r_run_in. The libdir is
-        # project-scoped on the shared FS, so a Slurm compute node sees it.
-        from core.exec import isolated_env as iso
-        lib = iso.r_env_lib(env, str(project_id))
-        if not lib.exists():
-            return {"error": f"isolated R env {env!r} is not available (project {project_id})."}
-        lib_lines.append(f'.libPaths(c({str(lib)!r}, .libPaths()))')
+        # §11: isolated R env — under weft a named R env is a FULL standalone
+        # env (its own R + libs, a realized prefix), not a lib dir stacked on
+        # the base. Use its Rscript; no .libPaths() juggling.
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
+        try:
+            rscript = named_envs.interpreter(str(project_id), env)
+        except ComputeError as ce:
+            return {"error": f"isolated R env {env!r} is not available "
+                             f"(project {project_id}): {ce.detail or ce.code}"}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"isolated R env {env!r} is not available "
+                             f"(project {project_id}): {e}"}
     else:
+        rscript = _rscript()
+        if not rscript.exists():
+            return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
         lib_expr = libpaths_expr(str(project_id))
         if lib_expr:
             lib_lines.append(lib_expr)

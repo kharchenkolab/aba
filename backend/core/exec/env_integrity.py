@@ -527,12 +527,13 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     Rscript. Each layer: {tier, scope, delivery, mutable, path, packages}."""
     import os
     import sysconfig
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
     from core.exec.materialize import (project_pylib_dir, project_pylib_paths,
                                        tools_env, _site_paths)
     if project_id is None:
         from core import projects
         project_id = projects.current()
+    iso_names = named_envs.list_names(str(project_id)) if project_id else []
 
     # ── Python ── §11.4: just two tiers now — the immutable base (the install-wide
     # foundation; the old shared overlay was folded into it) + THIS project's
@@ -548,11 +549,15 @@ def env_layers(project_id: Optional[str] = None) -> dict:
             {"tier": "project overlay", "scope": "project", "project_id": project_id,
              "delivery": "on-demand", "mutable": True, "path": str(project_pylib_dir(project_id)),
              "packages": _py_packages([str(p) for p in project_pylib_paths(project_id)])})
-    for name in iso.list_envs(project_id):
+    for name in iso_names:
+        row = named_envs.resolve(str(project_id), name) or {}
+        if row.get("language") == "r":
+            continue
         py_layers.append(
-            {"tier": "isolated", "scope": "capability", "delivery": "on-demand", "mutable": True,
-             "name": name, "path": str(iso.env_dir(name, project_id)),
-             "packages": _py_packages(_site_paths(iso.env_dir(name, project_id)))})
+            {"tier": "isolated", "scope": "capability", "delivery": "weft",
+             "mutable": False,   # frozen EnvID — additions layer to a NEW id
+             "name": name, "env_id": row.get("env_id"),
+             "packages": [{"name": p, "version": ""} for p in row.get("packages", [])]})
     lock = ensure_base_constraints()
     py = {"engine": "pip + venv", "layers": py_layers,
           "lock": {"path": str(lock) if lock else None,
@@ -562,17 +567,13 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     # ── R ──
     r_base_lib = tools_env() / "lib" / "R" / "library"
     r_proj_lib = None
-    iso_r = []
     try:
         from core.exec.r import project_r_lib
         if project_id:
             r_proj_lib = project_r_lib(project_id)
     except Exception:  # noqa: BLE001
         pass
-    _proot = iso._proj_root(project_id)
-    if _proot.exists():
-        iso_r += sorted(p for p in _proot.iterdir() if p.is_dir() and p.name.startswith("r-"))
-    all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else []) + iso_r
+    all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else [])
     by = _r_packages_by_lib(all_r_libs)
 
     def _pkgs_for(lib):
@@ -584,10 +585,14 @@ def env_layers(project_id: Optional[str] = None) -> dict:
         r_layers.append({"tier": "project lib", "scope": "project", "project_id": project_id,
                          "delivery": "on-demand", "mutable": True, "path": str(r_proj_lib),
                          "packages": _pkgs_for(r_proj_lib)})
-    for d in iso_r:
-        r_layers.append({"tier": "isolated", "scope": "capability", "delivery": "on-demand",
-                         "mutable": True, "name": d.name[2:], "path": str(d),
-                         "packages": _pkgs_for(d)})
+    # Named (weft) R envs — full standalone envs, rendered from the handle.
+    for name in iso_names:
+        row = named_envs.resolve(str(project_id), name) or {}
+        if row.get("language") == "r":
+            r_layers.append({"tier": "isolated", "scope": "capability", "delivery": "weft",
+                             "mutable": False, "name": name, "env_id": row.get("env_id"),
+                             "packages": [{"name": p, "version": ""}
+                                          for p in row.get("packages", [])]})
     r = {"engine": "install.packages + per-project libs + conda base", "layers": r_layers}
 
     return {"python": py, "r": r, "project_id": project_id}

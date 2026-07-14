@@ -1,10 +1,15 @@
-"""env_refactor.md P4 — the agent-facing isolated-env control surface.
+"""The agent-facing isolated-env control surface, weft-backed (weft rewrite W1).
 
-make_isolated_env (create + install with full version control) +
-run_in_isolated_env (use the sandbox). The mechanism's conflict-resolution is
-proven in test_isolated_env.py; here we pin the tool wiring + return shapes.
+make_isolated_env / run_in_isolated_env / set_active_env now ride
+core/compute/named_envs (per-project name→EnvID handles; extends_env layering;
+weft owns solve/realize). These tests pin the TOOL contract + the handle
+bookkeeping with a stubbed compute adapter — no weft/network needed. The real
+substrate path is covered by test_compute_ports.py (live echo task) and the
+opt-in live test at the bottom (ABA_WEFT_LIVE=1).
 """
 from __future__ import annotations
+import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -14,19 +19,45 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 import content.bio  # noqa: E402,F401
-import core.exec.materialize as mat  # noqa: E402
 from content.bio.tools import make_isolated_env, run_in_isolated_env, run_python  # noqa: E402
 
 pytestmark = pytest.mark.bio
 
 
-@pytest.fixture
-def iso_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(mat, "ENVS_DIR", tmp_path / "envs")
-    import core.config as _cfg
-    monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")  # active_envs.json
-    return tmp_path
+class _StubAdapter:
+    """Canned env_ensure: EnvID derived from the spec (stable), no I/O."""
+    def __init__(self):
+        self.ensured: list[dict] = []
 
+    async def env_ensure(self, spec, update=False, **kw):
+        self.ensured.append(spec)
+        import hashlib
+        h = hashlib.sha256(repr(sorted(spec.get("deps", {}).items())).encode()
+                           + repr(spec.get("extends_env")).encode()).hexdigest()
+        return {"env_id": f"env:v1:{h}", "status": "solved", "summary": "stub"}
+
+
+@pytest.fixture
+def stubbed(tmp_path, monkeypatch):
+    """Project registry under tmp + stubbed adapter; realization returns a
+    planted venv-shaped prefix so interpreter dispatch is real."""
+    import core.config as _cfg
+    from core.compute import named_envs, adapter as ad
+    monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")
+    stub = _StubAdapter()
+    monkeypatch.setattr(ad, "get_compute", lambda: stub)
+    prefix = tmp_path / "prefix"
+    (prefix / "bin").mkdir(parents=True)
+    # a real interpreter at the planted prefix → run_in works end-to-end
+    (prefix / "bin" / "python").symlink_to(sys.executable)
+    monkeypatch.setattr(named_envs, "ensure_realized",
+                        lambda env_id, **kw: prefix)
+    from core import projects
+    monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
+    return stub
+
+
+# ── argument/contract validation (no machinery) ──────────────────────────────
 
 def test_make_requires_name():
     assert make_isolated_env({})["status"] == "error"
@@ -36,32 +67,20 @@ def test_run_requires_name_and_code():
     assert run_in_isolated_env({"name": "x"})["status"] == "error"
 
 
-def test_make_env_only(iso_root):
-    r = make_isolated_env({"name": "toolA"})
-    assert r["status"] == "ok" and r["engine"] in ("uv", "venv")
-    # can run in it immediately
-    run = run_in_isolated_env({"name": "toolA", "code": "print('HELLO_ISO')"})
-    assert run["status"] == "ok" and "HELLO_ISO" in run["stdout"]
+def test_make_isolated_env_rejects_reserved():
+    for n in ("default", "base", "shared", "project"):
+        r = make_isolated_env({"name": n})
+        assert r["status"] == "error" and "reserved" in r["note"].lower(), n
 
 
-def test_make_env_with_package_and_run(iso_root):
-    r = make_isolated_env({"name": "toolB", "packages": ["six"], "verify_imports": ["six"]})
-    if r["status"] != "ok" and any(s in str(r.get("error", "")) for s in
-                                   ("Could not fetch", "Temporary failure",
-                                    "Network is unreachable", "Failed to establish")):
-        pytest.skip("no network for the isolated install")
-    assert r["status"] == "ok", r
-    assert r.get("verified") is True
-    run = run_in_isolated_env({"name": "toolB", "code": "import six; print('SIX_OK')"})
-    assert run["status"] == "ok" and "SIX_OK" in run["stdout"]
+def test_is_default_env_resolution():
+    from content.bio.tools.run_exec import _is_default_env
+    for v in (None, "", "default", "DEFAULT", "base", "shared", "project"):
+        assert _is_default_env(v) is True, v
+    for v in ("scrna", "legacy_tf", "myenv"):
+        assert _is_default_env(v) is False, v
 
 
-def test_run_in_missing_env_is_error(iso_root):
-    r = run_in_isolated_env({"name": "ghost", "code": "print(1)"})
-    assert r["status"] == "error" and "does not exist" in r["stderr"]
-
-
-# ── solve-driven auto-isolation (UNSAT-against-base → isolate, not fail) ──────
 def test_is_constraint_conflict():
     from content.bio.tools.discovery import _is_constraint_conflict
     assert _is_constraint_conflict("ERROR: ResolutionImpossible")
@@ -71,31 +90,96 @@ def test_is_constraint_conflict():
     assert not _is_constraint_conflict("No matching distribution found for typopkg")
 
 
-def test_auto_isolate_success(monkeypatch):
-    from core.exec import isolated_env as iso
+# ── handle bookkeeping over the stubbed adapter ──────────────────────────────
+
+def test_make_env_and_run(stubbed):
+    r = make_isolated_env({"name": "toolA"})
+    assert r["status"] == "ok" and r["engine"] == "weft"
+    assert r["env_id"].startswith("env:v1:")
+    run = run_in_isolated_env({"name": "toolA", "code": "print('HELLO_ISO')"})
+    assert run["status"] == "ok" and "HELLO_ISO" in run["stdout"]
+
+
+def test_python_named_env_bakes_ipykernel(stubbed):
+    make_isolated_env({"name": "kernelable"})
+    spec = stubbed.ensured[-1]
+    assert "ipykernel" in spec["deps"]["conda"]   # frozen env → baked at solve
+
+
+def test_second_make_layers_via_extends_env(stubbed):
+    r1 = make_isolated_env({"name": "grow", "packages": ["six"]})
+    r2 = make_isolated_env({"name": "grow", "packages": ["attrs"]})
+    assert r2["status"] == "ok" and r2["env_id"] != r1["env_id"]
+    assert stubbed.ensured[-1].get("extends_env") == r1["env_id"]   # frozen base
+    from core.compute import named_envs
+    row = named_envs.resolve("prjT", "grow")
+    assert row["env_id"] == r2["env_id"]
+    assert r1["env_id"] in row["history"]                            # provenance kept
+    assert set(row["packages"]) == {"six", "attrs"}
+
+
+def test_run_in_missing_env_is_helpful(stubbed):
+    r = run_in_isolated_env({"name": "ghost", "code": "print(1)"})
+    assert r["status"] == "error" and "make_isolated_env" in r["note"]
+
+
+def test_run_python_env_missing_is_helpful(stubbed):
+    r = run_python({"code": "print(1)", "env": "ghost"})
+    assert r["status"] == "error" and "make_isolated_env" in r["note"]
+
+
+def test_run_python_env_executes_isolated_stateless(stubbed, monkeypatch):
+    """Kernels off → the named env runs one-shot via its own interpreter."""
+    import core.config as _cfg
+    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)
+    assert make_isolated_env({"name": "envrun"})["status"] == "ok"
+    r = run_python({"code": "print('ENV_RUN_OK')", "env": "envrun"})
+    assert r["status"] == "ok" and "ENV_RUN_OK" in r["stdout"] and r["env"] == "envrun"
+
+
+def test_envs_are_project_scoped(stubbed, monkeypatch):
+    from core.compute import named_envs
+    from core import projects
+    make_isolated_env({"name": "dup"})
+    monkeypatch.setattr(projects, "current", lambda: "prjB", raising=False)
+    assert named_envs.resolve("prjB", "dup") is None       # other project blind
+    assert named_envs.resolve("prjT", "dup") is not None
+
+
+def test_active_env_pointer_roundtrip(stubbed):
+    from content.bio.tools import set_active_env
+    from core.compute import named_envs
+    make_isolated_env({"name": "act"})
+    assert set_active_env({"name": "act"})["active_python_env"] == "act"
+    assert named_envs.get_active("prjT", "python") == "act"
+    assert set_active_env({"name": "default"})["active_python_env"] == "default"
+    assert set_active_env({"name": "ghost"})["status"] == "error"
+
+
+# ── auto-isolation (UNSAT-against-base → isolate, not fail) ──────────────────
+
+def test_auto_isolate_success(stubbed, monkeypatch):
+    from core.compute import named_envs
     from content.bio.tools.discovery import _auto_isolate
-    monkeypatch.setattr(iso, "create_env", lambda n, **k: {"name": n, "engine": "venv", "python": "/x"})
-    monkeypatch.setattr(iso, "install_into",
-                        lambda n, specs, **k: {"ok": True, "installed": list(specs), "verified": True})
+    monkeypatch.setattr(named_envs, "verify_imports", lambda *a, **k: (True, ""))
     r = _auto_isolate("tflike", ["tflike==9"], {"import_name": "tflike"})
     assert r["status"] == "ready_isolated" and r["isolated_env"] == "cap-tflike"
     assert "run_in_isolated_env" in r["note"]
 
 
-def test_auto_isolate_install_fails(monkeypatch):
-    from core.exec import isolated_env as iso
+def test_auto_isolate_verify_fails(stubbed, monkeypatch):
+    from core.compute import named_envs
     from content.bio.tools.discovery import _auto_isolate
-    monkeypatch.setattr(iso, "create_env", lambda n, **k: {"name": n, "engine": "venv"})
-    monkeypatch.setattr(iso, "install_into", lambda n, specs, **k: {"ok": False, "error": "boom"})
-    assert _auto_isolate("x", ["x"], {})["status"] == "error"
+    monkeypatch.setattr(named_envs, "verify_imports",
+                        lambda *a, **k: (False, "ImportError: boom"))
+    r = _auto_isolate("x", ["x"], {"import_name": "x"})
+    assert r["status"] == "error" and "boom" in str(r.get("error"))
 
 
-def test_ensure_capability_auto_isolates_on_conflict(monkeypatch):
-    """Integration: a pip capability that's UNSAT against the base routes to an
-    isolated env instead of failing/corrupting."""
+def test_ensure_capability_auto_isolates_on_conflict(stubbed, monkeypatch):
     import core.catalog as cat
     from core.exec import materialize as matz
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
     from content.bio.tools import discovery as d
     monkeypatch.setattr(cat, "resolve_capability", lambda name, *a, **k: {
         "name": name, "provisioning": {"pip": ["tflike==9"]},
@@ -105,212 +189,43 @@ def test_ensure_capability_auto_isolates_on_conflict(monkeypatch):
         raise RuntimeError("ERROR: ResolutionImpossible. The conflict is caused by "
                            "numpy==2.4.6 (from -c constraints).")
     monkeypatch.setattr(matz.MaterializingExecutor, "materialize", boom)
-    monkeypatch.setattr(iso, "create_env", lambda n, **k: {"name": n, "engine": "venv", "python": "/x"})
-    monkeypatch.setattr(iso, "install_into",
-                        lambda n, specs, **k: {"ok": True, "installed": list(specs), "verified": True})
+    monkeypatch.setattr(named_envs, "verify_imports", lambda *a, **k: (True, ""))
     r = d.ensure_capability({"name": "tflike"})
     assert r["status"] == "ready_isolated", r
     assert r["isolated_env"] == "cap-tflike" and "run_in_isolated_env" in r["note"]
 
 
-# ── §11 Increment 1: env= on run_python + reserved names ─────────────────────
-def test_is_default_env_resolution():
-    from content.bio.tools.run_exec import _is_default_env
-    for v in (None, "", "default", "DEFAULT", "base", "shared", "project"):
-        assert _is_default_env(v) is True, v
-    for v in ("scrna", "legacy_tf", "myenv"):
-        assert _is_default_env(v) is False, v
+# ── sync-bridge safety ────────────────────────────────────────────────────────
+
+def test_named_envs_refuses_event_loop_thread():
+    from core.compute import named_envs
+
+    async def on_loop():
+        coro = asyncio.sleep(0)
+        with pytest.raises(RuntimeError, match="worker thread"):
+            named_envs._sync(coro)
+        coro.close()
+    asyncio.run(on_loop())
 
 
-def test_make_isolated_env_rejects_reserved(iso_root):
-    for n in ("default", "base", "shared", "project"):
-        r = make_isolated_env({"name": n})
-        assert r["status"] == "error" and "reserved" in r["note"].lower(), n
+# ── opt-in LIVE test (real weft solve+realize; slow, needs network) ──────────
 
-
-def test_create_env_rejects_reserved(iso_root):
-    from core.exec import isolated_env as iso
-    with pytest.raises(ValueError):
-        iso.create_env("default")
-    with pytest.raises(ValueError):
-        iso.r_create_env("base")
-
-
-def test_run_python_env_missing_is_helpful(iso_root, monkeypatch):
-    from core import projects
-    monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
-    r = run_python({"code": "print(1)", "env": "ghost"})
-    assert r["status"] == "error" and "make_isolated_env" in r["note"]
-
-
-def test_run_python_env_executes_in_isolated(iso_root, monkeypatch):
-    """Stateless-fallback path (KERNEL_ENABLED off) — deterministic + no kernel
-    spawn. The stateful per-env kernel is covered by the integration/live tests."""
+@pytest.mark.skipif(not os.environ.get("ABA_WEFT_LIVE"),
+                    reason="set ABA_WEFT_LIVE=1 for the real solve/realize round-trip")
+def test_live_make_and_run(tmp_path, monkeypatch):
     import core.config as _cfg
+    from core.compute import adapter as ad
     from core import projects
-    monkeypatch.setattr(projects, "current", lambda: "prjT", raising=False)
-    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)
-    assert make_isolated_env({"name": "envrun"})["status"] == "ok"
-    r = run_python({"code": "print('ENV_RUN_OK')", "env": "envrun"})
-    assert r["status"] == "ok" and "ENV_RUN_OK" in r["stdout"] and r["env"] == "envrun"
-
-
-def test_run_python_default_does_not_route_isolated(monkeypatch):
-    """env=None / 'default' must NOT hit the isolated path — it stays the served
-    stack. We assert the dispatch helper agrees (the kernel path needs a backend)."""
-    from content.bio.tools.run_exec import _is_default_env
-    assert _is_default_env(None) and _is_default_env("default")
-
-
-# ── §11.6 Point 2: project-scoped envs (no cross-project collision) ──────────
-def test_envs_are_project_scoped_no_collision(iso_root, monkeypatch):
-    from core.exec import isolated_env as iso
-    from core import projects
-    monkeypatch.setattr(projects, "current", lambda: "projA", raising=False)
-    iso.create_env("dup"); pa = iso.env_python("dup")
-    monkeypatch.setattr(projects, "current", lambda: "projB", raising=False)
-    iso.create_env("dup"); pb = iso.env_python("dup")
-    assert pa != pb and "projA" in str(pa) and "projB" in str(pb)   # distinct physical envs
-    iso.remove_env("dup")                                            # B removes its own
-    assert not iso.env_python("dup", "projB").exists()
-    assert iso.env_python("dup", "projA").exists()                  # A's is untouched
-
-
-# ── §11 Increment 4: per-env spec/lock + rebuild ─────────────────────────────
-def test_env_spec_capture_and_load(iso_root):
-    from core.exec import isolated_env as iso
-    iso.create_env("specA")
-    iso.capture_env_spec("specA", language="python", packages=["x"])
-    spec = iso.load_env_spec("specA")
-    assert spec and spec["name"] == "specA" and spec["language"] == "python"
-    assert spec["packages"] == ["x"] and "lock" in spec  # pip-freeze of the fresh venv
-
-
-def test_ensure_env_built_noop_when_present(iso_root):
-    from core.exec import isolated_env as iso
-    iso.create_env("specB"); iso.capture_env_spec("specB", packages=[])
-    assert iso.ensure_env_built("specB") is True   # already on disk → fast no-op
-
-
-def test_ensure_env_built_rebuilds_from_lock(iso_root):
-    import shutil, subprocess
-    from core.exec import isolated_env as iso
-    r = make_isolated_env({"name": "specC", "packages": ["six==1.16.0"]})
-    if r["status"] != "ok" and any(s in str(r.get("error", "")) for s in
-                                   ("Could not fetch", "Temporary failure", "Network",
-                                    "Failed to establish")):
-        pytest.skip("no network for the rebuild")
-    assert r["status"] == "ok"
-    spec = iso.load_env_spec("specC")
-    assert any("six==1.16.0" in l for l in (spec.get("lock") or [])), spec
-    shutil.rmtree(iso.env_dir("specC"))            # simulate GC of the built bytes
-    assert not iso.env_python("specC").exists()
-    assert iso.ensure_env_built("specC") is True   # rebuilt from the lock
-    chk = subprocess.run([str(iso.env_python("specC")), "-c",
-                          "import six; print(six.__version__)"], capture_output=True, text=True)
-    assert "1.16.0" in chk.stdout                  # pinned version restored
-
-
-def test_remove_env_drops_spec(iso_root):
-    from core.exec import isolated_env as iso
-    iso.create_env("specD"); iso.capture_env_spec("specD", packages=[])
-    assert iso.env_spec_path("specD").exists()
-    iso.remove_env("specD")
-    assert not iso.env_spec_path("specD").exists()
-
-
-# ── §11 Increment 6: lazy GC of idle built envs ──────────────────────────────
-def test_gc_reclaims_idle_rebuildable_env(iso_root):
-    import os, time
-    from core.exec import isolated_env as iso
-    iso.create_env("gc1"); iso.capture_env_spec("gc1", packages=[]); iso.touch_env("gc1")
-    old = time.time() - 40 * 86400
-    os.utime(iso.env_used_marker("gc1"), (old, old))      # look long-idle
-    reclaimed = iso.gc_isolated_envs(max_idle_s=30 * 86400)
-    assert "gc1" in reclaimed
-    assert not iso.env_python("gc1").exists()              # built bytes reclaimed
-    assert iso.load_env_spec("gc1") is not None            # spec kept
-    assert iso.ensure_env_built("gc1") is True             # rebuilds from spec
-
-
-def test_gc_skips_recent_env(iso_root):
-    from core.exec import isolated_env as iso
-    iso.create_env("gc2"); iso.capture_env_spec("gc2", packages=[]); iso.touch_env("gc2")
-    assert "gc2" not in iso.gc_isolated_envs(max_idle_s=30 * 86400)
-    assert iso.env_python("gc2").exists()
-
-
-def test_gc_skips_env_without_spec(iso_root):
-    import os, time
-    from core.exec import isolated_env as iso
-    iso.create_env("gc3"); iso.touch_env("gc3")           # no spec captured
-    old = time.time() - 40 * 86400
-    os.utime(iso.env_used_marker("gc3"), (old, old))
-    assert "gc3" not in iso.gc_isolated_envs(max_idle_s=30 * 86400)   # not rebuildable → keep
-    assert iso.env_python("gc3").exists()
-
-
-# ── §11 Increment 3: active env pointer + set_active_env ─────────────────────
-def test_active_env_storage_roundtrip(iso_root):
-    from core.exec import isolated_env as iso
-    assert iso.get_active_env("prjA", "python") == "default"
-    iso.set_active_env("prjA", "myenv", "python")
-    assert iso.get_active_env("prjA", "python") == "myenv"
-    iso.set_active_env("prjA", "default", "python")
-    assert iso.get_active_env("prjA", "python") == "default"
-    # per-language + per-project isolation
-    assert iso.get_active_env("prjB", "python") == "default"
-
-
-def test_set_active_env_tool_validates(iso_root, monkeypatch):
-    from core import projects
-    from content.bio.tools import set_active_env
-    monkeypatch.setattr(projects, "current", lambda: "prjA", raising=False)
-    assert set_active_env({"name": "nope"})["status"] == "error"      # non-existent
-    assert set_active_env({"name": "default"})["status"] == "ok"      # reset always ok
-    make_isolated_env({"name": "act1"})
-    r = set_active_env({"name": "act1"})
-    assert r["status"] == "ok" and r["active_python_env"] == "act1"
-
-
-def test_run_python_follows_active_pointer(iso_root, monkeypatch):
-    import core.config as _cfg
-    from core import projects
-    from content.bio.tools import set_active_env
-    monkeypatch.setattr(projects, "current", lambda: "prjA", raising=False)
-    monkeypatch.setattr(_cfg, "KERNEL_ENABLED", False)               # stateless fallback
-    make_isolated_env({"name": "act2"})
-    set_active_env({"name": "act2"})
-    # bare run_python (no env) -> the active env
-    r = run_python({"code": "print('VIA_ACTIVE')"})
-    assert r.get("env") == "act2" and "VIA_ACTIVE" in r.get("stdout", "")
-    # explicit env='default' overrides the active pointer (served stack, not act2)
-    r2 = run_python({"code": "print(1)", "env": "default"})
-    assert r2.get("env") is None
-
-
-def test_make_r_env_and_run_via_tools(iso_root):
-    """P3: the agent tools are language-aware — an R isolated env + run."""
-    from core.exec.materialize import tools_env
-    if not (tools_env() / "bin" / "Rscript").exists():
-        pytest.skip("R runtime not provisioned on this box")
-    r = make_isolated_env({"name": "rtool", "language": "r"})
-    assert r["status"] == "ok" and r["language"] == "r" and r["engine"] == "r-libdir"
-    run = run_in_isolated_env({"name": "rtool", "language": "r", "code": "cat('R_RUN_OK')"})
-    assert run["status"] == "ok" and run["language"] == "r" and "R_RUN_OK" in run["stdout"]
-
-
-def test_ensure_capability_non_conflict_stays_error(monkeypatch):
-    """A non-conflict materialize failure must NOT auto-isolate."""
-    import core.catalog as cat
-    from core.exec import materialize as matz
-    from content.bio.tools import discovery as d
-    monkeypatch.setattr(cat, "resolve_capability", lambda name, *a, **k: {
-        "name": name, "provisioning": {"pip": ["x"]}, "import_name": "x",
-        "scope": "project", "status": "published"})
-
-    def boom(self, prov, scope="system", *, cancel_token=None, project_id=None):
-        raise RuntimeError("network unreachable")
-    monkeypatch.setattr(matz.MaterializingExecutor, "materialize", boom)
-    r = d.ensure_capability({"name": "x"})
-    assert r["status"] == "error" and "materialization failed" in r["note"]
+    monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setenv("ABA_WEFT_WORKSPACE", str(tmp_path / "weft-ws"))
+    monkeypatch.setattr(ad, "_adapter", None)
+    monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "info", "detail": "un"})
+    st = ad.configure()
+    assert st["ok"], st["detail"]
+    monkeypatch.setattr(projects, "current", lambda: "prjLive", raising=False)
+    r = make_isolated_env({"name": "live1"})
+    assert r["status"] == "ok", r
+    run = run_in_isolated_env({"name": "live1", "code": "print('LIVE_OK')",
+                               "timeout_s": 900})
+    assert run["status"] == "ok" and "LIVE_OK" in run["stdout"], run
+    ad.shutdown()

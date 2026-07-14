@@ -566,22 +566,23 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
 def _is_default_env(env) -> bool:
     """env_refactor.md §11.2 — None/'' and the reserved names all mean the
     project's normal served stack; any other name is a named isolated env."""
-    from core.exec.isolated_env import RESERVED_ENV_NAMES
+    from core.compute.named_envs import RESERVED_ENV_NAMES
     return (env or "").strip().lower() in ("", *RESERVED_ENV_NAMES)
 
 
 def _run_in_named_env(env: str, code: str, lang: str, timeout_s: int) -> dict:
-    """run_python/run_r(env=<name>) → the named isolated env. Increment 1 routes to
-    the existing one-shot mechanism (stateless); increment 2 (§11.3) replaces this
-    with a persistent per-env Jupyter kernel that keeps state + harvests plots."""
-    from core.exec import isolated_env as iso
+    """run_python/run_r(env=<name>) → the named (weft) env, one-shot. The
+    interactive python path uses the per-env persistent kernel instead (below);
+    this is the stateless lane (R named envs + kernels-disabled fallback)."""
+    from core.compute import named_envs
+    from core import projects
     env = env.strip()
-    r = iso.r_run_in(env, code, timeout_s=timeout_s) if lang == "r" \
-        else iso.run_in(env, code, timeout_s=timeout_s)
-    if not r.get("ok") and "does not exist" in (r.get("stderr") or ""):
-        return {"status": "error", "env": env, "language": lang, "stderr": r["stderr"],
+    pid = str(projects.current() or "default")
+    if named_envs.resolve(pid, env) is None:
+        return {"status": "error", "env": env, "language": lang,
                 "note": f"No isolated env '{env}'. Create it with make_isolated_env("
                         f"name='{env}'" + (", language='r'" if lang == "r" else "") + ")."}
+    r = named_envs.run_in(pid, env, code, timeout_s=timeout_s)
     return {"status": "ok" if r.get("ok") else "error", "env": env, "language": lang,
             "stdout": r.get("stdout", ""), "stderr": r.get("stderr", ""),
             "execution_mode": "isolated"}
@@ -618,8 +619,8 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
            "mem_gb": input_.get("est_mem_gb"), "gpu": input_.get("est_gpu")}
     env = input_.get("env")
     if env is None:
-        from core.exec.isolated_env import get_active_env
-        env = get_active_env(str(project_id), "python")
+        from core.compute.named_envs import get_active
+        env = get_active(str(project_id), "python")
     env_name = None if _is_default_env(env) else str(env).strip()
     return {"estimate": est, "execution": input_.get("execution"),
             "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
@@ -656,16 +657,28 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # (including 'default') overrides it.
     env = input_.get("env")
     if env is None:
-        from core.exec.isolated_env import get_active_env
-        env = get_active_env(project_id, "python")
+        from core.compute.named_envs import get_active
+        env = get_active(project_id, "python")
     env_name = None if _is_default_env(env) else env.strip()
     if env_name:
-        from core.exec import isolated_env as iso
-        # §11.6: a reclaimed env rebuilds from its lock here, transparently.
-        if not iso.ensure_env_built(env_name):
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
+        # weft rebuilds a GC-reclaimed env from its lock transparently at
+        # realization (the old §11.6 story).
+        row = named_envs.resolve(str(project_id), env_name)
+        if row is None:
             return {"status": "error", "env": env_name,
                     "note": f"No isolated env '{env_name}'. Create it with "
                             f"make_isolated_env(name='{env_name}')."}
+        # Realize HERE, before the kernel pool — get_or_start holds the pool
+        # lock across kernel startup, and a first-use realization (minutes)
+        # under that lock would wedge every kernel acquisition process-wide.
+        try:
+            named_envs.ensure_realized(row["env_id"])
+        except ComputeError as ce:
+            return {"status": "error", "env": env_name, "error": ce.to_payload(),
+                    "note": f"env '{env_name}' could not be realized: "
+                            f"{ce.detail or ce.code}"}
         if not KERNEL_ENABLED:   # kernels off → stateless one-shot fallback
             return _run_in_named_env(env_name, code, "python", timeout_s)
 

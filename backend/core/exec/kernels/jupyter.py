@@ -68,30 +68,37 @@ _env_specs_ready: set = set()
 
 
 def _ensure_env_python_kernelspec(env_name: str) -> str:
-    """Register a kernelspec whose interpreter is the ISOLATED env's python (so a
-    kernel launched from it sees that env's packages, standalone — §11.3).
-    Installs ipykernel into the env on first use. Idempotent. Returns spec name.
-    The spec name includes the project id so two projects' same-named envs can't
-    cross-wire to the wrong python (§11.6 project-scoped)."""
+    """Register a kernelspec whose interpreter is the ISOLATED (weft) env's
+    python (so a kernel launched from it sees that env's packages, standalone —
+    §11.3). ipykernel is BAKED into every named python env at solve time
+    (core/compute/named_envs._spec_for) — weft envs are frozen, nothing is ever
+    installed into one here. Realization happens on first use (this call may
+    build the prefix). Idempotent. The spec name includes the project id so two
+    projects' same-named envs can't cross-wire to the wrong python."""
     import re as _re
     import subprocess
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
     from core import projects
-    pid = projects.current() or "_none"
-    py = iso.env_python(env_name)          # resolves project-scoped (current project)
-    if not py.exists():
+    pid = str(projects.current() or "_none")
+    row = named_envs.resolve(pid, env_name)
+    if row is None:
         raise RuntimeError(f"isolated env {env_name!r} does not exist")
-    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-env-{pid}-{env_name}".lower())
+    py = named_envs.ensure_realized(row["env_id"]) / "bin" / "python"
+    if not py.exists():
+        raise RuntimeError(f"isolated env {env_name!r} realized without a python "
+                           f"interpreter (env {row['env_id']})")
+    # Spec name is per-project AND per-EnvID: extending the env moves the handle
+    # to a NEW EnvID, and the kernelspec must follow it (a stale spec would keep
+    # launching the pre-extension prefix).
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-env-{pid}-{env_name}-{row['env_id'][-12:]}".lower())
     if spec_name in _env_specs_ready:
         return spec_name
-    # ipykernel must live IN the env (the kernel runs as the env's python).
     if subprocess.run([str(py), "-c", "import ipykernel"],
                       capture_output=True).returncode != 0:
-        ins = subprocess.run([str(py), "-m", "pip", "install", "-q", "ipykernel"],
-                             capture_output=True, text=True, timeout=600)
-        if ins.returncode != 0:
-            raise RuntimeError(f"could not install ipykernel into env {env_name!r}: "
-                               f"{(ins.stderr or ins.stdout or '')[-400:]}")
+        raise RuntimeError(
+            f"env {env_name!r} has no ipykernel — recreate it with "
+            f"make_isolated_env (named python envs bake ipykernel in)")
     subprocess.run(
         [str(py), "-m", "ipykernel", "install", "--user",
          "--name", spec_name, "--display-name", f"ABA env {env_name}"],

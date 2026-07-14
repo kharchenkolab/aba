@@ -822,11 +822,18 @@ def rebuild_env(entity_id: str, *, only: Optional[list] = None,
         raise ValueError("R env rebuild not yet supported (R envs are libdirs)")
     want = set(only) if only else None
     specs = [f"{k}=={v}" for k, v in pkg.items() if v and (want is None or k in want)]
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
     envname = name or f"repro_{str(entity_id)[:8]}"
-    iso.create_env(envname)
-    res = iso.install_into(envname, specs)
-    return {"env": envname, "installed": len(specs), "ok": bool(res.get("ok", True)),
+    pid = str(projects.current() or "default")
+    try:
+        res = named_envs.create(pid, envname, language="python", packages=specs)
+    except ComputeError as ce:
+        return {"env": envname, "installed": 0, "ok": False, "error": ce.to_payload(),
+                "note": "rebuild solve failed — pass `only` to bisect a few packages"}
+    return {"env": envname, "installed": len(specs), "ok": True,
+            "env_id": res["env_id"],
             "use": f"run_python(env='{envname}')",
             "note": "full rebuild can be slow / conflict — pass `only` to bisect a few packages"}
 

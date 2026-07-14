@@ -94,15 +94,9 @@ async def on_startup():
             except Exception as e:  # noqa: BLE001
                 import traceback as _tb
                 print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
-            # §11.6 lazy GC: reclaim built bytes of long-idle isolated envs (their
-            # spec/lock stays, so next use rebuilds transparently).
-            try:
-                from core.exec.isolated_env import gc_isolated_envs
-                gc = gc_isolated_envs()
-                if gc:
-                    print(f"[startup] reclaimed {len(gc)} long-idle isolated env(s): {gc}")
-            except Exception as e:  # noqa: BLE001
-                print(f"[startup] isolated-env GC failed (non-fatal): {e}")
+            # Named (weft) env footprint: weft owns realization lifecycle —
+            # reclaim is gc_plan/env_evict via doctor, not a boot-time sweep
+            # (a reclaimed realization rebuilds from its lock on next use).
         await asyncio.to_thread(_work)
     asyncio.create_task(_bg_base_maintenance())
 

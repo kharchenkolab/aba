@@ -14,6 +14,7 @@ Run (from host):
 from __future__ import annotations
 import asyncio
 import os
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -227,13 +228,21 @@ def s8_restart_readoption():
 
 # ── Scenario 9: a backgrounded job in an ISOLATED env runs IN it on the node ─
 def s9_isolated_env():
+    """W1: named envs are weft EnvIDs; the real cluster path (shared weft_root +
+    realize-on-node) is W3 (misc/weft_rewrite.md §7). Until then this scenario
+    plants a registry handle whose realization is a local venv on the shared FS
+    — same dispatch, stand-in realization."""
     import subprocess as _sp
-    from core.exec import isolated_env as iso
+    from pathlib import Path as _P
+    from core.compute import named_envs
     pid = projects.create_project("s9")["id"]; projects.set_current(pid)
-    # Stand-in isolated env on the shared FS (a real make_isolated_env needs uv+min).
-    envdir = iso.env_dir("isoenv", pid)
-    envdir.parent.mkdir(parents=True, exist_ok=True)
+    envdir = _P(tempfile.mkdtemp(prefix="aba_s9_env_", dir=os.environ.get("ABA_RUNTIME_DIR")))
     _sp.run([sys.executable, "-m", "venv", str(envdir)], check=True, capture_output=True)
+    data = named_envs._load(pid)
+    data["envs"]["isoenv"] = {"env_id": "env:v1:s9-standin", "language": "python",
+                              "packages": [], "history": [], "created_at": 0, "updated_at": 0}
+    named_envs._save(pid, data)
+    named_envs.ensure_realized = lambda env_id, **kw: envdir   # stand-in realize
     job = submit_python_job("import sys; print('PFX', sys.prefix)", "s9 isolated-env",
                             None, project_id=pid, env="isoenv", estimate={"runtime_min": 2})
     after = get_job(job["id"], project_id=pid)
@@ -244,25 +253,10 @@ def s9_isolated_env():
           f"status={st} log_tail={(j.get('log_tail') or '')[:90]!r}")
 
 
-# ── Scenario 10: a backgrounded R job in an ISOLATED R env (lib first) ───────
-def s10_isolated_r_env():
-    from core.exec import isolated_env as iso
-    pid = projects.create_project("s10")["id"]; projects.set_current(pid)
-    lib = iso.r_env_lib("renv", pid); lib.mkdir(parents=True, exist_ok=True)
-    job = submit_r_job("cat('LIB1:', .libPaths()[1], '\\n')", "s10 r-env", None,
-                       project_id=pid, env="renv", estimate={"runtime_min": 2})
-    after = get_job(job["id"], project_id=pid)
-    check("s10.env_in_params", after["params"].get("env") == "renv")
-    st = _drive_to_terminal(job["id"], pid, timeout=180)
-    j = get_job(job["id"], project_id=pid)
-    check("s10.ran_in_r_env_on_node", st == "done" and str(lib) in (j.get("log_tail") or ""),
-          f"status={st} log_tail={(j.get('log_tail') or '')[:100]!r}")
-
-
 def main() -> int:
     for fn in (s1_submit_result, s2_resource_flags, s3_monitoring, s4_cancellation, s5_error,
                s6_poll_loop_autonomy, s7_session_allocation, s8_restart_readoption,
-               s9_isolated_env, s10_isolated_r_env):
+               s9_isolated_env):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

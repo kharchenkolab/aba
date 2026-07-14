@@ -119,20 +119,20 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
-    """Create/refresh an ISOLATED environment you OWN (Python venv, or — with
-    language='r' — a standalone R library) and install packages into it with FULL
-    version control. USE THIS when a package conflicts with the base (a different
-    numpy, tensorflow, an ABI-incompatible wheel) or you need to resolve a
-    dependency conflict your own way — the shared base is never touched. Run code
-    in it with run_in_isolated_env. (Note for R: a *project* R install already
-    overrides the base via .libPaths, so reach for this only for a fully
-    project-independent / one-off conflicting lib.) Returns {status, name,
-    language, engine, installed, verified, error}."""
-    from core.exec import isolated_env as iso
+    """Create/refresh an ISOLATED environment you OWN (a weft-solved env — Python,
+    or with language='r' a standalone R env) with FULL version control. USE THIS
+    when a package conflicts with the base (a different numpy, tensorflow, an
+    ABI-incompatible wheel) or you need to resolve a dependency conflict your own
+    way — the shared base is never touched. Run code in it with
+    run_in_isolated_env. Returns {status, name, language, engine, env_id,
+    installed, verified, error}."""
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "make_isolated_env needs a `name`."}
-    if iso.is_reserved_name(name):
+    if named_envs.is_reserved_name(name):
         return {"status": "error", "name": name,
                 "note": f"'{name}' is reserved (default/base/shared/project) — it denotes "
                         "the normal environment, not an isolated one. Pick another name."}
@@ -140,43 +140,56 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     label = "R" if is_r else "Python"
     lang = "r" if is_r else "python"
     packages = list(input_.get("packages") or [])
+    pid = str(projects.current() or "default")
     try:
-        info = iso.r_create_env(name) if is_r else iso.create_env(name)
+        # Existing env + packages → layer on (extends_env; the env is never
+        # mutated in place). Fresh name → solve a new env. Solving is eager so
+        # conflicts surface NOW with weft's structured cause; realization is
+        # lazy — the first run materializes the prefix.
+        if named_envs.resolve(pid, name) is not None and packages:
+            res = named_envs.extend(pid, name, packages)
+        else:
+            res = named_envs.create(pid, name, language=lang, packages=packages)
+    except ComputeError as e:
+        return {"status": "error", "name": name, "language": lang,
+                "error": e.to_payload(),
+                "note": f"could not solve the env: {e.detail or e.code}"}
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "name": name, "note": f"could not create env: {e}"}
-    engine = info["engine"]
-    if not packages:
-        iso.capture_env_spec(name, language=lang, packages=[])   # §11.6 spec/lock
-        _run = "run_r" if is_r else "run_python"
-        return {"status": "ok", "name": name, "language": lang, "engine": engine,
-                "note": f"Isolated {label} env {name!r} ready ({engine}); install packages "
-                        f"or run code in it with {_run}(env={name!r}, code=…)."}
-    res = (iso.r_install_into(name, packages) if is_r
-           else iso.install_into(name, packages, verify_imports=input_.get("verify_imports")))
-    if not res["ok"]:
-        return {"status": "error", "name": name, "language": lang, "engine": engine,
-                "installed": packages, "error": res.get("error"),
-                "note": "Isolated env created, but the install failed — see error."}
-    iso.capture_env_spec(name, language=lang, packages=packages)   # §11.6 spec/lock
+    out = {"status": "ok", "name": name, "language": lang, "engine": "weft",
+           "env_id": res["env_id"], "installed": packages}
+    verify = input_.get("verify_imports")
+    if packages and verify:
+        ok, err = named_envs.verify_imports(pid, name, list(verify))
+        out["verified"] = ok
+        if not ok:
+            return {**out, "status": "error", "error": err,
+                    "note": "Env solved, but the requested imports failed inside it — see error."}
     _run = "run_r" if is_r else "run_python"
-    return {"status": "ok", "name": name, "language": lang, "engine": engine,
-            "installed": res["installed"], "verified": res.get("verified"),
-            "note": f"Isolated {label} env {name!r} ready ({engine}); run code in it with "
-                    f"{_run}(env={name!r}, code=…)."}
+    out["note"] = (f"Isolated {label} env {name!r} solved; run code in it with "
+                   f"{_run}(env={name!r}, code=…) — the first run materializes it. "
+                   f"Calling make_isolated_env again with more packages LAYERS them on.")
+    return out
 
 
 def run_in_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
     """Run code inside an isolated env created by make_isolated_env — your sandbox
     for conflict resolution / troubleshooting. `language` = python (default) | r.
     Returns {status, language, stdout, stderr}."""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
+    from core import projects
     name = (input_.get("name") or "").strip()
     code = input_.get("code") or ""
     if not name or not code:
         return {"status": "error", "note": "run_in_isolated_env needs `name` and `code`."}
     is_r = (input_.get("language") or "python").strip().lower() in ("r", "rlang")
     ts = int(input_.get("timeout_s") or 600)
-    r = iso.r_run_in(name, code, timeout_s=ts) if is_r else iso.run_in(name, code, timeout_s=ts)
+    pid = str(projects.current() or "default")
+    if named_envs.resolve(pid, name) is None:
+        return {"status": "error", "name": name,
+                "note": f"No isolated env '{name}'. Create it with make_isolated_env("
+                        f"name='{name}'" + (", language='r'" if is_r else "") + ")."}
+    r = named_envs.run_in(pid, name, code, timeout_s=ts)
     return {"status": "ok" if r["ok"] else "error", "name": name,
             "language": "r" if is_r else "python", "stdout": r["stdout"], "stderr": r["stderr"]}
 
@@ -185,17 +198,17 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
     """§11.2 — set the project's ACTIVE python env; bare run_python uses it until
     changed. name='default' resets to the normal served stack. (Python only — R's
     per-project lib already overrides the base, so run_r has no active pointer.)"""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
     from core import projects
     name = (input_.get("name") or "").strip()
     if not name:
         return {"status": "error", "note": "set_active_env needs a `name` (or 'default')."}
-    pid = projects.current()
-    if name.lower() != "default" and name not in iso.list_envs():
+    pid = str(projects.current() or "default")
+    if name.lower() != "default" and named_envs.resolve(pid, name) is None:
         return {"status": "error", "name": name,
                 "note": f"No isolated python env '{name}'. Create it with make_isolated_env, "
                         "or pass 'default' to use the normal environment."}
-    iso.set_active_env(pid, name, "python")
+    named_envs.set_active(pid, name, "python")
     if name.lower() == "default":
         return {"status": "ok", "active_python_env": "default",
                 "note": "Bare run_python now uses the default served stack."}
@@ -218,24 +231,34 @@ def _is_constraint_conflict(msg: str) -> bool:
 
 
 def _auto_isolate(name: str, pip_specs: list[str], cap: dict) -> dict:
-    """UNSAT against the base → install into an ISOLATED env the agent owns
+    """UNSAT against the base → solve an ISOLATED weft env the agent owns
     (base untouched). The capability is NOT importable in run_python; the agent
     runs its code via run_in_isolated_env."""
-    from core.exec import isolated_env as iso
+    from core.compute import named_envs
+    from core.compute.errors import ComputeError
+    from core import projects
     env_name = f"cap-{name}"
     imp = cap.get("import_name")
+    pid = str(projects.current() or "default")
     try:
-        iso.create_env(env_name)
-        res = iso.install_into(env_name, pip_specs, verify_imports=[imp] if imp else None)
+        res = named_envs.create(pid, env_name, language="python", packages=pip_specs)
+    except ComputeError as ce:
+        return {"status": "error", "name": name, "isolated_env": env_name,
+                "note": "conflicts with the base AND the isolated solve also failed — see error.",
+                "error": ce.to_payload()}
     except Exception as ie:  # noqa: BLE001
         return {"status": "error", "name": name,
                 "note": f"conflicts with the base, and the isolated-env fallback failed: {ie}"}
-    if not res["ok"]:
-        return {"status": "error", "name": name, "isolated_env": env_name,
-                "note": "conflicts with the base AND the isolated install also failed — see error.",
-                "error": res.get("error")}
+    verified = None
+    if imp:
+        ok, err = named_envs.verify_imports(pid, env_name, [imp])
+        verified = ok
+        if not ok:
+            return {"status": "error", "name": name, "isolated_env": env_name,
+                    "note": "conflicts with the base AND the isolated install also failed — see error.",
+                    "error": err}
     return {"status": "ready_isolated", "name": name, "isolated_env": env_name,
-            "installed": res["installed"], "verified": res.get("verified"),
+            "env_id": res["env_id"], "installed": pip_specs, "verified": verified,
             "note": (f"{name} conflicts with the base environment, so it was installed in an "
                      f"ISOLATED env {env_name!r} (the shared base was left untouched). It is NOT "
                      f"importable in run_python — run its code with "
