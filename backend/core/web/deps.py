@@ -62,7 +62,7 @@ def require_project(
     human action (the agent acts via the turn loop / MCP tools, not these)."""
     pid = _pin_or_412(project_id or x_project_id)
     try:
-        from core.runtime.actor import set_actor
+        from core.graph.actor import set_actor
         from core.graph.derivation import human_actor
         set_actor(human_actor())
     except Exception:  # noqa: BLE001 — actor attribution must never break a request
@@ -86,7 +86,7 @@ def optional_project(
     else:
         resolved = _projects.current()   # may be None on a fresh install
     try:
-        from core.runtime.actor import set_actor
+        from core.graph.actor import set_actor
         from core.graph.derivation import human_actor
         set_actor(human_actor())
     except Exception:  # noqa: BLE001 — actor attribution must never break a request

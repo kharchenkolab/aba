@@ -50,7 +50,7 @@ Three things compose, all pivoting on a **deployment-agnostic core**:
   │ cluster-personal / OOD│──▶│ config.env  (operational │──▶│  RUNTIME_DIR + lazy tiers│
   │ share install/core    │   │   toggles + creds; admin)│   │ core/web/deps.py         │
   └───────────────────────┘   │ bundle settings.yaml     │   │  require_project (gate)  │
-                              │   (deployment policy)    │   │ core/runtime/actor.py    │
+                              │   (deployment policy)    │   │ core/graph/actor.py    │
                               │ hpc.yaml (compute-topo   │   │  current_actor (who)     │
                               │   OVERRIDE, not a toggle)│   │ core/projects.py         │
                               └──────────────────────────┘   │  per-project DB binding  │
@@ -196,7 +196,7 @@ Exemptions are limited to genuinely-global endpoints (project lifecycle, server-
 defaults its `actor` from `current_actor()` when a caller doesn't pass one
 (`core/graph/entities.py:109`), so a human HTTP action is attributed for free. The agent path
 attributes `agent:<run_id>` **explicitly** rather than via the contextvar, because the
-contextvar can't cross FastMCP's tool-dispatch task boundary (`core/runtime/actor.py:5-13`,
+contextvar can't cross FastMCP's tool-dispatch task boundary (`core/graph/actor.py:5-13`,
 `core/runtime/tool_ctx.py:9-13`; exec-born creates resolve it from the exec's run_id,
 `agent_actor_for_exec`). The actor string is *descriptive* provenance — its meaning and use
 are owned by [`provenance.md`](provenance.md); here it is the *who* half of the access seam.
@@ -236,7 +236,7 @@ credential/access scope.
 | `aba settings [--deploy-env]` (`install/…/cli.py`) | operator view of the full declared surface (value/source/`weft_fate`/`reduction`) + unknown-var drift; or just the launcher-forwarded keys |
 | `core/web/deps.py` | `require_project` — per-request project pin (412 on no-context) + ambient `human:local` |
 | `tests/test_project_pinning_coverage.py` | the access-gate CI invariant: every mutating route pinned or justified-exempt |
-| `core/runtime/actor.py` · `core/runtime/tool_ctx.py` | ambient actor contextvar; why the agent path attributes explicitly across the MCP boundary |
+| `core/graph/actor.py` · `core/runtime/tool_ctx.py` | ambient actor contextvar; why the agent path attributes explicitly across the MCP boundary |
 | `core/graph/derivation.py` | `human_actor(uid="local")` / `agent_actor(run_id)` — the reserved `human:<uid>` seam |
 | `core/projects.py` | per-project SQLite registry; `set_current`/`bind` (contextvar DB isolation); `SINGLE` mode |
 | `core/bundle/scope_resolver.py` | startup identity/group/site.yaml resolution → the ordered scope chain |

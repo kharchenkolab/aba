@@ -164,7 +164,7 @@ is still the live `reproduce_from_exec` check. Design: `misc/provenance2.md`.
 | `content/bio/tools/run_exec.py` | `_write_exec_record` (`:446`) — automatic capture on every kernel-path `run_python`/`run_r` (code, code_hash, env fingerprint, `produced[]`, timing) |
 | `core/graph/derivation.py` | `derivation` kinds + `actor` constructors; `VALID_KINDS`, `from_lineage`, `agent_actor_for_exec` |
 | `core/graph/entities.py` | `create_entity` — auto-derive `exec`→derivation (`:104`), default actor from context |
-| `core/runtime/actor.py` | ambient actor contextvar: `current_actor`, `acting_as`, boundary binding |
+| `core/graph/actor.py` | ambient actor contextvar: `current_actor`, `acting_as`, boundary binding |
 | `tests/check_derivation.py` · `tests/test_invariants.py` | the build-time ratchet (every `create_entity` has `derivation=`/`exec_id=`) + its CI invariant (`test_derivation_invariant`, `:24`) |
 | `core/graph/derivation_backfill.py` | project-open backfill + `derivation_coverage_violations` (the runtime coverage invariant) |
 | `content/bio/lifecycle/revisions.py` | `make_revision`, `set_current_revision`, `delete_revision`, `reproduce_from_exec`, `diff_env`, `rebuild_env`, `export_bundle` |

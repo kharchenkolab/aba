@@ -197,9 +197,12 @@ def set_current(pid: str) -> None:
     # liveness guard inside reap_stale_turns is the belt to this suspenders.
     if pid not in _reaped_pids:
         _reaped_pids.add(pid)
+        # First-open lifecycle event. The turn reaper (Reasoning plane,
+        # core/runtime/checkpoint.py) registers for this — the waist fires
+        # the event, it never imports upward (plane lint, W0.2).
         try:
-            from core.runtime.checkpoint import reap_stale_turns
-            reap_stale_turns()
+            from core.hooks.dispatcher import dispatch
+            dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
     # Content-side project-open hooks (display-path backfill, etc.) run
@@ -248,9 +251,10 @@ def ensure_opened(pid: str) -> None:
     init_db()
     if pid not in _reaped_pids:
         _reaped_pids.add(pid)
+        # See set_current: the turn reaper subscribes to this event.
         try:
-            from core.runtime.checkpoint import reap_stale_turns
-            reap_stale_turns()
+            from core.hooks.dispatcher import dispatch
+            dispatch("on_project_first_open", {"pid": pid})
         except Exception:  # noqa: BLE001
             pass
     # Phase 2 (modularity_audit2 §2D): backfill typed derivations for

@@ -433,3 +433,20 @@ def settle_deferred_job(job: dict) -> bool:
     t.transition(TurnState.FAILED if job.get("status") in ("failed", "cancelled") else TurnState.DONE)
     checkpoint(t)
     return True
+
+
+# --- waist lifecycle subscription -------------------------------------------------
+# Reap stale turns on a project's FIRST open in this process (A1/#14). The waist
+# (core/projects) fires `on_project_first_open` and must not import upward
+# (plane dependency lint, W0.2) — the Reasoning plane subscribes here instead.
+# Registered at import: the app imports guide (→ this module) before any
+# project is opened; embedders that never import the runtime simply have no
+# turns to reap.
+from core.hooks.dispatcher import register as _register_hook  # noqa: E402
+
+
+def _reap_on_first_open(_ctx: dict) -> None:
+    reap_stale_turns()
+
+
+_register_hook("on_project_first_open", _reap_on_first_open)

@@ -21,6 +21,12 @@ Events used today (the names matter — handlers depend on them):
                         has pid. Handlers must be cheap + idempotent —
                         they run on every project switch. Bio uses this
                         for display-path backfill.
+    on_project_first_open — fired ONCE per project per process, the first
+                        time this process addresses the project's DB
+                        (set_current or ensure_opened; ctx has pid). The
+                        runtime's turn reaper subscribes
+                        (core/runtime/checkpoint.py) — the waist fires the
+                        event rather than importing upward (plane lint, W0.2).
 
 Adding a new event = pick a name and document it here.
 """

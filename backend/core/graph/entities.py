@@ -107,7 +107,7 @@ def create_entity(
     # Phase 2B: default the actor from the ambient context (set at the HTTP /
     # turn boundary) when the caller doesn't pass one explicitly.
     if actor is None:
-        from core.runtime.actor import current_actor
+        from core.graph.actor import current_actor
         actor = current_actor()
     _warn_if_unbound(entity_type)
     now = _utcnow()
