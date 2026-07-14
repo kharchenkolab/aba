@@ -37,8 +37,47 @@ def weft_available() -> bool:
     return bool(status().get("ok"))
 
 
+def _aba_env_vars() -> dict:
+    """The ABA_* config a node-side entry needs (the same contract the sbatch
+    lane's --export=ALL provided): every set ABA_* var, so the entry's registry
+    reads resolve identically on the node (shared-FS deployment)."""
+    import os
+    return {k: v for k, v in os.environ.items() if k.startswith("ABA_")}
+
+
+def weft_slurm_site() -> Optional[str]:
+    """The deployment's slurm-kind weft site (declared in weft-sites.yaml), or
+    None. This is what makes ABA_BATCH_SUBMITTER=slurm route through weft —
+    data-driven: a deployment that declared no cluster site keeps the legacy
+    sbatch lane."""
+    if not weft_available():
+        return None
+    try:
+        for s in _adapter().sync_call("sites_list"):
+            if s.get("kind") == "slurm":
+                return s.get("name")
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _walltime(timeout_s: int) -> str:
+    """Explicit walltime from the job's timeout ceiling (doctrine: size
+    walltime explicitly — an unspecified ask hits site defaults, an over-cap
+    ask is REFUSED upfront by weft instead of pending forever)."""
+    t = max(60, int(timeout_s))
+    return f"{t // 3600:02d}:{(t % 3600) // 60:02d}:{t % 60:02d}"
+
+
 class WeftSubmitter:
+    """site='local' → this node (the W2 lane); site=<slurm-kind weft site> →
+    the cluster (W3.3), same entry + result.json contract over the shared FS
+    the deployment already guarantees (server + nodes see the same paths)."""
+
     name = "weft"
+
+    def __init__(self, site: str = "local"):
+        self.site = site
 
     def _run_dir(self, job: dict) -> Path:
         pid = (job.get("params") or {}).get("project_id") or "default"
@@ -52,12 +91,13 @@ class WeftSubmitter:
         run_dir = self._run_dir(job)
         spec_path = run_dir / "job_spec.json"
         result_path = run_dir / "result.json"
+        timeout_s = int(params.get("timeout_s") or 600)
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit — artifacts land in the Run's
-            # work dir and attach to it (same rule as the Slurm lane).
+            # work dir and attach to it (same rule as the legacy Slurm lane).
             "run_id": params.get("run_id") or job["id"],
-            "timeout_s": int(params.get("timeout_s") or 600),
+            "timeout_s": timeout_s,
             "result_path": str(result_path), "env": params.get("env"),
             "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": [],
@@ -70,20 +110,29 @@ class WeftSubmitter:
         resources = {"cpus": int(est.get("cores") or 1)}
         if est.get("mem_gb"):
             resources["mem_gb"] = int(est["mem_gb"])
+        if est.get("gpu"):
+            resources["gpus"] = 1
+        if self.site != "local":
+            # Scheduler sites get an explicit walltime (timeout ceiling + grace
+            # for staging); weft refuses an over-cap ask upfront and its
+            # placement picks the partition from the resource shape.
+            resources["walltime"] = _walltime(timeout_s + 900)
         task = {
-            # Bare task: the command names the served base interpreter (the
-            # local site inherits the process env, so ABA_* config flows to the
-            # entry); PYTHONPATH makes `-m core.jobs.slurm_entry` importable.
+            # Bare task: the command names the served base interpreter — valid
+            # on every node via the deployment's shared FS; PYTHONPATH makes
+            # `-m core.jobs.slurm_entry` importable there. (ABA_* config flows
+            # via env_vars below; the local site also inherits process env.)
             "command": f"{sys.executable} -u -m core.jobs.slurm_entry {spec_path}",
-            "site": "local",
-            "env_vars": {"PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+            "site": self.site,
+            "env_vars": {"PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+                         **_aba_env_vars()},
             "resources": resources,
             "label": (job.get("title") or job["id"])[:200],
         }
         r = _adapter().sync_call("task_submit", task)
         from core.graph.jobs import update_job
         update_job(job["id"], params={**params, "weft_id": r["job_id"],
-                                      "submitter": "weft"},
+                                      "submitter": "weft", "weft_site": self.site},
                    project_id=str(pid))
 
     # ── cancel ───────────────────────────────────────────────────────────

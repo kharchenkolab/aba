@@ -63,29 +63,46 @@ def _local_lane() -> "BatchSubmitter":
     return LocalSubmitter()
 
 
-def get_submitter() -> "BatchSubmitter":
+def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
+    """The cluster lane (W3.3): a weft task on the deployment's slurm-kind
+    site when one is declared (weft-sites.yaml) and the substrate is up —
+    else the legacy sbatch/sentinel machinery, loudly. Nextflow HEADS stay
+    legacy for now: their bare-bash node script (no python on the node — the
+    slim-SIF model) is W3.4's controller-image work."""
+    if kind != "run_nextflow":
+        from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
+        site = weft_slurm_site()
+        if site:
+            return WeftSubmitter(site=site)
+        print("[jobs] no slurm-kind weft site declared (weft-sites.yaml) — "
+              "falling back to the legacy sbatch lane")
+    from core.jobs.slurm_submitter import SlurmSubmitter
+    return SlurmSubmitter()
+
+
+def get_submitter(kind: str | None = None) -> "BatchSubmitter":
     """The active submitter for this deployment. Lazy imports avoid a cycle
-    (runner ⇆ submitter) and keep Slurm code off the import path when local."""
+    (runner ⇆ submitter) and keep Slurm code off the import path when local.
+    `kind` (job kind) routes nextflow heads to their special-cased lane."""
     name = submitter_name()
     if name == "slurm":
-        from core.jobs.slurm_submitter import SlurmSubmitter
-        return SlurmSubmitter()
+        return _slurm_lane(kind)
     if name == "worker":     # explicit legacy escape hatch (in-process worker)
         from core.jobs.runner import LocalSubmitter
         return LocalSubmitter()
     return _local_lane()
 
 
-def get_submitter_for(target: str) -> "BatchSubmitter":
+def get_submitter_for(target: str, kind: str | None = None) -> "BatchSubmitter":
     """Submitter for a per-job submission target (see in-place submission,
     misc/inplace_submission.md): 'inline' → the local lane (run the job on THIS
     node — a bare weft task, or the in-process worker when the substrate is
-    offline); 'slurm' → SlurmSubmitter. Anything else → the deployment default.
-    This is the seam that lets a small job run in-place even when the
-    deployment default is Slurm."""
+    offline); 'slurm' → the cluster lane (a weft task on the declared slurm
+    site, else legacy sbatch). Anything else → the deployment default. This is
+    the seam that lets a small job run in-place even when the deployment
+    default is Slurm."""
     if target == "inline":
         return _local_lane()
     if target == "slurm":
-        from core.jobs.slurm_submitter import SlurmSubmitter
-        return SlurmSubmitter()
-    return get_submitter()
+        return _slurm_lane(kind)
+    return get_submitter(kind)

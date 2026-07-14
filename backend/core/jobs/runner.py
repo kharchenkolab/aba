@@ -232,12 +232,12 @@ def _submitter_for_job(job: dict):
         from core.jobs.weft_submitter import WeftSubmitter
         return WeftSubmitter()
     if params.get("submitter") == "slurm" or params.get("slurm_id"):
-        return get_submitter_for("slurm")
+        return get_submitter_for("slurm", kind=job.get("kind"))
     target = params.get("submission")
     if target == "inline":
         return LocalSubmitter()      # ran in-process (no weft/slurm marker)
     if target == "slurm":
-        return get_submitter_for("slurm")
+        return get_submitter_for("slurm", kind=job.get("kind"))
     return get_submitter()
 
 

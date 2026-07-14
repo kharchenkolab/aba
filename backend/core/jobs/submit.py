@@ -57,7 +57,7 @@ def submit_python_job(code: str, title: str, focus_entity_id: str | None,
         project_id=project_id,
     )
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission).submit(job)
+    get_submitter_for(submission, kind="run_python").submit(job)
     return job
 
 
@@ -86,7 +86,7 @@ def submit_r_job(code: str, title: str, focus_entity_id: str | None,
         project_id=project_id,
     )
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission).submit(job)
+    get_submitter_for(submission, kind="run_r").submit(job)
     return job
 
 
@@ -241,7 +241,7 @@ def submit_nextflow_job(pipeline: str, title: str, focus_entity_id: str | None,
         project_id=project_id,
     )
     from core.jobs.submitter import get_submitter_for
-    get_submitter_for(submission).submit(job)
+    get_submitter_for(submission, kind="run_nextflow").submit(job)
     return job
 
 

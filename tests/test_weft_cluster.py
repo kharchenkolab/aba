@@ -33,6 +33,10 @@ os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
 os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
 os.environ.pop("ABA_DB_PATH", None)
 sys.path.insert(0, str(ROOT / "backend"))
+# The W3.3 lane test runs aba's node entry INSIDE the container as its own
+# user over the shared mount — host-created dirs must be node-writable.
+os.umask(0)
+os.chmod(_tmp, 0o777)
 
 pytestmark = [
     pytest.mark.platform,
@@ -72,7 +76,11 @@ def cluster():
     # mounts and `unshare -rm` inside containers, which breaks the squashfs
     # publish spot-check. We're validating the aba↔weft flow, not container
     # security.
+    # Shared-FS mock (the real deployments' contract — server + nodes see the
+    # same paths): the aba checkout+venv read-only, the test runtime rw.
     run = _sh("docker", "run", "-d", "--rm", "--name", name, "--privileged",
+              "-v", "/home/pkharchenko/aba:/home/pkharchenko/aba:ro",
+              "-v", f"{_tmp}:{_tmp}",
               "--hostname", "weftslurm", "-p", "127.0.0.1::22", "weft-test-slurm")
     assert run.returncode == 0, run.stderr
     port = _sh("docker", "port", name, "22").stdout.strip().rsplit(":", 1)[-1]
@@ -217,6 +225,57 @@ def test_second_workspace_adopts_and_extends(cluster, published):
     assert _wait_done(w, r2["job_id"]) == "DONE"
     assert "EXTENDED" in w.sync_call("task_result", r2["job_id"])["logs"]["tail"]
     consumer.close()
+
+
+def test_background_job_rides_the_weft_slurm_lane(hpc, monkeypatch):
+    """W3.3: ABA_BATCH_SUBMITTER=slurm + a declared slurm-kind weft site →
+    run_python(background=True)'s job becomes a weft task ON THE CLUSTER,
+    running the same node entry over the shared FS; the result carries the
+    weft compute block with cluster placement."""
+    from core import projects
+    from core.graph.jobs import get_job
+    from core.jobs.submit import submit_python_job
+    from core.jobs.submitter import get_submitter
+    from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
+    monkeypatch.setenv("ABA_BATCH_SUBMITTER", "slurm")
+
+    assert weft_slurm_site() == "hpc"
+    sub = get_submitter(kind="run_python")
+    assert type(sub).__name__ == "WeftSubmitter" and sub.site == "hpc"
+    # nextflow heads stay on the legacy lane until W3.4
+    assert type(get_submitter(kind="run_nextflow")).__name__ == "SlurmSubmitter"
+
+    projects.init()
+    pid = projects.create_project("w33")["id"]
+    projects.set_current(pid)
+    code = ("import platform; print('NODE', platform.node()); "
+            "open('cluster_out.csv','w').write('a\\n1\\n')")
+    job = submit_python_job(code, "w3.3 cluster bg", None, project_id=pid,
+                            thread_id="t1", estimate={"cores": 1})
+    row = get_job(job["id"], project_id=pid)
+    params = row["params"] or {}
+    assert params.get("submitter") == "weft" and params.get("weft_site") == "hpc", params
+    assert params.get("weft_id", "").startswith("jb_")
+
+    poller = WeftSubmitter(site="hpc")
+    result = None
+    deadline = time.time() + 600
+    while time.time() < deadline:
+        row = get_job(job["id"], project_id=pid)
+        row["project_id"] = pid
+        result = poller.poll(row)
+        if result is not None:
+            break
+        time.sleep(2)
+    assert result is not None, "cluster job did not terminate"
+    assert result.get("returncode") == 0, result
+    assert "NODE weftslurm" in (result.get("stdout") or "")
+    assert any("cluster_out" in str(f) for f in
+               (result.get("files") or []) + (result.get("tables") or [])), result
+    comp = result.get("compute") or {}
+    assert comp.get("substrate") == "weft"
+    assert (comp.get("placement") or {}).get("site") == "hpc"
+    assert (comp.get("placement") or {}).get("node") == "weftslurm"
 
 
 def test_base_env_resolves_via_catalog(hpc, published, monkeypatch):
