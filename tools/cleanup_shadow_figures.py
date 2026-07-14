@@ -52,14 +52,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--project", default=None,
-        help="Project id (sets ABA_DB_PATH_OVERRIDE). Defaults to ABA_DB_PATH "
-             "as configured in env."
+        help="Project id (sets ABA_DB_PATH to that project's DB). Defaults to "
+             "ABA_DB_PATH as configured in env."
     )
     args = parser.parse_args()
 
     if args.project:
+        # Point the workspace DB at this project (SINGLE mode). Must be ABA_DB_PATH:
+        # the former ABA_DB_PATH_OVERRIDE alias was merged away (env_reorg §6), so
+        # setting it would be silently ignored and this tool would operate on the
+        # DEFAULT workspace DB — deleting rows from the wrong database under --apply.
         from core.config import project_db_path
-        os.environ["ABA_DB_PATH_OVERRIDE"] = str(project_db_path(args.project))
+        os.environ["ABA_DB_PATH"] = str(project_db_path(args.project))
 
     from core.graph._schema import init_db, _conn
     init_db()
