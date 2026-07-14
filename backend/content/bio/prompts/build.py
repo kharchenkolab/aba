@@ -391,9 +391,11 @@ def _discovery_directive_block(_tools: list[dict]) -> str:
     after identity/bundle_overlay so it sits at position 2-3 in the
     assembled system prompt — as early as we can get it without
     displacing the model's role framing."""
+    # The discovery directive is driven by mode (lean_small small-model lane); the
+    # former ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE manual override was never set in
+    # production and only duplicated this trigger — resolved away (env_reorg §6).
     current_mode = _MODE.get("full")
-    if (current_mode == "lean_small"
-            or config.settings.experimental_discovery_directive.get()):
+    if current_mode == "lean_small":
         return _H5_DISCOVERY_DIRECTIVE
     return ""
 

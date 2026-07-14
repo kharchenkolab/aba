@@ -15,7 +15,6 @@
   "discovery_env_gate": null,
   "env_prewarm": "eager",
   "experimental_ablate_blocks": [],
-  "experimental_discovery_directive": false,
   "experimental_fetch_recipe": false,
   "experimental_prescriptive_search_skills": false,
   "fake_session": "",

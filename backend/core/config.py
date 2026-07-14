@@ -979,10 +979,6 @@ setting("experimental_fetch_recipe", env="ABA_EXPERIMENTAL_FETCH_RECIPE",
         type="bool", default=False, coerce=_coerce_truthy_presence,
         empty_is_unset=True, category="experimental", branches=True, weft_fate="keep",
         reduction="resolve-flag", doc="Experimental: fetch-recipe discovery path.")
-setting("experimental_discovery_directive", env="ABA_EXPERIMENTAL_DISCOVERY_DIRECTIVE",
-        type="bool", default=False, coerce=_coerce_truthy_presence,
-        empty_is_unset=True, category="experimental", branches=True, weft_fate="keep",
-        reduction="resolve-flag", doc="Experimental: discovery directive prompt block.")
 setting("experimental_ablate_blocks", env="ABA_EXPERIMENTAL_ABLATE_BLOCKS",
         type="csv", default=(), category="experimental", branches=True,
         weft_fate="keep", reduction="resolve-flag",
