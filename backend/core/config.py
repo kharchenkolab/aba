@@ -885,6 +885,19 @@ setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
         category="deploy", weft_fate="keep",
         doc="Path to the pixi binary weft solves/realizes with. None → "
             "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
+setting("weft_sites", env="ABA_WEFT_SITES", type="str", default=None,
+        category="deploy", weft_fate="keep",
+        doc="Deployment site declarations (weft-sites.yaml: non-local weft "
+            "sites — slurm/ssh). None → $ABA_HOME/weft-sites.yaml.")
+setting("weft_publish_tree", env="ABA_WEFT_PUBLISH_TREE", type="str", default=None,
+        category="deploy", weft_fate="keep", deploy_injected=True,
+        doc="Published base-env catalog tree (shared read-only folder). When "
+            "set, base packs ADOPT from it by name (no solve); unset → solve "
+            "locally. Admin seeds it with core.compute.seeding.")
+setting("weft_publish_site", env="ABA_WEFT_PUBLISH_SITE", type="str",
+        default="local", category="deploy", weft_fate="keep",
+        doc="Site whose realization store backs the published catalog "
+            "(where env_adopt runs).")
 
 # ── DB / process modes ───────────────────────────────────────────────────────
 setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",

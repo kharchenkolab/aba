@@ -54,6 +54,12 @@ def weft_workspace() -> Path:
     return Path(raw) if raw else config.aba_home() / "weft"
 
 
+def sites_config_path() -> Path:
+    """The deployment's site declarations (weft-sites.yaml)."""
+    raw = config.settings.weft_sites.get()
+    return Path(raw) if raw else config.aba_home() / "weft-sites.yaml"
+
+
 def resolve_pixi() -> Optional[str]:
     """The pixi binary weft solves with: explicit setting → $PATH → the
     install-tree default. None when nowhere to be found (degraded)."""
@@ -74,6 +80,7 @@ class WeftAdapter:
         from weft.api import Weft   # the only weft import in aba
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="weft")
         self.workspace = workspace
+        self.pixi_bin = pixi_bin
         workspace.mkdir(parents=True, exist_ok=True)
         self._weft = Weft(workspace, pixi_bin=pixi_bin)
         self._ensure_local_site(pixi_bin)
@@ -87,6 +94,36 @@ class WeftAdapter:
                  "pixi_source": pixi_bin})
             if is_error_payload(r):
                 raise ComputeError.from_payload(r)
+        self._register_configured_sites(registered)
+
+    def _register_configured_sites(self, registered: set) -> None:
+        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml` (or
+        ABA_WEFT_SITES) lists non-local sites — slurm/ssh entries the installer
+        or an operator wrote. Registered once (weft persists them); errors are
+        LOUD but never boot-blocking (a dead login node must not stop the
+        server; doctor + the site's own errors surface it)."""
+        path = sites_config_path()
+        if not path.exists():
+            return
+        try:
+            import yaml
+            doc = yaml.safe_load(path.read_text()) or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"[compute] unreadable sites config {path}: {e}")
+            return
+        for entry in (doc.get("sites") or []):
+            name = (entry or {}).get("name")
+            kind = (entry or {}).get("kind")
+            cfg = dict((entry or {}).get("config") or {})
+            if not name or not kind or name in registered:
+                continue
+            cfg.setdefault("pixi_source", self.pixi_bin)
+            r = self._weft.register_site(name, kind, cfg)
+            if is_error_payload(r):
+                print(f"[compute] site {name!r} ({kind}) failed to register: "
+                      f"{r.get('error')}: {r.get('detail')}")
+            else:
+                print(f"[compute] registered site {name!r} ({kind}) from {path.name}")
 
     # -- pass-through machinery ------------------------------------------------
 

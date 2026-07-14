@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**122 settings** across 11 categories.  
-weft_fate — `keep` 61, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
-reduction — `derive` 3, `keep` 66, `merge` 50, `relocate` 2, `resolve-flag` 1.
+**125 settings** across 11 categories.  
+weft_fate — `keep` 64, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
+reduction — `derive` 3, `keep` 69, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 ### Tag vocabularies
 
@@ -77,6 +77,9 @@ reduction — `derive` 3, `keep` 66, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `offload_python` | `ABA_OFFLOAD_PYTHON` | str |  | retire | derive:sif | deploy | Python interpreter for offloaded (sbatch) jobs; else sys.executable. |
 | `pixi_bin` | `ABA_PIXI_BIN` | str |  | keep | keep |  | Path to the pixi binary weft solves/realizes with. None → $PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi. |
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
+| `weft_publish_site` | `ABA_WEFT_PUBLISH_SITE` | str | local | keep | keep |  | Site whose realization store backs the published catalog (where env_adopt runs). |
+| `weft_publish_tree` | `ABA_WEFT_PUBLISH_TREE` | str |  | keep | keep | deploy | Published base-env catalog tree (shared read-only folder). When set, base packs ADOPT from it by name (no solve); unset → solve locally. Admin seeds it with core.compute.seeding. |
+| `weft_sites` | `ABA_WEFT_SITES` | str |  | keep | keep |  | Deployment site declarations (weft-sites.yaml: non-local weft sites — slurm/ssh). None → $ABA_HOME/weft-sites.yaml. |
 | `weft_workspace` | `ABA_WEFT_WORKSPACE` | str |  | keep | keep |  | weft workspace dir (holds .weft state + the local site root). None → $ABA_HOME/weft. One workspace per deployment; per-project identity stays in the waist, not in weft. |
 
 ## mode

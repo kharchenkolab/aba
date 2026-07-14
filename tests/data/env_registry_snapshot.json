@@ -113,5 +113,8 @@
   "turn_log_dir": "/tmp/aba_turnlog",
   "user_bundle": null,
   "version": "dev",
+  "weft_publish_site": "local",
+  "weft_publish_tree": null,
+  "weft_sites": null,
   "weft_workspace": null
 }

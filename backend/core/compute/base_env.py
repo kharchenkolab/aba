@@ -79,9 +79,12 @@ def active(language: str) -> bool:
 
 
 def env_id(language: str) -> Optional[str]:
-    """Solve (cached) the base pack → EnvID. None when no pack is declared.
-    Raises ComputeError on substrate-offline / solve failure — the structured
-    cause reaches the agent; nothing degrades silently."""
+    """The base pack's EnvID: ADOPT from the deployment's published catalog
+    when one is configured (no solve — the managed-cluster model, W3.1), else
+    solve locally (cached). None when no pack is declared. Raises ComputeError
+    on substrate-offline / solve failure — the structured cause reaches the
+    agent; nothing degrades silently (a catalog MISS prints loudly and solves
+    privately, per the weft doctrine)."""
     name = pack_name(language)
     if name is None:
         return None
@@ -90,9 +93,13 @@ def env_id(language: str) -> Optional[str]:
     key = (language, name, str(hash(digest)))
     if key in _env_ids:
         return _env_ids[key]
-    res = named_envs._sync(_adapter.get_compute().env_ensure(spec))
-    _env_ids[key] = res["env_id"]
-    return res["env_id"]
+    from core.compute import seeding
+    eid = seeding.adopt_env_id(name)
+    if eid is None:
+        res = named_envs._sync(_adapter.get_compute().env_ensure(spec))
+        eid = res["env_id"]
+    _env_ids[key] = eid
+    return eid
 
 
 def prefix(language: str, *, timeout_s: int = 1800) -> Optional[Path]:
