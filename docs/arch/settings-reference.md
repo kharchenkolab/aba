@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**125 settings** across 11 categories.  
-weft_fate — `keep` 63, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 7.  
-reduction — `derive` 4, `keep` 62, `merge` 53, `relocate` 2, `resolve-flag` 4.
+**123 settings** across 11 categories.  
+weft_fate — `keep` 62, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
+reduction — `derive` 3, `keep` 62, `merge` 52, `relocate` 2, `resolve-flag` 4.
 
 ### Tag vocabularies
 
@@ -117,7 +117,6 @@ reduction — `derive` 4, `keep` 62, `merge` 53, `relocate` 2, `resolve-flag` 4.
 | `openai_account_id` | `ABA_OPENAI_ACCOUNT_ID` | str |  | keep | merge:openai |  | ChatGPT-Account-Id for the Codex subscription backend. |
 | `openai_api_key` | `ABA_OPENAI_API_KEY` | str | •redacted• | keep | merge:openai | secret | OpenAI-compatible API key (ABA-scoped). |
 | `openai_base_url` | `ABA_OPENAI_BASE_URL` | str |  | keep | merge:openai |  | OpenAI-compatible base URL (else provider default). |
-| `openai_oauth_client_id` | `ABA_OPENAI_OAUTH_CLIENT_ID` | str | app_EMoamEEZ73f0CkXaXp7hrann | keep | merge:openai |  | OAuth client id for the Codex subscription sign-in. |
 | `subscription_oauth` | `ABA_SUBSCRIPTION_OAUTH` | str |  | keep | keep | deploy | Gates the subscription (Claude.ai/Codex) sign-in flow. |
 
 ## behavior
@@ -162,7 +161,6 @@ reduction — `derive` 4, `keep` 62, `merge` 53, `relocate` 2, `resolve-flag` 4.
 | `history_summary_threshold_chars` | `ABA_HISTORY_SUMMARY_THRESHOLD_CHARS` | int | 400000 | keep | merge:history |  | Layer-B trigger: summarize when pruned history still exceeds this many chars. |
 | `import_harvest_cap` | `ABA_IMPORT_HARVEST_CAP` | int | 40 | keep | keep |  | Max symbols harvested from an import for the tool catalog. |
 | `kernel_cancel_grace_s` | `ABA_KERNEL_CANCEL_GRACE_S` | float | 3.0 | revisit | merge:kernel |  | Grace period (s) before force-killing a cancelled kernel cell. |
-| `kernel_hard_max` | `ABA_KERNEL_HARD_MAX` | int | 8 | revisit | derive:kernel_max_live |  | Absolute ceiling on live kernels (default = kernel_max_live + 3). |
 | `kernel_idle_ttl_s` | `ABA_KERNEL_IDLE_TTL_S` | int | 3600 | revisit | merge:kernel |  | Idle kernel time-to-live in seconds before LRU eviction. |
 | `kernel_max_live` | `ABA_KERNEL_MAX_LIVE` | int | 5 | revisit | merge:kernel |  | Per-user SOFT cap on live kernels (evict idle LRU past this). |
 | `kernel_threads` | `ABA_KERNEL_THREADS` | str |  | revisit | merge:kernel |  | Override thread count for kernels (else CPU-derived). |

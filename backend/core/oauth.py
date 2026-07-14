@@ -85,7 +85,7 @@ _FLOWS: dict[str, ProviderFlow] = {
     # ChatGPT WHAM. client_id + endpoints confirmed from the openai/codex CLI.
     "openai": ProviderFlow(
         provider="openai",
-        client_id=config.settings.openai_oauth_client_id.get(),
+        client_id="app_EMoamEEZ73f0CkXaXp7hrann",  # fixed Codex OAuth app id
         authorize_url="https://auth.openai.com/oauth/authorize",
         token_url="https://auth.openai.com/oauth/token",
         redirect_uri="http://localhost:1455/auth/callback",

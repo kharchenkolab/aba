@@ -656,13 +656,10 @@ KERNEL_MAX_LIVE = setting(
 ).get()
 # Absolute ceiling. The soft cap only evicts IDLE kernels; when all live kernels
 # are busy we allow a bounded burst above the soft cap rather than kill running
-# work, refusing only past this hard cap. Keep it modest on shared systems.
-KERNEL_HARD_MAX = setting(
-    "kernel_hard_max", env="ABA_KERNEL_HARD_MAX", type="int",
-    default=KERNEL_MAX_LIVE + 3, category="tuning", weft_fate="revisit",
-    reduction="derive:kernel_max_live",
-    doc="Absolute ceiling on live kernels (default = kernel_max_live + 3).",
-).get()
+# work, refusing only past this hard cap. DERIVED, not configured (env_reorg §6
+# reduction): always the soft cap + a fixed burst headroom — no independent
+# ABA_KERNEL_HARD_MAX knob (tune ABA_KERNEL_MAX_LIVE instead).
+KERNEL_HARD_MAX = KERNEL_MAX_LIVE + 3
 
 # ── History compaction + tool-output cap ────────────────────────────────────
 # Two layers (misc/history_compaction_redesign.md):
@@ -931,10 +928,9 @@ setting("openai_tool_result_framing", env="ABA_OPENAI_TOOL_RESULT_FRAMING",
         type="str", default="none", category="model", weft_fate="keep",
         reduction="merge:openai",
         doc="How tool results are framed for the OpenAI runtime.")
-setting("openai_oauth_client_id", env="ABA_OPENAI_OAUTH_CLIENT_ID", type="str",
-        default="app_EMoamEEZ73f0CkXaXp7hrann", category="credentials",
-        weft_fate="keep", reduction="merge:openai",
-        doc="OAuth client id for the Codex subscription sign-in.")
+# NB: the Codex OAuth client_id is a fixed provider constant (never per-deploy),
+# so it's hardcoded in core/oauth.py alongside the endpoints — not an env knob
+# (env_reorg §6 reduction; mirrors the Anthropic client_id in core/llm.py).
 
 # ── Credentials (mode selectors; the secret STORE unification is Phase 7) ─────
 setting("llm_credential", env="ABA_LLM_CREDENTIAL", type="str", default=None,
