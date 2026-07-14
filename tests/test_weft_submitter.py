@@ -33,19 +33,27 @@ from core import projects                                    # noqa: E402
 
 projects.init()
 
+# Static probe only (skipif evaluates at collection; configuring at import
+# would race other modules — pytest imports every file before running any).
 weft_ok = False
 try:
     from core.compute import adapter as _ad
-    if _ad.resolve_pixi():
-        weft_ok = _ad.configure().get("ok", False)
+    weft_ok = _ad.resolve_pixi() is not None
 except Exception:  # noqa: BLE001
     pass
 
 
-def teardown_module(_m=None):
-    """Reset the process-wide adapter — later test modules must see the
-    substrate unconfigured (get_submitter() would otherwise pick the weft lane
-    for tests written against the in-process worker)."""
+@pytest.fixture(scope="module", autouse=True)
+def _substrate():
+    """(Re)configure the process-wide adapter for THIS module's workspace, and
+    leave it torn down + offline for later modules (tests written against the
+    in-process worker must not silently ride the weft lane)."""
+    if weft_ok:
+        _ad.shutdown()
+        _ad._adapter = None
+        st = _ad.configure()
+        assert st["ok"], st["detail"]
+    yield
     try:
         _ad.shutdown()
         _ad._status = {"ok": False, "severity": "info", "detail": "torn down by test"}

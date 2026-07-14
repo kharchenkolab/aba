@@ -34,6 +34,19 @@ from core.compute.errors import ComputeError, is_error_payload
 _LOCAL_SITE = "local"
 
 
+def run_sync(coro):
+    """Run a port coroutine from a WORKER thread (tools run via
+    run_in_executor; the one-shot run path is sync). Loud on the event-loop
+    thread — blocking the loop on a solve/pack is never acceptable; use the
+    async port there instead."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("run_sync is worker-thread-only: on the event loop, "
+                       "await the port directly")
+
+
 def weft_workspace() -> Path:
     """The deployment's weft workspace (holds .weft state + the local site
     root). One per deployment; per-project identity stays in the waist."""

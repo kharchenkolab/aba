@@ -838,11 +838,87 @@ def rebuild_env(entity_id: str, *, only: Optional[list] = None,
             "note": "full rebuild can be slow / conflict — pass `only` to bisect a few packages"}
 
 
+def _bundle_envelope(entity_id: str, ent: dict, rec: dict) -> bytes:
+    """The aba half of a one-file weft bundle (weft rewrite W2, §4d): entity
+    identity + the exec record + bounded lineage, serialized as the SEALED
+    metadata envelope weft carries verbatim (64 MB cap — this is KBs). weft owns
+    the compute closure; this envelope carries the waist's meaning. NOT part of
+    bundle identity or the re-derivation proof; bundle_import returns it
+    verbatim and import_bundle_file() below re-attaches it."""
+    import json as _json
+    from datetime import datetime, timezone
+    from core import projects
+    lineage = {}
+    try:
+        from core.graph.provenance import neighborhood
+        lineage = neighborhood(entity_id)
+    except Exception:  # noqa: BLE001 — lineage is context, never a blocker
+        pass
+    env = {
+        "format": "aba.bundle_meta:v1",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "project_id": projects.current(),
+        "entity": {k: ent.get(k) for k in
+                   ("id", "type", "title", "status", "artifact_path",
+                    "exec_id", "derivation", "actor", "created_at")},
+        "exec_record": rec,
+        "lineage": lineage,
+    }
+    return _json.dumps(env, default=str).encode()
+
+
+def _export_via_weft(entity_id: str, ent: dict, rec: dict,
+                     dest: Optional[str]) -> Optional[dict]:
+    """One-file export through weft `bundle_export` for a record whose
+    execution went through the substrate (rec.compute.job_id). Returns None
+    when this record can't take the weft path (no compute block / substrate
+    offline / weft no longer holds the job) — the caller falls back to the
+    legacy folder, loudly."""
+    from pathlib import Path
+    comp = rec.get("compute") or {}
+    if comp.get("substrate") != "weft" or not comp.get("job_id"):
+        return None
+    from core.compute import get_compute, ComputeError
+    from core.compute.adapter import run_sync
+    from core.config import ARTIFACTS_DIR
+    out_dir = Path(dest) if dest else (Path(ARTIFACTS_DIR) / "bundles")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{entity_id}.aba-bundle.tar.gz"
+    try:
+        r = run_sync(get_compute().bundle_export(
+            comp["job_id"], str(out_path),
+            metadata=_bundle_envelope(entity_id, ent, rec)))
+    except ComputeError as e:
+        print(f"[export_bundle] weft path unavailable for {entity_id} "
+              f"({e.code}: {e.detail}) — falling back to the folder bundle")
+        return None
+    return {
+        "mode": "weft",
+        "bundle_file": r["path"],
+        "bytes": r.get("bytes"),
+        "weft": {"target_job": r.get("target_job"), "jobs": r.get("jobs"),
+                 "envs": r.get("envs"), "blobs": r.get("blobs"),
+                 "reproducibility": r.get("reproducibility")},
+        "language": rec.get("language") or "python",
+        "note": ("ONE portable file: weft's provenance closure (specs, locks, "
+                 "input blobs) + this entity's record/lineage in the sealed "
+                 "envelope. Reproduce anywhere: import_reproduction_bundle(path) "
+                 "then task_submit the returned task (force=True) — identical "
+                 "output refs prove the re-derivation."),
+    }
+
+
 def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
-    """Phase 5 (on demand, policy): a portable reproduction bundle — exec record +
-    code + pinned requirements + inputs-by-identity/hash + README — sufficient to
-    reproduce in a fresh env. Inputs are *referenced* (id + hash), never copied —
-    genomic files are large (provenance.md §3.2)."""
+    """Phase 5 (on demand, policy): a portable reproduction bundle.
+
+    Weft-run records (exec record carries `compute.job_id` — background jobs,
+    named-env runs) export as ONE verifiable file via weft `bundle_export`,
+    with the entity's record + lineage riding the sealed metadata envelope
+    (weft rewrite W2, §4d). Everything else (default-kernel records, or the
+    substrate offline) keeps the legacy folder: exec record + code + pinned
+    requirements + inputs-by-identity/hash + README. Inputs in the folder mode
+    are *referenced* (id + hash), never copied — genomic files are large
+    (provenance.md §3.2)."""
     import json as _json
     from pathlib import Path
     from core.config import ARTIFACTS_DIR
@@ -850,6 +926,9 @@ def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
     rec = exec_records.get(ent.get("exec_id")) if ent and ent.get("exec_id") else None
     if not rec:
         raise ValueError("entity has no exec record to export")
+    weft_bundle = _export_via_weft(entity_id, ent, rec, dest)
+    if weft_bundle is not None:
+        return weft_bundle
     bdir = Path(dest) if dest else (Path(ARTIFACTS_DIR) / "bundles" / str(entity_id))
     bdir.mkdir(parents=True, exist_ok=True)
     lang = rec.get("language") or "python"
@@ -891,8 +970,56 @@ def export_bundle(entity_id: str, *, dest: Optional[str] = None) -> dict:
         f"(seed={rec.get('seed')}, env_fingerprint={rec.get('env_fingerprint')})\n\n"
         f"Reproduce: build an env from requirements.txt, confirm the `inputs.json` "
         f"items are present, then run the script.\n")
-    return {"bundle_dir": str(bdir), "files": sorted(p.name for p in bdir.iterdir()),
+    return {"mode": "folder",
+            "bundle_dir": str(bdir), "files": sorted(p.name for p in bdir.iterdir()),
             "language": lang, "n_packages": len(pkg)}
+
+
+def import_bundle_file(path: str) -> dict:
+    """Load a weft reproduction bundle into THIS deployment (weft rewrite W2,
+    §4d): weft `bundle_import` restores the compute closure (envs, specs, input
+    blobs) and returns the target task ready to re-derive; the aba envelope —
+    entity identity + exec record + lineage — is decoded and RE-ATTACHED to the
+    response so the agent can compare provenance / re-register outputs. No
+    entities are created automatically: weft grades and reports, the agent
+    decides (an imported result enters the record only through the normal
+    promotion path)."""
+    import json as _json
+    from core.compute import get_compute
+    from core.compute.adapter import run_sync
+    r = run_sync(get_compute().bundle_import(path))
+    out = {
+        "target_job": r.get("target_job"),
+        "task": r.get("task"),
+        "recorded_outputs": r.get("recorded_outputs"),
+        "envs": r.get("envs"),
+        "reproducibility": r.get("reproducibility"),
+        "note": r.get("note"),
+    }
+    meta = r.get("metadata")
+    if isinstance(meta, (bytes, bytearray)):
+        try:
+            meta = _json.loads(bytes(meta).decode())
+        except Exception:  # noqa: BLE001 — a foreign envelope stays opaque
+            meta = {"_undecoded_bytes": len(meta)}
+    if isinstance(meta, dict) and meta.get("format") == "aba.bundle_meta:v1":
+        rec = meta.get("exec_record") or {}
+        out["aba"] = {
+            "entity": meta.get("entity"),
+            "project_id": meta.get("project_id"),
+            "exported_at": meta.get("exported_at"),
+            "lineage": meta.get("lineage"),
+            "exec_record": {k: rec.get(k) for k in
+                            ("exec_id", "code", "language", "seed", "inputs",
+                             "produced", "env_fingerprint", "compute")},
+        }
+        out["note"] = ((out.get("note") or "") +
+                       " The sealed envelope carried the producing entity's "
+                       "record + lineage (under `aba`). Re-exporting after "
+                       "import does NOT carry it forward — re-attach on export.")
+    elif meta is not None:
+        out["metadata"] = meta
+    return out
 
 
 def repair_revision_wiring() -> dict:

@@ -24,7 +24,6 @@ base until the controller-SIF deploy model lands (W3 re-sequencing, agreed
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import subprocess
@@ -46,14 +45,17 @@ def is_reserved_name(name: str) -> bool:
 
 
 def _sync(coro):
-    """Run a port coroutine from a worker thread. Loud on the loop thread —
-    blocking the event loop on a conda solve is never acceptable."""
+    """Run a port coroutine from a worker thread (adapter.run_sync — loud on
+    the loop thread; blocking the event loop on a conda solve is never
+    acceptable)."""
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    raise RuntimeError("named_envs is sync-only: call from a worker thread, "
-                       "not the event loop (use the async port directly there)")
+        return _adapter.run_sync(coro)
+    except RuntimeError as e:
+        if "worker-thread-only" in str(e):
+            raise RuntimeError(
+                "named_envs is sync-only: call from a worker thread, "
+                "not the event loop (use the async port directly there)") from e
+        raise
 
 
 # ── the per-project registry ─────────────────────────────────────────────────
