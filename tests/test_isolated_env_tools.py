@@ -197,15 +197,32 @@ def test_ensure_capability_auto_isolates_on_conflict(stubbed, monkeypatch):
 
 # ── sync-bridge safety ────────────────────────────────────────────────────────
 
-def test_named_envs_refuses_event_loop_thread():
+def test_named_envs_loop_thread_semantics():
+    """Main-thread loop → refuse (that's uvicorn's loop); worker-thread loop →
+    dispatch to a fresh thread and block (the in-process MCP bridge case,
+    found live in the W3.4 gate)."""
     from core.compute import named_envs
 
-    async def on_loop():
+    async def on_main_loop():
         coro = asyncio.sleep(0)
-        with pytest.raises(RuntimeError, match="worker thread"):
+        with pytest.raises(RuntimeError, match="worker thread|event loop"):
             named_envs._sync(coro)
         coro.close()
-    asyncio.run(on_loop())
+    asyncio.run(on_main_loop())
+
+    import threading
+    out = {}
+
+    def worker():
+        async def on_worker_loop():
+            out["v"] = named_envs._sync(_value())
+        asyncio.run(on_worker_loop())
+
+    async def _value():
+        return 42
+    t = threading.Thread(target=worker)
+    t.start(); t.join()
+    assert out["v"] == 42
 
 
 # ── opt-in LIVE test (real weft solve+realize; slow, needs network) ──────────

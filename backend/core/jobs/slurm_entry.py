@@ -21,7 +21,8 @@ def main() -> int:
     # sbatch captures to job.log (-o) — so the running job is tailable live
     # rather than silent until result.json is written at the end.
     kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
-              timeout_s=int(spec.get("timeout_s") or 600), stream=True)
+              timeout_s=int(spec.get("timeout_s") or 600), stream=True,
+              interp=spec.get("interp"))
     kind = spec.get("kind")
     if kind == "run_nextflow":               # the Nextflow HEAD process; fans tasks out via the site executor
         from core.exec.nextflow import run_nextflow_code
@@ -68,6 +69,8 @@ def main() -> int:
                     json.dump(result, f, default=str)
                 return 1
         result = run_python_code(spec["code"], env=spec.get("env"), **kw)
+    if spec.get("env_id") and isinstance(result, dict):
+        result["env_id"] = spec["env_id"]      # frozen identity → exec record
     with open(spec["result_path"], "w") as f:
         json.dump(result, f, default=str)
     rc = result.get("returncode")

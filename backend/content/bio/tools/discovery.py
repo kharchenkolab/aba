@@ -745,6 +745,106 @@ def _r_module_block() -> dict | None:
     return None
 
 
+def _default_probe_python() -> str | None:
+    """The interpreter import-probes must run against: the PROJECT's session
+    python on a pack deployment (the default kernels run it — probing the
+    backend's own env would answer for the wrong world), else None (backend
+    env — the served-base deployment)."""
+    try:
+        from core import projects
+        from core.compute import base_env, project_env
+        if base_env.active("python"):
+            return str(project_env.interpreter(str(projects.current() or "_none"),
+                                               "python"))
+    except Exception:  # noqa: BLE001 — probe fallback is the served base
+        pass
+    return None
+
+
+
+def _r_version_in_session(pid: str, libname: str) -> str | None:
+    """packageVersion() against the PROJECT SESSION's R (pack mode)."""
+    import subprocess
+    from core.compute import project_env
+    try:
+        rs = project_env.interpreter(str(pid), "r")
+        r = subprocess.run([str(rs), "-e",
+                            f'cat(as.character(packageVersion("{libname}")))'],
+                           capture_output=True, text=True, timeout=120)
+        v = (r.stdout or "").strip()
+        return v if r.returncode == 0 and v else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ensure_r_via_session(cap: dict, input_: dict, ctx: dict | None,
+                          name: str) -> dict:
+    """W3.4 pack mode: R capability into the PROJECT's session over the R base
+    pack. conda-first (binary r-*/bioconductor-* into the session — live, no
+    compile); github/source via the CAPTURED session installer (rides
+    snapshots as a portable post_install step). The shared pack is never
+    mutated — additions live in the project session."""
+    from core import projects
+    from core.compute import project_env
+    from core.exec import r as rexec
+    pid = str(projects.current() or "default")
+    rp = dict((cap.get("provisioning") or {}).get("r") or {})
+    for _k in ("ref", "source", "package"):
+        if input_.get(_k):
+            rp[_k] = input_[_k]
+    _src = rp.get("source", "cran")
+    _pkg = rp.get("package") or cap.get("name")
+    libname = rp.get("library") or (
+        _pkg.split("/")[-1] if _src == "github"
+        else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
+    min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
+    force = bool(input_.get("force")) or any(input_.get(_k) for _k in ("ref", "source", "package"))
+    installed = _r_version_in_session(pid, libname)
+    if installed and not force and (not min_version or rexec.version_ge(installed, min_version)):
+        return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+                "library": libname, "version": installed,
+                "note": f"Already available — library({libname}) {installed} works in run_r."}
+    try:
+        if _src in ("cran", "bioconductor", "conda"):
+            conda_name = _pkg if _pkg.startswith(("r-", "bioconductor-")) else (
+                f"bioconductor-{_pkg.lower()}" if _src == "bioconductor" else f"r-{_pkg.lower()}")
+            try:
+                project_env.install(pid, "r", [conda_name], eco="conda")
+            except Exception:  # noqa: BLE001 — no conda build → captured source install
+                _cmd = (f"Rscript -e 'if (!requireNamespace(\"BiocManager\", quietly=TRUE)) "
+                        f"install.packages(\"BiocManager\"); BiocManager::install(\"{_pkg}\", "
+                        f"update=FALSE, ask=FALSE)'" if _src == "bioconductor" else
+                        f"Rscript -e 'install.packages(\"{_pkg}\")'")
+                project_env.run_installer(pid, "r", _cmd,
+                                          note=f"{_src} install of {_pkg} (no conda binary)")
+        elif _src == "github":
+            _ref = f', ref="{rp.get("ref")}"' if rp.get("ref") else ""
+            project_env.run_installer(
+                pid, "r",
+                f"Rscript -e 'if (!requireNamespace(\"remotes\", quietly=TRUE)) "
+                f"install.packages(\"remotes\"); remotes::install_github(\"{_pkg}\"{_ref}, "
+                f"upgrade=\"never\", force={str(force).upper()})'",
+                note=f"github install of {_pkg}")
+        else:
+            return {"status": "error", "name": name,
+                    "note": f"unknown R source {_src!r} (cran|bioconductor|conda|github)"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "name": name, "archetype": "r_package",
+                "note": f"R install into the project env failed: {e}"}
+    new_ver = _r_version_in_session(pid, libname)
+    if not new_ver:
+        return {"status": "error", "name": name, "archetype": "r_package",
+                "library": libname,
+                "note": f"Installed, but library({libname}) is not loadable in the "
+                        f"project R env — NOT marking ready."}
+    # a stale loaded namespace in the running R kernel can pin the old build
+    rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
+    return {"status": "ready", "name": cap.get("name"), "archetype": "r_package",
+            "library": libname, "version": new_ver,
+            "note": f"Installed into the project R env; library({libname}) {new_ver} "
+                    f"is usable in run_r now."}
+
+
 def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
     """Materialize a catalogued capability on demand (P1). Python libraries go
     into the wipeable overlay so the next run_python can import them; non-pip
@@ -816,8 +916,9 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             pass
         if _probes:
             from core.exec.env_integrity import verify_python_imports
+            _probe_py = _default_probe_python()
             for _p in _probes:
-                _ok, _ = verify_python_imports([_p])
+                _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
                 if _ok:
                     return {"status": "ready", "name": name, "import_name": _p,
                             "note": f"Already available — `import {_p}` works in run_python "
@@ -933,20 +1034,30 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # (wrong-numpy ABI, partial install, missing system lib) HAS a spec but
         # explodes on import (the tensorflow incident). verify, don't presume.
         from core.exec.env_integrity import verify_python_imports
+        _probe_py = _default_probe_python()
         _imp0 = cap.get("import_name")
         if _imp0:
-            _ok, _ = verify_python_imports([_imp0])
+            _ok, _ = verify_python_imports([_imp0], python_exe=_probe_py)
             if _ok:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
                         "note": f"Already available; `import {_imp0}` works in run_python."})
-        from core.exec import MaterializingExecutor, Provisioning
+        from core import projects as _projects
         try:
-            from core import projects as _projects
-            MaterializingExecutor().materialize(
-                Provisioning(pip=list(prov["pip"])),
-                scope=str(cap.get("scope", "system")),
-                cancel_token=_ct, project_id=_projects.current())
+            if _probe_py is not None:
+                # W3.4 pack mode: install LIVE into the project's default
+                # session (weft session_install) — the running kernel imports
+                # it after the cache invalidation below, no restart; the next
+                # background job's snapshot picks it up as a frozen EnvID.
+                from core.compute import project_env as _penv
+                _penv.install(str(_projects.current() or "_none"), "python",
+                              list(prov["pip"]), eco="pypi")
+            else:
+                from core.exec import MaterializingExecutor, Provisioning
+                MaterializingExecutor().materialize(
+                    Provisioning(pip=list(prov["pip"])),
+                    scope=str(cap.get("scope", "system")),
+                    cancel_token=_ct, project_id=_projects.current())
         except Exception as e:  # noqa: BLE001
             # Solve-driven placement (env_refactor.md): if the constrained install
             # is UNSAT against the pinned base (the package needs versions the
@@ -966,7 +1077,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # Verify the install actually LOADS before claiming ready — no more
         # "ready"-lies for ABI-broken / partial installs.
         if imp:
-            _ok, _detail = verify_python_imports([imp])
+            _ok, _detail = verify_python_imports([imp], python_exe=_probe_py)
             if not _ok:
                 return {"status": "error", "name": name, "import_name": imp,
                         "note": (f"Installed, but `import {imp}` fails to load — likely an ABI "
@@ -1004,9 +1115,21 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # `_mod` (resolved + recorded up top) means a cluster module also covers this
         # CLI tool — it's loaded in the project's background jobs. We still build conda
         # for in-process use; a conda failure is non-fatal when `_mod` covers it.
-        from core.exec import MaterializingExecutor, Provisioning
         try:
-            MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
+            _probe_py = _default_probe_python()
+            if _probe_py is not None:
+                # W3.4 pack mode: conda spec lands LIVE in the project session
+                # (its bin/ is on the kernel PATH via the session prefix).
+                from core import projects as _projects
+                from core.compute import project_env as _penv
+                _c = prov["conda"]
+                _spec = _c["spec"] if isinstance(_c, dict) else _c
+                _penv.install(str(_projects.current() or "_none"), "python",
+                              [_spec] if isinstance(_spec, str) else list(_spec),
+                              eco="conda")
+            else:
+                from core.exec import MaterializingExecutor, Provisioning
+                MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
         except Exception as e:  # noqa: BLE001
             if _mod:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
@@ -1069,6 +1192,12 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         _blk = _r_module_block()
         if _blk:
             return _blk
+        # W3.4 pack mode: the R pack + project session replace the r-bio shell
+        # toolchain — install into the session (conda-first, captured escape
+        # hatch), never the shared base.
+        from core.compute import base_env as _bev
+        if _bev.active("r"):
+            return _ready(_ensure_r_via_session(cap, input_, ctx, name))
         # RIGHT-WAY provisioning: if the R toolchain (r-bio module) isn't built yet,
         # build it THROUGH the module (install-r-bio.sh: conda binaries for r-base +
         # Seurat + Bioconductor) — one consistent path that also flips the module to

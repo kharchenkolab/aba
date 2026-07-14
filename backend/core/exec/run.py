@@ -27,6 +27,7 @@ def run_python_code(
     timeout_s: int = 90,
     cancel_token=None,
     env: Optional[str] = None,
+    interp: Optional[str] = None,
     stream: bool = False,
 ) -> dict:
     """Run `code` in the project's scratch workspace and return the run_python
@@ -41,7 +42,7 @@ def run_python_code(
     # its OWN python (a weft-realized prefix), no project overlay — matching the
     # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
     # from the env's lock transparently at realize time.
-    interp: Optional[str] = None
+    interp = (interp or "").strip() or None    # the param survives; branches below may set it
     _base_default = False
     if env:
         from core.compute import named_envs
@@ -55,18 +56,23 @@ def run_python_code(
             return {"error": f"isolated env {env!r} is not available "
                              f"(project {project_id}): {e}"}
         interp = str(py)
+    elif interp:
+        # W3.4: a pre-resolved interpreter (a background job's spec carries the
+        # snapshot/session prefix python resolved AT SUBMIT — the entry process
+        # has no compute substrate). Standalone: no overlay.
+        _base_default = True
     else:
-        # W3.0: a bundle-declared base pack replaces the served base for the
-        # default lane — the pack's own python, standalone (no overlay).
-        from core.compute import base_env
+        # W3.0/W3.4: a bundle-declared base pack replaces the served base for
+        # the default lane — the PROJECT's session over the pack (live env,
+        # standalone — no overlay path-stacking).
+        from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             if base_env.active("python"):
-                interp = str(base_env.interpreter("python"))
+                interp = str(project_env.interpreter(str(project_id), "python"))
                 _base_default = True
-        except ComputeError as ce:
-            return {"error": f"the declared python base pack is not available: "
-                             f"{ce.detail or ce.code}"}
+        except (ComputeError, RuntimeError) as ce:
+            return {"error": f"the python environment pack is not available: {ce}"}
 
     # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
     # appended (the .venv wins, overlay fills gaps). An isolated env is
@@ -172,6 +178,7 @@ def run_r_code(
     timeout_s: int = 600,
     cancel_token=None,
     env: Optional[str] = None,
+    interp: Optional[str] = None,
     stream: bool = False,
 ) -> dict:
     """Background R execution — mirrors run_python_code's return shape so the
@@ -213,10 +220,15 @@ def run_r_code(
         except Exception as e:  # noqa: BLE001
             return {"error": f"isolated R env {env!r} is not available "
                              f"(project {project_id}): {e}"}
+    elif interp:
+        # W3.4: a pre-resolved Rscript from the job spec (see the python lane).
+        from pathlib import Path as _P
+        rscript = _P(interp)
     else:
-        # W3.0: a bundle-declared R base pack replaces the tools-env R for the
-        # default lane — the pack's own Rscript, standalone (no libpaths stack).
-        from core.compute import base_env
+        # W3.0/W3.4: a bundle-declared R base pack replaces the tools-env R for
+        # the default lane — the PROJECT's session over the pack, standalone
+        # (no libpaths stack).
+        from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             _base_r = base_env.active("r")
@@ -224,10 +236,9 @@ def run_r_code(
             _base_r = False
         if _base_r:
             try:
-                rscript = base_env.interpreter("r")
-            except ComputeError as ce:
-                return {"error": f"the declared R base pack is not available: "
-                                 f"{ce.detail or ce.code}"}
+                rscript = project_env.interpreter(str(project_id), "r")
+            except (ComputeError, RuntimeError) as ce:
+                return {"error": f"the R environment pack is not available: {ce}"}
         else:
             rscript = _rscript()
             if not rscript.exists():

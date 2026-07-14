@@ -92,6 +92,34 @@ class WeftSubmitter:
         spec_path = run_dir / "job_spec.json"
         result_path = run_dir / "result.json"
         timeout_s = int(params.get("timeout_s") or 600)
+        # W3.4 (pack deployments): a DEFAULT-env job runs the project session's
+        # SNAPSHOT — a frozen EnvID (dirty-cached), so the job is reproducible
+        # and its exec record carries true env identity. The interpreter is
+        # resolved HERE (server process, worker thread) and travels in the
+        # spec: the node entry is a FRESH process with no substrate (and a
+        # second Weft on the workspace would violate single-writer), so it can
+        # never resolve envs itself. Degradation ladder (loud at each step):
+        # snapshot prefix → live session prefix → served base.
+        env_id = None
+        interp = None
+        if not params.get("env") and kind in ("run_python", "run_r"):
+            from core.compute import base_env, named_envs, project_env
+            lang = "r" if kind == "run_r" else "python"
+            exe = "Rscript" if lang == "r" else "python"
+            try:
+                if base_env.active(lang):
+                    env_id = project_env.snapshot(str(pid), lang)
+                    interp = str(named_envs.ensure_realized(env_id) / "bin" / exe)
+            except Exception as e:  # noqa: BLE001
+                print(f"[jobs.weft] snapshot/realize failed ({e}) — "
+                      f"job runs the LIVE project session instead")
+                try:
+                    if base_env.active(lang):
+                        env_id = None
+                        interp = str(project_env.interpreter(str(pid), lang))
+                except Exception as e2:  # noqa: BLE001
+                    print(f"[jobs.weft] session resolve failed too ({e2}) — "
+                          f"job runs the served base")
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit — artifacts land in the Run's
@@ -99,6 +127,7 @@ class WeftSubmitter:
             "run_id": params.get("run_id") or job["id"],
             "timeout_s": timeout_s,
             "result_path": str(result_path), "env": params.get("env"),
+            "env_id": env_id, "interp": interp,
             "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": [],
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
@@ -172,7 +201,12 @@ class WeftSubmitter:
         else:
             res = {"error": f"weft task {state} with no result.json "
                             f"(infra failure before the entry ran?)"}
-        res.setdefault("compute", self._compute_block(wid, state))
+        comp = self._compute_block(wid, state)
+        # the entry copies spec env_id into the result — a bare task's weft
+        # manifest has none, but the SNAPSHOT identity is real (W3.4)
+        if isinstance(res, dict) and res.get("env_id"):
+            comp["env_id"] = res["env_id"]
+        res.setdefault("compute", comp)
         return res
 
     def _compute_block(self, wid: str, state: str) -> dict:

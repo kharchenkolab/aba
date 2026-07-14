@@ -735,15 +735,17 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             # W3.0: base-pack default lane — realize BEFORE the pool lock (a
             # first-use realize under it would wedge every kernel acquisition).
             if not env_name:
-                from core.compute import base_env
+                from core.compute import base_env, project_env
                 from core.compute.errors import ComputeError
                 try:
                     if base_env.active("python"):
-                        base_env.prefix("python")
+                        project_env.ensure(str(project_id), "python")
                 except ComputeError as ce:
                     return {"status": "error", "error": ce.to_payload(),
-                            "note": f"the declared python base pack is not "
+                            "note": f"the python environment pack is not "
                                     f"available: {ce.detail or ce.code}"}
+                except RuntimeError as re_:
+                    return {"status": "error", "note": str(re_)}
             from core.exec.kernels import KernelCapacityError
             try:
                 sess = get_pool().get_or_start(scope_key, "python",
@@ -943,15 +945,17 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         start_ts = _time.time()
         started_iso = _dt.now(_tz.utc).isoformat()
         # W3.0: base-pack R lane — realize before the pool lock (see python lane).
-        from core.compute import base_env
+        from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
             if base_env.active("r"):
-                base_env.prefix("r")
+                project_env.ensure(str(project_id), "r")
         except ComputeError as ce:
             return {"status": "error", "error": ce.to_payload(),
-                    "note": f"the declared R base pack is not available: "
+                    "note": f"the R environment pack is not available: "
                             f"{ce.detail or ce.code}"}
+        except RuntimeError as re_:
+            return {"status": "error", "note": str(re_)}
         from core.exec.kernels import KernelCapacityError
         try:
             sess = get_pool().get_or_start(str(thread_id), "r",

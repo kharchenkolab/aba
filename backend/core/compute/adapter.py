@@ -36,15 +36,39 @@ _LOCAL_SITE = "local"
 
 def run_sync(coro):
     """Run a port coroutine from a WORKER thread (tools run via
-    run_in_executor; the one-shot run path is sync). Loud on the event-loop
-    thread — blocking the loop on a solve/pack is never acceptable; use the
-    async port there instead."""
+    run_in_executor; the one-shot run path is sync).
+
+    Three cases:
+      * no running loop on this thread → plain asyncio.run.
+      * a running loop on a WORKER thread → run on a fresh thread and block.
+        This is the in-process MCP bridge: it spins a per-call event loop on
+        the tool executor thread and runs SYNC tools on it — that loop's whole
+        job is to block until the tool returns, so blocking it is correct
+        (found live: the first pack-mode run_python raised here).
+      * a running loop on the MAIN thread → hard error. That's uvicorn's loop;
+        blocking it on a solve freezes every request — await the port instead."""
+    import threading
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
-    raise RuntimeError("run_sync is worker-thread-only: on the event loop, "
-                       "await the port directly")
+    if threading.current_thread() is threading.main_thread():
+        raise RuntimeError("run_sync is worker-thread-only: on the main event "
+                           "loop, await the port directly")
+    box: dict = {}
+
+    def _r():
+        try:
+            box["v"] = asyncio.run(coro)
+        except BaseException as e:  # noqa: BLE001 — re-raised below
+            box["e"] = e
+
+    t = threading.Thread(target=_r, name="weft-run-sync", daemon=True)
+    t.start()
+    t.join()
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
 
 
 def weft_workspace() -> Path:

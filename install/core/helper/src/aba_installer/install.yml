@@ -202,6 +202,13 @@ steps:
       # like the aba clone above.
       - 'if [ -d "$REPO_DIR/weft" ]; then :; elif [ -n "${ABA_WEFT_SRC:-}" ]; then mkdir -p "$REPO_DIR/weft" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi "$ABA_WEFT_SRC/" "$REPO_DIR/weft/"; else R="${WEFT_REF:-main}"; U="${ABA_WEFT_URL:-https://github.com/kharchenkolab/weft}"; git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/weft" 2>/dev/null || { git clone "$U" "$REPO_DIR/weft" && git --git-dir="$REPO_DIR/weft/.git" --work-tree="$REPO_DIR/weft" checkout "$R"; }; fi'
       - '"$ENV_DIR/bin/python" -m pip install --quiet --no-user "$REPO_DIR/weft"'
+      # Default base env packs → the installation-scope bundle. FRESH installs
+      # only: once $ABA_HOME/installation/envs exists the OPERATOR owns it
+      # (aba update never touches it) — so declaring/undeclaring packs is a
+      # deployment decision, not something an update silently flips. The packs
+      # make weft the DEFAULT env engine (kernels, runs, capability installs);
+      # Settings → Modules toggles govern them (on / first_use / off).
+      - 'INST="$ABA_HOME/installation"; if [ -d "$INST/envs" ]; then echo "envs/ already present — operator-owned, not touching"; else mkdir -p "$INST/envs" && cp "$REPO_DIR"/aba/install/core/envs/*.yaml "$INST/envs/" && echo "installed $(ls "$INST/envs"/*.yaml | wc -l | tr -d " ") base env pack(s)"; fi'
       # Verification gate — configure() creates the weft workspace + registers
       # the local site (also pre-warms what the backend does at boot).
       - 'PYTHONPATH="$REPO_DIR/aba/backend" "$ENV_DIR/bin/python" -c "from core.compute import adapter; st = adapter.configure(); assert st[\"ok\"], st[\"detail\"]; print(\"compute substrate:\", st[\"detail\"])"'

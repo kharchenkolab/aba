@@ -77,6 +77,11 @@ def run_module(spec: ModuleSpec, *, runner: Runner = _default_runner,
                log: Callable[[str], None] = print) -> bool:
     """Install one module by running its script. Records status
     installing→idle/failed. Returns True on success. Never raises."""
+    # Pack-backed module (W3.4): "install" = solve+realize the base pack via
+    # the compute substrate — no shell script, and the same 3-state toggle.
+    pack = manager.pack_for(spec)
+    if pack is not None:
+        return _run_pack_module(spec, pack, log=log)
     script = _script_path(spec)
     if not script.exists():
         state.set_status(spec.id, "failed", error=f"install script missing: {script}")
@@ -201,6 +206,43 @@ def _notify(spec: ModuleSpec, mstate: str, *, progress: str | None = None,
                               state=mstate, progress=progress, error=error))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _run_pack_module(spec: ModuleSpec, pack: str, *,
+                     log: Callable[[str], None]) -> bool:
+    """Ensure+realize a pack-backed module (runs on the reconciler's daemon
+    thread — the sync bridge is legal here). Status/notify parity with the
+    script path so Settings → Modules toggles/toasts behave identically."""
+    with _LOCK:
+        if spec.id in _INFLIGHT:
+            log(f"[modules] {spec.id}: already installing — skipping duplicate")
+            return False
+        _INFLIGHT.add(spec.id)
+    try:
+        state.set_status(spec.id, "installing",
+                         progress=f"solving/realizing env pack {pack}", error="")
+        _notify(spec, "installing", progress=f"Installing {spec.title}…")
+        from core.compute import base_env
+        lang = None
+        try:
+            from core.compute import env_packs
+            row = next((r for r in env_packs.list_packs() if r["name"] == pack), {})
+            lang = (row.get("languages") or [None])[0]
+        except Exception:  # noqa: BLE001
+            pass
+        base_env.prefix(lang or "python")     # solve (cached) + realize
+        state.set_status(spec.id, "idle", progress="", error="")
+        _notify(spec, "ready")
+        log(f"[modules] {spec.id}: env pack {pack} ready")
+        return True
+    except Exception as e:  # noqa: BLE001
+        state.set_status(spec.id, "failed", error=str(e)[-500:])
+        _notify(spec, "failed", error=str(e)[-200:])
+        log(f"[modules] {spec.id}: pack install failed: {e}")
+        return False
+    finally:
+        with _LOCK:
+            _INFLIGHT.discard(spec.id)
 
 
 def _kick_install(spec: ModuleSpec, *, log: Callable[[str], None]) -> None:

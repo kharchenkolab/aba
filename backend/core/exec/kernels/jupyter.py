@@ -68,26 +68,31 @@ _env_specs_ready: set = set()
 
 
 def _ensure_base_python_kernelspec() -> str:
-    """W3.0 (weft rewrite): the DEFAULT python kernel runs the bundle-declared
-    base pack's realized python — not the backend's own interpreter. The pack
-    MUST bake ipykernel (weft envs are frozen; nothing is installed here). The
-    spec name is keyed by EnvID so a pack upgrade (new EnvID) re-registers and
-    new kernels follow it. Caller realizes the prefix BEFORE the pool lock."""
+    """W3.0/W3.4 (weft rewrite): the DEFAULT python kernel runs the PROJECT's
+    session over the base pack — a live env, so ensure_capability installs are
+    importable in the running kernel without a restart. The pack MUST bake
+    ipykernel (session clones inherit it). The spec name is keyed by SESSION id
+    (a rebuilt/reset session re-registers; live installs mutate the same
+    prefix, so the running kernel keeps working). Caller ensures the session
+    BEFORE the pool lock."""
     import re as _re
     import subprocess
-    from core.compute import base_env
-    py = base_env.interpreter("python")
-    eid = base_env.env_id("python") or ""
-    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-base-{eid[-12:]}".lower())
+    from core import projects
+    from core.compute import project_env
+    pid = str(projects.current() or "_none")
+    sess = project_env.ensure(pid, "python")
+    py = sess["prefix"] / "bin" / "python"
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-proj-{pid}-{sess['session_id'][-12:]}".lower())
     if spec_name in _env_specs_ready:
         return spec_name
     if subprocess.run([str(py), "-c", "import ipykernel"],
                       capture_output=True).returncode != 0:
+        from core.compute import base_env
         raise RuntimeError(
             f"base pack {base_env.pack_name('python')!r} has no ipykernel — "
             f"a python base pack must include `ipykernel` in its spec "
-            f"(the kernel runs as the pack's python; frozen envs are never "
-            f"installed into)")
+            f"(the project session clones it; nothing is installed here)")
     subprocess.run(
         [str(py), "-m", "ipykernel", "install", "--user",
          "--name", spec_name, "--display-name", "ABA Python (base pack)"],
@@ -97,15 +102,19 @@ def _ensure_base_python_kernelspec() -> str:
 
 
 def _ensure_base_r_kernelspec() -> str:
-    """W3.0: the DEFAULT R kernel from the bundle-declared R base pack (must
-    bake r-irkernel). Registered per-EnvID; standalone — no tools-env, no
-    module machinery."""
+    """W3.0/W3.4: the DEFAULT R kernel from the PROJECT's session over the R
+    base pack (must bake r-irkernel). Registered per-session; standalone — no
+    tools-env, no module shell machinery (the pack's MODULE TOGGLE still
+    gates: OFF refuses with the enable prompt inside project_env.ensure)."""
     import re as _re
     import subprocess
-    from core.compute import base_env
-    rs = base_env.interpreter("r")            # <prefix>/bin/Rscript
-    eid = base_env.env_id("r") or ""
-    spec_name = _re.sub(r"[^a-z0-9._-]", "-", f"aba-base-r-{eid[-12:]}".lower())
+    from core import projects
+    from core.compute import project_env
+    pid = str(projects.current() or "_none")
+    sess = project_env.ensure(pid, "r")
+    rs = sess["prefix"] / "bin" / "Rscript"
+    spec_name = _re.sub(r"[^a-z0-9._-]", "-",
+                        f"aba-proj-r-{pid}-{sess['session_id'][-12:]}".lower())
     if spec_name in _env_specs_ready:
         return spec_name
     import os
@@ -501,7 +510,12 @@ def _kernel_env(lang: str, cwd: str) -> dict:
         # tools-env injection (r_provisioning.md F5).
         from core.compute import base_env as _be
         try:
-            _pack_prefix = _be.prefix("r") if _be.active("r") else None
+            if _be.active("r"):
+                from core import projects as _pj
+                from core.compute import project_env as _pe
+                _pack_prefix = _pe.prefix(str(_pj.current() or "_none"), "r")
+            else:
+                _pack_prefix = None
         except Exception:  # noqa: BLE001 — surfaced on the kernel path itself
             _pack_prefix = None
         tenv = _pack_prefix or tools_env()

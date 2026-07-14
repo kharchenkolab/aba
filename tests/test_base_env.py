@@ -127,16 +127,11 @@ def _plant_prefix(with_ipykernel: bool = True) -> Path:
 
 
 def test_run_python_code_uses_pack_interpreter(generic_packs, monkeypatch):
-    from core.compute import named_envs
+    from core.compute import project_env
     from core.exec.run import run_python_code
     prefix = _plant_prefix()
-
-    class _Stub:
-        async def env_ensure(self, spec, **kw):
-            return {"env_id": "env:v1:baseline", "status": "cached"}
-    import core.compute.adapter as ad
-    monkeypatch.setattr(ad, "get_compute", lambda: _Stub())
-    monkeypatch.setattr(named_envs, "ensure_realized", lambda eid, **kw: prefix)
+    monkeypatch.setattr(project_env, "interpreter",
+                        lambda pid, lang: prefix / "bin" / "python")
 
     pid = projects.create_project("basepy")["id"]
     projects.set_current(pid)
@@ -150,20 +145,15 @@ def test_run_python_code_uses_pack_interpreter(generic_packs, monkeypatch):
 
 
 def test_run_r_code_uses_pack_rscript(generic_packs, monkeypatch):
-    from core.compute import named_envs
+    from core.compute import project_env
     import core.exec.run as runmod
     prefix = Path(tempfile.mkdtemp(prefix="aba_baser_"))
     (prefix / "bin").mkdir(parents=True)
     rs = prefix / "bin" / "Rscript"
     rs.write_text("#!/bin/sh\nexit 0\n")
     rs.chmod(0o755)
-
-    class _Stub:
-        async def env_ensure(self, spec, **kw):
-            return {"env_id": "env:v1:rbase", "status": "cached"}
-    import core.compute.adapter as ad
-    monkeypatch.setattr(ad, "get_compute", lambda: _Stub())
-    monkeypatch.setattr(named_envs, "ensure_realized", lambda eid, **kw: prefix)
+    monkeypatch.setattr(project_env, "interpreter",
+                        lambda pid, lang: prefix / "bin" / "Rscript")
 
     captured = {}
 
@@ -197,16 +187,13 @@ def test_no_pack_run_keeps_overlay(no_packs):
 # ── kernel spec content contract ─────────────────────────────────────────────
 
 def test_base_kernelspec_requires_ipykernel(generic_packs, monkeypatch):
-    from core.compute import named_envs
+    from core.compute import project_env
     from core.exec.kernels import jupyter as jk
     prefix = _plant_prefix()          # bare venv — no ipykernel
-
-    class _Stub:
-        async def env_ensure(self, spec, **kw):
-            return {"env_id": "env:v1:noipk", "status": "cached"}
-    import core.compute.adapter as ad
-    monkeypatch.setattr(ad, "get_compute", lambda: _Stub())
-    monkeypatch.setattr(named_envs, "ensure_realized", lambda eid, **kw: prefix)
+    monkeypatch.setattr(project_env, "ensure",
+                        lambda pid, lang: {"session_id": "ses_test",
+                                           "prefix": prefix,
+                                           "base_env_id": "env:v1:x"})
     with pytest.raises(RuntimeError, match="ipykernel"):
         jk._ensure_base_python_kernelspec()
 

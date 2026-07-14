@@ -975,15 +975,20 @@ async def stream_response(
                     # via the SAME helper the non-intercept run_python path uses. Before
                     # this, the intercept dropped the estimate, so a GPU-flagged job
                     # (est_gpu=true) couldn't be GPU-placed (prj_6d986f40).
-                    job = submit_python_job(
-                        code=tool_input.get("code", ""),
-                        title=tool_input.get("title") or "Background analysis",
-                        focus_entity_id=focus_entity_id,
-                        project_id=str(_pid),
-                        thread_id=str(store_tid),
-                        run_id=_arid_ctx.get("active_run_id"),
-                        **bg_submit_kwargs(tool_input, _pid),
-                    )
+                    # Submission runs OFF the main loop: it may block (sbatch
+                    # I/O; in pack mode a session snapshot+realize for the
+                    # job's frozen env — W3.4).
+                    import functools as _ft
+                    job = await asyncio.get_running_loop().run_in_executor(
+                        None, _ft.partial(
+                            submit_python_job,
+                            code=tool_input.get("code", ""),
+                            title=tool_input.get("title") or "Background analysis",
+                            focus_entity_id=focus_entity_id,
+                            project_id=str(_pid),
+                            thread_id=str(store_tid),
+                            run_id=_arid_ctx.get("active_run_id"),
+                            **bg_submit_kwargs(tool_input, _pid)))
                     return {
                         "job_id": job["id"],
                         "status": "queued",
