@@ -78,6 +78,19 @@ class CatalogEntry:
 
 
 @dataclass
+class EnvPack:
+    """One named environment pack from a scope's envs/ dir (weft rewrite W1,
+    misc/weft_rewrite.md §4b/§6.2): a NAMED base EnvSpec the compute substrate
+    solves into an EnvID, plus aba-side policy defaults (Modules on/first_use/
+    off) and first-use triggers. Domain enters as content: the platform knows
+    "env pack"; only the YAML names scanpy. The content pack projects these
+    exactly like skills/capabilities."""
+    name: str
+    spec: dict                          # the full pack doc (name, title, languages, spec{deps…}, …)
+    source_scope: str
+
+
+@dataclass
 class Provenance:
     """Records of what each scope contributed + what was shadowed."""
     policy_scopes: list[str] = field(default_factory=list)
@@ -86,6 +99,7 @@ class Provenance:
     skills: dict[str, dict] = field(default_factory=dict)
     capabilities: dict[str, dict] = field(default_factory=dict)
     refsources: dict[str, dict] = field(default_factory=dict)
+    env_packs: dict[str, dict] = field(default_factory=dict)
     settings_keys: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -117,6 +131,11 @@ class EffectiveBundle:
     # narrowest wins (exactly like `catalog`). refsources.py consumes this map;
     # it does NO layering of its own.
     refsources: dict[str, dict] = field(default_factory=dict)
+    # Named environment packs (weft rewrite W1), composed from each scope's
+    # envs/ dir — override by pack name, narrowest wins. The compute side
+    # (core/exec/project_env) consumes these; scope-layering composes at the
+    # SPEC level (one solved base + one project delta), never by stacking envs.
+    env_packs: list[EnvPack] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
     provenance: Provenance = field(default_factory=Provenance)
 
@@ -714,6 +733,49 @@ def _compose_catalog(chain: list[ScopeBundle],
     return sorted(seen.values(), key=lambda c: c.name), r_base, collection_dirs
 
 
+def _compose_envs(chain: list[ScopeBundle],
+                  provenance: Provenance) -> list[EnvPack]:
+    """Compose each present scope's ``envs/*.yaml`` into the named env-pack
+    catalog — override by ``name:``, narrowest scope wins (exactly like
+    capabilities). A file may carry one pack (a mapping with ``name:``) or a
+    ``packs:`` list. The pack's ``spec:`` is a verbatim weft EnvSpec; aba adds
+    nothing to it at compose time (solving is the compute substrate's job)."""
+    scope_docs: list[tuple[ScopeBundle, list[dict]]] = []
+    for s in chain:
+        if not s.present:
+            continue
+        edir = s.path / "envs"
+        if not edir.is_dir():
+            continue
+        docs = [d for yf in sorted(edir.glob("*.yaml"))
+                if (d := _read_yaml_safe(yf, provenance, s.name))]
+        if docs:
+            scope_docs.append((s, docs))
+
+    seen: dict[str, EnvPack] = {}
+    shadowed: dict[str, list[str]] = {}
+    for s, docs in reversed(scope_docs):          # narrowest first
+        for doc in docs:
+            packs = doc.get("packs") if isinstance(doc.get("packs"), list) else [doc]
+            for spec in packs:
+                if not isinstance(spec, dict):
+                    continue
+                name = spec.get("name")
+                if not name:
+                    continue
+                if name in seen:
+                    shadowed.setdefault(name, []).append(s.name)
+                    continue
+                seen[name] = EnvPack(name=name, spec=spec, source_scope=s.name)
+
+    for name, pack in seen.items():
+        provenance.env_packs[name] = {
+            "effective_scope": pack.source_scope,
+            "shadowed_in": shadowed.get(name, []),
+        }
+    return sorted(seen.values(), key=lambda p: p.name)
+
+
 def _compose_refsources(chain: list[ScopeBundle],
                         provenance: Provenance) -> dict[str, dict]:
     """Compose each present scope's ``knowhow/refsources/*.yaml`` into one
@@ -797,6 +859,9 @@ def load_bundle(resolution: ScopeResolution) -> EffectiveBundle:
     # 7. refsources (provider manifests, override-by-provider-name like catalog)
     eb.refsources = _compose_refsources(chain, eb.provenance)
 
+    # 8. env packs (named base EnvSpecs, override-by-name — weft rewrite W1)
+    eb.env_packs = _compose_envs(chain, eb.provenance)
+
     # Carry resolver-side warnings through
     eb.provenance.warnings.extend(resolution.warnings)
 
@@ -825,6 +890,7 @@ def format_effective_bundle(eb: EffectiveBundle) -> str:
     lines.append(f"[bundle] catalog: {len(eb.catalog)} capabilities, "
                   f"{len(eb.r_base_specs)} r-base pkgs, "
                   f"{len(eb.collection_dirs)} collection(s)")
+    lines.append(f"[bundle] env packs: {len(eb.env_packs)}")
     n_rs_shadow = sum(1 for v in eb.provenance.refsources.values() if v.get("shadowed_in"))
     lines.append(f"[bundle] refsources: {len(eb.refsources)} provider(s)"
                  + (f", {n_rs_shadow} overridden" if n_rs_shadow else ""))
