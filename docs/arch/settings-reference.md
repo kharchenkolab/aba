@@ -12,9 +12,9 @@ Each setting is declared once via `setting()` and read through `config.settings.
 - **reduction** — the fewer-better-variables plan (`keep` / `dead` / `resolve-flag` / `merge:<group>` / `derive:<from>` / `relocate:<layer>`).
 - **flags** — `branches` (changes behavior), `secret` (redacted), `deploy` (launcher-forwarded / `deploy_injected`).
 
-**120 settings** across 11 categories.  
-weft_fate — `keep` 59, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
-reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
+**122 settings** across 11 categories.  
+weft_fate — `keep` 61, `move:envspec` 10, `move:site` 21, `retire` 24, `revisit` 6.  
+reduction — `derive` 3, `keep` 66, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 ### Tag vocabularies
 
@@ -75,7 +75,9 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `modules_enabled` | `ABA_MODULES_ENABLED` | str |  | move:site | keep | branches | '0' disables the environment-modules integration. |
 | `offload_backend_dir` | `ABA_OFFLOAD_BACKEND_DIR` | str |  | retire | derive:sif | deploy | Backend dir made importable in offloaded jobs; else the live backend dir. |
 | `offload_python` | `ABA_OFFLOAD_PYTHON` | str |  | retire | derive:sif | deploy | Python interpreter for offloaded (sbatch) jobs; else sys.executable. |
+| `pixi_bin` | `ABA_PIXI_BIN` | str |  | keep | keep |  | Path to the pixi binary weft solves/realizes with. None → $PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi. |
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
+| `weft_workspace` | `ABA_WEFT_WORKSPACE` | str |  | keep | keep |  | weft workspace dir (holds .weft state + the local site root). None → $ABA_HOME/weft. One workspace per deployment; per-project identity stays in the waist, not in weft. |
 
 ## mode
 

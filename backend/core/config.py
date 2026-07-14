@@ -872,6 +872,20 @@ setting("accelerator", env="ABA_ACCELERATOR", type="str", default="",
         category="deploy", branches=True, weft_fate="move:site", reduction="derive:gpu-probe",
         doc="Accelerator hint ('cuda' → CUDA-aware paths); else CPU / probe-derived.")
 
+# ── Compute substrate (weft) — the W0 wiring of misc/weft_rewrite.md ─────────
+# These are the settings the weft migration ADDS; the weft_fate=retire/move
+# ledger names what it removes. Both default-derive so a personal install
+# needs nothing set.
+setting("weft_workspace", env="ABA_WEFT_WORKSPACE", type="str", default=None,
+        category="deploy", weft_fate="keep",
+        doc="weft workspace dir (holds .weft state + the local site root). "
+            "None → $ABA_HOME/weft. One workspace per deployment; per-project "
+            "identity stays in the waist, not in weft.")
+setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
+        category="deploy", weft_fate="keep",
+        doc="Path to the pixi binary weft solves/realizes with. None → "
+            "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
+
 # ── DB / process modes ───────────────────────────────────────────────────────
 setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",
         branches=True, weft_fate="keep",

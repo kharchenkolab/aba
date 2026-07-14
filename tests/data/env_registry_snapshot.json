@@ -78,6 +78,7 @@
   "openai_model": null,
   "openai_tool_result_framing": "none",
   "pagoda3_dist": null,
+  "pixi_bin": null,
   "preexec_veto": "on",
   "primary_model": null,
   "primary_spec": "",
@@ -111,5 +112,6 @@
   "tools_dir": null,
   "turn_log_dir": "/tmp/aba_turnlog",
   "user_bundle": null,
-  "version": "dev"
+  "version": "dev",
+  "weft_workspace": null
 }
