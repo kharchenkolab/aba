@@ -258,6 +258,51 @@ def list_settings(*, include_unknown=True, reveal_secrets=False):
             if k.startswith("ABA_") and k not in declared)
     return result
 
+
+def validate_settings(*, strict=None):
+    """Check every declared setting resolves cleanly; return a list of problem
+    strings. Two kinds are caught: an env value that fails to coerce to the
+    setting's type (falls back to default), and an out-of-`enum` value (advisory —
+    it still passes through, matching the historical inline read). Also lists
+    unrecognized ``ABA_*`` env vars.
+
+    Called at startup (main.lifespan) to WARN — unlike ``aba doctor`` which an
+    operator must run. With ``strict`` (or ``ABA_SETTINGS_STRICT`` set) it RAISES
+    instead, for CI / hardened deployments that want a bad toggle to fail fast."""
+    problems = []
+    for s in _REGISTRY.values():
+        try:
+            val, src = s.resolve()
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"{s.name}: resolve error: {e}")
+            continue
+        if src.endswith("(coerce-failed)"):
+            problems.append(
+                f"{s.name}: {'/'.join(s.env_keys)} value could not coerce to "
+                f"{s.type}; using default {s.default!r}")
+        elif src.endswith("(not-in-enum)"):
+            problems.append(
+                f"{s.name}={val!r} is not one of {s.enum} "
+                f"(from {'/'.join(s.env_keys)}) — value used as-is")
+    for k in list_settings(reveal_secrets=True).get("unknown_env", []):
+        problems.append(f"unrecognized env var {k} (typo, or a stale/removed knob)")
+    if strict is None:
+        strict = settings.settings_strict.get()
+    if strict and problems:
+        raise ValueError("settings validation failed:\n  " + "\n  ".join(problems))
+    return problems
+
+
+def check_settings_valid() -> dict:
+    """selfcheck adapter (core.runtime.selfcheck): surfaces settings problems on
+    ``/api/health`` + the admin drawer, not just the startup log."""
+    problems = validate_settings(strict=False)
+    if not problems:
+        return {"ok": True, "severity": "info", "detail": "all settings resolve cleanly"}
+    shown = "; ".join(problems[:5]) + (" …" if len(problems) > 5 else "")
+    return {"ok": False, "severity": "warning",
+            "detail": f"{len(problems)} setting issue(s): {shown}"}
+
 # ABA_RUNTIME_DIR is the roof for all mutable runtime state (data, work, artifacts,
 # envs, projects, the workspace DB). Hard-separated from the source tree so:
 #   - `git status` is clean (no `?? backend/envs/` etc.)
@@ -841,6 +886,11 @@ setting("disabled_tools", env="ABA_DISABLED_TOOLS", type="csv", default=(),
         doc="Comma-separated global tool kill-switch (layered under agent allowlists).")
 setting("version", env="ABA_VERSION", type="str", default="dev", category="mode",
         weft_fate="keep", doc="Deployed ABA version label (provenance stamp).")
+setting("settings_strict", env="ABA_SETTINGS_STRICT", type="bool", default=False,
+        coerce=_coerce_truthy_presence, empty_is_unset=True, category="mode",
+        branches=True, weft_fate="keep",
+        doc="Any value → validate_settings() RAISES on out-of-enum/coerce-fail at "
+            "startup instead of warning (CI / hardened deploys).")
 
 # ── Model / LLM (Reasoning plane — aba-owned; model resolver unified in Phase 7) ─
 setting("primary_model", env=["ABA_PRIMARY_MODEL", "ABA_MODEL"], type="str",

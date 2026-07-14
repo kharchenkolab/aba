@@ -45,11 +45,23 @@ async def on_startup():
     # submitter, finding F6b) is LOUD in the log AND on /api/health + the admin
     # drawer, instead of surfacing later as a cryptic in-job ModuleNotFoundError.
     # Non-fatal by design (loud-but-boot); the install-time gate is the hard stop.
+    # Settings-registry validation (env_reorg): warn on out-of-enum / coerce-failed
+    # values + unrecognized ABA_* vars at startup (loud in the log), not only when an
+    # operator runs `aba doctor`. ABA_SETTINGS_STRICT → raise here (fail fast).
+    try:
+        from core import config as _config
+        for _p in _config.validate_settings():
+            print(f"[startup] SETTINGS WARNING: {_p}")
+    except ValueError:
+        print("[startup] ABA_SETTINGS_STRICT set — refusing to boot with bad config:")
+        raise
     try:
         from core.runtime import selfcheck
         from core.exec.env_integrity import check_envs_dir_shared, check_base_dir_shared
+        from core.config import check_settings_valid
         selfcheck.register("envs_dir_shared", check_envs_dir_shared)
         selfcheck.register("base_dir_shared", check_base_dir_shared)
+        selfcheck.register("settings_valid", check_settings_valid)
         for _r in selfcheck.run():
             if not _r["ok"]:
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")

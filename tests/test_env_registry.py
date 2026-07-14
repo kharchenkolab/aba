@@ -128,3 +128,44 @@ def test_enum_is_advisory(monkeypatch):
     val, src = s.capability_approval.resolve()
     assert val == "bogus"  # passes through (no behavior change)
     assert "not-in-enum" in src  # but flagged for doctor
+
+
+def test_validate_settings_clean(monkeypatch):
+    _clean_env(monkeypatch)
+    assert config.validate_settings() == []
+
+
+def test_validate_settings_flags_bad_enum_and_unknown(monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("ABA_CAPABILITY_APPROVAL", "bogus")
+    monkeypatch.setenv("ABA_TOTALLY_MADE_UP", "1")
+    probs = config.validate_settings()
+    assert any("capability_approval" in p and "not one of" in p for p in probs)
+    assert any("ABA_TOTALLY_MADE_UP" in p for p in probs)
+
+
+def test_validate_settings_flags_coerce_failure(monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("ABA_KERNEL_MAX_LIVE", "notanint")
+    probs = config.validate_settings()
+    assert any("kernel_max_live" in p and "coerce" in p for p in probs)
+
+
+def test_validate_settings_strict_raises(monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("ABA_CAPABILITY_APPROVAL", "bogus")
+    with pytest.raises(ValueError):
+        config.validate_settings(strict=True)
+    # and via the ABA_SETTINGS_STRICT flag
+    monkeypatch.setenv("ABA_SETTINGS_STRICT", "1")
+    with pytest.raises(ValueError):
+        config.validate_settings()
+
+
+def test_check_settings_valid_adapter(monkeypatch):
+    _clean_env(monkeypatch)
+    ok = config.check_settings_valid()
+    assert ok["ok"] is True and ok["severity"] == "info"
+    monkeypatch.setenv("ABA_CAPABILITY_APPROVAL", "bogus")
+    bad = config.check_settings_valid()
+    assert bad["ok"] is False and bad["severity"] == "warning"
