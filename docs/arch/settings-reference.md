@@ -70,7 +70,7 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `job_wrap` | `ABA_JOB_WRAP` | str |  | move:site | keep | branches deploy | Job wrapper mode ('sif' → run jobs via apptainer exec <SIF>). |
 | `lmod_init` | `ABA_LMOD_INIT` | str |  | move:site | keep |  | Lmod init script path (else from site config init_path). |
 | `module_binds` | `ABA_MODULE_BINDS` | str |  | move:site | keep | deploy | Space-separated bind mounts injected when wrapping jobs in the SIF. |
-| `module_init` | `ABA_MODULE_INIT` | str |  | move:site | keep |  | Lmod init snippet path for module-based nextflow/tool execution. |
+| `module_init` | `ABA_MODULE_INIT` | str |  | move:site | keep | deploy | Lmod init snippet path for module-based nextflow/tool execution. Forwarded into the SIF so an offloaded bare job (nf-core head) can re-init the site's module system on its compute node. |
 | `modules_eager` | `ABA_MODULES_EAGER` | str |  | move:site | keep |  | Eagerly materialize module manifests at startup (fat-SIF baked artifacts). |
 | `modules_enabled` | `ABA_MODULES_ENABLED` | str |  | move:site | keep | branches | '0' disables the environment-modules integration. |
 | `offload_backend_dir` | `ABA_OFFLOAD_BACKEND_DIR` | str |  | retire | derive:sif | deploy | Backend dir made importable in offloaded jobs; else the live backend dir. |
@@ -179,8 +179,8 @@ reduction — `derive` 3, `keep` 64, `merge` 50, `relocate` 2, `resolve-flag` 1.
 
 | setting | env | type | default | weft_fate | reduction | flags | doc |
 |---|---|---|---|---|---|---|---|
-| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches | Batch backend: 'local' or 'slurm'. |
-| `hpc_config` | `ABA_HPC_CONFIG` | str |  | retire | relocate:hpc.yaml |  | Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). |
+| `batch_submitter` | `ABA_BATCH_SUBMITTER` | str | local | retire | keep | branches deploy | Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the local-vs-slurm SELECTOR; unset inside the container → every background job silently runs in-process on the session node. |
+| `hpc_config` | `ABA_HPC_CONFIG` | str |  | retire | relocate:hpc.yaml | deploy | Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). Forwarded into the SIF alongside the submitter (partition/QOS catalog). |
 | `inline_auto_max_cores` | `ABA_INLINE_AUTO_MAX_CORES` | float | 8.0 | retire | merge:inline |  | Max cores an auto-inline job may claim before offloading. |
 | `inline_auto_max_mem_gb` | `ABA_INLINE_AUTO_MAX_MEM_GB` | float | 32.0 | retire | merge:inline |  | Max memory (GB) an auto-inline job may claim before offloading. |
 | `inline_stall_cpu_sample_s` | `ABA_INLINE_STALL_CPU_SAMPLE_S` | float | 3.0 | retire | merge:inline |  | CPU sampling window (s) for stall detection. |

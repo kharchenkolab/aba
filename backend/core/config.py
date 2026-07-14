@@ -855,8 +855,10 @@ setting("module_binds", env="ABA_MODULE_BINDS", type="str", default="",
         category="deploy", weft_fate="move:site",
         doc="Space-separated bind mounts injected when wrapping jobs in the SIF.")
 setting("module_init", env="ABA_MODULE_INIT", type="str", default=None,
-        category="deploy", weft_fate="move:site",
-        doc="Lmod init snippet path for module-based nextflow/tool execution.")
+        category="deploy", weft_fate="move:site", deploy_injected=True,
+        doc="Lmod init snippet path for module-based nextflow/tool execution. "
+            "Forwarded into the SIF so an offloaded bare job (nf-core head) can "
+            "re-init the site's module system on its compute node.")
 setting("lmod_init", env="ABA_LMOD_INIT", type="str", default="", category="deploy",
         weft_fate="move:site",
         doc="Lmod init script path (else from site config init_path).")
@@ -1025,11 +1027,15 @@ setting("r_ppm_snapshot", env="ABA_R_PPM_SNAPSHOT", type="str", default="latest"
 # ── Cluster / jobs (weft owns placement/exec → mostly retire) ─────────────────
 setting("batch_submitter", env="ABA_BATCH_SUBMITTER", type="str", default="local",
         coerce=_coerce_lower_strip, empty_is_unset=True, category="cluster",
-        branches=True, weft_fate="retire",
-        doc="Batch backend: 'local' or 'slurm'.")
+        branches=True, weft_fate="retire", deploy_injected=True,
+        doc="Batch backend: 'local' or 'slurm'. Forwarded into the SIF — it's the "
+            "local-vs-slurm SELECTOR; unset inside the container → every background job "
+            "silently runs in-process on the session node.")
 setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
         category="cluster", weft_fate="retire", reduction="relocate:hpc.yaml",
-        doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml).")
+        deploy_injected=True,
+        doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). "
+            "Forwarded into the SIF alongside the submitter (partition/QOS catalog).")
 setting("slurm_mem_frac", env="ABA_SLURM_MEM_FRAC", type="float", default=0.85,
         category="cluster", weft_fate="retire",
         doc="Fraction of node memory an inline job may use before offloading.")

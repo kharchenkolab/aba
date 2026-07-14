@@ -465,9 +465,16 @@ def main():
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file
-            lines += [f"export CLAUDE_CODE_OAUTH_TOKEN={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=oauth"]
+            # oauth_cc, NOT plain oauth: these are Claude Code subscription bearers
+            # (browser sign-in / `claude setup-token` / a pasted claude.ai token). Mode
+            # oauth_cc prepends the Claude Code system marker so ALL models work; plain
+            # oauth is Haiku-only — the server 429s any non-Haiku request (e.g. the Opus
+            # default) because the marker is absent. Matches runtime subscription_signin,
+            # which also stores oauth_cc. (Live bug: relaunch downgraded oauth_cc→oauth,
+            # status stayed green on presence, and every Opus call silently 429'd.)
+            lines += [f"export CLAUDE_CODE_OAUTH_TOKEN={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=oauth_cc"]
         elif cred_mode == "oauth_env":      # user_oauth — ABA finds the bearer (~/.claude, ~/.aba)
-            lines.append("export ABA_LLM_CREDENTIAL=oauth")
+            lines.append("export ABA_LLM_CREDENTIAL=oauth_cc")
         if group_root:
             genv = group_root / ".env"
             lines.append(f'[ -f {shq(genv)} ] && set -a && . {shq(genv)} && set +a')
