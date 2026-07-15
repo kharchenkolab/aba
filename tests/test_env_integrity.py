@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from core.exec.env_integrity import verify_python_imports, verify_r_library  # noqa: E402
+from core.exec.env_integrity import verify_python_imports  # noqa: E402
 
 pytestmark = pytest.mark.platform
 
@@ -261,8 +261,10 @@ def test_env_layers_structure():
     assert "project overlay" in tiers
     assert {"tier", "scope", "mutable", "path", "packages"} <= set(base)
     assert d["python"]["lock"]["pins"] >= 0
-    # r structure present (packages populated only if R is provisioned)
-    assert d["r"]["layers"] and d["r"]["layers"][0]["tier"] == "base"
+    # R structure present; weft-only: the R "layers" list is populated only when
+    # an R base pack is declared + the session realizes (a session tier), else [].
+    assert isinstance(d["r"]["layers"], list)
+    assert all(L["tier"] in ("session", "isolated") for L in d["r"]["layers"])
 
 
 # ── base self-heal + error surfacing (fix 1 + surfacing) ─────────────────────
@@ -330,28 +332,6 @@ def test_env_overview_shape():
 
 
 # ── R (wrapper logic; real Rscript load is exercised in the R-scenario test) ──
-def test_verify_r_library_wraps_r_has_package(monkeypatch):
-    import core.exec.r as r
-    monkeypatch.setattr(r, "r_has_package", lambda pkg, project_id=None: pkg == "Matrix")
-    assert verify_r_library("Matrix") == (True, "")
-    ok, detail = verify_r_library("nonexistent_rpkg")
-    assert not ok and "does not load" in detail
-
-
-def test_verify_r_library_empty_is_ok():
-    assert verify_r_library("") == (True, "")
-
-
-def test_verify_r_library_real_load(monkeypatch):
-    """End-to-end Rscript library() load of a baked base package — the R analog
-    of the Python real-import test. Skips if the R runtime isn't provisioned."""
-    from core.exec.materialize import tools_env
-    if not (tools_env() / "bin" / "Rscript").exists():
-        pytest.skip("R runtime not provisioned on this box")
-    ok, _ = verify_r_library("Matrix")          # r-matrix is baked into the R base
-    assert ok, "baked base package Matrix should load"
-    ok2, detail = verify_r_library("NoSuchRPkgXyz")
-    assert not ok2 and "does not load" in detail
 
 
 # ── lazy/staged env init (ABA_ENV_PREWARM) — lazy_env_init.md ────────────────
@@ -399,8 +379,3 @@ def test_staging_import_note_paths(monkeypatch):
     assert "finishing setup" in note["note"]
 
 
-def test_lifespan_defers_r_provision_while_staging():
-    """The backend's startup R provisioning must defer while the base is staging,
-    so it can't race the installer's complete-r-env on the same tools env."""
-    lifespan = (ROOT / "backend" / "lifespan.py").read_text()
-    assert "base_stage()" in lifespan and '!= "ready"' in lifespan

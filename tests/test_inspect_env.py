@@ -54,9 +54,10 @@ def test_inspect_env_present_but_broken(tmp_path, monkeypatch):
 
 
 def test_inspect_env_r_real():
-    from core.exec.materialize import tools_env
-    if not (tools_env() / "bin" / "Rscript").exists():
-        pytest.skip("R runtime not provisioned on this box")
+    # weft-only: R introspection needs a declared R base pack + realizable session.
+    from core.compute import base_env
+    if not base_env.active("r"):
+        pytest.skip("no R base pack declared in this deployment")
     r = inspect_env({"name": "Matrix", "language": "r"})
     assert r["language"] == "r" and r["loads"] is True and r["version"]
     r2 = inspect_env({"name": "NoSuchRPkgXyz", "language": "r"})

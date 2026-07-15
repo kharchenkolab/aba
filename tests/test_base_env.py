@@ -174,14 +174,16 @@ def test_run_r_code_uses_pack_rscript(generic_packs, monkeypatch):
     assert ".libPaths(c(" not in captured.get("script", "")   # standalone
 
 
-def test_no_pack_run_keeps_overlay(no_packs):
+def test_no_pack_run_errors_never_served_base(no_packs):
+    # W3.5 weft-only: a deployment with no base pack does NOT fall back to the
+    # served base — run_python_code returns a structured error and does not run.
     from core.exec.run import run_python_code
     pid = projects.create_project("served")["id"]
     projects.set_current(pid)
     r = run_python_code("import sys; print('PFX', sys.prefix)", project_id=pid,
                         timeout_s=60)
-    assert r.get("returncode") == 0
-    assert sys.prefix in (r.get("stdout") or "")      # the served base ran
+    assert "error" in r and "pack is not available" in r["error"]
+    assert not r.get("stdout"), "no-pack run must not execute on a served base"
 
 
 # ── kernel spec content contract ─────────────────────────────────────────────

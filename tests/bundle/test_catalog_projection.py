@@ -113,13 +113,6 @@ def test_seeder_projects_into_live_catalog(tmp_path, monkeypatch):
         reset_active_db(tok)
 
 
-def test_load_r_base_specs_reads_bundle(tmp_path, monkeypatch):
-    monkeypatch.setenv("ABA_INSTITUTION_BUNDLE", str(_installation(tmp_path)))
-    _reload()
-    import content.bio.capabilities as caps
-    assert "r-seurat" in caps.load_r_base_specs()
-
-
 def test_collection_dir_registers(tmp_path, monkeypatch):
     inst = _installation(tmp_path)
     coll = inst / "catalog" / "mycoll"
