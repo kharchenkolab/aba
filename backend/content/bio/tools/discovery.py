@@ -518,10 +518,8 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     'kb-python' → 'kb_python') and thrashing on ModuleNotFoundError. Returns the
     first top-level module name, or None if undetectable."""
     import os, re, glob
-    try:
-        from core.exec.materialize import pylib_paths
-        dirs = [str(p) for p in pylib_paths()]
-    except Exception:  # noqa: BLE001
+    dirs = _session_site_dirs()
+    if not dirs:
         return None
     _norm = lambda s: re.sub(r"[-_.]+", "-", s).lower()
     for spec in pip_specs or []:
@@ -549,19 +547,34 @@ def _detect_import_name(pip_specs: list[str]) -> str | None:
     return None
 
 
+def _session_site_dirs() -> list[str]:
+    """The project's weft python SESSION site-packages dirs — where
+    session_install lands packages (the weft replacement for the served-base pip
+    overlay). Empty when no python pack is declared / the session isn't realizable."""
+    try:
+        from core.compute import base_env as _bev, project_env as _penv
+        from core.exec.materialize import _site_paths
+        from core import projects as _pj
+        if not _bev.active("python"):
+            return []
+        pfx = _penv.prefix(str(_pj.current() or "_none"), "python")
+        return [str(p) for p in _site_paths(pfx)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _overlay_has_import(import_name: str) -> bool:
-    """Is import_name already materialized in the pip overlay? Faithful to
-    run_python (which appends the overlay to sys.path) but thread-safe — probes
-    the overlay dir directly via PathFinder, never mutating sys.path."""
+    """Is import_name already materialized in the project's weft session? Probes
+    the session site-packages directly via PathFinder (thread-safe — never mutates
+    sys.path)."""
     if not import_name:
         return False
     try:
-        from core.exec.materialize import pylib_paths
         from importlib.machinery import PathFinder
         import importlib
-        importlib.invalidate_caches()   # overlay dir may have appeared post-startup
-        search = [str(p) for p in pylib_paths()]
-        return PathFinder.find_spec(import_name, search) is not None
+        importlib.invalidate_caches()
+        search = _session_site_dirs()
+        return bool(search) and PathFinder.find_spec(import_name, search) is not None
     except Exception:  # noqa: BLE001
         return False
 

@@ -38,19 +38,15 @@ def test_inspect_env_overview():
     assert "session" in r["tiers"] and "python" in r["tiers"]
 
 
-def test_inspect_env_present_but_broken(tmp_path, monkeypatch):
-    """The tensorflow case end-to-end through the tool: a package that exists but
-    won't import is reported loads=False with the error (not a silent pass)."""
-    import core.exec.materialize as m
-    monkeypatch.setattr(m, "PROJECT_PYLIB_ROOT", tmp_path / "pylib_proj")
-    from core import projects
-    monkeypatch.setattr(projects, "current", lambda: "prjBROKE")
-    sp = m.project_pylib_paths("prjBROKE")[0]
-    sp.mkdir(parents=True)
-    (sp / "abatfsim").mkdir()
-    (sp / "abatfsim" / "__init__.py").write_text(
+def test_inspect_env_present_but_broken(tmp_path):
+    """The tensorflow case: a package that EXISTS but won't import is reported
+    loads=False with the error (not a silent pass). python_package_status probes
+    the interpreter + any extra_paths and runs a REAL import."""
+    from core.exec.env_integrity import python_package_status
+    (tmp_path / "abatfsim").mkdir()
+    (tmp_path / "abatfsim" / "__init__.py").write_text(
         "raise ImportError('numpy.core.multiarray failed to import')\n")
-    r = inspect_env({"name": "abatfsim"})
+    r = python_package_status("abatfsim", extra_paths=[str(tmp_path)])
     assert r["loads"] is False and "multiarray" in (r["error"] or "")
 
 

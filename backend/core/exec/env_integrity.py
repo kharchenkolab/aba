@@ -212,26 +212,10 @@ def write_base_lock(out_path, *, python_exe: Optional[str] = None) -> Optional[P
     return out
 
 
-def _tier_of(location: Optional[str], project_id: Optional[str]) -> str:
-    """Classify where a loaded module's file lives: base | shared-overlay |
-    project-overlay | unknown — so the agent knows which tier owns it."""
-    if not location:
-        return "unknown"
-    loc = str(location)
-    from core.exec.materialize import pylib_paths, project_pylib_paths
-    for p in project_pylib_paths(project_id):
-        if loc.startswith(str(p)):
-            return "project-overlay"
-    for p in pylib_paths():
-        if loc.startswith(str(p)):
-            return "shared-overlay"
-    return "base"
-
-
 def python_package_status(name: str, *, project_id: Optional[str] = None,
                           extra_paths: Optional[Sequence[str]] = None,
                           timeout_s: int = 120) -> dict:
-    """Diagnose one Python package on the runtime path (base + overlays):
+    """Diagnose one Python package in the project's weft SESSION:
     ``{name, loads, version, location, tier, error}``. ``loads=False`` with a
     populated ``error`` is the present-but-broken case (ABI mismatch / partial
     install) — the troubleshooting signal the agent needs."""
@@ -243,10 +227,17 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
     if project_id is None:
         from core import projects
         project_id = projects.current()
-    if extra_paths is None:
-        from core.exec.materialize import pylib_paths, project_pylib_paths
-        extra_paths = ([str(p) for p in pylib_paths()]
-                       + [str(p) for p in project_pylib_paths(project_id)])
+    # Probe the project's weft SESSION python (its site-packages are authoritative);
+    # fall back to the aba runtime interpreter when no python pack is declared.
+    probe_py = sys.executable
+    from_session = False
+    try:
+        from core.compute import base_env as _bev, project_env as _penv
+        if _bev.active("python"):
+            probe_py = str(_penv.interpreter(str(project_id or "_none"), "python"))
+            from_session = True
+    except Exception:  # noqa: BLE001 — no realizable session → runtime interpreter
+        pass
     appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
     script = (
         "import sys, json, importlib\n"
@@ -268,7 +259,7 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
         "print('ABA_JSON=' + json.dumps(o))\n"
     )
     try:
-        proc = subprocess.run([sys.executable, "-c", script],
+        proc = subprocess.run([probe_py, "-c", script],
                               capture_output=True, text=True, timeout=timeout_s)
     except Exception as e:  # noqa: BLE001
         out["error"] = f"could not run diagnostic: {e}"
@@ -281,7 +272,8 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
             except Exception:  # noqa: BLE001
                 pass
             break
-    out["tier"] = _tier_of(out.get("location"), project_id)
+    out["tier"] = (("session" if from_session else "base")
+                   if out.get("loads") else "unknown")
     return out
 
 

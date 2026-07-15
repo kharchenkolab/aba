@@ -31,54 +31,20 @@ from core.config import ENVS_DIR, _LazyDir
 from core.exec.base import Env, ExecResult, Provisioning
 from core.exec.local import LocalSubprocessExecutor
 
-PYLIB_DIR = _LazyDir(lambda: ENVS_DIR / "pylib")          # shared pip --prefix overlay (per-group growth)
-
-
-def pylib_dir() -> Path:
-    """Prefix root for the overlay. Use for housekeeping (mkdir / rm -rf).
-    For import-from paths, use ``pylib_paths()`` — under --prefix those live
-    one or two levels deeper (lib/pythonX.Y/site-packages)."""
-    return PYLIB_DIR
-
 
 def _site_paths(prefix: Path) -> list[Path]:
-    """Site-packages dir(s) under a pip ``--prefix`` root, computed from sysconfig
-    against the running interpreter — matches the layout `pip install
-    --prefix=<prefix>` actually writes. Two entries (purelib + platlib) where a
-    distro splits lib / lib64; usually one."""
+    """Site-packages dir(s) under an env `prefix`, computed from sysconfig against
+    the running interpreter — the standard `lib/pythonX.Y/site-packages` layout.
+    Two entries (purelib + platlib) where a distro splits lib / lib64; usually one.
+    Used to enumerate a weft SESSION's / named-env's installed packages."""
     purelib = sysconfig.get_path("purelib", vars={"base": str(prefix), "platbase": str(prefix)})
     platlib = sysconfig.get_path("platlib", vars={"base": str(prefix), "platbase": str(prefix)})
     return list({Path(purelib), Path(platlib)})   # dedupe; usually equal
 
 
-def pylib_paths() -> list[Path]:
-    """Site-packages dir(s) of the install-wide shared overlay — appended to
-    sys.path so its packages are importable in run_python."""
-    return _site_paths(PYLIB_DIR)
-
-
-# Per-project Python overlays (env_refactor.md P1) — the Python analog of R's
-# r_libs/prj_<id>. Each holds only a project's own on-demand additions; the
-# install-wide base + shared pylib stay shared. Appended LAST on sys.path so a
-# project's package wins for itself but cannot pollute other projects.
-PROJECT_PYLIB_ROOT = _LazyDir(lambda: ENVS_DIR / "pylib_proj")
-
-
-def project_pylib_dir(project_id: str) -> Path:
-    """pip ``--prefix`` root for one project's overlay."""
-    return PROJECT_PYLIB_ROOT / str(project_id)
-
-
-def project_pylib_paths(project_id: Optional[str]) -> list[Path]:
-    """Site-packages dir(s) of a project's overlay (empty list if no project)."""
-    if not project_id:
-        return []
-    return _site_paths(project_pylib_dir(project_id))
-
-
 class MaterializingExecutor:
-    """Executor that materializes pip provisioning into the wipeable overlay
-    and runs commands via the local subprocess executor."""
+    """Runs commands via the local subprocess executor in the base venv (the run
+    HARNESS). Provisioning is weft's now — a stray pip/conda Provisioning raises."""
 
     def __init__(self):
         self._local = LocalSubprocessExecutor()
