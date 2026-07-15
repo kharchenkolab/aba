@@ -174,6 +174,8 @@ def test_uncatalogued_alias_probe_by_package_name(packed, monkeypatch):
     """Asked by PACKAGE name ('fastmesh-tools', not an identifier): the pack's
     import_names reverse map supplies the real import to probe — if it loads,
     it's ready, with the true import name reported."""
+    import _packmode
+    _packmode.enable(monkeypatch)          # W3.5: probe needs a session python
     from content.bio.tools import discovery as d
     monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
                         lambda names, **kw: (names == ["fastmesh"], ""))
@@ -186,10 +188,9 @@ def test_uncatalogued_alias_probe_by_package_name(packed, monkeypatch):
 # ── ensure_capability: role-aware responses ──────────────────────────────────
 
 def test_ready_response_carries_role_and_viewer_note(monkeypatch):
+    import _packmode
+    _packmode.enable(monkeypatch)          # W3.5: pip install into the weft session
     from content.bio.tools import discovery as d
-    from core.exec import materialize as matz
-    monkeypatch.setattr(matz.MaterializingExecutor, "materialize",
-                        lambda self, prov, **kw: None)
     monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
                         lambda names, **kw: (True, ""))
     register_capability({
@@ -204,6 +205,8 @@ def test_ready_response_carries_role_and_viewer_note(monkeypatch):
 
 
 def test_ready_response_carries_converter_note(monkeypatch):
+    import _packmode
+    _packmode.enable(monkeypatch)
     from content.bio.tools import discovery as d
     monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
                         lambda names, **kw: (True, ""))
@@ -214,6 +217,8 @@ def test_ready_response_carries_converter_note(monkeypatch):
 
 
 def test_plain_library_keeps_plain_note(monkeypatch):
+    import _packmode
+    _packmode.enable(monkeypatch)
     from content.bio.tools import discovery as d
     monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
                         lambda names, **kw: (True, ""))

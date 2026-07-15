@@ -177,18 +177,21 @@ def test_auto_isolate_verify_fails(stubbed, monkeypatch):
 
 
 def test_ensure_capability_auto_isolates_on_conflict(stubbed, monkeypatch):
+    import _packmode
     import core.catalog as cat
-    from core.exec import materialize as matz
-    from core.compute import named_envs
+    from core.compute import named_envs, project_env as _pe
     from content.bio.tools import discovery as d
+    _packmode.enable(monkeypatch)          # W3.5: pack-mode session install
     monkeypatch.setattr(cat, "resolve_capability", lambda name, *a, **k: {
         "name": name, "provisioning": {"pip": ["tflike==9"]},
         "import_name": "tflike", "scope": "project", "status": "published"})
 
-    def boom(self, prov, scope="system", *, cancel_token=None, project_id=None):
+    # W3.5: the conflict now surfaces from the weft SESSION install, not the old
+    # MaterializingExecutor — auto-isolate must trigger off it just the same.
+    def boom(pid, lang, specs, *, eco="pypi"):
         raise RuntimeError("ERROR: ResolutionImpossible. The conflict is caused by "
                            "numpy==2.4.6 (from -c constraints).")
-    monkeypatch.setattr(matz.MaterializingExecutor, "materialize", boom)
+    monkeypatch.setattr(_pe, "install", boom)
     monkeypatch.setattr(named_envs, "verify_imports", lambda *a, **k: (True, ""))
     r = d.ensure_capability({"name": "tflike"})
     assert r["status"] == "ready_isolated", r

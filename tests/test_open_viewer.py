@@ -78,8 +78,10 @@ def test_unknown_viewer_id_is_rejected():
 
 
 def test_open_viewer_tool_is_registered_on_the_server():
+    # The agent-facing viewer tool is get_viewer_url (external-viewer launch link);
+    # the legacy 'open_viewer' name was retired.
     import asyncio
     from content.bio.mcp_servers.aba_core.server import make_server
     mcp = make_server()
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    assert "open_viewer" in names
+    assert "get_viewer_url" in names

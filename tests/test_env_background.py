@@ -32,6 +32,17 @@ from core.compute import named_envs                          # noqa: E402
 
 projects.init()
 
+
+@pytest.fixture(autouse=True)
+def _pack_mode(monkeypatch):
+    """W3.5 weft-only: the default run lanes require a base pack. Present pack-mode
+    so a default (non-env) background run resolves the project session interpreter
+    (the backend python here) instead of erroring no_base_pack. Isolated-env runs
+    (env=…) use named_envs and are unaffected."""
+    import _packmode
+    _packmode.enable(monkeypatch)
+
+
 # Planted prefixes by EnvID — a module-level stand-in for weft realization
 # (a real solve needs network + minutes; the dispatch under test is aba's).
 _PLANTED: dict[str, Path] = {}
@@ -134,10 +145,8 @@ def test_run_r_code_isolated_env_uses_own_rscript(monkeypatch):
 
 
 def test_run_r_code_missing_env_errors(monkeypatch):
+    # A missing NAMED env errors (goes the named-env branch, not the base pack).
     pid = projects.create_project("envbg-rmiss")["id"]; projects.set_current(pid)
-    import core.exec.r as rmod
-    fake = Path(tempfile.mktemp() + "_rs"); fake.write_text("x")
-    monkeypatch.setattr(rmod, "_rscript", lambda: fake)
     r = run_r_code("cat(1)", project_id=pid, env="nope", timeout_s=20)
     assert "error" in r and "not available" in r["error"], r
 
