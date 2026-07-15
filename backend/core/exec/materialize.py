@@ -38,31 +38,6 @@ from core.exec.local import LocalSubprocessExecutor
 PYLIB_DIR = _LazyDir(lambda: ENVS_DIR / "pylib")          # shared pip --prefix overlay (per-group growth)
 
 
-def _resolve_tools_env() -> Path:
-    """Where the shared conda **tools env** (R base + CLI binaries) lives.
-
-    Default: ``ENVS_DIR/tools`` — the legacy/dev/test location, beside the
-    per-group growth layers (``pylib`` overlay, ``r_libs``). Unchanged behavior
-    when ``ABA_TOOLS_DIR`` is unset, so dev + the ~30 tests that point
-    ``ABA_ENVS_DIR`` at a throwaway dir stay byte-identical.
-
-    Override: ``ABA_TOOLS_DIR`` pins the base to an explicit path. The R/CLI
-    base is expensive to build and is IDENTICAL for every group, so production
-    (the OOD launch) points this at a pre-baked, **image-resident** copy that
-    ships beside the Python venv — same base/growth split as Python (venv base
-    in the image; ``pylib`` overlay per-group). That stops R rebuilding for
-    every lab. Growth (``r_libs``, ``pylib``) stays under ``ENVS_DIR``
-    regardless of where the base resolves.
-    """
-    override = config.settings.tools_dir.get()
-    if override and override.strip():
-        return Path(override).resolve()
-    return ENVS_DIR / "tools"
-
-
-TOOLS_ENV = _resolve_tools_env()        # shared conda env: R base + CLI tools
-
-
 def pylib_dir() -> Path:
     """Prefix root for the overlay. Use for housekeeping (mkdir / rm -rf).
     For import-from paths, use ``pylib_paths()`` — under --prefix those live
@@ -105,10 +80,6 @@ def project_pylib_paths(project_id: Optional[str]) -> list[Path]:
     return _site_paths(project_pylib_dir(project_id))
 
 
-def tools_env() -> Path:
-    return TOOLS_ENV
-
-
 def _is_base_write_conflict(pip_output: str) -> bool:
     """True iff a `pip --prefix` install failed because it tried to MODIFY the
     read-only immutable base (uninstall/recompile a base package) — the signal to
@@ -142,31 +113,24 @@ class MaterializingExecutor:
     def __init__(self):
         self._local = LocalSubprocessExecutor()
 
-    def _tools_overlay(self) -> dict:
-        """PATH overlay for the conda tools env, when it exists. Always applied
-        to the base env so run_python sees any materialized CLI tool — mirror of
-        how the pylib overlay is always on sys.path."""
-        binp = TOOLS_ENV / "bin"
-        return {"PATH": str(binp)} if binp.exists() else {}
-
     def _base_env(self) -> Env:
+        # weft-only: the base venv is the RUN HARNESS (subprocess management). It
+        # no longer stitches a conda tools-env onto PATH — CLI tools live in weft
+        # tool envs (named_envs.ensure_tool_env), added to PATH by the caller.
         return Env(id="base-venv", kind="venv", python=sys.executable,
-                   env_overlay=self._tools_overlay())
+                   env_overlay={})
 
     def materialize(self, prov: Provisioning, scope: str = "system", *,
                     cancel_token=None, project_id: Optional[str] = None) -> Env:
         if prov is None or prov.is_base():
             return self._base_env()
 
-        if prov.container or prov.binary or prov.cran:
+        if prov.container or prov.binary or prov.cran or prov.conda:
             raise NotImplementedError(
-                "container/binary/cran provisioning is deferred (capdat_impl.md seams)."
+                "container/binary/cran provisioning is deferred (capdat_impl.md "
+                "seams); conda/tool envs are weft's now — use "
+                "named_envs.ensure_tool_env, not MaterializingExecutor."
             )
-
-        if prov.conda:
-            self._conda_install(prov.conda, cancel_token=cancel_token)
-            return Env(id="conda-tools", kind="conda", root=str(TOOLS_ENV),
-                       python=sys.executable, env_overlay=self._tools_overlay())
 
         if prov.pip:
             # §11.4: ALL runtime installs go to the project's OWN overlay — the only
@@ -179,26 +143,6 @@ class MaterializingExecutor:
             return self._base_env()
 
         return self._base_env()
-
-    def _conda_install(self, conda: dict, *, cancel_token=None) -> None:
-        """Install a CLI tool into the shared conda tools env via micromamba.
-        Cached: skips if the package is already present."""
-        from core.exec.mamba import run_micromamba, installed_packages
-        spec = (conda.get("spec") or "").strip()
-        channel = conda.get("channel") or "conda-forge"
-        if not spec:
-            raise RuntimeError("conda provisioning needs a 'spec'")
-        pkg = re.split(r"[=<>!]", spec)[0].strip()
-        if pkg and pkg in installed_packages(TOOLS_ENV):
-            return  # cache hit
-        from core.runtime import progress
-        progress.emit(f"conda: solving + installing {spec} (binary; can take a few minutes)…",
-                      phase="conda")
-        # micromamba install -p doesn't auto-create the prefix; use create the
-        # first time, install thereafter (adds to the shared tools env).
-        verb = "install" if (TOOLS_ENV / "conda-meta").exists() else "create"
-        run_micromamba([verb, "-y", "-p", str(TOOLS_ENV),
-                        "-c", channel, "-c", "conda-forge", spec], cancel_token=cancel_token)
 
     def _pip_install(self, packages: Sequence[str], *, cancel_token=None,
                      prefix: Optional[Path] = None) -> None:

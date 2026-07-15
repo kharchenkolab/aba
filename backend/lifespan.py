@@ -117,63 +117,9 @@ async def on_startup():
     from core.runtime import notifications as _notif
     _notif.set_loop(asyncio.get_event_loop())
 
-    # Background-provision the curated shared R base (r_base.yaml: Seurat,
-    # DESeq2/limma/edger/apeglm, tidyverse, cairo, Rcpp*). When everything
-    # is already in the tools env, this completes in ~500ms (two
-    # `micromamba list --json` calls, no solve). When the env is missing a
-    # package, the solve + install runs in this thread — backend stays
-    # responsive throughout. Daemon thread = dies with the process; never
-    # blocks startup.
-    def _provision_r_base_bg():
-        import time as _t
-        try:
-            # Staged prewarm (lazy_env_init.md): while the base is still being built
-            # (boot|completing), python-bio completion is in flight —
-            # defer here so two micromamba solves don't race the same tools env. On
-            # the next boot (base ready) this runs and finds R already built (no-op).
-            from core.exec.env_integrity import base_stage
-            if base_stage() != "ready":
-                print("[r_base] base still staging — R build deferred; will verify on next boot",
-                      flush=True)
-                return
-            # r-bio is a module now (misc/modules.md). If the tools env is already
-            # present (eager/OOD built it pre-start), keep it healthy with the curated
-            # top-up below. If it's NOT present: disabled (default on personal) → skip
-            # (installs on first use); enabled → the reconciler owns the build
-            # (install-r-bio.sh), so defer this top-up to avoid two solves racing.
-            from core.modules import registry as _mreg, manager as _mmgr
-            _rbio = _mreg.get("r-bio")
-            if _rbio and _mmgr.actual_state(_rbio) != "ready":
-                if not _mmgr.is_enabled(_rbio):
-                    print("[r_base] r-bio disabled + not present — skipping (installs on first use)",
-                          flush=True)
-                else:
-                    print("[r_base] r-bio enabled but not built yet — reconciler owns the build; "
-                          "deferring curated top-up", flush=True)
-                return
-            # Read-only baked base (a fat SIF bakes the R tools env into the immutable image
-            # at $ABA_TOOLS_DIR). The curated top-up installs into that env — impossible on a
-            # read-only mount, and unnecessary: the baked env IS the curated base, frozen at
-            # build time. Attempting it would burn a micromamba solve and log a failure on
-            # every launch. Skip cleanly; the env is authoritative.
-            import os as _os
-            from core.exec.materialize import tools_env as _tenv
-            _te = _tenv()
-            if _te.exists() and not _os.access(_te, _os.W_OK):
-                print(f"[r_base] tools env {_te} is read-only (baked image) — "
-                      "skipping curated top-up; the baked R base is authoritative", flush=True)
-                return
-            from content.bio.capabilities import provision_r_base
-            t0 = _t.perf_counter()
-            provision_r_base()
-            dt = _t.perf_counter() - t0
-            if dt > 5:
-                print(f"[r_base] provisioned curated shared R base in {dt:.0f}s", flush=True)
-            else:
-                print(f"[r_base] curated shared R base already provisioned ({dt*1000:.0f}ms)", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"[r_base] provision failed (non-fatal — agent can still per-project install): {e}", flush=True)
-    threading.Thread(target=_provision_r_base_bg, name="r_base_provision", daemon=True).start()
+    # (weft-only) The shared R base is no longer provisioned into a conda
+    # tools env at boot: R is the r-bio base pack, realized lazily by the
+    # reconciler / first run_r (project_env session).
     # Pass-E follow-up: any Turn rows in GENERATING/EXECUTING_TOOLS/
     # SUMMARIZING state are from a process that didn't survive; they
     # cannot be resumed (stream + tool dispatch are in-memory). Mark

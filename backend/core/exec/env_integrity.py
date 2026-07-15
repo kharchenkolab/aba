@@ -1123,16 +1123,3 @@ def staging_import_note(stderr: str, *, wait_s: float = 30.0) -> Optional[dict]:
             "ready": False, "module": mod}
 
 
-def verify_r_library(libname: str, project_id: Optional[str] = None) -> tuple[bool, str]:
-    """R analog of verify_python_imports: does ``library(libname)`` actually
-    load (in the project's .libPaths + the shared base)? Wraps the existing
-    ``r_has_package`` (Rscript + ``library()``), so R already has real
-    load-verification — this just gives it the same (ok, detail) shape."""
-    if not libname:
-        return True, ""
-    try:
-        from core.exec.r import r_has_package
-        ok = bool(r_has_package(libname, project_id=project_id))
-        return ok, "" if ok else f"library({libname}) does not load on .libPaths()"
-    except Exception as e:  # noqa: BLE001
-        return False, str(e)[:400]
