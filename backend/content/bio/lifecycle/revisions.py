@@ -860,11 +860,11 @@ def rebuild_env(entity_id: str, *, only: Optional[list] = None,
                     "note": f"the recorded env {env_id} could not be realized here "
                             f"(not in this deployment's compute store): {ce.detail or ce.code}"}
         # Register a named-env handle pointing at the exact recorded EnvID.
-        data = named_envs._load(pid)
-        data["envs"][envname] = {"env_id": env_id, "language": lang,
-                                 "packages": [], "history": [],
-                                 "created_at": 0, "updated_at": 0}
-        named_envs._save(pid, data)
+        # Atomic/serialized (named_envs._update) — a plain load+save would race a
+        # concurrent env write and clobber it (the I5 lost-update class).
+        named_envs._update(pid, lambda data: data["envs"].__setitem__(
+            envname, {"env_id": env_id, "language": lang, "packages": [],
+                      "history": [], "created_at": 0, "updated_at": 0}))
         return {"env": envname, "ok": True, "env_id": env_id,
                 "use": f"run_{'r' if lang=='r' else 'python'}(env='{envname}')",
                 "note": "recorded env realized exactly (content-addressed EnvID)."}
