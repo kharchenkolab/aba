@@ -21,10 +21,6 @@ Non-Python CLI tools (salmon/STAR/fastqc — not on PyPI) need conda; that path
 is deferred (capdat_impl.md task 186) and raises NotImplementedError here.
 """
 from __future__ import annotations
-import os
-import re
-import shutil
-import subprocess
 import sys
 import sysconfig
 from pathlib import Path
@@ -80,32 +76,6 @@ def project_pylib_paths(project_id: Optional[str]) -> list[Path]:
     return _site_paths(project_pylib_dir(project_id))
 
 
-def _is_base_write_conflict(pip_output: str) -> bool:
-    """True iff a `pip --prefix` install failed because it tried to MODIFY the
-    read-only immutable base (uninstall/recompile a base package) — the signal to
-    retry self-contained with --ignore-installed (§11.4 override path)."""
-    low = (pip_output or "").lower()
-    return (("permission denied" in low and ("site-packages" in low or ".venv" in low))
-            or "cannot uninstall" in low
-            or "consider using the `--user`" in low)
-
-
-def _has_legacy_target_layout() -> bool:
-    """Detect a pylib dir written by the old ``pip install --target`` codepath.
-
-    --target writes top-level package dirs (numpy/, pandas/, …); --prefix writes
-    a single ``lib/`` subdir. If the overlay has site-packages-style siblings
-    but no ``lib/``, it's the old layout — wipe so --prefix can repopulate
-    cleanly (avoids mixing two layouts that index into different sys.path entries).
-    """
-    if not PYLIB_DIR.exists():
-        return False
-    if (PYLIB_DIR / "lib").exists():
-        return False
-    # Heuristic: any *.dist-info at the top level → old --target layout.
-    return any(p.suffix == ".dist-info" for p in PYLIB_DIR.iterdir())
-
-
 class MaterializingExecutor:
     """Executor that materializes pip provisioning into the wipeable overlay
     and runs commands via the local subprocess executor."""
@@ -132,78 +102,9 @@ class MaterializingExecutor:
                 "named_envs.ensure_tool_env, not MaterializingExecutor."
             )
 
-        if prov.pip:
-            # §11.4: ALL runtime installs go to the project's OWN overlay — the only
-            # session-writable layer. Nothing writes to the shared overlay anymore
-            # (it's folded into the immutable base); install-wide additions happen
-            # via a deliberate base rebuild from the lock, not a runtime write to a
-            # layer everyone reads. (No project context → legacy shared, rare.)
-            _prefix = project_pylib_dir(str(project_id)) if project_id else None
-            self._pip_install(prov.pip, cancel_token=cancel_token, prefix=_prefix)
             return self._base_env()
 
         return self._base_env()
-
-    def _pip_install(self, packages: Sequence[str], *, cancel_token=None,
-                     prefix: Optional[Path] = None) -> None:
-        """pip install the packages into a ``--prefix`` overlay — the shared
-        install-wide overlay by default, or a project's own overlay when
-        ``prefix`` is given (env_refactor.md P1). Uses the .venv's pip but
-        installs INTO the overlay, leaving the .venv untouched.
-
-        Uses ``--prefix`` (not ``--target``) so pip checks the running
-        interpreter's sys.path and SKIPS any dep already in the .venv —
-        avoiding the duplicate-numpy/pandas problem with --target."""
-        target = Path(prefix) if prefix is not None else PYLIB_DIR
-        # One-time migration: the old --target layout dumps packages at the top
-        # of the SHARED overlay; --prefix puts them under lib/. Mixing the two
-        # means imports randomly hit whichever the runtime added first. Wipe the
-        # old layout on the first --prefix install. (Project overlays are new —
-        # they never carry the legacy layout, so only check the shared one.)
-        if target == PYLIB_DIR and _has_legacy_target_layout():
-            shutil.rmtree(PYLIB_DIR, ignore_errors=True)
-        target.mkdir(parents=True, exist_ok=True)
-        from core.runtime import progress
-        from core.exec.proc import run_cancellable
-        from core.exec.env_integrity import ensure_base_constraints, abi_anchor_constraints
-        # §11.4: a project overlay (the writable layer) constrains only the ABI
-        # ANCHOR (numpy) — so a project can OVERRIDE ordinary package versions but a
-        # bad override that needs a different numpy fails the resolve instead of
-        # shadow-breaking the compiled stack. The legacy shared path (no prefix)
-        # keeps the full base freeze. Best-effort: unconstrained + warn if absent.
-        _constraints = abi_anchor_constraints() if prefix is not None else ensure_base_constraints()
-        _cflag = ["-c", str(_constraints)] if _constraints else []
-        if not _constraints:
-            print("[materialize] WARNING: base-constraints unavailable; "
-                  "installing UNCONSTRAINED (numpy-drift guard off)", flush=True)
-        _where = "project overlay" if target != PYLIB_DIR else "shared overlay"
-        progress.emit(f"pip: installing {', '.join(packages)} into the {_where}…", phase="pip")
-        # --prefer-binary: prefer a prebuilt wheel over a newer sdist. On an old system
-        # toolchain (e.g. cluster GCC 4.8.5) source-building a package — or its numpy
-        # build-dep — fails; if ANY version ships a wheel, use it instead of building the
-        # sdist-only latest. (scikit-misc: 0.5.2 is sdist-only, 0.5.1 has a manylinux
-        # wheel → this picks 0.5.1 and installs cleanly.) Falls back to sdist only when
-        # no wheel exists at all.
-        base_cmd = [sys.executable, "-m", "pip", "install", "--prefer-binary",
-                    "--prefix", str(target), *_cflag]
-        proc = run_cancellable([*base_cmd, *packages], timeout_s=900, cancel_token=cancel_token)
-        # §11.4: `pip --prefix` reuses base deps (fast) but UNINSTALLS the base copy
-        # when a requested version differs — which the read-only base blocks. When
-        # that happens for a project overlay, retry SELF-CONTAINED (--ignore-installed):
-        # the override + its subtree land in the overlay, base untouched. numpy stays
-        # anchor-pinned, so the result is ABI-safe. (Common new-package installs never
-        # hit this branch — they install cleanly on the first, fast pass.)
-        out = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode != 0 and prefix is not None and _is_base_write_conflict(out):
-            progress.emit("pip: base is immutable — installing the override self-contained "
-                          "into the project overlay…", phase="pip")
-            proc = run_cancellable([*base_cmd, "--ignore-installed", *packages],
-                                   timeout_s=900, cancel_token=cancel_token)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"pip install into overlay failed for {list(packages)}:\n"
-                f"{(proc.stderr or proc.stdout or '')[-1500:]}"
-            )
 
     def exec(
         self,

@@ -16,7 +16,6 @@ from typing import Optional
 from core.config import ARTIFACTS_DIR, DATA_DIR
 from core.data.workspace import scratch_dir
 from core.exec import MaterializingExecutor, Provisioning
-from core.exec.materialize import project_pylib_paths
 
 
 def run_python_code(
@@ -43,7 +42,6 @@ def run_python_code(
     # interactive isolated-env kernel. weft rebuilds a GC-reclaimed realization
     # from the env's lock transparently at realize time.
     interp = (interp or "").strip() or None    # the param survives; branches below may set it
-    _base_default = False
     if env:
         from core.compute import named_envs
         from core.compute.errors import ComputeError
@@ -59,8 +57,8 @@ def run_python_code(
     elif interp:
         # W3.4: a pre-resolved interpreter (a background job's spec carries the
         # snapshot/session prefix python resolved AT SUBMIT — the entry process
-        # has no compute substrate). Standalone: no overlay.
-        _base_default = True
+        # has no compute substrate). Standalone.
+        pass
     else:
         # W3.5 weft-only: the default lane is the PROJECT's session over the
         # bundle-declared base pack — REQUIRED, no served-base fallback. A
@@ -70,26 +68,19 @@ def run_python_code(
         try:
             base_env.require("python")
             interp = str(project_env.interpreter(str(project_id), "python"))
-            _base_default = True
         except (ComputeError, RuntimeError) as ce:
             return {"error": f"the python environment pack is not available: {ce}"}
 
-    # Preamble: DATA_DIR prepended; for the DEFAULT env the pylib overlay is
-    # appended (the .venv wins, overlay fills gaps). An isolated env is
-    # standalone — skip the overlay so its own site-packages are authoritative.
+    # Preamble: DATA_DIR prepended. Every run is now a weft env (isolated named
+    # env or the project's base-pack session) — STANDALONE, its own site-packages
+    # authoritative; additions layer via extends_env / session_install, never
+    # sys.path stacking. (The served-base project pylib overlay is gone.)
     from core.config import project_data_dir
     # `project_id` is authoritative (the job's project). The ambient
-    # current_project_id() is the _workspace fallback on a Slurm compute node,
-    # so always use the passed id for the data dir + pylib overlay.
+    # current_project_id() is the _workspace fallback on a Slurm compute node.
     _pid = str(project_id)
     _data_dir = project_data_dir(_pid)
     lines = [f"DATA_DIR = {str(_data_dir)!r}", "import sys as _sys"]
-    if not env and not _base_default:
-        # §11.4: project overlay PREPENDED (project wins); shared overlay folded
-        # into base. (Served-base lane only — a base-PACK run is standalone,
-        # additions layer via extends_env, never path-stacking.)
-        for _p in reversed(list(project_pylib_paths(_pid))):
-            lines.append(f"_sys.path.insert(0, {str(_p)!r})")
     # Provenance (provenance.md §3.3): seed the stateless run so a zero-delta
     # re-run is bit-stable; the seed is recorded in the exec record. Guarded —
     # numpy is optional and the user's own seed (if any) overrides this.
