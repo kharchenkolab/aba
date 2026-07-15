@@ -147,6 +147,32 @@ echo "   which shim baked (base images since EL8 omit it; R's utils needs /usr/b
 MM_BIN="${MICROMAMBA:-$(command -v micromamba 2>/dev/null || true)}"
 if [ -x "$MM_BIN" ]; then mkdir -p "$STAGE/bin"; cp "$MM_BIN" "$STAGE/bin/micromamba"; echo "   micromamba baked"; else echo "NOTE: no micromamba to bake (runtime conda installs unavailable)"; fi
 
+# ── bake the WEFT compute substrate (weft rewrite W3.4/W3.5): pixi binaries +
+# the weft package + the base env packs. On a weft deployment the science env is
+# a weft SESSION over a base pack (not the served conda venv); the SIF must carry
+# the substrate so the controller can solve/realize/adopt on the site. pixi lands
+# where resolve_pixi() looks ($ABA_HOME/tools/pixi/bin → /opt/aba/tools/pixi/bin);
+# weft is pip-installed into the venv below (fat) or the mounted venv (slim). The
+# base packs go to the INSTALLATION scope (operator-owned; base_env composes the
+# envs/ facet from there) — NOT the system bundle (domain stays out of platform).
+PIXI_SRC="${ABA_PIXI_SRC:-$REPO_ROOT/../tools/pixi/bin}"
+if [ -x "$PIXI_SRC/pixi" ]; then
+  mkdir -p "$STAGE/pixi/bin"
+  for b in pixi pixi-pack pixi-unpack; do [ -x "$PIXI_SRC/$b" ] && cp "$PIXI_SRC/$b" "$STAGE/pixi/bin/$b"; done
+  echo "   pixi baked: $(ls "$STAGE/pixi/bin" | tr '\n' ' ')"
+else echo "NOTE: no pixi at $PIXI_SRC (set ABA_PIXI_SRC) — weft solves unavailable in the image"; fi
+WEFT_SRC="${ABA_WEFT_SRC:-$REPO_ROOT/../weft}"
+if [ -d "$WEFT_SRC/src/weft" ]; then
+  mkdir -p "$STAGE/weft/src"
+  cp -a "$WEFT_SRC/src/weft" "$STAGE/weft/src/weft"
+  [ -f "$WEFT_SRC/pyproject.toml" ] && cp "$WEFT_SRC/pyproject.toml" "$STAGE/weft/pyproject.toml"
+  echo "   weft source staged (pip-installed into the venv below)"
+else echo "NOTE: no weft checkout at $WEFT_SRC (set ABA_WEFT_SRC) — the substrate won't load in the image"; fi
+if ls "$REPO_ROOT"/install/core/envs/*.yaml >/dev/null 2>&1; then
+  mkdir -p "$STAGE/installation/envs"; cp "$REPO_ROOT"/install/core/envs/*.yaml "$STAGE/installation/envs/"
+  echo "   base env packs baked: $(ls "$STAGE/installation/envs"/*.yaml | wc -l | tr -d ' ') (installation scope)"
+fi
+
 # ── fat: build the conda venv + R tools base from install/core specs ──
 if [ "$PROFILE" = "fat" ]; then
   MM="${MICROMAMBA:-micromamba}"
@@ -165,6 +191,15 @@ if [ "$PROFILE" = "fat" ]; then
   fi
   echo "-- building conda venv ($ACCEL base, from $ENV_YML) --"
   "$MM" create -y -q --channel-priority strict -p "$STAGE/aba-venv" -f "$ENV_YML"
+  # pip-install the weft substrate into the baked venv (W3.4). --no-user is
+  # load-bearing on conda pythons (user-site is enabled → a bare pip would divert
+  # to ~/.local and a user-site weft would shadow the image's). Non-fatal so a
+  # transient failure doesn't abort the whole image.
+  if [ -d "$STAGE/weft/src/weft" ]; then
+    "$STAGE/aba-venv/bin/pip" install --no-input --no-user "$STAGE/weft" \
+      && echo "   weft pip-installed into the baked venv" \
+      || echo "WARNING: weft pip-install into the baked venv failed — substrate won't load"
+  fi
   echo "-- building R tools base (install/core/r-environment.yml) --"
   "$MM" create -y -q -p "$STAGE/aba-tools" -f "$REPO_ROOT/install/core/r-environment.yml" \
     || echo "WARNING: R tools base failed — R will provision on demand"
@@ -215,6 +250,10 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
+  # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv
+  # above, so no separate copy). resolve_pixi() finds /opt/aba/tools/pixi/bin.
+  [ -d "$STAGE/pixi/bin" ] && echo "    $STAGE/pixi/bin /opt/aba/tools/pixi/bin"
+  [ -d "$STAGE/installation/envs" ] && echo "    $STAGE/installation/envs /opt/aba/installation/envs"
   echo ""
   echo "%environment"
   echo "    export ABA_SYSTEM_BUNDLE=/opt/aba/system_bundle"
@@ -225,8 +264,14 @@ DEF="$STAGE/aba-$PROFILE.def"
   # /opt/aba-venv + /opt/aba-envs/tools are BAKED (fat) or BIND-MOUNTED (slim) —
   # same paths either way, so the runscript + env don't branch on the profile.
   # /opt/aba/bin carries the baked micromamba (runtime conda/CLI materialization).
-  echo "    export PATH=/opt/aba/bin:/opt/aba-venv/bin:\$PATH"
+  echo "    export PATH=/opt/aba/bin:/opt/aba-venv/bin:/opt/aba/tools/pixi/bin:\$PATH"
   echo "    export ABA_TOOLS_DIR=\${ABA_TOOLS_DIR:-/opt/aba-envs/tools}"
+  # weft substrate (W3.4/W3.5): the pixi solver, the per-deploy weft store, and the
+  # base env packs (installation scope → base_env composes the envs/ facet). A
+  # site.yaml can override ABA_INSTITUTION_BUNDLE to layer lab/user packs on top.
+  [ -d "$STAGE/pixi/bin" ] && echo "    export ABA_PIXI_BIN=\${ABA_PIXI_BIN:-/opt/aba/tools/pixi/bin/pixi}"
+  echo "    export ABA_WEFT_WORKSPACE=\${ABA_WEFT_WORKSPACE:-\${ABA_RUNTIME_DIR:-/tmp/aba}/weft}"
+  [ -d "$STAGE/installation/envs" ] && echo "    export ABA_INSTITUTION_BUNDLE=\${ABA_INSTITUTION_BUNDLE:-/opt/aba/installation}"
   # EAGER plugin state: the heavy modules (r-bio, viewer-pagoda3) are BAKED into this fat
   # image, so they should read as `on` (permanently present) rather than their `first_use`
   # registry default. manager._eager_override honors this; combined with the probe paths
