@@ -262,8 +262,12 @@ def _realize_probe(language: str) -> str:
     return "Rscript -e 'invisible()'" if language == "r" else "python -c pass"
 
 
-def _run_realize_task(env_id: str, ad, timeout_s: int, language: str) -> str:
-    """Submit an env-exercising task; return its terminal state.
+def _run_realize_task(env_id: str, ad, timeout_s: int, language: str,
+                      probe: Optional[str] = None) -> str:
+    """Submit an env-exercising task; return its terminal state. `probe` overrides
+    the language default (e.g. a JVM CLI tool has neither python nor Rscript — it
+    runs `<tool> --version`); the command MUST exercise the env or weft resolves
+    it from the system PATH and skips materialization (the E1 finding).
 
     `force=True` is LOAD-BEARING: weft memoizes task results by (command, env,
     inputs) hash, so a repeated realize probe (same fixed command + EnvID) would
@@ -272,8 +276,8 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str) -> str:
     memo so the task always runs, and weft's runner rebuilds a missing prefix
     from the lock as a side effect (found live: the eviction/repair path silently
     no-op'd for exactly this reason)."""
-    sub = _sync(ad.task_submit({"command": _realize_probe(language), "env": env_id,
-                                "site": "local",
+    sub = _sync(ad.task_submit({"command": probe or _realize_probe(language),
+                                "env": env_id, "site": "local",
                                 "label": f"realize {env_id[:16]}"}, force=True))
     job_id = sub["job_id"]
     deadline = time.time() + timeout_s
@@ -286,8 +290,26 @@ def _run_realize_task(env_id: str, ad, timeout_s: int, language: str) -> str:
     return state
 
 
+def ensure_tool_env(specs: list[str], *, name: str, probe: str,
+                    eco: str = "conda", channels: Optional[list[str]] = None,
+                    timeout_s: int = 1800) -> Path:
+    """Provision a standalone CLI tool as a CONTENT-ADDRESSED weft env (not tied
+    to any project — a shared, cached tool env, e.g. `nextflow`) and return its
+    realized prefix; put `<prefix>/bin` on PATH to run the tool. This is the
+    weft replacement for the old micromamba `TOOLS_ENV`. `probe` is a command
+    that runs the tool INSIDE the env so weft materializes it (a no-op probe
+    resolves from the host PATH and won't build — see `_run_realize_task`).
+    `channels` adds solve channels (weft defaults to conda-forge; a bioconda
+    tool like nextflow needs `["bioconda", "conda-forge"]`)."""
+    spec: dict = {"name": name, "deps": {eco: list(specs)}}
+    if channels:
+        spec["channels"] = list(channels)
+    res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — cached
+    return ensure_realized(res["env_id"], timeout_s=timeout_s, probe=probe)
+
+
 def ensure_realized(env_id: str, *, timeout_s: int = 900,
-                    language: str = "python") -> Path:
+                    language: str = "python", probe: Optional[str] = None) -> Path:
     """The env's realized prefix on the local site, realizing it if needed.
 
     First use — or after the prefix is reclaimed (weft `env_evict`, GC, or a raw
@@ -302,7 +324,7 @@ def ensure_realized(env_id: str, *, timeout_s: int = 900,
     if prefix is not None:
         return prefix
     ad = _adapter.get_compute()
-    state = _run_realize_task(env_id, ad, timeout_s, language)
+    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe)
     prefix = _ready_prefix(env_id)
     if prefix is None:
         raise ComputeError(

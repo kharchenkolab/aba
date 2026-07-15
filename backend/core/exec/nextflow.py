@@ -1048,11 +1048,17 @@ def run_nextflow_code(pipeline: str, *, project_id: str, run_id: Optional[str] =
             except Exception:  # noqa: BLE001
                 module_overlay = {}
     try:
-        if shutil.which("nextflow") or module_overlay:
-            menv = ex.materialize(Provisioning(), cancel_token=cancel_token)
-        else:
-            menv = ex.materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}),
-                                  cancel_token=cancel_token)
+        if not (shutil.which("nextflow") or module_overlay):
+            # Off-cluster local path: provision nextflow as a content-addressed
+            # weft tool env and prepend its bin/ to PATH (the weft replacement
+            # for the old micromamba TOOLS_ENV conda-install).
+            from core.compute import named_envs
+            nf_prefix = named_envs.ensure_tool_env(
+                ["nextflow"], name="aba-tool-nextflow", probe="nextflow -version",
+                channels=["bioconda", "conda-forge"], timeout_s=1800)
+            module_overlay = {"PATH": str(nf_prefix / "bin") + os.pathsep
+                              + os.environ.get("PATH", "")}
+        menv = ex.materialize(Provisioning(), cancel_token=cancel_token)
     except Exception as e:  # noqa: BLE001
         return {"error": f"Could not provision nextflow: {e}"}
 

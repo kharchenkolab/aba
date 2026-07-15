@@ -1185,16 +1185,19 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         if engine != "nextflow":
             return {"status": "deferred", "name": cap.get("name"), "archetype": "pipeline",
                     "note": f"Pipeline engine '{engine}' isn't wired yet (only nextflow)."}
-        from core.exec import MaterializingExecutor, Provisioning
+        from core.compute import named_envs
         try:
-            MaterializingExecutor().materialize(Provisioning(conda={"channel": "bioconda", "spec": "nextflow"}), cancel_token=_ct)
+            named_envs.ensure_tool_env(["nextflow"], name="aba-tool-nextflow",
+                                       probe="nextflow -version",
+                                       channels=["bioconda", "conda-forge"])
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": cap.get("name"), "archetype": "pipeline",
-                    "note": f"Could not install nextflow: {e}"}
+                    "note": f"Could not provision nextflow: {e}"}
         ref = pl.get("nf_core") or cap.get("name")
         return _ready({"status": "ready", "name": cap.get("name"), "archetype": "pipeline",
-                "note": f"nextflow installed and on PATH. Run this pipeline with "
-                        f"run_nextflow(pipeline='{ref}', profile='test', ...). "
+                "note": f"nextflow provisioned (weft tool env). Run this pipeline with "
+                        f"run_nextflow(pipeline='{ref}', profile='test', ...) — it puts "
+                        f"nextflow on PATH from the cached env. "
                         f"(Large runs will route to HPC/remote later — local only for now.)"})
     if prov.get("r"):
         # Module gate (misc/modules.md): R is the r-bio module — honor an OFF toggle
