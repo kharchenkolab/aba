@@ -99,7 +99,8 @@ class WeftSubmitter:
         # spec: the node entry is a FRESH process with no substrate (and a
         # second Weft on the workspace would violate single-writer), so it can
         # never resolve envs itself. Degradation ladder (loud at each step):
-        # snapshot prefix → live session prefix → served base.
+        # snapshot prefix → live session prefix → (no served base — the job fails
+        # loudly on the node if neither resolves).
         env_id = None
         interp = None
         if not params.get("env") and kind in ("run_python", "run_r"):
@@ -107,19 +108,21 @@ class WeftSubmitter:
             lang = "r" if kind == "run_r" else "python"
             exe = "Rscript" if lang == "r" else "python"
             try:
-                if base_env.active(lang):
-                    env_id = project_env.snapshot(str(pid), lang)
-                    interp = str(named_envs.ensure_realized(env_id) / "bin" / exe)
+                base_env.require(lang)      # weft-only: no served-base fallback
+                env_id = project_env.snapshot(str(pid), lang)
+                interp = str(named_envs.ensure_realized(env_id, language=lang) / "bin" / exe)
             except Exception as e:  # noqa: BLE001
                 print(f"[jobs.weft] snapshot/realize failed ({e}) — "
-                      f"job runs the LIVE project session instead")
+                      f"trying the LIVE project session")
                 try:
-                    if base_env.active(lang):
-                        env_id = None
-                        interp = str(project_env.interpreter(str(pid), lang))
+                    base_env.require(lang)
+                    env_id = None
+                    interp = str(project_env.interpreter(str(pid), lang))
                 except Exception as e2:  # noqa: BLE001
-                    print(f"[jobs.weft] session resolve failed too ({e2}) — "
-                          f"job runs the served base")
+                    env_id = None
+                    interp = None
+                    print(f"[jobs.weft] no realizable {lang} pack ({e2}) — the job "
+                          f"will fail on the node (no served-base fallback)")
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit — artifacts land in the Run's

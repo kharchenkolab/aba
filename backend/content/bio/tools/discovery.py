@@ -769,19 +769,17 @@ def _r_module_block() -> dict | None:
 
 
 def _default_probe_python() -> str | None:
-    """The interpreter import-probes must run against: the PROJECT's session
-    python on a pack deployment (the default kernels run it — probing the
-    backend's own env would answer for the wrong world), else None (backend
-    env — the served-base deployment)."""
-    try:
-        from core import projects
-        from core.compute import base_env, project_env
-        if base_env.active("python"):
-            return str(project_env.interpreter(str(projects.current() or "_none"),
-                                               "python"))
-    except Exception:  # noqa: BLE001 — probe fallback is the served base
-        pass
-    return None
+    """The project's weft SESSION python that import-probes + installs run
+    against, or None when NO python base pack is declared (a python-less
+    deployment — the caller degrades). A weft error when a pack IS declared but
+    the session won't realize PROPAGATES (it is NOT swallowed into None): the
+    old swallow silently diverted installs onto the served-base/micromamba path
+    on a transient weft hiccup — the exact hybrid-revival bug W3.5 removes."""
+    from core import projects
+    from core.compute import base_env, project_env
+    if not base_env.active("python"):
+        return None
+    return str(project_env.interpreter(str(projects.current() or "_none"), "python"))
 
 
 
@@ -939,13 +937,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             pass
         if _probes:
             from core.exec.env_integrity import verify_python_imports
-            _probe_py = _default_probe_python()
-            for _p in _probes:
-                _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
-                if _ok:
-                    return {"status": "ready", "name": name, "import_name": _p,
-                            "note": f"Already available — `import {_p}` works in run_python "
-                                    f"(provided by the base env or a prior install); no install needed."}
+            try:
+                _probe_py = _default_probe_python()
+            except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
+                _probe_py = None
+            if _probe_py is not None:
+                for _p in _probes:
+                    _ok, _ = verify_python_imports([_p], python_exe=_probe_py)
+                    if _ok:
+                        return {"status": "ready", "name": name, "import_name": _p,
+                                "note": f"Already available — `import {_p}` works in run_python "
+                                        f"(provided by the base env or a prior install); no install needed."}
         # (B) Declared by an env pack? (#11 already-provided recognition.) The
         # bundle's env packs declare base contents + import aliases; if a pack
         # provides this name, the answer is that pack — NEVER an external
@@ -1057,7 +1059,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # (wrong-numpy ABI, partial install, missing system lib) HAS a spec but
         # explodes on import (the tensorflow incident). verify, don't presume.
         from core.exec.env_integrity import verify_python_imports
-        _probe_py = _default_probe_python()
+        from core.compute.errors import ComputeError
+        from core import projects as _projects
+        from core.compute import project_env as _penv
+        try:
+            _probe_py = _default_probe_python()
+        except (ComputeError, RuntimeError) as ce:
+            return {"status": "error", "name": name,
+                    "note": f"the python environment pack is not available: {ce}"}
+        if _probe_py is None:
+            return {"status": "error", "name": name,
+                    "note": "no python environment pack is declared for this deployment"}
         _imp0 = cap.get("import_name")
         if _imp0:
             _ok, _ = verify_python_imports([_imp0], python_exe=_probe_py)
@@ -1065,22 +1077,13 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                 return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
                         "archetype": cap.get("archetype"), "import_name": _imp0,
                         "note": f"Already available; `import {_imp0}` works in run_python."})
-        from core import projects as _projects
         try:
-            if _probe_py is not None:
-                # W3.4 pack mode: install LIVE into the project's default
-                # session (weft session_install) — the running kernel imports
-                # it after the cache invalidation below, no restart; the next
-                # background job's snapshot picks it up as a frozen EnvID.
-                from core.compute import project_env as _penv
-                _penv.install(str(_projects.current() or "_none"), "python",
-                              list(prov["pip"]), eco="pypi")
-            else:
-                from core.exec import MaterializingExecutor, Provisioning
-                MaterializingExecutor().materialize(
-                    Provisioning(pip=list(prov["pip"])),
-                    scope=str(cap.get("scope", "system")),
-                    cancel_token=_ct, project_id=_projects.current())
+            # Install LIVE into the project's default weft session
+            # (session_install) — the running kernel imports it after the cache
+            # invalidation below (no restart); the next background job's snapshot
+            # picks it up as a frozen EnvID.
+            _penv.install(str(_projects.current() or "_none"), "python",
+                          list(prov["pip"]), eco="pypi")
         except Exception as e:  # noqa: BLE001
             # Solve-driven placement (env_refactor.md): if the constrained install
             # is UNSAT against the pinned base (the package needs versions the
@@ -1107,7 +1110,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
                                  f"mismatch (built against a different numpy), a partial install, "
                                  f"or a missing system library. NOT marking ready."),
                         "detail": _detail}
-        note = "Installed into the materialized-library overlay; importable from run_python now."
+        note = "Installed into the project's weft session; importable from run_python now."
         if imp:
             note += f" Import it with `import {imp}`."
         else:
@@ -1136,31 +1139,36 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
             if _blk:
                 return _blk
         # `_mod` (resolved + recorded up top) means a cluster module also covers this
-        # CLI tool — it's loaded in the project's background jobs. We still build conda
-        # for in-process use; a conda failure is non-fatal when `_mod` covers it.
+        # CLI tool — it's loaded in the project's background jobs. The conda spec
+        # lands LIVE in the project's weft session (its bin/ is on the kernel PATH
+        # via the session prefix); a failure is non-fatal when `_mod` covers it.
+        def _mod_covered(reason: str):
+            return _ready({"status": "ready", "name": cap.get("name"),
+                    "version": cap.get("version"), "archetype": cap.get("archetype"),
+                    "module": _mod, "note": f"Provided by cluster module '{_mod}' "
+                    f"(loaded in background Slurm jobs); the local conda install {reason}."})
         try:
             _probe_py = _default_probe_python()
-            if _probe_py is not None:
-                # W3.4 pack mode: conda spec lands LIVE in the project session
-                # (its bin/ is on the kernel PATH via the session prefix).
-                from core import projects as _projects
-                from core.compute import project_env as _penv
-                _c = prov["conda"]
-                _spec = _c["spec"] if isinstance(_c, dict) else _c
-                _penv.install(str(_projects.current() or "_none"), "python",
-                              [_spec] if isinstance(_spec, str) else list(_spec),
-                              eco="conda")
-            else:
-                from core.exec import MaterializingExecutor, Provisioning
-                MaterializingExecutor().materialize(Provisioning(conda=prov["conda"]), cancel_token=_ct)
+        except Exception:  # noqa: BLE001 — no realizable session; handled below
+            _probe_py = None
+        if _probe_py is None:
+            if _mod:
+                return _mod_covered("isn't needed there (no local python pack)")
+            return {"status": "error", "name": name,
+                    "note": "no realizable python environment pack for a conda install"}
+        try:
+            from core import projects as _projects
+            from core.compute import project_env as _penv
+            _c = prov["conda"]
+            _spec = _c["spec"] if isinstance(_c, dict) else _c
+            _penv.install(str(_projects.current() or "_none"), "python",
+                          [_spec] if isinstance(_spec, str) else list(_spec),
+                          eco="conda")
         except Exception as e:  # noqa: BLE001
             if _mod:
-                return _ready({"status": "ready", "name": cap.get("name"), "version": cap.get("version"),
-                        "archetype": cap.get("archetype"), "module": _mod,
-                        "note": f"Provided by cluster module '{_mod}' (loaded in background Slurm "
-                                f"jobs); the conda install isn't needed there and failed: {e}"})
-            return {"status": "error", "name": name, "note": f"conda materialization failed: {e}"}
-        _note = ("Installed into the conda tools env; the binary is on PATH — "
+                return _mod_covered(f"isn't needed there and failed: {e}")
+            return {"status": "error", "name": name, "note": f"conda install failed: {e}"}
+        _note = ("Installed into the project's weft session; the binary is on PATH — "
                  "invoke it from run_python via subprocess.")
         if _mod:
             _note += f" Background Slurm jobs also load cluster module '{_mod}'."
@@ -1221,109 +1229,17 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # W3.4 pack mode: the R pack + project session replace the r-bio shell
         # toolchain — install into the session (conda-first, captured escape
         # hatch), never the shared base.
+        # weft-only: the R pack + project session ARE the R toolchain — install
+        # into the session (conda-first, captured installer escape hatch). REQUIRED:
+        # there is no tools-env/micromamba R fallback anymore.
         from core.compute import base_env as _bev
-        if _bev.active("r"):
-            return _ready(_ensure_r_via_session(cap, input_, ctx, name))
-        # RIGHT-WAY provisioning: if the R toolchain (r-bio module) isn't built yet,
-        # build it THROUGH the module (install-r-bio.sh: conda binaries for r-base +
-        # Seurat + Bioconductor) — one consistent path that also flips the module to
-        # ready in Settings → Modules — before any per-package install. Blocks with
-        # progress; a failure is surfaced (the turn/agent can diagnose).
+        from core.compute.errors import ComputeError
         try:
-            from core.modules import registry as _mreg, manager as _mmgr
-            _rspec = _mreg.get("r-bio")
-            if _rspec and _mmgr.actual_state(_rspec) != "ready":
-                from core.modules.reconciler import install_and_wait
-                from core.runtime import progress as _prog
-                _ok, _err = install_and_wait("r-bio", on_progress=lambda m: _prog.emit(m, phase="ensure"))
-                if not _ok:
-                    return {"status": "error", "name": name, "module": "r-bio",
-                            "note": f"The R toolchain (r-bio) failed to install: {_err}. "
-                                    f"The install log is at ~/.aba/logs/module-r-bio.log."}
-        except Exception:  # noqa: BLE001 — never let module wiring break the legacy path
-            pass
-        # R package (r_provisioning.md): already on the library path → ready;
-        # else a project-scoped native install (CRAN/Bioconductor/GitHub). The
-        # shared base is never mutated here — only curation grows it.
-        rp = dict(prov["r"])
-        # Per-install overrides (P5 fix #2): the caller can pin a different git
-        # ref / source / package for THIS install without re-cataloguing — e.g.
-        # ensure_capability(name='pagoda2', source='github',
-        # package='kharchenkolab/pagoda2', ref='devel') installs from a branch
-        # even though the catalog entry is the CRAN release. Transient: the
-        # catalog row is not mutated.
-        for _k in ("ref", "source", "package"):
-            if input_.get(_k):
-                rp[_k] = input_[_k]
-        from core.exec import r as rexec
-        from core import projects
-        pid = projects.current() or "default"
-        _src = rp.get("source", "cran")
-        _pkg = rp.get("package") or cap.get("name")
-        libname = rp.get("library") or (
-            _pkg.split("/")[-1] if _src == "github"
-            else (_pkg[2:] if _src == "conda" and _pkg.startswith("r-") else _pkg))
-        # The runtime now carries the foundational compiled deps (igraph/irlba/
-        # Rcpp*/xml2) as binaries, so GitHub/CRAN installs find them on
-        # .libPaths() instead of source-compiling. Heavy frameworks stay on-demand.
-        rexec.ensure_r_runtime()
-        # Version-aware presence check (was presence-only — the sccore-upgrade
-        # trap): a min-version requirement, an explicit force, or an install
-        # override (ref/source/package — "I want THIS build") all mean "already
-        # installed" is NOT enough, so reinstall instead of short-circuiting to
-        # "ready" while leaving a stale version.
-        min_version = (str(input_.get("min_version") or rp.get("min_version") or "").strip() or None)
-        force = bool(input_.get("force"))
-        override = any(input_.get(_k) for _k in ("ref", "source", "package"))
-        installed_ver = rexec.r_package_version(libname, project_id=pid)
-        satisfied = installed_ver is not None and (
-            not min_version or rexec.version_ge(installed_ver, min_version))
-        if satisfied and not force and not override:
-            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "version": installed_ver,
-                    "note": f"Already available — library({libname}) {installed_ver} works in run_r."})
-        # (Re)install. force=TRUE so install_github replaces an already-present-but-
-        # stale build; required whenever we're upgrading or honoring an override.
-        do_force = force or override or (installed_ver is not None and min_version is not None)
-        res = rexec.r_install(_src, _pkg, project_id=pid, library=libname,
-                              ref=rp.get("ref"), force=do_force, cancel_token=_ct)
-        if res.get("status") == "ready":
-            new_ver = rexec.r_package_version(libname, project_id=pid) or res.get("version")
-            # If the OLD version is loaded in the running R kernel it can't be
-            # swapped in place — unload it so the next library() loads the new one
-            # (falls back to restart_kernel if another loaded namespace pins it).
-            unloaded = rexec.r_unload_namespace(libname, (ctx or {}).get("thread_id"))
-            if res.get("source") == "conda" or res.get("via") == "conda":
-                where = "into the shared R environment (Bioconductor binary)"
-            else:
-                where = "into the project R library" + (
-                    " (recompiled from source)" if res.get("source_fallback") else "")
-            note = (f"Installed {libname}{(' ' + new_ver) if new_ver else ''} {where}; "
-                    f"use library({libname}) in run_r.")
-            if not unloaded and installed_ver and new_ver and installed_ver != new_ver:
-                note += (" A prior load may be cached in the R session — restart_kernel "
-                         "so the new version takes effect.")
-            return _ready({"status": "ready", "name": cap.get("name"), "archetype": "r_package",
-                    "library": libname, "version": new_ver, "note": note})
-        # Error → surface the actionable diagnostic (missing-system-lib hint) AND,
-        # crucially, any unmet VERSION requirement so the agent upgrades the dep in
-        # ONE step instead of inferring the whole dance.
-        out = {"status": "error", "name": cap.get("name"), "archetype": "r_package",
-               "note": res.get("note") or "R install failed."}
-        if res.get("missing_lib"):
-            out["missing_lib"] = res["missing_lib"]
-        if res.get("diagnostic"):
-            out["diagnostic"] = res["diagnostic"]
-        req = rexec.parse_version_requirement(
-            (res.get("note") or "") + "\n" + str(res.get("diagnostic") or ""))
-        if req:
-            out["requires"] = req
-            out["note"] = (f"{out['note']} — needs {req['package']} >= {req['min_version']}. "
-                           f"Upgrade it first: ensure_capability(name={req['package']!r}, "
-                           f"min_version={req['min_version']!r}, force=true), then retry. "
-                           f"(The reinstall unloads the stale namespace; if another loaded "
-                           f"package pins it, restart_kernel.)")
-        return out
+            _bev.require("r")
+        except (ComputeError, RuntimeError) as ce:
+            return {"status": "error", "name": name,
+                    "note": f"the R environment pack is not available: {ce}"}
+        return _ready(_ensure_r_via_session(cap, input_, ctx, name))
     return {"status": "error", "name": name, "note": "capability has no recognized provisioning."}
 
 

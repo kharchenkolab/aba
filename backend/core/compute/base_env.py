@@ -74,8 +74,31 @@ def active(language: str) -> bool:
     """True iff a base pack is declared for `language` AND the substrate is up.
     A declared pack with the substrate down is a DEPLOYMENT fault — surfaced
     where the interpreter is asked for (ComputeError), not silently downgraded
-    to the served base (which may not even hold the science stack)."""
+    to the served base (which may not even hold the science stack).
+
+    NOTE: on the weft-only cutover (W3.5) the science lanes call `require()`,
+    not `active()`. `active()` remains only for genuinely OPTIONAL consumers
+    (e.g. a viewer converter that can degrade), never as an old-path gate."""
     return pack_name(language) is not None
+
+
+def require(language: str) -> str:
+    """The declared base pack name for `language`, or raise. The mandatory-pack
+    gate for the science lanes: there is NO served-base/micromamba fallback
+    anymore, so a deployment that runs `language` MUST declare a `role: base`
+    env pack for it. A missing pack is a misconfiguration, surfaced loudly (the
+    agent sees a structured cause), never a silent downgrade."""
+    name = pack_name(language)
+    if name is None:
+        raise ComputeError(
+            "no_base_pack",
+            f"no base environment pack is declared for {language!r} — this "
+            f"deployment is not provisioned for {language} execution",
+            stage="aba",
+            hints={"fix": f"declare a role:base env pack for {language} in the "
+                          f"bundle; the installer ships one to "
+                          f"$ABA_HOME/installation/envs/ (run `aba update` to refresh)"})
+    return name
 
 
 def env_id(language: str) -> Optional[str]:

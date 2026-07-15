@@ -62,15 +62,15 @@ def run_python_code(
         # has no compute substrate). Standalone: no overlay.
         _base_default = True
     else:
-        # W3.0/W3.4: a bundle-declared base pack replaces the served base for
-        # the default lane — the PROJECT's session over the pack (live env,
-        # standalone — no overlay path-stacking).
+        # W3.5 weft-only: the default lane is the PROJECT's session over the
+        # bundle-declared base pack — REQUIRED, no served-base fallback. A
+        # deployment with no python pack is misconfigured (loud, structured).
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
-            if base_env.active("python"):
-                interp = str(project_env.interpreter(str(project_id), "python"))
-                _base_default = True
+            base_env.require("python")
+            interp = str(project_env.interpreter(str(project_id), "python"))
+            _base_default = True
         except (ComputeError, RuntimeError) as ce:
             return {"error": f"the python environment pack is not available: {ce}"}
 
@@ -104,11 +104,13 @@ def run_python_code(
     _since = (scratch / "script.py").stat().st_mtime
 
     ex = MaterializingExecutor()
-    menv = ex.materialize(Provisioning())         # base venv + tools-env PATH overlay
-    # Harden: never let an empty/blank interpreter slip through to Popen (the
-    # `Permission denied: ''` class). Coerce + strip each candidate, fall back to
-    # this process's own interpreter as the last resort.
-    used_interp = str(interp or menv.python or sys.executable or "").strip() or sys.executable
+    menv = ex.materialize(Provisioning())         # base-venv subprocess run harness
+    # `interp` is the weft interpreter (named env / job-spec / base-pack session);
+    # it is always resolved by here — the no-pack case already returned an error.
+    # Never fall back to the backend venv (sys.executable) for science code.
+    used_interp = str(interp or "").strip()
+    if not used_interp:
+        return {"error": "no python interpreter resolved for this run (internal)"}
     # Env-var parity with the interactive kernel (jupyter.py _kernel_env):
     # the agent's code routinely reads WORK_DIR / DATA_DIR / ARTIFACTS_DIR via
     # `os.environ[...]` since they're set up that way for run_python (kernel
@@ -200,7 +202,6 @@ def run_r_code(
     scratch = scratch_dir(str(project_id), str(run_id))
 
     from core.config import project_data_dir
-    from core.exec.r import _rscript, libpaths_expr
     # Authoritative project (see run_python_code) — not the _workspace ambient.
     _data_dir = project_data_dir(str(project_id))
 
@@ -225,27 +226,16 @@ def run_r_code(
         from pathlib import Path as _P
         rscript = _P(interp)
     else:
-        # W3.0/W3.4: a bundle-declared R base pack replaces the tools-env R for
-        # the default lane — the PROJECT's session over the pack, standalone
-        # (no libpaths stack).
+        # W3.5 weft-only: the default R lane is the PROJECT's session over the
+        # bundle-declared R base pack — REQUIRED, standalone (its own .libPaths,
+        # no stack). No tools-env R fallback; a missing R pack is loud.
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
-            _base_r = base_env.active("r")
-        except Exception:  # noqa: BLE001
-            _base_r = False
-        if _base_r:
-            try:
-                rscript = project_env.interpreter(str(project_id), "r")
-            except (ComputeError, RuntimeError) as ce:
-                return {"error": f"the R environment pack is not available: {ce}"}
-        else:
-            rscript = _rscript()
-            if not rscript.exists():
-                return {"error": "Rscript not provisioned. Run ensure_r_runtime() first."}
-            lib_expr = libpaths_expr(str(project_id))
-            if lib_expr:
-                lib_lines.append(lib_expr)
+            base_env.require("r")
+            rscript = project_env.interpreter(str(project_id), "r")
+        except (ComputeError, RuntimeError) as ce:
+            return {"error": f"the R environment pack is not available: {ce}"}
     preamble_lines = list(lib_lines)
     preamble_lines.append(f'setwd({str(scratch)!r})')
     preamble_lines.append("set.seed(0)")   # provenance.md §3.3 — bit-stable re-run

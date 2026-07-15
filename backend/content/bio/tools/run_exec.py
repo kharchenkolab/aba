@@ -738,8 +738,8 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 from core.compute import base_env, project_env
                 from core.compute.errors import ComputeError
                 try:
-                    if base_env.active("python"):
-                        project_env.ensure(str(project_id), "python")
+                    base_env.require("python")   # weft-only: no served-base fallback
+                    project_env.ensure(str(project_id), "python")
                 except ComputeError as ce:
                     return {"status": "error", "error": ce.to_payload(),
                             "note": f"the python environment pack is not "
@@ -948,8 +948,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         from core.compute import base_env, project_env
         from core.compute.errors import ComputeError
         try:
-            if base_env.active("r"):
-                project_env.ensure(str(project_id), "r")
+            base_env.require("r")           # weft-only: no served-base fallback
+            project_env.ensure(str(project_id), "r")
         except ComputeError as ce:
             return {"status": "error", "error": ce.to_payload(),
                     "note": f"the R environment pack is not available: "

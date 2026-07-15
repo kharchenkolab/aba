@@ -398,14 +398,13 @@ def _setup_code(cwd: str) -> str:
 
 
 def _env_setup_code(cwd: str) -> str:
-    """First cell for an ISOLATED-env kernel (§11.3). Unlike `_setup_code`, it does
-    NOT append the shared/project overlays or set PIP_PREFIX — the env is
-    standalone (its own site-packages; a bare `pip install` lands in the env). Just
-    DATA_DIR / WORK_DIR / headless mpl / the tools-env PATH + harvest helpers."""
+    """First cell for a weft-env kernel (isolated env OR base-pack session). The env
+    is STANDALONE (its own site-packages + bin — the interpreter is the env's own,
+    so its bin/ is already the active PATH); no overlay, no PIP_PREFIX, no tools-env
+    injection. Just DATA_DIR / WORK_DIR / headless mpl + harvest helpers."""
     data_dir, _ = _project_data_artifacts()
     return (
         "import sys as _sys, os as _os\n"
-        f"_os.environ['PATH'] = {str(tools_env() / 'bin')!r} + _os.pathsep + _os.environ.get('PATH','')\n"
         "_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
         f"DATA_DIR = {str(data_dir)!r}\n"
         f"WORK_DIR = {str(cwd)!r}\n"
@@ -504,23 +503,16 @@ def _kernel_env(lang: str, cwd: str) -> dict:
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
         env[var] = nthreads
     if lang == "r":
-        # W3.0: a base-PACK R kernel is self-contained (conda env layout — its
-        # own lib/ resolves .so deps via rpath); prepending the tools env would
-        # shadow the pack's libs with foreign versions. Served-base R keeps the
-        # tools-env injection (r_provisioning.md F5).
+        # The base-PACK R kernel is self-contained (conda env layout — its own
+        # lib/ resolves .so deps via rpath). Point PATH/LD_LIBRARY_PATH at the
+        # project's weft R session prefix; the pack is REQUIRED (no tools-env R).
         from core.compute import base_env as _be
-        try:
-            if _be.active("r"):
-                from core import projects as _pj
-                from core.compute import project_env as _pe
-                _pack_prefix = _pe.prefix(str(_pj.current() or "_none"), "r")
-            else:
-                _pack_prefix = None
-        except Exception:  # noqa: BLE001 — surfaced on the kernel path itself
-            _pack_prefix = None
-        tenv = _pack_prefix or tools_env()
-        env["LD_LIBRARY_PATH"] = str(tenv / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-        env["PATH"] = str(tenv / "bin") + os.pathsep + env.get("PATH", "")
+        from core import projects as _pj
+        from core.compute import project_env as _pe
+        _be.require("r")
+        _prefix = _pe.prefix(str(_pj.current() or "_none"), "r")
+        env["LD_LIBRARY_PATH"] = str(_prefix / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        env["PATH"] = str(_prefix / "bin") + os.pathsep + env.get("PATH", "")
         # R `future` defaults (Seurat/IntegrateLayers etc.): sequential plan + a
         # generous globals ceiling. future's 500 MiB future.globals.maxSize default
         # trips on real single-cell objects (IntegrateLayers ships the layered object
@@ -544,37 +536,25 @@ class JupyterKernelSession:
         self.alive = False
         self._cancel_grace_s = _CANCEL_GRACE_S
         Path(cwd).mkdir(parents=True, exist_ok=True)
-        # W3.0 (weft rewrite): a bundle-declared base pack replaces the served
-        # base for the DEFAULT lanes — data-driven (no pack declared → today's
-        # behavior, byte for byte).
+        # W3.5 weft-only: every kernel is a weft env — an isolated named env, or
+        # the project's default SESSION over the bundle-declared base pack. There
+        # is no served-base kernel; a deployment that runs a language MUST declare
+        # its base pack (require → loud, structured error, not a silent fallback).
         from core.compute import base_env as _base
-        _base_py = lang != "r" and not env_name and _base.active("python")
-        _base_r = lang == "r" and _base.active("r")
-        if _base_r:
+        if lang == "r":
+            _base.require("r")
             kernel_name, setup, setup_to = _ensure_base_r_kernelspec(), _base_r_setup_code(cwd), 60
-        elif lang == "r":
-            kernel_name, setup, setup_to = _ensure_r_kernelspec(), _r_setup_code(cwd), 60
         elif env_name:  # §11.3 isolated-env kernel: the env's python, standalone setup
             kernel_name, setup, setup_to = _ensure_env_python_kernelspec(env_name), _env_setup_code(cwd), 60
-        elif _base_py:  # base-pack kernel: the pack's python, standalone setup
+        else:           # base-pack python kernel: the pack's python, standalone setup
+            _base.require("python")
             kernel_name, setup, setup_to = _ensure_base_python_kernelspec(), _env_setup_code(cwd), 60
-        else:
-            kernel_name, setup, setup_to = _ensure_python_kernelspec(), _setup_code(cwd), 30
         self._km = KernelManager(kernel_name=kernel_name)
         kenv = _kernel_env(lang, cwd)
-        # §11.4: the SERVED-base default python kernel gets the project overlay on
-        # PYTHONPATH so it's prepended at interpreter STARTUP — before jupyter
-        # imports anything — so a project's overridden package version wins even
-        # over a base package the kernel itself imports. (Isolated-env and
-        # base-PACK kernels are standalone — a pack kernel's additions layer via
-        # extends_env, never path-stacking; R N/A.)
-        if lang != "r" and not env_name and not _base_py:
-            from core.exec.materialize import project_pylib_paths
-            from core import projects as _pj
-            _ov = [str(p) for p in project_pylib_paths(_pj.current())]
-            if _ov:
-                kenv["PYTHONPATH"] = os.pathsep.join(
-                    _ov + ([kenv["PYTHONPATH"]] if kenv.get("PYTHONPATH") else []))
+        # Every kernel is now a weft env (isolated or base-pack session) — always
+        # STANDALONE: a pack's additions layer via extends_env / session_install,
+        # never PYTHONPATH stacking. The served-base project-overlay-on-PYTHONPATH
+        # is gone with the served base.
         # P1: bound the startup. These library calls take no timeout and run while
         # the pool lock is held — if one BLOCKS under resource pressure it wedges
         # all kernel acquisition. Cap each so a bad startup fails fast (releasing
