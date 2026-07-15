@@ -24,12 +24,43 @@ from core import config
 # 0.2.0, which switched the on-disk store to zarr v3) AUTOMATICALLY
 # re-derives every cached store — no manual bump needed. Suffix `+N` here only if
 # THIS launcher's own conversion logic changes independently of lstar.
-def _launcher_version() -> str:
+def _lstar_python(pid: "str | None" = None) -> str:
+    """The interpreter that has lstar-sc — the CONVERTER (import name `lstar`).
+    W3.4: on a pack deployment lstar-sc ships in the python base pack, so it
+    lives in the PROJECT'S weft SESSION, NOT the backend process (`sys.executable`
+    is the controller / served base). Resolve the session python when a pack is
+    active; fall back to this process otherwise (served-base deploy — lstar-sc
+    is pinned into that env). Best-effort: any resolution error → sys.executable
+    (the launcher's own error surfaces if lstar truly isn't reachable)."""
+    import sys
     try:
-        import importlib.metadata as _md
-        return "lstar-sc/" + _md.version("lstar-sc")
+        from core.compute import base_env, project_env
+        from core import projects
+        if base_env.active("python"):
+            _pid = str(pid or projects.current() or "_none")
+            return str(project_env.interpreter(_pid, "python"))
     except Exception:  # noqa: BLE001
-        return "lstar-sc/unknown"
+        pass
+    return sys.executable
+
+
+def _launcher_version(python_exe: "str | None" = None) -> str:
+    """The lstar-sc version = the convert-cache key, so an lstar upgrade
+    auto-rederives stores. Read it from the SAME interpreter that runs the
+    convert (the session python on a pack deploy), not the backend process —
+    else a pack deployment always keys on 'unknown' and never rederives."""
+    import subprocess
+    py = python_exe or _lstar_python()
+    try:
+        r = subprocess.run(
+            [py, "-c", "import importlib.metadata as m; print(m.version('lstar-sc'))"],
+            capture_output=True, text=True, timeout=30)
+        v = (r.stdout or "").strip()
+        if r.returncode == 0 and v:
+            return "lstar-sc/" + v
+    except Exception:  # noqa: BLE001
+        pass
+    return "lstar-sc/unknown"
 
 # viewer@0.1 optimization is done by lstar's `convert --viewer` (in `_convert_any`),
 # NOT pagoda3's prep.ts (WASM). prep.ts needs node >= 22, unavailable on prod /
@@ -38,6 +69,9 @@ def _launcher_version() -> str:
 # node-free and, since lstar-sc >=0.1.7, auto-falls-back raw→lognorm for sources
 # with no raw counts. Optimization is thus lstar's job → the cache keys purely on
 # the lstar-sc version (no launcher-local suffix needed).
+# NOTE: the real cache key is computed PER-LAUNCH from the project session's
+# lstar-sc (see launch()), because on a pack deployment the version lives in the
+# session, not this process. This module-level value is only a legacy fallback.
 LAUNCHER_VERSION = _launcher_version()   # optimization delegated to lstar convert --viewer
 _STORE_SUFFIX = ".lstar.zarr"
 _ZIP_SUFFIX = ".lstar.zarr.zip"
@@ -58,14 +92,22 @@ def pagoda3_dist_path() -> Path:
     return home / "vendor" / "pagoda3" / "dist"
 
 
-def _rscript() -> "str | None":
+def _rscript(pid: "str | None" = None) -> "str | None":
     """The Rscript lstar's R bridge uses for `.rds` (Seurat / SCE / pagoda2 /
-    conos) — must be an R with the lstar R package installed. Preference:
-    `$LSTAR_RSCRIPT` (explicit override), then ABA's tools-env R (it ships the
-    domain frameworks — Seurat / SingleCellExperiment / …), then a system Rscript.
-    (The backend's own PATH may not include any R, so we resolve explicitly.)"""
+    conos). W3.4: on a pack deployment R lives in the r-bio base pack's project
+    SESSION, so resolve that first; then `$LSTAR_RSCRIPT`, the legacy tools-env
+    R, then a system Rscript. (The backend's own PATH may not include any R.)"""
     import shutil as _sh
-    cands = [os.getenv("LSTAR_RSCRIPT")]
+    cands: list = []
+    try:
+        from core.compute import base_env, project_env
+        from core import projects
+        if base_env.active("r"):
+            _pid = str(pid or projects.current() or "_none")
+            cands.append(str(project_env.interpreter(_pid, "r")))
+    except Exception:  # noqa: BLE001
+        pass
+    cands.append(os.getenv("LSTAR_RSCRIPT"))
     try:
         from core.config import ENVS_DIR
         cands.append(str(Path(ENVS_DIR) / "tools" / "bin" / "Rscript"))
@@ -78,7 +120,9 @@ def _rscript() -> "str | None":
     return None
 
 
-def _convert_any(src: Path, out: Path, set_phase=None) -> None:
+def _convert_any(src: Path, out: Path, set_phase=None,
+                 python_exe: "str | None" = None,
+                 rscript: "str | None" = None) -> None:
     """Convert any lstar-supported source into a `.lstar.zarr` directory store via
     the lstar CLI — ONE entry point for `.h5ad` / `.h5mu` (Python) and, when R +
     the lstar R package are present, Seurat / SingleCellExperiment / pagoda2 /
@@ -94,13 +138,13 @@ def _convert_any(src: Path, out: Path, set_phase=None) -> None:
     un-optimized) store rather than failing the launch. `set_phase` reports the
     sub-step to the launch page."""
     import subprocess
-    import sys
     sp = set_phase or (lambda *_: None)
     env = {**os.environ}
-    rs = _rscript()
+    py = python_exe or _lstar_python()      # W3.4: the SESSION python (has lstar-sc)
+    rs = rscript if rscript is not None else _rscript()
     if rs and not env.get("LSTAR_RSCRIPT"):
         env["LSTAR_RSCRIPT"] = rs      # point lstar's .rds bridge at an R with the lstar pkg
-    base = [sys.executable, "-m", "lstar", "convert", str(src), str(out), "--to", "store"]
+    base = [py, "-m", "lstar", "convert", str(src), str(out), "--to", "store"]
     sp(f"Converting {src.name} → optimized viewer store…")
     r = subprocess.run(base + ["--viewer"], capture_output=True, text=True, timeout=1800, env=env)
     if r.returncode != 0:
@@ -115,20 +159,32 @@ def _convert_any(src: Path, out: Path, set_phase=None) -> None:
                 f"lstar convert failed for {src.name!r} (exit {r.returncode}): {tail}")
 
 
-def _pack_download(store_dir: "str | Path", dest: "str | Path") -> None:
+def _pack_download(store_dir: "str | Path", dest: "str | Path",
+                   python_exe: "str | None" = None) -> None:
     """Pack the directory store into lstar's canonical single-file STORED
-    `.lstar.zarr.zip` — produced BY lstar (its exact format: STORED, metadata
-    first, range-readable) so a downloaded archive re-opens identically in
-    pagoda3 / lstar. Falls back to the equivalent generic STORED pack only if this
-    lstar build lacks the packer. (View + the internal cache stay the directory
-    `.lstar.zarr` — faster to load, updatable; the zip is for download/transport.)"""
+    `.lstar.zarr.zip` — produced BY lstar (STORED, metadata first, range-readable)
+    so a downloaded archive re-opens identically in pagoda3 / lstar. W3.4: prefer
+    an in-process lstar (served-base deploy), else subprocess the SESSION python
+    (pack deploy — lstar isn't in the web process); fall back to the generic
+    STORED pack only if neither has the packer."""
     try:
         from lstar.zarr_io import _pack_stored_zip
-    except Exception:  # noqa: BLE001 — older lstar without the single-file packer
-        from core.viewers.store_serve import zip_store_stored
-        zip_store_stored(Path(store_dir), Path(dest))
+        _pack_stored_zip(str(store_dir), str(dest))
         return
-    _pack_stored_zip(str(store_dir), str(dest))
+    except Exception:  # noqa: BLE001 — lstar not importable in THIS process
+        pass
+    py = python_exe or _lstar_python()
+    import subprocess
+    r = subprocess.run(
+        [py, "-c",
+         "import sys; from lstar.zarr_io import _pack_stored_zip; "
+         "_pack_stored_zip(sys.argv[1], sys.argv[2])",
+         str(store_dir), str(dest)],
+        capture_output=True, text=True, timeout=600)
+    if r.returncode == 0 and Path(dest).exists():
+        return
+    from core.viewers.store_serve import zip_store_stored   # generic STORED fallback
+    zip_store_stored(Path(store_dir), Path(dest))
 
 
 def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
@@ -245,6 +301,13 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
     tag = hashlib.sha1(str(src.resolve()).encode()).hexdigest()[:8]
     out_name = f"{stem}-{tag}{_STORE_SUFFIX}"
 
+    # W3.4: resolve the interpreters ONCE for this launch — the project session's
+    # python (has lstar-sc) + R (r-bio pack), and the cache key from that same
+    # lstar-sc (so a pack lstar upgrade rederives). Pack-less deploys resolve to
+    # sys.executable / tools-env exactly as before.
+    _py = _lstar_python(pid)
+    _rs = _rscript(pid)
+    _cache_ver = _launcher_version(_py)
     if suffix == _STORE_SUFFIX:
         # Already a store — nothing to derive; symlink it into the served dir
         # (copy only if it lives outside the project). No ensure_derived cache:
@@ -252,9 +315,12 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         store = _serve_native_store(src, cache_dir, out_name, root, set_phase)
     else:
         base_convert = _unzip_store if suffix == _ZIP_SUFFIX else _convert_any
-        def convert(s: Path, o: Path) -> None:  # bind set_phase into the 2-arg callback
-            base_convert(s, o, set_phase)
-        store = ensure_derived(src, cache_dir, out_name, LAUNCHER_VERSION, convert)
+        def convert(s: Path, o: Path) -> None:  # bind set_phase + interpreters
+            if base_convert is _convert_any:
+                _convert_any(s, o, set_phase, python_exe=_py, rscript=_rs)
+            else:
+                base_convert(s, o, set_phase)
+        store = ensure_derived(src, cache_dir, out_name, _cache_ver, convert)
 
     return LaunchResult(
         url=f"/pagoda3/?store=/pagoda3-store/{pid}/{store.name}/",
@@ -264,7 +330,7 @@ def launch(node: dict, ctx: dict) -> LaunchResult:
         # The prepared .lstar.zarr on disk — the download endpoint packs THIS
         # (cache-shared with viewing) into lstar's single-file STORED .lstar.zarr.zip.
         store_path=str(store),
-        download_packer=_pack_download,
+        download_packer=lambda sd, d: _pack_download(sd, d, python_exe=_py),
     )
 
 

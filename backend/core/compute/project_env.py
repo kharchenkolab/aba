@@ -73,9 +73,11 @@ def get(pid: str, language: str) -> Optional[dict]:
 
 
 def _save_row(pid: str, language: str, row: dict) -> None:
-    data = _load(str(pid))
-    data["default"][language] = row
-    named_envs._save(str(pid), data)
+    # Serialized + atomic (named_envs._update) — the default-session write shares
+    # weft_envs.json with named-env writes; a plain save would clobber a
+    # concurrent named-env create (observed live).
+    named_envs._update(str(pid),
+                       lambda data: data.setdefault("default", {}).__setitem__(language, row))
 
 
 # ── session lifecycle ────────────────────────────────────────────────────────
@@ -204,6 +206,5 @@ def reset(pid: str, language: str) -> None:
         named_envs._sync(_adapter.get_compute().session_stop(row["session_id"]))
     except Exception:  # noqa: BLE001 — a dead session is already reset
         pass
-    data = _load(pid)
-    data["default"].pop(language, None)
-    named_envs._save(pid, data)
+    named_envs._update(pid,
+                       lambda data: data.setdefault("default", {}).pop(language, None))

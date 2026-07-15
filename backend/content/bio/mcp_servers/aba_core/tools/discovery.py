@@ -180,21 +180,24 @@ def register_discovery_tools(mcp: FastMCP) -> None:
     def make_isolated_env(name: str,
                           packages: list[str] | None = None,
                           language: Literal["python", "r"] = "python",
+                          python_version: str | None = None,
                           aba_ctx_id: str | None = None) -> dict:
-        """Create/refresh an ISOLATED env you OWN (Python venv, or an R library
-        with language='r') and install `packages` into it with full version
-        control. Use when a package conflicts with the base (a different numpy,
+        """Create/refresh an ISOLATED env you OWN (a standalone solved
+        environment) and install `packages` into it with full version control.
+        Use when a package conflicts with the base (a different numpy,
         tensorflow, an ABI-incompatible wheel) or you need to resolve a
         dependency conflict your own way — the shared base is never touched, so
         any mess is contained. Run code in it with `run_python(env='name', …)`
-        (or `run_r(env='name', …)` for R). (Python engine: uv if available, else
-        venv. For R: a *project* install already overrides the base via
-        .libPaths — use this only for a fully project-independent / one-off
-        conflicting lib.)"""
+        (or `run_r(env='name', …)` for R). `python_version` (e.g. "3.10") pins
+        the interpreter — use it when a package needs a DIFFERENT python than
+        the base (an old library that requires <3.11); the isolated env is
+        standalone so it can hold any version. (For R: a *project* install
+        already overrides the base via .libPaths — use this only for a fully
+        project-independent / one-off conflicting lib.)"""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import make_isolated_env as _impl
-        return _impl({"name": name, "packages": packages or [], "language": language},
-                     peek_ctx(aba_ctx_id))
+        return _impl({"name": name, "packages": packages or [], "language": language,
+                      "python_version": python_version}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def set_active_env(name: str, aba_ctx_id: str | None = None) -> dict:

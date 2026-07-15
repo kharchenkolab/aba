@@ -59,6 +59,19 @@ def _sync(coro):
 
 
 # ── the per-project registry ─────────────────────────────────────────────────
+# weft_envs.json holds THREE namespaces (envs / active / default) written by BOTH
+# named_envs and project_env. A plain load-modify-save loses updates when two env
+# operations interleave (parallel tool calls, or a named-env create racing the
+# default-session write — observed live: an isolated env vanished under a
+# concurrent default-session write). So all writes go through `_update`, which
+# serializes on a process lock and writes atomically (temp + os.replace). The
+# SLOW part (the weft solve) stays OUTSIDE the lock; only the fast file mutation
+# is held.
+import os as _os
+import threading as _threading
+
+_REGISTRY_LOCK = _threading.RLock()
+
 
 def _registry_path(project_id: str) -> Path:
     from core.config import PROJECTS_DIR
@@ -68,20 +81,43 @@ def _registry_path(project_id: str) -> Path:
 def _load(project_id: str) -> dict:
     p = _registry_path(project_id)
     if not p.exists():
-        return {"envs": {}, "active": {}}
+        return {"envs": {}, "active": {}, "default": {}}
     try:
         data = json.loads(p.read_text()) or {}
     except Exception:  # noqa: BLE001
-        return {"envs": {}, "active": {}}
+        return {"envs": {}, "active": {}, "default": {}}
     data.setdefault("envs", {})
     data.setdefault("active", {})
+    data.setdefault("default", {})
     return data
 
 
 def _save(project_id: str, data: dict) -> None:
+    """Atomic write (temp + replace). Prefer `_update` for read-modify-write —
+    a bare _save can still clobber a concurrent update."""
     p = _registry_path(project_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=1))
+    tmp = p.with_suffix(p.suffix + f".tmp.{_os.getpid()}.{_threading.get_ident()}")
+    try:
+        tmp.write_text(json.dumps(data, indent=1))
+        _os.replace(tmp, p)
+    finally:
+        try:
+            tmp.unlink()          # no-op after a successful replace; cleans up on failure
+        except OSError:
+            pass
+
+
+def _update(project_id: str, mutator):
+    """Serialized read-modify-write of weft_envs.json: lock → load fresh →
+    mutator(data) → atomic save. The mutator sees the LATEST on-disk state, so
+    concurrent env operations merge instead of clobbering. Returns the mutator's
+    return value (or the saved data if it returns None)."""
+    with _REGISTRY_LOCK:
+        data = _load(project_id)
+        ret = mutator(data)
+        _save(project_id, data)
+        return ret if ret is not None else data
 
 
 def list_names(project_id: str) -> list[str]:
@@ -100,19 +136,20 @@ def get_active(project_id, lang: str = "python") -> str:
 
 
 def set_active(project_id: str, name: str, lang: str = "python") -> dict:
-    data = _load(project_id)
-    data["active"][lang] = name
-    _save(project_id, data)
+    _update(project_id, lambda data: data["active"].__setitem__(lang, name))
     return {"lang": lang, "active": name}
 
 
 # ── create / extend ──────────────────────────────────────────────────────────
 
 def _spec_for(project_id: str, name: str, language: str,
-              packages: list[str]) -> dict:
+              packages: list[str], python_version: Optional[str] = None) -> dict:
     """A fresh named-env spec. Python envs bake ipykernel so the per-env
     persistent kernel works without ever installing into the frozen env; R envs
-    get the cran layer for CRAN-style specs."""
+    get the cran layer for CRAN-style specs. `python_version` (e.g. "3.10")
+    pins the interpreter — the whole point of an isolated env is often a
+    DIFFERENT python than the base (an old package that needs <3.11); a fresh
+    env has no frozen base to conflict, so weft picks the matching build."""
     label = f"aba-{project_id}-{name}"
     if language == "r":
         conda = [p for p in packages if p.startswith(("r-", "bioconductor-"))]
@@ -121,27 +158,27 @@ def _spec_for(project_id: str, name: str, language: str,
         if cran:
             deps["cran"] = cran
         return {"name": label, "deps": deps}
+    pyspec = f"python ={python_version}" if python_version else "python =3.12"
     return {"name": label,
-            "deps": {"conda": ["python =3.12", "ipykernel"],
+            "deps": {"conda": [pyspec, "ipykernel"],
                      "pypi": list(packages)}}
 
 
 def create(project_id: str, name: str, *, language: str = "python",
-           packages: list[str] | None = None) -> dict:
+           packages: list[str] | None = None,
+           python_version: Optional[str] = None) -> dict:
     """Solve a fresh named env → EnvID (realization is lazy — first run
     realizes). Raises ComputeError with weft's structured cause (e.g.
     env.solve_conflict names the minimal conflicting set)."""
     name = name.strip()
-    spec = _spec_for(project_id, name, language, packages or [])
-    res = _sync(_adapter.get_compute().env_ensure(spec))
-    data = _load(project_id)
+    spec = _spec_for(project_id, name, language, packages or [], python_version)
+    res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
     now = time.time()
-    data["envs"][name] = {
+    _update(project_id, lambda data: data["envs"].__setitem__(name, {
         "env_id": res["env_id"], "language": language,
         "packages": list(packages or []), "history": [],
         "created_at": now, "updated_at": now,
-    }
-    _save(project_id, data)
+    }))
     return {"env_id": res["env_id"], "status": res.get("status"),
             "summary": res.get("summary"), "engine": "weft"}
 
@@ -156,14 +193,19 @@ def extend(project_id: str, name: str, packages: list[str]) -> dict:
     eco = "cran" if row["language"] == "r" else "pypi"
     spec = {"name": f"aba-{project_id}-{name}",
             "extends_env": row["env_id"], "deps": {eco: list(packages)}}
-    res = _sync(_adapter.get_compute().env_ensure(spec))
-    data = _load(project_id)
-    row = data["envs"][name]
-    row["history"].append(row["env_id"])
-    row["env_id"] = res["env_id"]
-    row["packages"] = list(dict.fromkeys([*row["packages"], *packages]))
-    row["updated_at"] = time.time()
-    _save(project_id, data)
+    res = _sync(_adapter.get_compute().env_ensure(spec))     # slow — OUTSIDE the lock
+
+    def _apply(data):
+        r = data["envs"].get(name)
+        if r is None:      # vanished concurrently — re-seed from the solved id
+            r = {"env_id": row["env_id"], "language": row["language"],
+                 "packages": list(row["packages"]), "history": []}
+            data["envs"][name] = r
+        r.setdefault("history", []).append(r["env_id"])
+        r["env_id"] = res["env_id"]
+        r["packages"] = list(dict.fromkeys([*r.get("packages", []), *packages]))
+        r["updated_at"] = time.time()
+    _update(project_id, _apply)
     return {"env_id": res["env_id"], "status": res.get("status"),
             "summary": res.get("summary"), "delta": res.get("delta")}
 

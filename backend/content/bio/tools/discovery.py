@@ -149,7 +149,8 @@ def make_isolated_env(input_: dict, ctx: dict | None = None) -> dict:
         if named_envs.resolve(pid, name) is not None and packages:
             res = named_envs.extend(pid, name, packages)
         else:
-            res = named_envs.create(pid, name, language=lang, packages=packages)
+            res = named_envs.create(pid, name, language=lang, packages=packages,
+                                    python_version=(input_.get("python_version") or None))
     except ComputeError as e:
         return {"status": "error", "name": name, "language": lang,
                 "error": e.to_payload(),
@@ -218,15 +219,24 @@ def set_active_env(input_: dict, ctx: dict | None = None) -> dict:
 
 
 def _is_constraint_conflict(msg: str) -> bool:
-    """Does a pip failure look like UNSAT-against-the-base (a version/constraint
-    conflict the pinned base forbids), vs a transient/typo/network error?
-    Conservative — only the clear pip resolver-conflict signals, so we never
-    mis-route a fat-fingered package name into isolation."""
+    """Does an install failure look like UNSAT-against-the-base (a version/
+    constraint conflict the pinned base forbids), vs a transient/typo/network
+    error? Conservative — only clear resolver-conflict signals, so we never
+    mis-route a fat-fingered package name into isolation. Covers BOTH the pip
+    resolver strings (served-base lane) AND weft's structured session/layer
+    conflict signals (W3.4 pack lane — a session_install/extends_env delta that
+    contradicts the frozen base), so a conflicting capability auto-isolates in
+    either deployment instead of hard-erroring."""
     m = (msg or "").lower()
     return any(s in m for s in (
         "resolutionimpossible",
         "conflicting dependencies",
         "the conflict is caused by",
+        # weft (ComputeError.__str__ carries the code + detail):
+        "env.solve_conflict",
+        "env.layer_conflict",
+        "incremental install failed in session",
+        "unsatisfiable as pinned",
     ))
 
 

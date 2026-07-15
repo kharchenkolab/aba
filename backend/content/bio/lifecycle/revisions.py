@@ -749,28 +749,40 @@ def reproduce_from_exec(entity_id: str, *,
     err = result.get("error")
     new_exec_id = result.get("exec_id")
 
+    # Env identity. W3.4: a weft-run record carries compute.env_id (content-
+    # addressed); the interactive re-run happens in the CURRENT project session,
+    # whose EnvID we compare against the recorded one when both are known.
+    orig_env_id = ((rec or {}).get("compute") or {}).get("env_id")
     orig_fp = (rec or {}).get("env_fingerprint")
-    new_fp = None
-    drift = False
+    new_env_id = new_fp = None
     if new_exec_id:
         try:
-            new_rec = exec_records.get(new_exec_id)
-            new_fp = (new_rec or {}).get("env_fingerprint")
+            new_rec = exec_records.get(new_exec_id) or {}
+            new_env_id = (new_rec.get("compute") or {}).get("env_id")
+            new_fp = new_rec.get("env_fingerprint")
         except Exception:  # noqa: BLE001
             pass
-    if orig_fp and new_fp and orig_fp != new_fp:
-        drift = True
     warnings: list[str] = []
+    drift = False
+    if orig_env_id and new_env_id:
+        drift = orig_env_id != new_env_id
+    elif orig_fp and new_fp:
+        drift = orig_fp != new_fp
     if drift:
-        warnings.append(
-            "env_fingerprint changed since the original run — "
-            "reproduction may differ in numeric details."
-        )
+        warnings.append("the environment changed since the original run — "
+                        "reproduction may differ in numeric details.")
+    if orig_env_id and not new_env_id:
+        warnings.append("original ran in a recorded env (EnvID "
+                        f"{orig_env_id[:20]}…); the re-run used the current "
+                        "session — use rebuild_env(entity) to run in the exact "
+                        "recorded env.")
 
     return {
         "reproduced": (err is None),
         "new_exec_id": new_exec_id,
         "env_drift": drift,
+        "original_env_id": orig_env_id,
+        "new_env_id": new_env_id,
         "original_fingerprint": orig_fp,
         "new_fingerprint": new_fp,
         "produced": result.get("plots") or result.get("tables") or [],
@@ -791,6 +803,19 @@ def diff_env(entity_id: str) -> dict:
     rec = exec_records.get(ent.get("exec_id")) if ent.get("exec_id") else None
     then = (rec or {}).get("package_versions") or {}
     lang = (rec or {}).get("language") or _resolve_language(ent)
+    # W3.4: weft-run records have no package_versions — the identity is
+    # compute.env_id. Realize it and probe ITS interpreter for `then`, so the
+    # diff is real instead of "everything added".
+    env_id = ((rec or {}).get("compute") or {}).get("env_id")
+    if not then and env_id:
+        try:
+            from core.compute import named_envs
+            prefix = named_envs.ensure_realized(env_id)
+            exe = "Rscript" if lang == "r" else "python"
+            then = package_versions_for_interpreter(str(prefix / "bin" / exe), lang)
+            then.pop("__lang_version__", None)
+        except Exception:  # noqa: BLE001 — env not realizable here → empty then
+            pass
     if lang == "r":
         from core.exec.r import _rscript
         now = package_versions_for_interpreter(str(_rscript()), "r")
@@ -810,14 +835,43 @@ def diff_env(entity_id: str) -> dict:
 
 def rebuild_env(entity_id: str, *, only: Optional[list] = None,
                 name: Optional[str] = None) -> dict:
-    """Phase 4 (rare): reconstruct a throwaway isolated env pinned to the versions
-    the entity was made with — optionally ONLY a `only` subset, to bisect a
-    discrepancy gradually. Run code in it via run_python(env=<returned name>)."""
+    """Phase 4 (rare): reconstruct the env the entity was made with, so you can
+    run code in it via run_python(env=<returned name>).
+
+    W3.4: a weft-run record carries `compute.env_id` — the EXACT env, content-
+    addressed. Realize it directly (byte-identical, no version guessing) and
+    register it as a named env. Legacy records (no env_id, only
+    package_versions) fall back to a version-pinned reconstruction."""
     ent = get_entity(entity_id)
     rec = exec_records.get(ent.get("exec_id")) if ent and ent.get("exec_id") else None
+    env_id = ((rec or {}).get("compute") or {}).get("env_id")
+    if env_id:
+        # The recorded env IS an EnvID — realize it as-is (the honest rebuild).
+        from core.compute import named_envs
+        from core.compute.errors import ComputeError
+        from core import projects
+        pid = str(projects.current() or "default")
+        envname = name or f"repro_{str(entity_id)[:8]}"
+        lang = (rec or {}).get("language") or "python"
+        try:
+            named_envs.ensure_realized(env_id)     # rebuild from weft's lock
+        except ComputeError as ce:
+            return {"env": None, "ok": False, "error": ce.to_payload(),
+                    "note": f"the recorded env {env_id} could not be realized here "
+                            f"(not in this deployment's compute store): {ce.detail or ce.code}"}
+        # Register a named-env handle pointing at the exact recorded EnvID.
+        data = named_envs._load(pid)
+        data["envs"][envname] = {"env_id": env_id, "language": lang,
+                                 "packages": [], "history": [],
+                                 "created_at": 0, "updated_at": 0}
+        named_envs._save(pid, data)
+        return {"env": envname, "ok": True, "env_id": env_id,
+                "use": f"run_{'r' if lang=='r' else 'python'}(env='{envname}')",
+                "note": "recorded env realized exactly (content-addressed EnvID)."}
     pkg = (rec or {}).get("package_versions") or {}
     if not pkg:
-        raise ValueError("no recorded package versions to rebuild from")
+        raise ValueError("no recorded env identity (neither compute.env_id nor "
+                         "package_versions) to rebuild from")
     if (rec or {}).get("language") == "r":
         raise ValueError("R env rebuild not yet supported (R envs are libdirs)")
     want = set(only) if only else None
