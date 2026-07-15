@@ -32,31 +32,25 @@ def verify_python_imports(
     python_exe: Optional[str] = None,
     timeout_s: int = 180,
 ) -> tuple[bool, str]:
-    """Actually import each name in a fresh subprocess on the runtime sys.path
-    (base interpreter + the pylib overlay **appended**, matching the run_python
-    preamble). Returns ``(ok, detail)``.
+    """Actually import each name in a fresh subprocess on the target interpreter.
+    Returns ``(ok, detail)``.
 
     ``ok=False`` means present-but-unloadable — ABI mismatch, partial install,
     missing system lib — i.e. the exact "find_spec says yes, import explodes"
     case. ``detail`` carries the traceback tail for the agent/operator.
 
-    ``extra_paths`` overrides the overlay paths (default: ``pylib_paths()``); use
-    it to verify against a temp install prefix before merging it (transactional
-    installs). ``python_exe`` defaults to the base interpreter.
+    ``python_exe`` is the interpreter to probe (a weft session / named-env python);
+    its own site-packages are authoritative, so ``extra_paths`` defaults to none.
+    Pass ``extra_paths`` to verify against a temp install prefix before merging it
+    (transactional installs).
     """
     names = [n for n in (import_names or []) if n]
     if not names:
         return True, ""
     exe = python_exe or sys.executable
     if extra_paths is None:
-        # Mirror run_python's sys.path: shared overlay THEN the current project's
-        # overlay (env_refactor.md P1), so verify sees exactly what a run_python
-        # cell would import.
-        from core.exec.materialize import pylib_paths, project_pylib_paths
-        from core import projects
-        extra_paths = ([str(p) for p in pylib_paths()]
-                       + [str(p) for p in project_pylib_paths(projects.current())])
-    # append (not prepend) so the base wins, exactly like the run_python preamble
+        extra_paths = []          # the target interpreter's own site-packages win
+    # append (not prepend) so the interpreter's own packages win
     appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
     names_lit = ", ".join(repr(n) for n in names)
     script = (
@@ -88,118 +82,6 @@ def base_constraints_path() -> Path:
     return Path(ENVS_DIR) / "base-constraints.txt"
 
 
-# §11.4 — the ABI anchor: the cross-cutting compiled-stack packages a project
-# overlay must NOT override (numpy's 1.x↔2.x ABI break is the one that bit us).
-# Pinning JUST these (not the full base freeze) lets a project override ordinary
-# package versions while the compiled foundation stays coherent.
-_ABI_ANCHOR = ("numpy",)
-
-
-def abi_anchor_path() -> Path:
-    from core.exec.materialize import ENVS_DIR
-    return Path(ENVS_DIR) / "abi-anchor.txt"
-
-
-def _anchor_pins_from_metadata(python_exe: Optional[str] = None) -> list[str]:
-    """Pin the ABI-anchor packages to their INSTALLED versions, read from package
-    metadata. Robust to how the package was delivered: a conda-forge / local-wheel
-    install renders in `pip freeze` as ``numpy @ file:///…`` (NOT ``numpy==2.4.6``),
-    which _freeze_pins drops as an invalid constraint — so on a conda scientific base
-    the freeze carries no numpy and the anchor would be empty. Metadata knows the
-    version either way. In-process (python_exe=None) reads THIS interpreter (== the
-    base that overlay installs target, since materialize pip-installs with
-    sys.executable); a python_exe reads that interpreter's metadata via subprocess."""
-    if python_exe and python_exe != sys.executable:
-        try:
-            code = ("import importlib.metadata as m,json;"
-                    "print(json.dumps({n:(m.version(n)) for n in %r}))" % (list(_ABI_ANCHOR),))
-            proc = subprocess.run([python_exe, "-c", code], capture_output=True,
-                                  text=True, timeout=30)
-            vers = json.loads(proc.stdout) if proc.returncode == 0 else {}
-        except Exception:  # noqa: BLE001
-            vers = {}
-        return [f"{n}=={v}" for n, v in vers.items() if v]
-    import importlib.metadata as _md
-    pins = []
-    for name in _ABI_ANCHOR:
-        try:
-            pins.append(f"{name}=={_md.version(name)}")
-        except Exception:  # noqa: BLE001 — anchor pkg not importable here; skip it
-            pass
-    return pins
-
-
-def _file_has_anchor_pin(path: Path) -> bool:
-    """True iff the cached anchor file actually pins an anchor package (guards against
-    a STALE/empty cache written before the anchor could be resolved)."""
-    try:
-        lines = path.read_text().splitlines()
-    except Exception:  # noqa: BLE001
-        return False
-    return any("==" in ln and ln.split("==")[0].strip().lower() in _ABI_ANCHOR
-               for ln in lines)
-
-
-def abi_anchor_constraints(*, force: bool = False,
-                           python_exe: Optional[str] = None) -> Optional[Path]:
-    """Small constraint pinning only the ABI-anchor packages (numpy) to their base
-    versions — used for project-overlay installs so an override can't shadow-break
-    the compiled stack (§11.4). Reads the version from live package METADATA (robust
-    to conda/local-wheel installs), falling back to the base-freeze extraction; None
-    only if the anchor truly can't be resolved. Revalidates a cached file so a stale
-    empty anchor is regenerated."""
-    out = abi_anchor_path()
-    if out.exists() and not force and _file_has_anchor_pin(out):
-        return out
-    pins = _anchor_pins_from_metadata(python_exe)
-    if not pins:                                   # legacy ==-pinned deployments
-        base = ensure_base_constraints(python_exe=python_exe)
-        pins = [ln.strip() for ln in (base.read_text().splitlines() if base and base.exists() else [])
-                if "==" in ln and ln.split("==")[0].strip().lower() in _ABI_ANCHOR]
-    if not pins:
-        return None
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(pins) + "\n")
-    return out
-
-
-def env_selfcheck(*, python_exe: Optional[str] = None) -> dict:
-    """Fast, structured check of the env-layering invariants a run should hold before
-    it trusts the stack — and it ARMS the ABI anchor as a side effect (idempotent).
-
-    Complements self_heal_base(): that verifies the base dependency CLOSURE (pip check
-    + deep import) but NOT the guard config. This catches the SILENT failure that the
-    deep check misses — the ABI-anchor (numpy pin) being unresolved, which on a conda
-    scientific base (pip freeze renders numpy as ``@ file://`` → dropped by the
-    freeze-based anchor) leaves overlay installs UNCONSTRAINED and lets pip rebuild
-    numpy (the GCC-too-old provisioning failures). Returns {ok, checks:{name:{ok,detail}}}."""
-    checks: dict = {}
-    anchor = abi_anchor_constraints(python_exe=python_exe)   # resolves + writes (arms) the pin
-    armed = bool(anchor and _file_has_anchor_pin(anchor))
-    checks["abi_anchor_armed"] = {
-        "ok": armed,
-        "detail": (anchor.read_text().strip() if armed
-                   else "ABI-anchor (numpy) pin UNRESOLVED — overlay installs run UNCONSTRAINED")}
-    try:
-        import importlib.metadata as _md
-        checks["numpy_present"] = {"ok": True, "detail": f"numpy=={_md.version('numpy')}"}
-    except Exception as e:  # noqa: BLE001
-        checks["numpy_present"] = {"ok": False, "detail": f"numpy not resolvable: {e}"}
-    # Accelerator consistency: a deployment that DECLARES a CUDA base (ABA_ACCELERATOR=
-    # cuda, config.env) must actually have a CUDA-build torch — else GPU jobs silently
-    # run on CPU on idle GPUs. Only checked when cuda is declared (a CPU deployment
-    # legitimately has CPU-only torch).
-    import os as _os
-    if (config.settings.accelerator.get() or "").strip().lower() == "cuda":
-        _cuda = torch_cuda_build()
-        checks["accelerator_cuda"] = {
-            "ok": _cuda is not None,
-            "detail": (f"torch CUDA build {_cuda}" if _cuda else
-                       "ABA_ACCELERATOR=cuda but torch is CPU-only — GPU jobs would run on CPU "
-                       "(rebuild the env)")}
-    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
-
-
 def gpu_capability_ok() -> tuple[Optional[bool], str]:
     """Can a GPU workload actually use a GPU in THIS interpreter? (via torch.cuda).
     Returns (ok, detail):
@@ -210,7 +92,7 @@ def gpu_capability_ok() -> tuple[Optional[bool], str]:
       None  — torch isn't importable → not a torch GPU job, so don't judge it.
     The verify-at-use boundary: certainty about a remote node's accelerator can only
     be had ON that node, so this runs where the job runs (slurm_entry) and also backs
-    the compute_env `gpu_usable` hint + the env_selfcheck invariant."""
+    the compute_env `gpu_usable` hint."""
     try:
         import torch  # noqa
     except Exception:  # noqa: BLE001 — no torch → not a torch-GPU job
@@ -330,36 +212,6 @@ def write_base_lock(out_path, *, python_exe: Optional[str] = None) -> Optional[P
     return out
 
 
-def materialize_from_lock(packages: Sequence[str], *, prefix=None,
-                          timeout_s: int = 1800) -> dict:
-    """Install ``packages`` PINNED to the base lock — lazy base-fill / pre-warm
-    for a minimal install (env_refactor.md P6). Defaults to the shared
-    install-wide overlay; constrained so versions match the canonical lock.
-    Returns {ok, installed, lock, error}."""
-    lock = ensure_base_constraints()
-    from core.exec.materialize import PYLIB_DIR
-    target = Path(prefix) if prefix is not None else PYLIB_DIR
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
-    # --ignore-installed: install the exact lock versions INTO the prefix without
-    # uninstalling/recompiling the (now read-only, immutable) base copies — its job
-    # is to fill a minimal install's overlay from the lock, independent of base.
-    cmd = [sys.executable, "-m", "pip", "install", "--prefix", str(target), "--ignore-installed"]
-    if lock:
-        cmd += ["-c", str(lock)]
-    cmd += list(packages)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "installed": list(packages), "lock": str(lock) if lock else None,
-                "error": f"materialize timed out after {timeout_s}s"}
-    ok = proc.returncode == 0
-    return {"ok": ok, "installed": list(packages), "lock": str(lock) if lock else None,
-            "error": None if ok else (proc.stderr or proc.stdout or "")[-1200:]}
-
-
 def _tier_of(location: Optional[str], project_id: Optional[str]) -> str:
     """Classify where a loaded module's file lives: base | shared-overlay |
     project-overlay | unknown — so the agent knows which tier owns it."""
@@ -434,33 +286,24 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
 
 
 def env_overview(project_id: Optional[str] = None) -> dict:
-    """A map of the Python tiers + their state — the no-package 'where am I'
-    view: base interpreter, shared overlay, this project's overlay, and whether
-    the base lock exists."""
-    from core.exec.materialize import (PYLIB_DIR, pylib_paths,
-                                       project_pylib_dir, project_pylib_paths)
+    """A map of the Python env — the no-package 'where am I' view: the project's
+    weft SESSION python (base pack + session_install additions), the aba runtime
+    interpreter, and whether the backend base lock exists. (The served-base pip
+    overlays are gone — W3.5.)"""
+    from core.compute import base_env as _bev, project_env as _penv
     if project_id is None:
         from core import projects
         project_id = projects.current()
-
-    def _populated(paths) -> bool:
-        for p in paths:
-            try:
-                if Path(p).exists() and any(Path(p).iterdir()):
-                    return True
-            except Exception:  # noqa: BLE001
-                pass
-        return False
-
+    session = None
+    if project_id and _bev.active("python"):
+        try:
+            session = str(_penv.prefix(str(project_id), "python"))
+        except Exception:  # noqa: BLE001 — session not realizable
+            session = None
     return {
-        "python": sys.executable,
-        "shared_overlay": {"dir": str(PYLIB_DIR),
-                           "populated": _populated(pylib_paths())},
-        "project_overlay": {
-            "project_id": project_id,
-            "dir": str(project_pylib_dir(project_id)) if project_id else None,
-            "populated": _populated(project_pylib_paths(project_id)),
-        },
+        "python": sys.executable,          # the aba runtime interpreter
+        "session": {"project_id": project_id, "prefix": session,
+                    "active": session is not None},
         "base_lock": {"path": str(base_constraints_path()),
                       "exists": base_constraints_path().exists()},
     }
@@ -528,29 +371,27 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     the (i) drawer's Env tab. Python via dist-info scan (fast); R via one
     Rscript. Each layer: {tier, scope, delivery, mutable, path, packages}."""
     import os
-    import sysconfig
     from core.compute import named_envs
-    from core.exec.materialize import (project_pylib_dir, project_pylib_paths,
-                                       _site_paths)
+    from core.compute import base_env as _bev, project_env as _penv
+    from core.exec.materialize import _site_paths
     if project_id is None:
         from core import projects
         project_id = projects.current()
     iso_names = named_envs.list_names(str(project_id)) if project_id else []
 
-    # ── Python ── §11.4: just two tiers now — the immutable base (the install-wide
-    # foundation; the old shared overlay was folded into it) + THIS project's
-    # overlay, prepended so its versions win. The shared overlay is off the run
-    # path and never written, so it's no longer a tier.
-    base_site = sysconfig.get_path("purelib")
-    py_layers = [
-        {"tier": "base (immutable)", "scope": "installation", "delivery": "baked", "mutable": False,
-         "path": base_site, "packages": _py_packages([base_site])},
-    ]
-    if project_id:
-        py_layers.append(
-            {"tier": "project overlay", "scope": "project", "project_id": project_id,
-             "delivery": "on-demand", "mutable": True, "path": str(project_pylib_dir(project_id)),
-             "packages": _py_packages([str(p) for p in project_pylib_paths(project_id)])})
+    # ── Python ── the weft python SESSION (base pack + session_install additions)
+    # is the env; named/isolated weft envs stack on top. No project / no pack →
+    # no session tier. (The served-base venv + pip overlay are gone — W3.5.)
+    py_layers = []
+    if project_id and _bev.active("python"):
+        try:
+            py_sess = _penv.prefix(str(project_id), "python")
+            py_layers.append(
+                {"tier": "session", "scope": "project", "project_id": project_id,
+                 "delivery": "weft", "mutable": True, "path": str(py_sess),
+                 "packages": _py_packages([str(p) for p in _site_paths(py_sess)])})
+        except Exception:  # noqa: BLE001 — session not realizable → no session layer
+            pass
     for name in iso_names:
         row = named_envs.resolve(str(project_id), name) or {}
         if row.get("language") == "r":
@@ -560,11 +401,7 @@ def env_layers(project_id: Optional[str] = None) -> dict:
              "mutable": False,   # frozen EnvID — additions layer to a NEW id
              "name": name, "env_id": row.get("env_id"),
              "packages": [{"name": p, "version": ""} for p in row.get("packages", [])]})
-    lock = ensure_base_constraints()
-    py = {"engine": "pip + venv", "layers": py_layers,
-          "lock": {"path": str(lock) if lock else None,
-                   "pins": len(lock.read_text().splitlines()) if lock and lock.exists() else 0,
-                   "canonical": canonical_lock_path() is not None}}
+    py = {"engine": "weft python session + isolated envs", "layers": py_layers}
 
     # ── R ── the weft R SESSION (base pack + additions) is the R env; named/
     # isolated weft R envs stack on top. No project / no R pack → no session layer.
@@ -968,20 +805,17 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
     site = _base_site_dir()
     if not site.exists():
         return {"skipped": "no-base"}
-    # Env self-check (cheap, ALWAYS runs — even when the deep base verify below is
-    # skipped): arm + verify the ABI-anchor guard. This is the invariant the deep
-    # closure check does NOT cover; a silently-off anchor let unconstrained overlay
-    # installs rebuild numpy (the conda '@ file://' base case).
+    # Accelerator invariant (cheap, ALWAYS runs): on a CUDA deployment, warn loudly
+    # if torch is a CPU-only build (the scVI-on-CPU incident). The ABI-anchor
+    # self-check is gone with the served-base pip overlay it guarded (W3.5).
     try:
-        sc = env_selfcheck()
-        if sc["ok"]:
-            log("[startup] env self-check ok — ABI anchor armed (" +
-                sc["checks"]["abi_anchor_armed"]["detail"] + ")")
-        else:
-            bad = {k: v["detail"] for k, v in sc["checks"].items() if not v["ok"]}
-            log(f"[startup] ENV SELF-CHECK PROBLEM: {bad}")
+        import os as _os
+        if (_os.environ.get("ABA_ACCELERATOR") or "").lower() == "cuda" \
+                and torch_cuda_build() is None:
+            log("[startup] WARNING: ABA_ACCELERATOR=cuda but torch is a CPU-only "
+                "build — GPU jobs will run on CPU")
     except Exception as e:  # noqa: BLE001 — a check must never block startup
-        log(f"[startup] env self-check errored (non-fatal): {e}")
+        log(f"[startup] accelerator check errored (non-fatal): {e}")
     # Staged prewarm (lazy_env_init.md): the installer is still building the base
     # (boot → completing → ready). Do NOT deep-verify/repair/freeze mid-write — a
     # repair-from-lock would fight the in-flight `env update`, and a read-only freeze
@@ -1012,19 +846,6 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
     if h["ok"]:
         _write_verified_stamp(base_fingerprint())   # recompute: repair may have changed it
         log("[startup] base verified — stamped to skip next boot's deep check")
-        if repaired:
-            # A repair can MOVE the ABI anchor package (e.g. numpy downgraded to
-            # satisfy numba). env_selfcheck armed the anchor file from the AS-BUILT
-            # base, so it now names the pre-repair numpy — and overlay installs
-            # would pin transitive deps to a numpy the base no longer ships (which
-            # then tries to upgrade the read-only base and fails). Re-arm from the
-            # repaired base so the anchor reflects reality.
-            try:
-                a = abi_anchor_constraints(force=True)
-                log("[startup] ABI anchor re-armed after repair ("
-                    + (a.read_text().strip() if a else "unresolved") + ")")
-            except Exception as e:  # never let a re-arm failure crash startup
-                log(f"[startup] ABI anchor re-arm after repair failed: {e}")
     return {"ok": h["ok"], "repaired": repaired}
 
 

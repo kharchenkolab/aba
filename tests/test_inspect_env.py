@@ -34,7 +34,8 @@ def test_inspect_env_python_missing():
 def test_inspect_env_overview():
     r = inspect_env({})   # no name → tier overview
     assert r["status"] == "ok" and r["scope"] == "overview"
-    assert "shared_overlay" in r["tiers"] and "project_overlay" in r["tiers"]
+    # W3.5 weft-only: the overview reports the weft session, not pip overlays.
+    assert "session" in r["tiers"] and "python" in r["tiers"]
 
 
 def test_inspect_env_present_but_broken(tmp_path, monkeypatch):
