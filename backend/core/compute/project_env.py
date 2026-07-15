@@ -110,11 +110,24 @@ def ensure(pid: str, language: str) -> dict:
         if prefix is not None:
             return {"session_id": row["session_id"], "prefix": prefix,
                     "base_env_id": base_eid}
-    # (Re)create — new project, base pack upgraded, or session pruned.
+    # (Re)create — new project, base pack CHANGED, or session pruned. Tell the
+    # three apart: a changed base under an existing project is a drift the agent
+    # must SEE (old snapshots/EnvIDs no longer match; additions are replayed onto
+    # a different base and may behave differently), not a silent swap. The prior
+    # code rebuilt against the current base with no signal (I4).
+    old_base = (row or {}).get("base_env_id")
+    base_changed = bool(row) and old_base is not None and old_base != base_eid
     ad = _adapter.get_compute()
     res = named_envs._sync(ad.session_start(base_eid, "local"))
     sid = res.get("session_id") or res.get("id")
     additions = list((row or {}).get("additions") or [])
+    if base_changed:
+        print(f"[project_env] base pack for {language!r} changed under project "
+              f"{pid} ({str(old_base)[:24]}… → {str(base_eid)[:24]}…); rebuilding "
+              f"the default session on the NEW base and replaying "
+              f"{len(additions)} recorded addition(s). Snapshots/EnvIDs recorded "
+              f"under the old base no longer match — re-run to record results "
+              f"under the new env.")
     for add in additions:                      # replay the recorded deltas
         named_envs._sync(ad.session_install(sid, **{add["eco"]: add["specs"]}))
     new_row = {"session_id": sid, "base_env_id": base_eid,
@@ -126,7 +139,11 @@ def ensure(pid: str, language: str) -> dict:
     if prefix is None:
         raise ComputeError("env.realize_failed",
                            f"session {sid} has no local prefix", stage="realize")
-    return {"session_id": sid, "prefix": prefix, "base_env_id": base_eid}
+    out = {"session_id": sid, "prefix": prefix, "base_env_id": base_eid}
+    if base_changed:
+        out["base_changed"] = {"from": old_base, "to": base_eid,
+                               "additions_replayed": len(additions)}
+    return out
 
 
 def prefix(pid: str, language: str) -> Path:
@@ -193,6 +210,41 @@ def snapshot(pid: str, language: str) -> str:
                        "at": time.time()}
     _save_row(pid, language, row)
     return eid
+
+
+def stop_all_sessions(pid: str) -> dict:
+    """Stop every default session this project owns in the weft store — called
+    on project DELETE so the store doesn't leak the project's live prefixes
+    (sessions are project-private and can be GBs each). Best-effort: never
+    raises, tolerates an offline substrate.
+
+    Deliberately leaves weft_envs.json and the per-project dir IN PLACE (the
+    recovery archive reads them; `ensure` rebuilds a stopped session from the
+    base + replayed additions). Named/isolated env EnvIDs are content-addressed
+    and may be shared across projects — they are weft-GC's to reclaim by LRU,
+    never force-dropped here."""
+    pid = str(pid)
+    try:
+        defaults = (named_envs._load(pid).get("default") or {})
+    except Exception:  # noqa: BLE001 — unreadable registry ≠ a delete blocker
+        return {"stopped": [], "errors": ["registry unreadable"]}
+    if not defaults:
+        return {"stopped": [], "errors": []}
+    try:
+        ad = _adapter.get_compute()
+    except Exception as e:  # noqa: BLE001 — substrate offline: nothing to stop
+        return {"stopped": [], "errors": [f"substrate unavailable: {e}"]}
+    stopped, errors = [], []
+    for lang, row in defaults.items():
+        sid = (row or {}).get("session_id")
+        if not sid:
+            continue
+        try:
+            named_envs._sync(ad.session_stop(sid))
+            stopped.append(sid)
+        except Exception as e:  # noqa: BLE001 — a dead session is already freed
+            errors.append(f"{lang}/{sid}: {e}")
+    return {"stopped": stopped, "errors": errors}
 
 
 def reset(pid: str, language: str) -> None:

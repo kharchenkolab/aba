@@ -171,6 +171,54 @@ def test_base_pack_upgrade_recreates(stub, monkeypatch):
     assert s["base_env_id"] == "env:v1:packbase" and s["session_id"].endswith("_2")
 
 
+def test_base_pack_change_is_surfaced_not_silent(stub):
+    """I4 — a base-pack change under an existing project is reported on the
+    ensure() result (base_changed), with the recorded additions replayed onto
+    the new base; a plain new project / pruned-session rebuild has no such flag."""
+    # New project: no base_changed flag.
+    s0 = project_env.ensure("prj_bc", "python")
+    assert "base_changed" not in s0
+    # Record an addition, then simulate the pack moving under the project.
+    project_env.install("prj_bc", "python", ["meshlib"], eco="pypi")
+    row = project_env.get("prj_bc", "python")
+    row["base_env_id"] = "env:v1:OLDBASE"
+    project_env._save_row("prj_bc", "python", row)
+    n_installs = len(stub.installs)
+    s1 = project_env.ensure("prj_bc", "python")
+    assert s1.get("base_changed") == {"from": "env:v1:OLDBASE",
+                                      "to": "env:v1:packbase",
+                                      "additions_replayed": 1}
+    assert len(stub.installs) == n_installs + 1          # addition REPLAYED
+    # A subsequent ensure (base now matches) reuses silently — no flag.
+    s2 = project_env.ensure("prj_bc", "python")
+    assert "base_changed" not in s2 and s2["session_id"] == s1["session_id"]
+
+
+def test_stop_all_sessions_frees_project_sessions(stub):
+    """I4 — deleting a project stops its live weft sessions (freeing the store)
+    while leaving the registry file for recovery; a stopped session self-heals
+    on the next ensure()."""
+    project_env.ensure("prj_del", "python")
+    project_env.ensure("prj_del", "r")
+    project_env.install("prj_del", "python", ["meshlib"], eco="pypi")
+    live = {v["session_id"] for v in stub.sessions.values()}
+    assert len(live) == 2                                # python + r sessions
+    out = project_env.stop_all_sessions("prj_del")
+    assert set(out["stopped"]) == live and not out["errors"]
+    assert stub.sessions == {}                           # both stopped in weft
+    # Registry (additions) untouched → a later ensure rebuilds + replays.
+    assert project_env.get("prj_del", "python")["additions"][-1]["specs"] == ["meshlib"]
+    n = len(stub.installs)
+    project_env.ensure("prj_del", "python")
+    assert len(stub.installs) == n + 1                   # replayed on rebuild
+
+
+def test_stop_all_sessions_noop_when_no_registry(stub):
+    """No default sessions recorded → a clean no-op (never raises)."""
+    out = project_env.stop_all_sessions("prj_never_used")
+    assert out == {"stopped": [], "errors": []}
+
+
 def test_module_off_gate_refuses(stub, monkeypatch):
     from core.modules import registry as mreg, manager as mmgr
     monkeypatch.setattr(mreg, "get",

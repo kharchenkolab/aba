@@ -151,6 +151,93 @@ def test_recovery_report_dry_run_does_not_write():
     Path(rep.target_db).unlink(missing_ok=True)
 
 
+# ─── I4: env-registry portability in the compatibility report ────────────────
+def _write_weft_envs(pdir: Path) -> None:
+    """A weft_envs.json referencing one named isolated env + python/r default
+    sessions — the per-project pointer table a cross-deployment move can't
+    resolve against a foreign compute store."""
+    pdir.mkdir(parents=True, exist_ok=True)
+    pdir.joinpath("weft_envs.json").write_text(json.dumps({
+        "envs": {"legacy_numba": {"env_id": "env:v1:" + "ab" * 32,
+                                  "language": "python", "packages": ["numba"]}},
+        "active": {"python": "legacy_numba"},
+        "default": {
+            "python": {"session_id": "ses_gone_py", "base_env_id": "env:v1:base",
+                       "additions": [{"eco": "pypi", "specs": ["wrapt"]}], "rev": 1},
+            "r": {"session_id": "ses_gone_r", "base_env_id": "env:v1:rbase",
+                  "additions": [], "rev": 0},
+        },
+    }))
+
+
+def test_env_registry_reported_when_store_offline():
+    """The report records what the project references (named envs, default
+    langs) even when this deployment's compute store can't be reached — marked
+    store_check=unknown, never fabricated."""
+    from core.recovery import report as R
+    from core.compute import adapter as _ad
+    pdir = _build_import_with_refs("prj_env_off")
+    _write_weft_envs(pdir)
+    # Force the substrate offline for a deterministic 'unknown' verdict.
+    orig = _ad.get_compute
+    _ad.get_compute = lambda: (_ for _ in ()).throw(RuntimeError("offline"))
+    try:
+        recover_project(pdir)
+    finally:
+        _ad.get_compute = orig
+    j = json.loads((pdir / "recovery_report.json").read_text())
+    er = j["env_registry"]
+    assert er["present"] is True
+    assert "legacy_numba" in er["named_envs"]
+    assert set(er["default_session_languages"]) == {"python", "r"}
+    assert er["store_check"] == "unknown"                 # couldn't verify
+    assert er["named_envs_unrecoverable"] == []           # nothing fabricated
+
+
+def test_env_registry_absent_is_present_false():
+    """No weft_envs.json (a project with no env customizations, or one lost in
+    transfer) → present:False, and recovery does not warn (ambiguous)."""
+    pdir = _build_import_with_refs("prj_env_none")
+    rep = recover_project(pdir)
+    j = json.loads((pdir / "recovery_report.json").read_text())
+    assert j["env_registry"]["present"] is False
+    assert not any("env registry" in w for w in rep.warnings)
+
+
+def test_env_registry_unrecoverable_named_env_detected_and_warned():
+    """When the compute store IS reachable, a named env whose EnvID is absent
+    from it is flagged unrecoverable in the report AND surfaced as a recover
+    warning; default sessions (which self-heal) are not flagged."""
+    from core.recovery import report as R
+    from core.compute import adapter as _ad, named_envs as _ne
+
+    class _FakeComp:
+        def __init__(self, known):
+            self.known = set(known)
+
+        def env_status(self, eid):
+            if eid not in self.known:
+                raise RuntimeError(f"unknown EnvID: {eid}")
+            return {"env_id": eid, "realizations": []}
+
+    pdir = _build_import_with_refs("prj_env_dangle")
+    _write_weft_envs(pdir)
+    orig_gc, orig_sync = _ad.get_compute, _ne._sync
+    # store knows NOTHING → the named env's EnvID is unrecoverable
+    _ad.get_compute = lambda: _FakeComp(known=[])
+    _ne._sync = lambda x: x                       # env_status is sync here
+    try:
+        rep = recover_project(pdir)
+    finally:
+        _ad.get_compute, _ne._sync = orig_gc, orig_sync
+    j = json.loads((pdir / "recovery_report.json").read_text())
+    er = j["env_registry"]
+    assert er["store_check"] == "checked"
+    assert er["named_envs_unrecoverable"] == ["legacy_numba"]
+    assert er["default_session_languages"]        # sessions listed, NOT flagged
+    assert any("legacy_numba" in w and "env registry" in w for w in rep.warnings)
+
+
 # ─── runner ─────────────────────────────────────────────────────────────────
 TESTS = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 
