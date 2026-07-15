@@ -801,10 +801,9 @@ def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
     # if torch is a CPU-only build (the scVI-on-CPU incident). The ABI-anchor
     # self-check is gone with the served-base pip overlay it guarded (W3.5).
     try:
-        import os as _os
-        if (_os.environ.get("ABA_ACCELERATOR") or "").lower() == "cuda" \
+        if (config.settings.accelerator.get() or "").strip().lower() == "cuda" \
                 and torch_cuda_build() is None:
-            log("[startup] WARNING: ABA_ACCELERATOR=cuda but torch is a CPU-only "
+            log("[startup] WARNING: accelerator=cuda but torch is a CPU-only "
                 "build — GPU jobs will run on CPU")
     except Exception as e:  # noqa: BLE001 — a check must never block startup
         log(f"[startup] accelerator check errored (non-fatal): {e}")
