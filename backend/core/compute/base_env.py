@@ -108,7 +108,7 @@ def prefix(language: str, *, timeout_s: int = 1800) -> Optional[Path]:
     eid = env_id(language)
     if eid is None:
         return None
-    return named_envs.ensure_realized(eid, timeout_s=timeout_s)
+    return named_envs.ensure_realized(eid, timeout_s=timeout_s, language=language)
 
 
 def interpreter(language: str, *, timeout_s: int = 1800) -> Optional[Path]:

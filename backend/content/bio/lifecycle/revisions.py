@@ -810,7 +810,7 @@ def diff_env(entity_id: str) -> dict:
     if not then and env_id:
         try:
             from core.compute import named_envs
-            prefix = named_envs.ensure_realized(env_id)
+            prefix = named_envs.ensure_realized(env_id, language=lang)
             exe = "Rscript" if lang == "r" else "python"
             then = package_versions_for_interpreter(str(prefix / "bin" / exe), lang)
             then.pop("__lang_version__", None)
@@ -854,7 +854,7 @@ def rebuild_env(entity_id: str, *, only: Optional[list] = None,
         envname = name or f"repro_{str(entity_id)[:8]}"
         lang = (rec or {}).get("language") or "python"
         try:
-            named_envs.ensure_realized(env_id)     # rebuild from weft's lock
+            named_envs.ensure_realized(env_id, language=lang)  # rebuild from weft
         except ComputeError as ce:
             return {"env": None, "ok": False, "error": ce.to_payload(),
                     "note": f"the recorded env {env_id} could not be realized here "

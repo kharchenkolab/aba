@@ -217,13 +217,27 @@ def _local_site_root() -> Path:
 
 
 def _ready_prefix(env_id: str) -> Optional[Path]:
-    st = _sync(_adapter.get_compute().env_status(env_id))
-    for r in st.get("realizations", []):
-        if r.get("site") == "local" and r.get("state") == "ready":
-            loc = _local_site_root() / r["location"]
-            prefix = _prefix_from_activation(loc)
-            if prefix is not None:
-                return prefix
+    """The realized prefix if it PHYSICALLY exists on the local site.
+
+    The realization location is deterministic (`envs/<env-id-hash>` under the
+    site root), and the physical activate.sh is the source of truth — weft's
+    `env_status` `state` label can lag behind reality (after a repair+rebuild it
+    may still read 'missing' while the prefix is materialized). So we check the
+    deterministic path's activation directly, then any location weft lists, and
+    trust the filesystem over the label."""
+    root = _local_site_root()
+    candidates = [root / "envs" / env_id.split(":")[-1]]
+    try:
+        st = _sync(_adapter.get_compute().env_status(env_id))
+        for r in st.get("realizations", []):
+            if r.get("site") == "local" and r.get("location"):
+                candidates.append(root / r["location"])
+    except Exception:  # noqa: BLE001 — the deterministic path still stands
+        pass
+    for loc in candidates:
+        prefix = _prefix_from_activation(loc)
+        if prefix is not None:
+            return prefix
     return None
 
 
@@ -240,16 +254,27 @@ def _prefix_from_activation(location: Path) -> Optional[Path]:
     return p if p.exists() else None
 
 
-def ensure_realized(env_id: str, *, timeout_s: int = 900) -> Path:
-    """The env's realized prefix on the local site, realizing it if needed (a
-    no-op weft task triggers realization; weft rebuilds a GC-reclaimed env from
-    its lock here transparently — the old §11.6 story, now weft's job)."""
-    prefix = _ready_prefix(env_id)
-    if prefix is not None:
-        return prefix
-    ad = _adapter.get_compute()
-    sub = _sync(ad.task_submit({"command": "true", "env": env_id, "site": "local",
-                                "label": f"realize {env_id[:16]}"}))
+# The realize task must actually EXERCISE the env's interpreter: a no-op `true`
+# resolves from the system PATH and never touches the env, so a GC'd/evicted
+# prefix is never rebuilt. A SIMPLE, single interpreter invocation forces
+# realization. Language-specific because an R base pack has no `python`.
+def _realize_probe(language: str) -> str:
+    return "Rscript -e 'invisible()'" if language == "r" else "python -c pass"
+
+
+def _run_realize_task(env_id: str, ad, timeout_s: int, language: str) -> str:
+    """Submit an env-exercising task; return its terminal state.
+
+    `force=True` is LOAD-BEARING: weft memoizes task results by (command, env,
+    inputs) hash, so a repeated realize probe (same fixed command + EnvID) would
+    hit the memo from the FIRST realization and return DONE *without* running —
+    hence without rebuilding a since-evicted/GC'd prefix. force bypasses the
+    memo so the task always runs, and weft's runner rebuilds a missing prefix
+    from the lock as a side effect (found live: the eviction/repair path silently
+    no-op'd for exactly this reason)."""
+    sub = _sync(ad.task_submit({"command": _realize_probe(language), "env": env_id,
+                                "site": "local",
+                                "label": f"realize {env_id[:16]}"}, force=True))
     job_id = sub["job_id"]
     deadline = time.time() + timeout_s
     state = "PENDING"
@@ -258,18 +283,33 @@ def ensure_realized(env_id: str, *, timeout_s: int = 900) -> Path:
         if state in ("DONE", "FAILED", "CANCELLED"):
             break
         time.sleep(1.0)
-    if state != "DONE":
-        detail = f"realization job {job_id} state={state}"
-        if state == "FAILED":
-            res = _sync(ad.task_result(job_id))
-            detail += f": {str(res.get('logs', {}).get('tail'))[-400:]}"
-        raise ComputeError("env.realize_failed", detail, stage="realize",
-                           retryable=state not in ("FAILED",))
+    return state
+
+
+def ensure_realized(env_id: str, *, timeout_s: int = 900,
+                    language: str = "python") -> Path:
+    """The env's realized prefix on the local site, realizing it if needed.
+
+    First use — or after the prefix is reclaimed (weft `env_evict`, GC, or a raw
+    disk purge) — an env-exercising task (submitted with `force=True`, see
+    `_run_realize_task`) materializes the env from its lock. weft's runner
+    rebuilds a missing/demoted realization on its own; the force flag is what
+    keeps the memo from short-circuiting that rebuild. `language` selects the
+    probe interpreter (an R base pack has no python). Transparent to the agent
+    (verified: a fully-deleted ~250 MB prefix rebuilds on the next run, for both
+    the clean-eviction and raw-`rm -rf` reclaim paths)."""
+    prefix = _ready_prefix(env_id)
+    if prefix is not None:
+        return prefix
+    ad = _adapter.get_compute()
+    state = _run_realize_task(env_id, ad, timeout_s, language)
     prefix = _ready_prefix(env_id)
     if prefix is None:
-        raise ComputeError("env.realize_failed",
-                           f"{env_id} ran but no ready local realization found",
-                           stage="realize")
+        raise ComputeError(
+            "env.realize_failed",
+            f"{env_id} could not be realized locally "
+            f"(realize task state={state}) — its lock may be unbuildable here",
+            stage="realize")
     return prefix
 
 
@@ -280,7 +320,7 @@ def interpreter(project_id: str, name: str) -> Path:
     if row is None:
         raise ComputeError("unknown_env", f"no named env {name!r} in this project",
                            stage="aba", hints={"available": list_names(project_id)})
-    prefix = ensure_realized(row["env_id"])
+    prefix = ensure_realized(row["env_id"], language=row["language"])
     exe = "Rscript" if row["language"] == "r" else "python"
     return prefix / "bin" / exe
 
