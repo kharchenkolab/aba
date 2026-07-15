@@ -219,8 +219,8 @@ def settings_environment_prewarm():
         except Exception:  # noqa: BLE001
             return False
     try:
-        from core.exec.materialize import tools_env
-        r_ready = (tools_env() / "bin" / "Rscript").exists()
+        from core.compute import base_env as _bev
+        r_ready = _bev.active("r")   # R pack declared (realizes lazily on first use)
     except Exception:  # noqa: BLE001
         r_ready = False
     modules = [

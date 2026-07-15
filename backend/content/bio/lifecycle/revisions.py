@@ -817,8 +817,15 @@ def diff_env(entity_id: str) -> dict:
         except Exception:  # noqa: BLE001 — env not realizable here → empty then
             pass
     if lang == "r":
-        from core.exec.r import _rscript
-        now = package_versions_for_interpreter(str(_rscript()), "r")
+        # Current R = the project's weft R session (no old conda R). No R pack →
+        # nothing to compare against.
+        from core.compute import base_env as _bev, project_env as _penv
+        from core import projects as _projects
+        if _bev.active("r"):
+            _rs = _penv.interpreter(str(_projects.current() or "_none"), "r")
+            now = package_versions_for_interpreter(str(_rs), "r")
+        else:
+            now = {}
     else:
         now = package_versions_for_interpreter(sys.executable, "python")
     now.pop("__lang_version__", None)

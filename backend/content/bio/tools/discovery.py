@@ -76,26 +76,41 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
         from core.exec.env_integrity import env_overview
         ov = env_overview(pid)
         if is_r:
-            from core.exec.r import project_r_lib
-            ov["r_project_lib"] = str(project_r_lib(pid)) if pid else None
+            # The weft R session prefix is the R env (no project-lib overlay).
+            from core.compute import base_env as _bev, project_env as _penv
+            try:
+                ov["r_session"] = (str(_penv.prefix(str(pid), "r"))
+                                   if (pid and _bev.active("r")) else None)
+            except Exception:  # noqa: BLE001 — overview must not fail on R
+                ov["r_session"] = None
         return {"status": "ok", "scope": "overview", "language": "r" if is_r else "python",
                 "tiers": ov}
 
     if is_r:
-        # Direct Rscript (like r_has_package) so it works without a kernel ctx
-        # and respects the project's .libPaths(). requireNamespace = real load;
-        # packageVersion + find.package give version/tier.
-        from core.exec.r import _run_rscript, project_r_lib, libpaths_expr
-        _lib = libpaths_expr(pid)
-        expr = ((_lib + "; " if _lib else "")
-                + f"ok <- requireNamespace({name!r}, quietly=TRUE); "
+        # Probe the project's weft R SESSION (base pack + additions); its own
+        # .libPaths() is authoritative, so there is no project-lib overlay to
+        # stack. requireNamespace = real load; packageVersion + find.package give
+        # version/location. No R pack declared → the R lane is unavailable here.
+        import subprocess
+        from core.compute import base_env as _bev, project_env as _penv
+        from core.compute.errors import ComputeError
+        if not _bev.active("r"):
+            return {"status": "unavailable", "name": name, "language": "r",
+                    "loads": False,
+                    "error": "no R environment pack is declared for this deployment"}
+        try:
+            _rs = str(_penv.interpreter(str(pid or "_none"), "r"))
+        except (ComputeError, RuntimeError) as e:
+            return {"status": "error", "name": name, "language": "r",
+                    "loads": False, "error": f"R session unavailable: {e}"}
+        expr = (f"ok <- requireNamespace({name!r}, quietly=TRUE); "
                 + f"cat('ABA_LOADS=', isTRUE(ok), '\\n', sep=''); "
                 + f"if (isTRUE(ok)) {{ cat('ABA_VER=', as.character(packageVersion({name!r})), '\\n', sep=''); "
                 + f"cat('ABA_LOC=', find.package({name!r}), '\\n', sep='') }}")
         try:
-            proc = _run_rscript(expr, timeout_s=120)
-            out = (getattr(proc, "stdout", "") or "")
-            err = (getattr(proc, "stderr", "") or "")
+            proc = subprocess.run([_rs, "-e", expr], capture_output=True,
+                                  text=True, timeout=120)
+            out, err = proc.stdout or "", proc.stderr or ""
         except Exception as e:  # noqa: BLE001
             return {"status": "error", "name": name, "language": "r",
                     "loads": False, "error": str(e)[:400]}
@@ -106,11 +121,9 @@ def inspect_env(input_: dict, ctx: dict | None = None) -> dict:
                     return ln[len(key):].strip()
             return None
         loads = (_pick("ABA_LOADS=") == "TRUE")
-        loc = _pick("ABA_LOC=")
-        tier = ("project-lib" if (loc and pid and str(project_r_lib(pid)) in loc) else
-                ("base" if loads else "unknown"))
         return {"status": "ok", "name": name, "language": "r", "loads": loads,
-                "version": _pick("ABA_VER="), "location": loc, "tier": tier,
+                "version": _pick("ABA_VER="), "location": _pick("ABA_LOC="),
+                "tier": ("session" if loads else "unknown"),
                 "error": None if loads else (err or out)[-600:]}
 
     from core.exec.env_integrity import python_package_status

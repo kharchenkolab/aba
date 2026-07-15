@@ -490,12 +490,14 @@ def _py_packages(site_dirs: Sequence) -> list[dict]:
     return sorted(out.values(), key=lambda x: x["name"].lower())
 
 
-def _r_packages_by_lib(lib_paths: Sequence) -> dict:
-    """One Rscript: installed.packages() grouped by LibPath, with the given libs
-    prepended to .libPaths(). Returns {realpath(lib): [{name,version}]}."""
+def _r_packages_by_lib(lib_paths: Sequence, rscript: Optional[str] = None) -> dict:
+    """One Rscript (the weft R SESSION's Rscript): installed.packages() grouped by
+    LibPath, with the given libs prepended to .libPaths(). Returns
+    {realpath(lib): [{name,version}]}. No rscript (no R pack) → {}."""
     import os
+    import subprocess
     paths = [str(p) for p in lib_paths if p]
-    if not paths:
+    if not paths or not rscript:
         return {}
     libs_r = "c(" + ", ".join(repr(p) for p in paths) + ")"
     expr = (f"libs <- {libs_r}; .libPaths(c(libs, .libPaths())); "
@@ -503,12 +505,12 @@ def _r_packages_by_lib(lib_paths: Sequence) -> dict:
             f"if (nrow(ip)>0) for (i in seq_len(nrow(ip))) "
             f"cat('PKG\\t', ip[i,'LibPath'], '\\t', ip[i,'Package'], '\\t', ip[i,'Version'], '\\n', sep='')")
     try:
-        from core.exec.r import _run_rscript
-        proc = _run_rscript(expr, timeout_s=120)
+        proc = subprocess.run([rscript, "-e", expr], capture_output=True,
+                              text=True, timeout=120)
     except Exception:  # noqa: BLE001
         return {}
     by: dict = {}
-    for ln in (getattr(proc, "stdout", "") or "").splitlines():
+    for ln in (proc.stdout or "").splitlines():
         if not ln.startswith("PKG\t"):
             continue
         parts = ln.split("\t")
@@ -529,7 +531,7 @@ def env_layers(project_id: Optional[str] = None) -> dict:
     import sysconfig
     from core.compute import named_envs
     from core.exec.materialize import (project_pylib_dir, project_pylib_paths,
-                                       tools_env, _site_paths)
+                                       _site_paths)
     if project_id is None:
         from core import projects
         project_id = projects.current()
@@ -564,27 +566,21 @@ def env_layers(project_id: Optional[str] = None) -> dict:
                    "pins": len(lock.read_text().splitlines()) if lock and lock.exists() else 0,
                    "canonical": canonical_lock_path() is not None}}
 
-    # ── R ──
-    r_base_lib = tools_env() / "lib" / "R" / "library"
-    r_proj_lib = None
-    try:
-        from core.exec.r import project_r_lib
-        if project_id:
-            r_proj_lib = project_r_lib(project_id)
-    except Exception:  # noqa: BLE001
-        pass
-    all_r_libs = [r_base_lib] + ([r_proj_lib] if r_proj_lib else [])
-    by = _r_packages_by_lib(all_r_libs)
-
-    def _pkgs_for(lib):
-        return by.get(os.path.realpath(str(lib)), []) if lib else []
-
-    r_layers = [{"tier": "base", "scope": "installation", "delivery": "conda", "mutable": False,
-                 "path": str(r_base_lib), "packages": _pkgs_for(r_base_lib)}]
-    if r_proj_lib:
-        r_layers.append({"tier": "project lib", "scope": "project", "project_id": project_id,
-                         "delivery": "on-demand", "mutable": True, "path": str(r_proj_lib),
-                         "packages": _pkgs_for(r_proj_lib)})
+    # ── R ── the weft R SESSION (base pack + additions) is the R env; named/
+    # isolated weft R envs stack on top. No project / no R pack → no session layer.
+    r_layers = []
+    from core.compute import base_env as _bev, project_env as _penv
+    if project_id and _bev.active("r"):
+        try:
+            r_sess = _penv.prefix(str(project_id), "r")
+            r_sess_lib = r_sess / "lib" / "R" / "library"
+            r_rscript = str(r_sess / "bin" / "Rscript")
+            by = _r_packages_by_lib([r_sess_lib], rscript=r_rscript)
+            r_layers.append({"tier": "session", "scope": "project", "project_id": project_id,
+                             "delivery": "weft", "mutable": True, "path": str(r_sess_lib),
+                             "packages": by.get(os.path.realpath(str(r_sess_lib)), [])})
+        except Exception:  # noqa: BLE001 — R session not realizable → no session layer
+            pass
     # Named (weft) R envs — full standalone envs, rendered from the handle.
     for name in iso_names:
         row = named_envs.resolve(str(project_id), name) or {}
@@ -593,7 +589,7 @@ def env_layers(project_id: Optional[str] = None) -> dict:
                              "mutable": False, "name": name, "env_id": row.get("env_id"),
                              "packages": [{"name": p, "version": ""}
                                           for p in row.get("packages", [])]})
-    r = {"engine": "install.packages + per-project libs + conda base", "layers": r_layers}
+    r = {"engine": "weft R session + isolated envs", "layers": r_layers}
 
     return {"python": py, "r": r, "project_id": project_id}
 
