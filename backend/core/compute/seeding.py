@@ -43,12 +43,19 @@ def _version_for(spec: dict) -> str:
 
 def publish_base_packs(*, site: str, tree: str,
                        packs: Optional[list[str]] = None,
-                       version: Optional[str] = None) -> list[dict]:
+                       version: Optional[str] = None,
+                       staging: Optional[str] = None) -> list[dict]:
     """Solve + publish every base-role pack (or the named subset) into the
     catalog `tree` on `site`. Idempotent per version (weft refuses duplicate
     version pointers). Returns one row per pack: {pack, env_id, version,
-    published|error}."""
+    published|error}.
+
+    `staging` (build-churn location) defaults to the `weft_publish_staging`
+    setting, else weft's 'auto' (under the site root) — the key lever when
+    `tree` is slow netfs: the tree then receives ONE sequential image write
+    instead of ~10^4 small-file ops (see config.weft_publish_staging)."""
     ad = _adapter.get_compute()
+    staging = staging or config.settings.weft_publish_staging.get()
     rows: list[dict] = []
     names = packs if packs is not None else [
         r["name"] for r in env_packs.list_packs() if r.get("role") == "base"]
@@ -62,7 +69,7 @@ def publish_base_packs(*, site: str, tree: str,
             res = named_envs._sync(ad.env_ensure(spec))
             eid = res["env_id"]
             pub = named_envs._sync(ad.env_publish(eid, site, tree, name,
-                                                  version=ver))
+                                                  version=ver, staging=staging))
             rows.append({"pack": name, "env_id": eid, "version": ver,
                          "published": True, "detail": pub})
         except ComputeError as e:

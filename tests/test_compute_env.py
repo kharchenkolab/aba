@@ -1,9 +1,11 @@
-"""ComputeEnv + Slurm live-query parsers (parsers validated against real dev-cluster sinfo)."""
+"""ComputeEnv: walltime parsing, the per-turn context line, and the live cluster
+landscape read through the weft SitePort (Bucket 2 — the legacy slurm_live
+introspection module was retired; partitions/load/access now come from the weft
+site adapter)."""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from core.exec.compute_env import slurm_time_to_min
-from core.jobs import slurm_live as sl
+from core.exec.compute_env import slurm_time_to_min, _wait_label  # noqa: E402
 
 
 def test_slurm_time_to_min():
@@ -15,32 +17,52 @@ def test_slurm_time_to_min():
         assert slurm_time_to_min(bad) is None
 
 
-def test_parse_partitions_real_sinfo():
-    out = "normal|up|5-00:00:00|1|1000|(null)|2|idle"          # the real dev-cluster line
-    p0 = sl.parse_partitions(out)[0]
-    assert p0["partition"] == "normal" and p0["avail"] == "up"
-    assert p0["cpus_per_node"] == 1 and p0["mem_gb_per_node"] == 1.0
-    assert p0["gpu"] is False and p0["nodes_total"] == 2 and p0["nodes_idle"] == 2
+def test_wait_label_from_live_load():
+    """The weft-sourced wait signal: unavailable → idle → empty-queue → queued."""
+    assert _wait_label(False, {}) == "unavailable"
+    assert "quick" in _wait_label(True, {"cpus_idle": 8, "pending_jobs": 0})
+    assert "moderate" in _wait_label(True, {"cpus_idle": 0, "pending_jobs": 0})
+    assert "queued" in _wait_label(True, {"cpus_idle": 0, "pending_jobs": 3})
 
 
-def test_parse_partitions_aggregates_and_gpu():
-    out = "gpu|up|1-00:00:00|32|256000|gpu:4|3|idle\ngpu|up|1-00:00:00|32|256000|gpu:4|1|alloc"
-    p = {x["partition"]: x for x in sl.parse_partitions(out)}["gpu"]
-    assert p["gpu"] is True and p["cpus_per_node"] == 32
-    assert p["nodes_total"] == 4 and p["nodes_idle"] == 3     # alloc not counted idle
+class _FakeAdapter:
+    """Stands in for the weft SitePort — returns canned sites_describe /
+    site_load / site_associations payloads (the real shapes)."""
+    def __init__(self, describe, load, assoc):
+        self._d, self._l, self._a = describe, load, assoc
+
+    def sync_call(self, name, *a, **k):
+        return {"sites_describe": self._d, "site_load": self._l,
+                "site_associations": self._a}[name]
 
 
-def test_parse_queue_and_wait():
-    q = sl.parse_queue("normal|R\nnormal|PD\nnormal|PD\ngpu|R")
-    assert q["normal"] == {"pending": 2, "running": 1}
-    assert "quick" in sl.wait_label({"partition": "normal", "avail": "up", "nodes_idle": 2}, q)
-    assert "queued" in sl.wait_label({"partition": "normal", "avail": "up", "nodes_idle": 0}, q)
-
-
-def test_parse_assoc():
-    assert sl.parse_assoc("") == []
-    rows = sl.parse_assoc("kharchenko|normal|normal,high\n")
-    assert rows[0]["account"] == "kharchenko" and "high" in rows[0]["qos"]
+def test_cluster_landscape_maps_weft_payloads(monkeypatch):
+    """_cluster_landscape maps weft's structured partitions + live load + assoc
+    into the (partitions, user_access) shape context_line/describe_compute read."""
+    import core.exec.compute_env as ce
+    describe = {"capabilities": {"scheduler": {"partitions": [
+        {"name": "normal", "cpus_per_node": 32, "mem_gb_per_node": 128,
+         "max_walltime": "5-00:00:00", "available": True, "gres": []},
+        {"name": "gpu", "cpus_per_node": 64, "mem_gb_per_node": 256,
+         "max_walltime": "1-00:00:00", "available": True,
+         "gres": [{"type": "gpu", "model": "a100", "count": 4}]}]}}}
+    load = {"partitions": {
+        "normal": {"cpus_idle": 32, "pending_jobs": 0},
+        "gpu": {"cpus_idle": 0, "pending_jobs": 5}}}
+    assoc = {"associations": [
+        {"account": "lab", "partition": None, "allowed_qos": ["normal", "long"],
+         "default_qos": "normal"}]}
+    import core.compute as cc
+    monkeypatch.setattr(cc, "get_compute",
+                        lambda: _FakeAdapter(describe, load, assoc))
+    parts, access = ce._cluster_landscape("cluster")
+    pmap = {p["partition"]: p for p in parts}
+    assert pmap["normal"]["gpu"] is False and pmap["gpu"]["gpu"] is True
+    assert pmap["normal"]["cpus_per_node"] == 32
+    assert "quick" in pmap["normal"]["wait"]        # idle CPUs → likely quick
+    assert "queued" in pmap["gpu"]["wait"]          # no idle + pending → queued
+    assert access == [{"account": "lab", "partition": None,
+                       "qos": ["normal", "long"]}]
 
 
 def test_context_line(monkeypatch):

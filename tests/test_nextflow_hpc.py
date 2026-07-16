@@ -400,19 +400,28 @@ def test_resume_cap_exhausted():
     assert sub.submitted == [] and "gave up after" in result["error"]
 
 
-def test_poll_flags_infra_death(monkeypatch):
-    # SlurmSubmitter.poll annotates slurm_terminal_fail when the job is gone from
-    # squeue, past the grace, no sentinel, and sacct reports a terminal kill.
-    from core.jobs.slurm_submitter import SlurmSubmitter
-    s = SlurmSubmitter()
-    job = {"id": "job_z", "kind": "run_nextflow",
-           "params": {"project_id": "p", "slurm_id": "999", "run_dir": "/nope"}}
-    monkeypatch.setattr(s, "_result_from_sentinel", lambda rd: None)
-    monkeypatch.setattr(s, "_in_squeue", lambda sid: False)
-    monkeypatch.setattr(s, "_too_young", lambda job, **k: False)
-    monkeypatch.setattr(s, "_sacct_state", lambda sid: "TIMEOUT")
-    r = s.poll(job)
-    assert r and r.get("slurm_terminal_fail") == "TIMEOUT" and r["returncode"] == 1
+def test_poll_flags_infra_death(monkeypatch, tmp_path):
+    # The nextflow head runs as a WEFT task now; WeftSubmitter.poll flags
+    # slurm_terminal_fail when the task died at the scheduler level (terminal state,
+    # no result.json) so the poll loop auto-resumes it (-resume from the work-dir).
+    import core.jobs.weft_submitter as WM
+    from core.jobs.weft_submitter import WeftSubmitter
+    sub = WeftSubmitter(site="cluster")
+    monkeypatch.setattr(sub, "_run_dir", lambda job: tmp_path)        # no result.json here
+    monkeypatch.setattr(sub, "_compute_block", lambda wid, state: {"substrate": "weft"})
+
+    class _Fake:
+        def sync_call(self, name, *a, **k):
+            return [{"state": "FAILED"}] if name == "task_status" else {}
+    monkeypatch.setattr(WM, "_adapter", lambda: _Fake())
+
+    r = sub.poll({"id": "job_z", "kind": "run_nextflow",
+                  "params": {"project_id": "p", "weft_id": "jb_9"}})
+    assert r and r.get("slurm_terminal_fail") == "FAILED"
+    # a NON-nextflow infra death is NOT auto-resume-flagged
+    r2 = sub.poll({"id": "job_y", "kind": "run_python",
+                   "params": {"project_id": "p", "weft_id": "jb_8"}})
+    assert r2 and "slurm_terminal_fail" not in r2
 
 
 # ── P3b: MultiQC interpretation ───────────────────────────────────────────────

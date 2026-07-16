@@ -126,12 +126,27 @@ def env_id(language: str) -> Optional[str]:
 
 
 def prefix(language: str, *, timeout_s: int = 1800) -> Optional[Path]:
-    """The realized base prefix on the local site (realizing on first use), or
-    None when no pack is declared."""
+    """The realized base DIRECTORY prefix on the local site (realizing on first
+    use), or None when no pack is declared. Raises `env.no_raw_prefix` for a
+    squashfs-strategy pack (no on-disk prefix at rest) — a caller that only needs
+    the pack BUILT (not a path) should use `ensure_ready`."""
     eid = env_id(language)
     if eid is None:
         return None
     return named_envs.ensure_realized(eid, timeout_s=timeout_s, language=language)
+
+
+def ensure_ready(language: str, *, timeout_s: int = 1800) -> bool:
+    """Realize the base pack on the local site if needed; return once it's READY.
+    Strategy-blind (works for squashfs AND directory strategies) — does NOT
+    resolve a raw prefix. Returns False when no pack is declared. This is the
+    right call for 'make sure the pack is built' (module reconcile) where no
+    interpreter path is needed — the running kernel/job activates the env itself."""
+    eid = env_id(language)
+    if eid is None:
+        return False
+    named_envs.ensure_ready(eid, timeout_s=timeout_s, language=language)
+    return True
 
 
 def interpreter(language: str, *, timeout_s: int = 1800) -> Optional[Path]:

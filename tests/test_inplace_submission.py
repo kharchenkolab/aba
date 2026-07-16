@@ -113,7 +113,10 @@ def test_concurrency_guard_uses_free_cores():
 
 def test_get_submitter_for_maps_target():
     assert get_submitter_for("inline").name == "local"
-    assert get_submitter_for("slurm").name == "slurm"
+    # The "slurm" target now resolves to the weft cluster lane (name "weft"),
+    # degrading to the in-process "local" lane when the substrate is offline (as in
+    # this test env) — never the retired sbatch submitter.
+    assert get_submitter_for("slurm").name in ("weft", "local")
 
 
 def test_bg_submission_maps_execution_for_python_r():
@@ -148,21 +151,19 @@ def _with_default_submitter(name, fn):
 
 
 def test_cancel_routes_inline_to_local_even_on_slurm_deploy():
-    # Regression: on a slurm-default deploy, an INLINE job's cancel must go to LocalSubmitter
-    # (fire the CancelToken → killpg the head), NOT SlurmSubmitter.scancel — which would be a
-    # no-op (the inline job has no slurm id) and leave the Nextflow head orphaned. cancel_job
-    # routes via _submitter_for_job(job) on params.submission, not the deployment default.
+    # Regression: on a cluster deploy, an INLINE job's cancel must go to LocalSubmitter
+    # (fire the CancelToken → killpg the head), NOT the cluster lane — which for an inline
+    # job would be a no-op and orphan the Nextflow head. cancel_job routes via
+    # _submitter_for_job(job) on hard evidence, not the deployment default. (The sbatch
+    # lane is retired: a weft-recorded job's cancel goes to its WeftSubmitter owner.)
     from core.jobs.runner import _submitter_for_job, LocalSubmitter
-    from core.jobs.slurm_submitter import SlurmSubmitter
+    from core.jobs.weft_submitter import WeftSubmitter
 
     def _check():
         assert isinstance(_submitter_for_job({"params": {"submission": "inline"}}), LocalSubmitter)
-        assert isinstance(_submitter_for_job({"params": {"submission": "slurm"}}), SlurmSubmitter)
-        # legacy row (pre-IP, no submission field) that reached Slurm → SlurmSubmitter
-        assert isinstance(_submitter_for_job({"params": {"submitter": "slurm", "slurm_id": "42"}}),
-                          SlurmSubmitter)
-        # legacy row, no evidence at all → deployment default (slurm here)
-        assert isinstance(_submitter_for_job({"params": {}}), SlurmSubmitter)
+        # hard evidence it ran on weft → the weft owner handles the cancel
+        assert isinstance(_submitter_for_job({"params": {"submitter": "weft", "weft_id": "jb_1"}}),
+                          WeftSubmitter)
     _with_default_submitter("slurm", _check)
 
 

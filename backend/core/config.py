@@ -369,7 +369,19 @@ class _LazyDir(os.PathLike):
 
 
 def _resolve_runtime_dir() -> Path:
-    return Path(os.getenv("ABA_RUNTIME_DIR", "/workspace/aba-runtime")).resolve()
+    # Default derives from the install home ($ABA_HOME, else ~/.aba) — matching
+    # the installers' shell fallback `${ABA_RUNTIME_DIR:-$ABA_HOME/runtime}`.
+    # NEVER default to a shared absolute path: two personal installs that both
+    # fell back to one /workspace would collide on projects/artifacts (silent
+    # overwrite) or hard-fail on a read-only mount. Container/OOD deploys inject
+    # ABA_RUNTIME_DIR explicitly (this setting is deploy_injected).
+    v = os.getenv("ABA_RUNTIME_DIR")
+    if v:
+        return Path(v).resolve()
+    # Inlined (not aba_home(), which is defined later — this resolver runs at
+    # import via ENVS_DIR); same $ABA_HOME-else-~/.aba logic.
+    home = os.getenv("ABA_HOME") or str(Path.home() / ".aba")
+    return (Path(home) / "runtime").resolve()
 
 
 def _resolve_under_runtime(env_key: str, *parts: str) -> Path:
@@ -910,6 +922,12 @@ setting("weft_publish_site", env="ABA_WEFT_PUBLISH_SITE", type="str",
         default="local", category="deploy", weft_fate="keep",
         doc="Site whose realization store backs the published catalog "
             "(where env_adopt runs).")
+setting("weft_publish_staging", env="ABA_WEFT_PUBLISH_STAGING", type="str",
+        default=None, category="deploy", weft_fate="keep",
+        doc="Where a publish's build churn lands (weft env_publish `staging`): "
+            "None → weft 'auto' (under the site root); an absolute node-local path "
+            "(e.g. /dev/shm/pubstage) is fastest on a netfs tree — the slow tree "
+            "then gets one sequential image write instead of ~10^4 small-file ops.")
 
 # ── DB / process modes ───────────────────────────────────────────────────────
 setting("db_path", env="ABA_DB_PATH", type="str", default=None, category="mode",

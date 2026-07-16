@@ -92,45 +92,44 @@ class WeftSubmitter:
         spec_path = run_dir / "job_spec.json"
         result_path = run_dir / "result.json"
         timeout_s = int(params.get("timeout_s") or 600)
-        # W3.4 (pack deployments): a DEFAULT-env job runs the project session's
-        # SNAPSHOT — a frozen EnvID (dirty-cached), so the job is reproducible
-        # and its exec record carries true env identity. The interpreter is
-        # resolved HERE (server process, worker thread) and travels in the
-        # spec: the node entry is a FRESH process with no substrate (and a
-        # second Weft on the workspace would violate single-writer), so it can
-        # never resolve envs itself. Degradation ladder (loud at each step):
-        # snapshot prefix → live session prefix → (no served base — the job fails
-        # loudly on the node if neither resolves).
+        # W3.4/W3.5 (pack deployments): the job runs INSIDE its weft env — the task
+        # carries `env=<EnvID>` and weft activates it on the node (a DEFAULT-env job
+        # rides the project session's SNAPSHOT — a frozen, dirty-cached EnvID, so the
+        # job is reproducible and its exec record carries true env identity; an
+        # isolated-env job rides that named env's EnvID). aba resolves only the
+        # IDENTITY here (a store op — NO realize, so this is strategy-blind: a squashfs
+        # env has no raw prefix at rest, but weft mounts it for the task and sets
+        # CONDA_PREFIX; the node entry reads that — see slurm_entry). `interp` is NO
+        # LONGER resolved aba-side (the old raw `<prefix>/bin/python` broke under the
+        # squashfs realization strategy that parallel-FS/cluster roots get).
         env_id = None
-        interp = None
-        if not params.get("env") and kind in ("run_python", "run_r"):
+        if kind in ("run_python", "run_r"):
             from core.compute import base_env, named_envs, project_env
             lang = "r" if kind == "run_r" else "python"
-            exe = "Rscript" if lang == "r" else "python"
             try:
-                base_env.require(lang)      # weft-only: no served-base fallback
-                env_id = project_env.snapshot(str(pid), lang)
-                interp = str(named_envs.ensure_realized(env_id, language=lang) / "bin" / exe)
+                if params.get("env"):
+                    row = named_envs.resolve(str(pid), params["env"])
+                    if row is None:
+                        print(f"[jobs.weft] unknown isolated env {params['env']!r} for "
+                              f"project {pid} — the job will fail loudly on the node")
+                    else:
+                        env_id = row["env_id"]
+                else:
+                    base_env.require(lang)      # weft-only: no served-base fallback
+                    env_id = project_env.snapshot(str(pid), lang)   # identity; store op, no realize
             except Exception as e:  # noqa: BLE001
-                print(f"[jobs.weft] snapshot/realize failed ({e}) — "
-                      f"trying the LIVE project session")
-                try:
-                    base_env.require(lang)
-                    env_id = None
-                    interp = str(project_env.interpreter(str(pid), lang))
-                except Exception as e2:  # noqa: BLE001
-                    env_id = None
-                    interp = None
-                    print(f"[jobs.weft] no realizable {lang} pack ({e2}) — the job "
-                          f"will fail on the node (no served-base fallback)")
+                print(f"[jobs.weft] env identity resolution failed ({e}) — the job "
+                      f"will fail loudly on the node (no served-base fallback)")
         spec_path.write_text(json.dumps({
             "code": params.get("code", ""), "kind": kind, "project_id": str(pid),
             # Run UNDER the Run captured at submit — artifacts land in the Run's
             # work dir and attach to it (same rule as the legacy Slurm lane).
             "run_id": params.get("run_id") or job["id"],
             "timeout_s": timeout_s,
-            "result_path": str(result_path), "env": params.get("env"),
-            "env_id": env_id, "interp": interp,
+            # env=None on the SPEC: the node entry must NOT re-resolve an env (no
+            # substrate there); it runs the activated task env via CONDA_PREFIX.
+            "result_path": str(result_path), "env": None,
+            "env_id": env_id, "interp": None,
             "gpu": bool((params.get("estimate") or {}).get("gpu")),
             "modules": [],
             "pipeline": params.get("pipeline"), "revision": params.get("revision"),
@@ -150,10 +149,14 @@ class WeftSubmitter:
             # placement picks the partition from the resource shape.
             resources["walltime"] = _walltime(timeout_s + 900)
         task = {
-            # Bare task: the command names the served base interpreter — valid
-            # on every node via the deployment's shared FS; PYTHONPATH makes
-            # `-m core.jobs.slurm_entry` importable there. (ABA_* config flows
-            # via env_vars below; the local site also inherits process env.)
+            # The command bootstraps with the ABA controller python (`sys.executable`,
+            # an absolute path valid on every node via the deployment's shared FS) so
+            # `-m core.jobs.slurm_entry` runs with ABA's own deps; PYTHONPATH makes it
+            # importable. When `env=<EnvID>` is set, weft ACTIVATES that env around the
+            # whole command (PATH + CONDA_PREFIX point at the mounted prefix) — so the
+            # entry runs the USER's code under the env's python (resolved from
+            # CONDA_PREFIX, strategy-blind) while ABA's entry code stays on the
+            # controller python. Nextflow heads carry no env (bare: `module load …`).
             "command": f"{sys.executable} -u -m core.jobs.slurm_entry {spec_path}",
             "site": self.site,
             "env_vars": {"PYTHONPATH": str(Path(__file__).resolve().parents[2]),
@@ -161,6 +164,8 @@ class WeftSubmitter:
             "resources": resources,
             "label": (job.get("title") or job["id"])[:200],
         }
+        if env_id:
+            task["env"] = env_id
         r = _adapter().sync_call("task_submit", task)
         from core.graph.jobs import update_job
         update_job(job["id"], params={**params, "weft_id": r["job_id"],
@@ -204,6 +209,14 @@ class WeftSubmitter:
         else:
             res = {"error": f"weft task {state} with no result.json "
                             f"(infra failure before the entry ran?)"}
+            # A Nextflow HEAD that died at the scheduler level (walltime/node-fail/
+            # preempt) with no result.json is auto-resumable — mark it so the poll
+            # loop re-submits with -resume (runner._maybe_resume_nextflow_job). The
+            # field name is legacy (it triggered off the retired sbatch lane); it is
+            # now the generic infra-terminal-death signal, set by whichever lane runs
+            # the head — which is this one.
+            if job.get("kind") == "run_nextflow":
+                res["slurm_terminal_fail"] = state
         comp = self._compute_block(wid, state)
         # the entry copies spec env_id into the result — a bare task's weft
         # manifest has none, but the SNAPSHOT identity is real (W3.4)

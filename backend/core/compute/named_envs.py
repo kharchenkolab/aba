@@ -26,9 +26,12 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -212,6 +215,9 @@ def extend(project_id: str, name: str, packages: list[str]) -> dict:
 
 # ── realization / interpreter ────────────────────────────────────────────────
 
+_LOCAL_SITE = "local"
+
+
 def _local_site_root() -> Path:
     return _adapter.weft_workspace() / "site-local"
 
@@ -308,9 +314,50 @@ def ensure_tool_env(specs: list[str], *, name: str, probe: str,
     return ensure_realized(res["env_id"], timeout_s=timeout_s, probe=probe)
 
 
+def _realization_ready(env_id: str) -> bool:
+    """Strategy-BLIND readiness: is the env realized on the local site?
+
+    True when either a materialized directory prefix exists (directory strategy)
+    OR weft's `env_status` reports a local realization with `state=="ready"` — the
+    SQUASHFS case, where the env is a read-only image mounted only inside a weft
+    task/kernel, so there is NO raw prefix on disk at rest. Use this to answer
+    'is it built?' without demanding a path (kernel lanes hand the EnvID to weft,
+    which mounts it; module reconcile just needs 'ready')."""
+    if _ready_prefix(env_id) is not None:
+        return True
+    try:
+        st = _sync(_adapter.get_compute().env_status(env_id))
+    except Exception:  # noqa: BLE001
+        return False
+    return any(r.get("site") == "local" and r.get("state") == "ready"
+               for r in st.get("realizations", []))
+
+
+def ensure_ready(env_id: str, *, timeout_s: int = 900,
+                 language: str = "python", probe: Optional[str] = None) -> None:
+    """Realize the env on the local site if needed; return once it's READY.
+
+    Strategy-blind — does NOT resolve a raw prefix (a squashfs env has none at
+    rest). This is the correct call for consumers that only need the env BUILT and
+    then run it THROUGH weft (interactive kernel lanes hand the EnvID to
+    `kernel_start(env_id=…)`; module reconcile just needs 'ready'). Raw-prefix
+    consumers (a subprocess exec of `<prefix>/bin/python`) use `ensure_realized`,
+    which is valid only for the directory strategy."""
+    if _realization_ready(env_id):
+        return
+    ad = _adapter.get_compute()
+    state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe)
+    if not _realization_ready(env_id):
+        raise ComputeError(
+            "env.realize_failed",
+            f"{env_id} could not be realized locally "
+            f"(realize task state={state}) — its lock may be unbuildable here",
+            stage="realize")
+
+
 def ensure_realized(env_id: str, *, timeout_s: int = 900,
                     language: str = "python", probe: Optional[str] = None) -> Path:
-    """The env's realized prefix on the local site, realizing it if needed.
+    """The env's realized DIRECTORY prefix on the local site, realizing if needed.
 
     First use — or after the prefix is reclaimed (weft `env_evict`, GC, or a raw
     disk purge) — an env-exercising task (submitted with `force=True`, see
@@ -319,7 +366,13 @@ def ensure_realized(env_id: str, *, timeout_s: int = 900,
     keeps the memo from short-circuiting that rebuild. `language` selects the
     probe interpreter (an R base pack has no python). Transparent to the agent
     (verified: a fully-deleted ~250 MB prefix rebuilds on the next run, for both
-    the clean-eviction and raw-`rm -rf` reclaim paths)."""
+    the clean-eviction and raw-`rm -rf` reclaim paths).
+
+    Returns a real on-disk prefix — valid ONLY for the directory realization
+    strategy. When the env is realized but has no raw prefix (SQUASHFS: mounted
+    only inside a weft task/kernel), this raises `env.no_raw_prefix` naming the
+    fix: run the env through weft (`task_submit(env=…)` / `kernel_*`) instead of
+    exec'ing a raw interpreter. Use `ensure_ready` when you don't need a path."""
     prefix = _ready_prefix(env_id)
     if prefix is not None:
         return prefix
@@ -327,6 +380,15 @@ def ensure_realized(env_id: str, *, timeout_s: int = 900,
     state = _run_realize_task(env_id, ad, timeout_s, language, probe=probe)
     prefix = _ready_prefix(env_id)
     if prefix is None:
+        if _realization_ready(env_id):
+            raise ComputeError(
+                "env.no_raw_prefix",
+                f"{env_id} is realized (ready) but has no on-disk prefix — its "
+                f"realization strategy (squashfs) is mounted only inside a weft "
+                f"task/kernel. Run this env THROUGH weft (task_submit(env=…) or "
+                f"kernel_start(env_id=…)) instead of resolving a raw interpreter.",
+                stage="realize",
+                hints={"env_id": env_id})
         raise ComputeError(
             "env.realize_failed",
             f"{env_id} could not be realized locally "
@@ -352,16 +414,29 @@ def interpreter(project_id: str, name: str) -> Path:
 def run_in(project_id: str, name: str, code: str, *,
            timeout_s: int = 600, cwd: str | None = None) -> dict:
     """One-shot code run inside a named env. Returns {ok, stdout, stderr,
-    returncode} (the retired iso.run_in contract)."""
+    returncode} (the retired iso.run_in contract).
+
+    Strategy-blind: when the env has a real on-disk prefix (directory strategy),
+    it runs the interpreter directly (fast path — exact rc, cwd). When it does NOT
+    (SQUASHFS: mounted only inside a weft task/kernel), there is no raw
+    `<prefix>/bin/python` to exec, so the run goes THROUGH weft — a task with
+    `env=<EnvID>` that weft activates on the site (`run_in_via_weft`)."""
     row = resolve(project_id, name)
     if row is None:
         return {"ok": False, "stdout": "",
                 "stderr": f"named env '{name}' does not exist in this project"}
+    lang = row["language"]
     try:
-        interp = interpreter(project_id, name)
+        ensure_ready(row["env_id"], language=lang)   # realize; strategy-blind (no raise on squashfs)
     except ComputeError as e:
         return {"ok": False, "stdout": "", "stderr": str(e)}
-    suffix = ".R" if row["language"] == "r" else ".py"
+    prefix = _ready_prefix(row["env_id"])
+    if prefix is None:
+        # squashfs (no raw prefix at rest) → run through weft, which mounts+activates
+        return _run_in_via_weft(row["env_id"], lang, code, timeout_s=timeout_s, cwd=cwd)
+    exe = "Rscript" if lang == "r" else "python"
+    interp = prefix / "bin" / exe
+    suffix = ".R" if lang == "r" else ".py"
     with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False) as f:
         f.write(code)
         script = f.name
@@ -374,6 +449,52 @@ def run_in(project_id: str, name: str, code: str, *,
         return {"ok": False, "stdout": "", "stderr": f"timed out ({timeout_s}s)"}
     finally:
         Path(script).unlink(missing_ok=True)
+
+
+def _run_in_via_weft(env_id: str, language: str, code: str, *,
+                     timeout_s: int = 600, cwd: str | None = None) -> dict:
+    """Run a one-shot script inside `env_id` as a weft task on the local site —
+    weft mounts+activates the env (squashfs-safe), so the interpreter resolves from
+    the activated PATH with no raw prefix. Script + captured stdout/stderr live on
+    the shared FS (readable after the task); the task's terminal state gives rc."""
+    exe = "Rscript" if language == "r" else "python"
+    suffix = ".R" if language == "r" else ".py"
+    work = _adapter.weft_workspace().parent / "run_in" / uuid.uuid4().hex
+    work.mkdir(parents=True, exist_ok=True)
+    script = work / f"code{suffix}"
+    script.write_text(code)
+    out, err = work / "stdout", work / "stderr"
+    cd = f"cd {shlex.quote(cwd)} && " if cwd else ""
+    cmd = (f"{cd}{exe} {shlex.quote(str(script))} "
+           f"> {shlex.quote(str(out))} 2> {shlex.quote(str(err))}")
+    ad = _adapter.get_compute()
+    try:
+        sub = _sync(ad.task_submit(
+            {"command": cmd, "env": env_id, "site": _LOCAL_SITE,
+             "label": f"run_in {env_id[:16]}"}, force=True))
+        job_id = sub["job_id"]
+        deadline = time.time() + timeout_s
+        state = "PENDING"
+        while time.time() < deadline:
+            state = _sync(ad.task_status(job_id))[0]["state"]
+            if state in ("DONE", "FAILED", "CANCELLED"):
+                break
+            time.sleep(0.5)
+        stdout = out.read_text() if out.exists() else ""
+        stderr = err.read_text() if err.exists() else ""
+        if state not in ("DONE", "FAILED", "CANCELLED"):
+            try:
+                _sync(ad.task_cancel(job_id, why="run_in timeout"))
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "stdout": stdout,
+                    "stderr": (stderr + f"\ntimed out ({timeout_s}s)").strip(),
+                    "returncode": 124}
+        # weft marks the task DONE only when the command exited 0; FAILED otherwise.
+        return {"ok": state == "DONE", "stdout": stdout, "stderr": stderr,
+                "returncode": 0 if state == "DONE" else 1}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def verify_imports(project_id: str, name: str, imports: list[str]) -> tuple[bool, str]:

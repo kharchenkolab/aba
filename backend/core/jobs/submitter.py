@@ -65,19 +65,25 @@ def _local_lane() -> "BatchSubmitter":
 
 def _slurm_lane(kind: str | None = None) -> "BatchSubmitter":
     """The cluster lane (W3.3): a weft task on the deployment's slurm-kind
-    site when one is declared (weft-sites.yaml) and the substrate is up —
-    else the legacy sbatch/sentinel machinery, loudly. Nextflow HEADS stay
-    legacy for now: their bare-bash node script (no python on the node — the
-    slim-SIF model) is W3.4's controller-image work."""
-    if kind != "run_nextflow":
-        from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
-        site = weft_slurm_site()
-        if site:
-            return WeftSubmitter(site=site)
-        print("[jobs] no slurm-kind weft site declared (weft-sites.yaml) — "
-              "falling back to the legacy sbatch lane")
-    from core.jobs.slurm_submitter import SlurmSubmitter
-    return SlurmSubmitter()
+    site when one is declared (weft-sites.yaml) and the substrate is up.
+    Nextflow heads ride the SAME bare weft task: the command
+    `python -m core.jobs.slurm_entry` dispatches `run_nextflow` on the node
+    (slurm_entry.py), the node runs the head over the shared FS (host-by-default),
+    and WeftSubmitter already forwards the nextflow spec + routes resume by
+    weft_id (runner.py). `kind` is retained for the call interface.
+
+    Weft-only (W3.4 tail): the legacy sbatch lane is GONE. A cluster deployment
+    declares a slurm-kind weft site (`host:` omitted = local transport on the
+    submit node); with none declared we degrade to the LOCAL weft lane so jobs
+    still run (on this node) — never a hard failure, never sbatch."""
+    del kind  # nextflow no longer special-cased — same lane as python/R
+    from core.jobs.weft_submitter import WeftSubmitter, weft_slurm_site
+    site = weft_slurm_site()
+    if site:
+        return WeftSubmitter(site=site)
+    print("[jobs] ABA_BATCH_SUBMITTER=slurm but no slurm-kind weft site declared "
+          "(weft-sites.yaml) — running background jobs on the LOCAL weft lane")
+    return _local_lane()
 
 
 def get_submitter(kind: str | None = None) -> "BatchSubmitter":

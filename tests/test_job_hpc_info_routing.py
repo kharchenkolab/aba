@@ -22,11 +22,11 @@ def test_weft_job_reads_weft_info(monkeypatch):
     assert out["scheduler"] == "weft" and out["state"] == "RUNNING"
 
 
-def test_slurm_job_reads_slurm_info(monkeypatch):
-    import core.jobs.slurm_submitter as ss
-    monkeypatch.setattr(ss.SlurmSubmitter, "info", lambda self, job: {"scheduler": "slurm"})
+def test_legacy_slurm_record_reads_local():
+    # The sbatch lane is retired: an OLD job recorded submitter=='slurm' no longer
+    # has a SlurmSubmitter to query, so job_hpc_info reads it as a local job.
     out = job_hpc_info({"params": {"submitter": "slurm", "slurm_id": "42"}})
-    assert out["scheduler"] == "slurm"
+    assert out == {"submitter": "local"}
 
 
 def test_local_job_reports_local():

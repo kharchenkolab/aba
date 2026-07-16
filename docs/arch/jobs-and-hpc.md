@@ -163,13 +163,19 @@ reproducible — see [`provenance.md`](provenance.md).
 
 **Discover-once (submit side).** `hpc_config` (`hpc_config.py:61`) resolves the deployment's
 compute landscape with precedence `$ABA_HPC_CONFIG`/`$ABA_HOME/hpc.yaml` → the bundle's
-`hpc:` settings → **live auto-detection**. When nothing pins them, partitions come from live
-`sinfo` (default partition first) and QOS+account from live `sacctmgr`
-(`slurm_live.qos_account_live`, ranked most-permissive first, carrying the primary QOS's
-`MaxWall` as a walltime cap). So an unconfigured cluster still routes GPU/large jobs to real
-partitions and submits the right `--qos`/`--account` with no `hpc.yaml` at all — the file is a
-pure optional override. `slurm_live.py` is also the read model behind the agent's
-`describe_compute` surface (partitions, node sizes, queue depth, wait hints).
+`hpc:` settings → **live auto-detection**. When nothing pins them, partitions and QOS+account
+are read live from the deployment's slurm-kind **weft site** through the SitePort:
+`sites_describe` for partitions (`hpc_config._live_partitions`) and `site_associations` for
+QOS+account (`hpc_config._live_qos_account`, ranked most-permissive first, carrying the primary
+QOS's `MaxWall` as a walltime cap). So an unconfigured cluster still routes GPU/large jobs to
+real partitions and submits the right `--qos`/`--account` with no `hpc.yaml` at all — the file
+is a pure optional override. The same weft SitePort (`sites_describe` + `site_load` +
+`site_associations`) is the read model behind the agent's `describe_compute` surface —
+`compute_env._cluster_landscape` (partitions, node sizes, queue depth, wait hints). *(Bucket 2:
+the legacy `slurm_live.py` local-`sinfo`/`squeue`/`sacctmgr` read model was retired; a slurm
+site's live queries now run through weft. One behavior note: weft's capability record carries
+no default-partition marker, so `_live_partitions` no longer orders the default partition
+first.)*
 
 **Hygiene + verify-at-use (compute side).** The generated `job.sh` runs `module load` for the
 project's resolved cluster modules, then — critically — `unset PYTHONHOME` and
@@ -192,8 +198,8 @@ boundary*.
 | `core/jobs/runner.py` | `LocalSubmitter`; `submit_python_job`/`submit_r_job`/`submit_nextflow_job`; `_run_one`/`_worker`; the shared `_finalize_job`; `reconcile_jobs` + `_reap_orphan_processes`; `_slurm_poll_loop`; `_inline_watchdog_loop`; `resolve_submission_target`; `cancel_job` |
 | `core/jobs/slurm_submitter.py` | `sbatch` submit (job.sh, PYTHONHOME/PYTHONPATH hygiene, resource flags); sentinel `poll()` (squeue-live vs sacct-historical, NFS-lag grace); `info()` for the monitor |
 | `core/jobs/slurm_entry.py` | compute-node entrypoint; same exec core; numpy canary + GPU verify-at-use preflight |
-| `core/jobs/hpc_config.py` | `hpc_config` (config → bundle → live sinfo/sacctmgr); `resolve_resources` (estimate → partition/qos/account/walltime) |
-| `core/jobs/slurm_live.py` | live `sinfo`/`squeue`/`sacctmgr` parsers; `qos_account_live`; `describe_compute` read model |
+| `core/jobs/hpc_config.py` | `hpc_config` (config → bundle → live weft SitePort); `_live_partitions`/`_live_qos_account` (weft `sites_describe`/`site_associations`); `resolve_resources` (estimate → partition/qos/account/walltime) |
+| `core/exec/compute_env.py` | `_cluster_landscape` (weft `sites_describe`/`site_load`/`site_associations`) — the `describe_compute`/`context_line` read model (partitions, node sizes, queue depth, wait hints) |
 | `core/jobs/continuation.py` | `enqueue_continuation` (defer/fire); `_fire` → `reasoning_port.run_continuation` (→ guide's registered handler); per-outcome `_continuation_message_text` |
 | `core/reasoning_port.py` | the Compute→Reasoning up-edge port: `register_continuation` (guide, at import) / `run_continuation` (continuation.py); mandatory, raises if unregistered |
 | `core/graph/jobs.py` | the `jobs` table: `create_job`/`update_job`/`get_job` |

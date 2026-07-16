@@ -10,7 +10,25 @@ ABA-side poll loop watches.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from pathlib import Path
+
+
+def _interp_from_activation(spec: dict) -> str | None:
+    """The interpreter for a run_python/run_r job. A modern weft job carries NO
+    aba-resolved `interp` (raw prefix paths break under the squashfs realization
+    strategy); instead the task ran with `env=<EnvID>` and weft ACTIVATED it, so
+    the mounted prefix is live in `$CONDA_PREFIX` and its `bin/` is first on PATH.
+    Read it here — strategy-blind (works for squashfs AND directory-prefix envs).
+    Falls back to a spec-carried `interp` (legacy path / explicit override)."""
+    if spec.get("interp"):
+        return spec["interp"]
+    prefix = os.environ.get("CONDA_PREFIX")
+    if not prefix:
+        return None                       # no activation → run.py raises loudly
+    exe = "Rscript" if spec.get("kind") == "run_r" else "python"
+    return str(Path(prefix) / "bin" / exe)
 
 
 def main() -> int:
@@ -22,7 +40,7 @@ def main() -> int:
     # rather than silent until result.json is written at the end.
     kw = dict(project_id=spec["project_id"], run_id=spec["run_id"],
               timeout_s=int(spec.get("timeout_s") or 600), stream=True,
-              interp=spec.get("interp"))
+              interp=_interp_from_activation(spec))
     kind = spec.get("kind")
     if kind == "run_nextflow":               # the Nextflow HEAD process; fans tasks out via the site executor
         from core.exec.nextflow import run_nextflow_code

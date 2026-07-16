@@ -230,7 +230,7 @@ def _run_pack_module(spec: ModuleSpec, pack: str, *,
             lang = (row.get("languages") or [None])[0]
         except Exception:  # noqa: BLE001
             pass
-        base_env.prefix(lang or "python")     # solve (cached) + realize
+        base_env.ensure_ready(lang or "python")   # solve (cached) + realize; strategy-blind (squashfs packs have no raw prefix)
         state.set_status(spec.id, "idle", progress="", error="")
         _notify(spec, "ready")
         log(f"[modules] {spec.id}: env pack {pack} ready")

@@ -94,7 +94,10 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None):
     row = named_envs.resolve(pid, env_name)
     if row is None:
         return None                     # unknown env — let jupyter raise the clear error
-    named_envs.ensure_realized(row["env_id"])   # realize before the pool lock (idempotent)
+    # Realize before the pool lock (idempotent). ensure_READY (not ensure_realized):
+    # strategy-blind — a squashfs env has no raw prefix, and we don't need one here
+    # (WeftKernelSession hands the EnvID to weft's kernel_start, which mounts it).
+    named_envs.ensure_ready(row["env_id"])
     return WeftKernelSession(scope_key, lang, env_id=row["env_id"], site="local",
                             setup_code=_weft_setup_code(lang))
 

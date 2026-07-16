@@ -843,40 +843,6 @@ def worker_status() -> dict:
     }
 
 
-_SLURM_POLL_S = 8.0
-
-
-def _active_slurm_jobs() -> list[dict]:
-    """All queued/running jobs (across project DBs) that were submitted to Slurm —
-    the rows the poll loop must watch. Each carries ``project_id`` (the DB it lives
-    in) so _finalize_job updates the right project."""
-    from core.config import PROJECTS_DIR
-    from core.graph.jobs import _row_to_job
-    import sqlite3
-    out: list[dict] = []
-    if not PROJECTS_DIR.exists():
-        return out
-    for proj_dir in sorted(PROJECTS_DIR.iterdir()):
-        db_file = proj_dir / "project.db"
-        if not proj_dir.is_dir() or not db_file.exists() or proj_dir.name.startswith("_"):
-            continue
-        try:
-            c = sqlite3.connect(db_file)
-            c.row_factory = sqlite3.Row
-            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
-                c.close()
-                continue
-            for r in c.execute("SELECT * FROM jobs WHERE status IN ('queued','running')").fetchall():
-                job = _row_to_job(r)
-                if (job.get("params") or {}).get("submitter") == "slurm":
-                    job["project_id"] = proj_dir.name
-                    out.append(job)
-            c.close()
-        except Exception:  # noqa: BLE001
-            continue
-    return out
-
-
 # A Nextflow head's wall-clock lifetime = task compute + the UNPREDICTABLE time its
 # task jobs spend queued, so an infrastructure kill (walltime/node-fail/preempt) is
 # expected on a busy cluster — not a pipeline error. We auto-resume it (same run_id →
@@ -935,44 +901,12 @@ def _maybe_resume_nextflow_job(sub, job: dict, result: dict, pid: str | None) ->
     return True
 
 
-async def _slurm_poll_loop() -> None:
-    """Watch Slurm-submitted jobs for completion (the shared-FS ``done`` sentinel)
-    and reflect RUNNING in the UI. Runs only when ABA_BATCH_SUBMITTER=slurm; the
-    local _worker still handles any local jobs. Completion routes through the
-    SHARED _finalize_job (artifacts + continuation), exactly like a local job."""
-    from core.jobs.submitter import get_submitter, submitter_name
-    if submitter_name() != "slurm":
-        return
-    sub = get_submitter()
-    print("[jobs.slurm] poll loop started", flush=True)
-    while True:
-        try:
-            for job in _active_slurm_jobs():
-                pid = job.get("project_id")
-                result = sub.poll(job)
-                if result is not None:
-                    # Auto-resume a Nextflow head killed by Slurm (walltime/node-fail)
-                    # before it could finish — re-submit with -resume instead of failing.
-                    if _maybe_resume_nextflow_job(sub, job, result, pid):
-                        continue
-                    await _finalize_job(job, result, pid, str(pid or "default"))
-                elif job.get("status") == "queued":
-                    # Flip to running once Slurm starts it (UI only; squeue is
-                    # called only for not-yet-running rows, bounding the cost).
-                    if (sub.info(job) or {}).get("state") == "RUNNING":
-                        update_job(job["id"], project_id=pid, status="running",
-                                   started_at=_utcnow())
-        except Exception as e:  # noqa: BLE001
-            _record_worker_failure("slurm-poll", None, e)
-        await asyncio.sleep(_SLURM_POLL_S)
-
-
 _WEFT_POLL_S = 5.0
 
 
 def _active_weft_jobs() -> list[dict]:
     """Queued/running jobs (across project DBs) that went out as weft tasks —
-    the rows _weft_poll_loop watches. Mirrors _active_slurm_jobs."""
+    the rows _weft_poll_loop watches."""
     from core.config import PROJECTS_DIR
     from core.graph.jobs import _row_to_job
     import sqlite3
@@ -1020,6 +954,12 @@ async def _weft_poll_loop() -> None:
                     pid = job.get("project_id")
                     result = sub.poll(job)
                     if result is not None:
+                        # Nextflow heads ride THIS lane now (§4a / nextflow→weft);
+                        # auto-resume one Slurm killed (walltime/node-fail) before it
+                        # finished — re-submit with -resume instead of failing, exactly
+                        # as the retired _slurm_poll_loop did.
+                        if _maybe_resume_nextflow_job(sub, job, result, pid):
+                            continue
                         await _finalize_job(job, result, pid, str(pid or "default"))
                     elif job.get("status") == "queued":
                         if (sub.info(job) or {}).get("state") == "RUNNING":
@@ -1035,8 +975,8 @@ _INLINE_WATCH_S = 30.0    # hangs unfold over minutes — a slow cadence keeps t
 
 def _active_inline_jobs() -> list[dict]:
     """Running INLINE pipeline heads across project DBs — the rows the hang watchdog checks.
-    The mirror-image of _active_slurm_jobs: a run_nextflow (or params.pipeline) head that is
-    NOT Slurm-submitted (Slurm heads have their own durability and no local-hang mode)."""
+    The mirror-image of _active_weft_jobs: a run_nextflow (or params.pipeline) head that is
+    NOT weft-submitted (weft heads have their own durability and no local-hang mode)."""
     from core.config import PROJECTS_DIR
     from core.graph.jobs import _row_to_job
     import sqlite3
@@ -1136,11 +1076,8 @@ def start_worker() -> None:
     # Watch inline pipeline heads for deadlocks (any deployment — an inline head can happen
     # regardless of the batch submitter, and it has no per-task walltime to catch a hang).
     asyncio.get_event_loop().create_task(_inline_watchdog_loop())
-    # On a Slurm deployment, also watch sbatch'd jobs for their completion
-    # sentinel (the local worker only handles in-process jobs).
-    from core.jobs.submitter import submitter_name
-    if submitter_name() == "slurm":
-        asyncio.get_event_loop().create_task(_slurm_poll_loop())
-    # W2: watch weft-submitted jobs. Always started — it idles until the
-    # compute substrate configures (lifespan does that after start_worker).
+    # W2/W3: watch weft-submitted jobs (the cluster lane is now a weft task, not
+    # sbatch). Always started — it idles until the compute substrate configures
+    # (lifespan does that after start_worker) and carries the nextflow auto-resume
+    # the retired sbatch sentinel loop used to.
     asyncio.get_event_loop().create_task(_weft_poll_loop())

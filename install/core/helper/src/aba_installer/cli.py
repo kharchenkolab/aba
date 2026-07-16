@@ -315,11 +315,12 @@ def doctor() -> int:
         _me = _re.search(r"ABA_ENVS_DIR=(\S+)", cfg_txt)
         _mr = _re.search(r"ABA_RUNTIME_DIR=(\S+)", cfg_txt)
         if not _me and not _mr:
-            # The default (config.py) is /workspace/aba-runtime — node-local scratch on
-            # many clusters. Under Slurm that silently breaks provisioned-package jobs.
+            # The default (config.py) is $ABA_HOME/runtime (i.e. your home) — often
+            # quota-limited, and on some setups node-local. Under Slurm that can break
+            # provisioned-package jobs; prefer an explicit shared cluster path.
             chk("provisioning dir configured for shared storage (Slurm)", False,
                 "neither ABA_RUNTIME_DIR nor ABA_ENVS_DIR is set in config.env — the default "
-                "(/workspace/aba-runtime) is node-local on many clusters; set one to a shared path")
+                "($ABA_HOME/runtime, your home) may be quota'd or node-local; point one at shared cluster scratch")
         else:
             _envs = (_me.group(1) if _me else _mr.group(1) + "/envs").strip("\"'")
             _kind, _fstype = _fs_kind_for_path(_envs)
