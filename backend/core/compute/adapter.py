@@ -186,6 +186,15 @@ class WeftAdapter:
             raise ComputeError.from_payload(out)
         return out
 
+    def subscribe_events(self, callback) -> None:
+        """In-process push of weft's event feed (bootstrap.step, site.*,
+        job.*, …) — same objects events_poll yields. Not a port method
+        (weft's events_subscribe is not a PUBLIC_TOOL); it exists so the web
+        layer can relay site events to the notification bus without reaching
+        around the doorway. The callback runs on weft's emitting thread —
+        keep it cheap and thread-safe."""
+        self._weft.events_subscribe(callback)
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 

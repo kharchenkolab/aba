@@ -63,6 +63,10 @@ async def on_startup():
         _cs = _compute.configure()
         print(f"[startup] compute substrate: "
               f"{'ok — ' if _cs['ok'] else 'OFFLINE — '}{_cs['detail']}")
+        if _cs["ok"]:
+            # Settings→Compute live refresh: weft site events → notification bus
+            from core.web.routers.compute import wire_event_relay
+            wire_event_relay()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] compute substrate wiring failed (non-fatal): {e}")
     try:

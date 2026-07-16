@@ -70,9 +70,16 @@ def _run(argv: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
+def identity_opts() -> list[str]:
+    """`-i` for aba's dedicated key once it exists — ssh only tries default
+    identity names, so the aba key must be offered explicitly."""
+    key, _ = key_paths()
+    return ["-i", str(key)] if key.exists() else []
+
+
 def _ssh(dest: str, port: Optional[int], opts: list[str], command: str,
          timeout: int = 20) -> subprocess.CompletedProcess:
-    argv = ["ssh", *SSH_BASE, *trust_opts(), *opts]
+    argv = ["ssh", *SSH_BASE, *trust_opts(), *identity_opts(), *opts]
     if port:
         argv += ["-p", str(port)]
     argv += [dest, command]
@@ -252,6 +259,7 @@ def remote_facts(dest: str, port: Optional[int] = None,
     paths = [p for p in (canary_paths or []) if re.fullmatch(r"[\w./@ -]+", p)]
     checks = "; ".join(f"test -e '{p}' && echo 'P:{p}'" for p in paths)
     cmd = ((checks + "; ") if checks else "") + \
+        "command -v sbatch >/dev/null 2>&1 && echo 'SCHED:slurm'; " \
         "echo '---'; sacctmgr -nP show assoc user=$USER format=account " \
         "2>/dev/null | sort -u; true"
     r = _ssh(dest, port, opts, cmd, timeout=30)
@@ -260,6 +268,9 @@ def remote_facts(dest: str, port: Optional[int] = None,
                 "detail": (r.stderr or "")[-500:]}
     head, _, tail = r.stdout.partition("---")
     present = [l[2:].strip() for l in head.splitlines() if l.startswith("P:")]
+    scheduler = next((l[6:].strip() for l in head.splitlines()
+                      if l.startswith("SCHED:")), "none")
     accounts = sorted({a.split("|")[0].strip()
                        for a in tail.splitlines() if a.strip()})
-    return {"ok": True, "present": present, "accounts": accounts}
+    return {"ok": True, "present": present, "scheduler": scheduler,
+            "accounts": accounts}

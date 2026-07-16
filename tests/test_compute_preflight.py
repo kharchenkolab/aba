@@ -143,13 +143,18 @@ def test_preflight_rejects_invalid_before_any_ssh(monkeypatch):
     assert pf.preflight("host; rm -rf /")["case"] == "invalid"
 
 
-def test_remote_facts_parses_canaries_and_accounts(monkeypatch):
+def test_remote_facts_parses_canaries_scheduler_and_accounts(monkeypatch):
     monkeypatch.setattr(pf, "_ssh", lambda *a, **k: _cp(
-        0, "P:/groups/lab\n---\nlab-alloc\nlab-alloc\n"))
+        0, "P:/groups/lab\nSCHED:slurm\n---\nlab-alloc\nlab-alloc\n"))
     out = pf.remote_facts("me@login.vbc.ac.at",
                           canary_paths=["/groups/lab", "/nonexistent"])
     assert out == {"ok": True, "present": ["/groups/lab"],
-                   "accounts": ["lab-alloc"]}
+                   "scheduler": "slurm", "accounts": ["lab-alloc"]}
+
+
+def test_remote_facts_no_scheduler(monkeypatch):
+    monkeypatch.setattr(pf, "_ssh", lambda *a, **k: _cp(0, "---\n"))
+    assert pf.remote_facts("me@box")["scheduler"] == "none"
 
 
 def test_remote_facts_unreachable_is_classified(monkeypatch):

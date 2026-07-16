@@ -183,6 +183,16 @@ export interface ModuleEvent {
   error?: string | null;
 }
 
+/** Compute-site change (Settings → Compute live refresh): registration narration (weft bootstrap.step relay), background queue verification, connect/disconnect. */
+export interface ComputeEvent {
+  type: 'compute';
+  site: string;
+  phase: string;
+  step?: string | null;
+  note?: string | null;
+  ok?: boolean | null;
+}
+
 /** Every event the per-turn chat stream can carry. */
 export type SSEEvent =
   | ManifestEvent
@@ -208,4 +218,5 @@ export type SSEEvent =
 export type NotificationEvent =
   | HelloEvent
   | EntityUpdatedEvent
-  | ModuleEvent;
+  | ModuleEvent
+  | ComputeEvent;

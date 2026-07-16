@@ -133,6 +133,12 @@ EVENTS: dict[str, EventSpec] = {s.name: s for s in [
         "Module install/state change (Settings → Modules toasts + live refresh).",
         {"id": "string", "title": "string", "state": "string"},
         {"progress": "string | null", "error": "string | null"}),
+    _ev("compute", "notify",
+        "Compute-site change (Settings → Compute live refresh): registration "
+        "narration (weft bootstrap.step relay), background queue verification, "
+        "connect/disconnect.",
+        {"site": "string", "phase": "string"},
+        {"step": "string | null", "note": "string | null", "ok": "boolean | null"}),
 ]}
 
 
