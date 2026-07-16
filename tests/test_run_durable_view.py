@@ -159,10 +159,71 @@ def test_durable_view_remote_in_place_kept_via_selection(tmp_path, monkeypatch):
     assert by["scratch.tmp"]["state"] != "kept"         # excluded → not durable
 
 
+def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
+    """A filename produced by N cells returns N rows from artifacts_for_run; the
+    panel shows ONE file per path, latest-version-wins, and counts must not inflate."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_1"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    # umap.png produced 3×: first two un-surfaced, the LAST surfaced to the store.
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "umap.png", "url": None, "kind": "figure", "size": 10},
+        {"original_name": "umap.png", "url": None, "kind": "figure", "size": 20},
+        {"original_name": "umap.png", "url": "/artifacts/p/umap.png",
+         "kind": "figure", "size": 30},
+    ])
+    view = runsmod.run_durable_view("run-d")
+    rows = [f for f in view["files"] if f["rel"] == "umap.png"]
+    assert len(rows) == 1                       # deduped, not 3
+    assert rows[0]["url"] == "/artifacts/p/umap.png"   # latest (surfaced) won
+    assert view["summary"]["total"] == 1 and view["summary"]["kept"] == 1
+
+
+def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatch):
+    """A remote in-place `kept` file (no local sidecar) must NOT advertise a
+    /api/runs/{id}/file URL — resolve_run_file can't read it, so the link 404s."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_r"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [{
+        "state": "done", "site": "hpc", "in_place": 1,
+        "location": "/groups/lab/weft-retained/runs/lbl/krn_r",   # not on this box
+        "selection": json.dumps({"include": ["big.h5ad"], "exclude": []}),
+    }])
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "big.h5ad", "url": None, "kind": "file", "size": _BIG}])
+    f = runsmod.run_durable_view("run-r2")["files"][0]
+    assert f["state"] == "kept" and f["site"] == "hpc"
+    assert f["url"] is None                     # not locally servable → no dead link
+
+
+def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
+    """A `*.txt` retained selection must NOT claim a NESTED `sub/a.txt` as durable
+    (fnmatch's `*` spans `/`; the path-aware matcher doesn't) — 'never lie'."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_g"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [{
+        "state": "done", "site": "hpc", "in_place": 1,
+        "location": "/remote/only", "selection": json.dumps({"include": ["*.txt"]}),
+    }])
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "top.txt", "url": None, "kind": "file", "size": 5},
+        {"original_name": "sub/deep.txt", "url": None, "kind": "file", "size": 5},
+    ])
+    by = {f["rel"]: f for f in runsmod.run_durable_view("run-g")["files"]}
+    assert by["top.txt"]["state"] == "kept"          # *.txt matches a top-level file
+    assert by["sub/deep.txt"]["state"] != "kept"     # but NOT the nested one
+
+
 _TESTS = [test_durable_view_states, test_durable_view_in_sandbox_vs_cleared,
           test_resolve_run_file_retained_then_sandbox_then_escape,
           test_durable_tree_nests_with_durable_fields,
-          test_durable_view_remote_in_place_kept_via_selection]
+          test_durable_view_remote_in_place_kept_via_selection,
+          test_durable_view_dedups_repeated_filename,
+          test_durable_view_remote_in_place_has_no_local_file_url,
+          test_durable_view_selection_glob_does_not_span_slash]
 
 
 def _standalone() -> int:

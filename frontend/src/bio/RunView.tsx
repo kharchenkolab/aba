@@ -370,11 +370,16 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
         <section className="runview__browse">
           <div className="runview__outputs-head runview__browse-head">
             Output files
+            {/* The durable tree's nodes are RUN-relative produced paths, while the
+                Files tab navigates the PROJECT tree — different coordinate systems, so
+                we can't deep-link to the run's subfolder from here yet (the old
+                find(name==='output') never matched and silently fell back to root).
+                Opens the Files tab at its root until the run's project-relative output
+                dir is threaded through. */}
             {onBrowseFiles && (
               <button className="runview__browse-link"
-                      onClick={() => onBrowseFiles(
-                        runTree?.children?.find(c => c.name === 'output')?.path || runTree?.path || '')}
-                      title="Open this run's output folder in the Files tab (viewer in the middle column)">
+                      onClick={() => onBrowseFiles(runTree?.path || '')}
+                      title="Open the Files tab (viewer in the middle column)">
                 Browse in Files tab →
               </button>
             )}

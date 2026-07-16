@@ -24,7 +24,9 @@ retroactively pins a casual-chat artifact.
 """
 from __future__ import annotations
 import logging
+import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Optional
 
 from core.graph._schema import _conn, WORKSPACE_ID
@@ -290,25 +292,63 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
         return  # jupyter / no weft kernel → nothing to retain against
     try:
         from core.exec.artifacts import artifacts_for_run
-        include = sorted({(a.get("original_name") or "").strip()
-                          for a in artifacts_for_run(run_id)} - {""})
+        arts = artifacts_for_run(run_id)
     except Exception as e:  # noqa: BLE001
         _log.warning("retain: could not list artifacts for run %s: %s", run_id, e)
         return
+    # Attribute each produced file to the target that ACTUALLY produced it, so a
+    # multi-target Run (a backend restart mid-Run minted a new kernel_id → both
+    # recorded) retains each target's OWN files against it. A blanket include per
+    # target would settle the OTHER target's files as `retain.pin_missing` (the
+    # file isn't in that sandbox) — noisy half-failed rows, not data loss, but a
+    # lie in the index. The exec record carries the weft target that ran the cell;
+    # each artifact carries its exec_id. Single-target (the norm) is unchanged: all
+    # files go to the one target.
+    from core.graph import exec_records
+    _tgt_cache: dict = {}
+
+    def _target_of(exec_id):
+        if exec_id not in _tgt_cache:
+            try:
+                _tgt_cache[exec_id] = (exec_records.get(exec_id) or {}).get("weft_target")
+            except Exception:  # noqa: BLE001
+                _tgt_cache[exec_id] = None
+        return _tgt_cache[exec_id]
+
+    per_target: dict = {t: set() for t in targets}
+    single = targets[0] if len(targets) == 1 else None
+    for a in arts:
+        rel = (a.get("original_name") or "").strip()
+        if not rel:
+            continue
+        if single is not None:
+            per_target[single].add(rel)
+            continue
+        tgt = _target_of(a.get("exec_id"))
+        if tgt in per_target:
+            per_target[tgt].add(rel)        # attributed → retain against that target only
+        else:
+            # producer unknown (no exec_id / unrecorded target) — retain against
+            # ALL targets so the file is never missed; the redundant targets emit a
+            # pin_missing for it, but a lost crown-jewel is worse than a noisy row.
+            for t in targets:
+                per_target[t].add(rel)
     # §6 rank-1: add declared outputs (recipe `produces:`) the agent DIDN'T surface, so a
-    # promised final is retained even if harvest never saw it. Only ones whose basename
-    # isn't already a produced path (else a subdir-surfaced declared output would add a
-    # spurious root-name literal → a `retain.pin_missing`). A truly-absent declared output
-    # → an honest pin_missing (the recipe promised it, it didn't appear).
+    # promised final is retained even if harvest never saw it — only ones no target
+    # produced (a produced basename is already covered). A truly-absent declared output is
+    # an honest pin_missing; put it on the PRIMARY target only, so a missing final yields
+    # ONE pin_missing, not one per target.
     declared = _declared_output_names(run_metadata)
     if declared:
-        produced_basenames = {p.rsplit("/", 1)[-1] for p in include}
-        include = sorted(set(include) | {n for n in declared
-                                         if n not in produced_basenames})
-    if not include:
-        return
+        produced_basenames = {r.rsplit("/", 1)[-1]
+                              for s in per_target.values() for r in s}
+        per_target[targets[0]].update(
+            n for n in declared if n not in produced_basenames)
     from core.compute import retention
     for t in targets:
+        include = sorted(per_target.get(t) or ())
+        if not include:
+            continue
         try:
             retention.retain(t, include=include, label=run_id,
                              layout="label", background=True)
@@ -373,16 +413,40 @@ def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
     return _under((ent or {}).get("artifact_path"))
 
 
+@lru_cache(maxsize=512)
+def _glob_to_re(pat: str):
+    """A path-aware glob → compiled regex: `*` matches WITHIN a path segment
+    (does not cross `/`), `**` crosses segments, `?` is one non-slash char.
+    Plain `fnmatch` makes `*` span `/`, so `*.txt` wrongly matches `sub/a.txt`
+    and over-claims durability for nested files — this doesn't."""
+    i, n, out = 0, len(pat), []
+    while i < n:
+        c = pat[i]
+        if c == "*":
+            if i + 1 < n and pat[i + 1] == "*":
+                out.append(".*"); i += 2; continue
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def _glob_match(rel: str, pattern: str) -> bool:
+    return bool(_glob_to_re(pattern).match(rel))
+
+
 def _sel_match(rel: str, done_sel: list):
     """meta of a remote/in-place `done` retain whose selection covers `rel` (an include
-    glob matches and no exclude does), else None. fnmatch '*' spans '/', so weft globs
-    like 'sub/**' and '*.txt' both resolve. Used when a retained sidecar isn't locally
-    readable (bytes durable on the site — §5.1)."""
-    import fnmatch
+    glob matches and no exclude does), else None. Path-aware globbing (`*` stays within a
+    segment) so a `*.txt` selection does NOT falsely claim `sub/deep/a.txt` — 'lose bytes,
+    never lie' (§5.1). Used when a retained sidecar isn't locally readable."""
     for include, exclude, meta in done_sel:
-        if any(fnmatch.fnmatch(rel, g) for g in (exclude or [])):
+        if any(_glob_match(rel, g) for g in (exclude or [])):
             continue
-        if any(fnmatch.fnmatch(rel, g) for g in (include or [])):
+        if any(_glob_match(rel, g) for g in (include or [])):
             return meta
     return None
 
@@ -447,35 +511,50 @@ def run_durable_view(run_id: str) -> dict:
         except Exception:  # noqa: BLE001 — no inventory yet is fine
             pass
 
-    files = []
-    counts = {"kept": 0, "pinned_pending": 0, "in_sandbox": 0, "cleared": 0}
+    # DEDUP by relpath: `artifacts_for_run` returns one row PER EXEC (ordered by
+    # started_at), so a filename produced by N cells appears N times. The Files
+    # panel shows one file per path, and the LATEST production is what's on disk /
+    # gets retained at settlement — so keep the last occurrence per relpath (its
+    # url/size/kind). Without this, rows + summary counts inflate and the tree gets
+    # duplicate sibling nodes with identical paths.
+    by_rel: dict = {}
     for a in artifacts_for_run(run_id):
         rel = (a.get("original_name") or "").strip()
-        if not rel:
-            continue
+        if rel:
+            by_rel[rel] = a            # last write wins (chronological → newest)
+
+    files = []
+    counts = {"kept": 0, "pinned_pending": 0, "in_sandbox": 0, "cleared": 0}
+    for rel, a in by_rel.items():
         url = a.get("url")
         size = a.get("size") or a.get("bytes") or 0
         kind = a.get("kind") or "file"
         large = bool(size and size > _MAX_HARVEST_BYTES)
         site = None
+        servable_local = False          # is the file readable on the CONTROLLER (→ /file works)?
         if url:                                   # small surfaced → aba artifact store
             state, badge = "kept", "kept ✓"
-        elif rel in done_files:                   # large → weft retained tree (local)
+        elif rel in done_files:                   # large → weft retained tree (local sidecar readable)
             d = done_files[rel]; site = d["site"]
             state = "kept"; badge = f"on {site}" if d["in_place"] else "kept ✓"
+            servable_local = True
         elif (dm := _sel_match(rel, done_sel)):   # remote/in-place durable retain (§5.1)
             site = dm["site"]; state = "kept"
             badge = f"on {site}" if dm["in_place"] else "kept ✓"
+            # bytes live on the remote site with no local sidecar → NOT locally
+            # servable; a /file link would 404. Leave view_url None until a
+            # fetch-on-open lands (the badge already says where it lives).
         elif pending:
             state = "pinned-pending"
             badge = ("large · keeps the version at run settlement" if large
                      else "pinned · saves when the run settles")
         elif rel in inv_paths:
             state, badge = "in-sandbox", "in sandbox"
+            servable_local = True
         else:
             state, badge = "cleared", "cleared"
         view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
-                           if state in ("kept", "in-sandbox") else None)
+                           if servable_local and state in ("kept", "in-sandbox") else None)
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
         counts["pinned_pending" if state == "pinned-pending"

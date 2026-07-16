@@ -111,6 +111,45 @@ def test_declared_output_names_helper(monkeypatch):
     assert runsmod._declared_output_names({}) == set()   # no plan → empty
 
 
+def test_retain_attributes_files_per_target_when_known(monkeypatch):
+    """Multi-target Run (a restart minted a 2nd kernel_id): a file whose producing
+    target is known (via its exec record's weft_target) is retained ONLY against that
+    target — not blanket to every target, which would settle the others as a spurious
+    pin_missing for a file they never produced (review finding #4)."""
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    from core.graph import exec_records
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "a.png", "exec_id": "e1"},
+        {"original_name": "b.png", "exec_id": "e2"},
+    ])
+    monkeypatch.setattr(exec_records, "get", lambda eid: {
+        "e1": {"weft_target": "krn_a"}, "e2": {"weft_target": "krn_b"}}.get(eid))
+    calls: dict = {}
+    monkeypatch.setattr(retmod, "retain",
+                        lambda target, **kw: calls.__setitem__(target, kw["include"])
+                        or {"state": "pinned-pending"})
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a", "krn_b"]})
+    assert calls == {"krn_a": ["a.png"], "krn_b": ["b.png"]}   # each its OWN file only
+
+
+def test_retain_multi_target_unattributable_falls_back_to_all(monkeypatch):
+    """When a file's producer can't be determined (no exec_id / unrecorded target),
+    retain it against ALL targets — a redundant pin_missing beats losing the file."""
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    from core.graph import exec_records
+    monkeypatch.setattr(artmod, "artifacts_for_run",
+                        lambda rid: [{"original_name": "orphan.png"}])   # no exec_id
+    monkeypatch.setattr(exec_records, "get", lambda eid: None)
+    calls: dict = {}
+    monkeypatch.setattr(retmod, "retain",
+                        lambda target, **kw: calls.__setitem__(target, kw["include"])
+                        or {"state": "pinned-pending"})
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a", "krn_b"]})
+    assert calls == {"krn_a": ["orphan.png"], "krn_b": ["orphan.png"]}   # safe: both
+
+
 _TESTS = [
     test_retain_run_outputs_pins_produced_per_target,
     test_retain_run_outputs_noop_without_targets,
@@ -118,6 +157,8 @@ _TESTS = [
     test_retain_run_outputs_swallows_retain_errors,
     test_retain_includes_declared_unsurfaced_outputs,
     test_declared_output_names_helper,
+    test_retain_attributes_files_per_target_when_known,
+    test_retain_multi_target_unattributable_falls_back_to_all,
 ]
 
 

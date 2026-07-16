@@ -501,22 +501,23 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
         # returns three lists; we union them into one stream addressable
         # as <exec_id>:<kind>:<idx>.
         produced: list[dict] = []
+        # `size` (from harvest's recorded bytes) rides along for every kind so the
+        # durable Files panel shows real sizes, not 0, for normally-copied files too.
         for i, p in enumerate(plots or []):
             produced.append({"kind": "figure", "idx": i,
-                             "url": p.get("url"),
+                             "url": p.get("url"), "size": p.get("bytes"),
                              "name": p.get("original_name") or p.get("name")})
         for i, t in enumerate(tables or []):
             produced.append({"kind": "table", "idx": i,
-                             "url": t.get("url"),
+                             "url": t.get("url"), "size": t.get("bytes"),
                              "name": t.get("original_name") or t.get("name")})
         for i, f in enumerate(files or []):
             produced.append({"kind": "file", "idx": i,
-                             "url": f.get("url"),
+                             "url": f.get("url"), "size": f.get("bytes"),
                              "name": f.get("original_name") or f.get("name"),
                              # link-only (oversize) files carry no served url;
-                             # the size + marker ride along so retention/UI see them.
-                             **({"link_only": True, "size": f.get("bytes")}
-                                if f.get("link_only") else {})})
+                             # the marker rides along so retention/UI see them.
+                             **({"link_only": True} if f.get("link_only") else {})})
 
         completed_iso = datetime.now(timezone.utc).isoformat()
         wall_s = max(0.0, _time.time() - started_ts)
@@ -693,8 +694,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         # Realize HERE, before the kernel pool — get_or_start holds the pool
         # lock across kernel startup, and a first-use realization (minutes)
         # under that lock would wedge every kernel acquisition process-wide.
+        # ensure_READY (strategy-blind): a squashfs env has no raw prefix and we
+        # need none here — the kernel lane activates the EnvID through weft.
         try:
-            named_envs.ensure_realized(row["env_id"])
+            named_envs.ensure_ready(row["env_id"])
         except ComputeError as ce:
             return {"status": "error", "env": env_name, "error": ce.to_payload(),
                     "note": f"env '{env_name}' could not be realized: "

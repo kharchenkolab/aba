@@ -414,8 +414,14 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
             display = str(f.relative_to(scratch))
         except ValueError:
             display = f.name
+        try:
+            nbytes = f.stat().st_size
+        except OSError:
+            nbytes = 0
+        # record the size so the durable Files panel shows real bytes for
+        # normally-copied files too (not just oversize link-only ones).
         bucket.append({"url": f"/artifacts/{pid}/{dest_name}",
-                       "original_name": display})
+                       "original_name": display, "bytes": nbytes})
 
     # 1) Figures
     for f in _iter_kept(scratch, (".png",), since_ts):
