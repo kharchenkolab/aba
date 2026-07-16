@@ -949,7 +949,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         except Exception:  # noqa: BLE001
             pass
         if _probes:
-            from core.exec.env_integrity import verify_python_imports
+            from core.exec.verify import verify_python_imports
             try:
                 _probe_py = _default_probe_python()
             except Exception:  # noqa: BLE001 — no realizable session → skip the shortcut
@@ -1071,7 +1071,7 @@ def ensure_capability(input_: dict, ctx: dict | None = None) -> dict:
         # overlay), not PathFinder.find_spec — a present-but-unloadable package
         # (wrong-numpy ABI, partial install, missing system lib) HAS a spec but
         # explodes on import (the tensorflow incident). verify, don't presume.
-        from core.exec.env_integrity import verify_python_imports
+        from core.exec.verify import verify_python_imports
         from core.compute.errors import ComputeError
         from core import projects as _projects
         from core.compute import project_env as _penv

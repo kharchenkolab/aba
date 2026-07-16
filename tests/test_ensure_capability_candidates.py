@@ -358,7 +358,7 @@ def test_importable_uncatalogued_resolves_ready_not_candidates():
         called["searched"] = True
         return [{"source": "pypi", "archetype": "library", "package": "lstar"}]
     with patch("core.catalog.resolve_capability", return_value=None), \
-         patch("core.exec.env_integrity.verify_python_imports", return_value=(True, {})), \
+         patch("core.exec.verify.verify_python_imports", return_value=(True, {})), \
          patch("content.bio.tools.discovery._default_probe_python", return_value=sys.executable), \
          patch("content.bio.tools.discovery._search_external_for_name", side_effect=_search_spy):
         out = ensure_capability({"name": "lstar"})
@@ -371,7 +371,7 @@ def test_nonimportable_uncatalogued_falls_through_to_candidates():
     """A must NOT swallow real misses: a name that doesn't import still reaches the
     external search."""
     with patch("core.catalog.resolve_capability", return_value=None), \
-         patch("core.exec.env_integrity.verify_python_imports", return_value=(False, {"foo": "no"})), \
+         patch("core.exec.verify.verify_python_imports", return_value=(False, {"foo": "no"})), \
          patch("content.bio.tools.discovery._search_external_for_name",
                return_value=[{"source": "pypi", "archetype": "library", "package": "foo"}]):
         out = ensure_capability({"name": "foobarbaz"})
@@ -385,7 +385,7 @@ def test_candidates_response_is_reframed_positive_with_collision_caution():
     fake = [{"source": "pypi", "archetype": "library", "package": "lstar",
              "summary": "Python implementation of lstar automata learning algorithm."}]
     with patch("core.catalog.resolve_capability", return_value=None), \
-         patch("core.exec.env_integrity.verify_python_imports", return_value=(False, {})), \
+         patch("core.exec.verify.verify_python_imports", return_value=(False, {})), \
          patch("content.bio.tools.discovery._search_external_for_name", return_value=fake):
         out = ensure_capability({"name": "lstar"})
     assert out["status"] == "candidates"

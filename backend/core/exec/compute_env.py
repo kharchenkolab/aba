@@ -258,7 +258,7 @@ def _build_compute_env() -> dict:
     # just "a GPU exists," when placing a GPU step.
     gpu_present = bool(env["node_gpus"]) or any(p.get("gpu") for p in env.get("partitions") or [])
     if gpu_present:
-        from core.exec.env_integrity import torch_cuda_build
+        from core.exec.verify import torch_cuda_build
         _cuda = torch_cuda_build()
         env["gpu_usable"] = _cuda is not None
         env["gpu_usable_reason"] = (

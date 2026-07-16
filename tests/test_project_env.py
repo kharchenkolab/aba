@@ -325,7 +325,7 @@ def test_ensure_capability_installs_into_session(stub, monkeypatch):
     def _verify(names, **kw):
         seen["n"] += 1
         return (seen["n"] > 1), ""
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports", _verify)
+    monkeypatch.setattr("core.exec.verify.verify_python_imports", _verify)
     r = d.ensure_capability({"name": "meshkit"})
     assert r["status"] == "ready", r
     assert calls == {"pid": pid, "lang": "python",

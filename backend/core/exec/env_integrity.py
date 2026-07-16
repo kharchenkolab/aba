@@ -24,55 +24,13 @@ from typing import Callable, Optional, Sequence
 
 from core import config
 
-
-def verify_python_imports(
-    import_names: Sequence[str],
-    *,
-    extra_paths: Optional[Sequence[str]] = None,
-    python_exe: Optional[str] = None,
-    timeout_s: int = 180,
-) -> tuple[bool, str]:
-    """Actually import each name in a fresh subprocess on the target interpreter.
-    Returns ``(ok, detail)``.
-
-    ``ok=False`` means present-but-unloadable — ABI mismatch, partial install,
-    missing system lib — i.e. the exact "find_spec says yes, import explodes"
-    case. ``detail`` carries the traceback tail for the agent/operator.
-
-    ``python_exe`` is the interpreter to probe (a weft session / named-env python);
-    its own site-packages are authoritative, so ``extra_paths`` defaults to none.
-    Pass ``extra_paths`` to verify against a temp install prefix before merging it
-    (transactional installs).
-    """
-    names = [n for n in (import_names or []) if n]
-    if not names:
-        return True, ""
-    exe = python_exe or sys.executable
-    if extra_paths is None:
-        extra_paths = []          # the target interpreter's own site-packages win
-    # append (not prepend) so the interpreter's own packages win
-    appends = "".join(f"sys.path.append({str(p)!r})\n" for p in (extra_paths or []))
-    names_lit = ", ".join(repr(n) for n in names)
-    script = (
-        "import sys\n"
-        f"{appends}"
-        "import importlib\n"
-        f"for _n in [{names_lit}]:\n"
-        "    importlib.import_module(_n)\n"
-        "print('ABA_IMPORT_OK')\n"
-    )
-    try:
-        proc = subprocess.run(
-            [exe, "-c", script], capture_output=True, text=True, timeout=timeout_s
-        )
-    except subprocess.TimeoutExpired:
-        return False, f"import verification timed out after {timeout_s}s"
-    except Exception as e:  # noqa: BLE001
-        return False, f"could not launch import verification: {e}"
-    if proc.returncode == 0 and "ABA_IMPORT_OK" in (proc.stdout or ""):
-        return True, ""
-    detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
-    return False, detail[-1400:]
+# W3.4: the honest import/GPU probes moved to core.exec.verify (this module keeps
+# the env diagnostics + FS self-checks). Re-exported here for compatibility.
+from core.exec.verify import (  # noqa: F401
+    gpu_capability_ok,
+    torch_cuda_build,
+    verify_python_imports,
+)
 
 
 def base_constraints_path() -> Path:
@@ -80,43 +38,6 @@ def base_constraints_path() -> Path:
     base) lives — next to the overlay it guards."""
     from core.exec.materialize import ENVS_DIR
     return Path(ENVS_DIR) / "base-constraints.txt"
-
-
-def gpu_capability_ok() -> tuple[Optional[bool], str]:
-    """Can a GPU workload actually use a GPU in THIS interpreter? (via torch.cuda).
-    Returns (ok, detail):
-      True  — a usable CUDA GPU is visible;
-      False — torch is present but sees NO usable GPU (a CPU-only build, or a CUDA
-              build with no runtime/driver on this node) — a GPU job would silently
-              run on CPU on an idle allocated GPU (the scVI-on-CPU incident);
-      None  — torch isn't importable → not a torch GPU job, so don't judge it.
-    The verify-at-use boundary: certainty about a remote node's accelerator can only
-    be had ON that node, so this runs where the job runs (slurm_entry) and also backs
-    the compute_env `gpu_usable` hint."""
-    try:
-        import torch  # noqa
-    except Exception:  # noqa: BLE001 — no torch → not a torch-GPU job
-        return None, "torch not importable"
-    try:
-        if torch.cuda.is_available():
-            return True, f"torch {torch.__version__}, cuda {torch.version.cuda}"
-        return False, (f"torch {torch.__version__} sees no usable GPU "
-                       f"(version.cuda={torch.version.cuda}, cuda.is_available()=False)")
-    except Exception as e:  # noqa: BLE001
-        return False, f"torch.cuda probe errored: {e}"
-
-
-def torch_cuda_build() -> Optional[str]:
-    """The CUDA version torch was BUILT against (`torch.version.cuda`), or None if torch
-    is a CPU-only build / not importable. Node-INDEPENDENT (a property of the build, not
-    of runtime GPU visibility) — so ABA on a CPU login node can tell whether a GPU JOB on
-    a compute node would be able to use the GPU, WITHOUT a GPU here. This is what backs
-    the compute_env `gpu_usable` hint; the on-node `gpu_capability_ok` is the verify-at-use."""
-    try:
-        import torch  # noqa
-        return torch.version.cuda
-    except Exception:  # noqa: BLE001
-        return None
 
 
 _PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")

@@ -499,7 +499,7 @@ def _run_in_via_weft(env_id: str, language: str, code: str, *,
 
 def verify_imports(project_id: str, name: str, imports: list[str]) -> tuple[bool, str]:
     """Real import check inside the named env (the isolated-lane replacement for
-    env_integrity.verify_python_imports)."""
+    verify.verify_python_imports)."""
     if not imports:
         return True, ""
     code = "import importlib\n" + "\n".join(

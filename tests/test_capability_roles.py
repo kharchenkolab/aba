@@ -162,7 +162,7 @@ def test_uncatalogued_but_pack_declared_reports_pack(packed, monkeypatch):
     is the pack, never external-registry candidates (a name match there can be
     an unrelated package)."""
     from content.bio.tools import discovery as d
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
+    monkeypatch.setattr("core.exec.verify.verify_python_imports",
                         lambda names, **kw: (False, "not installed"))
     r = d.ensure_capability({"name": "trimesh"})
     assert r["status"] == "provided_by_pack", r
@@ -177,7 +177,7 @@ def test_uncatalogued_alias_probe_by_package_name(packed, monkeypatch):
     import _packmode
     _packmode.enable(monkeypatch)          # W3.5: probe needs a session python
     from content.bio.tools import discovery as d
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
+    monkeypatch.setattr("core.exec.verify.verify_python_imports",
                         lambda names, **kw: (names == ["fastmesh"], ""))
     r = d.ensure_capability({"name": "fastmesh-tools"})
     assert r["status"] == "ready", r
@@ -191,7 +191,7 @@ def test_ready_response_carries_role_and_viewer_note(monkeypatch):
     import _packmode
     _packmode.enable(monkeypatch)          # W3.5: pip install into the weft session
     from content.bio.tools import discovery as d
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
+    monkeypatch.setattr("core.exec.verify.verify_python_imports",
                         lambda names, **kw: (True, ""))
     register_capability({
         "name": "volume-scope", "role": "viewer", "archetype": "library",
@@ -208,7 +208,7 @@ def test_ready_response_carries_converter_note(monkeypatch):
     import _packmode
     _packmode.enable(monkeypatch)
     from content.bio.tools import discovery as d
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
+    monkeypatch.setattr("core.exec.verify.verify_python_imports",
                         lambda names, **kw: (True, ""))
     r = d.ensure_capability({"name": "meshconv"})
     assert r["status"] == "ready" and r["role"] == "converter"
@@ -220,7 +220,7 @@ def test_plain_library_keeps_plain_note(monkeypatch):
     import _packmode
     _packmode.enable(monkeypatch)
     from content.bio.tools import discovery as d
-    monkeypatch.setattr("core.exec.env_integrity.verify_python_imports",
+    monkeypatch.setattr("core.exec.verify.verify_python_imports",
                         lambda names, **kw: (True, ""))
     r = d.ensure_capability({"name": "meshlib"})
     assert r["status"] == "ready" and r["role"] == "library"

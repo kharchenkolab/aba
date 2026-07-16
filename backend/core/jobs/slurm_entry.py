@@ -60,7 +60,7 @@ def main() -> int:
         # a non-torch GPU job, so we don't judge (ok is None). Applies in base AND
         # isolated envs — a GPU job must be able to use the GPU either way.
         if spec.get("gpu"):
-            from core.exec.env_integrity import gpu_capability_ok
+            from core.exec.verify import gpu_capability_ok
             _gpu_ok, _gpu_detail = gpu_capability_ok()
             if _gpu_ok is False:
                 result = {"error": "GPU requested but no usable GPU is visible to torch on "
@@ -77,7 +77,7 @@ def main() -> int:
         # rather than with a cryptic ImportError deep in the user's code. Isolated
         # envs (spec.env set) are self-contained, so skip the canary there.
         if not spec.get("env"):
-            from core.exec.env_integrity import verify_python_imports
+            from core.exec.verify import verify_python_imports
             _ok, _detail = verify_python_imports(["numpy"])
             if not _ok:
                 result = {"error": "background-job Python environment is broken: `import numpy` "
