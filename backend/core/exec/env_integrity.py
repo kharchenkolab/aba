@@ -1,136 +1,22 @@
-"""Environment-integrity primitives (env_refactor.md P0).
+"""Environment diagnostics + filesystem self-checks (env_refactor.md P0 remnant).
 
-Closes the gap that let corrupt installs be reported "ready": the old check was
-``PathFinder.find_spec`` (does a spec EXIST), not a real import. A package
-compiled against the wrong numpy ABI, a half-written package, or one missing a
-system lib all HAVE a spec but **fail to load** — the tensorflow/scipy incidents
-(2026-06-23/24). These helpers actually import the thing, on the real runtime
-sys.path, in a throwaway subprocess.
-
-Ground truth stays on the filesystem; these just probe it honestly. Language-
-symmetric: ``verify_python_imports`` mirrors run_python's path assembly,
-``verify_r_library`` wraps the existing ``r_has_package`` library()-load check.
+The honest import/GPU load-verification primitives moved to ``core.exec.verify``
+(W3.4); the served-base heal/repair/lock machinery was deleted with the served
+base itself (W3.5 — weft owns environment realization now). What remains is
+read-only: per-package + layered env diagnostics for the (i)-drawer Env tab, the
+``ensure_sys_executable`` startup recovery, the base-stage marker read, and the
+Slurm shared-FS self-checks (a node-local ENVS_DIR/base is unreachable by a job
+offloaded to another node).
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Optional, Sequence
 
 from core import config
-
-# W3.4: the honest import/GPU probes moved to core.exec.verify (this module keeps
-# the env diagnostics + FS self-checks). Re-exported here for compatibility.
-from core.exec.verify import (  # noqa: F401
-    gpu_capability_ok,
-    torch_cuda_build,
-    verify_python_imports,
-)
-
-
-def base_constraints_path() -> Path:
-    """Where the cached base-constraints (pip-freeze pin of the install-wide
-    base) lives — next to the overlay it guards."""
-    from core.exec.materialize import ENVS_DIR
-    return Path(ENVS_DIR) / "base-constraints.txt"
-
-
-_PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==")
-
-
-def _freeze_pins(python_exe: Optional[str] = None) -> Optional[list[str]]:
-    """Installed distributions of an interpreter as clean ``name==version`` constraint
-    lines. Uses ``importlib.metadata`` (NOT ``pip freeze``): a conda-forge / local-wheel
-    install — which pip freeze renders as ``name @ file://…``, an INVALID constraint that
-    the old ``==``-only filter silently dropped — is still pinned by version. On a conda
-    scientific base that drop meant numpy/scipy/scanpy vanished from the pins, turning the
-    numpy-drift guard off. Metadata knows name+version regardless of install form. Editable/
-    versionless dists are skipped (no usable pin). None on failure."""
-    import json
-    exe = python_exe or sys.executable
-    code = (
-        "import importlib.metadata as m, json\n"
-        "seen={}\n"
-        "for d in m.distributions():\n"
-        "    n=(d.metadata.get('Name') or '').strip()\n"
-        "    v=(d.version or '').strip()\n"
-        "    if n and v: seen.setdefault(n.lower(), f'{n}=={v}')\n"
-        "print(json.dumps(sorted(seen.values())))\n"
-    )
-    try:
-        proc = subprocess.run([exe, "-c", code], capture_output=True, text=True, timeout=120)
-    except Exception:  # noqa: BLE001
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    try:
-        pins = json.loads(proc.stdout.strip().splitlines()[-1])
-    except Exception:  # noqa: BLE001
-        return None
-    lines = [ln for ln in pins if _PIN_RE.match(ln)]     # keep only valid constraint lines
-    return lines or None
-
-
-def canonical_lock_path() -> Optional[Path]:
-    """A shipped/committed **canonical** base lock (the FULL intended scientific
-    stack, pinned), if configured via ``$ABA_BASE_LOCK``. Preferred over the
-    live-generated freeze so that on a MINIMAL install, on-demand installs still
-    pin to the canonical versions (env_refactor.md P6, lazy-from-lock). None if
-    not configured / missing."""
-    import os
-    p = config.settings.base_lock.get()
-    return Path(p) if (p and Path(p).exists()) else None
-
-
-def ensure_base_constraints(*, force: bool = False,
-                            python_exe: Optional[str] = None) -> Optional[Path]:
-    """The constraints file pinning the install-wide base so an overlay install
-    can't move numpy / scipy or pull an incompatible-ABI wheel — it must satisfy
-    the pin or fail loudly.
-
-    Resolution order (P6): a shipped **canonical lock** (`$ABA_BASE_LOCK`) wins —
-    so a minimal/lazy install pins to the full intended base; else the cached
-    freeze; else generate one from the live base. Returns the path or ``None``
-    (caller falls back to unconstrained + a logged warning — best-effort; never
-    block a real install on lock generation). ``force=True`` re-locks from the
-    live base (the "re-solve + re-lock" op)."""
-    canon = canonical_lock_path()
-    if canon is not None:
-        return canon
-    path = base_constraints_path()
-    if path.exists() and not force:
-        return path
-    lines = _freeze_pins(python_exe)
-    if not lines:
-        return None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        return None
-    return path
-
-
-def write_base_lock(out_path, *, python_exe: Optional[str] = None) -> Optional[Path]:
-    """Produce a **canonical** base lock by freezing the COMPLETE base — run on a
-    fully-provisioned box, ship/commit the result, and point ``$ABA_BASE_LOCK``
-    at it on minimal installs so they materialize the stack from the lock
-    (env_refactor.md P6). Returns the path written, or None."""
-    lines = _freeze_pins(python_exe)
-    if not lines:
-        return None
-    out = Path(out_path)
-    try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        return None
-    return out
 
 
 def python_package_status(name: str, *, project_id: Optional[str] = None,
@@ -200,9 +86,9 @@ def python_package_status(name: str, *, project_id: Optional[str] = None,
 
 def env_overview(project_id: Optional[str] = None) -> dict:
     """A map of the Python env — the no-package 'where am I' view: the project's
-    weft SESSION python (base pack + session_install additions), the aba runtime
-    interpreter, and whether the backend base lock exists. (The served-base pip
-    overlays are gone — W3.5.)"""
+    weft SESSION python (base pack + session_install additions) and the aba
+    runtime interpreter. (The served-base pip overlays + base lock are gone —
+    W3.5; weft owns environment realization.)"""
     from core.compute import base_env as _bev, project_env as _penv
     if project_id is None:
         from core import projects
@@ -217,8 +103,6 @@ def env_overview(project_id: Optional[str] = None) -> dict:
         "python": sys.executable,          # the aba runtime interpreter
         "session": {"project_id": project_id, "prefix": session,
                     "active": session is not None},
-        "base_lock": {"path": str(base_constraints_path()),
-                      "exists": base_constraints_path().exists()},
     }
 
 
@@ -359,9 +243,8 @@ def base_stage() -> str:
     create-env + the backend python-bio module completion under ABA_ENV_PREWARM=staged):
     'boot' (minimal base, server started) | 'completing' (full stack installing) |
     'ready'. Absent ⇒ 'ready' — eager builds and every pre-staging install. Lets the
-    startup self-heal avoid freezing/repairing a base that is intentionally still
-    being built (lazy_env_init.md), and lets the kernel path wait on a completing
-    base instead of erroring on a not-yet-installed import."""
+    kernel path wait on a completing base instead of erroring on a not-yet-installed
+    import (lazy_env_init.md)."""
     try:
         m = _base_prefix() / ".aba-base-stage"
         if m.exists():
@@ -371,60 +254,6 @@ def base_stage() -> str:
     except Exception:  # noqa: BLE001
         pass
     return "ready"
-
-
-# Known-harmless pip-check noise (optional extras that are intentionally absent).
-_PIPCHECK_IGNORE = ("tensorboard", "scvi-tools")
-_MISSING_RE = re.compile(r"requires (\S+?),? which is not installed", re.I)
-
-# The lazy workflow imports a plain `import scanpy` SKIPS — the ones that bit the
-# customer at sc.pp.neighbors (pandas→dateutil→six, numba/pynndescent/umap).
-_DEEP_IMPORTS = ["pandas", "dateutil", "six", "sklearn", "numba", "pynndescent", "umap", "scipy.sparse"]
-
-
-def base_health(*, deep: bool = True, python_exe: Optional[str] = None) -> dict:
-    """Is the base .venv's dependency CLOSURE intact? `pip check` catches missing
-    transitive deps (the `six` case `import scanpy` hides); ``deep`` also actually
-    imports the lazy workflow deps (sc.pp.neighbors' import tree). Returns
-    ``{ok, problems:[...], missing:[...]}`` — the read layer for self-heal +
-    error surfacing."""
-    exe = python_exe or sys.executable
-    problems: list[str] = []
-    try:
-        proc = subprocess.run([exe, "-m", "pip", "check"], capture_output=True, text=True, timeout=60)
-        for ln in ((proc.stdout or "") + (proc.stderr or "")).splitlines():
-            low = ln.lower().strip()
-            if not low or any(g in low for g in _PIPCHECK_IGNORE):
-                continue
-            if "not installed" in low or "has requirement" in low:
-                problems.append(ln.strip())
-    except Exception as e:  # noqa: BLE001
-        problems.append(f"pip check failed: {e}")
-    if deep:
-        script = "import " + ", ".join(_DEEP_IMPORTS) + "\nprint('ABA_DEEP_OK')"
-        try:
-            p2 = subprocess.run([exe, "-c", script], capture_output=True, text=True, timeout=120)
-            if "ABA_DEEP_OK" not in (p2.stdout or ""):
-                problems.append("deep import failed: " + ((p2.stderr or p2.stdout or "").strip())[-300:])
-        except Exception as e:  # noqa: BLE001
-            problems.append(f"deep import check failed: {e}")
-    missing = sorted({m.group(1) for p in problems for m in [_MISSING_RE.search(p)] if m})
-    return {"ok": not problems, "problems": problems, "missing": missing}
-
-
-def set_base_writable(writable: bool) -> bool:
-    """Flip the base site-packages writable/read-only (env_refactor.md immutable
-    base). Read-only is the steady state — nothing should mutate the base at
-    runtime; repair/rebuild flips it writable briefly. Best-effort."""
-    site = _base_site_dir()
-    if not site.exists():
-        return False
-    mode = "u+w" if writable else "a-w"
-    try:
-        subprocess.run(["chmod", "-R", mode, str(site)], capture_output=True, timeout=120)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
 
 
 def ensure_sys_executable() -> str:
@@ -450,60 +279,6 @@ def ensure_sys_executable() -> str:
             print(f"[env] recovered empty sys.executable -> {cand}", flush=True)
             return cand
     return sys.executable
-
-
-def repair_base(*, python_exe: Optional[str] = None) -> dict:
-    """Self-heal a broken base: reinstall the missing closure FROM THE CANONICAL
-    LOCK (so versions stay consistent). Flips the read-only base writable for the
-    repair, then re-locks it. Returns ``{repaired, installed, error}``."""
-    health = base_health()
-    if health["ok"]:
-        return {"repaired": False, "reason": "healthy"}
-    exe = python_exe or sys.executable
-    lock = ensure_base_constraints()
-    # Reinstall the named-missing deps from the lock; if pip-check couldn't name
-    # them (deep-import failure), reinstall the lock's full closure (idempotent —
-    # only missing/broken packages actually re-download).
-    targets = health["missing"]
-    was_writable = set_base_writable(True)
-    try:
-        cmd = [exe, "-m", "pip", "install", "--no-input"]
-        if lock:
-            cmd += ["-c", str(lock)]
-        if targets:
-            cmd += targets
-        elif lock:
-            cmd += ["-r", str(lock)]   # whole closure from the lock
-        else:
-            return {"repaired": False, "error": "broken but no lock + no named missing deps"}
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        ok = proc.returncode == 0
-    finally:
-        set_base_writable(False)   # restore read-only steady state
-    after = base_health()
-    return {"repaired": after["ok"], "installed": targets or "lock-closure",
-            "still_broken": after["problems"] if not after["ok"] else [],
-            "error": None if ok else (proc.stderr or proc.stdout or "")[-800:]}
-
-
-# ─── verify-once / skip-while-unchanged (avoid the ~9s deep check every boot) ──
-# The base is an IMMUTABLE foundation: once we've deep-verified it and frozen it
-# read-only, it cannot change until a rebuild. So re-running the full deep import
-# check on every startup is pure waste — it scales with the base's file count
-# (84k+ once the R/scientific stack lands) and dominates startup latency. We
-# stamp a fingerprint after a clean verify and skip the deep check while it holds.
-
-def base_is_readonly_fs() -> bool:
-    """True if the base lives on a read-only *filesystem* (not just chmod'd
-    read-only). The SIF/OOD case: the base is baked into a read-only squashfs
-    image and was already verified at build time, so per-launch re-verification
-    (and set_base_writable) is both pointless and impossible. Distinct from our
-    own `a-w` chmod, which leaves the FS writable — hence statvfs, not os.access."""
-    try:
-        st = os.statvfs(_base_site_dir())
-        return bool(st.f_flag & os.ST_RDONLY)
-    except Exception:  # noqa: BLE001
-        return False
 
 
 # ─── ENVS_DIR must be shared-FS under Slurm (finding F6b, HIGH) ────────────────
@@ -654,205 +429,3 @@ def check_base_dir_shared() -> dict:
                            "Use a slim SIF (image.base_dir on shared FS) or a native shared install.")}
     return {"ok": False, "severity": "warning",
             "detail": f"base venv shared-ness unverified ({detail}); confirm it is on shared storage."}
-
-
-def _base_stamp_path() -> Path:
-    """Where the 'base verified' stamp lives — under the mutable runtime root, NOT
-    the (read-only) base. Independent per install / per OOD tenant."""
-    from core.config import RUNTIME_DIR
-    return Path(str(RUNTIME_DIR)) / "base-verified.json"
-
-
-def base_fingerprint() -> str:
-    """Cheap identity of the current base: the canonical lock's content + the
-    base site-dir's mtime (changes when packages are added/removed) + the
-    interpreter. Stable across our read-only chmod (which doesn't alter dir
-    mtime), changes whenever the base is rebuilt or repaired."""
-    h = hashlib.sha256()
-    try:
-        lock = canonical_lock_path() or base_constraints_path()
-        if lock and lock.exists():
-            h.update(lock.read_bytes())
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        site = _base_site_dir()
-        h.update(str(site).encode())
-        h.update(str(site.stat().st_mtime_ns).encode())
-    except Exception:  # noqa: BLE001
-        pass
-    h.update(sys.version.encode())
-    h.update((sys.executable or "").encode())
-    return h.hexdigest()
-
-
-def _verified_stamp_matches(fp: str) -> bool:
-    try:
-        data = json.loads(_base_stamp_path().read_text())
-        return data.get("fingerprint") == fp
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _write_verified_stamp(fp: str) -> None:
-    try:
-        p = _base_stamp_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"fingerprint": fp}))
-        os.replace(tmp, p)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def self_heal_base(*, log: Callable[[str], None] = print) -> dict:
-    """Startup base self-heal, but only when it can actually matter:
-
-    - read-only FS (SIF/OOD immutable image) → skip; verified at build time.
-    - fingerprint stamp current → skip; base is immutable and unchanged since
-      its last clean deep verify.
-    - otherwise → deep verify, repair from the lock if broken, refreeze read-only,
-      and stamp. Meant to run in a BACKGROUND thread so startup-to-ready isn't
-      blocked on the ~9s deep import (env_root_cause covers the brief first-boot
-      window where a kernel could spawn before this completes)."""
-    site = _base_site_dir()
-    if not site.exists():
-        return {"skipped": "no-base"}
-    # Accelerator invariant (cheap, ALWAYS runs): on a CUDA deployment, warn loudly
-    # if torch is a CPU-only build (the scVI-on-CPU incident). The ABI-anchor
-    # self-check is gone with the served-base pip overlay it guarded (W3.5).
-    try:
-        if (config.settings.accelerator.get() or "").strip().lower() == "cuda" \
-                and torch_cuda_build() is None:
-            log("[startup] WARNING: accelerator=cuda but torch is a CPU-only "
-                "build — GPU jobs will run on CPU")
-    except Exception as e:  # noqa: BLE001 — a check must never block startup
-        log(f"[startup] accelerator check errored (non-fatal): {e}")
-    # Staged prewarm (lazy_env_init.md): the installer is still building the base
-    # (boot → completing → ready). Do NOT deep-verify/repair/freeze mid-write — a
-    # repair-from-lock would fight the in-flight `env update`, and a read-only freeze
-    # would make it fail ("Lacking write permission"). The installer owns the base
-    # until `ready`; the first boot AFTER completion has no stamp yet, so the normal
-    # deep verify + freeze + stamp runs then.
-    stage = base_stage()
-    if stage in ("boot", "completing"):
-        log(f"[startup] base staging in progress (stage={stage}) — skipping deep verify + freeze")
-        return {"skipped": "staging", "stage": stage}
-    if base_is_readonly_fs():
-        log("[startup] base on read-only filesystem (immutable image) — skipping deep verify")
-        return {"skipped": "readonly_fs"}
-    fp = base_fingerprint()
-    if _verified_stamp_matches(fp):
-        log("[startup] base unchanged since last verify — skipping deep check")
-        return {"skipped": "stamp"}
-    h = base_health(deep=True)
-    repaired = None
-    if not h["ok"]:
-        repaired = repair_base()
-        log(f"[startup] base was broken {h['problems'][:3]} -> repair: {repaired}")
-        h = base_health(deep=True)
-    else:
-        log("[startup] base health: ok (deep)")
-    if set_base_writable(False):
-        log("[startup] base set read-only (immutable foundation)")
-    if h["ok"]:
-        _write_verified_stamp(base_fingerprint())   # recompute: repair may have changed it
-        log("[startup] base verified — stamped to skip next boot's deep check")
-    return {"ok": h["ok"], "repaired": repaired}
-
-
-_BASE_HEALTH_TS = 0.0
-
-
-def ensure_base_healthy(*, throttle_s: int = 300) -> dict:
-    """Throttled check-and-repair, for the kernel-spawn / startup path. Skips the
-    (subprocess) check if one ran within ``throttle_s``. Returns the health/repair
-    summary, or ``{skipped:True}``."""
-    global _BASE_HEALTH_TS
-    import time as _t
-    now = _t.monotonic()
-    if now - _BASE_HEALTH_TS < throttle_s:
-        return {"skipped": True}
-    _BASE_HEALTH_TS = now
-    h = base_health(deep=False)   # fast pip-check; catches the missing-dep (six) case
-    if h["ok"]:
-        return {"ok": True}
-    return {"ok": False, "repair": repair_base(), "was": h["problems"]}
-
-
-# Surface patterns: a run failing this way is *likely* an env break, not user code.
-_ENV_FAIL_RE = re.compile(
-    r"numpy\.core\.multiarray failed to import|failed to import|"
-    r"ModuleNotFoundError|cannot import name|undefined symbol|"
-    r"DLL load failed|partially initialized module|circular import", re.I)
-
-
-def env_root_cause(stderr: str, *, repair: bool = True) -> Optional[dict]:
-    """Translate a cryptic import/ABI traceback into the BASE root cause — the
-    "what surfaces is the first thing that fails" fix. Returns None for ordinary
-    code errors (base intact) so normal failures aren't touched; otherwise a
-    surfaced note + (optionally) the result of an auto-repair. The deep call is
-    gated by the regex, so it only runs on import-shaped failures."""
-    if not stderr or not _ENV_FAIL_RE.search(stderr):
-        return None
-    h = base_health(deep=False)
-    if h["ok"]:
-        return None   # base closure intact — it's the user's own missing import
-    note = ("The base environment is broken (not your code): "
-            + "; ".join(h["problems"][:3]))
-    rep = repair_base() if repair else {"repaired": False, "reason": "repair disabled"}
-    if rep.get("repaired"):
-        note += f". Auto-repaired ({rep.get('installed')}) — re-run the cell."
-    else:
-        note += ". Auto-repair did not fully succeed; the environment needs attention."
-    return {"note": note, "base_problems": h["problems"], "repair": rep}
-
-
-def staging_import_note(stderr: str, *, wait_s: float = 30.0) -> Optional[dict]:
-    """During STAGED prewarm, a kernel import of a not-yet-installed base package
-    (scanpy/anndata/scvi/…) should read as 'environment still finishing setup', not
-    a code error or a broken base. If the base is boot/completing and `stderr` is a
-    missing-import, briefly wait for completion (emitting progress), then report
-    readiness. Returns None when not applicable (base ready, or not import-shaped) so
-    the normal env_root_cause / user-error path is unchanged. See lazy_env_init.md."""
-    import time
-    if not stderr or not _ENV_FAIL_RE.search(stderr):
-        return None
-    if base_stage() == "ready":
-        return None
-    m = re.search(r"No module named ['\"]([\w.]+)", stderr)
-    mod = (m.group(1).split(".")[0] if m else "")
-    try:
-        from core.runtime import progress
-        progress.emit("finishing environment setup (installing the scientific stack)…", phase="conda")
-    except Exception:  # noqa: BLE001
-        pass
-    # Guarantee the python-bio completion is actually running (first-use safety net:
-    # if the boot-time reconciler didn't start for any reason, this kicks it).
-    try:
-        from core.modules.reconciler import ensure_module
-        ensure_module("python-bio")
-    except Exception:  # noqa: BLE001
-        pass
-    deadline = time.monotonic() + max(0.0, wait_s)
-    while time.monotonic() < deadline and base_stage() != "ready":
-        time.sleep(2.0)
-    if base_stage() == "ready":
-        if mod:
-            try:
-                ok, _ = verify_python_imports([mod])
-            except Exception:  # noqa: BLE001
-                ok = True
-            if not ok:
-                return None   # base complete but this is a genuine extra → ensure_capability
-        return {"note": ("The analysis environment just finished setting up"
-                         + (f" ({mod} is ready)" if mod else "")
-                         + " — re-run the cell."),
-                "ready": True, "module": mod}
-    return {"note": ("The analysis environment is still finishing setup in the background "
-                     "(installing the scientific + bio stack). "
-                     + (f"`{mod}` isn't available yet — " if mod else "")
-                     + "data management and basic Python already work; re-run this in a minute."),
-            "ready": False, "module": mod}
-
-

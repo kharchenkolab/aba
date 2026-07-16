@@ -23,9 +23,9 @@ async def on_startup():
     start_worker()
     # Recover sys.executable FIRST if the launcher left it '' (bare argv[0] in
     # os.execve) — an empty interpreter silently poisons every subprocess that
-    # falls back to it (base self-heal pip, run_python, materialize), surfacing as
+    # falls back to it (run_python, materialize, capability verify), surfacing as
     # `PermissionError: [Errno 13] Permission denied: ''`. Must run before
-    # anything spawns a subprocess (incl. the reaper + base self-heal below).
+    # anything spawns a subprocess (incl. the reaper below).
     try:
         from core.exec.env_integrity import ensure_sys_executable
         ensure_sys_executable()
@@ -79,26 +79,11 @@ async def on_startup():
                 print(f"[startup] SELFCHECK {_r['severity'].upper()}: {_r['name']} — {_r['detail']}")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] selfcheck failed (non-fatal): {e}")
-    # Base self-heal + immutability (env_refactor.md) and isolated-env GC, run in
-    # the BACKGROUND so startup-to-ready isn't blocked. self_heal_base skips the
-    # ~9s deep verify entirely when the base is unchanged (fingerprint stamp) or
-    # on a read-only image (SIF/OOD) — both the steady state — and only does the
-    # full deep verify + repair-from-lock + refreeze when the base actually
-    # changed. The kernel-spawn path's import failures still get caught + repaired
-    # post-hoc by env_root_cause, covering the brief first-boot window.
-    async def _bg_base_maintenance():
-        def _work():
-            try:
-                from core.exec.env_integrity import self_heal_base
-                self_heal_base()
-            except Exception as e:  # noqa: BLE001
-                import traceback as _tb
-                print(f"[startup] base self-heal failed (non-fatal): {e}\n{_tb.format_exc()}")
-            # Named (weft) env footprint: weft owns realization lifecycle —
-            # reclaim is gc_plan/env_evict via doctor, not a boot-time sweep
-            # (a reclaimed realization rebuilds from its lock on next use).
-        await asyncio.to_thread(_work)
-    asyncio.create_task(_bg_base_maintenance())
+    # Base self-heal is GONE (W3.4/W3.5): weft owns environment realization now —
+    # the base is a static conda env (no runtime pip overlay to drift/repair), and
+    # weft envs are content-addressed + rebuilt from their lock on next use, so
+    # there is no boot-time base repair or isolated-env sweep. Named-env reclaim is
+    # gc_plan/env_evict via `aba doctor`, not a startup task.
 
     # Module reconciler (misc/modules.md): the backend — not the installer — owns
     # post-install. Installs every enabled-but-missing module (default: the python-bio
