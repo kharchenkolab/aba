@@ -428,6 +428,16 @@ def entities_download(entity_id: str):
     resolved = _artifact_url_to_path(path_str)
     path = resolved if resolved is not None else Path(path_str)
     if not path.exists():
+        # P5 legacy shim: the aba /artifacts copy is a size-capped SERVING cache,
+        # not weft-managed — an evicted (or never-copied, link-only oversize)
+        # artifact leaves this path dangling while weft still holds the bytes
+        # durably. Resolve the entity's own reference (exec_id → run → rel)
+        # through the P3 facade before declaring it missing.
+        from content.bio.lifecycle.runs import resolve_entity_output
+        info = resolve_entity_output(entity_id)
+        if info and info["kind"] == "file":
+            path = Path(info["local_path"])
+    if not path.exists() or not path.is_file():
         raise HTTPException(404, "artifact file is missing on disk")
     # Suggest a reasonable filename based on the entity's title.
     base = e["title"].replace("/", "_").strip()
@@ -1366,12 +1376,20 @@ def pagoda3_store(pid: str, relpath: str):
     from core.config import project_root
     root = project_root(pid)
     base = root / "pagoda3"
+    # P3 serve-in-place: a store produced on the weft substrate lives in weft's
+    # retained tree or a live kernel jobdir (both under the weft workspace) and is
+    # SYMLINKED into pagoda3/, never copied — weft is the system of record. So the
+    # allowed real-target roots are this project + the weft workspace. Only links
+    # WE place can point there; the `..` block in resolve_within keeps the URL
+    # itself from walking out of pagoda3/ (matched pair — see resolve_within).
+    extra = [root]
     try:
-        # A native `.lstar.zarr` produced by a run lives under work/ and is
-        # symlinked into pagoda3/ (not copied) — so allow following that link as
-        # long as its real target stays inside THIS project. The `..` block in
-        # resolve_within keeps the URL itself from walking out of pagoda3/.
-        f = resolve_within(base, relpath, extra_roots=(root,))
+        from core.compute.adapter import weft_workspace
+        extra.append(weft_workspace())
+    except Exception:  # noqa: BLE001 — no weft configured → project-only, as before
+        pass
+    try:
+        f = resolve_within(base, relpath, extra_roots=tuple(extra))
     except ValueError:
         raise HTTPException(403, "path escapes store root")
     if not f.is_file():

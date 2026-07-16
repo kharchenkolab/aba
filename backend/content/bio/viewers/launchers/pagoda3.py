@@ -192,12 +192,14 @@ def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
     """Place an already-built `.lstar.zarr` DIRECTORY store where the store route
     can serve it, WITHOUT copying the tree when avoidable.
 
-    A store inside the project (the usual case — a run wrote it under work/) is
-    SYMLINKED into pagoda3/: the store route follows a project-internal symlink,
-    so there's no reason to duplicate a possibly-multi-GB tree on every open. A
-    store OUTSIDE the project (a registered external path the route can't reach
-    through the project sandbox) is copied in as a fallback. Idempotent: an
-    existing correct symlink is reused; a stale/wrong one is replaced."""
+    A store inside the project OR inside the weft workspace — the retained tree
+    (`runs/<label>/<target>/`) or a live kernel jobdir, P3 serve-in-place: weft is
+    the system of record, aba holds only references — is SYMLINKED into pagoda3/:
+    the store route follows the link (its allowed real-target roots are the
+    project + the weft workspace), so a possibly-multi-GB tree is never duplicated
+    on open. Only a store outside BOTH (a registered external path) is copied in
+    as a fallback. Idempotent: an existing correct symlink is reused; a
+    stale/wrong one is replaced."""
     sp = set_phase or (lambda *_: None)
     cache_dir.mkdir(parents=True, exist_ok=True)
     out = cache_dir / out_name
@@ -208,11 +210,13 @@ def _serve_native_store(src: Path, cache_dir: Path, out_name: str,
         out.unlink()                            # replace a stale/dangling link
     elif out.exists():
         shutil.rmtree(out, ignore_errors=True)  # replace an old copied tree
+    allowed = [project_root.resolve()]
     try:
-        real.relative_to(project_root.resolve())
-        inside = True
-    except ValueError:
-        inside = False
+        from core.compute.adapter import weft_workspace
+        allowed.append(weft_workspace().resolve())
+    except Exception:  # noqa: BLE001 — no weft configured → project-only
+        pass
+    inside = any(real == r or r in real.parents for r in allowed)
     if inside:
         sp("Linking store…")
         out.symlink_to(real, target_is_directory=True)

@@ -116,15 +116,17 @@ def test_declared_output_names_helper(monkeypatch):
     assert runsmod._declared_output_names({}) == set()   # no plan → empty
 
 
-def test_retain_skips_transient_and_is_idempotent(monkeypatch):
-    """R1 level-1: obvious scratch (tmp/, cache/, *.tmp, chunk_*) excluded. Idempotent:
-    a path already covered by a pending retain row isn't re-issued (so plan-end + close +
-    extension only add NEW files)."""
+def test_retain_is_cumulative_and_skips_transient(monkeypatch):
+    """P1: obvious scratch (tmp/, cache/, *.tmp, chunk_*) excluded, and the submitted
+    selection is CUMULATIVE — a path already covered by a pending retain row is
+    re-submitted alongside the new file (weft's put_retained is an INSERT-OR-REPLACE per
+    target, so a delta submit would drop earlier turns' pins at settlement). A call with
+    nothing newly decided issues no retain at all (idempotent skip)."""
     import json
     import core.exec.artifacts as artmod
     import core.compute.retention as retmod
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
-        {"original_name": "umap.png"},               # already retained (below)
+        {"original_name": "umap.png"},               # already pending (below)
         {"original_name": "big.h5ad"},               # NEW keeper
         {"original_name": "tmp/scratch.dat"},        # transient DIR
         {"original_name": "cache/x.bin"},            # transient DIR
@@ -137,7 +139,39 @@ def test_retain_skips_transient_and_is_idempotent(monkeypatch):
     monkeypatch.setattr(retmod, "retain",
                         lambda target, **kw: calls.append(kw) or {"state": "pinned-pending"})
     runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a"]})
-    assert calls[0]["include"] == ["big.h5ad"]       # transients dropped; umap.png already pending
+    # cumulative: earlier pin re-submitted with the new keeper; transients dropped
+    assert calls[0]["include"] == ["big.h5ad", "umap.png"]
+
+    # nothing newly decided → NO retain call (the stored selection already covers it)
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "pinned-pending",
+         "selection": json.dumps({"include": ["big.h5ad", "umap.png"]})}])
+    calls.clear()
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a"]})
+    assert calls == []
+
+
+def test_retain_includes_directory_stores_from_jobdir(monkeypatch):
+    """P1 / #71: a directory-shaped store in the Run's jobdir (invisible to the file-only
+    harvest) enters the keeper set as a directory literal; stores under transient dirs
+    don't, and the store's chunk contents are not enumerated."""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    jd = _P(_tf.mkdtemp(prefix="aba_jobdir_"))
+    (jd / "dataset_cube.zarr" / "c").mkdir(parents=True)
+    (jd / "dataset_cube.zarr" / "c" / "0.0").write_bytes(b"\0" * 8)
+    (jd / "tmp" / "scratch.zarr").mkdir(parents=True)          # transient dir → skipped
+    monkeypatch.setattr(runsmod, "_run_jobdirs", lambda rid: [str(jd)])
+    monkeypatch.setattr(artmod, "artifacts_for_run",
+                        lambda rid: [{"original_name": "umap.png"}])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    calls = []
+    monkeypatch.setattr(retmod, "retain",
+                        lambda target, **kw: calls.append(kw) or {"state": "pinned-pending"})
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a"]})
+    assert calls[0]["include"] == ["dataset_cube.zarr", "umap.png"]
 
 
 def test_is_transient_matrix():
@@ -153,7 +187,8 @@ _TESTS = [
     test_retain_run_outputs_swallows_retain_errors,
     test_retain_includes_declared_unsurfaced_outputs,
     test_declared_output_names_helper,
-    test_retain_skips_transient_and_is_idempotent,
+    test_retain_is_cumulative_and_skips_transient,
+    test_retain_includes_directory_stores_from_jobdir,
     test_is_transient_matrix,
 ]
 

@@ -32,16 +32,25 @@ def _mk(**md) -> str:
 
 
 def test_keep_retains_rel_against_each_target(monkeypatch):
+    """P1: the late-pin goes through the CUMULATIVE keep machinery — the rel is
+    recorded as a keep decision and the submitted selection carries every prior
+    keep too (a bare retain([rel]) would replace the Run's stored selection)."""
+    import json
     calls = []
     monkeypatch.setattr(retmod, "retain",
                         lambda target, **kw: calls.append((target, kw))
                         or {"state": "pinned-pending"})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "pinned-pending",
+         "selection": json.dumps({"include": ["earlier.csv"]})}])
     rid = _mk(thread_id="t", run_state="open", weft_targets=["krn_a", "jb_b"])
     out = rt.run_keep(rid, rt._KeepBody(rel="figs/big.h5ad"))
     assert out["ok"] and out["rel"] == "figs/big.h5ad"
+    assert out["decision"]["include"] == ["figs/big.h5ad"]   # recorded level-2 keep
     assert {c[0] for c in calls} == {"krn_a", "jb_b"}
     for _target, kw in calls:
-        assert kw["include"] == ["figs/big.h5ad"]
+        # cumulative: the new rel PLUS the earlier pin, never a delta
+        assert kw["include"] == ["earlier.csv", "figs/big.h5ad"]
         assert kw["label"] == rid and kw["layout"] == "label"
 
 

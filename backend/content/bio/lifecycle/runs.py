@@ -332,38 +332,86 @@ def _keeper_set(produced: set, include=(), exclude=()) -> set:
     return keep
 
 
-def _already_retained_paths(run_id: str) -> set:
-    """Literal paths already covered by a pending/done retain row for this Run — so a repeat
-    retain (plan-end, then Run-close, then an extension) adds only NEW files. This is what
-    makes `_retain_run_outputs` idempotent + safe to call at every checkpoint."""
+def _retained_so_far(run_id: str) -> tuple:
+    """`(decided, placed)` across this Run's existing retain rows: `decided` is the literal
+    include paths of every pending/done row's selection — the keeper decisions weft already
+    holds; `placed` is the relpaths a DONE retain physically kept (sidecar). Backs the
+    CUMULATIVE resubmit in `_retain_run_outputs`: weft's `put_retained` keeps ONE row per
+    target (INSERT OR REPLACE), so a delta submit would overwrite earlier turns' pins and
+    lose them at settlement."""
     import json as _json
     from core.compute import retention
-    out: set = set()
+    decided: set = set()
+    placed: set = set()
     try:
         for row in (retention.retained(label=run_id) or []):
             st = row.get("state")
             if st == "done":
-                out |= _sidecar_files(retention.location_path(row))
+                placed |= _sidecar_files(retention.location_path(row))
             if st in ("done", "pinned-pending", "queued", "inflight"):
                 try:
                     sel = _json.loads(row.get("selection") or "{}")
                 except Exception:  # noqa: BLE001
                     sel = {}
-                out |= {g for g in (sel.get("include") or [])
-                        if not any(c in g for c in "*?[")}   # literal include paths only
+                decided |= {g for g in (sel.get("include") or [])
+                            if not any(c in g for c in "*?[")}   # literal include paths only
     except Exception as e:  # noqa: BLE001
         _log.debug("already-retained lookup failed for %s: %s", run_id, e)
+    return decided, placed
+
+
+# Directory-shaped stores (a chunked columnar/array store is a DIRECTORY, not a file).
+# Harvest lists single files by extension, so these never reach artifacts_for_run —
+# the jobdir scan below is how they enter the keeper set (P1 / #71). Suffix-matched
+# with endswith so multi-dot names (`x.lstar.zarr`) qualify too.
+_STORE_DIR_SUFFIXES = (".zarr",)
+_STORE_SCAN_MAX_DIRS = 2000   # bound the walk on a chunk-heavy jobdir
+
+
+def _jobdir_store_dirs(run_id: str) -> set:
+    """Sandbox-relative paths of store-suffix DIRECTORIES in the Run's local weft
+    jobdir(s) — retain candidates that harvest (file-only) can't see. Does not descend
+    into a matched store (its chunks travel with the directory literal) or into
+    transient dirs; bounded; best-effort empty on any failure."""
+    import os as _os
+    out: set = set()
+    visited = 0
+    try:
+        for root in _run_jobdirs(run_id):
+            rootr = _os.path.realpath(root)
+            if not _os.path.isdir(rootr):
+                continue
+            for dirpath, dirnames, _files in _os.walk(rootr):
+                visited += 1
+                if visited > _STORE_SCAN_MAX_DIRS:
+                    break
+                keep_dirs = []
+                for d in dirnames:
+                    if d in _TRANSIENT_DIRS or d.startswith("."):
+                        continue
+                    if d.lower().endswith(_STORE_DIR_SUFFIXES):
+                        rel = _os.path.relpath(_os.path.join(dirpath, d), rootr)
+                        out.add(rel.replace(_os.sep, "/"))
+                        continue                 # a store travels as a unit — don't walk chunks
+                    keep_dirs.append(d)
+                dirnames[:] = keep_dirs
+    except Exception as e:  # noqa: BLE001 — a failed scan only means no dir stores this pass
+        _log.debug("jobdir store scan failed for %s: %s", run_id, e)
     return out
 
 
 def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     """Durably retain this Run's KEEPER outputs against its weft target(s) — labeled to the
     Run (runs/<run>/<target>/), pinned-pending on the live session kernel (captured at
-    settlement; §6.3). INCREMENTAL + IDEMPOTENT: skips obvious transients (level-1) and
-    anything already retained/pending, so it's safe to call at plan-end, Run-close, and each
-    extension. The Run's OWN produced sandbox-relative paths (the shared kernel sandbox spans
-    Runs), incl. oversize link-only files (§9 A0) + declared `produces:` (§6 rank-1).
-    Best-effort — retention must never break a turn."""
+    settlement; §6.3). CUMULATIVE + IDEMPOTENT: each call submits the FULL keeper set
+    decided so far (an idempotent replace — weft keeps one row per target, so a delta
+    submit would drop earlier turns' pins at settlement), skipping only when nothing new
+    was decided. Safe to call at every turn end, plan-end, Run-close, and each extension.
+    The Run's OWN produced sandbox-relative paths (the shared kernel sandbox spans Runs),
+    incl. oversize link-only files (§9 A0), directory-shaped stores from the jobdir scan
+    (#71 — harvest is file-only), + declared `produces:` (§6 rank-1).
+    Best-effort — retention must never break a turn, but failures are surfaced on the Run
+    (`metadata.retention_alert`) rather than swallowed."""
     targets = list(run_metadata.get("weft_targets") or [])
     if not targets:
         return  # jupyter / no weft kernel → nothing to retain against
@@ -374,28 +422,63 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     except Exception as e:  # noqa: BLE001
         _log.warning("retain: could not list artifacts for run %s: %s", run_id, e)
         return
+    produced |= _jobdir_store_dirs(run_id)   # directory stores — invisible to harvest
     declared = _declared_output_names(run_metadata)
     if declared:
         produced_basenames = {p.rsplit("/", 1)[-1] for p in produced}
         produced |= {n for n in declared if n not in produced_basenames}
     decision = run_metadata.get("keep_decision") or {}            # level-2: agent keep_outputs triage
     keep = _keeper_set(produced, decision.get("include"), decision.get("exclude"))
-    new = sorted(keep - _already_retained_paths(run_id))          # incremental/idempotent
-    if not new:
-        return
+    decided, placed = _retained_so_far(run_id)
+    if not (keep - decided - placed):
+        return   # nothing newly decided — the stored selection / retained tree covers it
+    cumulative = sorted(keep | decided)      # full keeper set, never a delta
+    if not cumulative:
+        return   # run_retain errors on an empty match
     from core.compute import retention
+    errors: list = []
     for t in targets:
         try:
-            retention.retain(t, include=new, label=run_id,
+            retention.retain(t, include=cumulative, label=run_id,
                              layout="label", background=True)
-        except Exception as e:  # noqa: BLE001 — logged, never blocks the turn
+        except Exception as e:  # noqa: BLE001 — logged + surfaced, never blocks the turn
             _log.warning("retain failed for run %s target %s: %s", run_id, t, e)
+            errors.append(f"{t}: {e}")
+    _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
+
+
+def _note_retention_alert(run_id: str, run_metadata: dict, msg) -> None:
+    """Persist (or clear, msg=None) a retain-failure alert on the Run, so headroom
+    refusals / retain.failed reach the Run card instead of dying in a log line. Mutates
+    the caller's metadata dict too — close_run rewrites the entity from its own copy
+    right after, and must not clobber the alert. Best-effort."""
+    changed = (run_metadata.get("retention_alert") or None) != (msg or None)
+    if msg:
+        run_metadata["retention_alert"] = msg
+    else:
+        run_metadata.pop("retention_alert", None)
+    if not changed:
+        return
+    try:
+        ent = get_entity(run_id)
+        if not ent:
+            return
+        md = dict(ent.get("metadata") or {})
+        if msg:
+            md["retention_alert"] = msg
+        else:
+            md.pop("retention_alert", None)
+        update_entity(run_id, metadata=md)
+    except Exception:  # noqa: BLE001 — the alert is best-effort bookkeeping
+        pass
 
 
 def retain_run_keepers(run_id: str) -> None:
-    """Retain a Run's keepers NOW — the plan-end / extension entry point (guide_hooks
-    on_plan_complete), so durability + the Files panel are ready promptly instead of waiting
-    for Run-close. Incremental + idempotent; the close_run call is then a backstop."""
+    """Retain a Run's keepers NOW — the turn-end reconciliation entry point (guide_hooks:
+    on_stop for EVERY completed turn incl. plain re-runs, on_turn_failed for crashed ones,
+    on_plan_complete at plan-end), so durability + the Files panel are ready promptly
+    instead of waiting for Run-close. Cumulative + idempotent (a call with nothing newly
+    decided is a no-op); the close_run call is then a backstop."""
     try:
         ent = get_entity(run_id)
         if ent:
@@ -574,32 +657,120 @@ def _run_jobdirs(run_id: str) -> list:
     return out
 
 
-def resolve_run_output_path(run_id: str, name: str) -> Optional[str]:
-    """Absolute LOCAL path to a Run output FILE or DIRECTORY matching `name` (basename or rel),
-    across tiers: weft retained tree (`done` location) → the live weft jobdir(s) → the run
-    sandbox. Directory-aware — a `.zarr` STORE resolves (unlike `resolve_run_file`, which is
-    file-only) — and escape-safe. None when not locally resolvable (in-sandbox on a REMOTE site,
-    or swept). Backs viewer resolution of a fresh weft output not yet registered as an entity."""
+def _sidecar_resolve(loc: str, name: str) -> Optional[str]:
+    """Resolve `name` inside a RETAINED location via its `.weft-run.json` sidecar —
+    catalog-first, no directory walk (misc/output_serving_model.md: catalog rows are
+    per-run, so an artifact/store resolves as location + '/' + rel with the sidecar's
+    file list prefix-grouped). Matches an exact rel, a DIRECTORY prefix (a store's
+    chunk files enumerate under '<…>/<name>/…' — the match is the store dir itself),
+    or a basename. Only sidecar-listed rels are ever joined (never raw caller input),
+    so the result can't escape `loc`. None if the sidecar can't resolve it."""
+    import os as _os
+    files = _sidecar_files(loc)
+    if not files:
+        return None
+    base = name.rsplit("/", 1)[-1]
+
+    def _existing(rel: str) -> Optional[str]:
+        p = _os.path.join(loc, rel)
+        return _os.path.realpath(p) if _os.path.exists(p) else None
+    if name in files:                                 # exact rel
+        return _existing(name)
+    for rel in sorted(files):                         # store-dir prefix group
+        parts = rel.split("/")
+        if base in parts[:-1]:
+            return _existing("/".join(parts[:parts.index(base) + 1]))
+    for rel in sorted(files):                         # basename file match
+        if rel.rsplit("/", 1)[-1] == base:
+            return _existing(rel)
+    return None
+
+
+def resolve_output(run_id: str, name: str) -> Optional[dict]:
+    """P3 serving facade: resolve a Run output (FILE or DIRECTORY store) matching
+    `name` (basename or rel) across tiers, catalog-first —
+
+        {local_path, rel, root, locality, durability, kind}
+
+    Tiers, in order: weft retained tree (`done` rows — resolved from the catalog
+    sidecar, walk only as fallback; durability="retained") → the live weft jobdir(s)
+    (durability="live"; `rel` is sandbox-relative, i.e. retain-include ready) → the
+    run sandbox `artifact_path` (jupyter / non-weft; durability="scratch").
+    `locality` is hard-wired "local" until the remote arms (P6). `kind` is
+    "dir" | "file". Escape-safe on every tier. None when not locally resolvable
+    (in-sandbox on a REMOTE site, or swept). aba serves IN PLACE from `local_path`
+    — weft is the system of record; nothing here copies bytes."""
+    import os as _os
     from core.compute import retention
-    roots: list = []
+    tiers: list = []                                   # (root, durability, catalog_first)
     try:
         for row in (retention.retained(label=run_id) or []):
             if row.get("state") == "done":
                 loc = retention.location_path(row)
                 if loc:
-                    roots.append(loc)
+                    tiers.append((loc, "retained", True))
     except Exception as e:  # noqa: BLE001
-        _log.debug("resolve_run_output_path: retained() failed for %s: %s", run_id, e)
-    roots.extend(_run_jobdirs(run_id))
+        _log.debug("resolve_output: retained() failed for %s: %s", run_id, e)
+    tiers.extend((d, "live", False) for d in _run_jobdirs(run_id))
     ent = get_entity(run_id)
     ap = (ent or {}).get("artifact_path")
     if ap:
-        roots.append(ap)                                          # jupyter / non-weft fallback
-    for root in roots:
-        hit = _search_root_for(root, name)
+        tiers.append((ap, "scratch", False))           # jupyter / non-weft fallback
+    for root, durability, catalog_first in tiers:
+        hit = (_sidecar_resolve(root, name) if catalog_first else None) \
+            or _search_root_for(root, name)
         if hit:
-            return hit
+            rootr = _os.path.realpath(root)
+            return {"local_path": hit,
+                    "rel": _os.path.relpath(hit, rootr).replace(_os.sep, "/"),
+                    "root": rootr,
+                    "locality": "local",
+                    "durability": durability,
+                    "kind": "dir" if _os.path.isdir(hit) else "file"}
     return None
+
+
+def resolve_run_output_path(run_id: str, name: str) -> Optional[str]:
+    """Absolute LOCAL path to a Run output FILE or DIRECTORY matching `name` (basename or rel),
+    across tiers: weft retained tree (`done` location) → the live weft jobdir(s) → the run
+    sandbox. Directory-aware — a `.zarr` STORE resolves (unlike `resolve_run_file`, which is
+    file-only) — and escape-safe. None when not locally resolvable (in-sandbox on a REMOTE site,
+    or swept). Thin wrapper over the P3 `resolve_output` facade (path only)."""
+    info = resolve_output(run_id, name)
+    return info["local_path"] if info else None
+
+
+def resolve_entity_output(entity_id: str) -> Optional[dict]:
+    """P5 legacy shim: resolve a PINNED entity's bytes through the P3 facade —
+    `resolve_output`'s dict, or None.
+
+    An entity materialized from an artifact records its `artifact_path` as an aba
+    SERVED path (`/artifacts/<pid>/<hash>.png`) — that copy is aba's own serving
+    cache (harvest, size-capped), NOT weft-managed and not covered by `run_forget`.
+    So when it's absent (evicted, a project moved, or a link-only oversize artifact
+    that was never copied), the entity 404s even though weft holds the bytes
+    durably. But the entity already carries a durable REFERENCE it simply never
+    used: `exec_id` → the exec record's `run_id`, plus `metadata.original_name`
+    (the sandbox-relative path). Resolve through that.
+
+    This is §7's identity migration as a read-side shim: no schema change, legacy
+    `/artifacts` paths keep working (callers try them first), and the durable tier
+    becomes reachable when they don't. Best-effort — never raises."""
+    try:
+        ent = get_entity(entity_id)
+        if not ent:
+            return None
+        rel = (ent.get("metadata") or {}).get("original_name")
+        exec_id = ent.get("exec_id")
+        if not rel or not exec_id:
+            return None
+        from core.graph import exec_records
+        rec = exec_records.get(exec_id) or {}
+        rid = rec.get("run_id")
+        return resolve_output(rid, rel) if rid else None
+    except Exception as e:  # noqa: BLE001 — a shim must never break a download
+        _log.debug("resolve_entity_output failed for %s: %s", entity_id, e)
+        return None
 
 
 def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
@@ -665,9 +836,12 @@ def run_durable_view(run_id: str) -> dict:
     done_sel: list = []          # [(include_globs, exclude_globs, meta)] for remote rows
     pending_lit: set = set()     # literal include paths of pinned-pending retains → per-file "saving"
     pending_glob: list = []      # glob include patterns of pinned-pending retains
+    failed_rows = 0              # retain rows that ended `failed` — surfaced, not swallowed
     try:
         for row in (retention.retained(label=run_id) or []):
             state = row.get("state")
+            if state == "failed":
+                failed_rows += 1
             if state == "pinned-pending":
                 try:
                     inc = _json.loads(row.get("selection") or "{}").get("include") or []
@@ -804,7 +978,21 @@ def run_durable_view(run_id: str) -> dict:
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
         counts[_COUNT_KEY[state]] += 1
-    return {"files": files, "summary": {**counts, "total": len(files)}}
+    summary: dict = {**counts, "total": len(files)}
+    # P1 honest surfacing (UI-only — never injected into agent context; see project
+    # CLAUDE.md on shared agent inputs): declared outputs the run never produced, retain
+    # rows that ended `failed`, and the last synchronous retain error recorded on the Run.
+    declared = _declared_output_names(md)
+    if declared:
+        produced_basenames = {f["rel"].rsplit("/", 1)[-1] for f in files}
+        missing = sorted(n for n in declared if n not in produced_basenames)
+        if missing:
+            summary["missing_declared"] = missing
+    if failed_rows:
+        summary["retain_failed"] = failed_rows
+    if md.get("retention_alert"):
+        summary["retention_alert"] = md["retention_alert"]
+    return {"files": files, "summary": summary}
 
 
 def run_durable_tree(run_id: str) -> dict:
@@ -1029,17 +1217,25 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     (<exec_id>:<kind>:<idx>) when the file matches an artifact recorded
     in one of the Run's exec records. Frontends can use that id to pin
     via /api/artifacts/.../pin without the legacy disk-scan-pin path.
+
+    P2 (misc/output_serving_model.md): the HARVEST record (exec-record
+    `produced[]`, via artifacts_for_run) is the primary source — for a
+    weft-substrate Run the entity `artifact_path` scratch dir holds only
+    exec sidecars (the outputs live in the weft jobdir / retained tree),
+    so the disk scan yields nothing there. The scan is kept and unioned
+    for runs whose dir IS the output tree (jupyter runs, by-reference
+    imported runs — external_import.md browses those with zero copy).
+    Harvest-sourced entries resolve through the tier-crossing
+    /api/runs/{rid}/file route, so they keep working past the sweep.
+    (Directory stores still don't appear here — catalog migration later.)
     """
     from pathlib import Path
     ent = get_entity(run_id)
     if not ent:
         return
     d = ent.get("artifact_path")
-    if not d:
-        return
-    base = Path(d)
-    if not base.exists():
-        return
+    base = Path(d) if d else None
+    scan_disk = base is not None and base.exists()
     plot_urls_by_name = plot_urls_by_name or {}
     from urllib.parse import quote
     # Build a lookup from "original_name basename" → artifact_id for this
@@ -1050,8 +1246,10 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     # subdirs prefer the most recently produced exec.
     from core.exec.artifacts import artifacts_for_run
     name_to_artifact: dict[str, str] = {}
+    run_artifacts: list = []
     try:
-        for a in artifacts_for_run(run_id):
+        run_artifacts = artifacts_for_run(run_id)
+        for a in run_artifacts:
             leaf = (a.get("original_name") or "").rsplit("/", 1)[-1]
             if leaf:
                 name_to_artifact[leaf] = a["artifact_id"]
@@ -1060,6 +1258,10 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
 
     def _entry(f: Path) -> Optional[dict]:
         if not f.is_file() or f.name.startswith("."):
+            return None
+        # Skip anything under a hidden dir too — .exec/ holds exec-record
+        # sidecars (internal bookkeeping), not user-facing outputs.
+        if any(p.startswith(".") for p in f.relative_to(base).parts[:-1]):
             return None
         try:
             sz = f.stat().st_size
@@ -1093,8 +1295,51 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
 
     outputs: list[dict] = []
     seen_rel: set[str] = set()
-    for f in sorted(base.rglob("*")):
-        e = _entry(f)
+    if scan_disk:
+        for f in sorted(base.rglob("*")):
+            e = _entry(f)
+            if e:
+                outputs.append(e)
+                seen_rel.add(e["label"])
+
+    def _entry_for_name(nm, *, size_bytes=None, url_hint=None) -> Optional[dict]:
+        """Manifest entry for an output known by NAME (a harvest record / harvester
+        result) rather than by a local stat — href through the tier-resolving
+        /api/runs/{rid}/file route (retained tree → sandbox), size best-effort
+        (disk if visible, else the record's)."""
+        rel = Path(str(nm)).as_posix()
+        if not rel or rel in seen_rel:
+            return None
+        name = rel.rsplit("/", 1)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
+        sz = size_bytes
+        if sz is None and scan_disk:
+            try:
+                sz = (base / rel).stat().st_size
+            except OSError:
+                sz = None                   # not visible → omit size, still list it
+        if ext in _FIG_EXT:
+            out = {"kind": "figure", "label": rel,
+                   "thumb": plot_urls_by_name.get(name) or url_hint or url, "href": url}
+        elif ext in _TAB_EXT:
+            out = {"kind": "table", "label": rel, "href": url}
+        else:
+            out = {"kind": "file", "label": rel, "href": url + "&download=1"}
+        if sz is not None:
+            out["size"] = _human_size(sz)
+        artifact_id = name_to_artifact.get(name)
+        if artifact_id:
+            out["artifact_id"] = artifact_id
+        return out
+
+    # P2: union the harvest-record outputs — the authoritative, durable list of
+    # what the Run produced. For a weft run the disk scan above found nothing
+    # (the scratch dir holds only exec sidecars), so this IS the manifest there.
+    for a in run_artifacts:
+        e = _entry_for_name((a.get("original_name") or "").strip(),
+                            size_bytes=a.get("size") or a.get("bytes"),
+                            url_hint=a.get("url"))
         if e:
             outputs.append(e)
             seen_rel.add(e["label"])
@@ -1107,31 +1352,10 @@ def refresh_output_manifest(run_id: str, *, plot_urls_by_name: Optional[dict] = 
     # the Run). Without this a just-finished Slurm job shows an empty Run.
     # (Interactive callers pass already-listed names → deduped to a no-op.)
     for nm in (ensure_names or []):
-        rel = Path(str(nm)).as_posix()
-        if not rel or rel in seen_rel:
-            continue
-        name = rel.rsplit("/", 1)[-1]
-        ext = ("." + rel.rsplit(".", 1)[-1]).lower() if "." in name else ""
-        ext = ext.lstrip(".")
-        url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
-        try:
-            sz = (base / rel).stat().st_size
-        except OSError:
-            sz = None                       # not visible yet → omit size, still list it
-        if ext in _FIG_EXT:
-            out = {"kind": "figure", "label": rel,
-                   "thumb": plot_urls_by_name.get(name) or url, "href": url}
-        elif ext in _TAB_EXT:
-            out = {"kind": "table", "label": rel, "href": url}
-        else:
-            out = {"kind": "file", "label": rel, "href": url + "&download=1"}
-        if sz is not None:
-            out["size"] = _human_size(sz)
-        artifact_id = name_to_artifact.get(name)
-        if artifact_id:
-            out["artifact_id"] = artifact_id
-        outputs.append(out)
-        seen_rel.add(rel)
+        e = _entry_for_name(nm)
+        if e:
+            outputs.append(e)
+            seen_rel.add(e["label"])
     outputs.sort(key=lambda o: o["label"])
     bulk = None
     if len(outputs) > _MANIFEST_CAP:

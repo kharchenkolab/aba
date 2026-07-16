@@ -1408,6 +1408,11 @@ async def stream_response(
         checkpoint(turn)
         if turn.plan_entity_id:
             dispatch("on_plan_failed", {"plan_entity_id": turn.plan_entity_id})
+        # Turn-end reconciliation must run on the FAILED path too — a turn that
+        # crashed AFTER producing outputs is exactly when the durable keep
+        # matters (on_stop only fires on the success branch).
+        dispatch("on_turn_failed", {"thread_id": getattr(turn, "thread_id", None),
+                                    "plan_entity_id": turn.plan_entity_id})
         yield sse(wire.error(text=_friendly_error(e),
                              detail=f"{type(e).__name__}: {e}"))
         yield sse(wire.usage(input=usage_in, output=usage_out,
