@@ -31,6 +31,10 @@ spec:
   deps:
     conda:
       - python =3.12
+      - ipykernel             # REQUIRED: base_env/jupyter clones the session from
+                              # this pack; without it the persistent kernel can't
+                              # start and run_python degrades to stateless one-shot
+                              # (r_bio ships r-irkernel for the same reason).
       - "numpy <2.5"          # numba (via scanpy/scvi) needs numpy<2.5
       - pandas
       - scipy
