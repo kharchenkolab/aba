@@ -114,6 +114,10 @@ from core.web.routers import modules as _modules_routes
 app.include_router(_modules_routes.router)
 from core.web.routers import compute as _compute_routes
 app.include_router(_compute_routes.router)
+# weft-ui (expert compute surface) mounted at /weft in shared-controller mode
+# (misc/compute_settings.md §8) — no-op when weft-ui isn't installed.
+from core.web import weftui as _weftui
+_weftui.mount(app)
 from core.web.routers import memory as _memory_routes
 app.include_router(_memory_routes.router)
 from core.web.routers import threads as _threads_routes

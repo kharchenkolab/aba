@@ -186,6 +186,13 @@ class WeftAdapter:
             raise ComputeError.from_payload(out)
         return out
 
+    def raw_controller(self):
+        """The embedded Weft instance itself. ONLY for mounting weft-ui in
+        shared-controller mode (one controller, two surfaces — the
+        two-controller hazard fix, misc/compute_settings.md §8). Never a
+        tool-call path: aba code calls tools through the ports."""
+        return self._weft
+
     def subscribe_events(self, callback) -> None:
         """In-process push of weft's event feed (bootstrap.step, site.*,
         job.*, …) — same objects events_poll yields. Not a port method

@@ -295,6 +295,44 @@ def test_gc_plan_then_sweep(client, fake):
     assert sweep.json()["freed_bytes"] == 999
 
 
+# ── Advanced ↗ (weft-ui mount, shared controller) ────────────────────────────
+
+def test_advanced_reports_unavailable_without_mount(client, monkeypatch):
+    from core.web import weftui
+    monkeypatch.setitem(weftui._state, "available", False)
+    r = client.get("/api/compute/advanced").json()
+    assert r == {"available": False, "url": None}
+
+
+def test_advanced_url_shape(client, monkeypatch):
+    from core.web import weftui
+    monkeypatch.setitem(weftui._state, "available", True)
+    monkeypatch.setitem(weftui._state, "token", "tok123")
+    r = client.get("/api/compute/advanced?site=vbc").json()
+    assert r["available"] is True
+    assert r["url"] == "/weft/?token=tok123&hide=chat#/compute/vbc"
+
+
+def test_mount_degrades_when_substrate_offline(monkeypatch, tmp_path):
+    """weftui.mount + an offline substrate: the host app must boot fine and
+    the mount must serve nothing (weft-ui's degraded shared-controller mode)."""
+    pytest.importorskip("weft_ui")
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "home"))
+    import core.compute.adapter as ad
+    monkeypatch.setattr(ad, "_adapter", None)
+    monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "warning",
+                                        "detail": "offline for test"})
+    from core.web import weftui
+    monkeypatch.setattr(weftui, "_state", {"available": False, "token": None})
+    app = FastAPI()
+    assert weftui.mount(app) is True
+    with TestClient(app) as c:          # boot survives the failing factory
+        r = c.get("/weft/api/w", headers={"authorization": "Bearer "
+                                          + (weftui._state["token"] or "")})
+        assert r.status_code in (401, 404)   # no tool routers came up
+    assert weftui.advanced_url() is not None  # mounted, even if degraded
+
+
 # ── templates ────────────────────────────────────────────────────────────────
 
 def test_templates_empty_then_declared(client, monkeypatch, tmp_path):

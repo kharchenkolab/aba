@@ -187,4 +187,7 @@ export const computeApi = {
   gc: (name: string, confirm: boolean) =>
     apiPost<{ reclaimable_bytes?: number; freed_bytes?: number }>(
       `/api/compute/sites/${cname(name)}/gc`, { confirm }),
+  advanced: (site?: string) =>
+    apiGet<{ available: boolean; url?: string | null }>(
+      `/api/compute/advanced${site ? `?site=${cname(site)}` : ''}`),
 }

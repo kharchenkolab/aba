@@ -9,7 +9,18 @@ import { useCallback, useEffect, useState } from 'react'
 import './ComputeTab.css'
 import { computeApi } from '../lib/api'
 import type { ComputeSite, StoragePath } from '../lib/api'
+import { withBasePath } from '../oodBase'
 import ConnectMachine from './ConnectMachine'
+
+/** Open weft-ui (the expert surface, same workspace) in a new window. */
+async function openAdvanced(site?: string) {
+  try {
+    const r = await computeApi.advanced(site)
+    if (r.available && r.url) {
+      window.open(withBasePath(r.url), 'aba-weft-ui', 'width=1280,height=840')
+    }
+  } catch { /* unavailable — button is hidden anyway */ }
+}
 
 const fmtGB = (b?: number) => b == null ? '?' : `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`
 
@@ -63,6 +74,11 @@ export default function ComputeTab() {
   const [status, setStatus] = useState<{ ok: boolean; detail: string } | null>(null)
   const [sel, setSel] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
+
+  useEffect(() => {
+    computeApi.advanced().then(r => setAdvanced(r.available)).catch(() => {})
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -102,8 +118,14 @@ export default function ComputeTab() {
     <section className="settings__section">
       <div className="cmp-head">
         <h3 className="settings__section-title">Compute</h3>
-        <button className="cmp-btn cmp-btn--primary"
-          onClick={() => setConnecting(true)}>+ Connect a machine</button>
+        <div className="cmp-actions">
+          <button className="cmp-btn cmp-btn--primary"
+            onClick={() => setConnecting(true)}>+ Connect a machine</button>
+          {advanced && (
+            <button className="cmp-btn" title="Open weft-ui — every knob exposed"
+              onClick={() => openAdvanced()}>Advanced ↗</button>
+          )}
+        </div>
       </div>
       <p className="settings__hint">
         Where your analyses run. Connect your lab’s cluster or a workstation and
@@ -119,7 +141,7 @@ export default function ComputeTab() {
 
       <ul className="mod-list">
         {sites.map(s => (
-          <SiteCard key={s.name} site={s} open={sel === s.name}
+          <SiteCard key={s.name} site={s} open={sel === s.name} advanced={advanced}
             onToggle={() => setSel(sel === s.name ? null : s.name)}
             onChanged={load} />
         ))}
@@ -137,8 +159,9 @@ export default function ComputeTab() {
 
 // ── one machine: card + expandable manage detail (§6) ────────────────────────
 
-function SiteCard({ site, open, onToggle, onChanged }: {
-  site: ComputeSite; open: boolean; onToggle: () => void; onChanged: () => void
+function SiteCard({ site, open, advanced, onToggle, onChanged }: {
+  site: ComputeSite; open: boolean; advanced: boolean
+  onToggle: () => void; onChanged: () => void
 }) {
   const s = site
   const isLocal = s.name === 'local'
@@ -172,7 +195,7 @@ function SiteCard({ site, open, onToggle, onChanged }: {
           )}
         </p>
       )}
-      {open && <SiteDetail site={s} onChanged={onChanged} />}
+      {open && <SiteDetail site={s} advanced={advanced} onChanged={onChanged} />}
     </li>
   )
 }
@@ -183,7 +206,9 @@ const USE_FOR_ALL: { key: string; label: string }[] = [
   { key: 'gpu', label: 'GPU work' },
 ]
 
-function SiteDetail({ site, onChanged }: { site: ComputeSite; onChanged: () => void }) {
+function SiteDetail({ site, advanced, onChanged }: {
+  site: ComputeSite; advanced: boolean; onChanged: () => void
+}) {
   const s = site
   const isLocal = s.name === 'local'
   const [busy, setBusy] = useState<string | null>(null)
@@ -329,6 +354,10 @@ function SiteDetail({ site, onChanged }: { site: ComputeSite; onChanged: () => v
         {!isLocal && !confirmDisconnect && (
           <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
             onClick={() => setConfirmDisconnect(true)}>Disconnect…</button>
+        )}
+        {advanced && (
+          <button className="cmp-btn" title="This machine in weft-ui — every knob exposed"
+            onClick={() => openAdvanced(s.name)}>Advanced ↗</button>
         )}
       </div>
       {confirmDisconnect && (

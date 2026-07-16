@@ -117,6 +117,16 @@ def compute_status() -> dict:
     return status()
 
 
+@router.get("/api/compute/advanced")
+def advanced(site: Optional[str] = None) -> dict:
+    """The 'Advanced ↗' deep link into the mounted weft-ui (§8) — the same
+    workspace with every knob exposed, chat rail hidden. `available: false`
+    when weft-ui isn't installed in this deployment."""
+    from core.web import weftui
+    url = weftui.advanced_url(site)
+    return {"available": url is not None, "url": url}
+
+
 @router.get("/api/compute/hosts")
 def saved_hosts() -> dict:
     """~/.ssh/config concrete hosts — the entry screen's saved-host picker."""
