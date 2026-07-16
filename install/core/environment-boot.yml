@@ -35,11 +35,10 @@ dependencies:
   - pyyaml          # backend: `import yaml`
   - tabulate        # pandas.DataFrame.to_markdown() (ctx_read + describe tools)
 
-  # ── Python Jupyter kernel (run_python runs here from first boot) ───────
+  # ── Jupyter kernel CLIENT only — the KernelManager (jupyter_client) the backend
+  #    uses to talk to kernels + the `jupyter kernelspec` CLI. The kernel PROCESS
+  #    runs ipykernel from the weft SESSION python (pack), not here. ──
   - jupyter_client
-  - ipykernel
-  - nbformat
-  - nbconvert
 
   # ── backend runtime — IDENTICAL to environment.yml's pip: section (every entry
   #    is platform-CORE). Keep in lock-step. The viewer data layer (lstar-sc/zarr)

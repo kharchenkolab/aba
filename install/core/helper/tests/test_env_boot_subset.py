@@ -67,6 +67,11 @@ def test_science_stack_is_weft_owned_not_in_base():
     # session python for .lstar.zarr work and serves stores as raw bytes
     for weft_owned in ("lstar-sc", "zarr"):
         assert weft_owned not in names(full_pip), f"{weft_owned} is weft-owned (python pack), not in controller pip:"
-    # but the numeric core + kernel MUST be in boot (server can run python from boot)
-    for need in ("numpy", "pandas", "ipykernel", "python", "nodejs"):
+    # ipykernel is pack-owned too: the kernel PROCESS runs the SESSION python's
+    # ipykernel (python_bio.yaml), never the controller's — W3.5 is weft-only. The
+    # controller keeps only jupyter_client (the KernelManager CLIENT).
+    assert "ipykernel" not in boot_names and "ipykernel" not in full_names, \
+        "ipykernel is pack-owned (weft SESSION python), not in the controller env"
+    # the numeric core + kernel-client MUST be in boot (server talks to kernels from boot)
+    for need in ("numpy", "pandas", "jupyter_client", "python", "nodejs"):
         assert need in boot_names, f"{need} must be in the boot env"

@@ -56,13 +56,14 @@ dependencies:
   - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
   - tabulate        # pandas.DataFrame.to_markdown() backend (ctx_read + describe tools)
 
-  # ── Python Jupyter kernel (the agent runs Python here). R has its own
-  #    kernel in the tools env — see r-environment.yml. jupyter_client also
-  #    provides the `jupyter` CLI the R kernel registration shells out to. ──
+  # ── Jupyter kernel CLIENT only — the backend's KernelManager (jupyter_client)
+  #    that TALKS to kernels + the `jupyter kernelspec` CLI the R IRkernel
+  #    registration shells out to. The kernel PROCESS runs `ipykernel`/`r-irkernel`
+  #    from the weft SESSION python (the pack — python_bio.yaml/r_bio.yaml), NOT the
+  #    controller: W3.5 is weft-only, every kernel is a weft env, so the controller
+  #    never launches a kernel from its own interpreter. ipykernel is therefore
+  #    pack-owned; nbformat/nbconvert dropped entirely (zero backend use). ──
   - jupyter_client
-  - ipykernel
-  - nbformat
-  - nbconvert
 
   # ── document / report tooling ──────────────────────────────────────────
   - typst
