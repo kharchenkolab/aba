@@ -53,6 +53,45 @@ _STATUS_INTERVAL_S = 1.0
 _CANCEL_GRACE_S = config.settings.kernel_cancel_grace_s.get()
 
 
+def _weft_setup_code(lang: str) -> str:
+    """The kernel's first-block setup: DATA_DIR + harvest helpers, WORK_DIR bound
+    to the kernel's OWN cwd (its sandbox), and NO chdir.
+
+    A weft kernel must keep its sandbox as cwd — the file-block protocol reads/writes
+    `blocks/NNNN.*` and `kernel.stop` RELATIVE to cwd, so chdir'ing away orphans the
+    protocol and the kernel dies. So the sandbox IS the work dir; aba harvests from
+    there. WORK_DIR is set from `getcwd()` at runtime (the kernel knows its own
+    sandbox; the controller doesn't know the id until kernel_start returns)."""
+    from core.exec.kernels import jupyter as _j
+    data_dir, _ = _j._project_data_artifacts()
+    if lang == "r":
+        from core.exec.r import cran_repo, _ppm_ua_expr
+        repoline = f'options(repos=c(CRAN={cran_repo()!r})); {_ppm_ua_expr()}\n'
+        return (f"{repoline}DATA_DIR <- {str(data_dir)!r}\nWORK_DIR <- getwd()\n"
+                + _j._harvest_helpers_r())
+    return ("import os as _os\n_os.environ.setdefault('MPLBACKEND', 'Agg')\n"
+            f"DATA_DIR = {str(data_dir)!r}\nWORK_DIR = _os.getcwd()\n"
+            + _j._harvest_helpers_py())
+
+
+def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None):
+    """Build a WeftKernelSession for the pool, or return None to fall back to the
+    jupyter transport. W-K1a handles the ISOLATED-env lane (a frozen named EnvID);
+    the default lane (env_name=None → a live project session) is W-K1b and returns
+    None for now. The env is realized by the caller before the pool lock."""
+    if not env_name:
+        return None                     # default lane — W-K1b; caller uses jupyter
+    from core import projects
+    from core.compute import named_envs
+    pid = str(projects.current() or "_none")
+    row = named_envs.resolve(pid, env_name)
+    if row is None:
+        return None                     # unknown env — let jupyter raise the clear error
+    named_envs.ensure_realized(row["env_id"])   # realize before the pool lock (idempotent)
+    return WeftKernelSession(scope_key, lang, env_id=row["env_id"], site="local",
+                            setup_code=_weft_setup_code(lang))
+
+
 class WeftKernelSession:
     """A persistent weft kernel behind the `KernelSession` interface.
 
@@ -85,10 +124,19 @@ class WeftKernelSession:
         self._cancel_grace_s = _CANCEL_GRACE_S
         self.kernel_id: Optional[str] = None
 
+        self.work_dir: Optional[str] = None
         attach = {"session_id": session_id} if session_id else {"env_id": env_id}
         r = self._call("kernel_start", site, lang, walltime=walltime,
                        resources=resources or {}, label=label, **attach)
         self.kernel_id = r["kernel_id"]
+        if site == _LOCAL_SITE:
+            # The kernel's sandbox = its cwd = where bare relative writes land.
+            # aba harvests outputs from here (not aba scratch — a weft kernel can't
+            # chdir without breaking its protocol). Local-only; a remote kernel's
+            # sandbox comes home via weft's retain/collect (retention design).
+            from core.compute import adapter as _adapter
+            self.work_dir = str(_adapter.weft_workspace() / "site-local"
+                                / "kernels" / self.kernel_id)
         self.alive = True
         if setup_code:
             # Configure the session namespace once (DATA_DIR / WORK_DIR / harvest

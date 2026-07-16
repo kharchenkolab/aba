@@ -644,6 +644,18 @@ KERNEL_ENABLED = setting(
     weft_fate="revisit",
     doc="Master switch for the interactive kernel lane; off → stateless one-shot exec.",
 ).get()
+
+# W-K1 (kernels_to_weft.md): route the interactive kernel through weft's native
+# kernel_* (WeftKernelSession) instead of the jupyter_client transport. Default
+# OFF — the cutover is incremental (W-K1a isolated-env lane, then W-K1b default
+# lane on session-kernels) and rollback is flipping this back. When off, the pool
+# keeps building JupyterKernelSession.
+WEFT_KERNELS = setting(
+    "weft_kernels", env="ABA_WEFT_KERNELS", type="bool", default=False,
+    category="behavior", branches=True, weft_fate="keep",
+    doc="Route the interactive kernel through weft kernel_* (WeftKernelSession) "
+        "instead of jupyter_client.",
+).get()
 KERNEL_IDLE_TTL_S = setting(
     "kernel_idle_ttl_s", env="ABA_KERNEL_IDLE_TTL_S", type="int", default=3600,
     category="tuning", weft_fate="revisit", reduction="merge:kernel",

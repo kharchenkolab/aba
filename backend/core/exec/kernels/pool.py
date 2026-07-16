@@ -28,8 +28,26 @@ class KernelPool:
         self._ttl = idle_ttl
         self._reaper_started = False
 
-    def get_or_start(self, scope_key: str, lang: str, *, cwd: str, env_name: str | None = None):
+    def _new_session(self, scope_key: str, lang: str, *, cwd: str, env_name: str | None):
+        """Build a fresh kernel session for (scope_key, lang). Routes to the weft
+        transport when ABA_WEFT_KERNELS is on and the lane is supported (W-K1a:
+        isolated-env), else the jupyter transport. The weft factory returns None
+        to fall back (unsupported lane / unknown env), so this never hard-fails
+        the cutover — a flipped flag degrades to jupyter, not to an error."""
+        from core.config import WEFT_KERNELS
+        if WEFT_KERNELS:
+            try:
+                from core.exec.kernels import weft as _weft
+                s = _weft.for_pool(scope_key, lang, cwd=cwd, env_name=env_name)
+                if s is not None:
+                    return s
+            except Exception as e:  # noqa: BLE001 — never let the weft path break kernel acquisition
+                print(f"[kernel] weft transport unavailable ({type(e).__name__}: {e}); "
+                      f"falling back to jupyter", flush=True)
         from core.exec.kernels.jupyter import JupyterKernelSession
+        return JupyterKernelSession(scope_key, lang, cwd=cwd, env_name=env_name)
+
+    def get_or_start(self, scope_key: str, lang: str, *, cwd: str, env_name: str | None = None):
         with self._lock:
             self._start_reaper()
             key = (scope_key, lang)
@@ -55,7 +73,7 @@ class KernelPool:
                     f"Compute at capacity: {len(self._sessions)} kernels live and all busy "
                     f"(hard cap {self._hard_max}). Wait for a running analysis to finish, or "
                     f"stop one, before starting another.")
-            s = JupyterKernelSession(scope_key, lang, cwd=cwd, env_name=env_name)
+            s = self._new_session(scope_key, lang, cwd=cwd, env_name=env_name)
             self._sessions[key] = s
             return s
 

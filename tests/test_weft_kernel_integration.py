@@ -217,13 +217,66 @@ def test_it_session_attach_live_install():
             pass
 
 
+def test_it_pool_weft_isolated_lane():
+    """W-K1a: the KernelPool routes the isolated-env lane to a WeftKernelSession
+    when ABA_WEFT_KERNELS is on, the setup cell chdir's the kernel into the aba
+    scratch cwd (so a bare write lands where harvest looks — not the weft
+    sandbox), and state persists across cells."""
+    if not _ENABLED:
+        _skip("set ABA_WEFT_KERNEL_IT=1 to run the real-weft kernel integration test")
+    import tempfile
+    from core.compute import adapter as admod
+    from core.exec.kernels.pool import KernelPool
+    import core.exec.kernels.weft as wmod
+    import core.config as cfg
+    from core.compute import named_envs
+
+    st = admod.configure()
+    if not st.get("ok"):
+        _skip(f"weft substrate not configured: {st.get('detail')}")
+    env_id = _realized_python_env_id()
+    if not env_id:
+        _skip("no realized local python env")
+
+    # Route the isolated-env lane at a realized EnvID without needing a registered
+    # named env: patch resolve → that EnvID, ensure_realized → no-op (already ready).
+    import contextlib
+    saved = (cfg.WEFT_KERNELS, named_envs.resolve, named_envs.ensure_realized)
+    cfg.WEFT_KERNELS = True
+    named_envs.resolve = lambda pid, name: {"env_id": env_id, "language": "python"}
+    named_envs.ensure_realized = lambda eid, **k: None
+    cwd = tempfile.mkdtemp(prefix="aba_wk1a_cwd_")
+    pool = KernelPool(idle_ttl=10**9)
+    try:
+        s = pool.get_or_start("wk1a-iso", "python", cwd=cwd, env_name="iso-test")
+        assert type(s).__name__ == "WeftKernelSession", f"expected weft session, got {type(s)}"
+        assert s.work_dir, "weft session should expose its sandbox as work_dir"
+        # NO chdir (would break the file-block protocol); a bare relative write
+        # lands in the kernel sandbox (work_dir) — that's the local harvest source.
+        r = s.execute("open('made_here.txt','w').write('ok')\nprint('WROTE', WORK_DIR is not None)",
+                      timeout_s=60)
+        assert r.returncode == 0, r
+        assert "WROTE True" in r.stdout, r
+        import os as _os
+        assert _os.path.exists(_os.path.join(s.work_dir, "made_here.txt")), \
+            "bare write did not land in the kernel sandbox (work_dir) — harvest bridge broken"
+        # state persists across cells
+        r2 = s.execute("z = 6 * 7\nprint('z', z)", timeout_s=60)
+        assert "z 42" in r2.stdout, r2
+        r3 = s.execute("print('again', z)", timeout_s=60)
+        assert "again 42" in r3.stdout, r3
+    finally:
+        pool.shutdown_all()
+        cfg.WEFT_KERNELS, named_envs.resolve, named_envs.ensure_realized = saved
+
+
 def _standalone() -> int:
     if not _ENABLED:
         print("SKIP: set ABA_WEFT_KERNEL_IT=1 to run the real-weft integration test")
         return 0
     failures = []
     for t in (test_it_state_persists_and_streams, test_it_interrupt_and_failure,
-              test_it_session_attach_live_install):
+              test_it_session_attach_live_install, test_it_pool_weft_isolated_lane):
         try:
             t()
             print(f"  [PASS] {t.__name__}", flush=True)

@@ -68,6 +68,16 @@ def _ensure_kernel_cwd(sess, lang: str, cwd) -> None:
         ("__FRESH__") triggers the same preamble plus an extra header so the
         agent recognizes 'in-memory state is gone, paths persist'.
     """
+    # A weft kernel (WeftKernelSession, exposes `work_dir`) CANNOT chdir — its
+    # file-block protocol reads/writes `blocks/NNNN.*` relative to cwd, so moving
+    # away orphans the protocol and the kernel dies. Its sandbox IS the work dir and
+    # aba harvests from there (see _harvest_dir). Skip the chdir; still fire the
+    # one-shot orientation preamble on a fresh kernel.
+    if getattr(sess, "work_dir", None):
+        if getattr(sess, "_aba_cwd", None) is None:
+            sess._aba_cwd = sess.work_dir
+            sess._aba_cwd_just_switched = "__FRESH__"
+        return
     path = str(cwd)
     prev = getattr(sess, "_aba_cwd", None)
     if prev == path:
@@ -761,7 +771,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
                 return {"status": "cancelled",
                         "note": f"Run was cancelled by the user "
                                 f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-            plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
+            # weft kernels write into their sandbox (sess.work_dir), not aba scratch
+            # — they can't chdir. Harvest from there; jupyter falls back to cwd.
+            plots, tables, files, warns = harvest_artifacts(
+                getattr(sess, "work_dir", None) or cwd, since_ts=start_ts)
             # Session-derived: reproduction needs this thread's ordered cells,
             # not the single cell alone (kernels.md §8.1).
             from core.exec.output_cap import snip_middle
@@ -972,7 +985,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "cancelled",
                 "note": f"Run was cancelled by the user "
                         f"({getattr(cancel_token, 'reason', '')}). No further work happened."}
-    plots, tables, files, warns = harvest_artifacts(cwd, since_ts=start_ts)
+    plots, tables, files, warns = harvest_artifacts(
+        getattr(sess, "work_dir", None) or cwd, since_ts=start_ts)
     from core.exec.output_cap import snip_middle
     out = {"stdout": snip_middle(res.stdout or ""), "stderr": snip_middle(res.stderr or ""),
            "returncode": res.returncode, "plots": plots, "tables": tables,
