@@ -1395,7 +1395,8 @@ async def stream_response(
             # #160: if this turn was driving a plan's execution, mark the
             # plan completed. Idempotent + safe on a missing entity.
             if turn.plan_entity_id:
-                dispatch("on_plan_complete", {"plan_entity_id": turn.plan_entity_id})
+                dispatch("on_plan_complete", {"plan_entity_id": turn.plan_entity_id,
+                                              "thread_id": getattr(turn, "thread_id", None)})
         yield sse(wire.usage(input=usage_in, output=usage_out,
                              cache_read=usage_cr, cache_write=usage_cw))
         yield sse(wire.done())

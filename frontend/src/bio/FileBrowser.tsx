@@ -284,8 +284,8 @@ export default function FileBrowser({
     const st = node.state
     if (!st) return null
     const short = st === 'kept' ? (node.site ? `on ${node.site}` : 'kept ✓')
-      : st === 'pinned-pending' ? 'pending'
-      : st === 'in-sandbox' ? 'in sandbox'
+      : st === 'pinned-pending' ? 'saving…'
+      : st === 'in-sandbox' ? 'not kept yet'
       : st === 'cleared' ? 'cleared' : st
     return (
       <span className={`files__badge files__badge--dura files__badge--${st}`}

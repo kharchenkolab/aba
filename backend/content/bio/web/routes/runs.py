@@ -15,7 +15,7 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from core.web.deps import require_project
@@ -153,14 +153,23 @@ def run_file(rid: str, rel: str, download: int = 0):
     sandbox sweep. `rel` is relative to the run dir; traversal outside is rejected
     on every base. Images/text render inline; `download=1` forces an attachment."""
     _run_or_404(rid)
-    from content.bio.lifecycle.runs import resolve_run_file
-    target = resolve_run_file(rid, rel)
-    if not target:
-        raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
-    name = Path(target).name
+    from content.bio.lifecycle.runs import resolve_run_file, read_run_file
+    name = Path(rel).name
     media = mimetypes.guess_type(name)[0] or "application/octet-stream"
     headers = {"Content-Disposition": f'attachment; filename="{name}"'} if download else {}
-    return FileResponse(target, media_type=media, headers=headers)
+    # Tier 1: a local file (retained tree / scratch) → stream from disk.
+    target = resolve_run_file(rid, rel)
+    if target:
+        return FileResponse(target, media_type=media, headers=headers)
+    # Tier 2 (B1b): an IN-SANDBOX file (live/dead kernel jobdir, not local) → capped weft
+    # preview read. A truncated result means it's past the preview channel — Keep it.
+    data, truncated, total = read_run_file(rid, rel)
+    if data is not None and not truncated:
+        return Response(content=data, media_type=media, headers=headers)
+    if truncated:
+        raise HTTPException(413, f"{rel!r} is {total} bytes — too large to preview; "
+                                 "Keep it to retain, then download")
+    raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
 
 
 @router.get("/api/runs/{rid}/durable")

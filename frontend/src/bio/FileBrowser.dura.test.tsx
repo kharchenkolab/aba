@@ -25,7 +25,7 @@ describe('FileBrowser durability pills', () => {
     // kept → "kept ✓"
     expect(screen.getByText('kept ✓').className).toContain('files__badge--kept')
     // pinned-pending → short "pending", full designed text in the tooltip
-    const pending = screen.getByText('pending')
+    const pending = screen.getByText('saving…')
     expect(pending.className).toContain('files__badge--pinned-pending')
     expect(pending.getAttribute('title')).toContain('keeps the version at run settlement')
     // cleared
@@ -35,7 +35,7 @@ describe('FileBrowser durability pills', () => {
   it('renders pills in the rail tree view too', () => {
     render(<FileBrowser root={tree} variant="rail" />)
     expect(screen.getByText('kept ✓')).toBeTruthy()
-    expect(screen.getByText('pending')).toBeTruthy()
+    expect(screen.getByText('saving…')).toBeTruthy()
   })
 
   it('shows no pill when a node has no durable state (project rail nodes)', () => {

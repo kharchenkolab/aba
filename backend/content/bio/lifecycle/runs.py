@@ -83,6 +83,19 @@ def active_run_id(thread_id: str) -> Optional[str]:
     return None
 
 
+def run_id_for_plan(plan_entity_id: Optional[str]) -> Optional[str]:
+    """The Run opened for a given plan (its metadata.plan_entity_id matches), newest-first.
+    Used at plan-complete, where only the plan id is in scope (guide dispatches on_plan_complete
+    with just plan_entity_id) — so retention can find the Run to retain at plan-end."""
+    if not plan_entity_id:
+        return None
+    for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
+        md = e.get("metadata") or {}
+        if md.get("plan_entity_id") == plan_entity_id:
+            return e["id"]
+    return None
+
+
 def agent_actor_for_thread(thread_id: Optional[str]) -> Optional[str]:
     """agent:<run_id> for the open run on a thread — the actor for an agent-tool
     create on the gateway thread, where the ambient actor contextvar can't reach
@@ -274,19 +287,53 @@ def _declared_output_names(run_metadata: dict) -> set:
     return names
 
 
-def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
-    """Issue a durable retain of this Run's produced files against each weft
-    target that produced them — labeled to the Run, laid out as
-    runs/<run>/<target>/. On the live thread-scoped session kernel this records
-    a deferred pin (`pinned-pending`) captured at the kernel's settlement; aba
-    never stops the shared kernel to force it (§6.3). Jobs settle at completion.
+# Level-1 keep decision: obvious scratch skipped by folder + glob (misc/output_durability.md
+# §6.1). Kept deliberately small — the agent's level-2 triage (keep_outputs) handles ambiguity.
+_TRANSIENT_DIRS = {"tmp", "temp", "cache", ".cache", "__pycache__", ".ipynb_checkpoints", ".git"}
+_TRANSIENT_GLOBS = ("*.tmp", "*.pyc", "*.lock", "chunk_*", "*~", ".DS_Store")
 
-    The include list is the Run's OWN produced sandbox-relative paths — the
-    session kernel's sandbox is shared across Runs, so a blanket retain would
-    grab sibling Runs' files. Sourced from the Run's artifacts, which now carry
-    oversize link-only files too (§9 A0) → the crown-jewel large outputs harvest
-    wouldn't copy are covered here. Best-effort: retention must never break
-    Run close."""
+
+def _is_transient(path: str) -> bool:
+    """True for obvious scratch — a path UNDER a transient dir, or a transient basename."""
+    import fnmatch
+    parts = path.split("/")
+    if any(seg in _TRANSIENT_DIRS for seg in parts[:-1]):
+        return True
+    return any(fnmatch.fnmatch(parts[-1], g) for g in _TRANSIENT_GLOBS)
+
+
+def _already_retained_paths(run_id: str) -> set:
+    """Literal paths already covered by a pending/done retain row for this Run — so a repeat
+    retain (plan-end, then Run-close, then an extension) adds only NEW files. This is what
+    makes `_retain_run_outputs` idempotent + safe to call at every checkpoint."""
+    import json as _json
+    from core.compute import retention
+    out: set = set()
+    try:
+        for row in (retention.retained(label=run_id) or []):
+            st = row.get("state")
+            if st == "done":
+                out |= _sidecar_files(retention.location_path(row))
+            if st in ("done", "pinned-pending", "queued", "inflight"):
+                try:
+                    sel = _json.loads(row.get("selection") or "{}")
+                except Exception:  # noqa: BLE001
+                    sel = {}
+                out |= {g for g in (sel.get("include") or [])
+                        if not any(c in g for c in "*?[")}   # literal include paths only
+    except Exception as e:  # noqa: BLE001
+        _log.debug("already-retained lookup failed for %s: %s", run_id, e)
+    return out
+
+
+def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
+    """Durably retain this Run's KEEPER outputs against its weft target(s) — labeled to the
+    Run (runs/<run>/<target>/), pinned-pending on the live session kernel (captured at
+    settlement; §6.3). INCREMENTAL + IDEMPOTENT: skips obvious transients (level-1) and
+    anything already retained/pending, so it's safe to call at plan-end, Run-close, and each
+    extension. The Run's OWN produced sandbox-relative paths (the shared kernel sandbox spans
+    Runs), incl. oversize link-only files (§9 A0) + declared `produces:` (§6 rank-1).
+    Best-effort — retention must never break a turn."""
     targets = list(run_metadata.get("weft_targets") or [])
     if not targets:
         return  # jupyter / no weft kernel → nothing to retain against
@@ -300,10 +347,9 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     # multi-target Run (a backend restart mid-Run minted a new kernel_id → both
     # recorded) retains each target's OWN files against it. A blanket include per
     # target would settle the OTHER target's files as `retain.pin_missing` (the
-    # file isn't in that sandbox) — noisy half-failed rows, not data loss, but a
-    # lie in the index. The exec record carries the weft target that ran the cell;
-    # each artifact carries its exec_id. Single-target (the norm) is unchanged: all
-    # files go to the one target.
+    # file isn't in that sandbox) — noisy half-failed rows, a lie in the index. The
+    # exec record carries the weft target that ran the cell; each artifact carries its
+    # exec_id. Single-target (the norm) is unchanged: all files go to the one target.
     from core.graph import exec_records
     _tgt_cache: dict = {}
 
@@ -335,25 +381,41 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
                 per_target[t].add(rel)
     # §6 rank-1: add declared outputs (recipe `produces:`) the agent DIDN'T surface, so a
     # promised final is retained even if harvest never saw it — only ones no target
-    # produced (a produced basename is already covered). A truly-absent declared output is
-    # an honest pin_missing; put it on the PRIMARY target only, so a missing final yields
-    # ONE pin_missing, not one per target.
+    # produced. A truly-absent declared output is an honest pin_missing; put it on the
+    # PRIMARY target only, so a missing final yields ONE pin_missing, not one per target.
     declared = _declared_output_names(run_metadata)
     if declared:
         produced_basenames = {r.rsplit("/", 1)[-1]
                               for s in per_target.values() for r in s}
         per_target[targets[0]].update(
             n for n in declared if n not in produced_basenames)
+    # INCREMENTAL + IDEMPOTENT: per target, drop obvious transients (level-1) and anything
+    # already retained/pending, so this is safe to call at plan-end, Run-close, and each
+    # extension. Each target keeps only its OWN new keepers.
+    already = _already_retained_paths(run_id)
     from core.compute import retention
     for t in targets:
-        include = sorted(per_target.get(t) or ())
+        include = sorted({p for p in per_target.get(t, ())
+                          if not _is_transient(p)} - already)
         if not include:
             continue
         try:
             retention.retain(t, include=include, label=run_id,
                              layout="label", background=True)
-        except Exception as e:  # noqa: BLE001 — logged, never blocks close
+        except Exception as e:  # noqa: BLE001 — logged, never blocks the turn
             _log.warning("retain failed for run %s target %s: %s", run_id, t, e)
+
+
+def retain_run_keepers(run_id: str) -> None:
+    """Retain a Run's keepers NOW — the plan-end / extension entry point (guide_hooks
+    on_plan_complete), so durability + the Files panel are ready promptly instead of waiting
+    for Run-close. Incremental + idempotent; the close_run call is then a backstop."""
+    try:
+        ent = get_entity(run_id)
+        if ent:
+            _retain_run_outputs(run_id, ent.get("metadata") or {})
+    except Exception as e:  # noqa: BLE001
+        _log.debug("retain_run_keepers failed for %s: %s", run_id, e)
 
 
 def _sidecar_files(location: Optional[str]) -> set:
@@ -438,6 +500,31 @@ def _glob_match(rel: str, pattern: str) -> bool:
     return bool(_glob_to_re(pattern).match(rel))
 
 
+_PREVIEW_CAP = 8 * 1024 * 1024   # weft run_file_read hard cap; a preview channel, not transport
+
+
+def read_run_file(run_id: str, rel: str, max_bytes: int = _PREVIEW_CAP):
+    """Preview bytes of an IN-SANDBOX file via weft `run_file_read` (base64), across the
+    Run's targets — for a file that isn't in the local retained tree yet (B1b). Returns
+    `(bytes, truncated, total)`, or `(None, False, 0)` if unreadable. `truncated=True` means
+    the file is bigger than the preview channel — Keep it (→ retain) then download; big
+    bytes travel via `data_register`→`data_fetch`, not here. weft confines the path to the
+    jobdir + refuses traversal."""
+    import base64
+    from core.compute import retention
+    ent = get_entity(run_id)
+    for t in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+        try:
+            rd = retention.file_read(t, rel, max_bytes=max_bytes)
+        except Exception:  # noqa: BLE001 — swept / gone on this target → try the next
+            continue
+        b64 = rd.get("bytes_b64")
+        if b64 is not None:
+            return (base64.b64decode(b64), bool(rd.get("truncated")),
+                    int(rd.get("bytes_total") or 0))
+    return (None, False, 0)
+
+
 def _sel_match(rel: str, done_sel: list):
     """meta of a remote/in-place `done` retain whose selection covers `rel` (an include
     glob matches and no exclude does), else None. Path-aware globbing (`*` stays within a
@@ -502,7 +589,8 @@ def run_durable_view(run_id: str) -> dict:
     except Exception as e:  # noqa: BLE001
         _log.warning("durable view: retained() failed for %s: %s", run_id, e)
 
-    # terminal inventory paths (survive the sweep) across the Run's targets
+    # terminal inventory paths (survive the sweep) across the Run's targets — the fallback
+    # when a live stat isn't available.
     inv_paths: set = set()
     for t in (md.get("weft_targets") or []):
         try:
@@ -518,6 +606,31 @@ def run_durable_view(run_id: str) -> dict:
     # url/size/kind). Without this, rows + summary counts inflate and the tree gets
     # duplicate sibling nodes with identical paths.
     by_rel: dict = {}
+    # Live on-disk check (weft run_file_stat, 5d1c5dc) — authoritative for in-sandbox vs
+    # cleared, and the ONLY signal on a live kernel (which has no terminal inventory yet;
+    # the inventory proxy would mislabel every live file "cleared"). Bounded round-trips.
+    targets = list(md.get("weft_targets") or [])
+    _stat_budget = [50]
+
+    def _on_disk(rel: str):
+        """(performed, exists, bytes) across the Run's targets. `performed=False` → couldn't
+        check (jupyter / no target / budget spent) → caller falls back to the inventory proxy."""
+        if not targets or _stat_budget[0] <= 0:
+            return (False, False, 0)
+        answered = False   # did any stat actually return (vs. all erroring)?
+        for t in targets:
+            if _stat_budget[0] <= 0:
+                break
+            _stat_budget[0] -= 1
+            try:
+                st = retention.file_stat(t, rel)
+            except Exception:  # noqa: BLE001 — treat as not-checked → proxy fallback
+                continue
+            answered = True
+            if st.get("exists"):
+                return (True, True, st.get("bytes") or 0)
+        return (answered, False, 0)
+
     for a in artifacts_for_run(run_id):
         rel = (a.get("original_name") or "").strip()
         if rel:
@@ -548,13 +661,26 @@ def run_durable_view(run_id: str) -> dict:
             state = "pinned-pending"
             badge = ("large · keeps the version at run settlement" if large
                      else "pinned · saves when the run settles")
-        elif rel in inv_paths:
-            state, badge = "in-sandbox", "in sandbox"
-            servable_local = True
         else:
-            state, badge = "cleared", "cleared"
+            _SANDBOX = "on the run's scratch — not durably kept yet; kept when the run finishes, or Keep it now"
+            performed, exists, live_bytes = _on_disk(rel)
+            if exists:
+                state, badge = "in-sandbox", _SANDBOX
+                if not size and live_bytes:          # real size for a live file
+                    size = live_bytes
+                    large = size > _MAX_HARVEST_BYTES
+            elif performed:
+                state, badge = "cleared", "cleared — swept from scratch, not retained"
+            elif rel in inv_paths:
+                state, badge = "in-sandbox", _SANDBOX   # proxy: was inventoried
+            else:
+                state, badge = "cleared", "cleared — swept from scratch, not retained"
+        # A KEPT file needs local servability (a remote in-place retain has no local
+        # sidecar → a /file link would 404, so leave it None — #2); an IN-SANDBOX file is
+        # served live via weft run_file_read (read_run_file, B1b), so it's always linkable.
         view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
-                           if servable_local and state in ("kept", "in-sandbox") else None)
+                           if (state == "in-sandbox" or (state == "kept" and servable_local))
+                           else None)
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
         counts["pinned_pending" if state == "pinned-pending"
