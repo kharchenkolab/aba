@@ -97,11 +97,17 @@ def test_roundtrip_with_boot_reader():
     except Exception:
         pytest.skip("weft package not installed")
     import unittest.mock as mock
-    with mock.patch.dict(os.environ,
-                         {"ABA_WEFT_WORKSPACE": f"{_tmp}/weft-ws-rt"}):
-        with mock.patch.object(ad, "_adapter", None):
+    before_adapter, before_status = ad._adapter, dict(ad._status)
+    try:
+        with mock.patch.dict(os.environ,
+                             {"ABA_WEFT_WORKSPACE": f"{_tmp}/weft-ws-rt"}):
+            ad._adapter = None
             st = ad.configure()
             assert st["ok"], st["detail"]
             names = {s["name"] for s in ad.get_compute().sync_call("sites_list")}
-            ad.shutdown()
+    finally:
+        # FULL restore — leaving _status "ok" with _adapter None poisons any
+        # later test that calls get_compute (found via test_jobs_tools)
+        ad.shutdown()
+        ad._adapter, ad._status = before_adapter, before_status
     assert {"local", "scratch2"} <= names
