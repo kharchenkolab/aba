@@ -6,11 +6,13 @@
 # machinery, document tooling, and the backend's own runtime deps.
 #
 # It NO LONGER holds the single-cell science stack (scanpy/scvi-tools/anndata/
-# leiden/…): weft owns environment realization now, so the agent runs analysis
-# code in weft SESSION kernels backed by content-addressed science packs, not in
-# this base (W3.4 — slim controller). The only heavy libs kept are ones the
-# BACKEND itself imports: pandas (+ numpy) and the lstar/zarr viewer data layer
-# (which pulls scipy). R lives in its own tools env (r-environment.yml).
+# leiden/…) NOR the viewer data layer (lstar-sc/zarr/scipy): weft owns environment
+# realization now, so the agent runs analysis in weft SESSION kernels backed by
+# content-addressed packs (install/core/envs/python_bio.yaml), and the backend
+# subprocesses the SESSION python for .lstar.zarr conversion / serves stores as raw
+# bytes — it never imports the science or viewer stack in-process (W3.4 — slim
+# controller). The only heavy lib kept is pandas (+ its numpy), which the BACKEND
+# itself imports for to_markdown. R lives in its own tools env (r-environment.yml).
 #
 # Channels, in priority order:
 #   conda-forge — the C-library base + scientific Python + node
@@ -41,16 +43,16 @@ dependencies:
   - cmake
 
   # ── backend numeric deps ───────────────────────────────────────────────
-  # NOT the agent's science stack (weft-owned now — see header): only what the
-  # BACKEND process itself imports. pandas backs ctx_read/describe/orientation
-  # to_markdown; numpy rides with pandas + zarr (needs >=2) + lstar; scipy is a
-  # CORE dependency of lstar-sc (the viewer data layer, in pip: below). numpy
-  # keeps a conservative <2.5 upper bound — the numba driver is gone with scanpy/
-  # scvi, but the bound holds a known-good numpy for scipy/pandas/zarr/lstar until
-  # a 2.5 validation.
+  # NOT the science / viewer stack (weft-owned — see header): only what the BACKEND
+  # process itself imports. pandas backs ctx_read/describe/orientation to_markdown;
+  # numpy rides with it. That is the whole heavy footprint now — scipy/lstar-sc/zarr
+  # moved to the weft python pack too (install/core/envs/python_bio.yaml). The web
+  # process subprocesses the SESSION python for .lstar.zarr conversion and serves
+  # store files as RAW bytes over HTTP Range, so it never imports scipy/zarr/lstar
+  # in-process. numpy keeps a conservative <2.5 bound (known-good for pandas) — the
+  # numba driver that set it left with scanpy/scvi.
   - numpy<2.5
   - pandas
-  - scipy
   - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
   - tabulate        # pandas.DataFrame.to_markdown() backend (ctx_read + describe tools)
 
@@ -87,12 +89,7 @@ dependencies:
       - python-dotenv
       - pypdfium2
       - pillow
-
-      # ── viewer data layer (CORE) ───────────────────────────────────────
-      # lstar-sc: the .lstar.zarr reader/CONVERTER (import name `lstar`). Stays in core
-      # because it PRODUCES/reads the store format independent of the browser viewer —
-      # the toggleable viewer-pagoda3 module is just the dist (misc/modules.md).
-      - lstar-sc==0.2.1     # EXACT pin — lstar moves fast + isn't in a stable channel;
-                            #   co-versioned with the lstar R package (git tag v0.2.1) and
-                            #   pagoda3 v0.2.1. Bump this + the R/pagoda3 pins together.
-      - zarr>=3.1            # lstar uses the zarr-python 3 library
+      # NB the viewer data layer (lstar-sc + zarr) is NOT here — it moved to the weft
+      # python pack (install/core/envs/python_bio.yaml). The backend converts stores by
+      # subprocessing the SESSION python and serves .lstar.zarr as raw bytes, so it
+      # needs neither in-process. The toggleable viewer-pagoda3 module is just the dist.
