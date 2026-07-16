@@ -247,6 +247,15 @@ def preflight(dest: str, port: Optional[int] = None,
     return out
 
 
+def canary_paths() -> list[str]:
+    """Paths whose presence on a remote proves it shares the deployment's
+    storage (compute_settings.md §11 #3): aba's home and the weft workspace —
+    verified with a stat, never guessed from mount names."""
+    from core import config
+    from core.compute.adapter import weft_workspace
+    return [str(config.aba_home()), str(weft_workspace())]
+
+
 def remote_facts(dest: str, port: Optional[int] = None,
                  ssh_opts: Optional[list[str]] = None,
                  canary_paths: Optional[list[str]] = None) -> dict:

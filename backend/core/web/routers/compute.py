@@ -253,15 +253,6 @@ async def keysetup(t: Target) -> dict:
     return out
 
 
-def _canary_paths() -> list[str]:
-    """Paths whose presence on the remote proves it shares the deployment's
-    storage (§11 #3): aba's home and the weft workspace — never a guess
-    from mount names."""
-    from core import config
-    from core.compute.adapter import weft_workspace
-    return [str(config.aba_home()), str(weft_workspace())]
-
-
 @router.post("/api/compute/probe")
 async def probe(t: Target) -> dict:
     """The §5.3 moment: one preliminary facts call (scheduler kind, shared-fs
@@ -270,7 +261,7 @@ async def probe(t: Target) -> dict:
     from core.compute import inference, preflight as pf
     comp = _adapter()
     facts = await asyncio.to_thread(
-        pf.remote_facts, t.dest, t.port, t.ssh_opts, _canary_paths())
+        pf.remote_facts, t.dest, t.port, t.ssh_opts, pf.canary_paths())
     if not facts.get("ok"):
         raise HTTPException(502, facts)
     kind = "slurm" if facts.get("scheduler") == "slurm" else "ssh"

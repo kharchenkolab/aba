@@ -27,6 +27,7 @@ from .tools.revisions import register_revision_tools
 from .tools.cells import register_cell_tools
 from .tools.entity_ops import register_entity_ops_tools
 from .tools.jobs import register_jobs_tools
+from .tools.compute_sites import register_compute_sites_tools
 from .tools.feedback import register_feedback_tools
 from .tools.viewers import register_viewer_tools
 
@@ -74,5 +75,9 @@ def make_server() -> FastMCP:
                                     #      cancel_job — let the agent answer
                                     #      "is it still running?" without
                                     #      deflecting to the UI Queues panel.
+    register_compute_sites_tools(mcp)  # misc/compute_settings.md §9: the Guide
+                                    #      as a second front-end to Settings →
+                                    #      Compute (list/probe/connect sites;
+                                    #      no-password + confirm disciplines)
 
     return mcp
