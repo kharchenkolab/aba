@@ -28,7 +28,13 @@ def mount(app) -> bool:
     not installed in this environment."""
     try:
         from weft_ui.embed import attach
+        from weft_ui.main import WEB_DIST
     except ImportError:
+        return False
+    if not (WEB_DIST / "index.html").exists():
+        # installed but the SPA was never built (see the installer's
+        # provision-weft-ui step) — hide Advanced ↗ rather than mount a stub
+        print("[weftui] web/dist not built — advanced compute surface disabled")
         return False
     from core.compute.adapter import weft_workspace
 

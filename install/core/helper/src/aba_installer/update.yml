@@ -80,6 +80,20 @@ steps:
       - 'if [ -d "$REPO_DIR/weft" ]; then "$ENV_DIR/bin/python" -m pip install --quiet --no-user "$REPO_DIR/weft" || echo "NOTE: weft reinstall failed — existing install kept; retries next update"; fi; true'
     timeout_seconds: 300
 
+  - id: refresh-weft-ui
+    title: Refresh the advanced compute surface (weft-ui)
+    why: |
+      Same lifecycle as the weft checkout (WEFT_UI_REF, default main; pin in
+      config.env): pull, reinstall (EDITABLE — the served SPA lives in the
+      checkout's web/dist, not the wheel), and rebuild the SPA only when the
+      checkout actually moved (the dist/.built-ref stamp). NON-FATAL: a
+      failed refresh keeps the working copy; installs without weft-ui skip.
+    commands:
+      - 'msg="weft-ui refresh skipped (no checkout — run install to provision)"; if [ -n "${ABA_WEFT_UI_SRC:-}" ]; then mkdir -p "$REPO_DIR/weft-ui" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi --exclude node_modules "$ABA_WEFT_UI_SRC/" "$REPO_DIR/weft-ui/" && msg="weft-ui refreshed from $ABA_WEFT_UI_SRC"; elif [ -d "$REPO_DIR/weft-ui/.git" ]; then R="${WEFT_UI_REF:-main}"; cd "$REPO_DIR/weft-ui" && { git fetch --depth 1 origin "$R" 2>/dev/null && git reset --hard FETCH_HEAD || { git fetch origin && git reset --hard "$R"; }; } && msg="weft-ui at $(git rev-parse --short HEAD) (ref $R)"; fi; echo "$msg"; true'
+      - 'if [ -d "$REPO_DIR/weft-ui" ]; then "$ENV_DIR/bin/python" -m pip install --quiet --no-user -e "$REPO_DIR/weft-ui" || echo "NOTE: weft-ui reinstall failed — existing install kept; retries next update"; fi; true'
+      - 'W="$REPO_DIR/weft-ui/web"; if [ -d "$W" ]; then REV=$(git -C "$REPO_DIR/weft-ui" rev-parse HEAD 2>/dev/null || echo src); if [ ! -f "$W/dist/index.html" ] || [ "$(cat "$W/dist/.built-ref" 2>/dev/null)" != "$REV" ]; then (cd "$W" && PATH="$ENV_DIR/bin:$PATH" "$ENV_DIR/bin/npm" ci --silent && PATH="$ENV_DIR/bin:$PATH" ./node_modules/.bin/vite build && echo "$REV" > dist/.built-ref) || echo "NOTE: weft-ui web rebuild failed — previous build kept"; fi; fi; true'
+    timeout_seconds: 600
+
   - id: refresh-env
     title: Refresh the environment
     why: |
