@@ -45,7 +45,8 @@ from core.hooks.dispatcher import register
 # guide.py, not on bio's internal layout.
 from content.bio.graph.figure_history import figure_history
 from content.bio.lifecycle.plans import set_plan_lifecycle
-from content.bio.lifecycle.runs import active_run_id, close_run, open_run
+from content.bio.lifecycle.runs import (active_run_id, close_run, open_run,
+                                         retain_run_keepers, run_id_for_plan)
 from content.bio.tools import _feedlog
 
 
@@ -82,8 +83,10 @@ def _on_plan_presented(ctx: dict) -> None:
 
 
 def _on_plan_complete(ctx: dict) -> None:
-    """#160: when this turn was driving a plan's execution, mark the
-    plan completed. Idempotent + safe on a missing entity."""
+    """#160: when this turn was driving a plan's execution, mark the plan completed, and
+    retain the Run's keepers NOW (plan-end) so durability + the Files panel are ready
+    promptly instead of waiting for Run-close (which we delay for follow-ups). Both are
+    idempotent + best-effort."""
     eid = ctx.get("plan_entity_id")
     if not eid:
         return
@@ -91,6 +94,16 @@ def _on_plan_complete(ctx: dict) -> None:
         set_plan_lifecycle(eid, "completed")
     except Exception:  # noqa: BLE001 — plan-tracking is best-effort
         pass
+    # Retain the Run's keepers at plan-end. guide dispatches on_plan_complete with only
+    # plan_entity_id, so resolve the Run from that (thread_id is a fallback if present).
+    try:
+        tid = ctx.get("thread_id")
+        rid = run_id_for_plan(eid) or (active_run_id(str(tid)) if tid else None)
+        if rid:
+            retain_run_keepers(rid)
+            _feedlog(f"SERVER retain@plan_complete run={rid}")
+    except Exception as e:  # noqa: BLE001 — retain must never break the turn
+        _feedlog(f"SERVER retain@plan_complete FAILED: {e}")
 
 
 def _on_plan_failed(ctx: dict) -> None:

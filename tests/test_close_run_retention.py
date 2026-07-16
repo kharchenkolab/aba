@@ -31,6 +31,7 @@ def test_retain_run_outputs_pins_produced_per_target(monkeypatch):
         {"original_name": "big.h5ad"},     # the >50 MB link-only crown jewel (§A0)
         {"original_name": ""},             # dropped
     ])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])   # nothing retained yet
     calls = []
     monkeypatch.setattr(retmod, "retain",
                         lambda target, **kw: calls.append((target, kw))
@@ -59,6 +60,7 @@ def test_retain_run_outputs_noop_when_nothing_produced(monkeypatch):
     import core.exec.artifacts as artmod
     import core.compute.retention as retmod
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
     called = []
     monkeypatch.setattr(retmod, "retain", lambda *a, **k: called.append(1))
     runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a"]})
@@ -70,6 +72,8 @@ def test_retain_run_outputs_swallows_retain_errors(monkeypatch):
     import core.compute.retention as retmod
     monkeypatch.setattr(artmod, "artifacts_for_run",
                         lambda rid: [{"original_name": "x.png"}])
+
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
 
     def _boom(*a, **k):
         raise RuntimeError("weft unreachable")
@@ -91,6 +95,7 @@ def test_retain_includes_declared_unsurfaced_outputs(monkeypatch):
         {"original_name": "samples/A/umap.png"},   # surfaced (basename umap.png)
         {"original_name": "qc.csv"},
     ])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
     calls = []
     monkeypatch.setattr(retmod, "retain",
                         lambda target, **kw: calls.append(kw) or {"state": "pinned-pending"})
@@ -111,6 +116,36 @@ def test_declared_output_names_helper(monkeypatch):
     assert runsmod._declared_output_names({}) == set()   # no plan → empty
 
 
+def test_retain_skips_transient_and_is_idempotent(monkeypatch):
+    """R1 level-1: obvious scratch (tmp/, cache/, *.tmp, chunk_*) excluded. Idempotent:
+    a path already covered by a pending retain row isn't re-issued (so plan-end + close +
+    extension only add NEW files)."""
+    import json
+    import core.exec.artifacts as artmod
+    import core.compute.retention as retmod
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "umap.png"},               # already retained (below)
+        {"original_name": "big.h5ad"},               # NEW keeper
+        {"original_name": "tmp/scratch.dat"},        # transient DIR
+        {"original_name": "cache/x.bin"},            # transient DIR
+        {"original_name": "run.tmp"},                # transient glob
+        {"original_name": "chunk_003.parquet"},      # transient glob
+    ])
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "pinned-pending", "selection": json.dumps({"include": ["umap.png"]})}])
+    calls = []
+    monkeypatch.setattr(retmod, "retain",
+                        lambda target, **kw: calls.append(kw) or {"state": "pinned-pending"})
+    runsmod._retain_run_outputs("run-1", {"weft_targets": ["krn_a"]})
+    assert calls[0]["include"] == ["big.h5ad"]       # transients dropped; umap.png already pending
+
+
+def test_is_transient_matrix():
+    T = runsmod._is_transient
+    assert T("tmp/a.csv") and T("d/__pycache__/x.pyc") and T("x.tmp") and T("chunk_0.bin")
+    assert not T("umap.png") and not T("samples/A/qc.csv") and not T("big.h5ad")
+
+
 _TESTS = [
     test_retain_run_outputs_pins_produced_per_target,
     test_retain_run_outputs_noop_without_targets,
@@ -118,6 +153,8 @@ _TESTS = [
     test_retain_run_outputs_swallows_retain_errors,
     test_retain_includes_declared_unsurfaced_outputs,
     test_declared_output_names_helper,
+    test_retain_skips_transient_and_is_idempotent,
+    test_is_transient_matrix,
 ]
 
 
