@@ -522,18 +522,19 @@ def run_durable_view(run_id: str) -> dict:
             badge = ("large · keeps the version at run settlement" if large
                      else "pinned · saves when the run settles")
         else:
+            _SANDBOX = "on the run's scratch — not durably kept yet; kept when the run finishes, or Keep it now"
             performed, exists, live_bytes = _on_disk(rel)
             if exists:
-                state, badge = "in-sandbox", "in sandbox"
+                state, badge = "in-sandbox", _SANDBOX
                 if not size and live_bytes:          # real size for a live file
                     size = live_bytes
                     large = size > _MAX_HARVEST_BYTES
             elif performed:
-                state, badge = "cleared", "cleared"  # confirmed swept
+                state, badge = "cleared", "cleared — swept from scratch, not retained"
             elif rel in inv_paths:
-                state, badge = "in-sandbox", "in sandbox"   # proxy: was inventoried
+                state, badge = "in-sandbox", _SANDBOX   # proxy: was inventoried
             else:
-                state, badge = "cleared", "cleared"
+                state, badge = "cleared", "cleared — swept from scratch, not retained"
         view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
                            if state in ("kept", "in-sandbox") else None)
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,

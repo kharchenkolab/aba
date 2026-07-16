@@ -74,6 +74,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   // Durable view (output_durability.md §6.2): a TreeNode tree whose file nodes carry
   // per-file durability `state`/`badge`, merged from weft's retained tree + inventory +
   // the live sandbox — so the panel survives the sandbox sweep instead of going empty.
+  const runOpen = (run.metadata as { run_state?: string } | undefined)?.run_state === 'open'
   const pollRef = useRef<number | undefined>(undefined)
   const loadDurable = useCallback(() => {
     fetch(`/api/runs/${encodeURIComponent(run.id)}/durable`)
@@ -81,14 +82,15 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
       .then(d => {
         setRunTree(d as TreeNode | null)
         setDuraSummary((d && (d as { summary?: Record<string, number> }).summary) || null)
-        // F3: keep polling while anything is still settling (pinned-pending), so the
-        // badge flips to kept live when weft captures at kernel stop. /durable is
-        // already live-accurate per call, so a bounded poll is all it takes.
+        // Re-poll while the Run is still ACTIVE (open) — so a run-in-progress picks up
+        // newly-harvested files without a manual reload — OR while anything is settling
+        // (pinned-pending → flips to kept when weft captures at kernel stop). /durable is
+        // live-accurate per call. Stops once the Run is closed and nothing is pending.
         if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
-        if (d && treeHasPending(d as TreeNode)) pollRef.current = window.setTimeout(loadDurable, 5000)
+        if (runOpen || (d && treeHasPending(d as TreeNode))) pollRef.current = window.setTimeout(loadDurable, 6000)
       })
       .catch(() => setRunTree(null))
-  }, [run.id])
+  }, [run.id, runOpen])
   useEffect(() => {
     loadDurable()
     return () => { if (pollRef.current) window.clearTimeout(pollRef.current) }

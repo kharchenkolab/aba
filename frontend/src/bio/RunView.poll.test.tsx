@@ -65,17 +65,37 @@ describe('RunView durability polling', () => {
       render(<RunView run={run} entities={[]} onFocus={() => {}} onChange={() => {}} />)
     })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })   // flush initial fetch
-    expect(screen.getByText('pending')).toBeTruthy()
+    expect(screen.getByText('saving…')).toBeTruthy()
     expect(calls).toBe(1)
 
-    // advance the 5s poll → refetch → kept
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    // advance the poll → refetch → kept
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
     expect(screen.getByText('kept ✓')).toBeTruthy()
     expect(calls).toBe(2)
 
     // no more polling once nothing is pending
     await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
     expect(calls).toBe(2)
+  })
+
+  it('keeps polling while the Run is OPEN (picks up newly-harvested files), no pending needed', async () => {
+    let calls = 0
+    globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+      String(url).includes('/durable')
+        ? (calls++, Promise.resolve({ ok: true, json: () => Promise.resolve(keptTree) }))
+        : Promise.resolve({ ok: true, json: () => Promise.resolve({}) })) as unknown as typeof globalThis.fetch
+    // run_state: 'open' → an in-progress run; the panel must refresh as artifacts land
+    const run = { id: 'ana_open', type: 'analysis', title: 'R',
+                  metadata: { run_state: 'open' } } as unknown as never
+    await act(async () => {
+      render(<RunView run={run} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(calls).toBe(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(calls).toBe(2)                 // polled again purely because the run is open
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(calls).toBe(3)
   })
 })
 
