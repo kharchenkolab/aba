@@ -118,7 +118,7 @@ usage: aba <command>
   status     Is it running?
   logs       Tail the backend log
   update     Pull the latest code + recipes, refresh env, rebuild the UI
-  doctor     Diagnose this install (env, frontend, recipes, credential, Slurm)
+  doctor     Diagnose this install (env, frontend, recipes, credential, weft substrate + sites, Slurm)
   settings   Show the declared config settings surface (+ unknown-var drift);
              --deploy-env prints just the launcher-forwarded keys
   auth       Set a credential (Sign in with Claude / --token / --api-key)
