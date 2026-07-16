@@ -66,11 +66,22 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
         tree = build_files_tree(include_archived=False)
         n = find_file_node(tree, path)
-        if n is None:
-            cands = list_file_matches(tree, path)
-            hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
-            raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
-        return n
+        if n is not None:
+            return n
+        # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store in
+        # the live kernel jobdir). Resolve it directly from the Run's outputs (retained tree /
+        # jobdir / sandbox), the same fallback the open_viewer tool uses, so launch/download work
+        # without a prior data_register. resolve_project_run_output is escape-safe (paths stay
+        # under sanctioned Run roots), so an arbitrary `path=` can't reach outside them.
+        from content.bio.lifecycle.runs import resolve_project_run_output
+        hit = resolve_project_run_output(path)
+        if hit is not None:
+            _rid, abs_path = hit
+            return {"entity_id": None, "entity_type": None,
+                    "name": Path(abs_path).name, "artifact_path": abs_path, "size": None}
+        cands = list_file_matches(tree, path)
+        hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
+        raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
     raise HTTPException(400, "supply either entity_id or path")
 
 

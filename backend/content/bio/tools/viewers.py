@@ -54,21 +54,39 @@ def open_viewer_impl(params: dict, ctx: dict | None = None) -> dict:
         from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
         tree = build_files_tree(include_archived=False)
         n = find_file_node(tree, file_path)
-        if n is None:
-            cands = list_file_matches(tree, file_path)
-            hint = (" Matching files in this project: " + ", ".join(cands) + "."
-                    if cands else
-                    " No file with that name exists here — check the Files tab / your recent"
-                    " outputs, then pass its path or register it as a dataset and pass entity_id.")
-            return {"ok": False, "error": f"No file matching {file_path!r} in this project.{hint}"}
-        link_path = n.get("path")
-        node = {
-            "entity_id": n.get("entity_id"),
-            "entity_type": n.get("entity_type"),
-            "name": n.get("name") or os.path.basename(link_path or ""),
-            "artifact_path": n.get("artifact_path") or link_path,
-            "size": n.get("size"),
-        }
+        if n is not None:
+            link_path = n.get("path")
+            node = {
+                "entity_id": n.get("entity_id"),
+                "entity_type": n.get("entity_type"),
+                "name": n.get("name") or os.path.basename(link_path or ""),
+                "artifact_path": n.get("artifact_path") or link_path,
+                "size": n.get("size"),
+            }
+        else:
+            # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store
+            # in the live kernel jobdir) that isn't a registered entity yet. Resolve it directly
+            # from the Run's outputs so the user needn't data_register it first. The link carries
+            # the same basename; the launch route re-resolves it the same way.
+            from content.bio.lifecycle.runs import resolve_project_run_output
+            hit = resolve_project_run_output(file_path)
+            if hit is None:
+                cands = list_file_matches(tree, file_path)
+                hint = (" Matching files in this project: " + ", ".join(cands) + "."
+                        if cands else
+                        " No file with that name exists here — check the Files tab / your recent"
+                        " outputs, then pass its path or register it as a dataset and pass entity_id.")
+                return {"ok": False,
+                        "error": f"No file matching {file_path!r} in this project.{hint}"}
+            _rid, abs_path = hit
+            link_path = file_path
+            node = {
+                "entity_id": None,
+                "entity_type": None,
+                "name": os.path.basename(abs_path),
+                "artifact_path": abs_path,
+                "size": None,
+            }
 
     ext = [v for v in viewers_for(node) if v.mode == "external" and v.open_external]
     if not ext:

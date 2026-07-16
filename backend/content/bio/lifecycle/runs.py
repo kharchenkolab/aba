@@ -514,6 +514,109 @@ def read_run_file(run_id: str, rel: str, max_bytes: int = _PREVIEW_CAP):
     return (None, False, 0)
 
 
+def _search_root_for(root: Optional[str], name: str) -> Optional[str]:
+    """Absolute path of a FILE or DIRECTORY under `root` matching `name` (an exact rel join,
+    else a basename match anywhere below). Escape-safe. Prefers a directory (a `.zarr`/store
+    dir) over a same-named file, then newest mtime, and does NOT descend into a matched dir
+    (bounds cost for chunk-heavy stores). None if not found."""
+    import os as _os
+    if not root:
+        return None
+    rootr = _os.path.realpath(root)
+    if not _os.path.isdir(rootr):
+        return None
+    cand = _os.path.realpath(_os.path.join(rootr, name))          # exact rel join first (cheap)
+    if (cand == rootr or cand.startswith(rootr + _os.sep)) and _os.path.exists(cand):
+        return cand
+    base = name.rsplit("/", 1)[-1]
+    hits: list = []
+    for dirpath, dirnames, filenames in _os.walk(rootr):
+        for d in [d for d in dirnames if d == base]:              # matched dir (e.g. x.lstar.zarr)
+            hits.append(_os.path.join(dirpath, d))
+        dirnames[:] = [d for d in dirnames if d != base]          # prune → don't walk store chunks
+        for f in filenames:
+            if f == base:
+                hits.append(_os.path.join(dirpath, f))
+        if len(hits) > 50:                                        # bound the scan
+            break
+    if not hits:
+        return None
+
+    def _key(p: str):
+        try:
+            return (1 if _os.path.isdir(p) else 0, _os.path.getmtime(p))
+        except OSError:
+            return (0, 0.0)
+    return max(hits, key=_key)
+
+
+def _run_jobdirs(run_id: str) -> list:
+    """Absolute LOCAL weft jobdirs for a Run's targets. A weft kernel can't chdir — its cwd IS
+    its jobdir (`weft_workspace/site-local/<jobdir>`), so bare relative writes (a produced
+    `.zarr` store, an .h5ad) land there, and aba harvests from there. This is where a
+    freshly-produced, not-yet-retained output physically lives for the local site."""
+    out: list = []
+    ent = get_entity(run_id)
+    targets = ((ent or {}).get("metadata") or {}).get("weft_targets") or []
+    if not targets:
+        return out
+    try:
+        from core.compute import adapter as _ad, get_compute
+        ws = _ad.weft_workspace()
+        kmap = {k.get("kernel_id"): k
+                for k in (get_compute().sync_call("list_kernels").get("kernels") or [])}
+        for t in targets:
+            k = kmap.get(t)
+            if k and k.get("site") == "local" and k.get("jobdir"):
+                out.append(str(ws / "site-local" / k["jobdir"]))
+    except Exception as e:  # noqa: BLE001 — no jobdir just means we fall back to other tiers
+        _log.debug("run jobdir lookup failed for %s: %s", run_id, e)
+    return out
+
+
+def resolve_run_output_path(run_id: str, name: str) -> Optional[str]:
+    """Absolute LOCAL path to a Run output FILE or DIRECTORY matching `name` (basename or rel),
+    across tiers: weft retained tree (`done` location) → the live weft jobdir(s) → the run
+    sandbox. Directory-aware — a `.zarr` STORE resolves (unlike `resolve_run_file`, which is
+    file-only) — and escape-safe. None when not locally resolvable (in-sandbox on a REMOTE site,
+    or swept). Backs viewer resolution of a fresh weft output not yet registered as an entity."""
+    from core.compute import retention
+    roots: list = []
+    try:
+        for row in (retention.retained(label=run_id) or []):
+            if row.get("state") == "done":
+                loc = retention.location_path(row)
+                if loc:
+                    roots.append(loc)
+    except Exception as e:  # noqa: BLE001
+        _log.debug("resolve_run_output_path: retained() failed for %s: %s", run_id, e)
+    roots.extend(_run_jobdirs(run_id))
+    ent = get_entity(run_id)
+    ap = (ent or {}).get("artifact_path")
+    if ap:
+        roots.append(ap)                                          # jupyter / non-weft fallback
+    for root in roots:
+        hit = _search_root_for(root, name)
+        if hit:
+            return hit
+    return None
+
+
+def resolve_project_run_output(name: str, *, max_runs: int = 12) -> Optional[tuple]:
+    """`(run_id, abs_path)` for a project Run output matching `name`, searching Runs newest-first
+    (capped). Backs open_viewer / the viewer-launch route resolving a fresh weft output that
+    isn't in the entity-graph files tree yet — so the user needn't `data_register` it first."""
+    scanned = 0
+    for e in reversed(list_entities(type_filter="analysis", include_archived=False)):
+        hit = resolve_run_output_path(e["id"], name)
+        if hit:
+            return (e["id"], hit)
+        scanned += 1
+        if scanned >= max_runs:
+            break
+    return None
+
+
 def _sel_match(rel: str, done_sel: list):
     """meta of a remote/in-place `done` retain whose selection covers `rel` (an include
     glob matches and no exclude does), else None. fnmatch '*' spans '/', so weft globs
