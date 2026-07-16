@@ -103,3 +103,88 @@ export interface EntityProvenance {
 export function getEntityProvenance(entityId: string): Promise<EntityProvenance> {
   return apiGet<EntityProvenance>(`/api/entities/${encodeURIComponent(entityId)}/provenance`)
 }
+
+// --- Settings → Compute (misc/compute_settings.md §4–§7) ---
+
+export interface GpuEntry { model?: string | null; count?: number }
+export interface PartitionRow {
+  name: string; selected?: boolean; gpus_per_node?: number
+  nodes?: number | null; cpus_per_node?: number | null
+  mem_gb_per_node?: number | null; max_walltime?: string | null
+}
+export interface SiteCaps {
+  cpus?: number; mem_gb?: number; arch?: string; glibc?: string
+  internet?: boolean; module_system?: boolean; probed_at?: number
+  gpus?: GpuEntry[]
+  scheduler?: { type?: string; version?: string; partitions?: Record<string, unknown>[] }
+  storage?: { free_gb?: number; candidates?: { path: string; writable?: boolean; free_gb?: number }[] }
+}
+export interface StoragePath { path: string; stable?: boolean }
+export interface AbaSiteKeys { contract?: string; use_for?: string[]; storage?: StoragePath[] }
+export interface VerifyState {
+  state?: 'running' | 'done'; ok?: boolean; failed?: string[]
+  partitions?: Record<string, { ok?: boolean; note?: string }> | string[] | null
+  error?: { detail?: string }
+}
+export interface ComputeSite {
+  name: string; kind: string; health?: string
+  cpus?: number; mem_gb?: number; gpus?: number
+  scheduler?: string; internet?: boolean
+  config?: { root?: string; host?: string; user?: string
+             policy?: { partitions_allowed?: string[]; notes?: string[]
+                        storage?: Record<string, string> } }
+  capabilities?: SiteCaps | null
+  probed_at?: number
+  aba?: AbaSiteKeys
+  verify?: VerifyState
+}
+export interface ComputeProposal {
+  kind: string; machine_type: string; headline: string; name: string
+  use_for: string[]
+  working: { root: string; free_gb?: number | null; reason?: string }
+  long_term: StoragePath[]
+  contract: string; contract_evidence?: string[]
+  partitions: PartitionRow[]
+  account?: string | null; accounts?: string[]
+  gpus?: GpuEntry[]
+  totals?: { nodes: number; cores: number; gpus: number; partitions: number } | null
+  facts?: Record<string, unknown>
+}
+export interface PreflightResult {
+  case: 'ok' | 'auth' | 'hostkey' | 'dns' | 'network' | 'unknown'
+  cause?: string; stderr?: string
+  hostkey?: { line: string; fingerprint: string; keytype: string }
+}
+export interface SshTarget { dest: string; port?: number | null; ssh_opts?: string[] }
+
+const cname = (n: string) => encodeURIComponent(n)
+
+export const computeApi = {
+  status: () => apiGet<{ ok: boolean; detail: string }>('/api/compute/status'),
+  sites: () => apiGet<{ sites: ComputeSite[] }>('/api/compute/sites'),
+  site: (name: string) => apiGet<ComputeSite>(`/api/compute/sites/${cname(name)}`),
+  load: (name: string) =>
+    apiGet<{ start_estimate?: string | null; partitions?: unknown }>(
+      `/api/compute/sites/${cname(name)}/load?estimate=true`),
+  footprint: (name: string) =>
+    apiGet<{ free_bytes?: number; prefixes_bytes?: number; package_cache_bytes?: number }>(
+      `/api/compute/sites/${cname(name)}/footprint`),
+  hosts: () => apiGet<{ hosts: { host: string; hostname?: string; user?: string }[] }>('/api/compute/hosts'),
+  templates: () => apiGet<{ templates: { name: string; dest?: string; note?: string }[] }>('/api/compute/templates'),
+  preflight: (t: SshTarget) => apiPost<PreflightResult>('/api/compute/preflight', t),
+  acceptHostkey: (line: string) => apiPost<{ ok: boolean }>('/api/compute/hostkey', { line }),
+  keysetup: (t: SshTarget) =>
+    apiPost<{ ok: boolean; created: boolean; command: string }>('/api/compute/keysetup', t),
+  probe: (t: SshTarget) =>
+    apiPost<{ capabilities: SiteCaps; proposal: ComputeProposal }>('/api/compute/probe', t),
+  connect: (t: SshTarget & { proposal: ComputeProposal }) =>
+    apiPost<{ site: string; verifying: boolean }>('/api/compute/sites', t),
+  verify: (name: string) => apiPost<{ started: boolean }>(`/api/compute/sites/${cname(name)}/verify`),
+  reprobe: (name: string) => apiPost<{ site: string }>(`/api/compute/sites/${cname(name)}/reprobe`),
+  edit: (name: string, body: { use_for?: string[]; long_term?: StoragePath[]; notes?: string[] }) =>
+    apiPatch<{ site: string }>(`/api/compute/sites/${cname(name)}`, body),
+  disconnect: (name: string) => apiDelete<{ site: string }>(`/api/compute/sites/${cname(name)}`),
+  gc: (name: string, confirm: boolean) =>
+    apiPost<{ reclaimable_bytes?: number; freed_bytes?: number }>(
+      `/api/compute/sites/${cname(name)}/gc`, { confirm }),
+}

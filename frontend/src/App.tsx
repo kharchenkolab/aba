@@ -293,6 +293,9 @@ export default function App() {
         if (ev.type === 'entity_updated') refresh()
         // Module install progress → ModuleToasts + the Modules tab listen for this.
         else if (ev.type === 'module') window.dispatchEvent(new CustomEvent('aba:module', { detail: ev }))
+        // Compute-site lifecycle (registration narration, queue verification) →
+        // Settings → Compute tab live refresh.
+        else if (ev.type === 'compute') window.dispatchEvent(new CustomEvent('aba:compute', { detail: ev }))
       } catch {}
     }
     return () => { es.close() }
