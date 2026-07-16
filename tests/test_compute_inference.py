@@ -70,15 +70,35 @@ def test_suggest_name_decollides():
 
 # ── working-root pick ────────────────────────────────────────────────────────
 
-def test_working_root_prefers_scratch_over_home_and_tmp():
-    w = pick_working_root(slurm_caps()["storage"])
+def test_working_root_cluster_prefers_scratch():
+    w = pick_working_root(slurm_caps()["storage"], scheduler=True)
     assert w["root"] == "/scratch/me/.weft"
     assert w["free_gb"] == 4300
+    # every plausible choice is offered, honestly labeled — never a silent guess
+    roots = {o["root"]: o["kind"] for o in w["options"]}
+    assert roots["/scratch/me/.weft"] == "scratch"
+    assert roots["/home/me/.weft"] == "home"
+    assert "/tmp/.weft" not in roots          # volatile never proposed
 
 
-def test_working_root_falls_back_to_home():
+def test_working_root_plain_server_prefers_home():
+    """A single-node server's home is typically the backed-up, durable place —
+    no purge policy to dodge (the ada case)."""
+    w = pick_working_root(workstation_caps()["storage"], scheduler=False)
+    assert w["root"] == "/home/me/.weft" and w["kind"] == "home"
+    assert "backed up" in w["reason"]
+
+
+def test_working_root_tight_home_defers_to_roomy_mount():
     w = pick_working_root({"candidates": [
-        {"path": "/home/me", "writable": True, "free_gb": 10},
+        {"path": "/home/me", "writable": True, "free_gb": 5},
+        {"path": "/data/scratch", "writable": True, "free_gb": 900}]},
+        scheduler=False)
+    assert w["root"] == "/data/scratch/.weft"
+
+
+def test_working_root_no_candidates_falls_back_to_home():
+    w = pick_working_root({"candidates": [
         {"path": "/tmp", "writable": True, "free_gb": 999}]})
     assert w["root"] == "~/.weft"        # volatile /tmp never proposed
 
@@ -106,7 +126,10 @@ def test_workstation_proposal():
     assert "2× RTX 6000" in p["headline"]
     assert p["use_for"] == ["interactive", "background", "gpu"]
     assert p["contract"] == "detached"           # no verified shared path
-    assert p["working"]["root"] == "/work/me/.weft"
+    # non-scheduler machine with a roomy home → home (durable) wins over /work
+    assert p["working"]["root"] == "/home/me/.weft"
+    assert {o["root"] for o in p["working"]["options"]} == \
+        {"/home/me/.weft", "/work/me/.weft"}
     assert p["account"] is None
 
 
@@ -135,6 +158,13 @@ def test_build_site_config_slurm():
     assert cfg["policy"]["partitions_allowed"] == ["cpu", "gpu"]
     assert cfg["scheduler"] == {"account": "lab-alloc"}
     assert cfg["pixi_source"] == "/opt/pixi"
+
+
+def test_build_site_config_carries_policy_notes():
+    p = propose(slurm_caps(), dest="me@login1.vbc.ac.at")
+    p["notes"] = ["use only on nights, EU time", "  ", ""]
+    cfg = build_site_config(p, dest="me@login1.vbc.ac.at")
+    assert cfg["policy"]["notes"] == ["use only on nights, EU time"]
 
 
 def test_build_site_config_all_partitions_means_no_allowlist():

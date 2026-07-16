@@ -269,6 +269,21 @@ def test_edit_updates_yaml_and_policy(client, fake):
     assert aba["use_for"] == ["background"] and len(aba["storage"]) == 2
 
 
+def test_edit_moves_working_root_and_saves_notes(client, fake):
+    fake.sites["vbc"] = {"name": "vbc", "kind": "slurm",
+                         "config": {"root": "/scratch/me/.weft", "host": "h"},
+                         "capabilities": {}}
+    r = client.patch("/api/compute/sites/vbc", json={
+        "working_root": "/home/me/.weft",
+        "notes": ["use only on nights, EU time", " "]})
+    assert r.status_code == 200, r.text
+    cfg = r.json()["config"]
+    assert cfg["root"] == "/home/me/.weft"          # re-registered at new root
+    assert cfg["policy"]["notes"] == ["use only on nights, EU time"]
+    call = next(c for c in fake.calls if c[0] == "register_site")
+    assert call[3]["root"] == "/home/me/.weft"
+
+
 def test_disconnect_and_busy_409(client, fake):
     from core.compute import sites_config
     sites_config.upsert_site("gone", "ssh", {"root": "/g"})

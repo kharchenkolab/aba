@@ -35,6 +35,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [newPath, setNewPath] = useState('')
+  const [customRoot, setCustomRoot] = useState(false)
   const proposalName = useRef<string>('')
 
   useEffect(() => {
@@ -119,7 +120,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
   return (
     <div className="cmp-connect">
       <div className="cmp-connect__head">
-        <strong>Connect a machine</strong>
+        <strong>Add a machine</strong>
         <button className="mod-linkbtn" onClick={onCancel}>cancel</button>
       </div>
 
@@ -130,7 +131,8 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
           </label>
           <div className="cmp-addr">
             <input value={dest} placeholder="me@login.cluster.edu" spellCheck={false}
-              list="cmp-saved-hosts" autoFocus
+              list="cmp-saved-hosts" autoFocus autoComplete="off"
+              name="cmp-ssh-dest" data-1p-ignore
               onChange={e => setDest(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && dest.trim()) runPreflight() }} />
             <datalist id="cmp-saved-hosts">
@@ -218,9 +220,12 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
 
       {(step === 'probing' || step === 'connecting') && (
         <div>
-          <p>{step === 'probing'
-            ? 'Looking at the machine — this takes a few seconds…'
-            : 'Connecting…'}</p>
+          <p>
+            <span className="model-status__spin" aria-hidden>◜</span>{' '}
+            {step === 'probing'
+              ? 'Looking at the machine — this takes a few seconds…'
+              : 'Adding the machine…'}
+          </p>
           <ul className="cmp-narration">
             {narration.map(n => <li key={n}>{n}</li>)}
           </ul>
@@ -233,7 +238,8 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
 
           <div className="cmp-form">
             <label>Name</label>
-            <input value={proposal.name} spellCheck={false}
+            <input value={proposal.name} spellCheck={false} autoComplete="off"
+              name="cmp-site-name" data-1p-ignore
               onChange={e => { patch({ name: e.target.value }) }} />
 
             <label>Used for</label>
@@ -247,10 +253,29 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
 
             <label>Working space</label>
             <div>
-              <input value={proposal.working.root} spellCheck={false}
-                onChange={e => patch({ working: { ...proposal.working, root: e.target.value } })} />
+              {(proposal.working.options?.length ?? 0) > 0 ? (
+                <select value={customRoot ? '__custom__' : proposal.working.root}
+                  onChange={e => {
+                    if (e.target.value === '__custom__') { setCustomRoot(true); return }
+                    setCustomRoot(false)
+                    const opt = proposal.working.options!.find(o => o.root === e.target.value)
+                    patch({ working: { ...proposal.working, root: e.target.value,
+                                       free_gb: opt?.free_gb, reason: opt?.note } })
+                  }}>
+                  {proposal.working.options!.map(o => (
+                    <option key={o.root} value={o.root}>
+                      {o.root}{o.free_gb != null ? ` — ${o.free_gb} GB free` : ''}
+                    </option>
+                  ))}
+                  <option value="__custom__">another path…</option>
+                </select>
+              ) : null}
+              {(customRoot || !(proposal.working.options?.length)) && (
+                <input value={proposal.working.root} spellCheck={false} autoComplete="off"
+                  onChange={e => patch({ working: { ...proposal.working, root: e.target.value } })} />
+              )}
               <div className="cmp-dim">
-                {proposal.working.free_gb != null ? `${proposal.working.free_gb} GB free — ` : ''}
+                environments &amp; working files — everything here rebuilds itself.{' '}
                 {proposal.working.reason}
               </div>
             </div>
@@ -264,16 +289,30 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                     patch({ long_term: proposal.long_term.filter((_, j) => j !== i) })}>remove</button>
                 </div>
               ))}
+              {proposal.long_term.length === 0 && (
+                <div className="cmp-dim">
+                  none yet — add a path on durable storage (a backed-up home or
+                  project share) where data lives and kept results should stay
+                </div>
+              )}
               <div className="cmp-addpath">
-                <input value={newPath} placeholder="/groups/lab" spellCheck={false}
+                <input value={newPath} placeholder="add a path…" spellCheck={false}
+                  autoComplete="off"
                   onChange={e => setNewPath(e.target.value)} />
                 <button className="cmp-btn" disabled={!newPath.trim()}
                   onClick={() => {
                     patch({ long_term: [...proposal.long_term, { path: newPath.trim(), stable: true }] })
                     setNewPath('')
-                  }}>Add</button>
+                  }}>Add path</button>
               </div>
-              <div className="cmp-dim">data read in place; results kept here stay put</div>
+            </div>
+
+            <label>Notes <span className="cmp-dim">(guidance for scheduling)</span></label>
+            <div>
+              <textarea className="cmp-notes" rows={2} spellCheck={false}
+                placeholder={'e.g. "use only on nights, EU time" — the agent sees this with every plan'}
+                value={(proposal.notes ?? []).join('\n')}
+                onChange={e => patch({ notes: e.target.value.split('\n') })} />
             </div>
 
             <label>Files</label>
@@ -319,7 +358,10 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
             <button className="cmp-btn cmp-btn--primary"
               disabled={busy || !proposal.name.trim()
                 || knownNames.includes(proposal.name.trim())}
-              onClick={connect}>Connect</button>
+              onClick={connect}>
+              {busy && <span className="model-status__spin" aria-hidden>◜ </span>}
+              Add
+            </button>
             {knownNames.includes(proposal.name.trim()) &&
               <span className="cmp-dim">that name is taken</span>}
             <button className="cmp-btn" onClick={onCancel}>Cancel</button>

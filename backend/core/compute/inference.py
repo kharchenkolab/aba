@@ -53,32 +53,73 @@ def _partition_gpus(p: dict) -> int:
                if g.get("type") == "gpu")
 
 
-def pick_working_root(storage: dict) -> dict:
-    """The weft root proposal from the probe's storage candidates: roomiest
-    WRITABLE, non-home, non-volatile mount, preferring scratch/work trees and
-    user-specific (deeper) paths. Falls back to ~/.weft (always legal —
-    everything under a weft root rebuilds by design)."""
-    best, best_key = None, None
+_KIND_NOTE = {
+    "scratch": "fast and roomy — the cluster may purge it; everything aba "
+               "keeps here rebuilds itself",
+    "home": "usually backed up — counts against your home quota",
+    "other": "writable space",
+}
+
+
+def _candidate_kind(path: str) -> str:
+    if "scratch" in path or "work" in path or "/tmp" in path:
+        return "scratch"
+    if _HOMEISH.match(path) or path == "~":
+        return "home"
+    return "other"
+
+
+def working_root_options(storage: dict) -> list[dict]:
+    """Every plausible weft-root choice from the probe, honestly labeled —
+    the UI shows these as a picker, never a silent guess. Volatile mounts
+    (/tmp, /dev/shm) are excluded outright; everything else is the user's
+    call with the trade-off stated."""
+    opts = []
     for c in (storage or {}).get("candidates") or []:
         path = c.get("path") or ""
         if not c.get("writable") or not path:
             continue
         if any(path == v or path.startswith(v + "/") for v in _VOLATILE):
             continue
-        if _HOMEISH.match(path):
-            continue
-        key = (("scratch" in path or "work" in path),
-               c.get("free_gb") or 0, path.count("/"))
-        if best_key is None or key > best_key:
-            best, best_key = c, key
-    if best is None:
-        return {"root": "~/.weft", "free_gb": (storage or {}).get("free_gb"),
-                "reason": "no scratch-like writable mount found — home is "
-                          "safe (everything here rebuilds), just watch quota"}
-    return {"root": best["path"].rstrip("/") + "/.weft",
-            "free_gb": best.get("free_gb"),
-            "reason": ("scratch" if "scratch" in best["path"] else "roomiest")
-                      + " writable space — safe to wipe; rebuilds itself"}
+        kind = _candidate_kind(path)
+        opts.append({"root": path.rstrip("/") + "/.weft",
+                     "free_gb": c.get("free_gb"), "kind": kind,
+                     "note": _KIND_NOTE[kind]})
+    if not any(o["kind"] == "home" for o in opts):
+        opts.append({"root": "~/.weft",
+                     "free_gb": (storage or {}).get("free_gb"),
+                     "kind": "home", "note": _KIND_NOTE["home"]})
+    # stable order: scratch-likes by free space, then home, then other
+    opts.sort(key=lambda o: ({"scratch": 0, "home": 1, "other": 2}[o["kind"]],
+                             -(o["free_gb"] or 0), -o["root"].count("/")))
+    return opts
+
+
+def pick_working_root(storage: dict, *, scheduler: bool = False) -> dict:
+    """The DEFAULT weft-root pick (the user can choose any option):
+    - scheduler sites (clusters): prefer scratch/work — cluster homes are
+      classically small-quota, scratch is the norm, and everything under a
+      weft root rebuilds by design;
+    - plain servers/workstations: prefer HOME — it's typically the backed-up,
+      durable place, and there is no purge policy to dodge — unless home is
+      tight and a much roomier writable mount exists."""
+    opts = working_root_options(storage)
+    scratchy = [o for o in opts if o["kind"] == "scratch"]
+    homey = [o for o in opts if o["kind"] == "home"]
+    if scheduler and scratchy:
+        best = scratchy[0]
+    elif not scheduler and homey:
+        best = homey[0]
+        big = scratchy[0] if scratchy else None
+        home_free = best.get("free_gb") or 0
+        if big and home_free < 25 and (big.get("free_gb") or 0) > 4 * home_free:
+            best = big
+    else:
+        best = (scratchy + homey + opts)[0] if opts else \
+            {"root": "~/.weft", "free_gb": None, "kind": "home",
+             "note": _KIND_NOTE["home"]}
+    return {"root": best["root"], "free_gb": best.get("free_gb"),
+            "reason": best["note"], "kind": best["kind"], "options": opts}
 
 
 def propose(caps: dict, *, dest: str = "",
@@ -152,7 +193,9 @@ def propose(caps: dict, *, dest: str = "",
         "headline": headline,
         "name": suggest_name(dest, known_names),
         "use_for": use_for,
-        "working": pick_working_root(caps.get("storage") or {}),
+        "notes": [],
+        "working": pick_working_root(caps.get("storage") or {},
+                                     scheduler=sched_type != "none"),
         "long_term": [{"path": p, "stable": True} for p in shared],
         "contract": contract,
         "contract_evidence": shared,
@@ -197,6 +240,9 @@ def build_site_config(proposal: dict, *, dest: str = "",
         storage_roles["scratch"] = working_parent
     if storage_roles:
         policy["storage"] = storage_roles
+    notes = [n.strip() for n in (proposal.get("notes") or []) if n.strip()]
+    if notes:
+        policy["notes"] = notes   # free-text guidance weft surfaces per plan
     if policy:
         cfg["policy"] = policy
     if proposal["kind"] == "slurm" and proposal.get("account"):

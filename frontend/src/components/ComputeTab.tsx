@@ -120,7 +120,7 @@ export default function ComputeTab() {
         <h3 className="settings__section-title">Compute</h3>
         <div className="cmp-actions">
           <button className="cmp-btn cmp-btn--primary"
-            onClick={() => setConnecting(true)}>+ Connect a machine</button>
+            onClick={() => setConnecting(true)}>+ Add a machine</button>
           {advanced && (
             <button className="cmp-btn" title="Open weft-ui — every knob exposed"
               onClick={() => openAdvanced()}>Advanced ↗</button>
@@ -128,7 +128,7 @@ export default function ComputeTab() {
         </div>
       </div>
       <p className="settings__hint">
-        Where your analyses run. Connect your lab’s cluster or a workstation and
+        Where your analyses run. Add your lab’s cluster or a workstation and
         aba can run large jobs, GPU work, and overnight tasks there.
       </p>
 
@@ -219,6 +219,9 @@ function SiteDetail({ site, advanced, onChanged }: {
   const [longTerm, setLongTerm] = useState<StoragePath[]>(s.aba?.storage ?? [])
   const [newPath, setNewPath] = useState('')
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  const [editingRoot, setEditingRoot] = useState<string | null>(null)
+  const [notesText, setNotesText] = useState(
+    (s.config?.policy?.notes ?? []).join('\n'))
 
   const isScheduler = (s.capabilities?.scheduler?.type ?? 'none') !== 'none'
 
@@ -272,8 +275,29 @@ function SiteDetail({ site, advanced, onChanged }: {
           )}
           {s.config?.root && (
             <><dt>working space</dt>
-              <dd>{s.config.root} <span className="cmp-dim">· environments &amp; working
-                files — safe to wipe, rebuilds itself</span></dd></>
+              <dd>
+                {editingRoot === null ? (
+                  <>
+                    {s.config.root} <span className="cmp-dim">· environments &amp;
+                    working files — rebuilds itself</span>{' '}
+                    {!isLocal && (
+                      <button className="mod-linkbtn" disabled={busy !== null}
+                        onClick={() => setEditingRoot(s.config?.root ?? '')}>change…</button>
+                    )}
+                  </>
+                ) : (
+                  <span className="cmp-addpath">
+                    <input value={editingRoot} spellCheck={false} autoComplete="off"
+                      onChange={e => setEditingRoot(e.target.value)} />
+                    <button className="cmp-btn" disabled={busy !== null || !editingRoot.trim()}
+                      onClick={() => act('root', async () => {
+                        await computeApi.edit(s.name, { working_root: editingRoot.trim() })
+                        setEditingRoot(null)
+                      }, 'moved — environments rebuild there; the old location is not cleaned up (Free up first if needed)')}>Save</button>
+                    <button className="mod-linkbtn" onClick={() => setEditingRoot(null)}>cancel</button>
+                  </span>
+                )}
+              </dd></>
           )}
         </dl>
       )}
@@ -307,7 +331,8 @@ function SiteDetail({ site, advanced, onChanged }: {
             ))}
           </ul>
           <div className="cmp-addpath">
-            <input value={newPath} placeholder="/groups/lab" spellCheck={false}
+            <input value={newPath} placeholder="add a path…" spellCheck={false}
+              autoComplete="off"
               onChange={e => setNewPath(e.target.value)} />
             <button className="cmp-btn" disabled={!newPath.trim() || busy !== null}
               onClick={() => {
@@ -315,6 +340,25 @@ function SiteDetail({ site, advanced, onChanged }: {
                 setNewPath('')
               }}>Add path</button>
           </div>
+        </div>
+      )}
+
+      {!isLocal && (
+        <div className="cmp-block">
+          <div className="cmp-block__title">
+            Notes <span className="cmp-dim">— guidance for scheduling; the agent
+            sees this with every plan</span>
+          </div>
+          <textarea className="cmp-notes" rows={2} spellCheck={false}
+            placeholder={'e.g. "use only on nights, EU time"'}
+            value={notesText}
+            onChange={e => setNotesText(e.target.value)} />
+          {notesText !== (s.config?.policy?.notes ?? []).join('\n') && (
+            <button className="cmp-btn" disabled={busy !== null}
+              onClick={() => act('notes', () =>
+                computeApi.edit(s.name, { notes: notesText.split('\n') }),
+                'notes saved')}>Save notes</button>
+          )}
         </div>
       )}
 

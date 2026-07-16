@@ -83,7 +83,7 @@ class HostKey(BaseModel):
 
 
 class Proposal(BaseModel):
-    """The (possibly user-tweaked) §5.4 proposal coming back for Connect."""
+    """The (possibly user-tweaked) §5.4 proposal coming back for Add."""
     name: str
     kind: str                       # local | ssh | slurm
     use_for: list[str]
@@ -92,6 +92,8 @@ class Proposal(BaseModel):
     contract: str = "detached"
     partitions: list[dict] = []
     account: Optional[str] = None
+    notes: list[str] = []           # free-text policy guidance (weft surfaces
+                                    # it in every submit plan)
 
 
 class ConnectRequest(Target):
@@ -102,6 +104,10 @@ class SiteEdit(BaseModel):
     use_for: Optional[list[str]] = None
     long_term: Optional[list[dict]] = None
     notes: Optional[list[str]] = None
+    # moving the working space re-registers the site there; weft bootstraps
+    # anew at the new root (envs/caches rebuild) — the old root is NOT
+    # cleaned automatically (Free up first)
+    working_root: Optional[str] = None
 
 
 class GcRequest(BaseModel):
@@ -403,8 +409,10 @@ async def edit_site(name: str, edit: SiteEdit) -> dict:
         cfg["policy"] = policy
     if edit.notes is not None:
         policy = dict(cfg.get("policy") or {})
-        policy["notes"] = edit.notes
+        policy["notes"] = [n.strip() for n in edit.notes if n.strip()]
         cfg["policy"] = policy
+    if edit.working_root is not None and edit.working_root.strip():
+        cfg["root"] = edit.working_root.strip()
     try:
         await comp.register_site(name, kind, cfg)   # idempotent upsert
     except ComputeError as e:

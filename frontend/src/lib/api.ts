@@ -138,10 +138,15 @@ export interface ComputeSite {
   aba?: AbaSiteKeys
   verify?: VerifyState
 }
+export interface WorkingOption {
+  root: string; free_gb?: number | null; kind: string; note: string
+}
 export interface ComputeProposal {
   kind: string; machine_type: string; headline: string; name: string
   use_for: string[]
-  working: { root: string; free_gb?: number | null; reason?: string }
+  notes?: string[]
+  working: { root: string; free_gb?: number | null; reason?: string
+             kind?: string; options?: WorkingOption[] }
   long_term: StoragePath[]
   contract: string; contract_evidence?: string[]
   partitions: PartitionRow[]
@@ -181,7 +186,8 @@ export const computeApi = {
     apiPost<{ site: string; verifying: boolean }>('/api/compute/sites', t),
   verify: (name: string) => apiPost<{ started: boolean }>(`/api/compute/sites/${cname(name)}/verify`),
   reprobe: (name: string) => apiPost<{ site: string }>(`/api/compute/sites/${cname(name)}/reprobe`),
-  edit: (name: string, body: { use_for?: string[]; long_term?: StoragePath[]; notes?: string[] }) =>
+  edit: (name: string, body: { use_for?: string[]; long_term?: StoragePath[]
+                               notes?: string[]; working_root?: string }) =>
     apiPatch<{ site: string }>(`/api/compute/sites/${cname(name)}`, body),
   disconnect: (name: string) => apiDelete<{ site: string }>(`/api/compute/sites/${cname(name)}`),
   gc: (name: string, confirm: boolean) =>
