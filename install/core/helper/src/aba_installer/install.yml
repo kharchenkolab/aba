@@ -235,14 +235,17 @@ steps:
       weft-ui is the expert control surface over the same compute substrate;
       the backend mounts it at /weft in shared-controller mode (one Weft, two
       surfaces — misc/compute_settings.md §8) so Settings → Compute can offer
-      "Advanced ↗". Checkout mirrors the weft step (WEFT_UI_REF pin, default
-      main; ABA_WEFT_UI_URL / ABA_WEFT_UI_SRC overrides). The pip install is
-      EDITABLE on purpose: the wheel packages only server/weft_ui while the
-      served SPA lives in the checkout's web/dist — editable keeps that path
-      resolvable from site-packages. NON-FATAL throughout: without weft-ui
-      the backend boots normally and the tab hides its Advanced ↗ buttons.
+      "Advanced ↗". NO settings of its own — everything derives from the weft
+      trio by the sits-beside-weft convention: source = the ABA_WEFT_SRC
+      sibling dir named weft-ui; URL = ABA_WEFT_URL + "-ui" (same org); ref =
+      WEFT_REF when weft-ui also carries that ref (tag both repos together to
+      pin both), else main. The pip install is EDITABLE on purpose: the wheel
+      packages only server/weft_ui while the served SPA lives in the
+      checkout's web/dist — editable keeps that path resolvable from
+      site-packages. NON-FATAL throughout: without weft-ui the backend boots
+      normally and the tab hides its Advanced ↗ buttons.
     commands:
-      - 'if [ -d "$REPO_DIR/weft-ui" ]; then :; elif [ -n "${ABA_WEFT_UI_SRC:-}" ]; then mkdir -p "$REPO_DIR/weft-ui" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi --exclude node_modules "$ABA_WEFT_UI_SRC/" "$REPO_DIR/weft-ui/"; else R="${WEFT_UI_REF:-main}"; U="${ABA_WEFT_UI_URL:-https://github.com/kharchenkolab/weft-ui}"; git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/weft-ui" 2>/dev/null || { git clone "$U" "$REPO_DIR/weft-ui" && git --git-dir="$REPO_DIR/weft-ui/.git" --work-tree="$REPO_DIR/weft-ui" checkout "$R"; }; fi || echo "NOTE: weft-ui checkout failed (repo is PRIVATE — set ABA_WEFT_UI_URL to an authenticated remote, e.g. git@github.com:kharchenkolab/weft-ui, or ABA_WEFT_UI_SRC to a local tree) — Advanced compute surface stays hidden"; true'
+      - 'if [ -d "$REPO_DIR/weft-ui" ]; then :; elif [ -n "${ABA_WEFT_SRC:-}" ] && [ -d "$(dirname "$ABA_WEFT_SRC")/weft-ui" ]; then S="$(dirname "$ABA_WEFT_SRC")/weft-ui"; mkdir -p "$REPO_DIR/weft-ui" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi --exclude node_modules "$S/" "$REPO_DIR/weft-ui/" && echo "weft-ui from sibling source $S"; else U="${ABA_WEFT_URL:-https://github.com/kharchenkolab/weft}-ui"; R=main; if [ -n "${WEFT_REF:-}" ] && git ls-remote --exit-code "$U" "refs/heads/$WEFT_REF" "refs/tags/$WEFT_REF" >/dev/null 2>&1; then R="$WEFT_REF"; fi; { git clone --depth 1 --branch "$R" "$U" "$REPO_DIR/weft-ui" 2>/dev/null || { git clone "$U" "$REPO_DIR/weft-ui" && git --git-dir="$REPO_DIR/weft-ui/.git" --work-tree="$REPO_DIR/weft-ui" checkout "$R"; }; } && echo "weft-ui: $U @ $R"; fi || echo "NOTE: weft-ui checkout failed — Advanced compute surface stays hidden (derives from ABA_WEFT_URL/ABA_WEFT_SRC; check those + network)"; true'
       - 'if [ -d "$REPO_DIR/weft-ui" ]; then "$ENV_DIR/bin/python" -m pip install --quiet --no-user -e "$REPO_DIR/weft-ui" || echo "NOTE: weft-ui install failed — Advanced compute surface stays hidden"; fi; true'
       # SPA build — skipped when the source already carries a built web/dist
       # (e.g. an ABA_WEFT_UI_SRC dev tree). Same npm/vite recipe as
@@ -252,9 +255,11 @@ steps:
     timeout_seconds: 600
     remediation: |
       Optional step — ABA works without it (Settings → Compute simply hides
-      "Advanced ↗"). To retry: check access to the weft-ui repo (or set
-      ABA_WEFT_UI_SRC to a local tree), confirm "$ENV_DIR/bin/node" is Node
-      20+ for the web build, then re-run this step or `aba update`.
+      "Advanced ↗"). weft-ui has no settings of its own: it derives from the
+      weft ones (ABA_WEFT_URL + "-ui"; the ABA_WEFT_SRC sibling dir named
+      weft-ui). To retry: check network access to that derived location,
+      confirm "$ENV_DIR/bin/node" is Node 20+ for the web build, then re-run
+      this step or `aba update`.
 
   - id: build-frontend
     title: Build the interface

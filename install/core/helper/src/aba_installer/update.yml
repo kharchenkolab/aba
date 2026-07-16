@@ -83,13 +83,15 @@ steps:
   - id: refresh-weft-ui
     title: Refresh the advanced compute surface (weft-ui)
     why: |
-      Same lifecycle as the weft checkout (WEFT_UI_REF, default main; pin in
-      config.env): pull, reinstall (EDITABLE — the served SPA lives in the
+      Same lifecycle as the weft checkout, with NO settings of its own — the
+      source/ref derive from the weft trio by the sits-beside-weft convention
+      (ABA_WEFT_SRC sibling dir; WEFT_REF when weft-ui also carries that ref,
+      else main): pull, reinstall (EDITABLE — the served SPA lives in the
       checkout's web/dist, not the wheel), and rebuild the SPA only when the
       checkout actually moved (the dist/.built-ref stamp). NON-FATAL: a
       failed refresh keeps the working copy; installs without weft-ui skip.
     commands:
-      - 'msg="weft-ui refresh skipped (no checkout — run install to provision)"; if [ -n "${ABA_WEFT_UI_SRC:-}" ]; then mkdir -p "$REPO_DIR/weft-ui" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi --exclude node_modules "$ABA_WEFT_UI_SRC/" "$REPO_DIR/weft-ui/" && msg="weft-ui refreshed from $ABA_WEFT_UI_SRC"; elif [ -d "$REPO_DIR/weft-ui/.git" ]; then R="${WEFT_UI_REF:-main}"; cd "$REPO_DIR/weft-ui" && { git fetch --depth 1 origin "$R" 2>/dev/null && git reset --hard FETCH_HEAD || { git fetch origin && git reset --hard "$R"; }; } && msg="weft-ui at $(git rev-parse --short HEAD) (ref $R)"; fi; echo "$msg"; true'
+      - 'msg="weft-ui refresh skipped (no checkout — run install to provision)"; if [ -n "${ABA_WEFT_SRC:-}" ] && [ -d "$(dirname "$ABA_WEFT_SRC")/weft-ui" ]; then S="$(dirname "$ABA_WEFT_SRC")/weft-ui"; mkdir -p "$REPO_DIR/weft-ui" && rsync -a --exclude .git --exclude __pycache__ --exclude .pixi --exclude node_modules "$S/" "$REPO_DIR/weft-ui/" && msg="weft-ui refreshed from sibling source $S"; elif [ -d "$REPO_DIR/weft-ui/.git" ]; then cd "$REPO_DIR/weft-ui"; R=main; if [ -n "${WEFT_REF:-}" ] && git ls-remote --exit-code origin "refs/heads/$WEFT_REF" "refs/tags/$WEFT_REF" >/dev/null 2>&1; then R="$WEFT_REF"; fi; { git fetch --depth 1 origin "$R" 2>/dev/null && git reset --hard FETCH_HEAD || { git fetch origin && git reset --hard "$R"; }; } && msg="weft-ui at $(git rev-parse --short HEAD) (ref $R)"; fi; echo "$msg"; true'
       - 'if [ -d "$REPO_DIR/weft-ui" ]; then "$ENV_DIR/bin/python" -m pip install --quiet --no-user -e "$REPO_DIR/weft-ui" || echo "NOTE: weft-ui reinstall failed — existing install kept; retries next update"; fi; true'
       - 'W="$REPO_DIR/weft-ui/web"; if [ -d "$W" ]; then REV=$(git -C "$REPO_DIR/weft-ui" rev-parse HEAD 2>/dev/null || echo src); if [ ! -f "$W/dist/index.html" ] || [ "$(cat "$W/dist/.built-ref" 2>/dev/null)" != "$REV" ]; then (cd "$W" && PATH="$ENV_DIR/bin:$PATH" "$ENV_DIR/bin/npm" ci --silent && PATH="$ENV_DIR/bin:$PATH" ./node_modules/.bin/vite build && echo "$REV" > dist/.built-ref) || echo "NOTE: weft-ui web rebuild failed — previous build kept"; fi; fi; true'
     timeout_seconds: 600
