@@ -73,15 +73,16 @@ def run_sync(coro):
 
 def weft_workspace() -> Path:
     """The deployment's weft workspace (holds .weft state + the local site
-    root). One per deployment; per-project identity stays in the waist."""
-    raw = config.settings.weft_workspace.get()
-    return Path(raw) if raw else config.aba_home() / "weft"
+    root). One per deployment; per-project identity stays in the waist.
+    DERIVED, not a setting: always $ABA_HOME/weft — relocate ABA_HOME to
+    relocate it (settings reduction, 2026-07)."""
+    return config.aba_home() / "weft"
 
 
 def sites_config_path() -> Path:
-    """The deployment's site declarations (weft-sites.yaml)."""
-    raw = config.settings.weft_sites.get()
-    return Path(raw) if raw else config.aba_home() / "weft-sites.yaml"
+    """The deployment's site declarations. DERIVED, not a setting: always
+    $ABA_HOME/weft-sites.yaml, beside the workspace it bootstraps."""
+    return config.aba_home() / "weft-sites.yaml"
 
 
 def resolve_pixi() -> Optional[str]:
@@ -121,8 +122,8 @@ class WeftAdapter:
         self._register_configured_sites(registered)
 
     def _register_configured_sites(self, registered: set) -> None:
-        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml` (or
-        ABA_WEFT_SITES) lists non-local sites — slurm/ssh entries the installer
+        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml`
+        lists non-local sites — slurm/ssh entries the installer
         or an operator wrote. Registered once (weft persists them); errors are
         LOUD but never boot-blocking (a dead login node must not stop the
         server; doctor + the site's own errors surface it)."""

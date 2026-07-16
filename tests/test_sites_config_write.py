@@ -96,15 +96,14 @@ def test_roundtrip_with_boot_reader():
         import weft.api  # noqa: F401
     except Exception:
         pytest.skip("weft package not installed")
-    import unittest.mock as mock
     before_adapter, before_status = ad._adapter, dict(ad._status)
     try:
-        with mock.patch.dict(os.environ,
-                             {"ABA_WEFT_WORKSPACE": f"{_tmp}/weft-ws-rt"}):
-            ad._adapter = None
-            st = ad.configure()
-            assert st["ok"], st["detail"]
-            names = {s["name"] for s in ad.get_compute().sync_call("sites_list")}
+        # workspace derives from the fixture's per-test ABA_HOME — the yaml
+        # and the .weft store land beside each other, as in production
+        ad._adapter = None
+        st = ad.configure()
+        assert st["ok"], st["detail"]
+        names = {s["name"] for s in ad.get_compute().sync_call("sites_list")}
     finally:
         # FULL restore — leaving _status "ok" with _adapter None poisons any
         # later test that calls get_compute (found via test_jobs_tools)

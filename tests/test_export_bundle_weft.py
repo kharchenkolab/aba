@@ -20,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_bundlew_")
 os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
-os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
 os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
 os.environ["ARTIFACTS_DIR"] = str(Path(_tmp) / "artifacts")
 os.environ.pop("ABA_DB_PATH", None)

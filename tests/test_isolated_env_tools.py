@@ -237,7 +237,7 @@ def test_live_make_and_run(tmp_path, monkeypatch):
     from core.compute import adapter as ad
     from core import projects
     monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")
-    monkeypatch.setenv("ABA_WEFT_WORKSPACE", str(tmp_path / "weft-ws"))
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "home"))  # workspace derives here
     monkeypatch.setattr(ad, "_adapter", None)
     monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "info", "detail": "un"})
     st = ad.configure()

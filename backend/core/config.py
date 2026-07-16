@@ -888,19 +888,15 @@ setting("accelerator", env="ABA_ACCELERATOR", type="str", default="",
 # These are the settings the weft migration ADDS; the weft_fate=retire/move
 # ledger names what it removes. Both default-derive so a personal install
 # needs nothing set.
-setting("weft_workspace", env="ABA_WEFT_WORKSPACE", type="str", default=None,
-        category="deploy", weft_fate="keep",
-        doc="weft workspace dir (holds .weft state + the local site root). "
-            "None → $ABA_HOME/weft. One workspace per deployment; per-project "
-            "identity stays in the waist, not in weft.")
+# NOTE (settings reduction, 2026-07): the weft workspace and weft-sites.yaml
+# locations are NOT settings — they derive from $ABA_HOME unconditionally
+# ($ABA_HOME/weft, $ABA_HOME/weft-sites.yaml; adapter.weft_workspace() /
+# sites_config_path()). Relocating them means relocating ABA_HOME. The former
+# ABA_WEFT_WORKSPACE / ABA_WEFT_SITES env vars are ignored.
 setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
         category="deploy", weft_fate="keep",
         doc="Path to the pixi binary weft solves/realizes with. None → "
             "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
-setting("weft_sites", env="ABA_WEFT_SITES", type="str", default=None,
-        category="deploy", weft_fate="keep",
-        doc="Deployment site declarations (weft-sites.yaml: non-local weft "
-            "sites — slurm/ssh). None → $ABA_HOME/weft-sites.yaml.")
 setting("weft_publish_tree", env="ABA_WEFT_PUBLISH_TREE", type="str", default=None,
         category="deploy", weft_fate="keep", deploy_injected=True,
         doc="Published base-env catalog tree (shared read-only folder). When "

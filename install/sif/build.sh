@@ -270,7 +270,8 @@ DEF="$STAGE/aba-$PROFILE.def"
   # base env packs (installation scope → base_env composes the envs/ facet). A
   # site.yaml can override ABA_INSTITUTION_BUNDLE to layer lab/user packs on top.
   [ -d "$STAGE/pixi/bin" ] && echo "    export ABA_PIXI_BIN=\${ABA_PIXI_BIN:-/opt/aba/tools/pixi/bin/pixi}"
-  echo "    export ABA_WEFT_WORKSPACE=\${ABA_WEFT_WORKSPACE:-\${ABA_RUNTIME_DIR:-/tmp/aba}/weft}"
+  # (weft workspace needs no export: it derives as $ABA_HOME/weft, and with
+  #  HOME redirected into ABA_RUNTIME_DIR below, that lands writable.)
   [ -d "$STAGE/installation/envs" ] && echo "    export ABA_INSTITUTION_BUNDLE=\${ABA_INSTITUTION_BUNDLE:-/opt/aba/installation}"
   # EAGER plugin state: the heavy modules (r-bio, viewer-pagoda3) are BAKED into this fat
   # image, so they should read as `on` (permanently present) rather than their `first_use`

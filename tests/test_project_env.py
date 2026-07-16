@@ -14,8 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_projenv_")
 os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
-os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
-os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
+os.environ["ABA_HOME"] = str(Path(_tmp) / "home")   # weft workspace derives here
 os.environ.pop("ABA_DB_PATH", None)
 sys.path.insert(0, str(ROOT / "backend"))
 pytestmark = pytest.mark.platform
@@ -23,7 +22,7 @@ pytestmark = pytest.mark.platform
 from core.bundle.loader import EnvPack  # noqa: E402
 from core.compute import base_env, project_env  # noqa: E402
 
-WS = Path(_tmp) / "weft-ws"
+WS = Path(_tmp) / "home" / "weft"   # = $ABA_HOME/weft (derived, no setting)
 
 
 class _StubAdapter:
@@ -89,9 +88,10 @@ class _StubAdapter:
 
 @pytest.fixture()
 def stub(monkeypatch):
-    # conftest re-pins runtime dirs per module, but not the weft workspace —
-    # re-pin it here so _session_prefix and the stub agree under a full run.
-    monkeypatch.setenv("ABA_WEFT_WORKSPACE", str(WS))
+    # conftest re-pins runtime dirs per module, but not ABA_HOME (whence the
+    # weft workspace derives) — re-pin it here so _session_prefix and the
+    # stub agree under a full run.
+    monkeypatch.setenv("ABA_HOME", str(Path(_tmp) / "home"))
     monkeypatch.setenv("ABA_PROJECTS_DIR", str(Path(_tmp) / "projects"))
     import core.bundle.active as active
     import core.compute.adapter as ad

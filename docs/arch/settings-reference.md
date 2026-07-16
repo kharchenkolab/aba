@@ -79,8 +79,6 @@ reduction — `derive` 3, `keep` 69, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
 | `weft_publish_site` | `ABA_WEFT_PUBLISH_SITE` | str | local | keep | keep |  | Site whose realization store backs the published catalog (where env_adopt runs). |
 | `weft_publish_tree` | `ABA_WEFT_PUBLISH_TREE` | str |  | keep | keep | deploy | Published base-env catalog tree (shared read-only folder). When set, base packs ADOPT from it by name (no solve); unset → solve locally. Admin seeds it with core.compute.seeding. |
-| `weft_sites` | `ABA_WEFT_SITES` | str |  | keep | keep |  | Deployment site declarations (weft-sites.yaml: non-local weft sites — slurm/ssh). None → $ABA_HOME/weft-sites.yaml. |
-| `weft_workspace` | `ABA_WEFT_WORKSPACE` | str |  | keep | keep |  | weft workspace dir (holds .weft state + the local site root). None → $ABA_HOME/weft. One workspace per deployment; per-project identity stays in the waist, not in weft. |
 
 ## mode
 

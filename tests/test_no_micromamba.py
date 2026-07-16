@@ -62,8 +62,7 @@ def test_no_pack_errors_instead_of_served_base():
     _tmp = tempfile.mkdtemp(prefix="aba_nomm_")
     os.environ["ABA_RUNTIME_DIR"] = _tmp
     os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
-    os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft")
-    os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
+    os.environ["ABA_HOME"] = str(Path(_tmp) / "home")   # weft workspace derives here
     os.environ.pop("ABA_DB_PATH", None)
 
     from core import projects

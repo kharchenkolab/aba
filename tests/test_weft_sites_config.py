@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_sites_")
 os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
-os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
 os.environ.pop("ABA_DB_PATH", None)
 sys.path.insert(0, str(ROOT / "backend"))
 pytestmark = pytest.mark.platform

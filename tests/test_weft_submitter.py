@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_weftbg_")
 os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
-os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
 os.environ["ABA_HOME"] = str(Path(_tmp) / "home")   # NOT the box's ~/.aba (slurm profile)
 os.environ.pop("ABA_DB_PATH", None)
 os.environ["ABA_BATCH_SUBMITTER"] = "local"
