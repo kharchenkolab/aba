@@ -260,6 +260,15 @@ def test_it_pool_weft_isolated_lane():
         import os as _os
         assert _os.path.exists(_os.path.join(s.work_dir, "made_here.txt")), \
             "bare write did not land in the kernel sandbox (work_dir) — harvest bridge broken"
+        # the run_exec change harvests from work_dir; confirm a produced figure there
+        # is picked up (closes the harvest-from-sandbox loop end to end)
+        s.execute("import matplotlib; matplotlib.use('Agg')\n"
+                  "import matplotlib.pyplot as plt\nplt.plot([0,1,2],[0,1,4]); plt.savefig('fig.png')",
+                  timeout_s=90)
+        from core.exec.run import harvest_artifacts
+        plots, tables, files, warns = harvest_artifacts(s.work_dir, since_ts=0.0)
+        assert any("fig.png" in (p.get("original_name") or p.get("url") or "") for p in plots), \
+            f"harvest of work_dir did not surface fig.png; plots={plots}"
         # state persists across cells
         r2 = s.execute("z = 6 * 7\nprint('z', z)", timeout_s=60)
         assert "z 42" in r2.stdout, r2
