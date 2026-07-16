@@ -79,11 +79,18 @@ def for_pool(scope_key: str, lang: str, *, cwd: str, env_name: str | None):
     jupyter transport. W-K1a handles the ISOLATED-env lane (a frozen named EnvID);
     the default lane (env_name=None → a live project session) is W-K1b and returns
     None for now. The env is realized by the caller before the pool lock."""
-    if not env_name:
-        return None                     # default lane — W-K1b; caller uses jupyter
     from core import projects
-    from core.compute import named_envs
     pid = str(projects.current() or "_none")
+    if not env_name:
+        # Default lane (W-K1b): attach to the project's LIVE session so an
+        # ensure_capability (session_install) is visible to the running kernel with
+        # no restart — the live-install UX. run_exec already ensured the session
+        # before the pool lock; ensure() here is idempotent (returns the same id).
+        from core.compute import project_env
+        info = project_env.ensure(pid, lang)
+        return WeftKernelSession(scope_key, lang, session_id=info["session_id"],
+                                site="local", setup_code=_weft_setup_code(lang))
+    from core.compute import named_envs
     row = named_envs.resolve(pid, env_name)
     if row is None:
         return None                     # unknown env — let jupyter raise the clear error

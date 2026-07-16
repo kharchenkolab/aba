@@ -270,13 +270,63 @@ def test_it_pool_weft_isolated_lane():
         cfg.WEFT_KERNELS, named_envs.resolve, named_envs.ensure_realized = saved
 
 
+def test_it_pool_weft_default_lane():
+    """W-K1b: the pool routes the DEFAULT lane (env_name=None) to a session-attached
+    WeftKernelSession, and a session_install is visible to the running kernel through
+    the pool — the live-install UX, end to end."""
+    if not _ENABLED:
+        _skip("set ABA_WEFT_KERNEL_IT=1 to run the real-weft kernel integration test")
+    import tempfile
+    from core.compute import adapter as admod
+    from core.exec.kernels.pool import KernelPool
+    import core.config as cfg
+    from core.compute import project_env
+
+    st = admod.configure()
+    if not st.get("ok"):
+        _skip(f"weft substrate not configured: {st.get('detail')}")
+    base = _python_env_canonical()
+    if not base:
+        _skip("no realized local python env")
+    ad = admod.get_compute()
+    sess = ad.sync_call("session_start", base, "local")
+    session_id = sess.get("session_id") or sess.get("id")
+    assert session_id, sess
+
+    saved = (cfg.WEFT_KERNELS, project_env.ensure)
+    cfg.WEFT_KERNELS = True
+    project_env.ensure = lambda pid, lang: {"session_id": session_id, "base_env_id": base}
+    cwd = tempfile.mkdtemp(prefix="aba_wk1b_cwd_")
+    pool = KernelPool(idle_ttl=10**9)
+    try:
+        s = pool.get_or_start("wk1b-default", "python", cwd=cwd, env_name=None)
+        assert type(s).__name__ == "WeftKernelSession", f"expected weft session, got {type(s)}"
+        assert s.session_id == session_id, "default lane should attach to the project session"
+        r0 = s.execute("try:\n import humanize; print('HAS')\nexcept Exception:\n print('MISSING')",
+                       timeout_s=60)
+        assert "MISSING" in r0.stdout, f"humanize unexpectedly present: {r0.stdout}"
+        ad.sync_call("session_install", session_id, pypi=["humanize"])
+        r1 = s.execute("import importlib; importlib.invalidate_caches()\n"
+                       "import humanize; print('NOW', humanize.__name__)", timeout_s=120)
+        assert "NOW humanize" in r1.stdout, r1
+        assert s.alive
+    finally:
+        pool.shutdown_all()
+        cfg.WEFT_KERNELS, project_env.ensure = saved
+        try:
+            ad.sync_call("session_stop", session_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _standalone() -> int:
     if not _ENABLED:
         print("SKIP: set ABA_WEFT_KERNEL_IT=1 to run the real-weft integration test")
         return 0
     failures = []
     for t in (test_it_state_persists_and_streams, test_it_interrupt_and_failure,
-              test_it_session_attach_live_install, test_it_pool_weft_isolated_lane):
+              test_it_session_attach_live_install, test_it_pool_weft_isolated_lane,
+              test_it_pool_weft_default_lane):
         try:
             t()
             print(f"  [PASS] {t.__name__}", flush=True)
