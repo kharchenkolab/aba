@@ -45,6 +45,30 @@ _log = logging.getLogger(__name__)
 IDLE_TIMEOUT_S = 1800   # 30 minutes
 
 
+def record_weft_target(run_id: Optional[str], target: Optional[str]) -> None:
+    """Persist a weft target (a kernel_id / job_id that produced this Run's
+    outputs) onto the Run entity's `metadata.weft_targets`. This is the handle
+    retention needs: after a kernel stops, aba names the target to call
+    run_inventory/run_retain/run_forget (the run id itself is the retain `label`).
+    Best-effort, dedup, never raises — a missing target just means no retention
+    for that run. See misc/output_durability.md §A2."""
+    if not run_id or not target:
+        return
+    try:
+        ent = get_entity(run_id)
+        if not ent:
+            return
+        md = dict(ent.get("metadata") or {})
+        targets = list(md.get("weft_targets") or [])
+        if target in targets:
+            return
+        targets.append(target)
+        md["weft_targets"] = targets
+        update_entity(run_id, metadata=md)
+    except Exception:  # noqa: BLE001 — retention bookkeeping must never break a run
+        pass
+
+
 def active_run_id(thread_id: str) -> Optional[str]:
     """The currently-open Run for this thread, or None (newest wins)."""
     if not thread_id:

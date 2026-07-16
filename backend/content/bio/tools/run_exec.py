@@ -764,6 +764,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
             except KernelCapacityError as _cap:
                 return {"error": str(_cap), "at_capacity": True}
             _ensure_kernel_cwd(sess, "python", cwd)
+            # Persist the weft target on the Run so retention can name it after the
+            # kernel stops (run_inventory/run_retain/run_forget). No-op for jupyter.
+            from content.bio.lifecycle.runs import record_weft_target, active_run_id
+            record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
             res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
             if res.timed_out:
                 return {"error": f"Code execution timed out ({timeout_s}s limit)"}
@@ -976,6 +980,8 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         except KernelCapacityError as _cap:
             return {"error": str(_cap), "at_capacity": True}
         _ensure_kernel_cwd(sess, "r", cwd)
+        from content.bio.lifecycle.runs import record_weft_target, active_run_id
+        record_weft_target(active_run_id(str(thread_id)), getattr(sess, "kernel_id", None))
         res = sess.execute(code, cancel_token=cancel_token, timeout_s=timeout_s)
     except Exception as e:  # noqa: BLE001
         return {"error": f"R kernel error: {e}"}
