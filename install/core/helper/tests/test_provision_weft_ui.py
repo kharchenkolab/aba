@@ -131,4 +131,4 @@ def test_weft_ui_clone_failure_is_nonfatal(tmp_path):
     r = subprocess.run(["sh", "-c", _clone_cmd()], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    assert "NOTE: weft-ui provision failed" in r.stdout + r.stderr
+    assert "NOTE: weft-ui checkout failed" in r.stdout + r.stderr
