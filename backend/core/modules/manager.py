@@ -88,6 +88,32 @@ def pack_for(spec: ModuleSpec):
     return None
 
 
+def pack_env_id(spec: ModuleSpec) -> tuple[str, str] | None:
+    """For a pack-backed module (weft W3.4), the realized LOCAL weft EnvID + site to evict when
+    reclaiming disk — `(env_id, "local")`, or None if the module isn't pack-backed, the substrate
+    is offline, or the pack has no local realization to reclaim. This is what makes "Reclaim disk
+    space" actually free bytes: a pack-backed module's env lives in the weft store keyed by an
+    EnvID, NOT at the manifest's pre-weft `$TOOLS_ENV` path (which no longer exists), so reclaim
+    must `env_evict` this id rather than rmtree a dead path. The env rebuilds from its lock on
+    next use (see core.compute.named_envs)."""
+    pack = pack_for(spec)
+    if pack is None:
+        return None
+    try:
+        from core.compute import get_compute
+        w = get_compute()
+        envs = w.sync_call("list_envs")
+        rows = envs.get("envs") if isinstance(envs, dict) else envs
+        for e in (rows or []):
+            if (e.get("name") or "") == pack:
+                eid = e.get("env_id") or e.get("id")
+                if eid:
+                    return (eid, "local")
+    except Exception:  # noqa: BLE001 — substrate offline / unrealized → nothing to evict here
+        pass
+    return None
+
+
 def _pack_ready(pack: str) -> bool:
     """Cheap store-read probe (no solve, no network): the pack's env is solved
     AND has a ready local realization."""

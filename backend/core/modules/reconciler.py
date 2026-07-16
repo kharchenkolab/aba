@@ -179,20 +179,58 @@ def start(*, log: Callable[[str], None] = print) -> bool:
     return True
 
 
-def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> None:
-    """Reclaim a module's on-disk artifacts per its manifest `remove` block
-    (misc/modules.md): {paths: [...]} rmtree'd (with $VARs expanded), optional
-    {script: ...} run. No per-module Python."""
+def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> dict:
+    """Reclaim a module's on-disk artifacts; return a structured OUTCOME so the caller can tell
+    the user what actually happened (never a silent no-op — the honest-failure principle).
+
+    Pack-backed modules (weft W3.4) FIRST: their bytes live in a weft-realized env keyed by an
+    EnvID, so reclaim = `env_evict(env_id, "local")` (the env rebuilds from its lock on next use).
+    The old manifest `remove` block points at the pre-weft `$TOOLS_ENV` path, which no longer
+    exists on the weft branch — rmtree'ing it was a silent no-op that left the real env in place
+    (and `probe_ready` reads the weft store, so the module still showed present). That was the
+    "Reclaim disk space does nothing" bug. weft refuses the evict if live jobs/sessions/kernels
+    still use the env (it names them); we surface that reason rather than swallow it.
+
+    Then the manifest `remove` block (misc/modules.md): {paths: [...]} rmtree'd ($VARs expanded),
+    optional {script: ...} run — the only path for shell/script modules, and a harmless supplement
+    for pack ones (the stale $TOOLS_ENV entry is a no-op).
+
+    Returns {reclaimed: bool, detail: str, env_id?: str, in_use?: [...]}."""
     import shutil
+    outcome: dict | None = None
+    ev = manager.pack_env_id(spec)
+    if ev is not None:
+        env_id, site = ev
+        try:
+            from core.compute import get_compute
+            get_compute().sync_call("env_evict", env_id, site)
+            outcome = {"reclaimed": True, "env_id": env_id,
+                       "detail": f"evicted weft env on {site}"}
+            log(f"[modules] {spec.id}: evicted weft env {env_id} on {site} (reclaimed disk)")
+        except Exception as e:  # noqa: BLE001 — reclaim best-effort; SURFACE the reason, never raise
+            detail = getattr(e, "detail", None) or str(e)
+            outcome = {"reclaimed": False, "env_id": env_id, "detail": detail}
+            hints = getattr(e, "hints", None)
+            if isinstance(hints, dict) and hints.get("in_use"):
+                outcome["in_use"] = hints["in_use"]
+            log(f"[modules] {spec.id}: env_evict did not reclaim {env_id}: {detail}")
     rm = spec.remove or {}
+    removed: list[str] = []
     for p in rm.get("paths", []):
         target = manager.expand_path(str(p))
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
+            removed.append(str(target))
             log(f"[modules] {spec.id}: removed {target} (reclaimed disk)")
     if rm.get("script"):
         import subprocess
         subprocess.run(["bash", str(manager.expand_path(str(rm["script"])))], check=False)
+    if outcome is None:   # non-pack (shell/script) module → outcome from the manifest work
+        outcome = {"reclaimed": bool(removed) or bool(rm.get("script")),
+                   "detail": (f"removed {', '.join(removed)}" if removed
+                              else "ran remove script" if rm.get("script")
+                              else "nothing on disk to reclaim")}
+    return outcome
 
 
 def _notify(spec: ModuleSpec, mstate: str, *, progress: str | None = None,
@@ -280,15 +318,23 @@ def set_mode(module_id: str, new_mode: str, *, remove: bool = False,
         raise ValueError("modules are baked into this read-only image and can't be changed "
                          "here — rebuild the image to add or remove capabilities.")
     state.set_desired(module_id, new_mode)
+    reclaim: dict | None = None
     if new_mode == "off":
         if remove:
             if not spec.removable:
                 raise ValueError(f"{module_id} is not removable (it lives in the base env)")
-            _remove_artifacts(spec, log)
+            reclaim = _remove_artifacts(spec, log)
             state.set_status(module_id, "idle")
+            # Honest feedback: if weft refused (live jobs/sessions/kernels still use the env),
+            # toast the reason so the user knows to stop them + retry — never a silent no-op.
+            if reclaim and not reclaim.get("reclaimed"):
+                _notify(spec, "off", error=reclaim.get("detail"))
     elif new_mode == "on":
         _kick_install(spec, log=log)
-    return manager.get_view(module_id)
+    view = manager.get_view(module_id)
+    if view is not None and reclaim is not None:
+        view["reclaim"] = reclaim      # so the UI/endpoint can show what reclaim did (or why not)
+    return view
 
 
 def install_and_wait(module_id: str, *, timeout_s: float = 900.0,
