@@ -48,7 +48,7 @@ export interface FileNode {
   ephemeral?: boolean              // working/scratch tier — uncurated, GC-able until promoted
   note?: string                    // folder subtitle (e.g. the working/ scratch note)
   // Durability (output_durability.md §6.2): set on file nodes from /api/runs/{id}/durable.
-  state?: string | null            // kept | pinned-pending | in-sandbox | cleared
+  state?: string | null            // weft-truth: retained | saving | in-store | at-risk | in-sandbox | cleared
   badge?: string | null            // human label for the durable state
   large?: boolean                  // > harvest cap — durable via weft retention, not aba store
   site?: string | null             // site holding the retained bytes (remote in-place)

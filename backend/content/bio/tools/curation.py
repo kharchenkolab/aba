@@ -953,6 +953,35 @@ def close_run_tool(input_: dict, ctx: dict | None = None) -> dict:
             "note": "Run closed. New outputs go to a fresh per-step analysis until you open_run again."}
 
 
+def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Level-2 keep triage for the current Run's outputs (output_durability.md §6.1).
+
+    Obvious keepers (surfaced figures/tables, declared finals) and obvious scratch (tmp/,
+    cache/, *.tmp, chunk_*) are handled automatically — you only need this for the AMBIGUOUS
+    set: name a large intermediate to DROP so it isn't kept, or a file the folder heuristic
+    would drop that you want to KEEP. Paths/globs are relative to the Run's output dir."""
+    from content.bio.lifecycle.runs import active_run_id, set_keep_decision
+    rid = (input_.get("run_id") or "").strip() or None
+    if not rid:
+        tid = _ctx_thread(ctx)
+        rid = active_run_id(tid) if tid else None
+    if not rid:
+        return {"error": "no open run — open_run first (or pass run_id)"}
+    keep = input_.get("keep") or []
+    drop = input_.get("drop") or []
+    if isinstance(keep, str):
+        keep = [keep]
+    if isinstance(drop, str):
+        drop = [drop]
+    out = set_keep_decision(rid, keep=keep, drop=drop)
+    if out.get("error"):
+        return out
+    s = out.get("summary") or {}
+    note = (f"Keep decision applied. retained={s.get('retained', 0)} saving={s.get('saving', 0)} "
+            f"at_risk={s.get('at_risk', 0)}. Excluded won't be retained at run-close either.")
+    return {"status": "ok", **out, "note": note}
+
+
 def annotate_entity_tool(input_: dict, ctx: dict | None = None) -> dict:
     eid = input_.get("entity_id")
     if not eid:

@@ -26,7 +26,7 @@ export interface FileActions {
   /** Toggle pin. `pinned` is the NEW state (true=pin, false=unpin). */
   onPin?: (node: TreeNode, pinned: boolean) => void
   onDiscuss?: (node: TreeNode) => void
-  /** Durably retain an at-risk (in-sandbox) file — the §6.2 late-pin. */
+  /** Durably retain a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin. */
   onKeep?: (node: TreeNode) => void
 }
 
@@ -261,7 +261,7 @@ export default function FileBrowser({
             <ChatGlyph />
           </button>
         )}
-        {actions.onKeep && node.state === 'in-sandbox' && (
+        {actions.onKeep && (node.state === 'at-risk' || node.state === 'in-sandbox') && (
           <button className="files__action files__action--keep" title="Keep — retain this file durably before the sandbox is swept"
                   aria-label="Keep file" onClick={e => { e.stopPropagation(); actions.onKeep!(node) }}>
             <KeepGlyph />
@@ -277,14 +277,18 @@ export default function FileBrowser({
     )
   }
 
-  // Per-file durability pill (output_durability.md §6.2). Short label in the pill,
-  // the full designed badge text (e.g. "large · keeps the version at run settlement")
-  // in the tooltip. Absent for nodes without a durable `state` (e.g. the project rail).
+  // Per-file durability pill (output_durability.md §6.2), weft-truth vocabulary. Short label
+  // in the pill, the full designed badge text (e.g. "saving… · keeps the version at run
+  // settlement") in the tooltip. `retained`/`saving` are weft durability; `in-store` is aba's
+  // serving cache only (honest, not a fake "retained"); `at-risk` is a large output live on
+  // scratch nothing has kept yet (RED). Absent for nodes without a durable `state` (project rail).
   function duraBadge(node: TreeNode): React.ReactNode {
     const st = node.state
     if (!st) return null
-    const short = st === 'kept' ? (node.site ? `on ${node.site}` : 'kept ✓')
-      : st === 'pinned-pending' ? 'saving…'
+    const short = st === 'retained' ? (node.site ? `on ${node.site}` : 'retained ✓')
+      : st === 'saving' ? 'saving…'
+      : st === 'in-store' ? 'in store'
+      : st === 'at-risk' ? 'at risk'
       : st === 'in-sandbox' ? 'not kept yet'
       : st === 'cleared' ? 'cleared' : st
     return (

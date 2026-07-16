@@ -182,6 +182,24 @@ def register_curation_tools(mcp: FastMCP) -> None:
         from content.bio.tools import close_run_tool
         return close_run_tool({}, peek_ctx(aba_ctx_id))
 
+    @mcp.tool()
+    def keep_outputs(keep: list[str] | None = None,
+                     drop: list[str] | None = None,
+                     run_id: str | None = None,
+                     aba_ctx_id: str | None = None) -> dict:
+        """Triage which of the current Run's outputs are durably KEPT (weft-retained).
+        Obvious keepers (surfaced figures/tables, declared finals) and obvious scratch
+        (tmp/, cache/, *.tmp, chunk_*) are auto-decided — use this only for the AMBIGUOUS
+        set: `drop` names a large intermediate NOT worth keeping; `keep` rescues a file the
+        folder heuristic would drop. Paths/globs are relative to the Run's output dir. Keep
+        it light — you needn't list every file, just the judgment calls."""
+        from core.runtime.tool_ctx import peek_ctx
+        from content.bio.tools import keep_outputs_tool
+        return keep_outputs_tool(
+            {"keep": keep or [], "drop": drop or [], "run_id": run_id},
+            peek_ctx(aba_ctx_id),
+        )
+
     # --- reference data ---
 
     @mcp.tool()

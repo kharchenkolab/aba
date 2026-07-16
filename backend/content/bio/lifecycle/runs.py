@@ -290,6 +290,12 @@ def _declared_output_names(run_metadata: dict) -> set:
 _TRANSIENT_DIRS = {"tmp", "temp", "cache", ".cache", "__pycache__", ".ipynb_checkpoints", ".git"}
 _TRANSIENT_GLOBS = ("*.tmp", "*.pyc", "*.lock", "chunk_*", "*~", ".DS_Store")
 
+# R3: durable-view state → summary-count key. The state vocabulary is weft-truth (§6.2):
+# retained/saving are weft's durability; in-store is aba's serving cache only; at-risk is a
+# large output live on scratch that nothing has kept yet (RED — the crown-jewel-in-danger).
+_COUNT_KEY = {"retained": "retained", "saving": "saving", "in-store": "in_store",
+              "at-risk": "at_risk", "in-sandbox": "in_sandbox", "cleared": "cleared"}
+
 
 def _is_transient(path: str) -> bool:
     """True for obvious scratch — a path UNDER a transient dir, or a transient basename."""
@@ -298,6 +304,32 @@ def _is_transient(path: str) -> bool:
     if any(seg in _TRANSIENT_DIRS for seg in parts[:-1]):
         return True
     return any(fnmatch.fnmatch(parts[-1], g) for g in _TRANSIENT_GLOBS)
+
+
+def _keeper_set(produced: set, include=(), exclude=()) -> set:
+    """The set of produced paths to retain, applying the two-level keep decision
+    (misc/output_durability.md §6.1): level-1 auto-baseline drops obvious scratch (`_is_transient`);
+    level-2 is the agent's `keep_outputs` triage — `exclude` globs drop ambiguous scratch even if it
+    looks like a keeper, `include` globs rescue a file the level-1 heuristic would have dropped (and
+    add an agent-named literal path that isn't among the produced set, e.g. a declared final)."""
+    import fnmatch
+    inc = list(include or [])
+    exc = list(exclude or [])
+
+    def _m(rel: str, globs) -> bool:
+        return any(fnmatch.fnmatch(rel, g) for g in globs)
+
+    keep = set()
+    for p in produced:
+        if _m(p, exc):                              # agent dropped it → never keep, even a keeper
+            continue
+        if _is_transient(p) and not _m(p, inc):     # level-1 scratch, unless the agent rescued it
+            continue
+        keep.add(p)
+    for g in inc:                                   # an agent-named literal path not among produced
+        if not any(c in g for c in "*?[") and g not in keep and not _m(g, exc):
+            keep.add(g)
+    return keep
 
 
 def _already_retained_paths(run_id: str) -> set:
@@ -346,7 +378,8 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
     if declared:
         produced_basenames = {p.rsplit("/", 1)[-1] for p in produced}
         produced |= {n for n in declared if n not in produced_basenames}
-    keep = {p for p in produced if not _is_transient(p)}          # level-1: drop scratch
+    decision = run_metadata.get("keep_decision") or {}            # level-2: agent keep_outputs triage
+    keep = _keeper_set(produced, decision.get("include"), decision.get("exclude"))
     new = sorted(keep - _already_retained_paths(run_id))          # incremental/idempotent
     if not new:
         return
@@ -369,6 +402,34 @@ def retain_run_keepers(run_id: str) -> None:
             _retain_run_outputs(run_id, ent.get("metadata") or {})
     except Exception as e:  # noqa: BLE001
         _log.debug("retain_run_keepers failed for %s: %s", run_id, e)
+
+
+def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
+    """Record + apply the agent's level-2 keep decision (the `keep_outputs` tool;
+    misc/output_durability.md §6.1, A1). `keep`/`drop` are sandbox-relative paths or globs:
+    `keep` rescues an ambiguous file the folder-level auto-baseline would drop (or names a final
+    to retain now); `drop` excludes an ambiguous large intermediate the heuristic would keep. The
+    decision persists on the Run (`metadata.keep_decision`) so the plan-end + close auto-retains
+    honor it too, and we apply it NOW — retaining the resulting keeper set incrementally. Returns
+    the merged decision + the post-apply durable summary so the agent sees the effect.
+
+    Level-1 (obvious scratch by folder/glob) stays automatic; this is only the ambiguous set —
+    keep it light, the agent needn't enumerate every file."""
+    ent = get_entity(run_id)
+    if not ent:
+        return {"error": f"run {run_id} not found"}
+    md = dict(ent.get("metadata") or {})
+    dec = dict(md.get("keep_decision") or {})
+    dec["include"] = sorted(set(dec.get("include") or []) | {s.strip() for s in (keep or []) if s and s.strip()})
+    dec["exclude"] = sorted(set(dec.get("exclude") or []) | {s.strip() for s in (drop or []) if s and s.strip()})
+    md["keep_decision"] = dec
+    update_entity(run_id, metadata=md)
+    _retain_run_outputs(run_id, md)     # apply now, honoring the merged decision
+    try:
+        summary = run_durable_view(run_id).get("summary")
+    except Exception:  # noqa: BLE001 — the decision is recorded regardless of the view
+        summary = None
+    return {"run_id": run_id, "decision": dec, "summary": summary}
 
 
 def _sidecar_files(location: Optional[str]) -> set:
@@ -474,7 +535,12 @@ def run_durable_view(run_id: str) -> dict:
     artifact store (harvest copy → they carry a `url`); the rest depend on weft retention.
 
     Returns {"files": [{rel, bytes, kind, state, badge, url, site, large}], "summary": {...}}.
-    States: kept | pinned-pending | in-sandbox | cleared."""
+    States (weft-truth, decoupled from the served URL): retained | saving | in-store | at-risk |
+    in-sandbox | cleared. `retained`/`saving` are weft's durability (done / pinned-pending);
+    `in-store` is aba's serving cache only (a small surfaced copy, size-capped — shown honestly,
+    never a fake "retained"); `at-risk` is a large output live on scratch that nothing has kept
+    yet (the crown-jewel-in-danger, RED); the Keep button / plan-end retain move a file
+    at-risk → saving → retained."""
     from urllib.parse import quote
     from core.exec.artifacts import artifacts_for_run
     from core.exec.run import _MAX_HARVEST_BYTES
@@ -494,12 +560,21 @@ def run_durable_view(run_id: str) -> dict:
     import json as _json
     done_files: dict = {}
     done_sel: list = []          # [(include_globs, exclude_globs, meta)] for remote rows
-    pending = False
+    pending_lit: set = set()     # literal include paths of pinned-pending retains → per-file "saving"
+    pending_glob: list = []      # glob include patterns of pinned-pending retains
     try:
         for row in (retention.retained(label=run_id) or []):
             state = row.get("state")
             if state == "pinned-pending":
-                pending = True
+                try:
+                    inc = _json.loads(row.get("selection") or "{}").get("include") or []
+                except Exception:  # noqa: BLE001
+                    inc = []
+                for g in inc:
+                    if any(c in g for c in "*?["):
+                        pending_glob.append(g)
+                    else:
+                        pending_lit.add(g)
             elif state == "done":
                 loc = retention.location_path(row)
                 meta = {"location": loc, "site": row.get("site"),
@@ -553,8 +628,24 @@ def run_durable_view(run_id: str) -> dict:
                 return (True, True, st.get("bytes") or 0)
         return (answered, False, 0)
 
+    import fnmatch as _fnmatch
+
+    def _is_saving(rel: str) -> bool:
+        """A pinned-pending retain covers this path (literal include, or a glob that matches)."""
+        return rel in pending_lit or any(_fnmatch.fnmatch(rel, g) for g in pending_glob)
+
+    _CLEARED = "cleared — swept from scratch, not retained"
+    _SANDBOX = "on the run's scratch — not durably kept yet; kept when the run finishes, or Keep it now"
+    _ATRISK = ("at risk — large output on scratch, nothing has kept it yet; "
+               "Keep it now (or it's kept when the run finishes)")
+
+    def _live(is_large: bool):
+        """A produced file that exists but isn't durable: at-risk if large, else in-sandbox."""
+        return ("at-risk", _ATRISK) if is_large else ("in-sandbox", _SANDBOX)
+
     files = []
-    counts = {"kept": 0, "pinned_pending": 0, "in_sandbox": 0, "cleared": 0}
+    counts = {"retained": 0, "saving": 0, "in_store": 0,
+              "at_risk": 0, "in_sandbox": 0, "cleared": 0}
     for a in artifacts_for_run(run_id):
         rel = (a.get("original_name") or "").strip()
         if not rel:
@@ -564,39 +655,52 @@ def run_durable_view(run_id: str) -> dict:
         kind = a.get("kind") or "file"
         large = bool(size and size > _MAX_HARVEST_BYTES)
         site = None
-        if url:                                   # small surfaced → aba artifact store
-            state, badge = "kept", "kept ✓"
-        elif rel in done_files:                   # large → weft retained tree (local)
-            d = done_files[rel]; site = d["site"]
-            state = "kept"; badge = f"on {site}" if d["in_place"] else "kept ✓"
-        elif (dm := _sel_match(rel, done_sel)):   # remote/in-place durable retain (§5.1)
-            site = dm["site"]; state = "kept"
-            badge = f"on {site}" if dm["in_place"] else "kept ✓"
-        elif pending:
-            state = "pinned-pending"
-            badge = ("large · keeps the version at run settlement" if large
-                     else "pinned · saves when the run settles")
+        remote = False                            # bytes live on a site, not on this controller
+        # Weft durability is the truth and comes FIRST — done, then pinned-pending (saving) —
+        # so a file already retained by weft never mislabels as a mere serving copy. aba's
+        # artifact store (`url`) is only a serving cache (in-store), below weft. Then the live
+        # sandbox: a large live-but-unkept output is at-risk (RED), a small one in-sandbox.
+        if rel in done_files:                     # weft retained tree, local
+            d = done_files[rel]; site = d["site"]; remote = bool(d["in_place"])
+            state = "retained"; badge = f"on {site}" if remote else "retained ✓"
+        elif (dm := _sel_match(rel, done_sel)):   # remote in-place durable retain (§5.1)
+            site = dm["site"]; remote = bool(dm["in_place"]); state = "retained"
+            badge = f"on {site}" if remote else "retained ✓"
+        elif _is_saving(rel):                     # covered by a pinned-pending weft retain
+            state = "saving"
+            badge = ("saving… · keeps the version at run settlement" if large
+                     else "saving… · captured when the run settles")
+        elif url:                                 # small surfaced → aba serving cache only
+            state, badge = "in-store", "in store · serving copy (not yet weft-retained)"
         else:
-            _SANDBOX = "on the run's scratch — not durably kept yet; kept when the run finishes, or Keep it now"
             performed, exists, live_bytes = _on_disk(rel)
             if exists:
-                state, badge = "in-sandbox", _SANDBOX
                 if not size and live_bytes:          # real size for a live file
                     size = live_bytes
                     large = size > _MAX_HARVEST_BYTES
+                state, badge = _live(large)
             elif performed:
-                state, badge = "cleared", "cleared — swept from scratch, not retained"
+                state, badge = "cleared", _CLEARED
             elif rel in inv_paths:
-                state, badge = "in-sandbox", _SANDBOX   # proxy: was inventoried
+                state, badge = _live(large)          # proxy: inventoried at terminal
             else:
-                state, badge = "cleared", "cleared — swept from scratch, not retained"
-        view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
-                           if state in ("kept", "in-sandbox") else None)
+                state, badge = "cleared", _CLEARED
+        # Served URL, decoupled from state. R4 (serve local files directly from weft, not the
+        # /artifacts serving cache): a locally-RETAINED file is served straight from weft's
+        # durable tier via /file — the durable copy IS the truth, so we don't route through the
+        # store cache even when a store url exists. Every other state keeps the store url when
+        # present (immediate + reliable during the live/saving window), else the tier-resolving
+        # /file route (remote in-place fetches on open, B4). `cleared` has no bytes → no link.
+        weft_url = f"/api/runs/{run_id}/file?rel={quote(rel)}"
+        if state == "cleared":
+            view_url = None
+        elif state == "retained" and not remote:
+            view_url = weft_url
+        else:
+            view_url = url or weft_url
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
                       "badge": badge, "url": view_url, "site": site, "large": large})
-        counts["pinned_pending" if state == "pinned-pending"
-               else "in_sandbox" if state == "in-sandbox"
-               else state] += 1
+        counts[_COUNT_KEY[state]] += 1
     return {"files": files, "summary": {**counts, "total": len(files)}}
 
 

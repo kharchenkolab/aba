@@ -174,8 +174,8 @@ def run_file(rid: str, rel: str, download: int = 0):
 
 @router.get("/api/runs/{rid}/durable")
 def run_durable(rid: str, flat: int = 0):
-    """The Run's durability view — per-file state (kept / pinned-pending / in-sandbox /
-    cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
+    """The Run's durability view — per-file state (retained / saving / in-store / at-risk /
+    in-sandbox / cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
     TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
     Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
     {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
