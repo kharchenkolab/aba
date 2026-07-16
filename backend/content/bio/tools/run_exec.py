@@ -507,10 +507,16 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
                              "name": p.get("original_name") or p.get("name")})
         for i, t in enumerate(tables or []):
             produced.append({"kind": "table", "idx": i,
-                             "url": t.get("url"), "name": t.get("name")})
+                             "url": t.get("url"),
+                             "name": t.get("original_name") or t.get("name")})
         for i, f in enumerate(files or []):
             produced.append({"kind": "file", "idx": i,
-                             "url": f.get("url"), "name": f.get("name")})
+                             "url": f.get("url"),
+                             "name": f.get("original_name") or f.get("name"),
+                             # link-only (oversize) files carry no served url;
+                             # the size + marker ride along so retention/UI see them.
+                             **({"link_only": True, "size": f.get("bytes")}
+                                if f.get("link_only") else {})})
 
         completed_iso = datetime.now(timezone.utc).isoformat()
         wall_s = max(0.0, _time.time() - started_ts)
@@ -551,6 +557,11 @@ def _write_exec_record(*, lang: str, ctx: dict | None, code: str, cwd,
             cwd=cwd,
             payload={
                 "executor": f"kernel:{lang}",
+                # The weft kernel that ran this cell — carried so the artifact
+                # registration hook can record it on the (lazily-created) Run for
+                # retention, even on a single-turn Run where active_run_id was still
+                # None when the cell executed (misc/output_durability.md §A2).
+                "weft_target": getattr(sess, "kernel_id", None),
                 "kind": "script",
                 "language": lang,
                 "language_version": lang_ver,

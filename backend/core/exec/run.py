@@ -449,10 +449,22 @@ def harvest_artifacts(scratch: Path, since_ts: float = 0.0,
         except OSError:
             continue
         if st.st_size > _MAX_HARVEST_BYTES:
+            # Too large to copy into the served artifact store (would balloon
+            # disk), but NOT dropped: record a link-only entry so it lands in
+            # produced[] (→ a retain candidate — weft is its only durable home)
+            # and shows in the Files tab. No served `url` — it isn't inline-
+            # linkable until retained/fetched. (A0, misc/output_durability.md §9.)
+            try:
+                display = str(f.relative_to(scratch))
+            except ValueError:
+                display = f.name
+            files.append({"url": None, "original_name": display,
+                          "bytes": st.st_size, "link_only": True})
             warnings.append(
-                f"File '{f.name}' is {st.st_size // (1024*1024)}MB — too "
-                f"large to auto-copy; it's still on disk in WORK_DIR but "
-                f"won't be linkable from chat."
+                f"File '{display}' is {st.st_size // (1024*1024)}MB — too large "
+                f"to auto-copy into the artifact store; it stays in the run "
+                f"sandbox and is retained durably when the run settles (listed "
+                f"in Files, not inline-linkable)."
             )
             continue
         suf = f.suffix.lower()

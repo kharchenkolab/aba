@@ -241,9 +241,290 @@ def close_run(thread_id: str) -> Optional[str]:
     md = dict((ent or {}).get("metadata") or {})
     # Auto-pin declared finals BEFORE flipping run_state to closed.
     _auto_pin_declared_finals(rid, md)
+    # Durably retain this Run's produced files against its weft target(s) — a
+    # deferred pin on the live session kernel, settled at the kernel's own stop
+    # (we do NOT stop the shared kernel; misc/output_durability.md §6.3).
+    _retain_run_outputs(rid, md)
     md["run_state"] = "closed"
     update_entity(rid, metadata=md)
     return rid
+
+
+def _declared_output_names(run_metadata: dict) -> set:
+    """Filename-like `expected_outputs` declared across the plan that opened this Run
+    (recipe `produces:`) — as basenames. The §6 rank-1 "declared" keep signal. Empty if
+    the Run wasn't plan-opened; bare descriptions (no '.') are skipped."""
+    plan_id = run_metadata.get("plan_entity_id")
+    if not plan_id:
+        return set()
+    plan_ent = get_entity(plan_id)
+    if not plan_ent:
+        return set()
+    names: set = set()
+    for step in (plan_ent.get("metadata") or {}).get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for o in (step.get("expected_outputs") or []):
+            if isinstance(o, str):
+                leaf = o.rsplit("/", 1)[-1]
+                if "." in leaf:
+                    names.add(leaf)
+    return names
+
+
+def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
+    """Issue a durable retain of this Run's produced files against each weft
+    target that produced them — labeled to the Run, laid out as
+    runs/<run>/<target>/. On the live thread-scoped session kernel this records
+    a deferred pin (`pinned-pending`) captured at the kernel's settlement; aba
+    never stops the shared kernel to force it (§6.3). Jobs settle at completion.
+
+    The include list is the Run's OWN produced sandbox-relative paths — the
+    session kernel's sandbox is shared across Runs, so a blanket retain would
+    grab sibling Runs' files. Sourced from the Run's artifacts, which now carry
+    oversize link-only files too (§9 A0) → the crown-jewel large outputs harvest
+    wouldn't copy are covered here. Best-effort: retention must never break
+    Run close."""
+    targets = list(run_metadata.get("weft_targets") or [])
+    if not targets:
+        return  # jupyter / no weft kernel → nothing to retain against
+    try:
+        from core.exec.artifacts import artifacts_for_run
+        include = sorted({(a.get("original_name") or "").strip()
+                          for a in artifacts_for_run(run_id)} - {""})
+    except Exception as e:  # noqa: BLE001
+        _log.warning("retain: could not list artifacts for run %s: %s", run_id, e)
+        return
+    # §6 rank-1: add declared outputs (recipe `produces:`) the agent DIDN'T surface, so a
+    # promised final is retained even if harvest never saw it. Only ones whose basename
+    # isn't already a produced path (else a subdir-surfaced declared output would add a
+    # spurious root-name literal → a `retain.pin_missing`). A truly-absent declared output
+    # → an honest pin_missing (the recipe promised it, it didn't appear).
+    declared = _declared_output_names(run_metadata)
+    if declared:
+        produced_basenames = {p.rsplit("/", 1)[-1] for p in include}
+        include = sorted(set(include) | {n for n in declared
+                                         if n not in produced_basenames})
+    if not include:
+        return
+    from core.compute import retention
+    for t in targets:
+        try:
+            retention.retain(t, include=include, label=run_id,
+                             layout="label", background=True)
+        except Exception as e:  # noqa: BLE001 — logged, never blocks close
+            _log.warning("retain failed for run %s target %s: %s", run_id, t, e)
+
+
+def _sidecar_files(location: Optional[str]) -> set:
+    """The relpaths a DONE retain kept — from its `.weft-run.json` sidecar (§6.1b),
+    falling back to walking the retained dir. Empty for a location we can't read
+    (e.g. a remote in-place site — caller then leans on the row/inventory)."""
+    import os as _os
+    import json as _json
+    if not location or not _os.path.isdir(location):
+        return set()
+    sc = _os.path.join(location, ".weft-run.json")
+    if _os.path.isfile(sc):
+        try:
+            with open(sc) as fh:
+                data = _json.load(fh)
+            fs = {f.get("path") for f in (data.get("files") or []) if f.get("path")}
+            if fs:
+                return fs
+        except Exception:  # noqa: BLE001
+            pass
+    out = set()
+    for base, _dirs, files in _os.walk(location):
+        for f in files:
+            if f == ".weft-run.json":
+                continue
+            out.add(_os.path.relpath(_os.path.join(base, f), location))
+    return out
+
+
+def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
+    """Absolute on-disk path for one of a Run's files, resolved across tiers
+    (misc/output_durability.md §6.2): weft's retained tree (a `done` row's
+    `location`) first, then the live sandbox (`artifact_path`). None if not
+    resolvable. Rejects path escapes on every candidate base."""
+    import os as _os
+    from core.compute import retention
+
+    def _under(base: Optional[str]) -> Optional[str]:
+        if not base:
+            return None
+        baser = _os.path.realpath(base)
+        cand = _os.path.realpath(_os.path.join(baser, rel))
+        if (cand == baser or cand.startswith(baser + _os.sep)) and _os.path.isfile(cand):
+            return cand
+        return None
+
+    try:
+        for row in (retention.retained(label=run_id) or []):
+            if row.get("state") != "done":
+                continue
+            hit = _under(retention.location_path(row))
+            if hit:
+                return hit
+    except Exception as e:  # noqa: BLE001
+        _log.warning("resolve_run_file: retained() failed for %s: %s", run_id, e)
+    ent = get_entity(run_id)
+    return _under((ent or {}).get("artifact_path"))
+
+
+def _sel_match(rel: str, done_sel: list):
+    """meta of a remote/in-place `done` retain whose selection covers `rel` (an include
+    glob matches and no exclude does), else None. fnmatch '*' spans '/', so weft globs
+    like 'sub/**' and '*.txt' both resolve. Used when a retained sidecar isn't locally
+    readable (bytes durable on the site — §5.1)."""
+    import fnmatch
+    for include, exclude, meta in done_sel:
+        if any(fnmatch.fnmatch(rel, g) for g in (exclude or [])):
+            continue
+        if any(fnmatch.fnmatch(rel, g) for g in (include or [])):
+            return meta
+    return None
+
+
+def run_durable_view(run_id: str) -> dict:
+    """Per-file durability view for the Run's Files panel — each produced file annotated
+    with WHERE it is durable, so the panel tells the truth past the sandbox sweep
+    (misc/output_durability.md §6.2, §6.1b). Small surfaced files are durable in aba's
+    artifact store (harvest copy → they carry a `url`); the rest depend on weft retention.
+
+    Returns {"files": [{rel, bytes, kind, state, badge, url, site, large}], "summary": {...}}.
+    States: kept | pinned-pending | in-sandbox | cleared."""
+    from urllib.parse import quote
+    from core.exec.artifacts import artifacts_for_run
+    from core.exec.run import _MAX_HARVEST_BYTES
+    from core.compute import retention
+
+    ent = get_entity(run_id)
+    if not ent:
+        return {"files": [], "summary": {}}
+    md = ent.get("metadata") or {}
+
+    # weft retained rows under this Run's label → done files (by relpath) + pending flag.
+    # A local retained tree's `.weft-run.json` gives the exact file list. A REMOTE
+    # in-place retain (a `storage_durable` site's retain.dir — §5.1: the bytes stay on
+    # the site, we never move them home) has no locally-readable sidecar, so we fall back
+    # to the row's retained `selection` and attribute "kept (on site)" to produced paths
+    # that match it. Without this a remote-durable file would be mislabeled not-kept.
+    import json as _json
+    done_files: dict = {}
+    done_sel: list = []          # [(include_globs, exclude_globs, meta)] for remote rows
+    pending = False
+    try:
+        for row in (retention.retained(label=run_id) or []):
+            state = row.get("state")
+            if state == "pinned-pending":
+                pending = True
+            elif state == "done":
+                loc = retention.location_path(row)
+                meta = {"location": loc, "site": row.get("site"),
+                        "in_place": bool(row.get("in_place"))}
+                sfiles = _sidecar_files(loc)
+                if sfiles:
+                    for rel in sfiles:
+                        done_files[rel] = meta
+                else:
+                    sel = {}
+                    try:
+                        sel = _json.loads(row.get("selection") or "{}")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    done_sel.append((sel.get("include") or [], sel.get("exclude") or [], meta))
+    except Exception as e:  # noqa: BLE001
+        _log.warning("durable view: retained() failed for %s: %s", run_id, e)
+
+    # terminal inventory paths (survive the sweep) across the Run's targets
+    inv_paths: set = set()
+    for t in (md.get("weft_targets") or []):
+        try:
+            inv = retention.inventory(t)
+            inv_paths.update(e.get("path") for e in (inv.get("entries") or []))
+        except Exception:  # noqa: BLE001 — no inventory yet is fine
+            pass
+
+    files = []
+    counts = {"kept": 0, "pinned_pending": 0, "in_sandbox": 0, "cleared": 0}
+    for a in artifacts_for_run(run_id):
+        rel = (a.get("original_name") or "").strip()
+        if not rel:
+            continue
+        url = a.get("url")
+        size = a.get("size") or a.get("bytes") or 0
+        kind = a.get("kind") or "file"
+        large = bool(size and size > _MAX_HARVEST_BYTES)
+        site = None
+        if url:                                   # small surfaced → aba artifact store
+            state, badge = "kept", "kept ✓"
+        elif rel in done_files:                   # large → weft retained tree (local)
+            d = done_files[rel]; site = d["site"]
+            state = "kept"; badge = f"on {site}" if d["in_place"] else "kept ✓"
+        elif (dm := _sel_match(rel, done_sel)):   # remote/in-place durable retain (§5.1)
+            site = dm["site"]; state = "kept"
+            badge = f"on {site}" if dm["in_place"] else "kept ✓"
+        elif pending:
+            state = "pinned-pending"
+            badge = ("large · keeps the version at run settlement" if large
+                     else "pinned · saves when the run settles")
+        elif rel in inv_paths:
+            state, badge = "in-sandbox", "in sandbox"
+        else:
+            state, badge = "cleared", "cleared"
+        view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
+                           if state in ("kept", "in-sandbox") else None)
+        files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,
+                      "badge": badge, "url": view_url, "site": site, "large": large})
+        counts["pinned_pending" if state == "pinned-pending"
+               else "in_sandbox" if state == "in-sandbox"
+               else state] += 1
+    return {"files": files, "summary": {**counts, "total": len(files)}}
+
+
+def run_durable_tree(run_id: str) -> dict:
+    """`run_durable_view` nested into a TreeNode-compatible tree (root → folders →
+    file nodes carrying the durable `state`/`badge`), for the Files panel to render
+    directly. Folders sort before files, name-ascending. Carries `summary` alongside."""
+    dv = run_durable_view(run_id)
+    root: dict = {"kind": "root", "name": "", "path": "", "children": []}
+    dirs: dict = {"": root}
+
+    def _dir(path: str) -> dict:
+        if path in dirs:
+            return dirs[path]
+        parent_path, _, name = path.rpartition("/")
+        parent = _dir(parent_path)
+        node = {"kind": "folder", "name": name, "path": path, "children": []}
+        parent["children"].append(node)
+        dirs[path] = node
+        return node
+
+    for f in dv["files"]:
+        rel = f["rel"]
+        parent_path, _, name = rel.rpartition("/")
+        _dir(parent_path)["children"].append({
+            "kind": "file", "name": name, "path": rel,
+            "size": f.get("bytes"),
+            "artifact_path": f.get("url"),   # server-supplied URL (artifacts/ or /file)
+            "state": f.get("state"),         # kept | pinned-pending | in-sandbox | cleared
+            "badge": f.get("badge"),
+            "large": f.get("large"),
+            "site": f.get("site"),
+            "art_kind": f.get("kind"),       # figure | table | file (artifact kind)
+        })
+
+    def _sort(node: dict) -> None:
+        kids = node.get("children")
+        if not kids:
+            return
+        kids.sort(key=lambda n: (n["kind"] != "folder", n["name"].lower()))
+        for k in kids:
+            _sort(k)
+    _sort(root)
+    return {**root, "summary": dv["summary"]}
 
 
 def _auto_pin_declared_finals(run_id: str, run_metadata: dict) -> list[str]:
@@ -264,29 +545,7 @@ def _auto_pin_declared_finals(run_id: str, run_metadata: dict) -> list[str]:
 
     Returns the list of (newly) pinned entity ids."""
     pinned: list[str] = []
-    plan_id = run_metadata.get("plan_entity_id")
-    if not plan_id:
-        return pinned
-    plan_ent = get_entity(plan_id)
-    if not plan_ent:
-        return pinned
-    plan_md = plan_ent.get("metadata") or {}
-    steps = plan_md.get("steps") or []
-    expected_names: set[str] = set()
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        outputs = step.get("expected_outputs") or []
-        if not isinstance(outputs, list):
-            continue
-        for o in outputs:
-            if not isinstance(o, str):
-                continue
-            # Only treat strings that look like filenames (have a "." in
-            # the last path segment) — bare descriptions don't match.
-            leaf = o.rsplit("/", 1)[-1]
-            if "." in leaf:
-                expected_names.add(leaf)
+    expected_names = _declared_output_names(run_metadata)
     if not expected_names:
         return pinned
 

@@ -387,6 +387,19 @@ def entities_delete(entity_id: str, hard: bool = False,
 
     if not delete_entity_hard(entity_id):
         raise HTTPException(404, f"Entity {entity_id} not found")
+    # Reclaim any retained outputs weft is holding for this Run (bytes only; the
+    # terminal inventory survives — misc/output_durability.md §7). Only a Run
+    # (analysis) owns retained bytes labeled by its id. Soft-archive returns above
+    # and keeps the bytes (recoverable); this hard path forgets them. Best-effort:
+    # deletion is already committed and must not be blocked by a retention site.
+    if ent.get("type") == "analysis":
+        try:
+            from core.compute import retention
+            retention.forget(label=entity_id)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "retain forget failed for deleted run %s: %s", entity_id, e)
     out: dict = {"ok": True, "deleted": ent}
     if cascade_set:
         out["cascade_deleted"] = cascade_deleted

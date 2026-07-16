@@ -148,22 +148,59 @@ def run_tree(rid: str):
 
 @router.get("/api/runs/{rid}/file")
 def run_file(rid: str, rel: str, download: int = 0):
-    """Serve a single file from a Run's output directory. `rel` is the
-    path relative to the run dir; traversal outside is rejected.
-    Images/text render inline; `download=1` forces an attachment."""
+    """Serve a single file from a Run, resolved across tiers (weft retained tree →
+    live sandbox; misc/output_durability.md §6.2) so it keeps working past the
+    sandbox sweep. `rel` is relative to the run dir; traversal outside is rejected
+    on every base. Images/text render inline; `download=1` forces an attachment."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import resolve_run_file
+    target = resolve_run_file(rid, rel)
+    if not target:
+        raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
+    name = Path(target).name
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'} if download else {}
+    return FileResponse(target, media_type=media, headers=headers)
+
+
+@router.get("/api/runs/{rid}/durable")
+def run_durable(rid: str, flat: int = 0):
+    """The Run's durability view — per-file state (kept / pinned-pending / in-sandbox /
+    cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
+    TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
+    Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
+    {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import run_durable_view, run_durable_tree
+    return run_durable_view(rid) if flat else run_durable_tree(rid)
+
+
+class _KeepBody(BaseModel):
+    rel: str
+
+
+@router.post("/api/runs/{rid}/keep")
+def run_keep(rid: str, body: _KeepBody):
+    """User late-pin (output_durability.md §6.2): durably retain one of the Run's files on
+    demand. Issues run_retain(rel) against the Run's weft target(s), labeled to the Run →
+    pinned-pending on a live kernel (captured at settlement), done immediately for a
+    finished target. Best-effort per target; the one holding the file captures it."""
     run = _run_or_404(rid)
-    base = run.get("artifact_path")
-    if not base:
-        raise HTTPException(404, "run has no output directory")
-    base_p = Path(base).resolve()
-    target = (base_p / rel).resolve()
-    if base_p != target and base_p not in target.parents:
-        raise HTTPException(400, "path escapes the run directory")
-    if not target.is_file():
-        raise HTTPException(404, f"no file {rel!r} in the run output")
-    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    headers = {"Content-Disposition": f'attachment; filename="{target.name}"'} if download else {}
-    return FileResponse(str(target), media_type=media, headers=headers)
+    rel = (body.rel or "").strip()
+    if not rel:
+        raise HTTPException(400, "rel is required")
+    targets = list((run.get("metadata") or {}).get("weft_targets") or [])
+    if not targets:
+        raise HTTPException(400, "run has no weft target to retain from")
+    from core.compute import retention
+    from core.compute.errors import ComputeError
+    results = []
+    for t in targets:
+        try:
+            results.append(retention.retain(t, include=[rel], label=rid, layout="label"))
+        except ComputeError as e:
+            results.append({"target": t, "error": str(e)})
+    return {"ok": True, "rel": rel, "results": results}
 
 
 @router.get("/api/runs/{run_id}/artifacts")

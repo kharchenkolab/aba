@@ -53,7 +53,8 @@ def _isolate(tmp_path, monkeypatch):
     adir = tmp_path / "store"; adir.mkdir()
     scratch = tmp_path / "scratch"; scratch.mkdir()
     import core.config as cfg
-    monkeypatch.setattr(cfg, "current_project_id", lambda: "test")
+    import core.projects as proj      # current_project_id lives here (config burn-down #1)
+    monkeypatch.setattr(proj, "current_project_id", lambda: "test")
     monkeypatch.setattr(cfg, "project_artifacts_dir", lambda pid: adir)
     return adir, scratch
 
@@ -104,7 +105,8 @@ def _isolate_with_work(tmp_path, monkeypatch):
     work = tmp_path / "work"; work.mkdir()
     scratch = work / "thread-x"; scratch.mkdir()    # the per-thread exec cwd
     import core.config as cfg
-    monkeypatch.setattr(cfg, "current_project_id", lambda: "test")
+    import core.projects as proj      # current_project_id lives here (config burn-down #1)
+    monkeypatch.setattr(proj, "current_project_id", lambda: "test")
     monkeypatch.setattr(cfg, "project_artifacts_dir", lambda pid: adir)
     monkeypatch.setattr(cfg, "project_work_dir", lambda pid: work)
     return adir, work, scratch
@@ -127,6 +129,46 @@ def test_workdir_preexisting_not_recaught(tmp_path, monkeypatch):
     _mkpng(work / "old_wd.png", mtime=START - 50)            # written BEFORE the exec window
     plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
     assert "old_wd.png" not in {p["original_name"] for p in plots}
+
+
+# --- A0: oversize files are recorded link-only, not silently dropped ---
+# The crown-jewel bug: a >50 MB output (processed dataset, model) was warned about
+# and DROPPED from produced[] — so nothing could retain it and it aged out of the
+# sandbox. Now it lands in `files` as a link-only entry (no served url) → a retain
+# candidate + visible in the Files tab. (misc/output_durability.md §9 A0.)
+
+def _mklarge(p: Path, size: int, mtime: float | None = None):
+    with open(p, "wb") as fh:
+        fh.truncate(size)          # sparse: apparent size == `size`, no real bytes
+    if mtime is not None:
+        os.utime(p, (mtime, mtime))
+
+
+def test_large_file_recorded_link_only_not_dropped(tmp_path, monkeypatch):
+    adir, scratch = _isolate(tmp_path, monkeypatch)
+    big = scratch / "model.rds"
+    size = runmod._MAX_HARVEST_BYTES + 1024 * 1024      # just over the cap
+    _mklarge(big, size, mtime=START + 50)
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
+    entry = next((f for f in files if f.get("original_name") == "model.rds"), None)
+    assert entry is not None, f"large file dropped, not recorded: {files}"
+    assert entry.get("link_only") is True
+    assert entry.get("url") is None                     # not inline-linkable
+    assert entry.get("bytes") == size
+    assert not list(adir.glob("*.rds"))                 # NOT copied into the store
+    assert any("too large" in w and "retained" in w for w in warns)   # honest warning
+
+
+def test_small_file_still_copied_with_url(tmp_path, monkeypatch):
+    """Guard the normal path: an under-cap file is copied and served as before."""
+    adir, scratch = _isolate(tmp_path, monkeypatch)
+    small = scratch / "result.rds"
+    _mklarge(small, 1024, mtime=START + 50)
+    plots, tables, files, warns = runmod.harvest_artifacts(scratch, since_ts=START)
+    entry = next((f for f in files if f.get("original_name") == "result.rds"), None)
+    assert entry is not None and entry.get("url"), f"small file not copied: {files}"
+    assert not entry.get("link_only")
+    assert list(adir.glob("*.rds"))                     # copied into the store
 
 
 if __name__ == "__main__":

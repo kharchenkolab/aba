@@ -5,7 +5,7 @@
  * focus (succinct cells: counts + links, not every artifact). Running/failed
  * runs foreground the log; queued runs foreground the queue.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Entity } from '../types'
 import { EntityGlyph } from '../components/icons'
 import ResultList, { type OutputItem } from '../components/ResultList'
@@ -36,6 +36,19 @@ function rel(a?: string, bIso?: string): string {
   const m = Math.round(s / 60); if (m < 60) return `${m}m`
   const h = Math.floor(m / 60); return `${h}h ${m % 60}m`
 }
+/** Any file still settling (pinned-pending) → the panel keeps polling /durable (F3). */
+export function treeHasPending(node: TreeNode): boolean {
+  if (node.kind === 'file') return node.state === 'pinned-pending'
+  return (node.children || []).some(treeHasPending)
+}
+/** Drop `cleared` (swept, gone) file nodes — hidden by default; a toggle reveals them
+ *  as read-only tombstones. §6.2: never SILENTLY lost, but not noise by default. */
+export function pruneCleared(node: TreeNode): TreeNode {
+  if (!node.children) return node
+  return { ...node, children: node.children
+    .filter(c => !(c.kind === 'file' && c.state === 'cleared'))
+    .map(pruneCleared) }
+}
 export default function RunView({ run, entities, onFocus, onChange, onAsk, onChatResult, onBrowseFiles }: {
   run: Entity; entities: Entity[]; onFocus: (id: string) => void; onChange: () => void
   onAsk?: (t: string) => void
@@ -55,15 +68,31 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   // The Run's full output directory, browsed with the shared FileBrowser —
   // nested folders (model/, figures/…) and every file type, with pin/discuss.
   const [runTree, setRunTree] = useState<TreeNode | null>(null)
+  const [duraSummary, setDuraSummary] = useState<Record<string, number> | null>(null)
+  const [showCleared, setShowCleared] = useState(false)
   const [modalNode, setModalNode] = useState<TreeNode | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    fetch(`/api/runs/${encodeURIComponent(run.id)}/tree`)
+  // Durable view (output_durability.md §6.2): a TreeNode tree whose file nodes carry
+  // per-file durability `state`/`badge`, merged from weft's retained tree + inventory +
+  // the live sandbox — so the panel survives the sandbox sweep instead of going empty.
+  const pollRef = useRef<number | undefined>(undefined)
+  const loadDurable = useCallback(() => {
+    fetch(`/api/runs/${encodeURIComponent(run.id)}/durable`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (!cancelled) setRunTree(d as TreeNode) })
-      .catch(() => { if (!cancelled) setRunTree(null) })
-    return () => { cancelled = true }
+      .then(d => {
+        setRunTree(d as TreeNode | null)
+        setDuraSummary((d && (d as { summary?: Record<string, number> }).summary) || null)
+        // F3: keep polling while anything is still settling (pinned-pending), so the
+        // badge flips to kept live when weft captures at kernel stop. /durable is
+        // already live-accurate per call, so a bounded poll is all it takes.
+        if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
+        if (d && treeHasPending(d as TreeNode)) pollRef.current = window.setTimeout(loadDurable, 5000)
+      })
+      .catch(() => setRunTree(null))
   }, [run.id])
+  useEffect(() => {
+    loadDurable()
+    return () => { if (pollRef.current) window.clearTimeout(pollRef.current) }
+  }, [loadDurable])
 
   // Esc closes the file-preview modal.
   useEffect(() => {
@@ -74,8 +103,10 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   }, [modalNode])
 
   function fileHref(node: { artifact_path?: string | null; path: string }): string {
+    // The durable view supplies a server URL in artifact_path: /artifacts/… for small
+    // surfaced files, /api/runs/{id}/file?rel=… (tier-resolved) for retained/large ones.
     const ap = node.artifact_path || ''
-    return ap.startsWith('/artifacts/') || ap.startsWith('http')
+    return ap.startsWith('/artifacts/') || ap.startsWith('/api/') || ap.startsWith('http')
       ? ap : `/api/files/content?path=${encodeURIComponent(node.path)}`
   }
   // View a file in a MODAL overlay (keeps the run in the middle column), the same
@@ -110,6 +141,17 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   function discussFile(node: TreeNode) {
     const isImg = /\.(png|jpe?g|gif|svg|webp)$/i.test(node.name)
     onChatResult?.(node.name, isImg ? fileHref(node) : undefined)
+  }
+  // Keep (durably retain) an at-risk in-sandbox file — the §6.2 late-pin. POSTs the
+  // retain, then re-reads the durable view so the badge flips to pending/kept.
+  async function keepFile(node: TreeNode) {
+    try {
+      await fetch(`/api/runs/${encodeURIComponent(run.id)}/keep`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rel: node.path }),
+      })
+    } catch { /* leave the row as-is on failure */ }
+    loadDurable()   // re-read (and start polling if the keep is now pinned-pending)
   }
 
   const where = hpc ? `⛁ ${m.where || 'cluster'}${m.queue ? ` · ${m.queue}` : ''}` : '⚙ local'
@@ -337,13 +379,30 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
               </button>
             )}
           </div>
+          {duraSummary && (duraSummary.total ?? 0) > 0 && (
+            <div className="runview__dura-summary" title="Durability of this run's outputs">
+              {(duraSummary.kept ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--kept">{duraSummary.kept} kept</span>}
+              {(duraSummary.pinned_pending ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--pending">{duraSummary.pinned_pending} saving</span>}
+              {(duraSummary.in_sandbox ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--sandbox">{duraSummary.in_sandbox} in sandbox</span>}
+              {(duraSummary.cleared ?? 0) > 0 && (
+                <button className="dura-chip dura-chip--cleared"
+                        onClick={() => setShowCleared(s => !s)}
+                        title={showCleared ? 'Hide cleared files' : 'Show cleared (swept) files'}>
+                  {duraSummary.cleared} cleared · {showCleared ? 'hide' : 'show'}
+                </button>
+              )}
+            </div>
+          )}
           <FileBrowser
-            root={runTree}
+            root={showCleared ? runTree : pruneCleared(runTree)}
             variant="wide"
             focusedId=""
             onFocus={onFocus}
             onViewFile={browseViewFile}
-            actions={{ onPin: pinFile, onDiscuss: discussFile }}
+            actions={{ onPin: pinFile, onDiscuss: discussFile, onKeep: keepFile }}
             emptyHint="No files in this run's output folder."
           />
         </section>

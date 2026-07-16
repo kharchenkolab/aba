@@ -408,6 +408,20 @@
   padding: 0 4px; line-height: 1.55;
 }
 
+/* Per-file durability pills (output_durability.md §6.2) — state → colour mirrors
+   the run-pill palette so the two read as one vocabulary. */
+.files__badge--dura {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.3px;
+  border: 1px solid transparent; border-radius: 4px;
+  padding: 0 5px; line-height: 1.5; white-space: nowrap;
+}
+.files__badge--kept           { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
+.files__badge--pinned-pending { color: #b45309; background: #fef3c7; border-color: #fde68a; }
+.files__badge--in-sandbox     { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.files__badge--cleared        { color: var(--text-4); background: var(--surface-3); border-color: var(--border); }
+
 .files__children {
   /* No background — relies on indent. */
 }

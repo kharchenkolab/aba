@@ -26,6 +26,8 @@ export interface FileActions {
   /** Toggle pin. `pinned` is the NEW state (true=pin, false=unpin). */
   onPin?: (node: TreeNode, pinned: boolean) => void
   onDiscuss?: (node: TreeNode) => void
+  /** Durably retain an at-risk (in-sandbox) file — the §6.2 late-pin. */
+  onKeep?: (node: TreeNode) => void
 }
 
 interface Props {
@@ -259,6 +261,12 @@ export default function FileBrowser({
             <ChatGlyph />
           </button>
         )}
+        {actions.onKeep && node.state === 'in-sandbox' && (
+          <button className="files__action files__action--keep" title="Keep — retain this file durably before the sandbox is swept"
+                  aria-label="Keep file" onClick={e => { e.stopPropagation(); actions.onKeep!(node) }}>
+            <KeepGlyph />
+          </button>
+        )}
         {actions.onPromote && node.ephemeral && (
           <button className="files__action files__action--promote" title="Promote to a dataset (keep it)"
                   aria-label="Promote to dataset" onClick={e => { e.stopPropagation(); actions.onPromote!(node) }}>
@@ -266,6 +274,22 @@ export default function FileBrowser({
           </button>
         )}
       </>
+    )
+  }
+
+  // Per-file durability pill (output_durability.md §6.2). Short label in the pill,
+  // the full designed badge text (e.g. "large · keeps the version at run settlement")
+  // in the tooltip. Absent for nodes without a durable `state` (e.g. the project rail).
+  function duraBadge(node: TreeNode): React.ReactNode {
+    const st = node.state
+    if (!st) return null
+    const short = st === 'kept' ? (node.site ? `on ${node.site}` : 'kept ✓')
+      : st === 'pinned-pending' ? 'pending'
+      : st === 'in-sandbox' ? 'in sandbox'
+      : st === 'cleared' ? 'cleared' : st
+    return (
+      <span className={`files__badge files__badge--dura files__badge--${st}`}
+            title={node.badge || st}>{short}</span>
     )
   }
 
@@ -296,6 +320,7 @@ export default function FileBrowser({
           <span className="files__name-main">{isFile ? node.name : `${node.name}/`}</span>
           {parent && <span className="files__name-path">{parent}</span>}
         </button>
+        {isFile && duraBadge(node)}
         <span className="files__type">{typeLabel}</span>
         <span className="files__size">{isFile ? fmtSize(node.size ?? null) : <span className="files__size--dash">—</span>}</span>
         {rowActions(node, isFile)}
@@ -339,6 +364,7 @@ export default function FileBrowser({
           <span className="files__icon">{leafIcon(node)}</span>
           <button className="files__name files__name--clickable" onClick={() => activate(node)}
                   title={isReadme ? node.path : `${node.entity_type ?? ''} · ${node.entity_id ?? ''}`}>{node.name}</button>
+          {duraBadge(node)}
           <span className="files__type">{fileTypeLabel(node)}</span>
           <span className="files__size">{fmtSize(node.size ?? null)}</span>
           {rowActions(node, true)}
@@ -470,6 +496,10 @@ function DownloadGlyph() {
 }
 function PromoteGlyph() {
   return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5v-8" /><path d="M4.5 6L8 2.5 11.5 6" /><path d="M3 13.5h10" /></svg>
+}
+/** Shield-check — "keep this safe" (durable retain). */
+function KeepGlyph() {
+  return <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.5l5 2v4c0 3.2-2.1 5.4-5 6.5-2.9-1.1-5-3.3-5-6.5v-4l5-2z" /><path d="M5.8 8l1.6 1.6L10.4 6.6" /></svg>
 }
 function PinGlyph({ filled }: { filled?: boolean }) {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z" /></svg>
