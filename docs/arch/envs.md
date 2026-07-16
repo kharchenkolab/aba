@@ -3,7 +3,13 @@
 How ABA provides the software a run executes in — Python and R — and how it adds
 packages on demand without corrupting shared state.
 
-> Status: current as of 2026-07. This is the **maintained** reference.
+> Status: **substantially superseded by the weft migration** (see `misc/weft_rewrite.md`).
+> The body below describes the *pre-weft* served-base + project-overlay + ABI-anchor model.
+> Under weft, environments are content-addressed and realized in weft SESSIONS / packs; the
+> served base and its self-heal / ABI-anchor / base-lock machinery are **removed** (W3.4/W3.5),
+> the science stack is weft-owned (not in the controller `environment.yml`), and the honest
+> load/GPU probes moved to `core/exec/verify.py`. The `env_integrity`/`verify` code-map row
+> below is current; the rest needs a weft-era rewrite (tracked).
 
 ## Aims & principles
 
@@ -151,7 +157,7 @@ toggle). The base spec (`environment.yml`) lives in the repo.
 |---|---|
 | `core/config.py` | `RUNTIME_DIR`, `ENVS_DIR` (mutable-state roots + resolution) |
 | `core/exec/materialize.py` | `materialize()` dispatch (pip/conda); `_pip_install` (overlay + constraints); `_conda_install` (tools env); `PYLIB_DIR`, `project_pylib_dir` |
-| `core/exec/env_integrity.py` | ABI anchor (`abi_anchor_constraints`), base freeze (`ensure_base_constraints`, `_freeze_pins`), `env_selfcheck`, `gpu_capability_ok`/`torch_cuda_build`, `self_heal_base`/`repair_base`/`base_health`, `verify_python_imports` |
+| `core/exec/env_integrity.py` · `core/exec/verify.py` | **Current (W3.4):** `env_integrity` keeps read-only env diagnostics (`env_overview`, `env_layers`, `python_package_status`), the `.aba-base-stage` read (`base_stage`), `ensure_sys_executable`, and the Slurm shared-FS self-checks (`check_envs_dir_shared`/`check_base_dir_shared`). The honest load/GPU probes — `verify_python_imports`, `gpu_capability_ok`, `torch_cuda_build` — moved to `verify.py`. The served-base heal/ABI-anchor/base-lock machinery (`self_heal_base`/`repair_base`/`base_health`, `abi_anchor_constraints`, `ensure_base_constraints`/`_freeze_pins`, `canonical_lock_path`) was **deleted** (W3.4/W3.5 — weft owns realization). |
 | `core/jobs/slurm_entry.py` | background-job entry; GPU verify-at-use preflight + numpy canary |
 | `install/core/inject-accelerator.sh` · `install/linux/setup.sh` · `install/sif/build.sh` · `aba-vbc/build.sh` | deployment-conditional base: `ABA_ACCELERATOR` → CPU vs CUDA torch pin — applied by the installer, the SIF build (fat bakes the venv; slim's mounted base too), and the aba-vbc pipeline (`versions.env`); the fat image records it in `%labels` (`org.aba.accelerator`) |
 | `core/runtime/selfcheck.py` · `env_integrity.check_envs_dir_shared`/`envs_dir_fs_kind`/`_fs_type_for_path` | startup self-check registry (`{name,ok,severity,detail}`) → `/api/health` (`degraded`+`warnings[]`) + `/api/admin/selfcheck`; the ENVS_DIR shared-FS gate is its first tenant. Install-time hard gate + `sbatch` probe live in `aba_installer/cli.py` (`_fs_kind_for_path`, `_probe_envs_visible_on_compute_node`) |

@@ -15,9 +15,9 @@ without the planes knowing which target they run on or who is acting. Four imper
   to what runs on an OOD cluster. A target difference is only ever a **compute-config or ABI
   fact** — which job submitter, which torch build — resolved at the compute seam, **never a
   branch in business logic.** Prevents the N-codepaths-→-N×-the-bugs trap where a laptop fix
-  never reaches the cluster. (The only `platform.system()` reads in the tree pick a micromamba
-  binary for the arch — `core/exec/mamba.py:29` — and stamp a bug-report line — a compute/ABI
-  and a diagnostic concern, not business logic.)
+  never reaches the cluster. (The only `platform.system()`/`platform.machine()` reads in the
+  tree stamp a bug-report line — `content/bio/tools/feedback.py:215` — and pick the arch's
+  micromamba binary in the installer — a compute/ABI and a diagnostic concern, not business logic.)
 - **Config is driven, not hardcoded — and declared in one enforced place.** Every mutable-state
   root and every operational toggle is a **typed setting declared once** in `core/config.py`'s
   registry (`setting(...)`), read through a single accessor (`config.settings.<name>.get()`) that
