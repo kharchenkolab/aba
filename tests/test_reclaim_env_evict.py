@@ -26,14 +26,34 @@ import core.modules.reconciler as rec    # noqa: E402
 
 
 class _FakeCompute:
-    def __init__(self, envs=None, boom=None):
+    """Stateful weft double. `blockers` is the live in_use list env_evict refuses on; a
+    `session_stop` removes that session from it (mirrors weft), so once the safe holders are
+    stopped a retried env_evict succeeds — the real selective-stop-then-evict flow."""
+    def __init__(self, envs=None, boom=None, blockers=None):
         self.calls = []
         self._envs = envs or []
-        self._boom = boom            # an exception INSTANCE to raise from env_evict, or None
+        self._boom = boom            # legacy: a fixed exception to raise from env_evict, or None
+        self._blockers = list(blockers) if blockers is not None else None
+
+    def _evict_error(self):
+        from core.compute.errors import ComputeError
+        return ComputeError(
+            "env.evict_blocked",
+            f"{len(self._blockers)} live job(s)/session(s)/kernel(s) use this env",
+            stage="infra", hints={"in_use": list(self._blockers)})
+
     def sync_call(self, name, *a):
         self.calls.append((name, a))
-        if name == "env_evict" and self._boom is not None:
-            raise self._boom
+        if name == "env_evict":
+            if self._boom is not None:
+                raise self._boom
+            if self._blockers:
+                raise self._evict_error()
+            return {"ok": True}
+        if name == "session_stop" and self._blockers is not None:
+            sid = a[0]
+            self._blockers = [b for b in self._blockers if b.get("id") != sid]
+            return {"ok": True}
         if name == "list_envs":
             return {"envs": self._envs}
         return {"ok": True}
@@ -65,19 +85,48 @@ def test_remove_artifacts_pack_backed_evicts_weft_env(monkeypatch):
     assert out["reclaimed"] is True and out["env_id"] == "env:v1:rbio"
 
 
-def test_remove_artifacts_blocked_surfaces_reason(monkeypatch):
-    """weft refuses (live jobs/sessions/kernels use the env) → outcome is NOT swallowed:
-    reclaimed=False with the detail + the in_use holders, so the user learns why."""
+def test_remove_artifacts_stops_kernelless_holder_then_evicts(monkeypatch):
+    """P1/#3 selective stop: a kernel-less session only holds the base env open (no running
+    block). Reclaim stops it (session_stop) and the retried env_evict succeeds — the whole
+    point of the fix (before, an idle kernel-less session wedged reclaim forever)."""
     import core.compute as compute
-    from core.compute.errors import ComputeError
-    err = ComputeError("env.evict_blocked", "3 live job(s)/session(s)/kernel(s) use this env",
-                       stage="infra", hints={"in_use": [{"kind": "session", "id": "ses_1"}]})
     monkeypatch.setattr(mgr, "pack_env_id", lambda s: ("env:v1:rbio", "local"))
-    monkeypatch.setattr(compute, "get_compute", lambda: _FakeCompute(boom=err))
+    w = _FakeCompute(blockers=[{"kind": "session", "id": "ses_idle",
+                                "has_kernel": False, "idle_s": 21000}])
+    monkeypatch.setattr(compute, "get_compute", lambda: w)
+    out = rec._remove_artifacts(reg.get("r-bio"), log=lambda *_: None)
+    assert ("session_stop", ("ses_idle",)) in w.calls          # stopped the safe holder
+    assert w.calls.count(("env_evict", ("env:v1:rbio", "local"))) == 2   # tried, then retried
+    assert out["reclaimed"] is True and out["env_id"] == "env:v1:rbio"
+
+
+def test_remove_artifacts_live_kernel_holder_surfaced_not_killed(monkeypatch):
+    """A session WITH a running kernel (or a running kernel/job) is live work — never killed
+    for a disk reclaim. Reclaim can't proceed; the reason is surfaced honestly, not swallowed."""
+    import core.compute as compute
+    monkeypatch.setattr(mgr, "pack_env_id", lambda s: ("env:v1:rbio", "local"))
+    w = _FakeCompute(blockers=[{"kind": "session", "id": "ses_live", "has_kernel": True},
+                               {"kind": "kernel", "id": "krn_live"}])
+    monkeypatch.setattr(compute, "get_compute", lambda: w)
     out = rec._remove_artifacts(reg.get("r-bio"), log=lambda *_: None)   # must NOT raise
+    assert not any(c[0] == "session_stop" for c in w.calls)    # nothing safe → nothing stopped
     assert out["reclaimed"] is False
-    assert "live" in out["detail"]
-    assert out["in_use"] == [{"kind": "session", "id": "ses_1"}]
+    assert {h["id"] for h in out["in_use"]} == {"ses_live", "krn_live"}
+
+
+def test_remove_artifacts_mixed_stops_safe_leaves_live(monkeypatch):
+    """Mixed holders: stop the kernel-less session, but a running kernel still holds the env →
+    reclaim still can't finish; surface the remaining live blocker + what we stopped."""
+    import core.compute as compute
+    monkeypatch.setattr(mgr, "pack_env_id", lambda s: ("env:v1:rbio", "local"))
+    w = _FakeCompute(blockers=[{"kind": "session", "id": "ses_idle", "has_kernel": False},
+                               {"kind": "kernel", "id": "krn_live"}])
+    monkeypatch.setattr(compute, "get_compute", lambda: w)
+    out = rec._remove_artifacts(reg.get("r-bio"), log=lambda *_: None)
+    assert ("session_stop", ("ses_idle",)) in w.calls
+    assert out["reclaimed"] is False
+    assert out["stopped_sessions"] == ["ses_idle"]
+    assert {h["id"] for h in out["in_use"]} == {"krn_live"}   # only the live holder remains
 
 
 def test_remove_artifacts_non_pack_falls_back_to_manifest_rmtree(monkeypatch, tmp_path):
@@ -108,25 +157,26 @@ def test_set_mode_off_remove_evicts_pack_env_and_surfaces_outcome(monkeypatch):
 
 
 def test_set_mode_off_remove_blocked_notifies(monkeypatch):
-    """When weft refuses, the view carries the blocked reason and a notify fires (UI toast)."""
+    """When a LIVE holder (running kernel) blocks and can't be safely stopped, the view carries
+    the blocked reason and a notify fires (UI toast) — never a silent no-op."""
     import core.compute as compute
-    from core.compute.errors import ComputeError
-    err = ComputeError("env.evict_blocked", "2 live session(s) use this env", stage="infra",
-                       hints={"in_use": [{"kind": "session", "id": "s1"}]})
     monkeypatch.setattr(mgr, "pack_env_id", lambda s: ("env:v1:rbio", "local"))
-    monkeypatch.setattr(compute, "get_compute", lambda: _FakeCompute(boom=err))
+    w = _FakeCompute(blockers=[{"kind": "kernel", "id": "krn_live"}])
+    monkeypatch.setattr(compute, "get_compute", lambda: w)
     notes = []
     monkeypatch.setattr(rec, "_notify", lambda spec, mstate, **k: notes.append(k.get("error")))
     view = rec.set_mode("r-bio", "off", remove=True, log=lambda *_: None)
     assert view["reclaim"]["reclaimed"] is False
-    assert any("live session" in (n or "") for n in notes)
+    assert any("live" in (n or "") for n in notes)
 
 
 _TESTS = [
     test_pack_env_id_resolves_local_env,
     test_pack_env_id_none_when_not_pack_backed,
     test_remove_artifacts_pack_backed_evicts_weft_env,
-    test_remove_artifacts_blocked_surfaces_reason,
+    test_remove_artifacts_stops_kernelless_holder_then_evicts,
+    test_remove_artifacts_live_kernel_holder_surfaced_not_killed,
+    test_remove_artifacts_mixed_stops_safe_leaves_live,
     test_remove_artifacts_non_pack_falls_back_to_manifest_rmtree,
     test_set_mode_off_remove_evicts_pack_env_and_surfaces_outcome,
     test_set_mode_off_remove_blocked_notifies,

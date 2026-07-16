@@ -179,6 +179,79 @@ def start(*, log: Callable[[str], None] = print) -> bool:
     return True
 
 
+def _stop_evict_blockers(in_use: list, log: Callable[[str], None]) -> tuple[list[str], list[dict]]:
+    """Stop the reclaim blockers it's SAFE to stop, leave the ones that are live work.
+
+    A deliberate "turn the module off + reclaim" means the user wants this env gone. weft's
+    `in_use` holders now carry `has_kernel` / `idle_s` (2026-07 weft change), so we can be
+    selective: a **kernel-less session** is only holding the base env open (no running block) —
+    stop it (`session_stop`). A session **with a running kernel**, a running **kernel**, or a
+    live **job** IS active computation — never kill it for a disk reclaim; return it as an
+    unresolved blocker so the caller surfaces an honest "stop your live work first".
+
+    Returns (stopped_session_ids, remaining_blockers)."""
+    from core.compute import get_compute
+    stopped: list[str] = []
+    remaining: list[dict] = []
+    w = get_compute()
+    for h in (in_use or []):
+        kind = h.get("kind")
+        if kind == "session" and not h.get("has_kernel"):
+            sid = h.get("id")
+            try:
+                w.sync_call("session_stop", sid)
+                stopped.append(sid)
+                log(f"[modules] stopped kernel-less session {sid} "
+                    f"(idle {h.get('idle_s', '?')}s) holding the env")
+            except Exception as e:  # noqa: BLE001 — a session that won't stop stays a blocker
+                remaining.append({**h, "stop_error": str(e)})
+                log(f"[modules] could not stop session {sid}: {e}")
+        else:
+            remaining.append(h)   # running kernel/session/job → live work, not ours to kill
+    return stopped, remaining
+
+
+def _evict_pack_env(spec: ModuleSpec, env_id: str, site: str,
+                    log: Callable[[str], None]) -> dict:
+    """Evict a pack-backed module's weft env, stopping SAFE holders first. weft refuses the
+    evict while any active session/kernel/job holds the env; on that refusal we stop the
+    kernel-less session holders (see `_stop_evict_blockers`) and retry ONCE. If live work
+    still holds it, we surface that honestly (never kill it). Best-effort; never raises."""
+    from core.compute import get_compute
+    w = get_compute()
+
+    def _try_evict() -> dict:
+        w.sync_call("env_evict", env_id, site)
+        log(f"[modules] {spec.id}: evicted weft env {env_id} on {site} (reclaimed disk)")
+        return {"reclaimed": True, "env_id": env_id, "detail": f"evicted weft env on {site}"}
+
+    try:
+        return _try_evict()
+    except Exception as e:  # noqa: BLE001
+        hints = getattr(e, "hints", None)
+        in_use = hints.get("in_use") if isinstance(hints, dict) else None
+        if not in_use:
+            detail = getattr(e, "detail", None) or str(e)
+            log(f"[modules] {spec.id}: env_evict did not reclaim {env_id}: {detail}")
+            return {"reclaimed": False, "env_id": env_id, "detail": detail}
+        stopped, remaining = _stop_evict_blockers(in_use, log)
+        if not stopped:
+            # nothing safe to stop — the holders are all live work
+            return {"reclaimed": False, "env_id": env_id, "in_use": remaining,
+                    "detail": (getattr(e, "detail", None) or str(e))}
+        try:
+            out = _try_evict()
+            if remaining:
+                out["stopped_sessions"] = stopped
+            return out
+        except Exception as e2:  # noqa: BLE001 — still blocked (live kernels/jobs remain)
+            hints2 = getattr(e2, "hints", None)
+            still = (hints2.get("in_use") if isinstance(hints2, dict) else None) or remaining
+            return {"reclaimed": False, "env_id": env_id, "in_use": still,
+                    "stopped_sessions": stopped,
+                    "detail": getattr(e2, "detail", None) or str(e2)}
+
+
 def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> dict:
     """Reclaim a module's on-disk artifacts; return a structured OUTCOME so the caller can tell
     the user what actually happened (never a silent no-op — the honest-failure principle).
@@ -201,19 +274,7 @@ def _remove_artifacts(spec: ModuleSpec, log: Callable[[str], None]) -> dict:
     ev = manager.pack_env_id(spec)
     if ev is not None:
         env_id, site = ev
-        try:
-            from core.compute import get_compute
-            get_compute().sync_call("env_evict", env_id, site)
-            outcome = {"reclaimed": True, "env_id": env_id,
-                       "detail": f"evicted weft env on {site}"}
-            log(f"[modules] {spec.id}: evicted weft env {env_id} on {site} (reclaimed disk)")
-        except Exception as e:  # noqa: BLE001 — reclaim best-effort; SURFACE the reason, never raise
-            detail = getattr(e, "detail", None) or str(e)
-            outcome = {"reclaimed": False, "env_id": env_id, "detail": detail}
-            hints = getattr(e, "hints", None)
-            if isinstance(hints, dict) and hints.get("in_use"):
-                outcome["in_use"] = hints["in_use"]
-            log(f"[modules] {spec.id}: env_evict did not reclaim {env_id}: {detail}")
+        outcome = _evict_pack_env(spec, env_id, site, log)
     rm = spec.remove or {}
     removed: list[str] = []
     for p in rm.get("paths", []):
