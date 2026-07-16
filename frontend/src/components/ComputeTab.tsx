@@ -278,8 +278,9 @@ function SiteDetail({ site, advanced, onChanged }: {
               <dd>
                 {editingRoot === null ? (
                   <>
-                    {s.config.root} <span className="cmp-dim">· environments &amp;
-                    working files — rebuilds itself</span>{' '}
+                    {s.config.root} <span className="cmp-dim">· environments,
+                    working files, and kept results live here (keeps are retained
+                    in place — this storage’s durability is theirs)</span>{' '}
                     {!isLocal && (
                       <button className="mod-linkbtn" disabled={busy !== null}
                         onClick={() => setEditingRoot(s.config?.root ?? '')}>change…</button>
@@ -317,9 +318,9 @@ function SiteDetail({ site, advanced, onChanged }: {
       {!isLocal && (
         <div className="cmp-block">
           <div className="cmp-block__title">
-            Long-term store <span className="cmp-dim">— where data lives and kept
-            results stay; independent of the working space (the same disk can
-            serve both)</span>
+            Long-term store <span className="cmp-dim">— storage you trust to
+            last: where your data lives, read in place (kept results stay with
+            the working space; the same disk can serve both roles)</span>
           </div>
           {longTerm.length === 0 && <div className="cmp-dim">none declared</div>}
           <ul className="cmp-paths">

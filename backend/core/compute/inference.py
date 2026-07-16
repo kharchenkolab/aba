@@ -53,11 +53,16 @@ def _partition_gpus(p: dict) -> int:
                if g.get("type") == "gpu")
 
 
+# The consequence that matters: results you KEEP are retained IN PLACE under
+# this root (weft never relocates them) — so the root's durability is the
+# keeps' durability. Environments/caches rebuild; kept results don't.
 _KIND_NOTE = {
-    "scratch": "fast and roomy — the cluster may purge it; everything aba "
-               "keeps here rebuilds itself",
-    "home": "usually backed up — counts against your home quota",
-    "other": "writable space",
+    "scratch": "fast and roomy, but may be purged — environments rebuild; "
+               "results kept here would be lost with it",
+    "home": "usually backed up — results you keep here stay safe; counts "
+            "against your home quota",
+    "other": "writable space — check whether it is backed up if you plan "
+             "to keep results here",
 }
 
 

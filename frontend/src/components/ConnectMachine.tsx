@@ -290,16 +290,18 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                   onChange={e => patch({ working: { ...proposal.working, root: e.target.value } })} />
               )}
               <div className="cmp-dim">
-                environments &amp; working files — everything here rebuilds itself.{' '}
-                {proposal.working.reason}
+                environments, working files, and results you keep on this
+                machine all live here. {proposal.working.reason}
               </div>
             </div>
 
             <label>Long-term store</label>
             <div>
               <div className="cmp-dim">
-                where your data lives and kept results should stay — independent
-                of the working space above (the same disk can serve both)
+                storage you trust to last: where your data lives (read in place,
+                never copied). Kept results stay wherever the working space is —
+                put it on durable storage too if keeps should persist; the same
+                disk can serve both roles
               </div>
               {proposal.long_term.map((p: StoragePath, i: number) => (
                 <div key={p.path} className="cmp-paths">
