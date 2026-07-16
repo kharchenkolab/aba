@@ -3,8 +3,9 @@
 Under ABA_ENV_PREWARM=staged the installer creates the base from environment-boot.yml
 (fast, minimal), starts the server, then completes it with
 `micromamba env update -f environment.yml`. For the completed base to equal the eager
-build, boot must be a strict SUBSET with identical pins + an identical pip: section —
-and it must actually EXCLUDE the heavy stack (else staging saves nothing).
+build, boot must be a strict SUBSET with identical pins + an identical pip: section.
+(Post-W3.4 the science stack is weft-owned, in neither env — so completion now only
+adds build helpers + typst; the subset invariant still holds.)
 """
 from pathlib import Path
 
@@ -42,7 +43,12 @@ def test_boot_is_strict_subset_with_matching_pins():
     assert boot_pip == full_pip, "boot pip: section must match environment.yml exactly"
 
 
-def test_boot_excludes_the_heavy_stack():
+def test_science_stack_is_weft_owned_not_in_base():
+    """W3.4 slim controller: the single-cell science stack is realized by weft in
+    SESSION kernels (content-addressed packs), NOT installed into the controller
+    base — so it is absent from BOTH the boot and the full controller env. (Before
+    W3.4 the full env carried it and staging deferred it; now neither micromamba
+    env pulls it.)"""
     _, full_conda, _ = _split(FULL)
     _, boot_conda, _ = _split(BOOT)
 
@@ -51,10 +57,10 @@ def test_boot_excludes_the_heavy_stack():
         return {re.split(r"[=<>! ]", s)[0] for s in specs}
 
     boot_names, full_names = names(boot_conda), names(full_conda)
-    # the deferred tiers must NOT be in boot, but MUST be in full
-    for heavy in ("scanpy", "anndata", "scvi-tools", "leidenalg"):
-        assert heavy not in boot_names, f"{heavy} should be deferred (not in boot)"
-        assert heavy in full_names, f"{heavy} missing from environment.yml"
-    # but the ABI core + kernel MUST be in boot (server can run python from boot)
+    # the science stack is weft-owned → in NEITHER controller env
+    for weft_owned in ("scanpy", "anndata", "scvi-tools", "leidenalg"):
+        assert weft_owned not in boot_names, f"{weft_owned} is weft-owned (not in boot)"
+        assert weft_owned not in full_names, f"{weft_owned} is weft-owned (not in the controller env)"
+    # but the numeric core + kernel MUST be in boot (server can run python from boot)
     for need in ("numpy", "pandas", "scipy", "ipykernel", "python", "nodejs"):
         assert need in boot_names, f"{need} must be in the boot env"

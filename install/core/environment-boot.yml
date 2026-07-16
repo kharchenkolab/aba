@@ -1,13 +1,14 @@
 # ABA BOOT environment — the minimal base that lets the SERVER start under the
 # `staged` prewarm strategy (ABA_ENV_PREWARM=staged; see misc/lazy_env_init.md).
 #
-# Strict SUBSET of environment.yml: language toolchains + the ABI core
+# Strict SUBSET of environment.yml: language toolchains + the numeric core
 # (numpy/scipy/pandas) + the backend runtime + the Jupyter kernel + the viewer
 # data layer — enough to serve the UI, run data-management + light Python in a
-# kernel, and open the pagoda3 viewer. The heavier scientific + bio stack
-# (scanpy/anndata/scvi-tools→torch/leidenalg/…) is added AFTERWARDS, while the
-# server is already up, by `micromamba env update -f environment.yml` — so the
-# completed base is the SAME end state as the eager (full-up-front) build.
+# kernel, and open the pagoda3 viewer. What `micromamba env update -f
+# environment.yml` adds afterwards is now only build helpers + typst — the
+# single-cell science stack is weft-owned, realized in SESSION kernels, NOT
+# installed into this base (W3.4). So the completed base is the SAME end state as
+# the eager (full-up-front) build.
 #
 # Drift guard: install/core/helper/tests/test_env_boot_subset.py asserts this is a
 # subset of environment.yml (same pins) and that the pip: section is identical.
@@ -26,12 +27,11 @@ dependencies:
   - pip
   - pnpm
 
-  # ── ABI core — MUST live in the base: overlays ABI-anchor against the base
-  #    numpy (docs/arch/envs.md), and pandas/numpy cover early data-management
-  #    + light compute during background completion. ──────────────────────
-  # Pin numpy<2.5 to match environment.yml (numba needs <2.5) so the boot base —
-  # and the ABI anchor derived from it — never starts on a numpy the full env
-  # update would have to walk back.
+  # ── numeric core — pandas/numpy/scipy cover the backend's own imports (data
+  #    management + to_markdown) and the lstar viewer data layer. ────────────
+  # Pin numpy<2.5 to match environment.yml (a known-good numpy for scipy/pandas/
+  # zarr/lstar) so the boot base never starts on a numpy the full env update
+  # would have to walk back.
   - numpy<2.5
   - pandas
   - scipy

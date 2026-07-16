@@ -1,21 +1,26 @@
-# ABA conda environment — the single most-important file in the Mac install.
+# ABA conda environment — the CONTROLLER/platform env (the aba backend itself).
 #
 # Fetched at install time by the create-env playbook step and fed to
-# micromamba (see helper/src/aba_installer/install.yml). Everything ABA
-# needs to run lives here: the Python + R + Node toolchains, the
-# single-cell bio stack the agent executes, the Jupyter kernels it runs
-# code in, and the backend's own runtime deps.
+# micromamba (see helper/src/aba_installer/install.yml). This holds what the aba
+# PLATFORM needs to run: the Python + Node toolchains, the Jupyter kernel-client
+# machinery, document tooling, and the backend's own runtime deps.
+#
+# It NO LONGER holds the single-cell science stack (scanpy/scvi-tools/anndata/
+# leiden/…): weft owns environment realization now, so the agent runs analysis
+# code in weft SESSION kernels backed by content-addressed science packs, not in
+# this base (W3.4 — slim controller). The only heavy libs kept are ones the
+# BACKEND itself imports: pandas (+ numpy) and the lstar/zarr viewer data layer
+# (which pulls scipy). R lives in its own tools env (r-environment.yml).
 #
 # Channels, in priority order:
-#   conda-forge — the C-library base + most scientific Python + R-base
-#   bioconda    — Bioconductor packages (the binary source for Bioc on Mac;
-#                 PPM has CRAN binaries but no Bioc — see mac-install.md §8.2)
+#   conda-forge — the C-library base + scientific Python + node
+#   bioconda    — kept for parity with the R tools env's Bioconductor pulls
+#                 (see r-environment.yml + mac-install.md §8.2)
 #
-# Pin policy: pin the language toolchains (python/r/node) to a minor series
-# so updates stay predictable; leave the bio stack with floors (>=) so the
-# solver can pick a mutually-compatible set per arch. Once validated on a
-# fresh arm64 + x86_64 Mac, capture the resolved versions as a locked
-# snapshot. Refresh monthly (mac-install.md §4).
+# Pin policy: pin the language toolchains (python/node) to a minor series so
+# updates stay predictable. Once validated on a fresh arm64 + x86_64 Mac,
+# capture the resolved versions as a locked snapshot. Refresh monthly
+# (mac-install.md §4).
 
 name: aba
 channels:
@@ -32,30 +37,22 @@ dependencies:
   - pip
 
   # ── native libraries + build helpers (binary; nothing compiles at install)
-  - hdf5
   - pkg-config
   - cmake
 
-  # ── scientific Python core ─────────────────────────────────────────────
-  # numba (pulled transitively by scanpy/scvi-tools) requires numpy<2.5; left
-  # unpinned the solve picks the latest numpy (2.5.x) and ships a base that fails
-  # `import numba` — which the startup self-heal then has to downgrade. Pin it so
-  # the base is numba-compatible (and the ABI anchor correct) from the first build.
+  # ── backend numeric deps ───────────────────────────────────────────────
+  # NOT the agent's science stack (weft-owned now — see header): only what the
+  # BACKEND process itself imports. pandas backs ctx_read/describe/orientation
+  # to_markdown; numpy rides with pandas + zarr (needs >=2) + lstar; scipy is a
+  # CORE dependency of lstar-sc (the viewer data layer, in pip: below). numpy
+  # keeps a conservative <2.5 upper bound — the numba driver is gone with scanpy/
+  # scvi, but the bound holds a known-good numpy for scipy/pandas/zarr/lstar until
+  # a 2.5 validation.
   - numpy<2.5
   - pandas
   - scipy
-  - matplotlib-base
-  - scikit-learn
-  - h5py
   - pyyaml          # backend: `import yaml` (config, playbook, agent specs)
   - tabulate        # pandas.DataFrame.to_markdown() backend (ctx_read + describe tools)
-
-  # ── single-cell bio stack (the agent imports these in Python kernels) ──
-  - anndata>=0.10
-  - scanpy>=1.10
-  - scvi-tools>=1.1
-  - leidenalg
-  - python-igraph
 
   # ── Python Jupyter kernel (the agent runs Python here). R has its own
   #    kernel in the tools env — see r-environment.yml. jupyter_client also
