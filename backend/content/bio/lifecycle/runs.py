@@ -373,6 +373,31 @@ def resolve_run_file(run_id: str, rel: str) -> Optional[str]:
     return _under((ent or {}).get("artifact_path"))
 
 
+_PREVIEW_CAP = 8 * 1024 * 1024   # weft run_file_read hard cap; a preview channel, not transport
+
+
+def read_run_file(run_id: str, rel: str, max_bytes: int = _PREVIEW_CAP):
+    """Preview bytes of an IN-SANDBOX file via weft `run_file_read` (base64), across the
+    Run's targets — for a file that isn't in the local retained tree yet (B1b). Returns
+    `(bytes, truncated, total)`, or `(None, False, 0)` if unreadable. `truncated=True` means
+    the file is bigger than the preview channel — Keep it (→ retain) then download; big
+    bytes travel via `data_register`→`data_fetch`, not here. weft confines the path to the
+    jobdir + refuses traversal."""
+    import base64
+    from core.compute import retention
+    ent = get_entity(run_id)
+    for t in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+        try:
+            rd = retention.file_read(t, rel, max_bytes=max_bytes)
+        except Exception:  # noqa: BLE001 — swept / gone on this target → try the next
+            continue
+        b64 = rd.get("bytes_b64")
+        if b64 is not None:
+            return (base64.b64decode(b64), bool(rd.get("truncated")),
+                    int(rd.get("bytes_total") or 0))
+    return (None, False, 0)
+
+
 def _sel_match(rel: str, done_sel: list):
     """meta of a remote/in-place `done` retain whose selection covers `rel` (an include
     glob matches and no exclude does), else None. fnmatch '*' spans '/', so weft globs
@@ -438,7 +463,8 @@ def run_durable_view(run_id: str) -> dict:
     except Exception as e:  # noqa: BLE001
         _log.warning("durable view: retained() failed for %s: %s", run_id, e)
 
-    # terminal inventory paths (survive the sweep) across the Run's targets
+    # terminal inventory paths (survive the sweep) across the Run's targets — the fallback
+    # when a live stat isn't available.
     inv_paths: set = set()
     for t in (md.get("weft_targets") or []):
         try:
@@ -446,6 +472,31 @@ def run_durable_view(run_id: str) -> dict:
             inv_paths.update(e.get("path") for e in (inv.get("entries") or []))
         except Exception:  # noqa: BLE001 — no inventory yet is fine
             pass
+
+    # Live on-disk check (weft run_file_stat, 5d1c5dc) — authoritative for in-sandbox vs
+    # cleared, and the ONLY signal on a live kernel (which has no terminal inventory yet;
+    # the inventory proxy would mislabel every live file "cleared"). Bounded round-trips.
+    targets = list(md.get("weft_targets") or [])
+    _stat_budget = [50]
+
+    def _on_disk(rel: str):
+        """(performed, exists, bytes) across the Run's targets. `performed=False` → couldn't
+        check (jupyter / no target / budget spent) → caller falls back to the inventory proxy."""
+        if not targets or _stat_budget[0] <= 0:
+            return (False, False, 0)
+        answered = False   # did any stat actually return (vs. all erroring)?
+        for t in targets:
+            if _stat_budget[0] <= 0:
+                break
+            _stat_budget[0] -= 1
+            try:
+                st = retention.file_stat(t, rel)
+            except Exception:  # noqa: BLE001 — treat as not-checked → proxy fallback
+                continue
+            answered = True
+            if st.get("exists"):
+                return (True, True, st.get("bytes") or 0)
+        return (answered, False, 0)
 
     files = []
     counts = {"kept": 0, "pinned_pending": 0, "in_sandbox": 0, "cleared": 0}
@@ -470,10 +521,19 @@ def run_durable_view(run_id: str) -> dict:
             state = "pinned-pending"
             badge = ("large · keeps the version at run settlement" if large
                      else "pinned · saves when the run settles")
-        elif rel in inv_paths:
-            state, badge = "in-sandbox", "in sandbox"
         else:
-            state, badge = "cleared", "cleared"
+            performed, exists, live_bytes = _on_disk(rel)
+            if exists:
+                state, badge = "in-sandbox", "in sandbox"
+                if not size and live_bytes:          # real size for a live file
+                    size = live_bytes
+                    large = size > _MAX_HARVEST_BYTES
+            elif performed:
+                state, badge = "cleared", "cleared"  # confirmed swept
+            elif rel in inv_paths:
+                state, badge = "in-sandbox", "in sandbox"   # proxy: was inventoried
+            else:
+                state, badge = "cleared", "cleared"
         view_url = url or (f"/api/runs/{run_id}/file?rel={quote(rel)}"
                            if state in ("kept", "in-sandbox") else None)
         files.append({"rel": rel, "bytes": size, "kind": kind, "state": state,

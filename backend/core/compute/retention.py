@@ -85,6 +85,22 @@ def retained(*, label: Optional[str] = None, site: Optional[str] = None) -> list
     return _call("retained_runs", label=label, site=site)
 
 
+def file_stat(target: str, rel: str) -> dict:
+    """Existence + live size/mtime of a file in a target's sandbox (weft `run_file_stat`,
+    5d1c5dc): `{target, path, exists, bytes?, mtime?}`. The in-sandbox-vs-swept distinction
+    the durable view needs — authoritative on-disk (the inventory only says what EXISTED,
+    and a live kernel has no terminal inventory yet)."""
+    return _call("run_file_stat", target, rel)
+
+
+def file_read(target: str, rel: str, max_bytes: int = 1 << 20) -> dict:
+    """Size-capped base64 PREVIEW read from a target's sandbox (weft `run_file_read`): live
+    or dead, path confined to the jobdir, hard-capped at 8 MB (`data.missing` on a swept
+    file). A preview channel, NOT transport — big files travel via
+    `data_register(path, site=) → data_fetch` (which also mints the run:<target> lineage)."""
+    return _call("run_file_read", target, rel, max_bytes=max_bytes)
+
+
 def location_path(obj) -> Optional[str]:
     """Read a retained file's on-disk location across weft's two shapes: a `retain()` result
     carries `location: {site, path}` (dict); a `retained()` index row carries `location` as a

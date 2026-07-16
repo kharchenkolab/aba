@@ -72,19 +72,44 @@ def test_durable_view_states(tmp_path, monkeypatch):
                                "cleared": 0, "total": 3}
 
 
-def test_durable_view_in_sandbox_vs_cleared(tmp_path, monkeypatch):
+def test_durable_view_in_sandbox_vs_cleared_via_stat(tmp_path, monkeypatch):
+    """B1a: a live on-disk stat (weft run_file_stat) is authoritative — still.csv exists,
+    gone.dat was swept. Live size fills a produced size of 0."""
     monkeypatch.setattr(runsmod, "get_entity",
                         lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
     monkeypatch.setattr(retmod, "retained", lambda **kw: [])          # nothing retained
-    monkeypatch.setattr(retmod, "inventory",
-                        lambda t: {"entries": [{"path": "still.csv", "bytes": 5, "mtime": 1}]})
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(retmod, "file_stat", lambda t, rel:
+                        {"exists": True, "bytes": 4096} if rel == "still.csv"
+                        else {"exists": False})
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
-        {"original_name": "still.csv", "url": None, "kind": "table", "size": 5},   # in inventory → in-sandbox
-        {"original_name": "gone.dat", "url": None, "kind": "file", "size": 9},     # nowhere → cleared
+        {"original_name": "still.csv", "url": None, "kind": "table", "size": 0},   # on disk
+        {"original_name": "gone.dat", "url": None, "kind": "file", "size": 9},     # swept
     ])
     by = {f["rel"]: f for f in runsmod.run_durable_view("run-2")["files"]}
-    assert by["still.csv"]["state"] == "in-sandbox"
+    assert by["still.csv"]["state"] == "in-sandbox" and by["still.csv"]["bytes"] == 4096
     assert by["gone.dat"]["state"] == "cleared" and by["gone.dat"]["url"] is None
+
+
+def test_durable_view_falls_back_to_inventory_proxy_when_stat_unavailable(tmp_path, monkeypatch):
+    """If a stat can't be performed (weft error), fall back to the terminal-inventory proxy."""
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_9"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    monkeypatch.setattr(retmod, "inventory",
+                        lambda t: {"entries": [{"path": "was.csv", "bytes": 5, "mtime": 1}]})
+
+    def _boom(t, rel):
+        raise RuntimeError("weft unreachable")
+    monkeypatch.setattr(retmod, "file_stat", _boom)
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "was.csv", "url": None, "kind": "table", "size": 5},   # in inventory
+        {"original_name": "never.dat", "url": None, "kind": "file", "size": 9},  # nowhere
+    ])
+    by = {f["rel"]: f for f in runsmod.run_durable_view("run-3")["files"]}
+    # stat raised (performed=False) → proxy: inventoried → in-sandbox; else cleared
+    assert by["was.csv"]["state"] == "in-sandbox"
+    assert by["never.dat"]["state"] == "cleared"
 
 
 def test_resolve_run_file_retained_then_sandbox_then_escape(tmp_path, monkeypatch):
@@ -159,10 +184,47 @@ def test_durable_view_remote_in_place_kept_via_selection(tmp_path, monkeypatch):
     assert by["scratch.tmp"]["state"] != "kept"         # excluded → not durable
 
 
-_TESTS = [test_durable_view_states, test_durable_view_in_sandbox_vs_cleared,
+def test_read_run_file_previews_in_sandbox(monkeypatch):
+    """B1b: read_run_file decodes weft run_file_read's base64 preview across the targets."""
+    import base64
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"metadata": {"weft_targets": ["krn_a"]}})
+    monkeypatch.setattr(retmod, "file_read", lambda t, rel, max_bytes: {
+        "bytes_b64": base64.b64encode(b"hello").decode(), "truncated": False, "bytes_total": 5})
+    data, trunc, total = runsmod.read_run_file("run-1", "x.txt")
+    assert data == b"hello" and trunc is False and total == 5
+
+
+def test_read_run_file_flags_truncated(monkeypatch):
+    import base64
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"metadata": {"weft_targets": ["krn_a"]}})
+    monkeypatch.setattr(retmod, "file_read", lambda t, rel, max_bytes: {
+        "bytes_b64": base64.b64encode(b"partial").decode(), "truncated": True,
+        "bytes_total": 99_000_000})
+    _data, trunc, total = runsmod.read_run_file("run-1", "big.bin")
+    assert trunc is True and total == 99_000_000    # → route returns 413, not a broken partial
+
+
+def test_read_run_file_unreadable_returns_none(monkeypatch):
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"metadata": {"weft_targets": ["krn_a"]}})
+
+    def _boom(t, rel, max_bytes):
+        raise RuntimeError("data.missing")
+    monkeypatch.setattr(retmod, "file_read", _boom)
+    assert runsmod.read_run_file("run-1", "gone")[0] is None
+
+
+_TESTS = [test_durable_view_states,
+          test_durable_view_in_sandbox_vs_cleared_via_stat,
+          test_durable_view_falls_back_to_inventory_proxy_when_stat_unavailable,
           test_resolve_run_file_retained_then_sandbox_then_escape,
           test_durable_tree_nests_with_durable_fields,
-          test_durable_view_remote_in_place_kept_via_selection]
+          test_durable_view_remote_in_place_kept_via_selection,
+          test_read_run_file_previews_in_sandbox,
+          test_read_run_file_flags_truncated,
+          test_read_run_file_unreadable_returns_none]
 
 
 def _standalone() -> int:
