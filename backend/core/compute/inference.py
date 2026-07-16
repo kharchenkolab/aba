@@ -53,16 +53,14 @@ def _partition_gpus(p: dict) -> int:
                if g.get("type") == "gpu")
 
 
-# The consequence that matters: results you KEEP are retained IN PLACE under
-# this root (weft never relocates them) — so the root's durability is the
-# keeps' durability. Environments/caches rebuild; kept results don't.
+# Kept results are retained IN PLACE under this root (weft never relocates
+# them) — so the root's durability is the keeps' durability. The UI carries
+# that as a single "durable" checkbox, pre-set from the kind guess; the notes
+# stay short.
 _KIND_NOTE = {
-    "scratch": "fast and roomy, but may be purged — environments rebuild; "
-               "results kept here would be lost with it",
-    "home": "usually backed up — results you keep here stay safe; counts "
-            "against your home quota",
-    "other": "writable space — check whether it is backed up if you plan "
-             "to keep results here",
+    "scratch": "fast, but may be purged",
+    "home": "usually backed up",
+    "other": "writable space",
 }
 
 
@@ -191,6 +189,8 @@ def propose(caps: dict, *, dest: str = "",
     } for p in partitions]
 
     accounts = [a for a in accounts if a]
+    working = pick_working_root(caps.get("storage") or {},
+                                scheduler=sched_type != "none")
 
     return {
         "kind": kind,
@@ -199,8 +199,10 @@ def propose(caps: dict, *, dest: str = "",
         "name": suggest_name(dest, known_names),
         "use_for": use_for,
         "notes": [],
-        "working": pick_working_root(caps.get("storage") or {},
-                                     scheduler=sched_type != "none"),
+        "working": working,
+        # keeps are retained in place under the root — "durable" is the
+        # user's word on whether that storage lasts (pre-guessed from kind)
+        "durable": working.get("kind") == "home",
         "long_term": [{"path": p, "stable": True} for p in shared],
         "contract": contract,
         "contract_evidence": shared,

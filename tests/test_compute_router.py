@@ -275,6 +275,7 @@ def test_edit_moves_working_root_and_saves_notes(client, fake):
                          "capabilities": {}}
     r = client.patch("/api/compute/sites/vbc", json={
         "working_root": "/home/me/.weft",
+        "durable": True,
         "notes": ["use only on nights, EU time", " "]})
     assert r.status_code == 200, r.text
     cfg = r.json()["config"]
@@ -282,6 +283,8 @@ def test_edit_moves_working_root_and_saves_notes(client, fake):
     assert cfg["policy"]["notes"] == ["use only on nights, EU time"]
     call = next(c for c in fake.calls if c[0] == "register_site")
     assert call[3]["root"] == "/home/me/.weft"
+    from core.compute import sites_config
+    assert sites_config.aba_keys("vbc")["durable"] is True
 
 
 def test_disconnect_and_busy_409(client, fake):

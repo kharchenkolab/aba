@@ -120,7 +120,10 @@ export interface SiteCaps {
   storage?: { free_gb?: number; candidates?: { path: string; writable?: boolean; free_gb?: number }[] }
 }
 export interface StoragePath { path: string; stable?: boolean }
-export interface AbaSiteKeys { contract?: string; use_for?: string[]; storage?: StoragePath[] }
+export interface AbaSiteKeys {
+  contract?: string; use_for?: string[]; storage?: StoragePath[]
+  durable?: boolean
+}
 export interface VerifyState {
   state?: 'running' | 'done'; ok?: boolean; failed?: string[]
   partitions?: Record<string, { ok?: boolean; note?: string }> | string[] | null
@@ -145,6 +148,7 @@ export interface ComputeProposal {
   kind: string; machine_type: string; headline: string; name: string
   use_for: string[]
   notes?: string[]
+  durable?: boolean
   working: { root: string; free_gb?: number | null; reason?: string
              kind?: string; options?: WorkingOption[] }
   long_term: StoragePath[]
@@ -187,7 +191,8 @@ export const computeApi = {
   verify: (name: string) => apiPost<{ started: boolean }>(`/api/compute/sites/${cname(name)}/verify`),
   reprobe: (name: string) => apiPost<{ site: string }>(`/api/compute/sites/${cname(name)}/reprobe`),
   edit: (name: string, body: { use_for?: string[]; long_term?: StoragePath[]
-                               notes?: string[]; working_root?: string }) =>
+                               notes?: string[]; working_root?: string
+                               durable?: boolean }) =>
     apiPatch<{ site: string }>(`/api/compute/sites/${cname(name)}`, body),
   disconnect: (name: string) => apiDelete<{ site: string }>(`/api/compute/sites/${cname(name)}`),
   gc: (name: string, confirm: boolean) =>

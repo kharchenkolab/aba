@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './ComputeTab.css'
 import { computeApi } from '../lib/api'
-import type { ComputeSite, StoragePath } from '../lib/api'
+import type { ComputeSite } from '../lib/api'
 import { withBasePath } from '../oodBase'
 import ConnectMachine from './ConnectMachine'
 
@@ -216,8 +216,6 @@ function SiteDetail({ site, advanced, onChanged }: {
   const [estimate, setEstimate] = useState<string | null>(null)
   const [footprint, setFootprint] = useState<number | null>(null)
   const [reclaim, setReclaim] = useState<number | null>(null)
-  const [longTerm, setLongTerm] = useState<StoragePath[]>(s.aba?.storage ?? [])
-  const [newPath, setNewPath] = useState('')
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [editingRoot, setEditingRoot] = useState<string | null>(null)
   const [notesText, setNotesText] = useState(
@@ -255,11 +253,6 @@ function SiteDetail({ site, advanced, onChanged }: {
     act('usefor', () => computeApi.edit(s.name, { use_for: next }))
   }
 
-  const saveLongTerm = (next: StoragePath[]) => {
-    setLongTerm(next)
-    act('storage', () => computeApi.edit(s.name, { long_term: next }))
-  }
-
   return (
     <div className="cmp-detail">
       {caps && (
@@ -278,12 +271,21 @@ function SiteDetail({ site, advanced, onChanged }: {
               <dd>
                 {editingRoot === null ? (
                   <>
-                    {s.config.root} <span className="cmp-dim">· environments,
-                    working files, and kept results live here (keeps are retained
-                    in place — this storage’s durability is theirs)</span>{' '}
+                    {s.config.root}{' '}
                     {!isLocal && (
                       <button className="mod-linkbtn" disabled={busy !== null}
                         onClick={() => setEditingRoot(s.config?.root ?? '')}>change…</button>
+                    )}
+                    {!isLocal && (
+                      <label className="cmp-part">
+                        <input type="checkbox" checked={!!s.aba?.durable}
+                          disabled={busy !== null}
+                          onChange={e => act('durable', () =>
+                            computeApi.edit(s.name, { durable: e.target.checked }))} />
+                        durable storage
+                        <span className="cmp-dim">— backed up / not auto-purged;
+                        results you keep on this machine stay here</span>
+                      </label>
                     )}
                   </>
                 ) : (
@@ -314,36 +316,6 @@ function SiteDetail({ site, advanced, onChanged }: {
           ))}
         </div>
       </div>
-
-      {!isLocal && (
-        <div className="cmp-block">
-          <div className="cmp-block__title">
-            Long-term store <span className="cmp-dim">— storage you trust to
-            last: where your data lives, read in place (kept results stay with
-            the working space; the same disk can serve both roles)</span>
-          </div>
-          {longTerm.length === 0 && <div className="cmp-dim">none declared</div>}
-          <ul className="cmp-paths">
-            {longTerm.map((p, i) => (
-              <li key={p.path}>
-                <code>{p.path}</code>
-                <button className="mod-linkbtn" disabled={busy !== null}
-                  onClick={() => saveLongTerm(longTerm.filter((_, j) => j !== i))}>remove</button>
-              </li>
-            ))}
-          </ul>
-          <div className="cmp-addpath">
-            <input value={newPath} placeholder="add a path…" spellCheck={false}
-              autoComplete="off"
-              onChange={e => setNewPath(e.target.value)} />
-            <button className="cmp-btn" disabled={!newPath.trim() || busy !== null}
-              onClick={() => {
-                saveLongTerm([...longTerm, { path: newPath.trim(), stable: true }])
-                setNewPath('')
-              }}>Add path</button>
-          </div>
-        </div>
-      )}
 
       {!isLocal && (
         <div className="cmp-block">

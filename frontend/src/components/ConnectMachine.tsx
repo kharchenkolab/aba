@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { computeApi } from '../lib/api'
-import type { ComputeProposal, PreflightResult, StoragePath } from '../lib/api'
+import type { ComputeProposal, PreflightResult } from '../lib/api'
 
 type Step = 'entry' | 'access' | 'probing' | 'proposal' | 'connecting'
 
@@ -34,7 +34,6 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
   const [proposal, setProposal] = useState<ComputeProposal | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [newPath, setNewPath] = useState('')
   const [customRoot, setCustomRoot] = useState(false)
   const proposalName = useRef<string>('')
 
@@ -147,14 +146,16 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
           </div>
           {hosts.length > 0 && (
             <div className="cmp-templates">
-              Saved hosts:{' '}
-              {hosts.slice(0, 8).map(h => {
-                const v = h.user && h.hostname ? `${h.user}@${h.hostname}` : h.host
-                return (
-                  <button key={h.host} className="mod-linkbtn" title={v}
-                    onClick={() => { setDest(v); runPreflight(v) }}>{h.host}</button>
-                )
-              })}
+              <span className="cmp-dim">or pick a saved host:</span>
+              {/* native <select>, not <datalist>: Chrome bolts address/email
+                  autofill onto datalist inputs and ignores autocomplete=off */}
+              <select value="" onChange={e => { if (e.target.value) setDest(e.target.value) }}>
+                <option value="">~/.ssh/config…</option>
+                {hosts.slice(0, 20).map(h => {
+                  const v = h.user && h.hostname ? `${h.user}@${h.hostname}` : h.host
+                  return <option key={h.host} value={v}>{h.host}</option>
+                })}
+              </select>
             </div>
           )}
           {templates.length > 0 && (
@@ -275,11 +276,13 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                     setCustomRoot(false)
                     const opt = proposal.working.options!.find(o => o.root === e.target.value)
                     patch({ working: { ...proposal.working, root: e.target.value,
-                                       free_gb: opt?.free_gb, reason: opt?.note } })
+                                       free_gb: opt?.free_gb, reason: opt?.note },
+                            durable: opt?.kind === 'home' })   // re-guess; still editable below
                   }}>
                   {proposal.working.options!.map(o => (
                     <option key={o.root} value={o.root}>
                       {o.root}{o.free_gb != null ? ` — ${o.free_gb} GB free` : ''}
+                      {o.note ? ` · ${o.note}` : ''}
                     </option>
                   ))}
                   <option value="__custom__">another path…</option>
@@ -289,56 +292,13 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                 <input value={proposal.working.root} spellCheck={false} autoComplete="off"
                   onChange={e => patch({ working: { ...proposal.working, root: e.target.value } })} />
               )}
-              <div className="cmp-dim">
-                environments, working files, and results you keep on this
-                machine all live here. {proposal.working.reason}
-              </div>
-            </div>
-
-            <label>Long-term store</label>
-            <div>
-              <div className="cmp-dim">
-                storage you trust to last: where your data lives (read in place,
-                never copied). Kept results stay wherever the working space is —
-                put it on durable storage too if keeps should persist; the same
-                disk can serve both roles
-              </div>
-              {proposal.long_term.map((p: StoragePath, i: number) => (
-                <div key={p.path} className="cmp-paths">
-                  <code>{p.path}</code>
-                  <button className="mod-linkbtn" onClick={() =>
-                    patch({ long_term: proposal.long_term.filter((_, j) => j !== i) })}>remove</button>
-                </div>
-              ))}
-              {(() => {
-                const taken = new Set(proposal.long_term.map(p => p.path))
-                const sugg = (proposal.working.options ?? [])
-                  .filter(o => o.kind !== 'scratch')      // purgeable ≠ long-term
-                  .map(o => o.root.replace(/\/\.weft$/, ''))
-                  .filter(p => p && !taken.has(p))
-                return sugg.length > 0 && (
-                  <div className="cmp-templates">
-                    seen on this machine:{' '}
-                    {sugg.map(p => (
-                      <button key={p} className="mod-linkbtn"
-                        onClick={() => patch({ long_term:
-                          [...proposal.long_term, { path: p, stable: true }] })}>
-                        + {p}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
-              <div className="cmp-addpath">
-                <input value={newPath} placeholder="add a path…" spellCheck={false}
-                  autoComplete="off"
-                  onChange={e => setNewPath(e.target.value)} />
-                <button className="cmp-btn" disabled={!newPath.trim()}
-                  onClick={() => {
-                    patch({ long_term: [...proposal.long_term, { path: newPath.trim(), stable: true }] })
-                    setNewPath('')
-                  }}>Add path</button>
-              </div>
+              <label className="cmp-part">
+                <input type="checkbox" checked={!!proposal.durable}
+                  onChange={e => patch({ durable: e.target.checked })} />
+                durable storage
+                <span className="cmp-dim">— backed up / not auto-purged; results
+                you keep on this machine stay here</span>
+              </label>
             </div>
 
             <label>Notes <span className="cmp-dim">(guidance for scheduling)</span></label>

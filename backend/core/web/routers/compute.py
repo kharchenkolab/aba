@@ -94,6 +94,9 @@ class Proposal(BaseModel):
     account: Optional[str] = None
     notes: list[str] = []           # free-text policy guidance (weft surfaces
                                     # it in every submit plan)
+    durable: bool = False           # the working root's storage lasts (keeps
+                                    # are retained in place, so this is the
+                                    # keeps' durability)
 
 
 class ConnectRequest(Target):
@@ -108,6 +111,7 @@ class SiteEdit(BaseModel):
     # anew at the new root (envs/caches rebuild) — the old root is NOT
     # cleaned automatically (Free up first)
     working_root: Optional[str] = None
+    durable: Optional[bool] = None
 
 
 class GcRequest(BaseModel):
@@ -312,6 +316,7 @@ async def connect(req: ConnectRequest) -> dict:
         raise _http(e)
     sites_config.upsert_site(p.name, p.kind, cfg, aba={
         "contract": p.contract, "use_for": list(p.use_for),
+        "durable": p.durable,
         "storage": [e for e in p.long_term if e.get("path")]})
     _broadcast(p.name, "connected")
     selected = [r["name"] for r in p.partitions if r.get("selected")]
@@ -396,6 +401,8 @@ async def edit_site(name: str, edit: SiteEdit) -> dict:
     aba: dict = {}
     if edit.use_for is not None:
         aba["use_for"] = edit.use_for
+    if edit.durable is not None:
+        aba["durable"] = edit.durable
     if edit.long_term is not None:
         aba["storage"] = [e for e in edit.long_term if e.get("path")]
         stable = [e["path"] for e in aba["storage"] if e.get("stable")]

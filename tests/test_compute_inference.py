@@ -117,6 +117,7 @@ def test_slurm_proposal():
     assert p["account"] == "lab-alloc"           # exactly one → autofilled
     sel = {r["name"]: r["selected"] for r in p["partitions"]}
     assert sel == {"cpu": True, "gpu": True, "down-part": False}
+    assert p["durable"] is False                 # scratch-rooted → not durable
     assert p["totals"]["nodes"] == 412 and p["totals"]["gpus"] == 88
 
 
@@ -128,6 +129,7 @@ def test_workstation_proposal():
     assert p["contract"] == "detached"           # no verified shared path
     # non-scheduler machine with a roomy home → home (durable) wins over /work
     assert p["working"]["root"] == "/home/me/.weft"
+    assert p["durable"] is True                  # home-kind pick → durable guess
     assert {o["root"] for o in p["working"]["options"]} == \
         {"/home/me/.weft", "/work/me/.weft"}
     assert p["account"] is None
