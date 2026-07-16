@@ -17,8 +17,8 @@ which silently relocated state-dependent cells into a fresh process):
   killed) plus honoring the explicit flag.
 
 `location` stays "local" | "background"; the active submitter
-(`ABA_BATCH_SUBMITTER`) turns a "background" choice into a local async job or an
-`sbatch` job. Thresholds are tunable via ABA_SLURM_MEM_FRAC / ABA_SLURM_WALLTIME_FRAC.
+(`ABA_BATCH_SUBMITTER`) turns a "background" choice into a local weft task or a
+weft slurm-site task. Thresholds are tunable via ABA_SLURM_MEM_FRAC / ABA_SLURM_WALLTIME_FRAC.
 """
 from __future__ import annotations
 

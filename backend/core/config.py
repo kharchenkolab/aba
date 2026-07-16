@@ -856,22 +856,17 @@ setting("release_id", env="ABA_RELEASE_ID", type="str", default=None,
         category="paths", deploy_injected=True, weft_fate="move:site",
         doc="Active release id under $ABA_SHARE/releases (else resolve_current()).")
 
-# ── Container / offload / modules deploy wiring (mostly move:site under weft) ──
+# ── Container / modules deploy wiring (mostly move:site under weft) ──
+# Retired W3.4: base_lock (ABA_BASE_LOCK — the served-base lock died with the
+# self-heal machinery) and offload_python/offload_backend_dir (ABA_OFFLOAD_* —
+# the sbatch offload lane is gone, #35). An old OOD card still setting these gets
+# an "unrecognized ABA_* var" startup warning; the vars do nothing.
 setting("sif", env="ABA_SIF", type="str", default=None, category="deploy",
         deploy_injected=True, weft_fate="move:site",
         doc="Path to the fat/slim SIF image used to wrap jobs.")
 setting("job_wrap", env="ABA_JOB_WRAP", type="str", default="", category="deploy",
         branches=True, weft_fate="move:site",
         doc="Job wrapper mode ('sif' → run jobs via apptainer exec <SIF>).")
-setting("base_lock", env="ABA_BASE_LOCK", type="str", default=None,
-        category="deploy", weft_fate="move:envspec",
-        doc="Path to the base environment lock (integrity check).")
-setting("offload_python", env="ABA_OFFLOAD_PYTHON", type="str", default=None,
-        category="deploy", weft_fate="retire", reduction="derive:sif",
-        doc="Python interpreter for offloaded (sbatch) jobs; else sys.executable.")
-setting("offload_backend_dir", env="ABA_OFFLOAD_BACKEND_DIR", type="str",
-        default=None, category="deploy", weft_fate="retire", reduction="derive:sif",
-        doc="Backend dir made importable in offloaded jobs; else the live backend dir.")
 setting("apptainer_tmpdir", env="ABA_APPTAINER_TMPDIR", type="str", default=None,
         category="deploy", weft_fate="move:site",
         doc="TMPDIR for apptainer/singularity build+run scratch.")
@@ -1095,12 +1090,15 @@ setting("hpc_config", env="ABA_HPC_CONFIG", type="str", default=None,
         deploy_injected=True,
         doc="Path to hpc.yaml compute-topology override (else $ABA_HOME/hpc.yaml). "
             "Forwarded into the SIF alongside the submitter (partition/QOS catalog).")
+# slurm_mem_frac/slurm_walltime_frac stay: still LIVE via core/exec/router.py
+# (read directly from the env) — the Slurm-mode threshold for routing a won't-fit
+# step to the background (weft slurm) lane. weft_fate=retire is intent, not yet.
 setting("slurm_mem_frac", env="ABA_SLURM_MEM_FRAC", type="float", default=0.85,
         category="cluster", weft_fate="retire",
-        doc="Fraction of node memory an inline job may use before offloading.")
+        doc="Fraction of node memory a step may use before routing to the background lane.")
 setting("slurm_walltime_frac", env="ABA_SLURM_WALLTIME_FRAC", type="float",
         default=0.8, category="cluster", weft_fate="retire",
-        doc="Fraction of walltime an inline job may use before offloading.")
+        doc="Fraction of walltime a step may use before routing to the background lane.")
 setting("inline_stall_min", env="ABA_INLINE_STALL_MIN", type="float", default=20.0,
         category="cluster", weft_fate="retire", reduction="merge:inline",
         doc="Whole-run silence budget (min) before an inline run is deemed stalled.")
@@ -1187,7 +1185,7 @@ setting("scratch_dir", env="ABA_SCRATCH", type="str", default=None, category="bu
 # share_dir/release_id/sif` are already marked at declaration; add the rest here.
 for _n in ("site_config", "group", "model_snapshot", "job_wrap", "apptainer_tmpdir",
            "module_binds", "subscription_oauth", "nextflow_module", "nextflow_profiles",
-           "nextflow_config", "nextflow_cachedir", "offload_python", "offload_backend_dir"):
+           "nextflow_config", "nextflow_cachedir"):
     _REGISTRY[_n].deploy_injected = True
 
 # Credential env vars the launcher also forwards but that the registry does NOT own
