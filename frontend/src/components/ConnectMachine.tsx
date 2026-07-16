@@ -57,7 +57,9 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
   }, [])
 
   async function runPreflight(currentDest = dest) {
-    setBusy(true); setError(null); setPre(null)
+    // NOTE: keep the previous `pre` while retrying — clearing it blanks the
+    // access card mid-"Test again" (leaving the user staring at an empty box)
+    setBusy(true); setError(null)
     try {
       const r = await computeApi.preflight({ dest: currentDest.trim() })
       setPre(r)
@@ -130,22 +132,31 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
             Address — the same thing you type after <code>ssh</code>
           </label>
           <div className="cmp-addr">
+            {/* deliberately NO <datalist>: Chrome bolts its own address/email
+                autofill (+ "Manage addresses") onto datalist inputs and
+                ignores autocomplete=off there — saved hosts render as plain
+                chips below instead */}
             <input value={dest} placeholder="me@login.cluster.edu" spellCheck={false}
-              list="cmp-saved-hosts" autoFocus autoComplete="off"
-              name="cmp-ssh-dest" data-1p-ignore
+              autoFocus autoComplete="off" name="cmp-ssh-dest" data-1p-ignore
               onChange={e => setDest(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && dest.trim()) runPreflight() }} />
-            <datalist id="cmp-saved-hosts">
-              {hosts.map(h => (
-                <option key={h.host}
-                  value={h.user && h.hostname ? `${h.user}@${h.hostname}` : h.host}>
-                  {h.host}
-                </option>
-              ))}
-            </datalist>
             <button className="cmp-btn cmp-btn--primary" disabled={!dest.trim() || busy}
-              onClick={() => runPreflight()}>{busy ? 'Checking…' : 'Continue'}</button>
+              onClick={() => runPreflight()}>
+              {busy ? <><span className="cmp-spin" aria-hidden>◜</span> Checking…</> : 'Continue'}
+            </button>
           </div>
+          {hosts.length > 0 && (
+            <div className="cmp-templates">
+              Saved hosts:{' '}
+              {hosts.slice(0, 8).map(h => {
+                const v = h.user && h.hostname ? `${h.user}@${h.hostname}` : h.host
+                return (
+                  <button key={h.host} className="mod-linkbtn" title={v}
+                    onClick={() => { setDest(v); runPreflight(v) }}>{h.host}</button>
+                )
+              })}
+            </div>
+          )}
           {templates.length > 0 && (
             <div className="cmp-templates">
               Your lab uses:{' '}
@@ -163,6 +174,10 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
 
       {step === 'access' && pre && (
         <div>
+          <p className="cmp-dim">
+            machine: <code>{dest.trim()}</code>
+            {busy && <>{' '}· <span className="cmp-spin" aria-hidden>◜</span> testing the connection…</>}
+          </p>
           {pre.case === 'hostkey' && pre.hostkey ? (
             <div>
               <p>First time connecting to <code>{dest.trim()}</code>. The machine
@@ -196,7 +211,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                   </div>
                   <div className="cmp-actions">
                     <button className="cmp-btn cmp-btn--primary" disabled={busy}
-                      onClick={() => runPreflight()}>{busy ? 'Testing…' : 'Test again'}</button>
+                      onClick={() => runPreflight()}>{busy ? <><span className="cmp-spin" aria-hidden>◜</span> Testing…</> : 'Test again'}</button>
                     <button className="cmp-btn" onClick={() => setStep('entry')}>Back</button>
                   </div>
                 </div>
@@ -209,7 +224,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                 <pre className="cmp-stderr">{pre.stderr}</pre></details>}
               <div className="cmp-actions">
                 <button className="cmp-btn cmp-btn--primary" disabled={busy}
-                  onClick={() => runPreflight()}>{busy ? 'Testing…' : 'Test again'}</button>
+                  onClick={() => runPreflight()}>{busy ? <><span className="cmp-spin" aria-hidden>◜</span> Testing…</> : 'Test again'}</button>
                 <button className="cmp-btn" onClick={() => setStep('entry')}>Back</button>
               </div>
             </div>
@@ -221,7 +236,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
       {(step === 'probing' || step === 'connecting') && (
         <div>
           <p>
-            <span className="model-status__spin" aria-hidden>◜</span>{' '}
+            <span className="cmp-spin" aria-hidden>◜</span>{' '}
             {step === 'probing'
               ? 'Looking at the machine — this takes a few seconds…'
               : 'Adding the machine…'}
@@ -282,6 +297,10 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
 
             <label>Long-term store</label>
             <div>
+              <div className="cmp-dim">
+                where your data lives and kept results should stay — independent
+                of the working space above (the same disk can serve both)
+              </div>
               {proposal.long_term.map((p: StoragePath, i: number) => (
                 <div key={p.path} className="cmp-paths">
                   <code>{p.path}</code>
@@ -289,12 +308,25 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                     patch({ long_term: proposal.long_term.filter((_, j) => j !== i) })}>remove</button>
                 </div>
               ))}
-              {proposal.long_term.length === 0 && (
-                <div className="cmp-dim">
-                  none yet — add a path on durable storage (a backed-up home or
-                  project share) where data lives and kept results should stay
-                </div>
-              )}
+              {(() => {
+                const taken = new Set(proposal.long_term.map(p => p.path))
+                const sugg = (proposal.working.options ?? [])
+                  .filter(o => o.kind !== 'scratch')      // purgeable ≠ long-term
+                  .map(o => o.root.replace(/\/\.weft$/, ''))
+                  .filter(p => p && !taken.has(p))
+                return sugg.length > 0 && (
+                  <div className="cmp-templates">
+                    seen on this machine:{' '}
+                    {sugg.map(p => (
+                      <button key={p} className="mod-linkbtn"
+                        onClick={() => patch({ long_term:
+                          [...proposal.long_term, { path: p, stable: true }] })}>
+                        + {p}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               <div className="cmp-addpath">
                 <input value={newPath} placeholder="add a path…" spellCheck={false}
                   autoComplete="off"
@@ -359,7 +391,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
               disabled={busy || !proposal.name.trim()
                 || knownNames.includes(proposal.name.trim())}
               onClick={connect}>
-              {busy && <span className="model-status__spin" aria-hidden>◜ </span>}
+              {busy && <span className="cmp-spin" aria-hidden>◜</span>}
               Add
             </button>
             {knownNames.includes(proposal.name.trim()) &&

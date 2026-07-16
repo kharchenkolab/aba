@@ -317,8 +317,9 @@ function SiteDetail({ site, advanced, onChanged }: {
       {!isLocal && (
         <div className="cmp-block">
           <div className="cmp-block__title">
-            Long-term store <span className="cmp-dim">— data read in place; results
-            kept here stay put</span>
+            Long-term store <span className="cmp-dim">— where data lives and kept
+            results stay; independent of the working space (the same disk can
+            serve both)</span>
           </div>
           {longTerm.length === 0 && <div className="cmp-dim">none declared</div>}
           <ul className="cmp-paths">

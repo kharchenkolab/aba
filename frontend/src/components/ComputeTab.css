@@ -58,6 +58,14 @@
   width: 100%; max-width: 480px; font-size: 12.5px; padding: 4px 6px;
   border: 1px solid var(--border); border-radius: 6px; resize: vertical;
 }
+/* busy spinner — must be inline-BLOCK: transforms are no-ops on inline els
+   (the invisible-spinner bug) */
+.cmp-spin {
+  display: inline-block; color: var(--text-3);
+  animation: cmp-spin 0.9s linear infinite;
+}
+@keyframes cmp-spin { to { transform: rotate(360deg); } }
+
 /* placeholders must read as hints, never as filled-in values */
 .cmp-connect input::placeholder, .cmp-detail input::placeholder,
 .cmp-notes::placeholder {
