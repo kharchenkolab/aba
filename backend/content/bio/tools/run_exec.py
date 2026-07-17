@@ -712,6 +712,13 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # - interactive (default): the thread's persistent kernel (state persists).
     # timeout_s is a CEILING, not an estimate; routing to background keys on the
     # agent's estimated_runtime_min so a defensive timeout doesn't mis-background.
+    if input_.get("site") and not input_.get("background"):
+        # site= targets a remote machine — background-only by contract
+        # (interactive kernels stay local by design; misc/detached_compute.md)
+        return {"status": "error",
+                "note": f"site='{input_['site']}' runs a BACKGROUND job on that "
+                        f"machine — pass background=True (the interactive "
+                        f"kernel always runs here)"}
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
@@ -726,11 +733,14 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
         # timeout so a Slurm deployment can size partition/QoS + pick a GPU node.
         # bg_submit_kwargs is the SINGLE source shared with guide.py's background
         # intercept — neither path drops the placement estimate.
-        job = submit_python_job(code, title=input_.get("title") or "Background analysis",
-                                focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                                project_id=str(project_id), thread_id=str(thread_id),
-                                run_id=active_run_id(str(thread_id)),
-                                **bg_submit_kwargs(input_, project_id))
+        try:
+            job = submit_python_job(code, title=input_.get("title") or "Background analysis",
+                                    focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                                    project_id=str(project_id), thread_id=str(thread_id),
+                                    run_id=active_run_id(str(thread_id)),
+                                    **bg_submit_kwargs(input_, project_id))
+        except ValueError as e:      # unknown site= — names the real ones
+            return {"status": "error", "note": str(e)}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",
@@ -908,6 +918,13 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     env = input_.get("env")
     env_name = None if _is_default_env(env) else env.strip()
 
+    if input_.get("site") and not input_.get("background"):
+        # site= targets a remote machine — background-only by contract
+        # (interactive kernels stay local by design; misc/detached_compute.md)
+        return {"status": "error",
+                "note": f"site='{input_['site']}' runs a BACKGROUND job on that "
+                        f"machine — pass background=True (the interactive "
+                        f"kernel always runs here)"}
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
@@ -924,11 +941,15 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
         # `estimated_runtime_min` but no explicit `timeout_s` was killed at the 600s
         # default (the IntegrateLayers retry that timed out).
         bg_timeout_s = _background_timeout_s(input_, est_min)
-        job = submit_r_job(code, title=input_.get("title") or "Background R analysis",
-                           focus_entity_id=(ctx or {}).get("focus_entity_id"),
-                           timeout_s=bg_timeout_s, project_id=str(project_id),
-                           thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
-                           estimate=est, env=env_name, execution=input_.get("execution"))
+        try:
+            job = submit_r_job(code, title=input_.get("title") or "Background R analysis",
+                               focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                               timeout_s=bg_timeout_s, project_id=str(project_id),
+                               thread_id=str(thread_id), run_id=active_run_id(str(thread_id)),
+                               estimate=est, env=env_name, execution=input_.get("execution"),
+                               site=input_.get("site") or None)
+        except ValueError as e:      # unknown site= — names the real ones
+            return {"status": "error", "note": str(e)}
         return {
             "deferred": True, "deferred_id": job["id"], "job_id": job["id"],
             "status": "submitted",

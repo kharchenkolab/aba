@@ -38,9 +38,11 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
         kind (local/ssh/slurm), health, capacity summary, and the aba-side
         keys — `use_for` (interactive/background/gpu placement hints) and
         `contract` (shared-fs: aba sees the user's files directly; detached:
-        work must ship over). Read-only and fast (no ssh). Use it to answer
-        "where can this run?" and to surface placement choices to the user
-        — when a job runs remotely, say where and why."""
+        work ships over automatically). Read-only and fast (no ssh). Use it
+        to answer "where can this run?" and to surface placement choices to
+        the user — when a job runs remotely, say where and why. To actually
+        RUN work on one of these machines: run_python/run_r with
+        `background=True, site=<name>`."""
         from core.compute import sites_config
         from core.compute.adapter import get_compute
         comp = get_compute()
