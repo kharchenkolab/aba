@@ -49,11 +49,45 @@ _tmp = Path(tempfile.mkdtemp(prefix="aba_dstudy_"))
 HOME = _tmp / "home"
 HOME.mkdir(parents=True)
 # oauth: SYMLINK (refreshes write through — no token-rotation divergence
-# against the real store). installation: the recipe/skill bundle, read-only.
+# against the real store) — but ONLY while the store is actually fresh: an
+# expired store whose refresh 400s POISONS the resolver (tier-1 failure does
+# not fall through), so we skip it and bridge via CLAUDE_CODE_OAUTH_TOKEN
+# from the Claude Code CLI's own credential (macOS Keychain), touching
+# nothing of the user's store. installation: the recipe/skill bundle, RO.
+import subprocess as _sp
+import time as _time
+
+
+def _store_fresh() -> bool:
+    try:
+        d = json.load(open(INSTALL / "oauth.json"))
+        return (d.get("expires_at") or 0) > _time.time() + 120
+    except Exception:  # noqa: BLE001
+        return False
+
+
 for name in ("oauth.json", "installation"):
     src = INSTALL / name
-    if src.exists():
-        os.symlink(src, HOME / name)
+    if not src.exists():
+        continue
+    if name == "oauth.json" and not _store_fresh():
+        r = _sp.run(["security", "find-generic-password",
+                     "-s", "Claude Code-credentials", "-w"],
+                    capture_output=True, text=True)
+        tok = ""
+        if r.returncode == 0:
+            try:
+                tok = (json.loads(r.stdout).get("claudeAiOauth") or {})                     .get("accessToken") or ""
+            except Exception:  # noqa: BLE001
+                pass
+        if tok:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = tok
+            print("[study] aba oauth store is stale — bridging via the "
+                  "Claude Code CLI credential (keychain)")
+            continue
+        sys.exit("[study] aba oauth store is stale and no CLI credential "
+                 "found — re-login aba, then rerun")
+    os.symlink(src, HOME / name)
 os.environ["ABA_HOME"] = str(HOME)
 os.environ["ABA_RUNTIME_DIR"] = str(_tmp / "runtime")
 os.environ["ABA_DB_PATH"] = str(_tmp / "study.db")
@@ -117,6 +151,11 @@ def drive_turn(client, pid, tid, text, timeout_s=900):
             elif t == "tool_start":
                 cap["tools"].append({"name": ev.get("name") or ev.get("tool"),
                                      "input": ev.get("input") or {}})
+            elif t in ("error", "notice"):
+                cap.setdefault("errors", []).append(
+                    {"type": t, "text": ev.get("text"),
+                     "detail": ev.get("detail")})
+                print(f"    [turn {t}] {ev.get('text')!r} {ev.get('detail')!r}"[:200])
     cap["text"] = "".join(cap["text"]).strip()
     return cap
 
@@ -240,18 +279,22 @@ def s_remote(client, pid, tid):
 
 @scenario("drift_and_missing")
 def s_drift(client, pid, tid):
-    ssh(f"mkdir -p {R_DATA} && head -c 1000 /dev/urandom > {R_DATA}/a.bin")
+    # own path — sharing R_DATA with remote_inplace trips the SOURCE-KEY
+    # DEDUP (by design!) and reuses that scenario's entity (found live in
+    # the full-sequence run: register returned already_registered)
+    drift_data = R_DATA + "-drift"
+    ssh(f"mkdir -p {drift_data} && head -c 1000 /dev/urandom > {drift_data}/a.bin")
     # the agent registers it (a direct tool call would bind outside the
     # request's project and be invisible to the agent — found live)
     cap0 = drive_turn(client, pid, tid,
-                      f"Register the data at {R_DATA} on mendel as dataset "
+                      f"Register the data at {drift_data} on mendel as dataset "
                       f"'Drift Cohort' (in place, no copying).")
     assert dataset_by_title("Drift Cohort"), cap0["text"][:300]
-    ssh(f"echo extra >> {R_DATA}/a.bin")
+    ssh(f"echo extra >> {drift_data}/a.bin")
     cap1 = drive_turn(client, pid, tid,
                       "Before we analyze anything: is the 'Drift Cohort' "
                       "dataset still current? Check, don't guess.")
-    ssh(f"rm -rf {os.path.dirname(R_DATA)}")
+    ssh(f"rm -rf {drift_data}")
     cap2 = drive_turn(client, pid, tid,
                       "And now? Please check 'Drift Cohort' again.")
     caps = [cap1, cap2]
@@ -294,6 +337,113 @@ def s_produced(client, pid, tid):
     ]
 
 
+
+
+@scenario("produce_keep_reuse")
+def s_keep_reuse(client, pid, tid):
+    """Produce → register → REUSE from a fresh thread (computation reuse,
+    local): the second thread must build on the registered dataset, not
+    regenerate it."""
+    cap1 = drive_turn(client, pid, tid,
+                      "In python, compute the first 200 prime numbers, save "
+                      "them one per line to primes.txt, and register that "
+                      "file as dataset 'Primes'. Quick utility work — no "
+                      "plan needed.")
+    caps = [cap1]
+    ent = dataset_by_title("Primes")
+    if not ent:
+        caps.append(drive_turn(client, pid, tid, "Yes, go ahead."))
+        ent = dataset_by_title("Primes")
+    # fresh thread, same project — the reuse question
+    tid2 = client.post("/api/threads",
+                       json={"project_id": pid, "title": "reuse"}).json()["id"]
+    cap2 = drive_turn(client, pid, tid2,
+                      "Using the Primes dataset we already have in this "
+                      "project, compute the sum of the primes in python and "
+                      "tell me the value. Do not regenerate the primes.")
+    caps.append(cap2)
+    ap = (ent or {}).get("artifact_path") or ""
+    base = os.path.basename(ap)
+    reuse_runs = tools_named([cap2], "run_python")
+    used_dataset = any(base and base in (t["input"].get("code") or "")
+                       or ap and ap in (t["input"].get("code") or "")
+                       for t in reuse_runs)
+    regenerated = any("is_prime" in (t["input"].get("code") or "")
+                      or "sympy" in (t["input"].get("code") or "")
+                      for t in reuse_runs)
+    return caps, [
+        ("dataset registered in thread 1", ent is not None),
+        ("thread 2 read the registered file", used_dataset),
+        ("thread 2 did not regenerate primes", not regenerated),
+        ("correct sum reported", "111587" in cap2["text"].replace(",", "")),
+    ]
+
+
+@scenario("keep_triage_and_whereabouts")
+def s_keep_triage(client, pid, tid):
+    """The keep conversation: explicit triage (keep the summary, drop the
+    big intermediate), then a grounded 'where is it / is it safe' answer."""
+    cap1 = drive_turn(client, pid, tid,
+                      "Run a quick python step that writes two files: "
+                      "summary.txt (a line of text) and big_intermediate.bin "
+                      "(1 MB of zeros). Keep the summary for the project, "
+                      "but the intermediate is scratch — make sure it is NOT "
+                      "kept. Quick utility work, no plan needed.")
+    caps = [cap1]
+    triage = tools_named(caps, "keep_outputs")
+    dropped = any("big_intermediate" in json.dumps(t["input"])
+                  for t in triage)
+    cap2 = drive_turn(client, pid, tid,
+                      "Where exactly does summary.txt live now, and is it "
+                      "safe / will it survive cleanup?")
+    caps.append(cap2)
+    txt2 = cap2["text"]
+    grounded = "/" in txt2 and "summary.txt" in txt2
+    safe_lang = any(w in txt2.lower() for w in
+                    ("kept", "safe", "retained", "survive", "protected"))
+    jargon = "dref:" in txt2 or " cas " in txt2.lower()
+    return caps, [
+        ("keep triage used (big intermediate dropped)",
+         bool(triage) and dropped),
+        ("whereabouts answered with a real path", grounded),
+        ("safety stated in plain language", safe_lang and not jargon),
+    ]
+
+
+@scenario("retention_alert_loop")
+def s_alert_loop(client, pid, tid):
+    """A run whose keepers could not be kept (no durable storage) carries a
+    retention_alert — the agent must read it and explain the levers, not
+    guess or go silent."""
+    from core.graph.entities import create_entity, get_entity, update_entity
+    from core.graph.derivation import imported
+    rid = create_entity(
+        entity_type="run", title="Remote sweep (test)",
+        derivation=imported("test"), metadata={
+            "retention_alert": (
+                "results not kept: the machine that ran this has no safe "
+                "storage and the keepers total 5.2 GB. Options: declare "
+                "durable storage on its machine card (Settings → Compute), "
+                "or ask to ship them here explicitly.")})
+    cap = drive_turn(client, pid, tid,
+                     f"Why weren't the results of the run 'Remote sweep "
+                     f"(test)' ({rid}) kept? What are my options?")
+    caps = [cap]
+    txt = cap["text"].lower()
+    return caps, [
+        ("alert was read (run consulted)",
+         any(t["name"] in ("read_entity", "list_entities", "get_lineage",
+                           "get_job_status")
+             for t in cap["tools"]) or "5.2" in cap["text"]),
+        ("explains the cause (no safe storage)",
+         "storage" in txt and ("safe" in txt or "durable" in txt)),
+        ("offers both levers",
+         ("settings" in txt or "compute" in txt or "machine" in txt)
+         and ("ship" in txt or "copy" in txt or "transfer" in txt
+              or "bring" in txt)),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -310,7 +460,8 @@ def main():
     print("[study] mendel registered in throwaway workspace")
 
     scenarios = [(fn._scenario, fn) for fn in
-                 [s_url, s_reuse, s_remote, s_drift, s_produced]]
+                 [s_url, s_reuse, s_remote, s_drift, s_produced,
+                  s_keep_reuse, s_keep_triage, s_alert_loop]]
     try:
         with TestClient(app) as client:
             try:

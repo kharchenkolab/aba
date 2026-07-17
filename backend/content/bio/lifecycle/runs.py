@@ -839,6 +839,28 @@ def resolve_output(run_id: str, name: str) -> Optional[dict]:
                     "locality": "local",
                     "durability": durability,
                     "kind": "dir" if _os.path.isdir(hit) else "file"}
+    # retention2 fallback: the (run, relpath) KEY, resolved by weft itself
+    # (run_file_stat answers sandbox-or-keep with `at`) — catches states the
+    # tier walk misses: kernel row gone, keep under a different label, keep
+    # moved by PLACE. Exact-rel only; weft confines traversal to the jobdir.
+    try:
+        from core.compute.adapter import get_compute
+        comp = get_compute()
+        for t2 in ((ent or {}).get("metadata") or {}).get("weft_targets") or []:
+            st = comp.sync_call("run_file_stat", t2, name)
+            pth = st.get("abs_path")
+            if st.get("exists") and pth and _os.path.exists(pth):
+                real = _os.path.realpath(pth)
+                return {"local_path": real,
+                        "rel": name,
+                        "root": _os.path.dirname(real),
+                        "locality": "local",
+                        "durability": ("retained" if st.get("at") == "retained"
+                                       else "live"),
+                        "kind": "dir" if _os.path.isdir(real) else "file"}
+    except Exception as e:  # noqa: BLE001 — a fallback must stay a fallback
+        _log.debug("resolve_output (run,rel) fallback failed for %s: %s",
+                   run_id, e)
     return None
 
 
