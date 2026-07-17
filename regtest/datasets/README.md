@@ -150,3 +150,20 @@ Follow-ups (not built): planning->approval->execute with a remote step (needs
 the resume/approval POST driven from the harness); a SECOND real site for
 conflicting-gravity + multi-site preflight; cancel-midflight (sync cancel has
 unit coverage); cross_thread_separation + mid_chain_steering.
+
+## Two-site coverage (mendel + docker fixture) — validated live
+
+Added the second real remote site (mendel over ssh) alongside the dockerized
+cluster fixture, gated on reachability:
+
+- **conflicting_gravity** — a large file (3M integers, ~20 MB) lives on
+  mendel; the user leans toward "run on hpc" but the compute needs the whole
+  file. The agent computes AT the data on mendel, reasons about the transfer,
+  reports the correct sum, and never hauls the big file across. (18-scenario
+  total now.)
+- **cross_thread_separation** — thread A works on hpc, thread B on mendel;
+  the agent never cross-wires which thread's work ran where.
+
+18 scenarios total, all passing live across single-remote, two-site, and
+local compute. Remaining follow-ups unchanged: planning->approval->execute
+with a remote step; mid_chain_steering (retarget mid-chain); cancel_midflight.
