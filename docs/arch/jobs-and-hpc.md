@@ -205,7 +205,7 @@ boundary*.
 | `core/graph/jobs.py` | the `jobs` table: `create_job`/`update_job`/`get_job` |
 | `content/bio/tools/run_exec.py` · `guide.py` | callers of `submit_*_job` (background routing; the estimate) |
 
-## The weft local lane (W2 — misc/weft_rewrite.md)
+## The weft local lane
 
 The **local background lane defaults to a bare weft task** when the compute substrate is up
 (`core/jobs/weft_submitter.py`): `submit_*_job` with target `inline` (and the deployment
@@ -222,7 +222,7 @@ routes by hard evidence (`params.weft_id` → `task_cancel`). Note the lane also
 long-standing default: `execution=None` on a non-slurm deployment used to resolve to
 `sbatch` (dead on personal installs); it now resolves to the local lane.
 
-## The detached transport (misc/detached_compute.md — 2026-07)
+## The detached transport
 
 `site=` on `submit_python_job`/`submit_r_job` (and the `run_python`/`run_r`
 tools) targets ANY declared weft site — the orthogonal *which-machine* axis;

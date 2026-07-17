@@ -67,7 +67,7 @@ rather than `name==version`). A full base freeze (`ensure_base_constraints` → 
 also metadata-based) or a shipped canonical lock (`$ABA_BASE_LOCK`) backs the legacy
 shared path.
 
-## Platform membership (multi-site envs — 2026-07)
+## Platform membership (multi-site envs)
 
 An env lock's **platform set is part of its identity** (weft: adding a
 platform yields a NEW EnvID solved for all members). aba's specs

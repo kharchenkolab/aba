@@ -110,7 +110,7 @@ tab's own language. See [`jobs-and-hpc.md`](jobs-and-hpc.md) for the submit/poll
 - `weft-ui/server/tests/test_embed.py` — shared-controller mode (serves the host's Weft, no
   ui.lock/reconcile; factory failure degrades the mount).
 
-## Retention2 integration (2026-07-18)
+## Retention2 integration
 
 Site durability is weft's `durable` key (`true` | `"/path"` | absent — a
 user assertion, guessed but never decided by heuristics), set from the
@@ -125,7 +125,7 @@ re-obtainability after CAS eviction (verified live). Tests:
 `tests/test_retention2_policy.py`, `regtest/datasets/epic_mechanism.py`,
 `regtest/datasets/study.py` (live agent).
 
-## Ledger + holdings (more_weft_ui.md §1/§2, as built 2026-07-17)
+## Data-safety ledger + holdings
 
 `core/data/ledger.py` is the ONE query layer for data safety: `data_ledger()`
 (every valued item — datasets by home + durable declarations, retained runs —
@@ -139,7 +139,7 @@ RECORDED state only — never probes sites. Tests: `tests/test_data_ledger.py`
 (incl. the local-only quiescence contract), `frontend .../LedgerStrip.test.tsx`
 (the UI snapshot half).
 
-## Detached compute lane (misc/detached_compute.md, as built 2026-07-17)
+## Detached compute lane
 
 Background jobs run on ANY declared weft site — including machines sharing
 nothing with the controller (cross-OS validated: mac → linux). One lane, two

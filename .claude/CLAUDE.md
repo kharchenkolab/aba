@@ -14,6 +14,7 @@ ABA is an AI-orchestrated, **entity-oriented** workspace for data analysis: user
 - System prompts / rules compose bundle scopes system → installation → lab → user (narrowest-wins): universal always-on rules (e.g. `behavior.md`) live in `backend/system_bundle/rules/` (this repo); site/lab/user rules go in an `aba-bundle-starter`-derived bundle's `rules/`.
 - Deployments update via `aba update` (ABA code from `main`); install paths/hosts are per-deployment, not recorded here.
 - Architecture docs: `docs/arch/` — a succinct, code-cited doc per subsystem (index in `docs/arch/README.md`); `misc/*.md` are the design/evolution logs behind them.
+- Arch docs are **coherent descriptions of the CURRENT system, never a journal**: no dated section headers, no "as built <date>" / "NEW" addenda — integrate changes into the existing narrative as if the doc were written today. History and rationale live in `misc/` and git; an arch doc may *link* there, not accrete.
 - Consult the relevant `docs/arch/` doc before touching a subsystem; keep it true — update it + its **Known gaps** at any change that materially alters that part.
 
 ## Change discipline for shared agent inputs (tool catalog, prompts, context)
