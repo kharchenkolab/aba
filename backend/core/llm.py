@@ -24,6 +24,7 @@ open_stream() in fake mode pops the next turn.
 """
 from __future__ import annotations
 import json
+import sys
 import os
 import time
 import threading
@@ -343,28 +344,71 @@ def _oauth_bearer():
                 s = _load_oauth_store() or {}                  # re-check: another turn may have refreshed
                 e = s.get("expires_at")
                 if s.get("refresh_token") and e and time.time() >= e - _OAUTH_REFRESH_SKEW:
-                    return _refresh_oauth(s)                    # new token, or None on failure
-                return s.get("access_token")                   # already refreshed by another turn
-        return None                                            # expired, no refresh token → re-auth
+                    tok = _refresh_oauth(s)
+                    if tok:
+                        return tok
+                    # DEAD STORE MUST NOT POISON THE CHAIN (found live
+                    # 2026-07-18: an expired store whose refresh 400s
+                    # blocked a perfectly valid CLI credential) — fall
+                    # through to the other tiers instead of returning None
+                else:
+                    return s.get("access_token")               # already refreshed by another turn
 
     # (2) Static env var (back-compat / pasted token).
     tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if tok:
         return tok.strip()
 
-    # (3) Claude Code CLI store (CLI keeps it refreshed).
+    # (3) Claude Code CLI credential (the CLI keeps it refreshed):
+    #     the credentials file where it exists, else the macOS Keychain
+    #     (the CLI's default store on mac — the file usually doesn't exist).
+    tok = _cli_credential()
+    if tok:
+        return tok
+    return None
+
+
+_CLI_CRED_CACHE: dict = {"tok": None, "until": 0.0}
+# The macOS Keychain probe is real-machine state — tests disable it globally
+# (tests/conftest.py) so credential tests stay deterministic on dev boxes.
+_CLI_KEYCHAIN_ENABLED = True
+
+
+def _cli_credential():
+    """Claude Code CLI's own OAuth access token, from its credentials file
+    or (macOS) its Keychain entry. Cached briefly — the Keychain read is a
+    subprocess. Expired tokens read as missing."""
+    now = time.time()
+    if now < _CLI_CRED_CACHE["until"]:
+        return _CLI_CRED_CACHE["tok"]
+
+    def _from_blob(blob: dict):
+        oa = (blob or {}).get("claudeAiOauth") or {}
+        exp = oa.get("expiresAt")
+        # expiresAt is ms-since-epoch; treat expired (5s grace) as missing.
+        if isinstance(exp, (int, float)) and exp <= int(now * 1000) + 5_000:
+            return None
+        return (oa.get("accessToken") or "").strip() or None
+
+    tok = None
     cred = os.path.expanduser("~/.claude/.credentials.json")
     if os.path.exists(cred):
         try:
-            oa = json.load(open(cred)).get("claudeAiOauth") or {}
-            exp = oa.get("expiresAt")
-            # expiresAt is ms-since-epoch; treat expired (5s grace) as missing.
-            if isinstance(exp, (int, float)) and exp <= int(time.time() * 1000) + 5_000:
-                return None
-            return (oa.get("accessToken") or "").strip() or None
+            tok = _from_blob(json.load(open(cred)))
         except Exception:  # noqa: BLE001
-            return None
-    return None
+            tok = None
+    if tok is None and sys.platform == "darwin" and _CLI_KEYCHAIN_ENABLED:
+        try:
+            import subprocess
+            r = subprocess.run(["security", "find-generic-password",
+                                "-s", "Claude Code-credentials", "-w"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                tok = _from_blob(json.loads(r.stdout))
+        except Exception:  # noqa: BLE001
+            tok = None
+    _CLI_CRED_CACHE.update(tok=tok, until=now + 60)
+    return tok
 
 
 class OAuthTokenUnavailable(RuntimeError):

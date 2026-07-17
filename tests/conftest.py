@@ -125,3 +125,13 @@ def _seed_valid_global_db() -> None:
 
 
 _seed_valid_global_db()
+
+
+# Deterministic credentials in tests: never probe the developer's macOS
+# Keychain for the Claude Code CLI token — real dev machines have one, CI
+# doesn't, and "no credentials configured" assertions must mean it.
+try:
+    from core import llm as _llm_for_tests
+    _llm_for_tests._CLI_KEYCHAIN_ENABLED = False
+except Exception:  # noqa: BLE001 — llm import problems surface in real tests
+    pass
