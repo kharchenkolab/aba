@@ -165,7 +165,11 @@ def resolve_release_image(release_root):
         return {}
     rdir = os.path.realpath(cur)               # concrete releases/<id> — the pin
     out = {"ABA_RELEASE_ID": os.path.basename(rdir), "ABA_SHARE": release_root}
-    sifs = sorted(glob.glob(os.path.join(rdir, "sif", "*.sif")))
+    # The app image is a `.sif` (fat/slim) OR a bare `.sqfs` (the weft profile — built via
+    # the rootless --sandbox + mksquashfs path, which yields a plain squashfs; apptainer
+    # execs it by content regardless of extension). Match both so a weft release resolves.
+    sifs = sorted(glob.glob(os.path.join(rdir, "sif", "*.sif"))
+                  + glob.glob(os.path.join(rdir, "sif", "*.sqfs")))
     if sifs:
         out["ABA_SIF"] = sifs[0]
     venv = os.path.join(rdir, "env", "aba-venv")
