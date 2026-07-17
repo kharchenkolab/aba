@@ -654,33 +654,30 @@ def mn_conflicting_gravity(client, pid, tid):
     available.)"""
     if not MENDEL_OK:
         return [], [("mendel available (scenario skipped otherwise)", False)]
-    mssh(f"mkdir -p {M_DATA} && head -c 80000000 /dev/urandom > {M_DATA}/big_a.bin "
-         f"&& (echo n,w; seq 1 400 | awk '{{print $1\",\"($1*8)%15}}') > {M_DATA}/idx.csv")
-    total = sum((i * 8) % 15 for i in range(1, 401))
+    # a ~70 MB file of newline-terminated integers 1..N: the COMPUTE needs the
+    # whole big file (so data gravity is real), and its sum is deterministic
+    n = 3_000_000
+    mssh(f"mkdir -p {M_DATA} && seq 1 {n} > {M_DATA}/big_nums.txt")
+    total = n * (n + 1) // 2
     caps = [drive_turn(client, pid, tid,
-        f"Our big collection (an ~80 MB binary + idx.csv) lives on machine "
-        f"'mendel' at {M_DATA}. Register idx.csv as dataset 'Idx' by "
-        f"reference. Then I'd like a summation of idx.csv's w column — I was "
-        f"going to say run it on 'hpc', but do whatever avoids moving the big "
-        f"data around. Tell me the sum and where you ran it, and why.")]
+        f"A large (~{'{:.0f}'.format(20)} MB+) file big_nums.txt lives on machine "
+        f"'mendel' at {M_DATA} — it's one integer per line, 1 up to {n}. I "
+        f"want the SUM of every number in it. I was going to say run it on "
+        f"'hpc', but the file is big — do whatever avoids hauling it across "
+        f"machines. Give me the sum and say where you ran it, and why.")]
     full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     txt = full.lower()
     ran = _site_ran(caps)
-    # good: computed at the data (mendel), NOT on hpc; and did not pull the big binary
-    pulled_big = any(int(t["input"].get("max_bytes") or 0) > 50_000_000
+    pulled_big = any(int(t["input"].get("max_bytes") or 0) > 40_000_000
                      for t in tools_named(caps, "fetch_dataset"))
     return caps, [
-        ("registered Idx by reference on mendel", any(
-            ((e.get("metadata") or {}).get("home") or {}).get("site") == "mendel"
-            for e in find_entities(type="dataset", not_deleted=True)
-            if (e.get("title") or "").lower() == "idx")),
-        ("did NOT compute on hpc (avoided moving big data there)",
-         "hpc" not in ran),
-        ("computed where the data is, or explained the tradeoff",
-         "mendel" in ran or any(w in txt for w in
-            ("where the data", "avoid moving", "transfer", "data lives", "on mendel"))),
+        ("computed at the data on mendel (not hpc)",
+         "mendel" in ran and "hpc" not in ran),
+        ("reasoned about data gravity / avoiding the transfer",
+         any(w in txt for w in ("where the data", "avoid moving", "avoid hauling",
+             "transfer", "data lives", "on mendel", "gravity"))),
         ("correct sum reported", str(total) in full),
-        ("did not haul the big binary across", not pulled_big),
+        ("did not haul the big file across", not pulled_big),
     ]
 
 
