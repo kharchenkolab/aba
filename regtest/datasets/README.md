@@ -120,3 +120,33 @@ fixture); gpu_routing (fixture fake-GPU partition); cancel_midflight;
 rerun_asis_recomputes (memo-nonce forces a fresh task); and the multi-turn
 context-durability probes (long_gap_recall, cross_thread_separation,
 mid_chain_steering, context_line_sufficiency).
+
+## Multinode coverage — 16 scenarios, all validated live
+
+Definitive: the primary 13 passed together in one clean run; the newest 3
+(gpu_routing, rerun_asis_recomputes, data_gravity_recall) passed together in
+another. Full list:
+
+size_up · hop_chain · status_surfaces · honesty · isolated_env_remote ·
+crash_fix_rerun · fanout_gather · pin_remote_result · external_ref_inject ·
+background_monitor · provenance_after_chain · preflight_disconnect ·
+reference_drift · gpu_routing · rerun_asis_recomputes · data_gravity_recall.
+
+Product bugs this study + an adversarial review surfaced and fixed (each with
+a fast regression guard): unsized-walltime eternal pend (PartitionTimeLimit);
+default-env platform re-lock gap; single-DB weft-poll blindness (jobs stuck
+'queued'); wrong-site resubmit from the generic poller; sync-remote
+cancel/timeout no-op orphaning the remote task; substrate-cancel reported as
+success; a harvested remote figure being unpinnable (no exec record ->
+no artifact_id); and the ambient context line not naming remote machines.
+
+Harness disciplines learned live: isolated per-scenario data dirs (a shared
+dir let leftover files create ambiguity the agent correctly refused to guess
+through); wait_for_text polls for DEFERRED-continuation results (jobs-settled
++ fixed sleep is too early — the gather/report runs later); number-normalize
+checks so '12,070,100' matches '12070100'.
+
+Follow-ups (not built): planning->approval->execute with a remote step (needs
+the resume/approval POST driven from the harness); a SECOND real site for
+conflicting-gravity + multi-site preflight; cancel-midflight (sync cancel has
+unit coverage); cross_thread_separation + mid_chain_steering.
