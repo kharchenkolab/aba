@@ -182,12 +182,19 @@ def register_curation_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def open_run(title: str,
+                 rerun_of: str | None = None,
                  aba_ctx_id: str | None = None) -> dict:
         """Open an analysis Run so this pipeline's outputs group as one
-        unit. Subsequent run_python/run_r figures auto-attach."""
+        unit. Subsequent run_python/run_r figures auto-attach.
+
+        When you are RE-RUNNING an existing Run WITH CHANGES (the user asked
+        to vary a prior run), pass its entity_id as `rerun_of` — the new Run
+        is recorded as a variant of it (a `scenario_of` branch), so the
+        original keeps its outputs and history and the two read as siblings.
+        Omit `rerun_of` for fresh work or an exact as-is re-run."""
         from core.runtime.tool_ctx import peek_ctx
         from content.bio.tools import open_run_tool
-        return open_run_tool({"title": title}, peek_ctx(aba_ctx_id))
+        return open_run_tool({"title": title, "rerun_of": rerun_of}, peek_ctx(aba_ctx_id))
 
     @mcp.tool()
     def close_run(aba_ctx_id: str | None = None) -> dict:

@@ -1119,8 +1119,17 @@ def open_run_tool(input_: dict, ctx: dict | None = None) -> dict:
     title = (input_.get("title") or "").strip()
     if not title:
         return {"error": "title is required — name the analysis (e.g. the approved plan's title)"}
+    # §8f: a re-run WITH CHANGES branches — record the baseline as scenario_of,
+    # but only if it names a real analysis Run (never self, never a bad id).
+    rerun_of = (input_.get("rerun_of") or "").strip() or None
+    if rerun_of:
+        from core.graph.entities import get_entity as _ge
+        base = _ge(rerun_of)
+        if not base or base.get("type") != "analysis":
+            rerun_of = None
     from content.bio.lifecycle.runs import open_run
-    rid = open_run(tid, title, focus_entity_id=(ctx or {}).get("focus_entity_id"))
+    rid = open_run(tid, title, focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                   scenario_of=rerun_of)
 
     out: dict = {"status": "ok", "run_id": rid, "title": title}
 

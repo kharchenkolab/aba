@@ -119,7 +119,7 @@ def run_output_dir(project_id: str, run_id: str) -> "Path":
 
 
 def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = None,
-             plan_entity_id: Optional[str] = None) -> str:
+             plan_entity_id: Optional[str] = None, scenario_of: Optional[str] = None) -> str:
     """Open a Run for the thread, rotating out any currently-open one first
     (a new boundary supersedes the previous Run). Returns the run (analysis) id.
     Records the run's output directory as its `artifact_path` so run_python/run_r
@@ -154,12 +154,16 @@ def open_run(thread_id: str, title: str, *, focus_entity_id: Optional[str] = Non
     md: dict = {"thread_id": thread_id, "run_state": "open", "origin": "internal"}
     if plan_entity_id:
         md["plan_entity_id"] = plan_entity_id
+    # §8f (more_weft_ui.md): a re-run WITH CHANGES branches — the new Run carries
+    # a `scenario_of` edge to the original, so the baseline keeps its history and
+    # the variant reads as a sibling. A plain re-run (as-is) passes no baseline.
     from core.graph.derivation import manual
     rid = create_entity(
         entity_type="analysis",
         title=(title or "Analysis run").strip()[:120],
         parent_entity_id=focus_entity_id or WORKSPACE_ID,
         derivation=manual(),   # Phase 2B: a Run is opened, not derived (actor from ambient)
+        scenario_of=scenario_of or None,
         metadata=md,
     )
     try:
