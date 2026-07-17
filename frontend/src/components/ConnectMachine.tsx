@@ -296,7 +296,7 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                 <input type="checkbox" checked={!!proposal.durable}
                   onChange={e => patch({ durable: e.target.checked })} />
                 durable storage
-                <span className="cmp-dim">— results kept here survive</span>
+                <span className="cmp-dim">— results can be kept here long-term</span>
               </label>
               {!proposal.durable && (
                 proposal.durable_path == null ? (

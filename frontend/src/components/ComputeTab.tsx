@@ -288,7 +288,7 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                           onChange={e => act('durable', () =>
                             computeApi.edit(s.name, { durable: e.target.checked }))} />
                         durable storage
-                        <span className="cmp-dim">— results kept here survive</span>
+                        <span className="cmp-dim">— results can be kept here long-term</span>
                       </label>
                     )}
                     {!isLocal && s.config?.durable !== true && (
