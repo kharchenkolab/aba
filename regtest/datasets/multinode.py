@@ -321,29 +321,30 @@ def mn_fanout_gather(client, pid, tid):
 
 @scenario("mn_pin_remote_result")
 def mn_pin_remote_result(client, pid, tid):
-    """Full pipeline: a remote step PRODUCES a plot → harvested back into a
-    figure entity attached to the Run → agent PROMOTES it to a Result. Tests
-    the harvest-from-remote → pin-to-Results path the platform is built on."""
+    """Full pipeline: a remote step PRODUCES a plot → harvested back and shown
+    in the run's outputs → agent pins it as a Result. Tests the
+    harvest-from-remote → pin-to-Results path the platform is built on.
+    (Post-cutover, figures become entities only when pinned — so we verify
+    the run's OUTPUT MANIFEST carries the plot, then a Result after pinning.)"""
     caps = [drive_turn(client, pid, tid,
-        "On machine 'hpc', generate the sequence y = i*i for i in 1..40 and "
-        "make a line plot of it saved as squares.png. Then bring it back and "
-        "show it to me.")]
+        "Open an analysis run titled 'Squares'. Then on machine 'hpc', "
+        "generate y = i*i for i in 1..40 and make a line plot saved as "
+        "squares.png. Bring it back and show it to me.")]
     wait_jobs_settled(client, pid)
-    figs = [e for e in find_entities(type="figure", not_deleted=True)
-            if "square" in (e.get("title") or "").lower()
-            or "square" in str((e.get("metadata") or {}).get("original_name", "")).lower()]
-    fig_any = [e for e in find_entities(type="figure", not_deleted=True)]
+    run = _run_by_title("Squares")
+    outs = ((run or {}).get("metadata") or {}).get("run", {}).get("outputs") or []
+    dv = _durable(client, run["id"]) if run else {"files": []}
+    plot_harvested = (any("squares.png" in str(o.get("label", "")) for o in outs)
+                      or any(f["rel"].endswith("squares.png") for f in dv["files"]))
     caps.append(drive_turn(client, pid, tid,
-        "That looks good — pin it as a Result titled 'Squares curve' with a "
-        "one-line interpretation."))
+        "That looks good — pin/save it as a Result titled 'Squares curve' "
+        "with a one-line interpretation of the shape."))
     wait_jobs_settled(client, pid)
     results = find_entities(type="result", not_deleted=True)
-    prom = tools_named(caps, "promote_to_result") + tools_named(caps, "pin_figure")
     return caps, [
         ("remote step ran on hpc", "hpc" in _site_ran(caps)),
-        ("a figure was harvested from the remote run", bool(fig_any)),
-        ("agent used a pin/promote gesture", bool(prom) or bool(results)),
-        ("a Result entity now exists", bool(results)),
+        ("the plot was harvested back into the run's outputs", plot_harvested),
+        ("a Result entity now exists after pinning", bool(results)),
     ]
 
 
