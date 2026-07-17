@@ -472,6 +472,14 @@ def main():
             _ss = comp["self_service"]
             _ss = "1" if (_ss is True or str(_ss).strip().lower() in ("1", "true", "yes", "on")) else "0"
             lines.append(f"export ABA_COMPUTE_SELF_SERVICE={shq(_ss)}")
+        # published weft env-image tree (site.yaml `envs: {publish_tree}`) — the weft profile's
+        # science stacks are adopted read-only from here (no solve). Sets ABA_WEFT_PUBLISH_TREE
+        # (+ site); base_env.env_id adopts by name. Absent → each session solves its own.
+        envs = site.get("envs") or {}
+        if envs.get("publish_tree"):
+            lines.append(f"export ABA_WEFT_PUBLISH_TREE={shq(ex(envs['publish_tree']))}")
+        if envs.get("publish_site"):
+            lines.append(f"export ABA_WEFT_PUBLISH_SITE={shq(envs['publish_site'])}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file
