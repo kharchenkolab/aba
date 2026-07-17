@@ -123,6 +123,22 @@ class WeftAdapter:
             if is_error_payload(r):
                 raise ComputeError.from_payload(r)
         self._register_configured_sites(registered)
+        self._refresh_shims()
+
+    def _refresh_shims(self) -> None:
+        """Re-run each registered site's `ensure_bootstrap` so the shim + pixi under
+        the site root track the INSTALLED weft. register_site bootstraps only NEW
+        sites (weft persists them, so `_ensure_local_site`/`_register_configured_sites`
+        skip the rest) — without this, an `aba update` / weft bump leaves STALE shims on
+        already-registered sites, and new shim verbs (e.g. file-root data_fingerprint,
+        weft 3972cc2) fail with confusing errors. `ensure_bootstrap` is idempotent and
+        byte-diffs the shim, so this is a cheap no-op when nothing changed and never
+        re-probes. Best-effort per site: a dead host must not block boot."""
+        for name, adapter in list(getattr(self._weft, "adapters", {}).items()):
+            try:
+                adapter.ensure_bootstrap()
+            except Exception as e:  # noqa: BLE001 — surfaced by doctor / the site's own errors
+                print(f"[compute] shim refresh for site {name!r} skipped: {e}")
 
     def _register_configured_sites(self, registered: set) -> None:
         """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml`
