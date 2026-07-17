@@ -396,20 +396,22 @@ def check_base_dir_shared() -> dict:
       FS — a slim SIF (`image.base_dir` on shared FS) or a native shared install. An
       in-image / node-local base is unreachable → the job can't even find the
       interpreter.
-    - WRAPPED offload (`ABA_JOB_WRAP=sif`, a fat SIF): the job RE-ENTERS the image
-      via `apptainer exec` (slurm_submitter._job_body), so the baked in-image base is
-      exactly what runs — a node-local/in-image base is CORRECT, not a defect. Fat is
-      NOT single-node in this mode (misc/fatagain.md).
+    - WRAPPED offload (`ABA_JOB_WRAP=sif`, a fat OR weft SIF): the job RE-ENTERS the
+      image via `apptainer exec` (slurm_submitter._job_body), so the baked in-image
+      base is exactly what runs — a node-local/in-image base is CORRECT, not a defect,
+      and NOT single-node (misc/fatagain.md). (Under the weft profile the baked base is
+      only the slim controller runtime; the science env is a weft image adopted on the
+      node — either way the offloaded job reaches its interpreter.)
 
     Fires only for the 'slurm' submitter."""
     from core.jobs.submitter import submitter_name
     if submitter_name() != "slurm":
         return {"ok": True, "severity": "info", "detail": "local submitter — base sharing N/A"}
-    # Fat + job-wrap: offloaded env-jobs re-enter the SIF, so the baked base is reachable
-    # (its being node-local/in-image is by design). Don't flag it as unreachable.
+    # Job-wrap (fat or weft SIF): offloaded jobs re-enter the SIF, so the baked base is
+    # reachable (its being node-local/in-image is by design). Don't flag it as unreachable.
     if (config.settings.job_wrap.get() or "").strip().lower() == "sif":
         return {"ok": True, "severity": "info",
-                "detail": ("fat SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded env-jobs re-enter the "
+                "detail": ("SIF + job-wrap (ABA_JOB_WRAP=sif): offloaded jobs re-enter the "
                            "image via `apptainer exec`, so the baked in-image base is reachable — "
                            "not single-node (misc/fatagain.md).")}
     kind, detail = base_fs_kind()

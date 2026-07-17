@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Build the ABA Apptainer image — one script, two profiles.
+# Build the ABA Apptainer image — one script, three profiles (weft is the STANDARD).
 #
-#   ./install/sif/build.sh --profile fat        # bakes conda venv + R base + backend + frontend + recipes
-#   ./install/sif/build.sh --profile slim       # bakes backend + frontend + recipes; venv + R base mounted at run
+#   ./install/sif/build.sh --profile weft       # DEFAULT: app + slim CONTROLLER runtime + weft/pixi;
+#                                               #   science python + R come from published weft squashfs
+#                                               #   env images adopted read-only at run. ~375 MB.
+#   ./install/sif/build.sh --profile fat        # LEGACY: bakes conda venv + R base + backend + frontend + recipes
+#   ./install/sif/build.sh --profile slim       # LEGACY: bakes backend + frontend + recipes; venv + R base mounted at run
 #
 # Recipes are baked as the SYSTEM bundle in BOTH profiles (ABA_SYSTEM_BUNDLE) — the
 # image ships the curated pack; institution/lab/user bundles layer on top from
@@ -20,7 +23,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROFILE="fat"; OUT=""; STAGE_ONLY=0; SIF_BASE=""
+PROFILE="weft"; OUT=""; STAGE_ONLY=0; SIF_BASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:?}"; shift ;;

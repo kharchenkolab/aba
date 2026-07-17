@@ -115,15 +115,64 @@ class WeftAdapter:
         if _LOCAL_SITE not in registered:
             r = self._weft.register_site(
                 _LOCAL_SITE, "local",
-                {"root": str(self.workspace / "site-local"),
-                 # retention2: the workspace sits on the user's own disk —
-                 # keeps pin in place, never trip the no-durable refusal
-                 "durable": True,
-                 "pixi_source": pixi_bin})
+                self._with_ro_root(
+                    {"root": str(self.workspace / "site-local"),
+                     # retention2: the workspace sits on the user's own disk —
+                     # keeps pin in place, never trip the no-durable refusal
+                     "durable": True,
+                     "pixi_source": pixi_bin}))
             if is_error_payload(r):
                 raise ComputeError.from_payload(r)
         self._register_configured_sites(registered)
         self._refresh_shims()
+        self._ensure_ro_roots()
+
+    @staticmethod
+    def _publish_tree() -> Optional[str]:
+        """The published-env tree (ABA_WEFT_PUBLISH_TREE / site.yaml envs.publish_tree),
+        or None. Consumers must list it in a site's `ro_roots` for weft to mount the
+        published images in place (the consumer half of publish/adopt)."""
+        try:
+            return (config.settings.weft_publish_tree.get() or "").strip() or None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _with_ro_root(self, cfg: dict) -> dict:
+        """Add the publish tree to a site config's `ro_roots` (idempotent) so weft may
+        adopt the published env images read-only in place. No tree set → cfg unchanged."""
+        tree = self._publish_tree()
+        if not tree:
+            return cfg
+        roots = list(cfg.get("ro_roots") or [])
+        if tree not in roots:
+            roots.append(tree)
+            cfg = {**cfg, "ro_roots": roots}
+        return cfg
+
+    def _ensure_ro_roots(self) -> None:
+        """Reconcile: ensure every registered site carries the publish tree in its
+        persisted `ro_roots`. Fresh registrations already get it (_with_ro_root); this
+        covers a site registered BEFORE a publish tree was declared (an upgrade) — it
+        re-registers ONLY when the tree is missing, so it's a one-time cost per site per
+        tree change (re-register probes), never a per-boot expense. Best-effort."""
+        tree = self._publish_tree()
+        if not tree:
+            return
+        for name in [s.get("name") for s in self._weft.sites_list()]:
+            if not name:
+                continue
+            try:
+                row = self._weft.sites_describe(name)
+                cfg = dict(row.get("config") or {})
+                if tree in (cfg.get("ro_roots") or []):
+                    continue                              # already present — no re-register
+                r = self._weft.register_site(name, row.get("kind"), self._with_ro_root(cfg))
+                if is_error_payload(r):
+                    print(f"[compute] ro_roots update for site {name!r} failed: {r.get('error')}")
+                else:
+                    print(f"[compute] site {name!r}: added publish tree to ro_roots")
+            except Exception as e:  # noqa: BLE001 — a dead host must not block boot
+                print(f"[compute] ro_roots reconcile for site {name!r} skipped: {e}")
 
     def _refresh_shims(self) -> None:
         """Re-run each registered site's `ensure_bootstrap` so the shim + pixi under
@@ -162,7 +211,7 @@ class WeftAdapter:
             if not name or not kind or name in registered:
                 continue
             cfg.setdefault("pixi_source", self.pixi_bin)
-            r = self._weft.register_site(name, kind, cfg)
+            r = self._weft.register_site(name, kind, self._with_ro_root(cfg))
             if is_error_payload(r):
                 print(f"[compute] site {name!r} ({kind}) failed to register: "
                       f"{r.get('error')}: {r.get('detail')}")
