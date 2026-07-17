@@ -172,58 +172,60 @@ def mn_hop_chain(client, pid, tid):
 
 @scenario("mn_status_surfaces")
 def mn_status_surfaces(client, pid, tid):
-    """(iii) After a remote run, the SURFACES the cards render from tell the
-    truth. In-place remote keeps apply to LARGE outputs that STAY on the node
-    (small ones auto-come-home — that's the sync/harvest design). So we
-    produce a big file on hpc, keep it in place, and assert the durable view /
-    ledger / bring-back reflect 'on hpc' — on the exact JSON the cards read."""
+    """(iii) After a remote run produces a LARGE output that STAYS on the node
+    (small outputs auto-come-home by design), the SURFACES the cards render
+    from must show it as SAFE ON HPC. Mechanism-agnostic: the agent may keep
+    the run output in place OR register it as a durable-home dataset — both
+    are valid 'safe on hpc' outcomes; we assert whichever surface reflects it,
+    plus the project ledger, on the exact JSON the cards read."""
     caps = [drive_turn(client, pid, tid,
         "Open an analysis run titled 'Remote production'. Then run a BACKGROUND "
         "job on machine 'hpc' that writes a LARGE ~60 MB file called big.bin "
-        "in the run's working directory (e.g. 60*1024*1024 bytes), plus a "
-        "small marker.txt containing 'done'. It's big, so KEEP it safe on "
-        "hpc in place — do not move it off yet.")]
+        "in the run's working directory (e.g. 60*1024*1024 bytes). It's big — "
+        "make sure it's kept SAFE on hpc without copying it here.")]
     wait_jobs_settled(client, pid)
-    ent = _run_by_title("Remote production")
-    rid = ent["id"] if ent else None
-    if not rid:   # fallback: any run whose durable view saw the big output
+
+    def _on_hpc_somewhere():
+        # (a) a run whose durable view marks big.bin kept on hpc
         for r in find_entities(type="analysis", not_deleted=True):
             dv = _durable(client, r["id"])
-            if any(f["rel"].endswith("big.bin") for f in dv["files"]):
-                rid = r["id"]
-                break
-    if rid:       # keeps settle asynchronously (retain at close / keep_outputs)
-        t0 = time.time()
-        while time.time() - t0 < 180:
-            dv = _durable(client, rid)
-            if any(f.get("state") == "retained" and f.get("site") == "hpc"
-                   for f in dv["files"]):
-                break
-            time.sleep(6)
-    checks = [("a run captured the remote outputs", bool(rid))]
-    if rid:
-        dv = _durable(client, rid)
-        remote = [f for f in dv["files"] if (f.get("site") or "") not in ("", "local")]
-        led = client.get(f"/api/projects/{pid}/data-ledger").json()
-        checks += [
-            ("durable view marks the big file on hpc", any(
-                f.get("site") == "hpc" for f in dv["files"])),
-            ("remote-kept badge reads 'kept ✓ · on hpc'", any(
-                str(f.get("badge", "")).startswith("kept ✓") and "hpc" in f.get("badge", "")
-                for f in remote)),
-            ("ledger sees hpc as a remote site",
-             "hpc" in (led.get("remote_sites") or [])),
-        ]
-        bb = client.post(f"/api/runs/{rid}/bring-back")
+            for f in dv["files"]:
+                if f["rel"].endswith("big.bin") and f.get("site") == "hpc":
+                    return ("run", r["id"], f)
+        # (b) a dataset whose durable home is on hpc
+        for e in find_entities(type="dataset", not_deleted=True):
+            home = ((e.get("metadata") or {}).get("home")
+                    or (e.get("metadata") or {}).get("weft_home") or {})
+            if home.get("site") == "hpc":
+                return ("dataset", e["id"], None)
+        return (None, None, None)
+
+    kind, eid, frow = None, None, None
+    t0 = time.time()
+    while time.time() - t0 < 180:
+        kind, eid, frow = _on_hpc_somewhere()
+        if kind:
+            break
+        time.sleep(6)
+    led = client.get(f"/api/projects/{pid}/data-ledger").json()
+    checks = [
+        ("big output shown SAFE ON HPC (run keep or dataset home)", bool(kind)),
+        ("ledger sees hpc as a remote site", "hpc" in (led.get("remote_sites") or [])),
+    ]
+    if kind == "run":
+        checks.append(("run durable badge reads 'kept ✓ · on hpc'",
+                       str((frow or {}).get("badge", "")).startswith("kept ✓")
+                       and "hpc" in (frow or {}).get("badge", "")))
+        bb = client.post(f"/api/runs/{eid}/bring-back")
         time.sleep(8)
-        dv2 = _durable(client, rid)
+        dv2 = _durable(client, eid)
         checks.append(("big file servable locally after bring-back", any(
             f.get("url") for f in dv2["files"] if f["rel"].endswith("big.bin"))))
-        caps.append(drive_turn(client, pid, tid,
-            f"Where do this run's files live now, and are they safe? Brief."))
-        atxt = caps[-1]["text"].lower()
-        checks.append(("agent names hpc + safety", "hpc" in atxt
-                       and any(w in atxt for w in ("safe", "kept", "here", "brought"))))
+    caps.append(drive_turn(client, pid, tid,
+        "Where does the big file live now, and is it safe? One line."))
+    atxt = caps[-1]["text"].lower()
+    checks.append(("agent names hpc + safety", "hpc" in atxt
+                   and any(w in atxt for w in ("safe", "kept", "retained", "durable"))))
     return caps, checks
 
 
@@ -399,6 +401,32 @@ def mn_background_monitor(client, pid, tid):
         ("did NOT poll excessively (<=5 status checks)", polls <= 5),
         ("job settled", settled),
         ("final result reported (via continuation)", str(sum(range(1, 2001))) in full),
+    ]
+
+
+@scenario("mn_provenance_after_chain")
+def mn_provenance_after_chain(client, pid, tid):
+    """Provenance across machines: a figure produced on hpc, pinned to a
+    Result, must trace back to WHERE it ran. Validates the remote-sync exec
+    record carries the placement block (ran on hpc) into the entity graph."""
+    caps = [drive_turn(client, pid, tid,
+        "Open a run 'Prov check'. On machine 'hpc', compute z = i%7 for "
+        "i in 1..120 and make a bar plot saved as bars.png. Bring it back.")]
+    wait_jobs_settled(client, pid)
+    caps.append(drive_turn(client, pid, tid,
+        "Pin that as a Result titled 'Bars' with a short interpretation."))
+    wait_jobs_settled(client, pid)
+    results = find_entities(type="result", not_deleted=True)
+    # provenance question — the placement block should let the agent name hpc
+    caps.append(drive_turn(client, pid, tid,
+        "For the 'Bars' result: which machine actually produced it, and how "
+        "was it made? Be specific about where it ran."))
+    ptext = caps[-1]["text"].lower()
+    return caps, [
+        ("remote step ran on hpc", "hpc" in _site_ran(caps)),
+        ("a Result exists", bool(results)),
+        ("agent names hpc as where it ran (placement provenance)",
+         "hpc" in ptext),
     ]
 
 
