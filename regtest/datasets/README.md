@@ -167,3 +167,18 @@ cluster fixture, gated on reachability:
 18 scenarios total, all passing live across single-remote, two-site, and
 local compute. Remaining follow-ups unchanged: planning->approval->execute
 with a remote step; mid_chain_steering (retarget mid-chain); cancel_midflight.
+
+### Planning->approval->execute with a remote step — how to build it
+
+Not built (the studies bypass planning with "no plan needed"). To add it, the
+harness needs a plan-aware drive:
+1. `drive_turn` must capture the turn's `run_id` from the SSE stream and detect
+   the plan halt (state `awaiting_user`, `pending_user_signal == "plan"`).
+2. POST `/api/turns/{run_id}/resume` with `{"user_text": "", "project_id": pid}`
+   (empty user_text on a plan-halt = the user's "Go"; main.py:1027-1036
+   transitions the plan validated->executing and streams the follow-up turn).
+3. Capture the resumed stream (the execution) like a normal drive_turn.
+Then assert: the presented plan's steps reference the remote machine, and the
+executed run actually routed there (site= in the resumed turn's run_python).
+The plan/approval mechanism itself is exercised by the platform's own tests;
+this scenario's added value is confirming plan steps carry remote placement.
