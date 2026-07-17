@@ -241,11 +241,12 @@ def s_remote(client, pid, tid):
 @scenario("drift_and_missing")
 def s_drift(client, pid, tid):
     ssh(f"mkdir -p {R_DATA} && head -c 1000 /dev/urandom > {R_DATA}/a.bin")
-    # register via the tool directly (fixture step, not under study)
-    from content.bio.tools.curation import register_dataset_tool
-    r = register_dataset_tool({"title": "Drift Cohort", "path": R_DATA,
-                               "site": "mendel"}, {})
-    assert r.get("status") == "ok", r
+    # the agent registers it (a direct tool call would bind outside the
+    # request's project and be invisible to the agent — found live)
+    cap0 = drive_turn(client, pid, tid,
+                      f"Register the data at {R_DATA} on mendel as dataset "
+                      f"'Drift Cohort' (in place, no copying).")
+    assert dataset_by_title("Drift Cohort"), cap0["text"][:300]
     ssh(f"echo extra >> {R_DATA}/a.bin")
     cap1 = drive_turn(client, pid, tid,
                       "Before we analyze anything: is the 'Drift Cohort' "
