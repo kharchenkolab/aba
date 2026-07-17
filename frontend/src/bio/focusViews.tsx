@@ -299,7 +299,7 @@ function FigureView({ entity }: FocusViewProps) {
 }
 
 
-function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: FocusViewProps) {
+function DatasetView({ entity, onFocus, onChange, onChatResult, onPrefill, projectId }: FocusViewProps) {
   const [preview, setPreview] = useState<Preview | null>(null)
   useEffect(() => {
     setPreview(null)
@@ -313,6 +313,7 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: Foc
 
   return (
     <div className="focus__dataset">
+      <DriftBanner entity={entity} onChange={onChange} onPrefill={onPrefill} />
       <DatasetDescription entity={entity} onChange={onChange} />
       <div className="focus__rows">
         <div className="focus__row">
@@ -353,6 +354,87 @@ function DatasetView({ entity, onFocus, onChange, onChatResult, projectId }: Foc
       <ExternalViewerActions entity={entity} />
       <DatasetFiles entity={entity} onFocus={onFocus} onChatResult={onChatResult}
                     onChange={onChange} projectId={projectId} />
+    </div>
+  )
+}
+
+
+/** §5 drift banner + verified relink (more_weft_ui.md). Renders ONLY when the
+ *  entity carries a recorded drift/missing flag (set by /recheck or at use) —
+ *  the affected entity only, never ambient chrome. Relink accepts on a content
+ *  match; a mismatch demotes to the new-version flow (via the Guide). */
+function DriftBanner({ entity, onChange, onPrefill }: {
+  entity: Entity; onChange: () => void; onPrefill?: (t: string) => void
+}) {
+  const md = (entity.metadata ?? {}) as {
+    home?: { site?: string; path?: string }
+    source_changed?: boolean; source_missing?: boolean; source_checked_at?: number
+  }
+  const [relinking, setRelinking] = useState(false)
+  const [newPath, setNewPath] = useState('')
+  const [note, setNote] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  if (!md.source_changed && !md.source_missing) return null
+  const where = md.home?.path
+    ? `${md.home.path}${md.home.site && md.home.site !== 'local' ? ` on ${md.home.site}` : ''}`
+    : 'its source'
+  const checked = md.source_checked_at
+    ? ` · checked ${new Date(md.source_checked_at * 1000).toLocaleString()}` : ''
+  async function recheck() {
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/recheck`, { method: 'POST' })
+      const d = await r.json().catch(() => null)
+      setNote(d?.state === 'unchanged' ? 'source matches the registration again' : null)
+    } catch { setNote('re-check failed — is the machine reachable?') }
+    setBusy(false); onChange()
+  }
+  async function relink() {
+    if (!newPath.trim()) return
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(entity.id)}/relink`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: newPath.trim() }),
+      })
+      if (r.status === 409) {
+        setNote('the content at that path differs — use “new version” instead')
+      } else if (!r.ok) {
+        setNote('nothing readable at that path')
+      } else {
+        setRelinking(false); setNote('relinked — same content, new home')
+      }
+    } catch { setNote('relink failed') }
+    setBusy(false); onChange()
+  }
+  return (
+    <div className="focus__drift">
+      <div>
+        ⚠ {md.source_missing
+          ? `The data at ${where} is gone or unreachable`
+          : `The data at ${where} has changed since registration`}{checked}
+      </div>
+      <div className="focus__drift-actions">
+        {md.source_changed && onPrefill && (
+          <button className="focus__drift-btn" disabled={busy}
+            onClick={() => onPrefill(`The source of dataset "${entity.title}" (entity_id="${entity.id}") changed at ${where}. Register the current contents as a NEW VERSION of this dataset (keep the old one for provenance). `)}>
+            Use as new version
+          </button>
+        )}
+        <button className="focus__drift-btn" disabled={busy}
+          onClick={() => setRelinking(v => !v)}>It moved — relink…</button>
+        <button className="focus__drift-btn" disabled={busy} onClick={recheck}>Re-check</button>
+      </div>
+      {relinking && (
+        <div className="focus__drift-relink">
+          <input value={newPath} onChange={e => setNewPath(e.target.value)}
+                 placeholder="new path of the same data…"
+                 onKeyDown={e => { if (e.key === 'Enter') relink() }} />
+          <button className="focus__drift-btn" disabled={busy || !newPath.trim()}
+                  onClick={relink}>Verify & relink</button>
+        </div>
+      )}
+      {note && <div className="focus__drift-note">{note}</div>}
     </div>
   )
 }

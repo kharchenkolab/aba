@@ -187,6 +187,65 @@ def ingest_produced(abspath: str, *, site: str = "local") -> dict:
 
 # ── first use / drift ────────────────────────────────────────────────────────
 
+def content_shape(path: str, site: str) -> dict:
+    """Names+sizes fingerprint with mtimes EXCLUDED — the §5 relink comparator
+    (misc/more_weft_ui.md): a legitimate migration (`cp -r`, rsync without
+    `-t`) rewrites mtimes while content is identical, so the registration
+    digest (which includes mtimes — cheap and right for in-place drift) is
+    the wrong comparator for "it moved"."""
+    from core.compute.errors import ComputeError
+    try:
+        fp = _comp().sync_call("data_fingerprint", path, site,
+                               hash_under=_FP_HASH_UNDER,
+                               max_entries=_FP_MAX_ENTRIES)
+    except ComputeError as e:
+        if "missing" in e.code or "not" in e.detail.lower():
+            return {"exists": False}
+        raise
+    entries = fp.get("entries") or []
+    if not entries and not fp.get("bytes"):
+        return {"exists": False}
+    lines = sorted(f"{e['path']}\t{e['bytes']}" for e in entries)
+    return {"exists": True,
+            "digest": hashlib.sha1("\n".join(lines).encode()).hexdigest(),
+            "n_files": len(entries),
+            "total_bytes": sum(e.get("bytes", 0) for e in entries)}
+
+
+def relink(meta: dict, new_path: str, site: Optional[str] = None) -> dict:
+    """§5 verified relink ("it moved"): accept silently ONLY on a content
+    match. Compares content shapes (names+sizes, mtimes excluded) between the
+    old home (when still readable — a moved-by-copy) and the new path; when
+    the old home is gone, falls back to the recorded fingerprint's
+    n_files/total_bytes (weaker, stated). A mismatch demotes to the
+    new-version flow — never a silent repoint.
+
+    → {ok, state: relinked|mismatch|missing|no_home, home?, fingerprint?}"""
+    home = meta.get("home") or {}
+    if not home.get("path"):
+        return {"ok": False, "state": "no_home"}
+    old_site = home.get("site") or "local"
+    new_site = site or old_site
+    new_shape = content_shape(new_path, new_site)
+    if not new_shape.get("exists"):
+        return {"ok": False, "state": "missing",
+                "detail": f"nothing found at {new_path} on {new_site}"}
+    old_shape = content_shape(home["path"], old_site)
+    if old_shape.get("exists"):
+        match = old_shape["digest"] == new_shape["digest"]
+    else:
+        rec = meta.get("fingerprint") or {}
+        match = (rec.get("n_files") == new_shape["n_files"]
+                 and rec.get("total_bytes") == new_shape["total_bytes"])
+    if not match:
+        return {"ok": False, "state": "mismatch", "new_shape": new_shape,
+                "old_shape": (old_shape if old_shape.get("exists")
+                              else meta.get("fingerprint"))}
+    return {"ok": True, "state": "relinked",
+            "home": {"site": new_site, "path": new_path},
+            "fingerprint": fingerprint_site_path(new_path, new_site)}
+
+
 def revalidate(meta: dict) -> dict:
     """Compare the durable home now vs the recorded fingerprint.
     → {state: unchanged|drifted|missing|no_home, fingerprint?}"""
