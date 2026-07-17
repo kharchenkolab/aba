@@ -28,6 +28,16 @@ from study import (  # noqa: E402
 from core.graph.entities import find_entities, get_entity  # noqa: E402
 
 R_DATA = "/home/physicist/aba-mn-data/readings"   # ON the hpc fixture
+M_DATA = "/home/pkharchenko/aba-mn2-data"         # ON mendel (real remote ssh)
+M_ROOT = "/home/pkharchenko/aba-mn2-weft"
+MENDEL_OK = False                                 # set in main() if reachable+registered
+
+
+def mssh(cmd: str):
+    """Run a command ON mendel (the real second remote site)."""
+    import subprocess
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "mendel", cmd],
+                          capture_output=True, text=True, timeout=120)
 
 
 def _cluster_conn():
@@ -635,6 +645,73 @@ def mn_data_gravity_recall(client, pid, tid):
     ]
 
 
+@scenario("mn_conflicting_gravity")
+def mn_conflicting_gravity(client, pid, tid):
+    """Two real sites, conflicting data gravity: a LARGE dataset lives on
+    mendel; the user asks to compute 'on hpc'. The agent must NOT silently
+    haul big data across machines — it should compute where the data is
+    (mendel) or explicitly surface the transfer cost. (Skips if mendel isn't
+    available.)"""
+    if not MENDEL_OK:
+        return [], [("mendel available (scenario skipped otherwise)", False)]
+    mssh(f"mkdir -p {M_DATA} && head -c 80000000 /dev/urandom > {M_DATA}/big_a.bin "
+         f"&& (echo n,w; seq 1 400 | awk '{{print $1\",\"($1*8)%15}}') > {M_DATA}/idx.csv")
+    total = sum((i * 8) % 15 for i in range(1, 401))
+    caps = [drive_turn(client, pid, tid,
+        f"Our big collection (an ~80 MB binary + idx.csv) lives on machine "
+        f"'mendel' at {M_DATA}. Register idx.csv as dataset 'Idx' by "
+        f"reference. Then I'd like a summation of idx.csv's w column — I was "
+        f"going to say run it on 'hpc', but do whatever avoids moving the big "
+        f"data around. Tell me the sum and where you ran it, and why.")]
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    txt = full.lower()
+    ran = _site_ran(caps)
+    # good: computed at the data (mendel), NOT on hpc; and did not pull the big binary
+    pulled_big = any(int(t["input"].get("max_bytes") or 0) > 50_000_000
+                     for t in tools_named(caps, "fetch_dataset"))
+    return caps, [
+        ("registered Idx by reference on mendel", any(
+            ((e.get("metadata") or {}).get("home") or {}).get("site") == "mendel"
+            for e in find_entities(type="dataset", not_deleted=True)
+            if (e.get("title") or "").lower() == "idx")),
+        ("did NOT compute on hpc (avoided moving big data there)",
+         "hpc" not in ran),
+        ("computed where the data is, or explained the tradeoff",
+         "mendel" in ran or any(w in txt for w in
+            ("where the data", "avoid moving", "transfer", "data lives", "on mendel"))),
+        ("correct sum reported", str(total) in full),
+        ("did not haul the big binary across", not pulled_big),
+    ]
+
+
+@scenario("mn_cross_thread_separation")
+def mn_cross_thread_separation(client, pid, tid):
+    """Two threads, two sites: thread A works on hpc, thread B on mendel. The
+    agent must not cross-wire where each thread's work ran. (Skips if mendel
+    isn't available.)"""
+    if not MENDEL_OK:
+        return [], [("mendel available (scenario skipped otherwise)", False)]
+    tidB = client.post("/api/threads",
+                       json={"project_id": pid, "title": "thread B"}).json()["id"]
+    capsA = drive_turn(client, pid, tid,
+        "On machine 'hpc', compute and print the sum of 1..111. Run it there.")
+    capsB = drive_turn(client, pid, tidB,
+        "On machine 'mendel', compute and print the sum of 1..222. Run it there.")
+    qA = drive_turn(client, pid, tid,
+        "Which machine did the work in THIS conversation run on? One word.")
+    qB = drive_turn(client, pid, tidB,
+        "Which machine did the work in THIS conversation run on? One word.")
+    caps = [capsA, capsB, qA, qB]
+    aran = _site_ran([capsA]); bran = _site_ran([capsB])
+    aTxt = qA["text"].lower(); bTxt = qB["text"].lower()
+    return caps, [
+        ("thread A ran on hpc", "hpc" in aran),
+        ("thread B ran on mendel", "mendel" in bran),
+        ("thread A recalls hpc (not mendel)", "hpc" in aTxt and "mendel" not in aTxt),
+        ("thread B recalls mendel (not hpc)", "mendel" in bTxt and "hpc" not in bTxt),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -659,6 +736,21 @@ def main():
                               "-o", "IdentitiesOnly=yes"]})
     print("[mn] hpc (docker slurm, detached) registered")
 
+    # optional SECOND real site (mendel over ssh) for the cross-site scenarios;
+    # gracefully skipped when unreachable
+    global MENDEL_OK
+    if mssh("echo ok").stdout.strip() == "ok":
+        try:
+            r = c.sync_call("register_site", "mendel", "ssh",
+                            {"root": M_ROOT, "host": "mendel", "durable": True})
+            MENDEL_OK = r.get("site") == "mendel"
+            print("[mn] mendel (real ssh, detached) registered" if MENDEL_OK
+                  else f"[mn] mendel registration returned {r}")
+        except Exception as e:  # noqa: BLE001
+            print("[mn] mendel registration failed — cross-site scenarios skip:", e)
+    else:
+        print("[mn] mendel unreachable — cross-site scenarios skip")
+
     from fastapi.testclient import TestClient
     from main import app
     scenarios = [(fn._scenario, fn) for fn in
@@ -668,7 +760,8 @@ def main():
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,
                   mn_gpu_routing, mn_rerun_asis_recomputes,
-                  mn_data_gravity_recall]]
+                  mn_data_gravity_recall, mn_conflicting_gravity,
+                  mn_cross_thread_separation]]
     try:
         with TestClient(app) as client:
             try:
@@ -677,14 +770,18 @@ def main():
                         continue
                     run_scenario(client, name, fn)
             finally:
-                try:
-                    ad.get_compute().sync_call("site_unregister", "hpc")
-                except Exception:  # noqa: BLE001
-                    pass
-                print("[cleanup] hpc unregistered")
+                for site in ("hpc", "mendel"):
+                    try:
+                        ad.get_compute().sync_call("site_unregister", site)
+                    except Exception:  # noqa: BLE001
+                        pass
+                print("[cleanup] sites unregistered")
     finally:
         out = hssh("rm -rf /home/physicist/aba-mn-data && echo cleaned")
         print("[cleanup] hpc data dirs:", out.stdout.strip() or out.stderr[-120:])
+        if MENDEL_OK:
+            mout = mssh(f"rm -rf {M_ROOT} {M_DATA} && echo cleaned")
+            print("[cleanup] mendel dirs:", mout.stdout.strip() or mout.stderr[-120:])
     print("\nMULTINODE:", "ALL PASS" if all(ok for _, ok in RESULTS)
           else "FAILURES: " + ", ".join(n for n, ok in RESULTS if not ok))
     sys.exit(0 if all(ok for _, ok in RESULTS) else 1)
