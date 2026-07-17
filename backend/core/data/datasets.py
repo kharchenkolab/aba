@@ -272,6 +272,10 @@ def explain_data_error(err: Any) -> Optional[str]:
         return ("A dataset failed its content check after transfer "
                 f"({detail}). It may be corrupted in transit — retry, or "
                 "re-register the source.")
+    if code == "retain.no_durable":
+        return ("This machine has no safe storage declared, so results can't "
+                "be kept on it. Declare durable storage on its machine card "
+                "(Settings → Compute), or ship the results here explicitly.")
     if code == "data.missing":
         return (f"A dataset's stored bytes are gone ({detail}). If its durable "
                 "home still exists, re-register it; if it was produced by a "

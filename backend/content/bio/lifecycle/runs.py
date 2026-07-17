@@ -442,9 +442,51 @@ def _retain_run_outputs(run_id: str, run_metadata: dict) -> None:
             retention.retain(t, include=cumulative, label=run_id,
                              layout="label", background=True)
         except Exception as e:  # noqa: BLE001 — logged + surfaced, never blocks the turn
+            from core.compute.errors import ComputeError
+            if isinstance(e, ComputeError) and e.code == "retain.no_durable":
+                err = _no_durable_keep_policy(t, cumulative, run_id)
+                if err:
+                    errors.append(err)
+                continue
             _log.warning("retain failed for run %s target %s: %s", run_id, t, e)
             errors.append(f"{t}: {e}")
     _note_retention_alert(run_id, run_metadata, "; ".join(errors) if errors else None)
+
+
+def _no_durable_keep_policy(target: str, keepers: list, run_id: str):
+    """retention2's refusal, resolved by aba's SIZE-GATED default (never a
+    silent multi-GB transfer, never a silent loss): small keeper sets ship
+    to the controller workspace with a note; big ones become a Run alert
+    carrying weft's own levers (declare durable storage on the machine, or
+    ship explicitly). Returns an alert string, or None when handled."""
+    from core.compute import retention
+    from core.compute.adapter import get_compute
+    from core.data.datasets import FETCH_GUARDRAIL_BYTES
+    total = None
+    try:
+        inv = get_compute().sync_call("run_inventory", target)
+        names = set(keepers)
+        total = sum(e.get("bytes", 0) for e in (inv.get("entries") or inv.get("files") or [])
+                    if isinstance(e, dict)
+                    and (e.get("path") in names
+                         or (e.get("path") or "").rsplit("/", 1)[-1] in names))
+    except Exception:  # noqa: BLE001 — unknown size reads as "big": ask, don't ship
+        pass
+    if total is not None and total <= FETCH_GUARDRAIL_BYTES:
+        try:
+            retention.retain(target, include=list(keepers), label=run_id,
+                             layout="label", background=True,
+                             dest="@workspace")
+            _log.info("run %s: keepers (%.1f MB) shipped to the workspace — "
+                      "site has no durable storage", run_id, total / 1e6)
+            return None
+        except Exception as e:  # noqa: BLE001
+            return f"{target}: ship-home failed: {e}"
+    size = f"{total / 1e9:.1f} GB" if total is not None else "an unknown size"
+    return (f"results not kept: the machine that ran this has no safe "
+            f"storage and the keepers total {size}. Options: declare "
+            f"durable storage on its machine card (Settings → Compute), or "
+            f"ask to ship them here explicitly.")
 
 
 def _note_retention_alert(run_id: str, run_metadata: dict, msg) -> None:
