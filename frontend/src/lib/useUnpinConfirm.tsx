@@ -9,11 +9,13 @@
  *      this member from the Result; the figure entity + revisions stay.
  *
  *   2. The wrapping Result has only this evidence as its non-auto
- *      content → blocking info dialog. Unpinning would empty (and
- *      therefore archive) the Result, which is equivalent to deleting
- *      it — and per the design convention (see ResultView
- *      _removeDialogsFor) that gesture belongs on the rail ⋯ menu, not
- *      on a per-figure pin. The dialog directs the user there.
+ *      content → destructive ConfirmDialog that states the consequence:
+ *      the now-empty Result is ARCHIVED along with the unpin (that is
+ *      the backend's actual /unpin contract — reversible, the caption/
+ *      interpretation is preserved on the archived Result). The earlier
+ *      block-with-info dead end ("go delete it from the rail ⋯ menu")
+ *      left users in a half-toggled state with no completable action
+ *      (PK 2026-07-17); a confirm that ACTS is both honest and safe.
  *
  * Usage:
  *
@@ -122,21 +124,20 @@ export function useUnpinConfirm(entities: Entity[], onRefresh: () => void) {
 
   const dialog = target && target.mode === 'last'
     ? <ConfirmDialog
-        title="That would empty the Result"
-        mode="info" variant="info" primaryLabel="Got it"
-        onPrimary={() => setTarget(null)}
+        title={`Unpin "${labelFor(target)}"?`}
+        variant="destructive" primaryLabel="Unpin & archive Result"
+        onPrimary={() => _commit(target.evidenceId)}
         onCancel={() => setTarget(null)}
         body={
           <>
             <p>
-              <strong>{labelFor(target)}</strong> is the only meaningful content
-              in the Result that wraps it — unpinning would leave the Result
-              effectively empty.
+              <strong>{labelFor(target)}</strong> is the only content in the
+              Result that wraps it, so unpinning also <strong>archives that
+              Result</strong> (its caption and notes are preserved on the
+              archived copy — this can be undone from archived items).
             </p>
             <p>
-              That's equivalent to deleting the Result itself. To do that, use
-              the <strong>⋯ menu</strong> next to the Result in the left rail
-              (look for <code>Delete</code> there).
+              The figure itself (and any revisions) stay in the project.
             </p>
           </>
         }

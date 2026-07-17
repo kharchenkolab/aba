@@ -157,21 +157,23 @@ function toolRunningLabel(name: string) {
 /** Per-figure pin (a cell can hold several plots — each is its own entity).
  *  Icon-only, hover-reveal in the plot's top-right corner — same style as the
  *  message toolbar buttons. */
-function FigurePin({ entity, isPinned, onPin }: {
+export function FigurePin({ entity, isPinned, onPin }: {
   entity: Entity
   isPinned: boolean
   onPin: (id: string, pinned: boolean) => void
 }) {
-  // Optimistic flip on click for instant feedback; reconciles with the
-  // authoritative `isPinned` (derived from active Results that include
-  // this figure) once the server confirms. Resets when isPinned changes.
+  // Optimistic flip ONLY when pinning (fire-and-forget POST). Unpin routes
+  // through a confirm/consequence dialog — flipping optimistically there left
+  // a discordant un-red pin when the user cancelled, because `isPinned` never
+  // CHANGES in a cancelled flow so the reset effect never fired (PK
+  // 2026-07-17). The pin stays red until the unpin actually happens.
   const [opt, setOpt] = useState<boolean | null>(null)
   useEffect(() => { setOpt(null) }, [isPinned])
   const pinned = opt ?? isPinned
   return (
     <button
       className={`msg__tool msg__tool--pin ${pinned ? 'msg__tool--pinned' : 'msg__tool--hover'}`}
-      onClick={() => { setOpt(!pinned); onPin(entity.id, !pinned) }}
+      onClick={() => { if (!pinned) setOpt(true); onPin(entity.id, !pinned) }}
       title={pinned ? 'Pinned — click to unpin' : 'Pin this figure'}
     >
       <svg viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3z"/></svg>
