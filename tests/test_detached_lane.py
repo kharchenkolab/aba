@@ -64,6 +64,8 @@ class _FakeComp:
             return [{"state": "DONE"}]
         if name == "task_result":
             return {"node": "far-node", "env_id": None, "wall_s": 1}
+        if name == "task_cancel":
+            return {"ok": True}
         if name == "provenance":
             return {}
         raise AssertionError(f"unexpected call {name}")
@@ -301,6 +303,47 @@ def test_sync_remote_runs_in_tool(monkeypatch):
     assert all("sync" not in (j.get("params") or {}) for j in _active_weft_jobs())
 
 
+def test_sync_substrate_cancel_not_reported_as_success(monkeypatch):
+    """A task cancelled ON THE SUBSTRATE returns {status: cancelled} with no
+    error/returncode — the sync loop must NOT read that as success (review
+    Defect 2)."""
+    class _CancelComp(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_status":
+                return [{"state": "CANCELLED"}]
+            return super().sync_call(name, *a, **kw)
+    comp = _CancelComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    from content.bio.tools.run_exec import _run_remote_sync
+    out = _run_remote_sync({"code": "x=1", "site": "far", "timeout_s": 30},
+                           {"thread_id": "t"}, "default", "t", "run_python")
+    assert out["status"] == "cancelled" and "cancelled" in out["note"].lower()
+
+
+def test_sync_cancel_uses_fresh_row_with_weft_id(monkeypatch):
+    """Token-cancel must call sub.cancel on a row carrying weft_id — the stale
+    submit-return dict has none, so cancelling it orphans the remote task
+    (review Defect 1). We assert task_cancel actually reaches the substrate."""
+    class _SlowComp(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_status":
+                return [{"state": "RUNNING"}]      # never terminal → loop spins
+            return super().sync_call(name, *a, **kw)
+    comp = _SlowComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+
+    class _Tok:
+        cancelled = True                            # already cancelled on entry
+    from content.bio.tools.run_exec import _run_remote_sync
+    out = _run_remote_sync({"code": "x=1", "site": "far", "timeout_s": 30},
+                           {"thread_id": "t", "cancel_token": _Tok()},
+                           "default", "t", "run_python")
+    assert out["status"] == "cancelled"
+    # task_cancel reached the substrate with the real weft id (not a no-op)
+    cancels = [c for c in comp.calls if c[0] == "task_cancel"]
+    assert cancels and cancels[0][1][0] == "wj_1"
+
+
 def test_site_validation_names_real_sites(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -333,6 +376,8 @@ def _standalone() -> int:
               test_poll_relock_covers_default_env_via_base_pack,
               test_active_weft_jobs_seen_in_single_db_mode,
               test_sync_remote_runs_in_tool,
+              test_sync_substrate_cancel_not_reported_as_success,
+              test_sync_cancel_uses_fresh_row_with_weft_id,
               test_site_validation_names_real_sites):
         mp = _MP()
         try:

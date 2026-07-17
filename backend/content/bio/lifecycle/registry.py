@@ -127,14 +127,7 @@ def register_artifacts_from_tool_result(
     # is reproduced by replaying this thread's ordered cells.
     _mode = result_obj.get("execution_mode") if isinstance(result_obj, dict) else None
     res_meta["execution_mode"] = _mode or "stateless"
-    # A "session" artifact needs this thread's ordered cells replayed to
-    # reproduce it; a FRESH-PROCESS artifact (stateless one-shot, a background
-    # job, or a remote-sync run on another machine) is reproduced by its
-    # producing_code alone — no kernel history to replay.
-    _self_contained = {"stateless", "remote-sync", "background", "job"}
-    res_meta["reproducible"] = ("self_contained"
-                                if res_meta["execution_mode"] in _self_contained
-                                else "session")
+    res_meta["reproducible"] = "self_contained" if res_meta["execution_mode"] == "stateless" else "session"
 
     # Capture every executed cell onto the thread's open Run (if any), so the
     # Run is the recompute unit — not just cells that happened to emit a figure.

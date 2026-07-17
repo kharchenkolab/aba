@@ -691,16 +691,30 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
                params={**(fresh.get("params") or {}), "sync": True})
     sub = WeftSubmitter(site=site)
     cancel_token = (ctx or {}).get("cancel_token")
+
+    def _kill():
+        # cancel the FRESH row — the stale submit-return dict has no weft_id
+        # (written by _submit_detached AFTER submit returns), so cancelling it
+        # is a silent no-op that orphans the remote task (review Defect 1)
+        sub.cancel(get_job(job["id"], project_id=project_id) or job)
+
     t0 = _time.time()
     while _time.time() - t0 < timeout_s + 60:
         if cancel_token is not None and getattr(cancel_token, "cancelled", False):
-            sub.cancel(job)
+            _kill()
             update_job(job["id"], project_id=project_id, status="cancelled")
             return {"status": "cancelled",
                     "note": f"remote step on {site} cancelled"}
         row = get_job(job["id"], project_id=project_id)
         res = sub.poll(row)
         if res is not None:
+            # a substrate-cancelled task returns {status: cancelled} with no
+            # error/returncode — must NOT be read as success (review Defect 2)
+            if res.get("status") == "cancelled":
+                update_job(job["id"], project_id=project_id, status="cancelled")
+                return {"status": "cancelled", "compute": res.get("compute"),
+                        "note": f"the remote step on {site} was cancelled on the "
+                                f"compute substrate"}
             ok = "error" not in res and res.get("returncode", 0) == 0
             update_job(job["id"], project_id=project_id,
                        status="done" if ok else "failed",
@@ -713,12 +727,23 @@ def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
             out = {"status": "ok", "stdout": res.get("stdout", ""),
                    "plots": res.get("plots", []), "tables": res.get("tables", []),
                    "files": res.get("files", []), "compute": res.get("compute"),
+                   "cwd": str(sub._run_dir(row)),
                    "execution_mode": "remote-sync",
                    "note": f"ran on {site} in a fresh process there "
                            f"(no interactive state); outputs harvested back"}
+            # Provenance parity with the background lane: write the exec record
+            # (code + produced + the weft placement block "ran on <site>") and
+            # inject exec_id, so the on_post_tool hook links artifacts to it and
+            # a pinned figure traces back to where it actually ran.
+            try:
+                from core.jobs.runner import _write_exec_record_for_job
+                _write_exec_record_for_job(row, out, project_id, project_id)
+            except Exception:  # noqa: BLE001 — provenance is best-effort
+                pass
             return out
         _time.sleep(1.5)
-    sub.cancel(job)
+    _kill()      # fresh-row cancel (Defect 1): the task walltime outlives our
+                 # timeout_s+60 loop, so it IS still running here
     update_job(job["id"], project_id=project_id, status="failed",
                error=f"timed out after {timeout_s}s")
     return {"status": "error",
