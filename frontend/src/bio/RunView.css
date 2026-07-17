@@ -39,7 +39,18 @@
 .runview__act:hover { background: var(--tree-active-bg); color: var(--text); }
 .runview__act--danger { color: #b91c1c; border-color: #fecaca; }
 .runview__act--danger:hover { background: #fee2e2; }
-.runview__act--primary { color: var(--accent); border-color: var(--accent); }
+.runview__verdict { font-size: 12.5px; color: var(--text-2); }
+.runview__verdict--failed { color: #b91c1c; }
+.runview__alert { margin: 2px 0 4px; font-size: 12px; color: #b45309; }
+.runview__origin { font-size: 12px; color: var(--text-4); margin: 2px 0 6px; }
+.runview__origin-link {
+  border: none; background: none; padding: 0; font-size: 12px;
+  color: var(--text-3); cursor: pointer; text-decoration: underline dotted;
+  display: inline-flex; align-items: center; gap: 3px; margin: 0 2px;
+}
+.runview__origin-link:hover { color: var(--text); }
+.runview__origin-link:disabled { text-decoration: none; cursor: default; }
+.runview__details { font-size: 12px; color: var(--text-3); margin: 4px 0; font-family: var(--mono); }
 
 /* ⋯ overflow for the rare re-run verbs */
 .runview__more { position: relative; display: inline-block; }

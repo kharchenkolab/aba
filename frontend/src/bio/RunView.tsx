@@ -12,6 +12,7 @@ import ResultList, { type OutputItem } from '../components/ResultList'
 import { useUnpinConfirm } from '../lib/useUnpinConfirm'
 import FileBrowser, { type TreeNode } from './FileBrowser'
 import FileCanvas from '../viewers/FileCanvas'
+import EntityMenu from './EntityMenu'
 import type { FileNode } from '../viewers/types'
 import './RunView.css'
 
@@ -65,7 +66,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   const active = status === 'running' || status === 'queued'
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(run.title)
-  const [panel, setPanel] = useState<'command' | 'inputs' | 'log' | null>(
+  const [panel, setPanel] = useState<'command' | 'log' | 'details' | null>(
     status === 'failed' || status === 'running' ? 'log' : null)
   // Re-run verbs live in a quiet ⋯ overflow — rarely used, they shouldn't
   // compete with Discuss (the one primary action) for band space.
@@ -175,10 +176,43 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     loadDurable()   // re-read (and start polling if the keep is now saving)
   }
 
-  const where = hpc ? `⛁ ${m.where || 'cluster'}${m.queue ? ` · ${m.queue}` : ''}` : '⚙ local'
-  const elapsed = status === 'running' ? `running ${rel(m.started_at)}`
-    : status === 'succeeded' || status === 'failed' ? rel(m.started_at || m.submitted_at, m.finished_at)
-    : status === 'queued' ? `waiting ${rel(m.submitted_at)}` : ''
+  // §8d verdict — ONE state-appropriate sentence (quiet when boring: a clean
+  // local run reads `ran locally · 2 min`). Failed runs headline the CAUSE —
+  // m.error carries the plain-language translation when one exists; the raw
+  // log stays behind the Log toggle.
+  const siteName = hpc ? (m.where || 'cluster') : null
+  const dur = rel(m.started_at || m.submitted_at, m.finished_at)
+  const nTotal = duraSummary?.total ?? 0
+  const nKept = (duraSummary?.retained ?? 0) + (duraSummary?.saving ?? 0)
+  const asked = [m.resources?.cores && `${m.resources.cores} cores`,
+                 m.resources?.mem, m.resources?.walltime].filter(Boolean).join(' / ')
+  const failCause = (m.error || '').split('\n').find(l => l.trim())?.trim() || ''
+  const verdict =
+    status === 'queued'
+      ? `queued${siteName ? ` on ${siteName}` : ''}${m.queue ? ` (${m.queue})` : ''}`
+        + `${asked ? ` · asked ${asked}` : ''} · waiting ${rel(m.submitted_at)}`
+    : status === 'running'
+      ? `running${siteName ? ` on ${siteName}` : ''} · ${rel(m.started_at)}`
+        + `${m.resources?.walltime ? ` of ${m.resources.walltime}` : ''}`
+    : status === 'succeeded'
+      ? `ran ${siteName ? `on ${siteName}` : 'locally'}${dur ? ` · ${dur}` : ''}`
+        + `${nTotal ? ` · ${nTotal} file${nTotal === 1 ? '' : 's'}` : ''}`
+        + `${!runOpen && nKept ? ` · ${nKept} kept ✓` : ''}`
+    : status === 'failed'
+      ? `stopped: ${failCause ? (failCause.length > 160 ? failCause.slice(0, 157) + '…' : failCause) : 'see the log below'}`
+    : status === 'cancelled' ? `cancelled${dur ? ` · after ${dur}` : ''}`
+    : status
+  // The machinery line, one disclosure away (§8e.7): scheduler/job/wait/asked.
+  const details = (hpc || m.scheduler_job_id || asked)
+    ? [siteName, m.queue && `${m.queue} queue`,
+       m.scheduler_job_id && `job ${m.scheduler_job_id}`,
+       m.submitted_at && m.started_at && `waited ${rel(m.submitted_at, m.started_at)}`,
+       m.started_at && m.finished_at && `ran ${rel(m.started_at, m.finished_at)}`,
+       asked && `asked ${asked}`].filter(Boolean).join(' · ')
+    : ''
+  const retAlert = duraSummary
+    ? (duraSummary as Record<string, unknown>)['retention_alert'] as string | undefined
+    : undefined
 
   async function patch(body: Record<string, unknown>) {
     await fetch(`/api/entities/${encodeURIComponent(run.id)}`, {
@@ -191,7 +225,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     await fetch(`/api/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' }).catch(() => {})
     onChange()
   }
-  const toggle = (p: 'command' | 'inputs' | 'log') => setPanel(c => c === p ? null : p)
+  const toggle = (p: 'command' | 'log' | 'details') => setPanel(c => c === p ? null : p)
 
   const outputs = m.outputs ?? []
   // Hide superseded revisions from the Plots strip. When the agent
@@ -301,6 +335,20 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     onChange()
   }
 
+  // Origin + downstream (§8e.6): on whose behalf it ran, and what came of it.
+  // All graph data already in `entities`; the old Inputs toggle folds in here.
+  const threadEnt = entities.find(e =>
+    e.id === (run.metadata as { thread_id?: string } | undefined)?.thread_id)
+  const runArtifactIds = useMemo(() =>
+    new Set(outputs.map(o => o.artifact_id).filter(Boolean) as string[]), [outputs])
+  const nResults = useMemo(() =>
+    [...pinnedArtifactIds].filter(id => runArtifactIds.has(id)).length,
+    [pinnedArtifactIds, runArtifactIds])
+  const producedDatasets = useMemo(() => entities.filter(e =>
+    e.type === 'dataset' && e.status === 'active'
+    && (e.metadata as { run_key?: { run?: string } } | undefined)?.run_key?.run === run.id),
+    [entities, run.id])
+
   const pill = (
     <span className={`run-pill run-pill--${status}`}>
       {active && status === 'running' && <span className="run-pill__dot" />}{STATUS_LABEL[status] ?? status}
@@ -319,21 +367,16 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
           <h1 className="runview__title" onClick={() => setEditing(true)} title="Click to rename">{run.title}</h1>
         )}
         {pill}
+        <EntityMenu entity={run} onChange={onChange} />
       </div>
 
-      {/* Status + controls band */}
+      {/* Verdict band (§8d) — one sentence; no Discuss button (§8b: the focused
+          run's chat peek IS the conversation; per-output gestures remain). */}
       <div className="runview__band">
-        <span className="runview__meta">{where}</span>
-        {elapsed && <span className="runview__meta runview__meta--dim">{elapsed}</span>}
-        {m.scheduler_job_id && <span className="runview__meta runview__meta--dim">job {m.scheduler_job_id}</span>}
+        <span className={`runview__verdict ${status === 'failed' ? 'runview__verdict--failed' : ''}`}
+              title={status === 'failed' ? (m.error || undefined) : undefined}>{verdict}</span>
         <span className="runview__spacer" />
         {active && <button className="runview__act runview__act--danger" onClick={cancel}>Cancel</button>}
-        {(onPrefill || onAsk) && (
-          <button className="runview__act runview__act--primary"
-            onClick={() => seed(`Let's look at the run "${run.title}" (entity_id="${run.id}") — what it did and what the outputs show. `)}>
-            Discuss
-          </button>
-        )}
         {!active && (onPrefill || onAsk) && (
           <span className="runview__more" ref={moreRef}>
             <button className="runview__act" aria-label="More actions" title="More actions"
@@ -342,26 +385,40 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
               <div className="runview__menu">
                 <button onClick={() => { setMoreOpen(false); seed(`Re-run "${run.title}" (entity_id="${run.id}") as-is.`) }}>Re-run as-is</button>
                 <button onClick={() => { setMoreOpen(false); seed(`Re-run "${run.title}" (entity_id="${run.id}") with this change: `) }}>Re-run with changes…</button>
+                <button onClick={() => { setMoreOpen(false); seed(`Reproduce the run "${run.title}" (entity_id="${run.id}"): re-run it as recorded and report any drift.`) }}>Reproduce</button>
+                {hpc && <button onClick={() => { setMoreOpen(false); window.open('/weft/', '_blank') }}>Open in weft-ui ↗</button>}
               </div>
             )}
           </span>
         )}
       </div>
-      <div className="runview__toggles">
-        {m.command && <button className={panel === 'command' ? 'is-on' : ''} onClick={() => toggle('command')}>Command</button>}
-        {m.inputs && m.inputs.length > 0 && <button className={panel === 'inputs' ? 'is-on' : ''} onClick={() => toggle('inputs')}>Inputs</button>}
-        {(m.log_tail || m.error) && <button className={panel === 'log' ? 'is-on' : ''} onClick={() => toggle('log')}>Log</button>}
-      </div>
-      {panel === 'command' && m.command && <pre className="runview__pre">{m.command}</pre>}
-      {panel === 'inputs' && (
-        <div className="runview__chips">
-          {(m.inputs ?? []).map((inp, i) => (
-            <button key={i} className="run-chip" disabled={!inp.entity_id} onClick={() => inp.entity_id && onFocus(inp.entity_id)}>
-              <EntityGlyph name="dataset" size={12} />{inp.label}
+      {retAlert && (
+        <div className="runview__alert" title={retAlert}>⚠ {retAlert}</div>
+      )}
+      {(threadEnt || (m.inputs?.length ?? 0) > 0 || nResults > 0 || producedDatasets.length > 0) && (
+        <div className="runview__origin">
+          {threadEnt && <>from thread <button className="runview__origin-link"
+            onClick={() => onFocus(threadEnt.id)}>“{threadEnt.title}”</button></>}
+          {(m.inputs?.length ?? 0) > 0 && <>{threadEnt ? ' · ' : ''}inputs: {m.inputs!.map((inp, i) => (
+            <button key={i} className="runview__origin-link" disabled={!inp.entity_id}
+              onClick={() => inp.entity_id && onFocus(inp.entity_id)}>
+              <EntityGlyph name="dataset" size={11} />{inp.label}
             </button>
-          ))}
+          ))}</>}
+          {nResults > 0 && <> · {nResults} result{nResults === 1 ? '' : 's'} pinned</>}
+          {producedDatasets.length > 0 && <> · {producedDatasets.length === 1
+            ? <button className="runview__origin-link"
+                onClick={() => onFocus(producedDatasets[0].id)}>1 dataset registered</button>
+            : `${producedDatasets.length} datasets registered`}</>}
         </div>
       )}
+      <div className="runview__toggles">
+        {m.command && <button className={panel === 'command' ? 'is-on' : ''} onClick={() => toggle('command')}>Command</button>}
+        {(m.log_tail || m.error) && <button className={panel === 'log' ? 'is-on' : ''} onClick={() => toggle('log')}>Log</button>}
+        {details && <button className={panel === 'details' ? 'is-on' : ''} onClick={() => toggle('details')}>Details</button>}
+      </div>
+      {panel === 'command' && m.command && <pre className="runview__pre">{m.command}</pre>}
+      {panel === 'details' && details && <div className="runview__details">{details}</div>}
       {panel === 'log' && (m.error || m.log_tail) && (
         <pre className={`runview__pre ${m.error ? 'runview__pre--err' : ''}`}>{m.error ? m.error + '\n\n' : ''}{m.log_tail}</pre>
       )}

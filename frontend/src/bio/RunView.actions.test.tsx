@@ -1,8 +1,9 @@
 /**
- * Run-card action band: Discuss is the ONE primary verb and SEEDS the composer
- * (onPrefill — no auto-send, no focus yank); the rare re-run verbs live behind
- * the ⋯ overflow and seed too. onAsk remains only as the legacy fallback when
- * no prefill hook is wired.
+ * Run-card action band (§8b/§8d): NO run-level Discuss button — the focused
+ * run's chat peek is the conversation (context-aware composer placeholder).
+ * The band holds one verdict sentence + Cancel (active) + a quiet ⋯ overflow
+ * (re-run verbs + Reproduce), all of which SEED the composer via onPrefill
+ * (no auto-send); onAsk is only the legacy fallback.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
@@ -22,19 +23,33 @@ describe('RunView action band', () => {
   beforeEach(() => { origFetch = globalThis.fetch; mockFetch() })
   afterEach(() => { globalThis.fetch = origFetch; vi.restoreAllMocks() })
 
-  it('Discuss seeds the composer via onPrefill (never auto-sends via onAsk)', async () => {
-    const onPrefill = vi.fn(); const onAsk = vi.fn()
+  it('has NO run-level Discuss button (§8b: focus replaces Discuss)', async () => {
     await act(async () => {
       render(<RunView run={doneRun} entities={[]} onFocus={() => {}} onChange={() => {}}
-                      onAsk={onAsk} onPrefill={onPrefill} />)
+                      onPrefill={() => {}} onAsk={() => {}} />)
     })
-    fireEvent.click(screen.getByText('Discuss'))
-    expect(onPrefill).toHaveBeenCalledTimes(1)
-    expect(onPrefill.mock.calls[0][0]).toContain('entity_id="ana_x"')
-    expect(onAsk).not.toHaveBeenCalled()
+    expect(screen.queryByText('Discuss')).toBeNull()
   })
 
-  it('re-run verbs are in the ⋯ overflow, not the band, and seed the composer', async () => {
+  it('renders the §8d verdict sentence for a quiet local run', async () => {
+    await act(async () => {
+      render(<RunView run={doneRun} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    // local single-site quiescence: "ran locally", no site talk, no safety word
+    expect(screen.getByText(/^ran locally/)).toBeTruthy()
+  })
+
+  it('failed runs headline the cause in the verdict', async () => {
+    const failed = { id: 'ana_f', type: 'analysis', title: 'sweep', metadata: {
+      run: { status: 'failed', error: 'the input data at /x changed since registration\nlong trace…' },
+    } } as unknown as never
+    await act(async () => {
+      render(<RunView run={failed} entities={[]} onFocus={() => {}} onChange={() => {}} />)
+    })
+    expect(screen.getByText(/^stopped: the input data at \/x changed/)).toBeTruthy()
+  })
+
+  it('re-run verbs + Reproduce live in the ⋯ overflow and seed the composer', async () => {
     const onPrefill = vi.fn()
     await act(async () => {
       render(<RunView run={doneRun} entities={[]} onFocus={() => {}} onChange={() => {}}
@@ -42,6 +57,7 @@ describe('RunView action band', () => {
     })
     expect(screen.queryByText('Re-run as-is')).toBeNull()          // hidden until ⋯
     fireEvent.click(screen.getByLabelText('More actions'))
+    expect(screen.getByText('Reproduce')).toBeTruthy()
     fireEvent.click(screen.getByText('Re-run as-is'))
     expect(onPrefill).toHaveBeenCalledTimes(1)
     expect(onPrefill.mock.calls[0][0]).toMatch(/^Re-run "sweep" \(entity_id="ana_x"\) as-is\./)
@@ -54,7 +70,8 @@ describe('RunView action band', () => {
       render(<RunView run={doneRun} entities={[]} onFocus={() => {}} onChange={() => {}}
                       onAsk={onAsk} />)
     })
-    fireEvent.click(screen.getByText('Discuss'))
+    fireEvent.click(screen.getByLabelText('More actions'))
+    fireEvent.click(screen.getByText('Re-run as-is'))
     expect(onAsk).toHaveBeenCalledTimes(1)
   })
 
