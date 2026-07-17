@@ -244,8 +244,13 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
         setFootprint((r.prefixes_bytes ?? 0) + (r.package_cache_bytes ?? 0))
       }
     }).catch(() => {})
+    // §6 storage meter (remote cards only): kept results + data homes join the
+    // working-files line — each class renders only when nonzero (quiescence).
+    if (!isLocal) {
+      computeApi.holdings(s.name).then(h => { if (!stop) setHoldings(h) }).catch(() => {})
+    }
     return () => { stop = true }
-  }, [s.name, isScheduler])
+  }, [s.name, isScheduler, isLocal])
 
   async function act(label: string, fn: () => Promise<unknown>, done?: string) {
     setBusy(label); setNote(null)
@@ -391,10 +396,25 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
         </div>
       )}
 
-      {footprint != null && footprint > 0 && (
+      {((footprint != null && footprint > 0)
+        || (holdings != null && (holdings.kept_runs > 0 || holdings.dataset_homes.length > 0))) && (
         <div className="cmp-block">
           <div className="cmp-block__title">Disk</div>
-          <span>aba is using {fmtGB(footprint)} on this machine</span>{' '}
+          {/* §6: every byte aba touches is one of three kinds, each with its own
+              action; classes render only when nonzero. */}
+          {holdings != null && holdings.kept_runs > 0 && (
+            <div className="cmp-part">
+              kept results {holdings.kept_bytes > 0 ? fmtGB(holdings.kept_bytes) : `(${holdings.kept_runs} run${holdings.kept_runs === 1 ? '' : 's'})`}
+              <span className="cmp-dim">· protected — Free up never touches these</span>
+            </div>
+          )}
+          {holdings != null && holdings.dataset_homes.length > 0 && (
+            <div className="cmp-part">
+              data homes {holdings.dataset_homes.length}
+              <span className="cmp-dim">· referenced in place, not aba’s to reclaim</span>
+            </div>
+          )}
+          <span>working files {footprint != null ? fmtGB(footprint) : '—'} <span className="cmp-dim">· rebuildable</span></span>{' '}
           {reclaim == null ? (
             <button className="mod-linkbtn" disabled={busy !== null || !selfService}
               onClick={() => act('gc', async () => {

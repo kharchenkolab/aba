@@ -606,6 +606,49 @@ def set_keep_decision(run_id: str, keep=None, drop=None) -> dict:
     return {"run_id": run_id, "decision": dec, "summary": summary}
 
 
+def bring_back_run(run_id: str) -> dict:
+    """§8e.4 (more_weft_ui.md) bring-back: ship the Run's KEPT files to the
+    workspace — a managed local copy. This moves the LOCATION axis only; the
+    in-place keeps stay kept where they are (the promise is untouched), weft
+    just places a durable copy at @workspace. Selection = the kept rels the
+    retained index records for this Run per target, so nothing unkept rides
+    along."""
+    import json as _json
+    ent = get_entity(run_id)
+    if not ent:
+        return {"error": f"run {run_id} not found"}
+    targets = list((ent.get("metadata") or {}).get("weft_targets") or [])
+    if not targets:
+        return {"error": "run has no compute target to bring files from"}
+    from core.compute import retention
+    per_target: dict = {t: set() for t in targets}
+    for row in (retention.retained(label=run_id) or []):
+        t = row.get("target")
+        if t not in per_target or row.get("state") not in ("done", "pinned-pending"):
+            continue
+        rels = _sidecar_files(retention.location_path(row))
+        if not rels:
+            try:
+                rels = set(_json.loads(row.get("selection") or "{}").get("include") or [])
+            except Exception:  # noqa: BLE001
+                rels = set()
+        per_target[t] |= rels
+    requested = 0
+    errors: list = []
+    for t, rels in per_target.items():
+        if not rels:
+            continue
+        try:
+            retention.retain(t, include=sorted(rels), dest="@workspace",
+                             label=run_id, background=True)
+            requested += len(rels)
+        except Exception as e:  # noqa: BLE001
+            errors.append(str(e))
+    if not requested and not errors:
+        return {"error": "nothing kept for this run to bring back"}
+    return {"ok": not errors, "requested": requested, "errors": errors or None}
+
+
 def _sidecar_files(location: Optional[str]) -> set:
     """The relpaths a DONE retain kept — from its `.weft-run.json` sidecar (§6.1b),
     falling back to walking the retained dir. Empty for a location we can't read

@@ -250,6 +250,18 @@ def run_keep(rid: str, body: _KeepBody):
             "summary": out.get("summary")}
 
 
+@router.post("/api/runs/{rid}/bring-back")
+def run_bring_back(rid: str):
+    """§8e.4: ship this Run's kept files to the workspace (managed local copy).
+    Location axis only — keeps stay kept where they live."""
+    _run_or_404(rid)
+    from content.bio.lifecycle.runs import bring_back_run
+    out = bring_back_run(rid)
+    if out.get("error"):
+        raise HTTPException(400, out["error"])
+    return out
+
+
 @router.get("/api/runs/{run_id}/artifacts")
 def list_run_artifacts(run_id: str):
     """All artifacts produced by every exec attributed to this Run.

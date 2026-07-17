@@ -43,6 +43,11 @@ export function treeHasPending(node: TreeNode): boolean {
   if (node.kind === 'file') return node.state === 'saving'
   return (node.children || []).some(treeHasPending)
 }
+/** Flatten a durable tree's FILE nodes (whereabouts math: §8e.4). */
+export function treeFiles(node: TreeNode): TreeNode[] {
+  if (node.kind === 'file') return [node]
+  return (node.children || []).flatMap(treeFiles)
+}
 /** Drop `cleared` (swept, gone) file nodes — hidden by default; a toggle reveals them
  *  as read-only tombstones. §6.2: never SILENTLY lost, but not noise by default. */
 export function pruneCleared(node: TreeNode): TreeNode {
@@ -234,6 +239,36 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
   const retAlert = duraSummary
     ? (duraSummary as Record<string, unknown>)['retention_alert'] as string | undefined
     : undefined
+  // §8e.4 whereabouts: kept files whose bytes are NOT here (remote in-place,
+  // no served url) vs files available from this machine. Quiet when nothing
+  // is remote-only — a local run never sees this line.
+  const allFiles = useMemo(() => (runTree ? treeFiles(runTree) : []), [runTree])
+  const remoteOnly = useMemo(() =>
+    allFiles.filter(f => f.state === 'retained' && !f.artifact_path), [allFiles])
+  const tempFiles = useMemo(() =>
+    allFiles.filter(f => f.state === 'at-risk' || f.state === 'in-sandbox'), [allFiles])
+  async function bringBack() {
+    try {
+      const r = await fetch(`/api/runs/${encodeURIComponent(run.id)}/bring-back`, { method: 'POST' })
+      if (!r.ok) throw new Error(String(r.status))
+      setBringNote('bringing files back — they appear here as they land')
+    } catch { setBringNote('could not start the transfer — is the machine reachable?') }
+    loadDurable()
+  }
+  const [bringNote, setBringNote] = useState<string | null>(null)
+  // Run-scoped make-safe: keep every still-temporary file (the per-file Keep,
+  // applied across the run). Sequential; the durable view refresh shows keeping…
+  async function keepAllTemporary() {
+    for (const f of tempFiles) {
+      try {
+        await fetch(`/api/runs/${encodeURIComponent(run.id)}/keep`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rel: f.path }),
+        })
+      } catch { /* per-file failure surfaces as an unchanged badge */ }
+    }
+    loadDurable()
+  }
 
   async function patch(body: Record<string, unknown>) {
     await fetch(`/api/entities/${encodeURIComponent(run.id)}`, {
@@ -511,10 +546,18 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
                 <span className="dura-chip dura-chip--retained">{duraSummary.retained} kept ✓</span>}
               {(duraSummary.saving ?? 0) > 0 &&
                 <span className="dura-chip dura-chip--saving">{duraSummary.saving} keeping…</span>}
-              {!runOpen && ((duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)) > 0 &&
+              {!runOpen && ((duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)) > 0 && (
                 <span className="dura-chip dura-chip--temp"
                       title="Not kept — housekeeping will discard these eventually">
-                  {(duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)} temporary</span>}
+                  {(duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)} temporary
+                </span>
+              )}
+              {!runOpen && tempFiles.length > 0 && (
+                <button className="runview__browse-link" onClick={keepAllTemporary}
+                        title="Keep every still-temporary file (protect them where they live)">
+                  keep all
+                </button>
+              )}
               {(duraSummary.cleared ?? 0) > 0 && (
                 <button className="dura-chip dura-chip--cleared"
                         onClick={() => setShowCleared(s => !s)}
@@ -522,6 +565,19 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
                   {duraSummary.cleared} discarded · {showCleared ? 'hide' : 'show'}
                 </button>
               )}
+            </div>
+          )}
+          {/* §8e.4 whereabouts + bring-back — renders ONLY when kept bytes live
+              solely on another machine (a local run never sees this line). */}
+          {remoteOnly.length > 0 && (
+            <div className="runview__whereabouts">
+              {allFiles.length - remoteOnly.length} of {allFiles.length} files on this machine
+              {' · '}
+              <button className="runview__browse-link" onClick={bringBack}
+                      title="Copy the kept files to this machine (they also stay kept where they are)">
+                bring the rest back
+              </button>
+              {bringNote && <span className="cmp-dim"> — {bringNote}</span>}
             </div>
           )}
           <FileBrowser
