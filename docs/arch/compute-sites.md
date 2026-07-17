@@ -101,6 +101,21 @@ tab's own language. See [`jobs-and-hpc.md`](jobs-and-hpc.md) for the submit/poll
 - `weft-ui/server/tests/test_embed.py` — shared-controller mode (serves the host's Weft, no
   ui.lock/reconcile; factory failure degrades the mount).
 
+## Retention2 integration (2026-07-18)
+
+Site durability is weft's `durable` key (`true` | `"/path"` | absent — a
+user assertion, guessed but never decided by heuristics), set from the
+Compute card's durable checkbox + "keep results at a safe path" pair
+(`inference.build_site_config`). The local site declares `durable: true`.
+close_run resolves weft's `retain.no_durable` refusal with a size-gated
+policy (`content/bio/lifecycle/runs._no_durable_keep_policy`): small keeper
+sets ship to `@workspace` with a note; larger ones become a Run
+`retention_alert` carrying the levers. Kept files are addressable by the
+`(run, relpath)` key (`data_register(run=, rel=)`); keeps anchor
+re-obtainability after CAS eviction (verified live). Tests:
+`tests/test_retention2_policy.py`, `regtest/datasets/epic_mechanism.py`,
+`regtest/datasets/study.py` (live agent).
+
 ## Known gaps
 
 - **Detached contract (P2).** Non-shared-FS sites (a bare workstation, cloud) need weft's

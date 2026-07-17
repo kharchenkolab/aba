@@ -134,8 +134,8 @@ try:
         {"root": "/home/physicist/.weft", "host": "127.0.0.1",
          "port": int(PORT), "user": "physicist", "ssh_opts": SSH_OPTS,
          "modules_init": "export MODULEPATH=/opt/site-modules",
-         "retain": {"dir": "/home/physicist/keeps"}})
-    check("0. cluster registered (with an in-place retain.dir)",
+         "durable": "/home/physicist/keeps"})     # topology C (retention2)
+    check("0. cluster registered (durable path declared)",
           r.get("site") == "hpc")
 
     # 1 ── URL → straight into the CLUSTER's CAS
@@ -170,13 +170,10 @@ try:
           f"location={row.get('location')}")
 
     # 3b ── the kept file becomes a ref (durable-home = retained tree)
-    kept_inter = f"{row['location'].rstrip('/')}/out/inter.txt"
-    r2 = comp.sync_call("data_register", kept_inter, site="hpc",
-                        ingest=False)
+    r2 = comp.sync_call("data_register", run=jid1, rel="out/inter.txt")
     ref_inter = r2["ref"]
-    check("3b. kept path registered in place (run-lineage home)",
-          ref_inter.startswith("dref:"),
-          f"home={r2.get('external_home', '?')}")
+    check("3b. kept file registered by (run, rel) — the retention2 key",
+          ref_inter.startswith("dref:"), str({k: r2[k] for k in list(r2)[:3]}))
 
     # 4 ── round 2 on the cluster, consuming the KEPT intermediate
     t2 = comp.sync_call("task_submit", {
@@ -232,6 +229,16 @@ try:
     check("7. remote round on locally-produced bytes (auto site-ward move)",
           s4["state"] == "DONE" and checksum in tail(jid4)
           and "roundtrip-complete" in tail(jid4))
+
+    # 7b ── keep-anchor: purge the cluster CAS — the KEEP must re-serve
+    comp.sync_call("gc_sweep", "hpc", confirm=True)
+    t5 = comp.sync_call("task_submit", {
+        "command": "cat inter && printf ' served-from-keep\\n'",
+        "site": "hpc", "label": "epic-anchor",
+        "inputs": [{"ref": ref_inter, "mount_as": "inter"}]})
+    s5 = wait(t5["job_id"])
+    check("7b. after CAS purge, staging re-obtains from the keep",
+          s5["state"] == "DONE" and checksum in tail(t5["job_id"]))
 
     # 8 ── memoization: identical round-1 resubmit is a cache hit
     m = comp.sync_call("task_submit", {
