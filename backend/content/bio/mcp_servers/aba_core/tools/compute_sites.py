@@ -157,3 +157,15 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
                 "note": "connected; tell the user it appears under "
                         "Settings → Compute, where queues verify in the "
                         "background"}
+
+    @mcp.tool()
+    def data_safety_summary() -> dict:
+        """Is anything in this project going to disappear? The data-safety
+        ledger: every valued item (dataset / run keeps) in exactly one state —
+        safe, at_risk (only copy on storage nothing promised to preserve),
+        changed (source drifted since registration), unknown. Same query the
+        Settings/data UI uses, so your answer and the UI always agree. Use it
+        when the user asks whether their data/results are safe, before
+        disconnecting a machine, or when triaging what to protect."""
+        from core.data.ledger import data_ledger
+        return data_ledger()

@@ -480,6 +480,26 @@ async def disconnect(name: str) -> dict:
     return {"site": name, **(out if isinstance(out, dict) else {})}
 
 
+@router.get("/api/compute/sites/{name}/holdings")
+def holdings(name: str) -> dict:
+    """§2 (more_weft_ui.md): what lives ONLY on this machine — kept results
+    + dataset homes — so structural actions (Disconnect, durable-uncheck,
+    Free up) can preview what they'd orphan BEFORE acting. Read-only, from
+    recorded catalog state; never probes the site."""
+    from core.data.ledger import site_holdings
+    return site_holdings(name)
+
+
+@router.get("/api/projects/{pid}/data-ledger")
+def data_ledger_route(pid: str) -> dict:
+    """§1: the project data-safety rollup — every valued item (dataset /
+    run keeps) in exactly one state (safe / at_risk / changed / unknown),
+    plus totals. The same query backs the Guide's data_safety_summary tool,
+    so chat and UI cannot disagree."""
+    from core.data.ledger import data_ledger
+    return data_ledger(pid)
+
+
 @router.post("/api/compute/sites/{name}/gc")
 async def free_up(name: str, req: GcRequest) -> dict:
     _require_self_service()
