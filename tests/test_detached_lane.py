@@ -169,6 +169,43 @@ def test_detached_poll_fetches_results_over_data_plane(monkeypatch):
     assert res["compute"]["runtime"] == "Python 3.11"
 
 
+def test_poll_side_platform_relock_resubmits(monkeypatch):
+    """This weft surfaces env.platform_mismatch at REALIZE (async): the poll
+    must re-lock the named env for the site's platform, resubmit the task
+    transparently (poll returns None → keep polling), and do it ONCE."""
+
+    class _MismatchComp(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_status":
+                self.calls.append((name, a, kw))
+                return [{"state": "FAILED", "error": {
+                    "error": "env.platform_mismatch",
+                    "detail": "env is locked for ['osx-arm64'] but site far is linux-aarch64",
+                    "hints": {"site_platform": "linux-aarch64"}}}]
+            return super().sync_call(name, *a, **kw)
+    comp = _MismatchComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    import core.compute.named_envs as ne
+    relocks = []
+    monkeypatch.setattr(ne, "ensure_platform",
+                        lambda pid, name, plat: relocks.append((name, plat))
+                        or {"env_id": "env:relocked"})
+    job = create_job(job_id="job_det_pl", kind="run_python", title="t",
+                     focus_entity_id=None, project_id="default",
+                     params={"code": "x=1", "project_id": "default",
+                             "detached": True, "weft_id": "wj_old",
+                             "env": "myenv", "estimate": {}})
+    out = ws.WeftSubmitter(site="far").poll(get_job("job_det_pl", project_id="default"))
+    assert out is None                                  # transparent resubmit
+    assert relocks == [("myenv", "linux-aarch64")]
+    p = get_job("job_det_pl", project_id="default")["params"]
+    assert p["platform_relocked"] is True and p["weft_id"] == "wj_1"
+    assert p["env_id"] == "env:relocked"
+    # second mismatch (relock already spent) → hard failure, named cause
+    out2 = ws.WeftSubmitter(site="far").poll(get_job("job_det_pl", project_id="default"))
+    assert out2 is not None and "platform" in out2["error"]
+
+
 def test_site_validation_names_real_sites(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -197,6 +234,7 @@ def _standalone() -> int:
               test_detached_slurm_site_gets_walltime,
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
+              test_poll_side_platform_relock_resubmits,
               test_site_validation_names_real_sites):
         mp = _MP()
         try:

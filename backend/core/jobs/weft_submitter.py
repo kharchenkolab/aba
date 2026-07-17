@@ -40,6 +40,25 @@ def _mismatch_platform(e) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _row_mismatch_platform(task_err) -> Optional[str]:
+    """Same, from a TASK ROW's error payload — this weft surfaces the
+    mismatch asynchronously (at realize), as a dict with hints."""
+    if isinstance(task_err, dict):
+        if task_err.get("error") != "env.platform_mismatch":
+            return None
+        hint = (task_err.get("hints") or {}).get("site_platform")
+        if hint:
+            return str(hint)
+        m = re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)\s*$",
+                      str(task_err.get("detail") or ""))
+        return m.group(1) if m else None
+    if isinstance(task_err, str) and "env.platform_mismatch" in task_err:
+        m = re.search(r"'site_platform':\s*'([a-z0-9_]+-[a-z0-9_]+)'", task_err) \
+            or re.search(r"is ([a-z0-9_]+-[a-z0-9_]+)", task_err)
+        return m.group(1) if m else None
+    return None
+
+
 def _adapter():
     from core.compute import get_compute
     return get_compute()
@@ -92,14 +111,11 @@ def site_contract(site: str) -> str:
                 return "detached" if (e.get("config") or {}).get("host") else "shared-fs"
     except Exception:  # noqa: BLE001
         pass
-    # not in the yaml (registered ad hoc, e.g. tests) → ask the substrate
-    try:
-        for s in _adapter().sync_call("sites_list"):
-            if s.get("name") == site:
-                cfg = s.get("config") or s
-                return "detached" if cfg.get("host") else "shared-fs"
-    except Exception:  # noqa: BLE001
-        pass
+    # Not in the deployment yaml (registered ad hoc): DETACHED. Shared-fs is a
+    # DEPLOYMENT property (installer-declared, host-less transport on the
+    # submit node) — it must be declared, never guessed: the detached
+    # transport works everywhere, while assuming shared-fs on a foreign
+    # machine fails with a meaningless exit 127.
     return "detached"
 
 
@@ -264,16 +280,12 @@ class WeftSubmitter:
         except Exception:  # noqa: BLE001 — env-less, honestly graded
             return None, None
 
-    def _submit_detached(self, job: dict) -> None:
-        """Code travels AS DATA (misc/detached_compute.md): payload {harness,
-        user script, spec+nonce} → CAS ref → weft stages it into the task
-        workdir on the node. The harness runs the script under the env's
-        interpreter (weft realizes EnvID at the site) or the node system, and
-        writes result.json there; poll() reads it back over the data plane."""
+    def _build_detached_task(self, job: dict, params: dict,
+                             env_id: Optional[str]) -> dict:
+        """Payload dir {harness, user script, spec+nonce} → CAS ref → the
+        weft task dict. Idempotent (same payload → same ref); used by submit
+        AND the poll-side platform-re-lock resubmit."""
         import shutil as _shutil
-        from core.compute.errors import ComputeError
-        params = job.get("params") or {}
-        pid = params.get("project_id") or "default"
         kind = job.get("kind") or "run_python"
         lang = "r" if kind == "run_r" else "python"
         run_dir = self._run_dir(job)
@@ -290,9 +302,8 @@ class WeftSubmitter:
             # memo — "Re-run as-is" would silently return the cached result
             "job_id": job["id"],
         }))
-        comp = _adapter()
-        env_id, env_name = self._detached_env(params, pid, lang)
-        ref = comp.sync_call("data_register", str(payload), ingest=True)["ref"]
+        ref = _adapter().sync_call("data_register", str(payload),
+                                   ingest=True)["ref"]
         timeout_s = int(params.get("timeout_s") or 600)
         est = params.get("estimate") or {}
         resources = {"cpus": int(est.get("cores") or 1)}
@@ -314,6 +325,22 @@ class WeftSubmitter:
         }
         if env_id:
             task["env"] = env_id
+        return task
+
+    def _submit_detached(self, job: dict) -> None:
+        """Code travels AS DATA (misc/detached_compute.md): payload {harness,
+        user script, spec+nonce} → CAS ref → weft stages it into the task
+        workdir on the node. The harness runs the script under the env's
+        interpreter (weft realizes EnvID at the site) or the node system, and
+        writes result.json there; poll() reads it back over the data plane."""
+        from core.compute.errors import ComputeError
+        params = job.get("params") or {}
+        pid = params.get("project_id") or "default"
+        kind = job.get("kind") or "run_python"
+        lang = "r" if kind == "run_r" else "python"
+        comp = _adapter()
+        env_id, env_name = self._detached_env(params, pid, lang)
+        task = self._build_detached_task(job, params, env_id)
         try:
             r = comp.sync_call("task_submit", task)
         except ComputeError as e:
@@ -383,18 +410,57 @@ class WeftSubmitter:
                 return None
         raw = _read("result.json", cap=1 << 20)
         if raw is None:
-            res = {"error": f"weft task {state} with no readable result.json "
-                            f"(infra failure before the harness ran?)"}
+            task_err = None
             if state == "FAILED":
                 try:
                     rows = _adapter().sync_call("task_status", wid)
-                    from core.data.datasets import explain_data_error
-                    friendly = explain_data_error((rows[0] or {}).get("error"))
-                    if friendly:
-                        res["error"] = friendly
+                    task_err = (rows[0] or {}).get("error")
                 except Exception:  # noqa: BLE001
                     pass
-            res.setdefault("compute", self._compute_block(wid, state))
+            # Lazy platform re-lock, POLL side: this weft surfaces
+            # env.platform_mismatch at realize (async), so the submit-time
+            # catch never sees it. Re-lock the named env for the site's
+            # platform and RESUBMIT transparently — once.
+            plat = _row_mismatch_platform(task_err)
+            if plat and params.get("env") and not params.get("platform_relocked"):
+                try:
+                    from core.compute import named_envs
+                    pid = params.get("project_id") or "default"
+                    relock = named_envs.ensure_platform(
+                        str(pid), params["env"], plat)
+                    task = self._build_detached_task(job, params,
+                                                     relock["env_id"])
+                    r = _adapter().sync_call("task_submit", task)
+                    from core.graph.jobs import update_job
+                    update_job(job["id"],
+                               params={**params, "weft_id": r["job_id"],
+                                       "env_id": relock["env_id"],
+                                       "platform_relocked": True},
+                               project_id=str(pid))
+                    print(f"[jobs.weft] env re-locked for {plat} and job "
+                          f"{job['id']} resubmitted to {self.site}")
+                    return None            # keep polling the NEW task
+                except Exception as e:  # noqa: BLE001 — fall through to failure
+                    print(f"[jobs.weft] platform re-lock failed: {e}")
+            res = {"error": f"weft task {state} before the harness could run"}
+            if task_err:
+                from core.data.datasets import explain_data_error
+                friendly = explain_data_error(task_err)
+                if friendly:
+                    res["error"] = friendly
+                    res["error_detail"] = str(task_err)
+                elif plat:
+                    res["error"] = (
+                        f"this env is not available for {self.site}'s platform "
+                        f"({plat}) — the re-lock failed or wasn't possible; "
+                        f"see error_detail")
+                    res["error_detail"] = str(task_err)
+                else:
+                    res["error"] = f"the compute substrate reported: {task_err}"
+            comp = self._compute_block(wid, state)
+            if comp.get("log_tail") and "substrate reported" not in res["error"]:
+                res["error"] += f"\n--- node log tail ---\n{comp['log_tail'][-400:]}"
+            res.setdefault("compute", comp)
             return res
         try:
             node = json.loads(raw)
