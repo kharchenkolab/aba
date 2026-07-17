@@ -575,9 +575,28 @@ def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
     dest = str(project_data_dir(current_project_id()) / base)
     if os.path.abspath(dest) != os.path.abspath(abspath):
         _get_compute_sync("data_fetch", rec["ref"], dest)
-    return dest, {"ref": rec["ref"], "origin_class": rec["origin_class"],
-                  "source_key": rec["source_key"],
-                  "descriptor": rec.get("descriptor") or {}}
+    md = {"ref": rec["ref"], "origin_class": rec["origin_class"],
+          "source_key": rec["source_key"],
+          "descriptor": rec.get("descriptor") or {}}
+    # retention2: when the file sits in a weft kernel jobdir, record the
+    # (run, relpath) KEY — the durable handle that survives sweeps, keeps,
+    # and PLACE moves (paths are lookups, never identities)
+    try:
+        from core.compute.adapter import get_compute, weft_workspace
+        real = os.path.realpath(abspath)
+        for k in (get_compute().sync_call("list_kernels") or {})                 .get("kernels", []):
+            jd = k.get("jobdir")
+            if not jd or k.get("site") != "local":
+                continue
+            root = os.path.realpath(str(weft_workspace() / "site-local" / jd))
+            if real.startswith(root + os.sep):
+                md["run_key"] = {"run": k.get("kernel_id"),
+                                 "rel": os.path.relpath(real, root)
+                                 .replace(os.sep, "/")}
+                break
+    except Exception:  # noqa: BLE001 — the key is enrichment, never a gate
+        pass
+    return dest, md
 
 
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:

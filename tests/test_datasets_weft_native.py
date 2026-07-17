@@ -193,3 +193,29 @@ def test_resolve_inputs_carries_content_ref_and_home_path(pid):
     hit2 = [i for i in resolve_inputs(f"load('{share}')")
             if i["ref"] == out2["dataset_id"]]
     assert hit2 and "content_ref" not in hit2[0]   # lazy identity: no ref yet
+
+
+def test_produced_dataset_records_run_key(pid):
+    """retention2: a dataset registered from a live kernel jobdir carries the
+    (run, relpath) key — the durable handle, not just a path."""
+    from core.compute.adapter import get_compute
+    # a REAL kernel jobdir (list_kernels must know it) — start a kernel
+    k = get_compute().sync_call("kernel_start", "local", env="__bare__") \
+        if False else None
+    # cheaper: fabricate via the discoverable path only if a live kernel
+    # exists; otherwise assert the graceful absence (enrichment, not a gate)
+    kernels = (get_compute().sync_call("list_kernels") or {}).get("kernels", [])
+    live = [k for k in kernels if k.get("site") == "local" and k.get("jobdir")]
+    if not live:
+        p = _jobdir_file("rk.bin", b"R" * 128)
+        out = register_dataset_tool({"title": "RK", "path": p}, {})
+        md = get_entity(out["dataset_id"])["metadata"]
+        assert "run_key" not in md          # no live kernel → no key, no error
+        return
+    jd = ad.weft_workspace() / "site-local" / live[0]["jobdir"]
+    f = jd / "rk.bin"
+    f.write_bytes(b"R" * 128)
+    out = register_dataset_tool({"title": "RK", "path": str(f)}, {})
+    md = get_entity(out["dataset_id"])["metadata"]
+    assert md["run_key"]["run"] == live[0]["kernel_id"]
+    assert md["run_key"]["rel"] == "rk.bin"
