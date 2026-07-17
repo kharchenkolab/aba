@@ -28,3 +28,51 @@ yet wired (background jobs route only to slurm-kind shared-fs sites, and a
 mac controller cannot serve the shared-fs entry into a linux node) — the epic
 therefore runs at the weft-task level; the live-agent scenarios cover
 everything agent-reachable today.
+
+## Multinode scenario coverage plan (misc/detached_compute.md S4+)
+
+Current (`multinode.py`): size-up + data-gravity placement · node→local→node
+hop chain · status surfaces (two-axis badges / ledger / bring-back, asserted
+on the exact JSON the cards render) · bogus-site honesty.
+
+Planned slate, priority order (each doubles as a permanent regression guard;
+all content strictly generic — numeric series, parameter sweeps, csv/binary
+blocks; no domain examples):
+
+1. **isolated_env_remote** — agent makes an isolated env for a named package
+   and runs it on the node: named-env re-lock → realize-on-site → import
+   works remotely. (Named-env re-lock has fast tests, no live pass.)
+2. **crash_fix_rerun** — remote job dies on a code error; agent reads the
+   log from the result, fixes, resubmits to the SAME site, succeeds.
+3. **fanout_gather** — 3 independent parameter-variant jobs in parallel
+   (mix of node + local), then a local gather step over all outputs;
+   exercises concurrent detached jobs + continuation ordering.
+4. **conflicting_gravity** — data home on machine A, compute requested on
+   machine B: agent states the tradeoff and either computes at the data or
+   moves it DELIBERATELY (guardrail-priced); never a silent bulk transfer.
+5. **preflight_disconnect** — remote keeps + a data home exist; "anything
+   at risk if I disconnect?": data_safety_summary-grounded answer naming
+   items → bring-back → "now safe". The ledger story as conversation.
+6. **platform_unsolvable** — env package with no build for the node's
+   platform: re-lock fails with the named cause; agent relays honestly and
+   offers real options (no retry loops, no fabrication).
+7. **rerun_asis_recomputes** — "re-run stage 1 as-is" forces a REAL
+   recompute (fresh weft task id — the memo nonce), while re-run WITH
+   CHANGES records `scenario_of` lineage.
+8. **provenance_after_chain** — "where did this number come from?" after a
+   hop chain: agent names each stage's machine from recorded state,
+   matching the cards.
+9. **stay_local** — remote available but the step is trivial: no
+   gratuitous remote job.
+10. **gpu_routing** — est_gpu step lands on the fixture's (fake-)GPU
+    partition with gpu resources in the task; agent says where and why.
+11. **cancel_midflight** — user cancels a running remote job: propagates,
+    Run reflects cancelled, partial outputs stay honest (temporary).
+12. **status_while_running** — "how's it going?" mid-job: honest state,
+    no fabricated progress.
+
+Harness disciplines (learned live): unambiguous seeds (header rows — a
+headerless csv cost a run to a defensible parse difference); settle before
+asserting (wait_jobs_settled + durable-view settle — continuations land
+after the driven turn's stream ends); assert results against the FULL
+thread text, not just captured streams.

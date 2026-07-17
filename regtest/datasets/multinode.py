@@ -65,26 +65,36 @@ def _durable(client, rid):
     return r.json() if r.status_code == 200 else {"files": []}
 
 
-def thread_text(client, pid, tid, settle_s=60):
+def wait_jobs_settled(client, pid, timeout_s=300):
+    """Block until the project has no queued/running jobs (deferred
+    continuations fire after terminal states) — the harness must not assert
+    on surfaces before the work it drove has actually finished."""
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        r = client.get(f"/api/jobs?project_id={pid}")
+        if r.status_code == 200:
+            rows = r.json() if isinstance(r.json(), list) else r.json().get("jobs", [])
+            if not any((j.get("status") in ("queued", "running")) for j in rows):
+                return True
+        time.sleep(5)
+    return False
+
+
+def thread_text(client, pid, tid, settle_s=120):
     """ALL text on the thread — including deferred-continuation turns that land
     AFTER a drive_turn's stream ends (a background job's result arrives as a
-    new assistant message). Polls briefly so a just-finished job's
-    continuation can settle."""
+    new assistant message). Waits for the project's jobs to settle first."""
     import json as _json
-    last = ""
-    for _ in range(settle_s // 5):
-        r = client.get(f"/api/messages?thread_id={tid}&project_id={pid}")
-        if r.status_code == 200:
-            parts = []
-            for m in r.json():
-                c = m.get("content") or m.get("text") or ""
-                parts.append(c if isinstance(c, str) else _json.dumps(c))
-            cur = "\n".join(parts)
-            if cur == last and cur:
-                return cur
-            last = cur
-        time.sleep(5)
-    return last
+    wait_jobs_settled(client, pid, timeout_s=settle_s)
+    time.sleep(8)          # continuation turn writes after the job flips
+    r = client.get(f"/api/messages?thread_id={tid}&project_id={pid}")
+    if r.status_code != 200:
+        return ""
+    parts = []
+    for m in r.json():
+        c = m.get("content") or m.get("text") or ""
+        parts.append(c if isinstance(c, str) else _json.dumps(c))
+    return "\n".join(parts)
 
 
 def _site_ran(caps):
@@ -104,7 +114,7 @@ def mn_size_up(client, pid, tid):
     """(i) The agent consults describe_compute and chooses the remote node for
     a heavy step whose data lives there — rather than pulling data local."""
     hssh(f"mkdir -p {R_DATA} && head -c 40000000 /dev/urandom > {R_DATA}/block.bin"
-        f" && seq 1 800 | awk '{{print $1\",\"($1*7)%13}}' > {R_DATA}/readings.csv")
+        f" && (echo idx,val; seq 1 800 | awk '{{print $1\",\"($1*7)%13}}') > {R_DATA}/readings.csv")
     caps = [drive_turn(client, pid, tid,
         f"A ~40 MB data collection lives on the machine 'hpc' at {R_DATA} "
         f"(readings.csv + a big binary block). I want a heavy summarization "
@@ -129,8 +139,10 @@ def mn_hop_chain(client, pid, tid):
     """(ii) node → local → node: compute on hpc, keep/bring back, follow up
     LOCALLY on that result, then a SECOND hpc step consuming the local product.
     Ground-truth threaded by a deterministic series."""
-    hssh(f"mkdir -p {R_DATA} && seq 1 500 | awk '{{print $1\",\"($1*3)%17}}' > "
-        f"{R_DATA}/series.csv")
+    # header row makes the parse unambiguous — a headerless file cost run 4:
+    # pandas (reasonably) ate row 1 as the header and summed 499 rows
+    hssh(f"mkdir -p {R_DATA} && (echo idx,val; seq 1 500 | "
+         f"awk '{{print $1\",\"($1*3)%17}}') > {R_DATA}/series.csv")
     total = sum((i * 3) % 17 for i in range(1, 501))
     caps = [drive_turn(client, pid, tid,
         f"Open an analysis run titled 'Hop chain' for this work. The file "
@@ -169,6 +181,7 @@ def mn_status_surfaces(client, pid, tid):
         f"'hpc', read {R_DATA}/seed.txt and write two files in the run: "
         f"series.txt (the numbers doubled) and marker.txt (containing "
         f"'done'). Keep them safe on hpc — don't move them off yet.")]
+    wait_jobs_settled(client, pid)
     ent = _run_by_title("Remote production")
     rid = ent["id"] if ent else None
     if not rid:   # fallback: any run whose durable view saw the outputs
@@ -177,6 +190,14 @@ def mn_status_surfaces(client, pid, tid):
             if any(f["rel"].endswith(("series.txt", "marker.txt")) for f in dv["files"]):
                 rid = r["id"]
                 break
+    if rid:       # keeps settle asynchronously (retain at close / keep_outputs)
+        t0 = time.time()
+        while time.time() - t0 < 180:
+            dv = _durable(client, rid)
+            if any(f.get("state") == "retained" and f.get("site") == "hpc"
+                   for f in dv["files"]):
+                break
+            time.sleep(6)
     checks = [("a run captured the remote outputs", bool(rid))]
     if rid:
         dv = _durable(client, rid)
