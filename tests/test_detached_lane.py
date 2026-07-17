@@ -208,15 +208,21 @@ def test_poll_side_platform_relock_resubmits(monkeypatch):
                      focus_entity_id=None, project_id="default",
                      params={"code": "x=1", "project_id": "default",
                              "detached": True, "weft_id": "wj_old",
+                             "weft_site": "far",
                              "env": "myenv", "estimate": {}})
-    out = ws.WeftSubmitter(site="far").poll(get_job("job_det_pl", project_id="default"))
+    # the REAL poll loop uses a generic WeftSubmitter() (site='local') — the
+    # resubmit must go to the JOB's recorded site, never self's (a re-locked
+    # job once bounced to 'local' this way — found live)
+    out = ws.WeftSubmitter().poll(get_job("job_det_pl", project_id="default"))
     assert out is None                                  # transparent resubmit
     assert relocks == [("myenv", "linux-aarch64")]
+    resub = [c for c in comp.calls if c[0] == "task_submit"][-1][1][0]
+    assert resub["site"] == "far"
     p = get_job("job_det_pl", project_id="default")["params"]
     assert p["platform_relocked"] is True and p["weft_id"] == "wj_1"
     assert p["env_id"] == "env:relocked"
     # second mismatch (relock already spent) → hard failure, named cause
-    out2 = ws.WeftSubmitter(site="far").poll(get_job("job_det_pl", project_id="default"))
+    out2 = ws.WeftSubmitter().poll(get_job("job_det_pl", project_id="default"))
     assert out2 is not None and "platform" in out2["error"]
 
 
@@ -246,9 +252,10 @@ def test_poll_relock_covers_default_env_via_base_pack(monkeypatch):
                      focus_entity_id=None, project_id="default",
                      params={"code": "x=1", "project_id": "default",
                              "detached": True, "weft_id": "wj_old",
+                             "weft_site": "far",
                              "env": None, "env_id": "env:snapshot",
                              "estimate": {}})
-    out = ws.WeftSubmitter(site="far").poll(get_job("job_det_dp", project_id="default"))
+    out = ws.WeftSubmitter().poll(get_job("job_det_dp", project_id="default"))
     assert out is None and relocks == [("python", "linux-aarch64")]
     p = get_job("job_det_dp", project_id="default")["params"]
     assert p["env_id"] == "env:packrelock" and p["platform_relocked"] is True

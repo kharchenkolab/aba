@@ -254,9 +254,10 @@ class WeftSubmitter:
                    project_id=str(pid))
 
     # ── detached transport (misc/detached_compute.md) ─────────────────────
-    def _site_kind(self) -> Optional[str]:
+    def _site_kind(self, site: Optional[str] = None) -> Optional[str]:
+        name = site or self.site
         for s in declared_compute_sites():
-            if s["name"] == self.site:
+            if s["name"] == name:
                 return s.get("kind")
         return None
 
@@ -281,10 +282,14 @@ class WeftSubmitter:
             return None, None
 
     def _build_detached_task(self, job: dict, params: dict,
-                             env_id: Optional[str]) -> dict:
+                             env_id: Optional[str],
+                             site: Optional[str] = None) -> dict:
         """Payload dir {harness, user script, spec+nonce} → CAS ref → the
         weft task dict. Idempotent (same payload → same ref); used by submit
-        AND the poll-side platform-re-lock resubmit."""
+        AND the poll-side platform-re-lock resubmit. `site` overrides
+        self.site — the POLL LOOP's generic WeftSubmitter() is site='local',
+        so a resubmit must use the JOB's recorded site, never self's (a
+        re-locked job once bounced to 'local' this way — found live)."""
         import shutil as _shutil
         kind = job.get("kind") or "run_python"
         lang = "r" if kind == "run_r" else "python"
@@ -311,7 +316,8 @@ class WeftSubmitter:
             resources["mem_gb"] = int(est["mem_gb"])
         if est.get("gpu"):
             resources["gpus"] = 1
-        if self._site_kind() == "slurm" and float(est.get("runtime_min") or 0) > 0:
+        site = site or self.site
+        if self._site_kind(site) == "slurm" and float(est.get("runtime_min") or 0) > 0:
             # Explicit walltime ONLY for a job the agent actually SIZED. An
             # unsized ask inflated from the default timeout pends FOREVER on
             # sites whose partition cap is below it (PartitionTimeLimit —
@@ -324,7 +330,7 @@ class WeftSubmitter:
             # env= rides along (weft mounts it first), else the node system.
             # NO controller paths, NO ABA_* env — the node shares nothing.
             "command": "python3 payload/aba_entry.py",
-            "site": self.site,
+            "site": site,
             "inputs": [{"ref": ref, "mount_as": "payload"}],
             "resources": resources,
             "label": (job.get("title") or job["id"])[:200],
@@ -446,8 +452,11 @@ class WeftSubmitter:
                         extra["env_note"] = (
                             "re-locked BASE pack for the site platform — "
                             "session-installed extras are not in this env")
+                    job_site = params.get("weft_site") or params.get("site") \
+                        or self.site
                     task = self._build_detached_task(job, params,
-                                                     relock["env_id"])
+                                                     relock["env_id"],
+                                                     site=job_site)
                     r = _adapter().sync_call("task_submit", task)
                     from core.graph.jobs import update_job
                     update_job(job["id"],
@@ -456,7 +465,7 @@ class WeftSubmitter:
                                        "platform_relocked": True, **extra},
                                project_id=str(pid))
                     print(f"[jobs.weft] env re-locked for {plat} and job "
-                          f"{job['id']} resubmitted to {self.site}")
+                          f"{job['id']} resubmitted to {job_site}")
                     return None            # keep polling the NEW task
                 except Exception as e:  # noqa: BLE001 — fall through to failure
                     print(f"[jobs.weft] platform re-lock failed: {e}")
