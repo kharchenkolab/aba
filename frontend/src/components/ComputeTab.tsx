@@ -339,10 +339,10 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
         <div className="cmp-block__title">Used for</div>
         <div className="cmp-chips">
           {USE_FOR_ALL.map(u => (
-            <button key={u.key} disabled={isLocal || busy !== null}
+            <button key={u.key} disabled={isLocal || busy !== null || !selfService}
               className={`cmp-chip ${useFor.includes(u.key) ? 'is-on' : ''}`}
               aria-pressed={useFor.includes(u.key)}
-              onClick={() => !isLocal && toggleUseFor(u.key)}>{u.label}</button>
+              onClick={() => !isLocal && selfService && toggleUseFor(u.key)}>{u.label}</button>
           ))}
         </div>
       </div>

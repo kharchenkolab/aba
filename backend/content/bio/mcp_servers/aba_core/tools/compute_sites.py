@@ -18,6 +18,17 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 
+def _self_service_refusal() -> dict:
+    """Shared refusal when the deployment manages its own machines
+    (ABA_COMPUTE_SELF_SERVICE=false) — mirrors the /api/compute 403 so the tab,
+    the REST API, and the Guide all enforce the same read-only intent. The agent
+    must NOT try to add/change a site here; relay this to the user."""
+    return {"error": "self_service_disabled",
+            "detail": "compute sites on this installation are managed by the "
+                      "deployment — ask your administrator to change machines or "
+                      "storage declarations. Do not attempt to add one."}
+
+
 def register_compute_sites_tools(mcp: FastMCP) -> None:
     """Register the compute-sites (Settings → Compute) tools on `mcp`."""
 
@@ -62,6 +73,9 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
           contract. Present it in plain language; every field is editable.
           After the user approves, call connect_compute_site(confirmed=True).
         """
+        from core.compute import sites_config
+        if not sites_config.self_service():
+            return _self_service_refusal()
         from core.compute import inference, preflight as pf
         from core.compute.adapter import get_compute, run_sync
         pre = pf.preflight(dest, port)
@@ -116,6 +130,9 @@ def register_compute_sites_tools(mcp: FastMCP) -> None:
         weft-sites.yaml with the aba keys (contract, use_for, long-term
         storage). Queue verification (a small test job per queue) can then
         be run from Settings → Compute."""
+        from core.compute import sites_config
+        if not sites_config.self_service():
+            return _self_service_refusal()
         if not confirmed:
             return {"error": "user_confirmation_required",
                     "detail": "present the proposal and get the user's "

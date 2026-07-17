@@ -39,6 +39,15 @@ configuration, the user confirms or tweaks. The expert surface (every knob) is
    login-node probe; `site_probe_deep` (a real test job per queue, which can wait on a busy
    cluster) runs as a background task and upgrades the card via a `compute` notification —
    it never blocks the connect.
+6. **Shared deployments can be read-only.** `ABA_COMPUTE_SELF_SERVICE=false` (the
+   `compute_self_service` registry setting, `deploy_injected` — set it in a personal install's
+   `config.env`, or via `site.yaml` `compute: {self_service: false}` on OOD/SIF) makes the
+   deployment manage its own machines: the tab renders every declared site read-only (no Add,
+   no edit/disconnect/free-up), the eight `/api/compute` management endpoints return a 403
+   `self_service_disabled`, and the Guide's `probe_compute_site`/`connect_compute_site` tools
+   refuse the same way (`sites_config.self_service()` gates router + tools identically, failing
+   OPEN so a config hiccup never locks the UI). Reads (status, list, load, verify, reprobe)
+   stay available.
 
 ## The pieces (where the code is)
 

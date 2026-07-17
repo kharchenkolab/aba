@@ -133,6 +133,25 @@ def test_probe_ok_returns_proposal(tools, monkeypatch):
     assert port._last[3] == {"probe_only": True}
 
 
+def test_self_service_disabled_blocks_probe_and_connect(tools, monkeypatch):
+    """A shared deployment (ABA_COMPUTE_SELF_SERVICE=false) manages its own
+    machines: the Guide's add-a-site tools refuse, matching the tab/API 403, so
+    the agent can't add a node behind the read-only UI's back. Reads still work."""
+    call, port = tools
+    from core.compute import sites_config
+    monkeypatch.setattr(sites_config, "self_service", lambda: False)
+    out = call("probe_compute_site", dest="me@x.edu")
+    assert out["error"] == "self_service_disabled"
+    proposal = {"name": "box", "kind": "ssh", "use_for": ["background"],
+                "working": {"root": "/scratch/me/.weft"},
+                "long_term": [], "contract": "detached", "partitions": []}
+    out = call("connect_compute_site", dest="me@box", proposal=proposal,
+               confirmed=True)
+    assert out["error"] == "self_service_disabled"
+    assert not hasattr(port, "_last")            # nothing was registered
+    assert call("list_compute_sites")["sites"][0]["name"] == "local"  # reads OK
+
+
 def test_connect_refuses_without_confirmation(tools):
     call, port = tools
     proposal = {"name": "box", "kind": "ssh", "use_for": ["background"],

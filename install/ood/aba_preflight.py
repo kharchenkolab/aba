@@ -462,6 +462,16 @@ def main():
             lines.append(f"export ABA_NEXTFLOW_CONFIG={shq(ex(nf['config']))}")
         if nf.get("cachedir"):
             lines.append(f"export ABA_NEXTFLOW_CACHEDIR={shq(ex(nf['cachedir']))}")
+        # compute-site management (site.yaml `compute:`) — a SHARED deployment sets
+        # self_service: false so Settings → Compute renders the deployment's machines
+        # read-only, the management API 403s, and the Guide's site tools refuse to add
+        # one. Absent → defaults on (personal installs manage their own sites). YAML 1.1
+        # reads bare false/no/off as the boolean False, so normalize to a 0/1 string.
+        comp = site.get("compute") or {}
+        if "self_service" in comp:
+            _ss = comp["self_service"]
+            _ss = "1" if (_ss is True or str(_ss).strip().lower() in ("1", "true", "yes", "on")) else "0"
+            lines.append(f"export ABA_COMPUTE_SELF_SERVICE={shq(_ss)}")
         if cred_mode == "apikey":
             lines += [f"export ANTHROPIC_API_KEY={shq(cred_val)}", "export ABA_LLM_CREDENTIAL=apikey"]
         elif cred_mode == "oauth":          # explicit oauth token from a cred file
