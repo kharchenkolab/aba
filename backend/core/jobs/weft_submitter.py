@@ -204,6 +204,18 @@ class WeftSubmitter:
         else:
             res = {"error": f"weft task {state} with no result.json "
                             f"(infra failure before the entry ran?)"}
+        if state == "FAILED":
+            # data-plane failures get the plain-language translation
+            # (misc/datasets2.md S3): staging is async, so a drifted/vanished
+            # durable home lands HERE as a failed job, not at submit
+            try:
+                from core.data.datasets import explain_data_error
+                friendly = explain_data_error((rows[0] or {}).get("error"))
+                if friendly:
+                    res["error"] = friendly
+                    res["error_detail"] = (rows[0] or {}).get("error")
+            except Exception:  # noqa: BLE001 — translation must never mask the failure
+                pass
         comp = self._compute_block(wid, state)
         # the entry copies spec env_id into the result — a bare task's weft
         # manifest has none, but the SNAPSHOT identity is real (W3.4)

@@ -241,6 +241,44 @@ def fetch_check(meta: dict, *, limit: int = FETCH_GUARDRAIL_BYTES) -> dict:
     return {"ok": True, "total_bytes": size}
 
 
+def explain_data_error(err: Any) -> Optional[str]:
+    """Translate a weft data-plane error (ComputeError or its payload) into a
+    plain, agent-facing sentence — never a raw weft string at the user
+    (misc/datasets2.md §S3). Returns None for errors that aren't data-plane.
+
+    Staging is async, so an external-home drift lands as a JOB FAILURE with
+    data.verify_failed(source=external-home); data.missing means the home is
+    gone with locations exhausted."""
+    code = getattr(err, "code", None)
+    hints = getattr(err, "hints", None)
+    detail = getattr(err, "detail", "")
+    if code is None and isinstance(err, dict):
+        code = err.get("error") or err.get("code")
+        hints = err.get("hints")
+        detail = err.get("detail", "")
+    hints = hints or {}
+    if code == "data.verify_failed" and hints.get("source") == "external-home":
+        home = hints.get("home") or "the registered path"
+        site = hints.get("site") or "its machine"
+        rec, obs = hints.get("recorded") or {}, hints.get("observed") or {}
+        delta = ""
+        if rec.get("bytes") is not None and obs.get("bytes") is not None:
+            delta = f" (was {rec['bytes']} bytes, now {obs['bytes']})"
+        return (f"The dataset at {home} on {site} has changed since it was "
+                f"registered{delta}. Re-register it — that mints a new "
+                f"revision — before using it; results memoized against the "
+                f"old content won't (and shouldn't) be reused.")
+    if code == "data.verify_failed":
+        return ("A dataset failed its content check after transfer "
+                f"({detail}). It may be corrupted in transit — retry, or "
+                "re-register the source.")
+    if code == "data.missing":
+        return (f"A dataset's stored bytes are gone ({detail}). If its durable "
+                "home still exists, re-register it; if it was produced by a "
+                "run, re-run that step to recompute it.")
+    return None
+
+
 def fetch(meta: dict, to_path: str, *,
           limit: int = FETCH_GUARDRAIL_BYTES, force: bool = False) -> dict:
     """Stage a dataset's bytes to a local path (guardrailed). Mints the ref

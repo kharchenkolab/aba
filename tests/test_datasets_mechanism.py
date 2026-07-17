@@ -182,6 +182,34 @@ def test_fetch_small_goes_through(fake):
     assert fake.calls[-1][0] == "data_fetch"
 
 
+def test_explain_data_error_external_home():
+    friendly = ds.explain_data_error({
+        "error": "data.verify_failed", "stage": "staging",
+        "detail": "external source for dref:x changed or vanished",
+        "hints": {"source": "external-home", "site": "vbc",
+                  "home": "/groups/lab/atlas",
+                  "recorded": {"bytes": 100}, "observed": {"bytes": 200},
+                  "suggestion": "…"}})
+    assert "/groups/lab/atlas" in friendly and "vbc" in friendly
+    assert "was 100 bytes, now 200" in friendly
+    assert "Re-register" in friendly
+    assert "dref:" not in friendly            # no weft jargon at the user
+
+
+def test_explain_data_error_other_cases():
+    assert "corrupted in transit" in ds.explain_data_error(
+        {"error": "data.verify_failed", "detail": "hash mismatch"})
+    assert "re-run that step" in ds.explain_data_error(
+        {"error": "data.missing", "detail": "unknown ref: dref:x"})
+    assert ds.explain_data_error({"error": "task.invalid"}) is None
+    assert ds.explain_data_error(None) is None
+    from core.compute.errors import ComputeError
+    e = ComputeError("data.verify_failed", "external source for r changed",
+                     stage="staging", hints={"source": "external-home",
+                                             "home": "/g/a", "site": "box"})
+    assert "/g/a" in ds.explain_data_error(e)
+
+
 def test_fetch_refuses_drifted_source(fake):
     fake.trees["/g/a"] = T1
     meta = ds.register_source("/g/a", site="vbc")
