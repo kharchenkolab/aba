@@ -97,3 +97,26 @@ realistic multi-turn use without confusing the agent:
 17. **context_line_sufficiency** — the ambient per-turn compute context
     names declared remote sites (or we fix it so it does): the agent should
     know its placement options WITHOUT having to think of describe_compute.
+
+## Multinode coverage — implemented (13 scenarios)
+
+size_up · hop_chain · status_surfaces · honesty · isolated_env_remote ·
+crash_fix_rerun · fanout_gather · pin_remote_result · external_ref_inject ·
+background_monitor · provenance_after_chain · preflight_disconnect ·
+reference_drift.
+
+These cover the named core workflows: data injection (external_ref,
+reference_drift), run routing/submission (size_up, hop_chain, fanout),
+monitoring + no-poll compliance (background_monitor), error handling
+(crash_fix_rerun), result interpretation (throughout), Run-card status
+(status_surfaces), pinning to Results (pin_remote_result), provenance
+(provenance_after_chain), safety ledger (preflight_disconnect), and
+remote env realization (isolated_env_remote).
+
+Still planned: planning→approval→execute with a remote step (needs the
+approval-POST flow driven from the harness); conflicting_gravity + a
+multi-site preflight (needs a SECOND real remote site alongside the
+fixture); gpu_routing (fixture fake-GPU partition); cancel_midflight;
+rerun_asis_recomputes (memo-nonce forces a fresh task); and the multi-turn
+context-durability probes (long_gap_recall, cross_thread_separation,
+mid_chain_steering, context_line_sufficiency).
