@@ -425,15 +425,27 @@ class WeftSubmitter:
                     pass
             # Lazy platform re-lock, POLL side: this weft surfaces
             # env.platform_mismatch at realize (async), so the submit-time
-            # catch never sees it. Re-lock the named env for the site's
-            # platform and RESUBMIT transparently — once.
+            # catch never sees it. Re-lock for the site's platform and
+            # RESUBMIT transparently — once. NAMED envs re-solve their
+            # recorded spec; the DEFAULT env re-locks its BASE PACK (the
+            # session snapshot's extras don't travel — recorded on the job).
             plat = _row_mismatch_platform(task_err)
-            if plat and params.get("env") and not params.get("platform_relocked"):
+            if plat and not params.get("platform_relocked") and \
+                    (params.get("env") or params.get("env_id")):
                 try:
-                    from core.compute import named_envs
                     pid = params.get("project_id") or "default"
-                    relock = named_envs.ensure_platform(
-                        str(pid), params["env"], plat)
+                    extra: dict = {}
+                    if params.get("env"):
+                        from core.compute import named_envs
+                        relock = named_envs.ensure_platform(
+                            str(pid), params["env"], plat)
+                    else:
+                        from core.compute import base_env
+                        lang = "r" if (job.get("kind") == "run_r") else "python"
+                        relock = base_env.ensure_platform(lang, plat)
+                        extra["env_note"] = (
+                            "re-locked BASE pack for the site platform — "
+                            "session-installed extras are not in this env")
                     task = self._build_detached_task(job, params,
                                                      relock["env_id"])
                     r = _adapter().sync_call("task_submit", task)
@@ -441,7 +453,7 @@ class WeftSubmitter:
                     update_job(job["id"],
                                params={**params, "weft_id": r["job_id"],
                                        "env_id": relock["env_id"],
-                                       "platform_relocked": True},
+                                       "platform_relocked": True, **extra},
                                project_id=str(pid))
                     print(f"[jobs.weft] env re-locked for {plat} and job "
                           f"{job['id']} resubmitted to {self.site}")

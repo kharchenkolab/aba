@@ -911,6 +911,27 @@ def _active_weft_jobs() -> list[dict]:
     from core.graph.jobs import _row_to_job
     import sqlite3
     out: list[dict] = []
+    # SINGLE-DB mode (ABA_DB_PATH: tests, single-user installs) has no
+    # per-project DB files — jobs live in the ONE workspace DB, which the
+    # PROJECTS_DIR walk below never visits. Without this branch, weft
+    # background jobs in single mode are never polled: they sit 'queued'
+    # in aba forever while weft's row is long terminal (found live by the
+    # multinode agent study — the agent watched a failed job as 'queued').
+    from core import projects as _projects
+    if _projects.SINGLE:
+        try:
+            from core.graph._schema import _conn
+            c = _conn()
+            for r in c.execute("SELECT * FROM jobs WHERE status IN "
+                               "('queued','running')").fetchall():
+                job = _row_to_job(r)
+                if (job.get("params") or {}).get("submitter") == "weft":
+                    job["project_id"] = None      # main-DB routing
+                    out.append(job)
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return out
     if not PROJECTS_DIR.exists():
         return out
     for proj_dir in sorted(PROJECTS_DIR.iterdir()):

@@ -220,6 +220,53 @@ def test_poll_side_platform_relock_resubmits(monkeypatch):
     assert out2 is not None and "platform" in out2["error"]
 
 
+def test_poll_relock_covers_default_env_via_base_pack(monkeypatch):
+    """The DEFAULT project env (pack snapshot) must re-lock too — the study
+    found every default-env job dying on env.platform_mismatch with no
+    recovery. The base pack's spec re-solves with the site platform, and the
+    job records that session extras don't travel."""
+
+    class _MismatchComp(_FakeComp):
+        def sync_call(self, name, *a, **kw):
+            if name == "task_status":
+                self.calls.append((name, a, kw))
+                return [{"state": "FAILED", "error": {
+                    "error": "env.platform_mismatch",
+                    "detail": "env is locked for ['linux-64'] but site far is linux-aarch64",
+                    "hints": {"site_platform": "linux-aarch64"}}}]
+            return super().sync_call(name, *a, **kw)
+    comp = _MismatchComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    import core.compute.base_env as be
+    relocks = []
+    monkeypatch.setattr(be, "ensure_platform",
+                        lambda lang, plat: relocks.append((lang, plat))
+                        or {"env_id": "env:packrelock", "platforms": [plat]})
+    job = create_job(job_id="job_det_dp", kind="run_python", title="t",
+                     focus_entity_id=None, project_id="default",
+                     params={"code": "x=1", "project_id": "default",
+                             "detached": True, "weft_id": "wj_old",
+                             "env": None, "env_id": "env:snapshot",
+                             "estimate": {}})
+    out = ws.WeftSubmitter(site="far").poll(get_job("job_det_dp", project_id="default"))
+    assert out is None and relocks == [("python", "linux-aarch64")]
+    p = get_job("job_det_dp", project_id="default")["params"]
+    assert p["env_id"] == "env:packrelock" and p["platform_relocked"] is True
+    assert "extras" in p.get("env_note", "")
+
+
+def test_active_weft_jobs_seen_in_single_db_mode():
+    """SINGLE-DB mode: the poll loop must see weft jobs in the ONE workspace
+    DB — the study found jobs never finalizing (agent watched a terminal
+    task as 'queued' forever) because only PROJECTS_DIR/*.db was scanned."""
+    create_job(job_id="job_single_scan", kind="run_python", title="t",
+               focus_entity_id=None, project_id="default",
+               params={"code": "", "submitter": "weft", "weft_id": "wj_s"})
+    from core.jobs.runner import _active_weft_jobs
+    jobs = {j["id"] for j in _active_weft_jobs()}
+    assert "job_single_scan" in jobs
+
+
 def test_site_validation_names_real_sites(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -249,6 +296,8 @@ def _standalone() -> int:
               test_platform_mismatch_relocks_once_and_retries,
               test_detached_poll_fetches_results_over_data_plane,
               test_poll_side_platform_relock_resubmits,
+              test_poll_relock_covers_default_env_via_base_pack,
+              test_active_weft_jobs_seen_in_single_db_mode,
               test_site_validation_names_real_sites):
         mp = _MP()
         try:

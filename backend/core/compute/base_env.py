@@ -170,3 +170,22 @@ def reset_cache() -> None:
     """Test/reload hook: drop cached EnvIDs (e.g. after a bundle reload)."""
     _env_ids.clear()
     _warned.clear()
+
+def ensure_platform(language: str, platform_str: str) -> dict:
+    """Re-lock the base pack for an additional platform (the detached compute
+    lane's lazy re-lock, mirroring named_envs.ensure_platform): verbatim pack
+    spec + platforms → env_ensure(update=True) → a NEW EnvID solved for all
+    members. NOTE: a job re-locked this way runs the PACK env — the project
+    session's dirty-snapshot extras do NOT travel; the submitter records that
+    honestly on the job."""
+    name = require(language)
+    spec = dict(env_packs.pack_spec(name) or {})
+    if not spec:
+        raise ComputeError("no_base_pack", f"base pack {name!r} has no spec",
+                           stage="aba")
+    spec["platforms"] = sorted({named_envs.controller_platform(), platform_str}
+                               | set(spec.get("platforms") or []))
+    res = named_envs._sync(_adapter.get_compute().env_ensure(spec, update=True))
+    return {"env_id": res["env_id"], "platforms": spec["platforms"],
+            "pack": name}
+
