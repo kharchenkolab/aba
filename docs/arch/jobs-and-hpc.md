@@ -226,7 +226,13 @@ long-standing default: `execution=None` on a non-slurm deployment used to resolv
 
 `site=` on `submit_python_job`/`submit_r_job` (and the `run_python`/`run_r`
 tools) targets ANY declared weft site — the orthogonal *which-machine* axis;
-explicit `site` wins over `execution`. `WeftSubmitter` picks the transport by
+explicit `site` wins over `execution`. Placement is independent of *duration*:
+`site=` alone runs SYNCHRONOUSLY (`content/bio/tools/run_exec._run_remote_sync`
+submits, waits in-tool, returns a normal result — like a local call executed
+on the node; it owns cancellation by re-reading the row before `task_cancel`
+so a Stop/timeout can't orphan the remote task, and never masks a
+substrate-cancel as success), while `site=` + `background=True` defers through
+the poll loop + continuation for long steps. `WeftSubmitter` picks the transport by
 `site_contract()` (`weft_submitter.py`): shared-fs (host-less deployment-
 declared sites — the unchanged lane above) vs **detached** (host-bearing or
 ad-hoc sites — never guess shared-fs). Detached submit
