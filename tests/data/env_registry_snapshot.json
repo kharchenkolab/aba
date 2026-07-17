@@ -7,6 +7,7 @@
   "batch_submitter": "local",
   "capability_approval": "auto",
   "composed_bundle_path": null,
+  "compute_self_service": true,
   "cpu_limit": "",
   "data_summary": "on",
   "db_path": null,

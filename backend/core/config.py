@@ -897,6 +897,14 @@ setting("pixi_bin", env="ABA_PIXI_BIN", type="str", default=None,
         category="deploy", weft_fate="keep",
         doc="Path to the pixi binary weft solves/realizes with. None → "
             "$PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi.")
+setting("compute_self_service", env="ABA_COMPUTE_SELF_SERVICE", type="bool",
+        default=True, category="deploy", weft_fate="keep",
+        deploy_injected=True,
+        doc="May users add/remove/reconfigure compute sites from the UI/"
+            "agent? Shared installs (OOD/cluster deployments whose slurm "
+            "sites the admin declares in weft-sites.yaml) set false — the "
+            "Compute tab shows the deployment's machines read-only and the "
+            "management API refuses with an actionable 403.")
 setting("weft_publish_tree", env="ABA_WEFT_PUBLISH_TREE", type="str", default=None,
         category="deploy", weft_fate="keep", deploy_injected=True,
         doc="Published base-env catalog tree (shared read-only folder). When "

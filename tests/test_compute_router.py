@@ -366,13 +366,9 @@ def test_templates_empty_then_declared(client, monkeypatch, tmp_path):
 
 # ── shared installs: self_service off → read-only tab ────────────────────────
 
-def test_self_service_disabled_locks_management(client, fake, monkeypatch, tmp_path):
-    monkeypatch.setenv("ABA_HOME", str(tmp_path / "h3"))
-    from core.compute.adapter import sites_config_path
-    sites_config_path().parent.mkdir(parents=True, exist_ok=True)
-    sites_config_path().write_text(
-        "self_service: false\n"
-        "sites:\n  - name: hpc\n    kind: slurm\n    config: {root: /r}\n")
+def test_self_service_disabled_locks_management(client, fake, monkeypatch):
+    # the central settings registry, deploy-injectable (ABA_COMPUTE_SELF_SERVICE)
+    monkeypatch.setenv("ABA_COMPUTE_SELF_SERVICE", "0")
     assert client.get("/api/compute/status").json()["self_service"] is False
     # reads stay open
     assert client.get("/api/compute/sites").status_code == 200

@@ -57,15 +57,16 @@ def aba_keys(name: str) -> dict:
 
 def self_service() -> bool:
     """May users add/remove/reconfigure compute sites from the UI/agent?
-    Shared installs (e.g. an OOD deployment whose slurm sites the admin
-    declared in this file) set a top-level `self_service: false` — the
-    Compute tab then shows the deployment's machines read-only, and the
-    add/disconnect/edit surfaces disappear entirely. Defaults to True
-    (personal installs). Admin-owned: it lives in the file the deployment
-    already writes, not in a new env var."""
+    A registry setting (ABA_COMPUTE_SELF_SERVICE, default True) — a real
+    deployment DECISION belongs in the central settings surface (validated,
+    listed in settings-reference.md, deploy-injectable on OOD), not hidden
+    inside the sites declaration file. Shared installs set it false: the
+    Compute tab shows the deployment's machines read-only and the
+    management API refuses with an actionable 403."""
+    from core import config
     try:
-        return bool(read_sites_config().get("self_service", True))
-    except Exception:  # noqa: BLE001 — unreadable file must not lock the UI
+        return bool(config.settings.compute_self_service.get())
+    except Exception:  # noqa: BLE001 — a config hiccup must not lock the UI
         return True
 
 
