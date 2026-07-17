@@ -139,12 +139,39 @@ RECORDED state only — never probes sites. Tests: `tests/test_data_ledger.py`
 (incl. the local-only quiescence contract), `frontend .../LedgerStrip.test.tsx`
 (the UI snapshot half).
 
+## Detached compute lane (misc/detached_compute.md, as built 2026-07-17)
+
+Background jobs run on ANY declared weft site — including machines sharing
+nothing with the controller (cross-OS validated: mac → linux). One lane, two
+transports inside `WeftSubmitter`: shared-fs (unchanged W3.3 path) vs
+detached, chosen by `site_contract()` (explicit `aba: contract:` wins; a
+`host`-bearing yaml entry ⇒ detached; ad-hoc/undeclared ⇒ detached — never
+guess shared-fs). Detached submit ships code AS DATA: a payload dir
+{`core/jobs/detached_entry.py` — a stdlib-only, language-agnostic harness —
+user script, spec + job-id memo nonce} registered into the CAS and staged by
+weft as a task input; the task runs `python3 payload/aba_entry.py` under the
+env's prefix when `env=` rides along. Envs realize per site; a platform
+mismatch (weft surfaces it at realize) triggers ONE lazy re-lock
+(`named_envs.ensure_platform`: recorded spec + site platform →
+`env_ensure(update=True)`) and a transparent resubmit. Poll fetches
+result.json + small outputs over the data plane into the local run dir →
+standard controller-side harvest; big outputs stay on the node (kept,
+`(run,rel)`-addressable, bring-back). Env-less runs are graded
+(`env_grade: node-system` + runtime version on the exec record). Agent
+surface: `run_python`/`run_r` `site=` (background-only, validated,
+`site` wins over `execution`), `describe_compute.remote_sites`,
+behavior-rule data gravity. Tests: `tests/test_detached_lane.py`,
+`tests/test_detached_agent_inputs.py`, `regtest/datasets/multinode.py`
+(live agent).
+
 ## Known gaps
 
-- **Detached contract (P2).** Non-shared-FS sites (a bare workstation, cloud) need weft's
-  W3.2 data plane (payload-as-input + manifest + `data_fetch`). Until then the proposal shows
-  `detached` as "not yet supported here — use Advanced"; connect is meaningful only for
-  shared-FS sites. `use_for`-driven multi-site placement in the agent is P2 too.
+- **Detached contract — largely CLOSED** by the detached compute lane (above): background
+  python/R jobs run on detached sites with env parity. Still open from the original P2:
+  `use_for`-driven AUTOMATIC placement (today `site=` is explicit), nextflow heads on
+  detached sites, remote interactive kernels, and the Connect-flow copy that still calls
+  detached "not yet supported" (update it). Preflight should also probe node runtimes
+  (`python3`/`Rscript`) so describe_compute can report them per machine.
 - **Lab templates (§5.7)** are read today from a deployment-level `$ABA_HOME/compute-templates.yaml`
   (`/api/compute/templates`). Bundle-scope composition (system → lab → user, like the catalog)
   is the intended source and remains to wire.
