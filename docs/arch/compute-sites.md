@@ -125,6 +125,20 @@ re-obtainability after CAS eviction (verified live). Tests:
 `tests/test_retention2_policy.py`, `regtest/datasets/epic_mechanism.py`,
 `regtest/datasets/study.py` (live agent).
 
+## Ledger + holdings (more_weft_ui.md §1/§2, as built 2026-07-17)
+
+`core/data/ledger.py` is the ONE query layer for data safety: `data_ledger()`
+(every valued item — datasets by home + durable declarations, retained runs —
+in exactly one of safe / at_risk / changed / unknown) and `site_holdings(site)`
+(kept results + dataset homes that live only there). Consumed by
+`GET /api/projects/{pid}/data-ledger`, `GET /api/compute/sites/{name}/holdings`,
+the `data_safety_summary` Guide tool, the LedgerStrip (Data/Results heads,
+self-quieting), the ComputeTab consequence previews (Disconnect /
+durable-uncheck / Free up) and the 3-class storage meter. It renders from
+RECORDED state only — never probes sites. Tests: `tests/test_data_ledger.py`
+(incl. the local-only quiescence contract), `frontend .../LedgerStrip.test.tsx`
+(the UI snapshot half).
+
 ## Known gaps
 
 - **Detached contract (P2).** Non-shared-FS sites (a bare workstation, cloud) need weft's
@@ -144,3 +158,10 @@ re-obtainability after CAS eviction (verified live). Tests:
   entry teases it disabled.
 - **Regtest sweep.** The Guide connect tools ship with unit behavioral guards; adding a
   `regtest/placement`-style live-agent scenario for the connect flow is a follow-up.
+- **Ledger `unknown` tier.** Honest unknown-on-unreachable needs RECORDED site health
+  (freshness discipline forbids render-time probes); health isn't persisted yet, so items
+  on an unreachable site keep their last derived state. Follow-up: persist per-site health
+  from probe/verify/event traffic and derive `unknown` from it.
+- **Placement line (§3) plan mode.** Record-mode facts ride the Run card's verdict +
+  Details; the pre-flight "will run on X · ~N min queue" line waits on the P2 placement
+  wiring (the [change…] picker is gated on it by the honesty rule).
