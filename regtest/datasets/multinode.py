@@ -430,6 +430,60 @@ def mn_provenance_after_chain(client, pid, tid):
     ]
 
 
+@scenario("mn_preflight_disconnect")
+def mn_preflight_disconnect(client, pid, tid):
+    """The safety-ledger story as a conversation: a dataset lives with its
+    durable home ON hpc; the user asks what's at risk before disconnecting.
+    The agent must consult the ledger (data_safety_summary) and name the
+    hpc-resident item — grounded, not guessed."""
+    hssh(f"mkdir -p {R_DATA} && (echo a,b; seq 1 200 | "
+         f"awk '{{print $1\",\"($1%5)}}') > {R_DATA}/homed.csv")
+    caps = [drive_turn(client, pid, tid,
+        f"Register {R_DATA}/homed.csv on machine 'hpc' as a dataset "
+        f"'Homed Table' by reference (leave it there).")]
+    ds = [e for e in find_entities(type="dataset", not_deleted=True)
+          if "homed table" in (e.get("title") or "").lower()]
+    caps.append(drive_turn(client, pid, tid,
+        "I'm thinking of disconnecting the machine 'hpc'. Before I do — is "
+        "anything in this project at risk if I disconnect it? Check properly."))
+    used = tools_named(caps, "data_safety_summary") + tools_named(caps, "list_compute_sites")
+    txt = caps[-1]["text"].lower()
+    return caps, [
+        ("dataset home is on hpc", bool(ds) and (((ds[0].get("metadata") or {})
+            .get("home") or {}).get("site") == "hpc")),
+        ("agent consulted the safety ledger / sites", bool(used)),
+        ("agent flags the hpc-resident data", "hpc" in txt
+         and any(w in txt for w in ("risk", "lose", "access", "homed", "disconnect"))),
+    ]
+
+
+@scenario("mn_reference_drift")
+def mn_reference_drift(client, pid, tid):
+    """External reference on a remote machine drifts: register a file on hpc
+    by reference, then the file CHANGES on hpc; the agent re-checks and
+    reports the drift instead of trusting stale content."""
+    hssh(f"mkdir -p {R_DATA} && (echo x; seq 1 100) > {R_DATA}/drift.csv")
+    caps = [drive_turn(client, pid, tid,
+        f"Register {R_DATA}/drift.csv on machine 'hpc' as dataset 'Drift Set' "
+        f"by reference.")]
+    ds = [e for e in find_entities(type="dataset", not_deleted=True)
+          if "drift set" in (e.get("title") or "").lower()]
+    # the source changes underneath us on the remote
+    hssh(f"(echo x; seq 1 500) > {R_DATA}/drift.csv")
+    caps.append(drive_turn(client, pid, tid,
+        "Has the source of the 'Drift Set' dataset changed since we "
+        "registered it? Check the actual file on hpc and tell me."))
+    checked = tools_named(caps, "check_import")
+    txt = caps[-1]["text"].lower()
+    return caps, [
+        ("dataset registered by reference on hpc", bool(ds)),
+        ("agent re-checked the remote source", bool(checked)),
+        ("agent reports it CHANGED", any(w in txt for w in
+            ("changed", "drift", "differ", "modified", "no longer match",
+             "grown", "larger", "updated"))),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -460,7 +514,8 @@ def main():
                  [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty,
                   mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather,
                   mn_pin_remote_result, mn_external_ref_inject,
-                  mn_background_monitor]]
+                  mn_background_monitor, mn_provenance_after_chain,
+                  mn_preflight_disconnect, mn_reference_drift]]
     try:
         with TestClient(app) as client:
             try:
