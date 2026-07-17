@@ -523,6 +523,77 @@ def mn_reference_drift(client, pid, tid):
     ]
 
 
+@scenario("mn_gpu_routing")
+def mn_gpu_routing(client, pid, tid):
+    """Placement plumbing: a GPU-flagged step on hpc must carry the GPU
+    resource so weft lands it on a GPU partition. (The fixture's GPU is a
+    stub, so we test ROUTING — est_gpu → gpus resource → gpu partition —
+    not GPU math.)"""
+    caps = [drive_turn(client, pid, tid,
+        "Run a short step ON machine 'hpc' that needs a GPU (flag it as a "
+        "GPU workload). It only has to print its hostname — I'm confirming "
+        "that GPU-flagged work routes to a GPU node. Report where it ran.")]
+    wait_jobs_settled(client, pid)
+    gpu_runs = [t for t in tools_named(caps, "run_python")
+                if t["input"].get("site") == "hpc" and t["input"].get("est_gpu")]
+    txt = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid)).lower()
+    # confirm the task actually requested a GPU (job row estimate)
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    from core.graph._schema import active_db_path
+    requested_gpu = False
+    try:
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        for r in c.execute("SELECT * FROM jobs").fetchall():
+            j = _row_to_job(r); p = j.get("params") or {}
+            if p.get("site") == "hpc" and (p.get("estimate") or {}).get("gpu"):
+                requested_gpu = True
+        c.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return caps, [
+        ("agent flagged the step as GPU (est_gpu) on hpc", bool(gpu_runs)),
+        ("the job requested a GPU resource", requested_gpu),
+        ("agent reports it ran on hpc", "hpc" in txt),
+    ]
+
+
+@scenario("mn_rerun_asis_recomputes")
+def mn_rerun_asis_recomputes(client, pid, tid):
+    """The memo-nonce design: re-running IDENTICAL remote code must actually
+    RECOMPUTE (a fresh weft task), not silently return a memo-cached result.
+    Two runs of the same code → two DISTINCT weft task ids."""
+    caps = [drive_turn(client, pid, tid,
+        "On machine 'hpc', compute and print the sum of 1..1234. Run it "
+        "directly.")]
+    caps.append(drive_turn(client, pid, tid,
+        "Run that exact same computation on 'hpc' again — I want it actually "
+        "re-run, not a cached answer."))
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    # distinct weft task ids across the two identical runs = no memo collision
+    from core.graph.jobs import _row_to_job
+    import sqlite3
+    from core.graph._schema import active_db_path
+    wids = set()
+    try:
+        c = sqlite3.connect(active_db_path()); c.row_factory = sqlite3.Row
+        for r in c.execute("SELECT * FROM jobs").fetchall():
+            p = (_row_to_job(r).get("params") or {})
+            if p.get("site") == "hpc" and p.get("weft_id"):
+                wids.add(p["weft_id"])
+        c.close()
+    except Exception:  # noqa: BLE001
+        pass
+    hpc_runs = [t for t in tools_named(caps, "run_python")
+                if t["input"].get("site") == "hpc"]
+    return caps, [
+        ("both runs targeted hpc", len(hpc_runs) >= 2),
+        ("correct sum reported", str(sum(range(1, 1235))) in full),
+        ("re-run produced a DISTINCT weft task (no memo collision)",
+         len(wids) >= 2),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -554,7 +625,8 @@ def main():
                   mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather,
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
-                  mn_preflight_disconnect, mn_reference_drift]]
+                  mn_preflight_disconnect, mn_reference_drift,
+                  mn_gpu_routing, mn_rerun_asis_recomputes]]
     try:
         with TestClient(app) as client:
             try:
