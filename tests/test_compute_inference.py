@@ -175,3 +175,12 @@ def test_build_site_config_all_partitions_means_no_allowlist():
         r["selected"] = True
     cfg = build_site_config(p, dest="me@login1.vbc.ac.at")
     assert "partitions_allowed" not in cfg.get("policy", {})
+
+
+def test_build_site_config_keeps_stay_on_the_machine():
+    """Remote keeps must not silently tar-pipe home: retain.dir under the
+    working root makes the tab's 'results you keep stay here' promise true
+    (weft keeps in place only when the site declares retain.dir)."""
+    p = propose(slurm_caps(), dest="me@login1.vbc.ac.at")
+    cfg = build_site_config(p, dest="me@login1.vbc.ac.at")
+    assert cfg["retain"] == {"dir": "/scratch/me/.weft/keeps"}

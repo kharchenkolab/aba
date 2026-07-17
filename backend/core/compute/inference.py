@@ -225,6 +225,13 @@ def build_site_config(proposal: dict, *, dest: str = "",
     to propose() so the two halves of the contract stay in one file."""
     cfg: dict = {"root": proposal["working"]["root"]}
     if proposal["kind"] in ("ssh", "slurm"):
+        # keeps stay ON the machine, in place, under the working root —
+        # without retain.dir weft tar-pipes remote keeps back to the
+        # controller, which would silently break the tab's promise
+        # ("results you keep on this machine stay here"); durability
+        # follows the root exactly as the durable checkbox states
+        cfg["retain"] = {"dir": proposal["working"]["root"].rstrip("/")
+                         + "/keeps"}
         user, _, host = dest.rpartition("@")
         cfg["host"] = host or dest
         if user:
