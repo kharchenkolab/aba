@@ -175,6 +175,41 @@ registry's **`deploy_injected`** surface (`config.deploy_injected_keys()`, = `ab
 (or vice-versa) and CI fails. This closes the "add a var, forget to forward it" desync the
 fat-SIF work kept hitting across `script.sh.erb`/`before.sh.erb`/`after.sh.erb`.
 
+## Shared-artifact layout (`$ABA_SHARE`)
+
+A multi-user / OOD deployment keeps its heavy, read-mostly artifacts on one shared,
+node-readable tree — `$ABA_SHARE` (the directory `ABA_SITE_CONFIG`'s `site.yaml` lives in) —
+that every session and compute node reads; per-user **state** stays under `$ABA_HOME`. The
+tree holds two kinds of thing: **versioned artifacts** (a `releases/<ver>/` dir + an atomic
+`current` symlink + a `prev` pointer) and **accumulating data stores** (plain dirs). They
+upgrade on **independent cadences** — that decoupling is the point (a recipe fix never
+rebuilds an image; a dependency bump never reships the app):
+
+| artifact | shape | upgrades when | mechanism |
+|---|---|---|---|
+| **app image** | `app/releases/<ver>/aba.sif` + `current` + `prev` | aba code changes | build → drop `releases/<ver>` → atomic flip `current` (`core/release.py`) |
+| **compute env images** | one line per stack (`releases/<ver>/image.sqfs` + `current`) | a stack's deps change | weft re-solves → publishes an `image.sqfs` keyed by EnvID (`core/compute/seeding.py` → weft publish/adopt) |
+| **recipe/rules bundle** | `installation/` (optionally versioned) | recipes/policy edit | refresh the dir (`aba update`) — no image rebuild |
+| **shared refs** | `refs/` (data store) | curator adds data | append; not a release |
+
+**Pin-on-launch.** A session/job resolves `current` → a concrete release **once** at start
+(`resolve_current` / `active_release_id`, `core/release.py`; the OOD launcher's
+`resolve_release_image`), so flipping `current` never mutates a running job's tree — new work
+picks up the new release, in-flight work stays on the one it started with. Rollback = flip
+`current` back to `prev`.
+
+**Fully-weft profile.** The controller's own runtime is baked **into the app image**; the
+*only* on-disk envs are the weft-published compute stacks, mounted read-only on the node via
+the site's `ro_roots` (consumers `env_adopt` by name — no solve). There is no separate
+controller-env-on-FS or content-addressed `components/` tier in this profile (that machinery
+belongs to the older slim model — see `misc/slim_sif_deploy.md`).
+
+**`site.yaml` is not release-specific.** It points at the release *root* (`app/`); the
+`current` symlink inside does per-release selection at launch. It changes only when the
+*deployment* changes (paths, policy, queue), and sits **above** releases. A **cluster-personal**
+install has no `site.yaml` at all — each user's `config.env` points directly at these same
+read-only artifacts.
+
 ## The access seam (identity, gating, scope)
 
 Access attaches at two boundaries and nowhere else, so business logic never carries an
