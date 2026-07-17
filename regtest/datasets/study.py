@@ -279,18 +279,22 @@ def s_remote(client, pid, tid):
 
 @scenario("drift_and_missing")
 def s_drift(client, pid, tid):
-    ssh(f"mkdir -p {R_DATA} && head -c 1000 /dev/urandom > {R_DATA}/a.bin")
+    # own path — sharing R_DATA with remote_inplace trips the SOURCE-KEY
+    # DEDUP (by design!) and reuses that scenario's entity (found live in
+    # the full-sequence run: register returned already_registered)
+    drift_data = R_DATA + "-drift"
+    ssh(f"mkdir -p {drift_data} && head -c 1000 /dev/urandom > {drift_data}/a.bin")
     # the agent registers it (a direct tool call would bind outside the
     # request's project and be invisible to the agent — found live)
     cap0 = drive_turn(client, pid, tid,
-                      f"Register the data at {R_DATA} on mendel as dataset "
+                      f"Register the data at {drift_data} on mendel as dataset "
                       f"'Drift Cohort' (in place, no copying).")
     assert dataset_by_title("Drift Cohort"), cap0["text"][:300]
-    ssh(f"echo extra >> {R_DATA}/a.bin")
+    ssh(f"echo extra >> {drift_data}/a.bin")
     cap1 = drive_turn(client, pid, tid,
                       "Before we analyze anything: is the 'Drift Cohort' "
                       "dataset still current? Check, don't guess.")
-    ssh(f"rm -rf {os.path.dirname(R_DATA)}")
+    ssh(f"rm -rf {drift_data}")
     cap2 = drive_turn(client, pid, tid,
                       "And now? Please check 'Drift Cohort' again.")
     caps = [cap1, cap2]
