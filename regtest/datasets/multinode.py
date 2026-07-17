@@ -248,6 +248,77 @@ def mn_honesty(client, pid, tid):
     ]
 
 
+
+
+@scenario("mn_isolated_env_remote")
+def mn_isolated_env_remote(client, pid, tid):
+    """Named-env path live: the agent creates an isolated env for a package
+    and runs it ON the node — env re-locks for the site platform, realizes
+    there, and the import works remotely."""
+    caps = [drive_turn(client, pid, tid,
+        "Create an isolated environment named 'numtools' containing the "
+        "python package 'click'. Then run a background step ON machine "
+        "'hpc' inside that env: import click, print its version, and write "
+        "ok.txt containing that version. Report the version back to me.")]
+    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    mk = tools_named(caps, "make_isolated_env")
+    runs = [t for t in tools_named(caps, "run_python")
+            if t["input"].get("site") == "hpc"]
+    return caps, [
+        ("isolated env created", bool(mk)),
+        ("remote job ran IN that env", any(
+            (t["input"].get("env") or "") == "numtools" for t in runs)),
+        ("a version was reported", any(ch.isdigit() for ch in full)
+         and "click" in full.lower()),
+    ]
+
+
+@scenario("mn_crash_fix_rerun")
+def mn_crash_fix_rerun(client, pid, tid):
+    """The daily-life loop over the detached transport: the remote job fails
+    (wrong filename), the agent reads the error, debugs, and lands the
+    correct number — never fabricating."""
+    hssh(f"mkdir -p {R_DATA} && (echo idx,val; seq 1 60 | "
+         f"awk '{{print $1\",\"($1*5)%11}}') > {R_DATA}/vals_v2.csv")
+    total = sum((i * 5) % 11 for i in range(1, 61))
+    caps = [drive_turn(client, pid, tid,
+        f"On machine 'hpc' (background), read the csv in {R_DATA} — I think "
+        f"it's called vals.csv — and report the sum of its val column. If "
+        f"something fails, debug it yourself there and get me the number.")]
+    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    hpc_runs = [t for t in tools_named(caps, "run_python")
+                if t["input"].get("site") == "hpc"]
+    return caps, [
+        ("worked on the node", bool(hpc_runs)),
+        ("found the real file", "vals_v2" in full),
+        ("correct sum reported", str(total) in full),
+    ]
+
+
+@scenario("mn_fanout_gather")
+def mn_fanout_gather(client, pid, tid):
+    """Concurrent detached jobs + continuation ordering: three independent
+    variants in parallel (node + local mix), then a local gather step."""
+    caps = [drive_turn(client, pid, tid,
+        "Run three INDEPENDENT background jobs, in parallel (submit all "
+        "before waiting): each computes the sum of i*i for i from 1 to N, "
+        "for N = 100, 200 and 300. Run at least one of them on machine "
+        "'hpc' and at least one locally. When all three are done, compute "
+        "the TOTAL of the three results locally and report it.")]
+    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    bg = [t for t in tools_named(caps, "run_python")
+          if t["input"].get("background")]
+    sites = [t["input"].get("site") for t in bg]
+    expected = {100: 338350, 200: 2686700, 300: 9045050}
+    total = sum(expected.values())
+    return caps, [
+        ("three background jobs submitted", len(bg) >= 3),
+        ("at least one on hpc", "hpc" in sites),
+        ("at least one local", any(not s for s in sites)),
+        ("correct total reported", str(total) in full),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -273,7 +344,8 @@ def main():
     from fastapi.testclient import TestClient
     from main import app
     scenarios = [(fn._scenario, fn) for fn in
-                 [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty]]
+                 [mn_size_up, mn_hop_chain, mn_status_surfaces, mn_honesty,
+                  mn_isolated_env_remote, mn_crash_fix_rerun, mn_fanout_gather]]
     try:
         with TestClient(app) as client:
             try:
