@@ -65,10 +65,11 @@ def test_durable_view_states(tmp_path, monkeypatch):
     by = {f["rel"]: f for f in view["files"]}
     # weft-truth: the aba store copy is honestly "in-store", NOT a fake "retained"
     assert by["umap.png"]["state"] == "in-store" and by["umap.png"]["url"] == "/artifacts/p/x.png"
-    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "on local"
+    # §8c: protection axis only — a LOCAL in-place keep never mentions the site
+    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "kept ✓"
     assert by["big.h5ad"]["url"].startswith("/api/runs/run-1/file?rel=")   # tier-resolved
     assert by["model.pt"]["state"] == "saving"
-    assert by["model.pt"]["badge"] == "saving… · keeps the version at run settlement"
+    assert by["model.pt"]["badge"] == "keeping… · keeps the version at run settlement"
     assert by["model.pt"]["large"] is True
     assert view["summary"] == {"retained": 1, "saving": 1, "in_store": 1,
                                "at_risk": 0, "in_sandbox": 0, "cleared": 0, "total": 3}
@@ -204,7 +205,8 @@ def test_durable_view_remote_in_place_kept_via_selection(tmp_path, monkeypatch):
         {"original_name": "scratch.tmp", "url": None, "kind": "file", "size": 5},  # excluded
     ])
     by = {f["rel"]: f for f in runsmod.run_durable_view("run-r")["files"]}
-    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "on hpc"
+    # §8c composite: protection + location ("safe, AND not here")
+    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "kept ✓ · on hpc"
     assert by["big.h5ad"]["site"] == "hpc"
     assert by["figs/umap.png"]["state"] == "retained"   # matched figs/**
     assert by["scratch.tmp"]["state"] != "retained"     # excluded → not durable
@@ -270,6 +272,27 @@ def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
     assert by["sub/deep.txt"]["state"] != "retained" # but NOT the nested one
 
 
+def test_durable_view_temporary_by_absence_while_open(monkeypatch):
+    """§8c rendering rule: while the Run is OPEN an unkept file's badge is EMPTY
+    (temporary is the default, not news); once closed it says so explicitly.
+    State keys are unchanged either way (the Keep shield keys off them)."""
+    def _ent(state):
+        return lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_o"],
+                                                    "run_state": state}}
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [])
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(retmod, "file_stat", lambda t, rel: {"exists": True, "bytes": _BIG})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "work.parquet", "url": None, "kind": "file", "size": _BIG}])
+    monkeypatch.setattr(runsmod, "get_entity", _ent("open"))
+    f_open = runsmod.run_durable_view("run-o")["files"][0]
+    assert f_open["state"] == "at-risk" and f_open["badge"] == ""
+    monkeypatch.setattr(runsmod, "get_entity", _ent("closed"))
+    f_closed = runsmod.run_durable_view("run-o")["files"][0]
+    assert f_closed["state"] == "at-risk"
+    assert f_closed["badge"].startswith("temporary")
+
+
 def test_read_run_file_previews_in_sandbox(monkeypatch):
     """B1b: read_run_file decodes weft run_file_read's base64 preview across the targets."""
     import base64
@@ -312,6 +335,7 @@ _TESTS = [test_durable_view_states,
           test_durable_view_dedups_repeated_filename,
           test_durable_view_remote_in_place_has_no_local_file_url,
           test_durable_view_selection_glob_does_not_span_slash,
+          test_durable_view_temporary_by_absence_while_open,
           test_read_run_file_previews_in_sandbox,
           test_read_run_file_flags_truncated,
           test_read_run_file_unreadable_returns_none]

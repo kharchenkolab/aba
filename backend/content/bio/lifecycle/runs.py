@@ -1051,14 +1051,20 @@ def run_durable_view(run_id: str) -> dict:
         """A pinned-pending retain covers this path (literal include, or a glob that matches)."""
         return rel in pending_lit or any(_fnmatch.fnmatch(rel, g) for g in pending_glob)
 
-    _CLEARED = "cleared — swept from scratch, not retained"
-    _SANDBOX = "on the run's scratch — not durably kept yet; kept when the run finishes, or Keep it now"
-    _ATRISK = ("at risk — large output on scratch, nothing has kept it yet; "
-               "Keep it now (or it's kept when the run finishes)")
+    # §8c two-axis vocabulary (misc/more_weft_ui.md): badges say PROTECTION
+    # (kept ✓ / keeping… / temporary / discarded) + location only when the bytes
+    # are not simply here. State KEYS are unchanged (wire contract). While the
+    # Run is OPEN, `temporary` is expressed by ABSENCE (empty badge — it's the
+    # default, not news; the Keep shield is the affordance); after close it
+    # becomes explicit.
+    run_open = md.get("run_state") == "open"
+    _CLEARED = "discarded — swept by housekeeping; it was not kept"
+    _TEMP = "" if run_open else "temporary — will be discarded; Keep it to save it"
 
     def _live(is_large: bool):
-        """A produced file that exists but isn't durable: at-risk if large, else in-sandbox."""
-        return ("at-risk", _ATRISK) if is_large else ("in-sandbox", _SANDBOX)
+        """A produced file that exists but nothing keeps: `temporary` on the
+        protection axis; large ones keep the at-risk state key (styling/lever)."""
+        return ("at-risk", _TEMP) if is_large else ("in-sandbox", _TEMP)
 
     # Dedup by relpath — a filename produced by N cells yields N artifact rows; keep the
     # last (chronological → newest is what's on disk / retained), so the panel shows one
@@ -1084,18 +1090,19 @@ def run_durable_view(run_id: str) -> dict:
         # artifact store (`url`) is only a serving cache (in-store), below weft. Then the live
         # sandbox: a large live-but-unkept output is at-risk (RED), a small one in-sandbox.
         if rel in done_files:                     # weft retained tree, local (sidecar readable here)
-            d = done_files[rel]; site = d["site"]; remote = bool(d["in_place"])
-            state = "retained"; badge = f"on {site}" if remote else "retained ✓"
+            d = done_files[rel]; site = d["site"]; remote = bool(d["in_place"]) and site != "local"
+            state = "retained"; badge = f"kept ✓ · on {site}" if remote else "kept ✓"
             local_servable = True                 # location dir is on this box → resolve_run_file finds it
         elif (dm := _sel_match(rel, done_sel)):   # remote in-place durable retain (§5.1)
-            site = dm["site"]; remote = bool(dm["in_place"]); state = "retained"
-            badge = f"on {site}" if remote else "retained ✓"
+            site = dm["site"]; remote = bool(dm["in_place"]) and site != "local"
+            state = "retained"
+            badge = f"kept ✓ · on {site}" if remote else "kept ✓"
         elif _is_saving(rel):                     # covered by a pinned-pending weft retain
             state = "saving"
-            badge = ("saving… · keeps the version at run settlement" if large
-                     else "saving… · captured when the run settles")
+            badge = ("keeping… · keeps the version at run settlement" if large
+                     else "keeping… · captured when the run settles")
         elif url:                                 # small surfaced → aba serving cache only
-            state, badge = "in-store", "in store · serving copy (not yet weft-retained)"
+            state, badge = "in-store", "temporary · a viewing copy is held here"
         else:
             performed, exists, live_bytes = _on_disk(rel)
             if exists:
