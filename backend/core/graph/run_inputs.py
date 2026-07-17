@@ -72,17 +72,26 @@ def resolve_inputs(code: str | None, focus_entity_id: str | None = None) -> list
         except Exception:  # noqa: BLE001
             pass
 
-    # 2. Registered datasets referenced in the code.
+    # 2. Registered datasets referenced in the code. Matches the local
+    #    artifact_path AND the weft durable home (a remote dataset is
+    #    referenced in code by its on-site path). When the entity already
+    #    carries a content ref (weft DataRef), it rides along — exact
+    #    content lineage in the exec record for free (misc/datasets2.md).
     if code:
         try:
             for e in list_entities(include_archived=False):
                 if e.get("type") != "dataset":
                     continue
+                md = e.get("metadata") or {}
                 p = (e.get("artifact_path") or "").strip()
-                base = Path(p).name if p else ""
+                hp = ((md.get("home") or {}).get("path") or "").strip()
+                base = Path(p).name if p else (Path(hp).name if hp else "")
                 did = e.get("id") or ""
-                if (p and p in code) or (base and base in code) or (did and did in code):
-                    _add(did, "dataset", e.get("title"), p or None)
+                if ((p and p in code) or (hp and hp in code)
+                        or (base and base in code) or (did and did in code)):
+                    _add(did, "dataset", e.get("title"), p or hp or None)
+                    if md.get("ref") and inputs and inputs[-1]["ref"] == did:
+                        inputs[-1]["content_ref"] = md["ref"]
         except Exception:  # noqa: BLE001
             pass
 

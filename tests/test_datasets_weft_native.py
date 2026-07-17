@@ -173,3 +173,23 @@ def test_relative_produced_path_resolves_to_jobdir(pid):
     # absolute path lane, which is the honest fallback.
     out = register_dataset_tool({"title": "Made", "path": str(kd / "made.txt")}, {})
     assert out["status"] == "ok"
+
+
+# ── provenance: run inputs carry the content ref ─────────────────────────────
+
+def test_resolve_inputs_carries_content_ref_and_home_path(pid):
+    from core.graph.run_inputs import resolve_inputs
+    p = _jobdir_file("prov.bin", b"P" * 2048)
+    out = register_dataset_tool({"title": "Prov DS", "path": p}, {})
+    md = get_entity(out["dataset_id"])["metadata"]
+    hit = [i for i in resolve_inputs(f"open('{out['artifact_path']}')")
+           if i["ref"] == out["dataset_id"]]
+    assert hit and hit[0].get("content_ref") == md["ref"]
+
+    share = Path(_tmp) / "share3" / "remote-ish"
+    share.mkdir(parents=True, exist_ok=True)
+    (share / "d.txt").write_bytes(b"x")
+    out2 = register_dataset_tool({"title": "Homey", "path": str(share)}, {})
+    hit2 = [i for i in resolve_inputs(f"load('{share}')")
+            if i["ref"] == out2["dataset_id"]]
+    assert hit2 and "content_ref" not in hit2[0]   # lazy identity: no ref yet
