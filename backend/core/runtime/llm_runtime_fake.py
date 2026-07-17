@@ -49,6 +49,12 @@ from core.runtime.llm_runtime import (
     TurnDone,
     TurnHalt,
 )
+# The private stream-completion sentinel guide.stream_response consumes to
+# capture stop_reason + assistant_blocks. DirectAPIRuntime + OpenAICompatible
+# both emit it (the latter imports it from here too); a fake replay must emit
+# it as well or guide never learns _stop_reason == "tool_use" and silently
+# falls THROUGH plan/clarify halts to DONE instead of AWAITING_USER.
+from core.runtime.llm_runtime_direct import _StreamCompleted
 
 
 _ROOT = Path(__file__).resolve().parents[2]   # workspace root (above backend/)
@@ -130,23 +136,52 @@ class FakeRuntime:
         if isinstance(turn, dict) and "raise" in turn:
             raise RuntimeError(turn["raise"])
         blocks = turn.get("blocks", [])
+        # Assign a stable tool_use id up-front so the ToolUseStart event, the
+        # persisted assistant block, and the ToolResult in the dispatch phase
+        # all agree. Without this the stream phase and dispatch phase minted
+        # DIFFERENT random ids for an id-less fixture block, so the tool_result
+        # couldn't be paired with its tool_use in the message log.
+        for b in blocks:
+            if b.get("type") == "tool_use" and not b.get("id"):
+                b["id"] = f"toolu_fake_{uuid.uuid4().hex[:12]}"
 
-        # ── stream phase: text + tool_use_start events ──
+        # ── stream phase: text + tool_use_start events + assistant-block assembly ──
+        # Build assistant_blocks (Anthropic shape) exactly like DirectAPIRuntime
+        # so _StreamCompleted below carries what guide persists + counts.
+        assistant_blocks: list[dict] = []
+        tool_calls_this_turn: list[str] = []
         for b in blocks:
             t = b.get("type")
             if t == "text":
                 # Chunk the text into ~40-char pieces so consumers that
                 # exercise multi-delta paths see realistic deltas.
                 text = b.get("text", "")
+                assistant_blocks.append({"type": "text", "text": text})
                 for i in range(0, len(text), 40):
                     yield TextDelta(text=text[i:i + 40])
             elif t == "tool_use":
-                tool_use_id = b.get("id") or f"toolu_fake_{uuid.uuid4().hex[:12]}"
+                inp = b.get("input", {})
+                assistant_blocks.append({"type": "tool_use", "id": b["id"],
+                                         "name": b["name"], "input": inp})
+                tool_calls_this_turn.append(b["name"])
                 yield ToolUseStart(
-                    tool_use_id=tool_use_id,
+                    tool_use_id=b["id"],
                     tool_name=b["name"],
-                    input=b.get("input", {}),
+                    input=inp,
                 )
+
+        stop_reason = "tool_use" if tool_calls_this_turn else "end_turn"
+        # The sentinel guide.stream_response needs to set _stop_reason (and thus
+        # realize plan/clarify halts) + persist the assistant turn. Mirrors
+        # DirectAPIRuntime's emission (final_msg is unused by guide — assigned,
+        # never dereferenced — so None is fine for the fake).
+        yield _StreamCompleted(
+            final_msg=None,
+            usage_delta={"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+            assistant_blocks=assistant_blocks,
+            stop_reason=stop_reason,
+            tool_calls_this_turn=tool_calls_this_turn,
+        )
 
         # ── tool dispatch phase ──
         # Walk the tool_use blocks; same halt-envelope contract as
@@ -157,7 +192,7 @@ class FakeRuntime:
         for b in blocks:
             if b.get("type") != "tool_use":
                 continue
-            tool_use_id = b.get("id") or f"toolu_fake_{uuid.uuid4().hex[:12]}"
+            tool_use_id = b["id"]   # stable id assigned above (matches ToolUseStart)
             tool_name = b["name"]
             tool_input = b.get("input", {})
 
@@ -211,8 +246,6 @@ class FakeRuntime:
                 return
 
         # ── normal end-of-turn ──
-        stop_reason = "tool_use" if any(b.get("type") == "tool_use"
-                                         for b in blocks) else "end_turn"
         # FakeRuntime doesn't track usage tokens; emit zero-filled dict so
         # callers can mirror their production accounting.
         yield TurnDone(stop_reason=stop_reason, usage={

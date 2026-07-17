@@ -73,12 +73,11 @@ reduction — `derive` 1, `keep` 70, `merge` 50, `relocate` 2, `resolve-flag` 1.
 | `modules_eager` | `ABA_MODULES_EAGER` | str |  | move:site | keep |  | Eagerly materialize module manifests at startup (fat-SIF baked artifacts). |
 | `modules_enabled` | `ABA_MODULES_ENABLED` | str |  | move:site | keep | branches | '0' disables the environment-modules integration. |
 | `pixi_bin` | `ABA_PIXI_BIN` | str |  | keep | keep |  | Path to the pixi binary weft solves/realizes with. None → $PATH lookup, then $ABA_HOME/tools/pixi/bin/pixi. |
+| `compute_self_service` | `ABA_COMPUTE_SELF_SERVICE` | bool | True | keep | keep | deploy | May users add/remove/reconfigure compute sites from the UI/agent? Shared installs (OOD/cluster deployments whose slurm sites the admin declares in weft-sites.yaml) set false — the Compute tab shows the deployment's machines read-only and the management API refuses with an actionable 403. |
 | `sif` | `ABA_SIF` | str |  | move:site | keep | deploy | Path to the fat/slim SIF image used to wrap jobs. |
 | `weft_publish_site` | `ABA_WEFT_PUBLISH_SITE` | str | local | keep | keep |  | Site whose realization store backs the published catalog (where env_adopt runs). |
 | `weft_publish_staging` | `ABA_WEFT_PUBLISH_STAGING` | str |  | keep | keep |  | Where a publish's build churn lands (weft env_publish `staging`): None → weft 'auto' (under the site root); an absolute node-local path (e.g. /dev/shm/pubstage) is fastest on a netfs tree — the slow tree then gets one sequential image write instead of ~10^4 small-file ops. |
 | `weft_publish_tree` | `ABA_WEFT_PUBLISH_TREE` | str |  | keep | keep | deploy | Published base-env catalog tree (shared read-only folder). When set, base packs ADOPT from it by name (no solve); unset → solve locally. Admin seeds it with core.compute.seeding. |
-| `weft_sites` | `ABA_WEFT_SITES` | str |  | keep | keep |  | Deployment site declarations (weft-sites.yaml: non-local weft sites — slurm/ssh). None → $ABA_HOME/weft-sites.yaml. |
-| `weft_workspace` | `ABA_WEFT_WORKSPACE` | str |  | keep | keep |  | weft workspace dir (holds .weft state + the local site root). None → $ABA_HOME/weft. One workspace per deployment; per-project identity stays in the waist, not in weft. |
 
 ## mode
 

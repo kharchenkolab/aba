@@ -49,27 +49,53 @@ def test_durable_view_states(tmp_path, monkeypatch):
     monkeypatch.setattr(retmod, "retained", lambda **kw: [
         {"state": "done", "site": "local", "in_place": 1, "location": loc},
         {"state": "pinned-pending", "site": "local", "in_place": 0,
-         "location": "/somewhere/krn_1"},
+         "location": "/somewhere/krn_1",
+         "selection": json.dumps({"include": ["model.pt"]})},   # per-file saving: covers model.pt
     ])
     monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "umap.png", "url": "/artifacts/p/x.png",
-         "kind": "figure", "size": 2048},                       # small surfaced → kept (aba store)
+         "kind": "figure", "size": 2048},                       # small surfaced, not weft-kept → in-store
         {"original_name": "big.h5ad", "url": None, "kind": "file",
-         "size": _BIG},                                          # large + in done sidecar → kept on site
+         "size": _BIG},                                          # large + in done sidecar → retained on site
         {"original_name": "model.pt", "url": None, "kind": "file",
-         "size": _BIG},                                          # large + a pending row exists → pinned
+         "size": _BIG},                                          # large + covered by pending → saving
     ])
     view = runsmod.run_durable_view("run-1")
     by = {f["rel"]: f for f in view["files"]}
-    assert by["umap.png"]["state"] == "kept" and by["umap.png"]["url"] == "/artifacts/p/x.png"
-    assert by["big.h5ad"]["state"] == "kept" and by["big.h5ad"]["badge"] == "on local"
+    # weft-truth: the aba store copy is honestly "in-store", NOT a fake "retained"
+    assert by["umap.png"]["state"] == "in-store" and by["umap.png"]["url"] == "/artifacts/p/x.png"
+    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "on local"
     assert by["big.h5ad"]["url"].startswith("/api/runs/run-1/file?rel=")   # tier-resolved
-    assert by["model.pt"]["state"] == "pinned-pending"
-    assert by["model.pt"]["badge"] == "large · keeps the version at run settlement"
+    assert by["model.pt"]["state"] == "saving"
+    assert by["model.pt"]["badge"] == "saving… · keeps the version at run settlement"
     assert by["model.pt"]["large"] is True
-    assert view["summary"] == {"kept": 2, "pinned_pending": 1, "in_sandbox": 0,
-                               "cleared": 0, "total": 3}
+    assert view["summary"] == {"retained": 1, "saving": 1, "in_store": 1,
+                               "at_risk": 0, "in_sandbox": 0, "cleared": 0, "total": 3}
+
+
+def test_durable_view_serves_retained_local_directly_from_weft(tmp_path, monkeypatch):
+    """R4: a small figure that is BOTH in aba's /artifacts store (has a url) AND weft-retained
+    LOCALLY is served straight from weft's durable copy via /file — not the store cache. The
+    store url stays the fallback only for files with no local weft copy (in-store)."""
+    loc = _retained_dir(tmp_path, "krn_x", {"umap.png": "img", "figs/pca.png": "img2"})
+    monkeypatch.setattr(runsmod, "get_entity",
+                        lambda rid: {"id": rid, "metadata": {"weft_targets": ["krn_x"]}})
+    monkeypatch.setattr(retmod, "retained", lambda **kw: [
+        {"state": "done", "site": "local", "in_place": 0, "location": loc}])
+    monkeypatch.setattr(retmod, "inventory", lambda t: {"entries": []})
+    monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
+        {"original_name": "umap.png", "url": "/artifacts/p/x.png", "kind": "figure", "size": 2048},
+        {"original_name": "orphan.png", "url": "/artifacts/p/o.png", "kind": "figure", "size": 512},
+    ])
+    by = {f["rel"]: f for f in runsmod.run_durable_view("run-x")["files"]}
+    # retained locally → served from weft directly, NOT the /artifacts cache url
+    assert by["umap.png"]["state"] == "retained"
+    assert by["umap.png"]["url"] == "/api/runs/run-x/file?rel=umap.png"
+    assert by["umap.png"]["url"] != "/artifacts/p/x.png"
+    # not in the retained tree → in-store, still served from the cache (the fallback)
+    assert by["orphan.png"]["state"] == "in-store"
+    assert by["orphan.png"]["url"] == "/artifacts/p/o.png"
 
 
 def test_durable_view_in_sandbox_vs_cleared_via_stat(tmp_path, monkeypatch):
@@ -149,10 +175,10 @@ def test_durable_tree_nests_with_durable_fields(tmp_path, monkeypatch):
     assert top["samples"]["kind"] == "folder"
     a = {c["name"]: c for c in top["samples"]["children"]}["A"]
     qc = a["children"][0]
-    assert qc["path"] == "samples/A/qc.csv" and qc["kind"] == "file" and qc["state"] == "kept"
+    assert qc["path"] == "samples/A/qc.csv" and qc["kind"] == "file" and qc["state"] == "in-store"
     # file node carries durable fields + server url in artifact_path
     big = top["big.h5ad"]
-    assert big["state"] == "kept" and big["large"] is True
+    assert big["state"] == "retained" and big["large"] is True
     assert big["artifact_path"].startswith("/api/runs/run-t/file?rel=")   # tier-resolved
     umap = top["umap.png"]
     assert umap["artifact_path"] == "/artifacts/p/x.png"                  # aba store url
@@ -178,10 +204,10 @@ def test_durable_view_remote_in_place_kept_via_selection(tmp_path, monkeypatch):
         {"original_name": "scratch.tmp", "url": None, "kind": "file", "size": 5},  # excluded
     ])
     by = {f["rel"]: f for f in runsmod.run_durable_view("run-r")["files"]}
-    assert by["big.h5ad"]["state"] == "kept" and by["big.h5ad"]["badge"] == "on hpc"
+    assert by["big.h5ad"]["state"] == "retained" and by["big.h5ad"]["badge"] == "on hpc"
     assert by["big.h5ad"]["site"] == "hpc"
-    assert by["figs/umap.png"]["state"] == "kept"       # matched figs/**
-    assert by["scratch.tmp"]["state"] != "kept"         # excluded → not durable
+    assert by["figs/umap.png"]["state"] == "retained"   # matched figs/**
+    assert by["scratch.tmp"]["state"] != "retained"     # excluded → not durable
 
 
 def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
@@ -202,7 +228,8 @@ def test_durable_view_dedups_repeated_filename(tmp_path, monkeypatch):
     rows = [f for f in view["files"] if f["rel"] == "umap.png"]
     assert len(rows) == 1                       # deduped, not 3
     assert rows[0]["url"] == "/artifacts/p/umap.png"   # latest (surfaced) won
-    assert view["summary"]["total"] == 1 and view["summary"]["kept"] == 1
+    # a surfaced file with a store url but no weft retain is `in-store` (serving cache)
+    assert view["summary"]["total"] == 1 and view["summary"]["in_store"] == 1
 
 
 def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatch):
@@ -219,7 +246,7 @@ def test_durable_view_remote_in_place_has_no_local_file_url(tmp_path, monkeypatc
     monkeypatch.setattr(artmod, "artifacts_for_run", lambda rid: [
         {"original_name": "big.h5ad", "url": None, "kind": "file", "size": _BIG}])
     f = runsmod.run_durable_view("run-r2")["files"][0]
-    assert f["state"] == "kept" and f["site"] == "hpc"
+    assert f["state"] == "retained" and f["site"] == "hpc"
     assert f["url"] is None                     # not locally servable → no dead link
 
 
@@ -239,8 +266,8 @@ def test_durable_view_selection_glob_does_not_span_slash(tmp_path, monkeypatch):
         {"original_name": "sub/deep.txt", "url": None, "kind": "file", "size": 5},
     ])
     by = {f["rel"]: f for f in runsmod.run_durable_view("run-g")["files"]}
-    assert by["top.txt"]["state"] == "kept"          # *.txt matches a top-level file
-    assert by["sub/deep.txt"]["state"] != "kept"     # but NOT the nested one
+    assert by["top.txt"]["state"] == "retained"      # *.txt matches a top-level file
+    assert by["sub/deep.txt"]["state"] != "retained" # but NOT the nested one
 
 
 def test_read_run_file_previews_in_sandbox(monkeypatch):
@@ -276,6 +303,7 @@ def test_read_run_file_unreadable_returns_none(monkeypatch):
 
 
 _TESTS = [test_durable_view_states,
+          test_durable_view_serves_retained_local_directly_from_weft,
           test_durable_view_in_sandbox_vs_cleared_via_stat,
           test_durable_view_falls_back_to_inventory_proxy_when_stat_unavailable,
           test_resolve_run_file_retained_then_sandbox_then_escape,

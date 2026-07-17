@@ -336,6 +336,17 @@ def _scratch_bases(ctx: dict | None) -> list[str]:
             bases.append(str(scratch_dir(pid, f"thread-{tid}")))
     except Exception:  # noqa: BLE001
         pass
+    # Under weft, the kernel's cwd IS its ephemeral jobdir
+    # ($ABA_HOME/weft/site-local/kernels/<kid>/) — the datasets2.md §1 bug:
+    # a bare filename the agent just wrote resolves nowhere without these.
+    try:
+        from core.compute.adapter import get_compute, weft_workspace
+        for k in (get_compute().sync_call("list_kernels") or {}).get("kernels", []):
+            jd = k.get("jobdir")
+            if jd and k.get("site") == "local":
+                bases.append(str(weft_workspace() / "site-local" / jd))
+    except Exception:  # noqa: BLE001 — substrate offline → no jobdir candidates
+        pass
     return bases
 
 
@@ -486,6 +497,89 @@ def _producing_exec_id(input_: dict, ctx: dict | None) -> str | None:
         return None
 
 
+def _register_dataset_url(url: str, site: str | None, title: str,
+                          input_: dict, ctx: dict | None) -> dict:
+    """URL lane (misc/datasets2.md §4A): weft fetches into the target site's
+    CAS, hashed on arrival — the agent never pre-downloads. With site=, the
+    bytes land on THAT site and never touch the controller; locally we also
+    stage a browsable copy into DATA_DIR (0-cost hardlink from the CAS)."""
+    import os
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    from core.data import datasets as _wds
+    from core.graph.entities import create_entity, update_entity
+    from core.graph.derivation import imported
+    from content.bio.lifecycle.runs import agent_actor_for_thread
+    try:
+        rec = _wds.register_source(url, site=site)
+    except Exception as e:  # noqa: BLE001 — structured cause to the agent
+        return {"error": f"could not fetch {url}: {e}"}
+    abspath = None
+    if not site or site == "local":
+        try:
+            slug = _slugify_for_dir(title)
+            dest = str(project_data_dir(current_project_id()) / slug)
+            _get_compute_sync("data_fetch", rec["ref"], dest)
+            abspath = dest
+        except Exception:  # noqa: BLE001 — CAS copy still holds the bytes
+            pass
+    md = {"thread_id": _ctx_thread(ctx), "origin": "url",
+          "by_reference": abspath is None, "ref_path": abspath or url,
+          "summary": (input_.get("summary") or "").strip(),
+          "source": input_.get("source") or url,
+          "organism": input_.get("organism"),
+          "source_key": rec["source_key"], "ref": rec["ref"],
+          "origin_class": rec["origin_class"],
+          "descriptor": rec.get("descriptor") or {},
+          "dataset_site": site or "local"}
+    eid = create_entity(entity_type="dataset", title=title,
+                        artifact_path=abspath,
+                        derivation=imported(url),
+                        actor=agent_actor_for_thread(_ctx_thread(ctx)),
+                        exec_id=_producing_exec_id(input_, ctx),
+                        metadata=md)
+    if md["summary"]:
+        update_entity(eid, notes=md["summary"])
+    where = (f"fetched onto site {site!r} (bytes never touched this machine)"
+             if site and site != "local" else
+             f"fetched and available at {abspath}" if abspath else
+             "fetched into the local data store")
+    return {"status": "ok", "dataset_id": eid, "title": title,
+            "artifact_path": abspath,
+            "note": f"Registered as a Dataset entity — {where}."}
+
+
+def _get_compute_sync(name: str, *a, **kw):
+    from core.compute.adapter import get_compute
+    return get_compute().sync_call(name, *a, **kw)
+
+
+def _slugify_for_dir(title: str) -> str:
+    import re
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", str(title)).strip("-")
+    return (s or "dataset")[:80]
+
+
+def _weft_adopt(abspath: str, title: str) -> tuple[str, dict]:
+    """Weft-native adopt for PRODUCED/fetched bytes (replaces the plain
+    copy-into-data-dir): CAS ingest mints the content identity (dedup — the
+    same content re-registered is the same ref, re-fetches stop piling up),
+    then a 0-cost local data_fetch gives DATA_DIR its browsable view.
+    Returns (data_dir_path, weft_metadata)."""
+    import os
+    from core.config import project_data_dir
+    from core.projects import current_project_id
+    from core.data import datasets as _wds
+    rec = _wds.ingest_produced(abspath)
+    base = os.path.basename(abspath.rstrip("/")) or _slugify_for_dir(title)
+    dest = str(project_data_dir(current_project_id()) / base)
+    if os.path.abspath(dest) != os.path.abspath(abspath):
+        _get_compute_sync("data_fetch", rec["ref"], dest)
+    return dest, {"ref": rec["ref"], "origin_class": rec["origin_class"],
+                  "source_key": rec["source_key"],
+                  "descriptor": rec.get("descriptor") or {}}
+
+
 def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     import os
     from core.config import DATA_DIR
@@ -505,14 +599,44 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"error": "title is required"}
     paths_list = input_.get("paths")
     path = input_.get("path")
-    if not paths_list and not path:
-        return {"error": "either `path` (single file/dir) or `paths` (list of files) is required"}
-    if paths_list and path:
-        return {"error": "pass `path` OR `paths`, not both"}
+    url = (input_.get("url") or "").strip() or None
+    site = (input_.get("site") or "").strip() or None
+    given = [x for x in (paths_list, path, url) if x]
+    if not given:
+        return {"error": "one of `url`, `path` (single file/dir), or `paths` "
+                         "(list of files) is required"}
+    if len(given) > 1:
+        return {"error": "pass exactly one of `url`, `path`, `paths`"}
 
     from core.graph.entities import create_entity, update_entity
 
+    # Semantic dedup BEFORE obtaining/registering (misc/datasets2.md §4):
+    # the same source registered twice is the same dataset — say so instead
+    # of re-fetching / minting a duplicate entity.
+    from core.data import datasets as _wds
+    try:
+        _skey = _wds.source_key(url) if url else (
+            _wds.source_key(os.path.normpath(str(path)), site)
+            if path and os.path.isabs(str(path)) else None)
+        if _skey:
+            from core.graph.entities import find_entities
+            hits = find_entities(type="dataset", not_deleted=True,
+                                 metadata_contains={"source_key": _skey})
+            if hits:
+                _h = hits[0]
+                return {"status": "ok", "dataset_id": _h["id"],
+                        "title": _h.get("title"), "already_registered": True,
+                        "note": (f"This source is already registered as dataset "
+                                 f"{_h['id']} ({_h.get('title')!r}) — reusing it. "
+                                 "No bytes were fetched or copied.")}
+    except Exception:  # noqa: BLE001 — dedup is best-effort, never blocks registration
+        pass
+
+    if url:
+        return _register_dataset_url(url, site, title, input_, ctx)
+
     bundle_note = ""
+    weft_md = {}
     if paths_list:
         # Multi-path mode: resolve each, link them into a fresh DATA_DIR/<slug>/
         # bundle, register THAT bundle. Lets the agent register only the files
@@ -538,27 +662,69 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     else:
         abspath = _resolve_dataset_path(str(path), ctx)
         exists = os.path.exists(abspath)
-        # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR) is
-        # hardlinked into DATA_DIR so the dataset persists past the 48h scratch GC —
-        # removing the move-then-re-register dance. Non-blocking (instant hardlink,
-        # or a background copy across filesystems).
+        # Adopt: a file found in the SCRATCH tier (not already under DATA_DIR)
+        # goes weft-native (misc/datasets2.md §4B): CAS ingest mints the
+        # content identity (dedup, survives the kernel-jobdir sweep), then a
+        # 0-cost hardlink fetch gives DATA_DIR its browsable view. Falls back
+        # to the legacy plain adopt when the substrate is offline.
         adopted = materializing = False
+        weft_md: dict = {}
         # "Is this file in scratch?" / "is it already in DATA_DIR?" must check
         # the PER-PROJECT trees the agent actually writes to, plus the module
-        # ones for back-compat. Without per-project membership, a scratch file
-        # at projects/<pid>/work/... wouldn't be recognized as scratch and the
-        # adopt step would silently skip — file gets registered by-reference
-        # against a path that'll be GC'd in 48h.
+        # ones for back-compat — and the weft workspace, because under weft
+        # the kernel cwd is an ephemeral jobdir inside it.
         in_work = (_within(abspath, str(WORK_DIR)) or
                    _within(abspath, _PROJECT_WORK))
+        try:
+            from core.compute.adapter import weft_workspace as _wws
+            in_work = in_work or _within(abspath, str(_wws()))
+        except Exception:  # noqa: BLE001
+            pass
         in_data = (_within(abspath, str(DATA_DIR)) or
                    _within(abspath, _PROJECT_DATA))
         if exists and in_work and not in_data:
             try:
-                abspath, materializing = _adopt_into_data_dir(abspath)
+                abspath, weft_md = _weft_adopt(abspath, str(title))
                 adopted = True
-            except Exception:  # noqa: BLE001 — fall back to by-reference at the scratch path
+            except Exception:  # noqa: BLE001 — substrate offline → legacy adopt
+                try:
+                    abspath, materializing = _adopt_into_data_dir(abspath)
+                    adopted = True
+                except Exception:  # noqa: BLE001 — by-reference at the scratch path
+                    pass
+        elif exists and not in_data:
+            # In place outside aba's trees: a DURABLE-HOME registration
+            # (misc/datasets2.md §4C) — fingerprint + descriptor, NO ingest,
+            # NO copy; the content identity (ref) mints lazily at first use.
+            try:
+                from core.data import datasets as _wds2
+                rec = _wds2.register_source(abspath, site=site)
+                weft_md = {k: rec[k] for k in
+                           ("source_key", "home", "fingerprint", "descriptor",
+                            "origin_class") if rec.get(k) is not None}
+            except Exception:  # noqa: BLE001 — plain by-reference still works
                 pass
+        elif not exists and site and site != "local":
+            # A path that lives on a REMOTE site (never visible locally):
+            # register the durable home site-side — bytes never touch this
+            # machine (the whole point for TB-scale remote data).
+            try:
+                from core.data import datasets as _wds2
+                rec = _wds2.register_source(str(path), site=site)
+                if (rec.get("fingerprint") or {}).get("exists"):
+                    abspath = os.path.normpath(str(path))
+                    exists = True   # exists ON THE SITE — honest enough for the entity
+                    weft_md = {k: rec[k] for k in
+                               ("source_key", "home", "fingerprint",
+                                "descriptor", "origin_class")
+                               if rec.get(k) is not None}
+                else:
+                    return {"error": (f"nothing found at {path!r} on site "
+                                      f"{site!r} — check the path (it is "
+                                      f"checked on that machine, not here)")}
+            except Exception as e:  # noqa: BLE001
+                return {"error": f"could not reach site {site!r} to check "
+                                 f"{path!r}: {e}"}
         # Fix 3: a path that doesn't exist can't be registered (the dataset
         # schema requires artifact_path). Return a clear, actionable error
         # instead of letting create_entity raise the cryptic "required field
@@ -587,8 +753,9 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     _md = {"thread_id": _ctx_thread(ctx), "origin": "external",
            "by_reference": not adopted, "ref_path": abspath,
            "summary": summary, "source": input_.get("source", ""),
-           "organism": input_.get("organism")}
-    if exists and not adopted:
+           "organism": input_.get("organism"), **weft_md}
+    _remote_home = ((weft_md.get("home") or {}).get("site") or "local") != "local"
+    if exists and not adopted and not _remote_home:
         try:
             from core.data.external_ref import fingerprint as _fp
             _md["import_fingerprint"] = _fp(abspath)
@@ -607,6 +774,9 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
         # The dataset detail view shows `notes` as the description — populate it.
         update_entity(eid, notes=summary)
     note = "Registered as a Dataset entity — now in the Data facet."
+    if _remote_home:
+        note += (f" The data stays on {(weft_md.get('home') or {}).get('site')} "
+                 f"at {abspath} — read in place, never copied to this machine.")
     if adopted and not materializing:
         note += " Files adopted into DATA_DIR (kept past scratch cleanup)."
     elif adopted and materializing:
@@ -619,7 +789,7 @@ def register_dataset_tool(input_: dict, ctx: dict | None = None) -> dict:
     # in the tool_result so the agent's next turn has the location in
     # conversation context. Removes the "I just registered it — now where does
     # it live?" round-trip that was costing 3-5 tool calls (prj_8d699668).
-    layout_hint = _dataset_layout_hint(abspath) if exists else ""
+    layout_hint = _dataset_layout_hint(abspath) if exists and not _remote_home else ""
     if layout_hint:
         # Persist the hint on the entity so the cwd-shift preamble can surface it later.
         # MERGE with the existing metadata — update_entity REPLACES the metadata
@@ -653,6 +823,31 @@ def check_import_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"error": f"no entity {eid!r}"}
     md = ent.get("metadata") or {}
     ref = md.get("ref_path")
+    # weft durable-home datasets (misc/datasets2.md): the fingerprint was taken
+    # SITE-SIDE — revalidate there too (works for remote homes the controller
+    # can't stat), and mark drift on the entity for the pre-submit fence.
+    if md.get("home"):
+        from core.data import datasets as _wds
+        v = _wds.revalidate(md)
+        home = md["home"]
+        if v["state"] == "unchanged":
+            return {"entity_id": eid, "by_reference": True, "stale": False,
+                    "ref_path": home.get("path"),
+                    "note": f"Up to date — {home.get('path')} on "
+                            f"{home.get('site')} still matches the "
+                            "registration fingerprint."}
+        reason = "missing" if v["state"] == "missing" else "changed"
+        return {"entity_id": eid, "by_reference": True, "stale": True,
+                "reason": reason, "ref_path": home.get("path"),
+                "note": (f"STALE ({reason}): the data at {home.get('path')} on "
+                         f"{home.get('site')} "
+                         + ("is gone or unreachable."
+                            if reason == "missing" else
+                            "has changed since registration (size/mtime "
+                            "mismatch).")
+                         + " Re-register it (a new revision) before using it "
+                           "in new analyses — results memoized against the "
+                           "old content will not be reused.")}
     if not md.get("by_reference"):
         return {"entity_id": eid, "by_reference": False, "stale": False,
                 "note": "Not imported by reference — its data is ABA-owned, so there's nothing to "
@@ -951,6 +1146,35 @@ def close_run_tool(input_: dict, ctx: dict | None = None) -> dict:
         return {"status": "noop", "note": "No open run to close."}
     return {"status": "ok", "closed_run_id": rid,
             "note": "Run closed. New outputs go to a fresh per-step analysis until you open_run again."}
+
+
+def keep_outputs_tool(input_: dict, ctx: dict | None = None) -> dict:
+    """Level-2 keep triage for the current Run's outputs (output_durability.md §6.1).
+
+    Obvious keepers (surfaced figures/tables, declared finals) and obvious scratch (tmp/,
+    cache/, *.tmp, chunk_*) are handled automatically — you only need this for the AMBIGUOUS
+    set: name a large intermediate to DROP so it isn't kept, or a file the folder heuristic
+    would drop that you want to KEEP. Paths/globs are relative to the Run's output dir."""
+    from content.bio.lifecycle.runs import active_run_id, set_keep_decision
+    rid = (input_.get("run_id") or "").strip() or None
+    if not rid:
+        tid = _ctx_thread(ctx)
+        rid = active_run_id(tid) if tid else None
+    if not rid:
+        return {"error": "no open run — open_run first (or pass run_id)"}
+    keep = input_.get("keep") or []
+    drop = input_.get("drop") or []
+    if isinstance(keep, str):
+        keep = [keep]
+    if isinstance(drop, str):
+        drop = [drop]
+    out = set_keep_decision(rid, keep=keep, drop=drop)
+    if out.get("error"):
+        return out
+    s = out.get("summary") or {}
+    note = (f"Keep decision applied. retained={s.get('retained', 0)} saving={s.get('saving', 0)} "
+            f"at_risk={s.get('at_risk', 0)}. Excluded won't be retained at run-close either.")
+    return {"status": "ok", **out, "note": note}
 
 
 def annotate_entity_tool(input_: dict, ctx: dict | None = None) -> dict:

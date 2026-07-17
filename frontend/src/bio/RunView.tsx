@@ -36,9 +36,10 @@ function rel(a?: string, bIso?: string): string {
   const m = Math.round(s / 60); if (m < 60) return `${m}m`
   const h = Math.floor(m / 60); return `${h}h ${m % 60}m`
 }
-/** Any file still settling (pinned-pending) → the panel keeps polling /durable (F3). */
+/** Any file still settling (weft `saving`) → the panel keeps polling /durable (F3), so the
+ *  badge flips to `retained` live when weft captures at settlement. */
 export function treeHasPending(node: TreeNode): boolean {
-  if (node.kind === 'file') return node.state === 'pinned-pending'
+  if (node.kind === 'file') return node.state === 'saving'
   return (node.children || []).some(treeHasPending)
 }
 /** Drop `cleared` (swept, gone) file nodes — hidden by default; a toggle reveals them
@@ -84,8 +85,8 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
         setDuraSummary((d && (d as { summary?: Record<string, number> }).summary) || null)
         // Re-poll while the Run is still ACTIVE (open) — so a run-in-progress picks up
         // newly-harvested files without a manual reload — OR while anything is settling
-        // (pinned-pending → flips to kept when weft captures at kernel stop). /durable is
-        // live-accurate per call. Stops once the Run is closed and nothing is pending.
+        // (weft `saving` → flips to `retained` when weft captures at kernel stop). /durable is
+        // live-accurate per call. Stops once the Run is closed and nothing is saving.
         if (pollRef.current) { window.clearTimeout(pollRef.current); pollRef.current = undefined }
         if (runOpen || (d && treeHasPending(d as TreeNode))) pollRef.current = window.setTimeout(loadDurable, 6000)
       })
@@ -105,8 +106,9 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
   }, [modalNode])
 
   function fileHref(node: { artifact_path?: string | null; path: string }): string {
-    // The durable view supplies a server URL in artifact_path: /artifacts/… for small
-    // surfaced files, /api/runs/{id}/file?rel=… (tier-resolved) for retained/large ones.
+    // The durable view supplies a server URL in artifact_path: /api/runs/{id}/file?rel=…
+    // (tier-resolved, served straight from weft's durable copy) for retained/at-risk/in-sandbox
+    // files, and the /artifacts/… store url only for the in-store serving-cache fallback (R4).
     const ap = node.artifact_path || ''
     return ap.startsWith('/artifacts/') || ap.startsWith('/api/') || ap.startsWith('http')
       ? ap : `/api/files/content?path=${encodeURIComponent(node.path)}`
@@ -144,8 +146,8 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
     const isImg = /\.(png|jpe?g|gif|svg|webp)$/i.test(node.name)
     onChatResult?.(node.name, isImg ? fileHref(node) : undefined)
   }
-  // Keep (durably retain) an at-risk in-sandbox file — the §6.2 late-pin. POSTs the
-  // retain, then re-reads the durable view so the badge flips to pending/kept.
+  // Keep (durably retain) a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin.
+  // POSTs the retain, then re-reads the durable view so the badge flips to saving/retained.
   async function keepFile(node: TreeNode) {
     try {
       await fetch(`/api/runs/${encodeURIComponent(run.id)}/keep`, {
@@ -153,7 +155,7 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
         body: JSON.stringify({ rel: node.path }),
       })
     } catch { /* leave the row as-is on failure */ }
-    loadDurable()   // re-read (and start polling if the keep is now pinned-pending)
+    loadDurable()   // re-read (and start polling if the keep is now saving)
   }
 
   const where = hpc ? `⛁ ${m.where || 'cluster'}${m.queue ? ` · ${m.queue}` : ''}` : '⚙ local'
@@ -388,10 +390,14 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onCha
           </div>
           {duraSummary && (duraSummary.total ?? 0) > 0 && (
             <div className="runview__dura-summary" title="Durability of this run's outputs">
-              {(duraSummary.kept ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--kept">{duraSummary.kept} kept</span>}
-              {(duraSummary.pinned_pending ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--pending">{duraSummary.pinned_pending} saving</span>}
+              {(duraSummary.at_risk ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--at-risk">{duraSummary.at_risk} at risk</span>}
+              {(duraSummary.retained ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--retained">{duraSummary.retained} retained</span>}
+              {(duraSummary.saving ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--saving">{duraSummary.saving} saving</span>}
+              {(duraSummary.in_store ?? 0) > 0 &&
+                <span className="dura-chip dura-chip--in-store">{duraSummary.in_store} in store</span>}
               {(duraSummary.in_sandbox ?? 0) > 0 &&
                 <span className="dura-chip dura-chip--sandbox">{duraSummary.in_sandbox} in sandbox</span>}
               {(duraSummary.cleared ?? 0) > 0 && (

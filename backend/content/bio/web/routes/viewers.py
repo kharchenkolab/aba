@@ -66,11 +66,23 @@ def _resolve_files_node(entity_id: str | None, path: str | None) -> dict:
         from content.bio.files.tree import build_files_tree, find_file_node, list_file_matches
         tree = build_files_tree(include_archived=False)
         n = find_file_node(tree, path)
-        if n is None:
-            cands = list_file_matches(tree, path)
-            hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
-            raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
-        return n
+        if n is not None:
+            return n
+        # Not in the entity-graph tree — a fresh weft Run output (e.g. a `.lstar.zarr` store in
+        # the live kernel jobdir). Resolve it directly from the Run's outputs (retained tree /
+        # jobdir / sandbox), the same fallback the open_viewer tool uses, so launch/download work
+        # without a prior data_register. resolve_project_run_output is escape-safe (paths stay
+        # under sanctioned Run roots), so an arbitrary `path=` can't reach outside them.
+        from content.bio.lifecycle.runs import resolve_project_run_output
+        hit = resolve_project_run_output(path)
+        if hit is not None:
+            _rid, abs_path = hit
+            return {"entity_id": None, "entity_type": None,
+                    "name": Path(abs_path).name, "artifact_path": abs_path, "size": None,
+                    "run_id": _rid}   # lets the launch route retain-on-view (P3)
+        cands = list_file_matches(tree, path)
+        hint = f" Did you mean: {', '.join(cands)}?" if cands else ""
+        raise HTTPException(404, f"no file matching {path!r} in this project.{hint}")
     raise HTTPException(400, "supply either entity_id or path")
 
 
@@ -128,6 +140,20 @@ def viewers_launch(body: ViewerLaunchIn, _pid: str = Depends(require_project)):
     if v is None:
         raise HTTPException(404, "no external viewer applies to this file")
     pid = current_project_id()
+
+    # P3 retain-on-view: opening a fresh weft output that isn't entity-registered
+    # records a keep decision so it becomes durable. On a LIVE session kernel this
+    # is a deferred pin — the bytes aren't capturable mid-life, so the viewer keeps
+    # serving from the sandbox jobdir in place until settlement promotes it to the
+    # retained tree (misc/output_serving_model.md P3 wording fix). Best-effort.
+    if node.get("run_id") and not node.get("entity_id"):
+        try:
+            from content.bio.lifecycle.runs import resolve_output, set_keep_decision
+            info = resolve_output(node["run_id"], Path(node["artifact_path"]).name)
+            if info and info["durability"] == "live" and info.get("rel"):
+                set_keep_decision(node["run_id"], keep=[info["rel"]])
+        except Exception:  # noqa: BLE001 — viewing must never fail on retention
+            pass
 
     def runner(set_phase):
         set_phase("Preparing the dataset…")

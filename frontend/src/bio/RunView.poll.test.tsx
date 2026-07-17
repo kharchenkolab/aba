@@ -1,6 +1,6 @@
 /**
  * F3: the Files panel polls /api/runs/{id}/durable while any file is still settling
- * (pinned-pending), so the badge flips to kept live when weft captures at kernel stop,
+ * (weft `saving`), so the badge flips to `retained` live when weft captures at kernel stop,
  * then stops polling. output_durability.md §6.2.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -11,7 +11,7 @@ import type { TreeNode } from './FileBrowser'
 describe('pruneCleared', () => {
   it('drops cleared file nodes, keeps the rest', () => {
     const t: TreeNode = { kind: 'root', name: '', path: '', children: [
-      { kind: 'file', name: 'a', path: 'a', state: 'kept' },
+      { kind: 'file', name: 'a', path: 'a', state: 'retained' },
       { kind: 'file', name: 'g', path: 'g', state: 'cleared' },
       { kind: 'folder', name: 'd', path: 'd', children: [
         { kind: 'file', name: 'x', path: 'd/x', state: 'cleared' },
@@ -25,32 +25,32 @@ describe('pruneCleared', () => {
 })
 
 describe('treeHasPending', () => {
-  it('is true iff some file is pinned-pending', () => {
+  it('is true iff some file is saving (weft pinned-pending)', () => {
     const t: TreeNode = {
       kind: 'root', name: '', path: '', children: [
         { kind: 'folder', name: 'd', path: 'd', children: [
-          { kind: 'file', name: 'a', path: 'd/a', state: 'kept' },
-          { kind: 'file', name: 'b', path: 'd/b', state: 'pinned-pending' },
+          { kind: 'file', name: 'a', path: 'd/a', state: 'retained' },
+          { kind: 'file', name: 'b', path: 'd/b', state: 'saving' },
         ] },
       ],
     }
     expect(treeHasPending(t)).toBe(true)
     expect(treeHasPending({ kind: 'root', name: '', path: '', children: [
-      { kind: 'file', name: 'a', path: 'a', state: 'kept' }] })).toBe(false)
+      { kind: 'file', name: 'a', path: 'a', state: 'retained' }] })).toBe(false)
   })
 })
 
 const pendingTree = { kind: 'root', name: '', path: '', children: [
-  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'pinned-pending', badge: 'pending' }] }
+  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'saving', badge: 'saving…' }] }
 const keptTree = { kind: 'root', name: '', path: '', children: [
-  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'kept', badge: 'kept ✓' }] }
+  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'retained', badge: 'retained ✓' }] }
 
 describe('RunView durability polling', () => {
   let origFetch: typeof globalThis.fetch
   beforeEach(() => { origFetch = globalThis.fetch; vi.useFakeTimers() })
   afterEach(() => { globalThis.fetch = origFetch; vi.useRealTimers(); vi.restoreAllMocks() })
 
-  it('polls /durable while pinned-pending, flips to kept, then stops', async () => {
+  it('polls /durable while saving, flips to retained, then stops', async () => {
     let calls = 0
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes('/durable')) {
@@ -68,9 +68,9 @@ describe('RunView durability polling', () => {
     expect(screen.getByText('saving…')).toBeTruthy()
     expect(calls).toBe(1)
 
-    // advance the poll → refetch → kept
+    // advance the poll → refetch → retained
     await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
-    expect(screen.getByText('kept ✓')).toBeTruthy()
+    expect(screen.getByText('retained ✓')).toBeTruthy()
     expect(calls).toBe(2)
 
     // no more polling once nothing is pending
@@ -101,10 +101,10 @@ describe('RunView durability polling', () => {
 
 const mixedTree = {
   kind: 'root', name: '', path: '',
-  summary: { kept: 2, pinned_pending: 0, in_sandbox: 0, cleared: 1, total: 3 },
+  summary: { retained: 2, saving: 0, in_store: 0, at_risk: 0, in_sandbox: 0, cleared: 1, total: 3 },
   children: [
-    { kind: 'file', name: 'a.png', path: 'a.png', state: 'kept', badge: 'kept ✓' },
-    { kind: 'file', name: 'b.csv', path: 'b.csv', state: 'kept', badge: 'kept ✓' },
+    { kind: 'file', name: 'a.png', path: 'a.png', state: 'retained', badge: 'retained ✓' },
+    { kind: 'file', name: 'b.csv', path: 'b.csv', state: 'retained', badge: 'retained ✓' },
     { kind: 'file', name: 'gone.dat', path: 'gone.dat', state: 'cleared', badge: 'cleared' },
   ],
 }
@@ -125,7 +125,7 @@ describe('RunView durability summary + cleared toggle', () => {
     })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
 
-    expect(screen.getByText('2 kept')).toBeTruthy()
+    expect(screen.getByText('2 retained')).toBeTruthy()
     expect(screen.getByText('1 cleared · show')).toBeTruthy()
     expect(screen.queryByText('gone.dat')).toBeNull()       // cleared hidden by default
 

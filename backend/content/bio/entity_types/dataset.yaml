@@ -8,16 +8,24 @@ icon: data
 category: leaf
 
 schema:
-  required: [title, artifact_path]
+  # artifact_path became OPTIONAL with the weft-native data plane
+  # (misc/datasets2.md): a dataset whose bytes live in a site CAS (URL
+  # fetch on a remote node) or at a remote durable home has no local
+  # path — its identity is metadata.ref / metadata.home instead.
+  required: [title]
   # Post Cutover 4: producing_code dropped; exec_id is the pointer
   # (rarely set on datasets — only when the dataset was registered
   # immediately after a tool call that produced it).
-  optional: [producing_params, parent_entity_id, scenario_of,
+  optional: [artifact_path, producing_params, parent_entity_id, scenario_of,
              metadata, tags, notes,
              exec_id, artifact_kind, artifact_idx]
   # metadata commonly carries: size_bytes, file_count, layout
   # ('directory' | absent for single-file), layout_hint, original_name,
   # source, description, organism.
+  # weft data plane (misc/datasets2.md): ref (DataRef), home
+  # ({site, path} durable home), fingerprint (stat-level, drift
+  # baseline), descriptor ({total_bytes, n_files, top}), origin_class
+  # (url | run | path), source_key (semantic dedup key).
 
 status_model:
   initial: active

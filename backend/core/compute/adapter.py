@@ -73,15 +73,16 @@ def run_sync(coro):
 
 def weft_workspace() -> Path:
     """The deployment's weft workspace (holds .weft state + the local site
-    root). One per deployment; per-project identity stays in the waist."""
-    raw = config.settings.weft_workspace.get()
-    return Path(raw) if raw else config.aba_home() / "weft"
+    root). One per deployment; per-project identity stays in the waist.
+    DERIVED, not a setting: always $ABA_HOME/weft — relocate ABA_HOME to
+    relocate it (settings reduction, 2026-07)."""
+    return config.aba_home() / "weft"
 
 
 def sites_config_path() -> Path:
-    """The deployment's site declarations (weft-sites.yaml)."""
-    raw = config.settings.weft_sites.get()
-    return Path(raw) if raw else config.aba_home() / "weft-sites.yaml"
+    """The deployment's site declarations. DERIVED, not a setting: always
+    $ABA_HOME/weft-sites.yaml, beside the workspace it bootstraps."""
+    return config.aba_home() / "weft-sites.yaml"
 
 
 def resolve_pixi() -> Optional[str]:
@@ -115,14 +116,17 @@ class WeftAdapter:
             r = self._weft.register_site(
                 _LOCAL_SITE, "local",
                 {"root": str(self.workspace / "site-local"),
+                 # retention2: the workspace sits on the user's own disk —
+                 # keeps pin in place, never trip the no-durable refusal
+                 "durable": True,
                  "pixi_source": pixi_bin})
             if is_error_payload(r):
                 raise ComputeError.from_payload(r)
         self._register_configured_sites(registered)
 
     def _register_configured_sites(self, registered: set) -> None:
-        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml` (or
-        ABA_WEFT_SITES) lists non-local sites — slurm/ssh entries the installer
+        """Deployment-declared sites (W3.1): `$ABA_HOME/weft-sites.yaml`
+        lists non-local sites — slurm/ssh entries the installer
         or an operator wrote. Registered once (weft persists them); errors are
         LOUD but never boot-blocking (a dead login node must not stop the
         server; doctor + the site's own errors surface it)."""
@@ -185,6 +189,22 @@ class WeftAdapter:
         if is_error_payload(out):
             raise ComputeError.from_payload(out)
         return out
+
+    def raw_controller(self):
+        """The embedded Weft instance itself. ONLY for mounting weft-ui in
+        shared-controller mode (one controller, two surfaces — the
+        two-controller hazard fix, misc/compute_settings.md §8). Never a
+        tool-call path: aba code calls tools through the ports."""
+        return self._weft
+
+    def subscribe_events(self, callback) -> None:
+        """In-process push of weft's event feed (bootstrap.step, site.*,
+        job.*, …) — same objects events_poll yields. Not a port method
+        (weft's events_subscribe is not a PUBLIC_TOOL); it exists so the web
+        layer can relay site events to the notification bus without reaching
+        around the doorway. The callback runs on weft's emitting thread —
+        keep it cheap and thread-safe."""
+        self._weft.events_subscribe(callback)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)

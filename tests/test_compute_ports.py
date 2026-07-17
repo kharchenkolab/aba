@@ -67,7 +67,8 @@ def adapter(tmp_path, monkeypatch):
     pixi = mod.resolve_pixi()
     if pixi is None:
         pytest.skip("pixi binary not available")
-    monkeypatch.setenv("ABA_WEFT_WORKSPACE", str(tmp_path / "weft-ws"))
+    # the workspace derives from ABA_HOME (no setting) — isolate the home
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "home"))
     # fresh process-wide state for the test
     monkeypatch.setattr(mod, "_adapter", None)
     monkeypatch.setattr(mod, "_status", {"ok": False, "severity": "info",

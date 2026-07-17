@@ -158,6 +158,7 @@ from .curation import (    # noqa: F401, E402
     create_claim_tool,
     open_run_tool,
     close_run_tool,
+    keep_outputs_tool,
     annotate_entity_tool,
     _archive_entity_tool,
 )

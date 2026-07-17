@@ -19,8 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _tmp = tempfile.mkdtemp(prefix="aba_baseenv_")
 os.environ["ABA_RUNTIME_DIR"] = _tmp
 os.environ["ABA_PROJECTS_DIR"] = str(Path(_tmp) / "projects")
-os.environ["ABA_WEFT_WORKSPACE"] = str(Path(_tmp) / "weft-ws")
-os.environ["ABA_HOME"] = str(Path(_tmp) / "home")
+os.environ["ABA_HOME"] = str(Path(_tmp) / "home")   # weft workspace derives here
 os.environ.pop("ABA_DB_PATH", None)
 sys.path.insert(0, str(ROOT / "backend"))
 pytestmark = pytest.mark.platform
@@ -216,5 +215,5 @@ def test_live_default_lane_on_real_pack(generic_packs, monkeypatch):
                         project_id=pid, timeout_s=900)
     assert r.get("returncode") == 0, r
     assert "LIVE_BASE" in (r.get("stdout") or "")
-    assert str(Path(os.environ["ABA_WEFT_WORKSPACE"])) in (r.get("stdout") or "")
+    assert str(ad.weft_workspace()) in (r.get("stdout") or "")
     ad.shutdown()

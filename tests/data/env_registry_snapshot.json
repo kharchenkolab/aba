@@ -6,6 +6,7 @@
   "batch_submitter": "local",
   "capability_approval": "auto",
   "composed_bundle_path": null,
+  "compute_self_service": true,
   "cpu_limit": "",
   "data_summary": "on",
   "db_path": null,
@@ -113,7 +114,5 @@
   "weft_kernels": false,
   "weft_publish_site": "local",
   "weft_publish_staging": null,
-  "weft_publish_tree": null,
-  "weft_sites": null,
-  "weft_workspace": null
+  "weft_publish_tree": null
 }

@@ -1,0 +1,11 @@
+# Domain-neutral reconcile fixture for the P0 replay harness (regtest/harness/replay.py).
+# Exercises the P1 turn-end reconciliation bug end-to-end on a REAL weft kernel:
+#   msg1: present_plan -> (Go) -> run_python produces a FILE + a DIRECTORY store -> closing text
+#   msg2: a PLAIN follow-up re-run produces a second FILE (no plan -> only on_stop fires)
+# The keeper set must be CUMULATIVE across turns AND include the directory store.
+# Generic analytics content only (tables + a columnar .zarr-suffixed store) — no domain specifics.
+{"blocks": [{"type": "text", "text": "This is a two-step export — let me lay out a plan first."}, {"type": "tool_use", "name": "present_plan", "input": {"title": "Two-step data export", "rationale": "exercise plan-Go then a plain follow-up re-run", "steps": ["Write an early summary table and a columnar store", "Write the final summary table"]}}]}
+{"blocks": [{"type": "text", "text": "Plan approved — running step 1."}, {"type": "tool_use", "name": "run_python", "input": {"code": "import os, json\nwith open('summary_early.csv','w') as f:\n    f.write('metric,value\\nrows,100\\ncols,8\\n')\nos.makedirs('dataset_cube.zarr', exist_ok=True)\nwith open('dataset_cube.zarr/.zmetadata','w') as f:\n    json.dump({'zarr_format': 2, 'metadata': {}}, f)\nwith open('dataset_cube.zarr/0.0','wb') as f:\n    f.write(b'\\x00' * 64)\nprint('WROTE step1: summary_early.csv + dataset_cube.zarr/')"}}]}
+{"blocks": [{"type": "text", "text": "Step 1 done — wrote the early summary and the columnar store."}]}
+{"blocks": [{"type": "text", "text": "Re-running to add the final summary."}, {"type": "tool_use", "name": "run_python", "input": {"code": "with open('summary_final.csv','w') as f:\n    f.write('metric,value\\nrows,100\\ncols,12\\n')\nprint('WROTE step2: summary_final.csv')"}}]}
+{"blocks": [{"type": "text", "text": "Re-run done — the final summary is written."}]}

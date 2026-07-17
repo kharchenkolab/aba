@@ -174,8 +174,8 @@ def run_file(rid: str, rel: str, download: int = 0):
 
 @router.get("/api/runs/{rid}/durable")
 def run_durable(rid: str, flat: int = 0):
-    """The Run's durability view — per-file state (kept / pinned-pending / in-sandbox /
-    cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
+    """The Run's durability view — per-file state (retained / saving / in-store / at-risk /
+    in-sandbox / cleared) merged from weft's retained tree + inventory + the live sandbox. Returns a
     TreeNode-compatible tree (root → folders → file nodes with `state`/`badge`) so the
     Files panel renders it directly, plus a `summary`. `?flat=1` returns the flat
     {files, summary} model instead. Backs the sweep-surviving Files listing (§6.2)."""
@@ -191,9 +191,10 @@ class _KeepBody(BaseModel):
 @router.post("/api/runs/{rid}/keep")
 def run_keep(rid: str, body: _KeepBody):
     """User late-pin (output_durability.md §6.2): durably retain one of the Run's files on
-    demand. Issues run_retain(rel) against the Run's weft target(s), labeled to the Run →
-    pinned-pending on a live kernel (captured at settlement), done immediately for a
-    finished target. Best-effort per target; the one holding the file captures it."""
+    demand. Recorded as a level-2 keep decision (`metadata.keep_decision.include`) and
+    applied through the CUMULATIVE retain (P1) — a bare retain(include=[rel]) would
+    REPLACE the Run's stored selection (weft keeps one row per target) and silently drop
+    every earlier keep at settlement. Returns the merged decision + durable summary."""
     run = _run_or_404(rid)
     rel = (body.rel or "").strip()
     if not rel:
@@ -201,15 +202,12 @@ def run_keep(rid: str, body: _KeepBody):
     targets = list((run.get("metadata") or {}).get("weft_targets") or [])
     if not targets:
         raise HTTPException(400, "run has no weft target to retain from")
-    from core.compute import retention
-    from core.compute.errors import ComputeError
-    results = []
-    for t in targets:
-        try:
-            results.append(retention.retain(t, include=[rel], label=rid, layout="label"))
-        except ComputeError as e:
-            results.append({"target": t, "error": str(e)})
-    return {"ok": True, "rel": rel, "results": results}
+    from content.bio.lifecycle.runs import set_keep_decision
+    out = set_keep_decision(rid, keep=[rel])
+    if out.get("error"):
+        raise HTTPException(400, out["error"])
+    return {"ok": True, "rel": rel, "decision": out.get("decision"),
+            "summary": out.get("summary")}
 
 
 @router.get("/api/runs/{run_id}/artifacts")
