@@ -164,9 +164,12 @@ cluster fixture, gated on reachability:
 - **cross_thread_separation** — thread A works on hpc, thread B on mendel;
   the agent never cross-wires which thread's work ran where.
 
-18 scenarios total, all passing live across single-remote, two-site, and
-local compute. Remaining follow-ups unchanged: planning->approval->execute
-with a remote step; mid_chain_steering (retarget mid-chain); cancel_midflight.
+19 scenarios total, all passing live across single-remote, two-site, and
+local compute. Added mn_mid_chain_steering: a chain starts on hpc, the user
+retargets step 2 to mendel mid-flight, and the agent retargets cleanly while
+carrying the prior stage's value across. Remaining follow-ups:
+planning->approval->execute with a remote step (drive approach documented
+below); cancel_midflight (sync cancel has unit coverage).
 
 ### Planning->approval->execute with a remote step — how to build it
 
