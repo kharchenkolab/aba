@@ -172,6 +172,46 @@ def run_file(rid: str, rel: str, download: int = 0):
     raise HTTPException(404, f"no file {rel!r} in the run (retained or sandbox)")
 
 
+@router.get("/api/runs/{rid}/archive")
+def run_archive(rid: str):
+    """ZIP of the Run's locally-servable output files — the run-level "Local
+    copy all" (§8e.3). Files whose bytes aren't available from this machine
+    (remote in-place keeps, discarded files) are LISTED in a manifest inside
+    the zip rather than silently omitted — the archive never lies about
+    completeness."""
+    _run_or_404(rid)
+    import io
+    import zipfile
+    from content.bio.lifecycle.runs import run_durable_view, resolve_run_file, read_run_file
+    view = run_durable_view(rid)
+    if not view["files"]:
+        raise HTTPException(404, "run has no recorded output files")
+    buf = io.BytesIO()
+    skipped: list[str] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in view["files"]:
+            rel = f["rel"]
+            if f.get("state") == "cleared":
+                skipped.append(f"{rel} — discarded (swept by housekeeping)")
+                continue
+            p = resolve_run_file(rid, rel)
+            if p:
+                zf.write(p, arcname=rel)
+                continue
+            data, truncated, _total = read_run_file(rid, rel)
+            if data is not None and not truncated:
+                zf.writestr(rel, data)
+            else:
+                where = f" (on {f['site']})" if f.get("site") else ""
+                skipped.append(f"{rel} — not available from this machine{where}")
+        if skipped:
+            zf.writestr("SKIPPED-FILES.txt",
+                        "Not included in this archive:\n" + "\n".join(skipped) + "\n")
+    return Response(content=buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{rid}-outputs.zip"'})
+
+
 @router.get("/api/runs/{rid}/durable")
 def run_durable(rid: str, flat: int = 0):
     """The Run's durability view — per-file state (retained / saving / in-store / at-risk /

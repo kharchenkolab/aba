@@ -164,6 +164,27 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
     const isImg = /\.(png|jpe?g|gif|svg|webp)$/i.test(node.name)
     onChatResult?.(node.name, isImg ? fileHref(node) : undefined)
   }
+  // §8e.3 Local copy — a plain download to the user's machine. For run-served
+  // URLs the download flag forces an attachment; store URLs stream as-is with
+  // the anchor download attribute.
+  function localCopyFile(node: TreeNode) {
+    const href = fileHref(node)
+    const url = href.startsWith('/api/runs/') ? `${href}&download=1`
+      : href.includes('?') ? `${href}&download=1` : `${href}?download=1`
+    const a = document.createElement('a')
+    a.href = url; a.download = node.name
+    document.body.appendChild(a); a.click(); a.remove()
+  }
+  // §8e.3 Register as dataset — outputs are born here; same endpoint the plots
+  // strip uses, keyed by the served href.
+  async function registerFile(node: TreeNode) {
+    await fetch(`/api/runs/${encodeURIComponent(run.id)}/register-dataset`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: node.name, path: fileHref(node),
+                             size: node.size != null ? String(node.size) : undefined }),
+    }).catch(() => {})
+    onChange()
+  }
   // Keep (durably retain) a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin.
   // POSTs the retain, then re-reads the durable view so the badge flips to saving/retained.
   async function keepFile(node: TreeNode) {
@@ -469,6 +490,11 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
                 find(name==='output') never matched and silently fell back to root).
                 Opens the Files tab at its root until the run's project-relative output
                 dir is threaded through. */}
+            <a className="runview__browse-link"
+               href={`/api/runs/${encodeURIComponent(run.id)}/archive`}
+               title="Download every locally-available output as a .zip (files only on a remote machine are listed, not included)">
+              Local copy all ↓
+            </a>
             {onBrowseFiles && (
               <button className="runview__browse-link"
                       onClick={() => onBrowseFiles(runTree?.path || '')}
@@ -504,7 +530,8 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
             focusedId=""
             onFocus={onFocus}
             onViewFile={browseViewFile}
-            actions={{ onPin: pinFile, onDiscuss: discussFile, onKeep: keepFile }}
+            actions={{ onPin: pinFile, onDiscuss: discussFile, onKeep: keepFile,
+                       onLocalCopy: localCopyFile, onRegister: registerFile }}
             emptyHint="No files in this run's output folder."
           />
         </section>

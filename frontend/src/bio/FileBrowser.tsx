@@ -28,6 +28,11 @@ export interface FileActions {
   onDiscuss?: (node: TreeNode) => void
   /** Durably retain a not-yet-kept file (at-risk / in-sandbox) — the §6.2 late-pin. */
   onKeep?: (node: TreeNode) => void
+  /** §8e.3 Local copy — download the file to the user's machine (a plain copy,
+   *  theirs to manage). Rendered only when the file is servable from here. */
+  onLocalCopy?: (node: TreeNode) => void
+  /** §8e.3 Register as dataset — outputs are born here; promote one in place. */
+  onRegister?: (node: TreeNode) => void
 }
 
 interface Props {
@@ -271,6 +276,18 @@ export default function FileBrowser({
           <button className="files__action files__action--promote" title="Promote to a dataset (keep it)"
                   aria-label="Promote to dataset" onClick={e => { e.stopPropagation(); actions.onPromote!(node) }}>
             <PromoteGlyph />
+          </button>
+        )}
+        {actions.onRegister && node.state !== 'cleared' && !isImage(node) && (
+          <button className="files__action files__action--promote" title="Register as a dataset (usable as an input to further work)"
+                  aria-label="Register as dataset" onClick={e => { e.stopPropagation(); actions.onRegister!(node) }}>
+            <PromoteGlyph />
+          </button>
+        )}
+        {actions.onLocalCopy && node.state !== 'cleared' && node.artifact_path && (
+          <button className="files__action files__action--copy" title="Local copy — download to your machine (a plain copy, yours to manage)"
+                  aria-label="Local copy" onClick={e => { e.stopPropagation(); actions.onLocalCopy!(node) }}>
+            <DownloadGlyph />
           </button>
         )}
       </>

@@ -100,6 +100,8 @@
 .runview__browse-link {
   border: none; background: none; cursor: pointer; padding: 0;
   font-family: var(--sans); font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--accent);
+  text-decoration: none;   /* same quiet look when the "link" is an <a> */
+  margin-left: 10px;
 }
 .runview__browse-link:hover { text-decoration: underline; }
 /* File-preview modal — mirrors the plot-thumbnail preview overlay. */
