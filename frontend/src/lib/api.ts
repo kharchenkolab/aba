@@ -203,4 +203,15 @@ export const computeApi = {
   advanced: (site?: string) =>
     apiGet<{ available: boolean; url?: string | null }>(
       `/api/compute/advanced${site ? `?site=${cname(site)}` : ''}`),
+  // §2 (more_weft_ui.md): what lives only on this machine — feeds every
+  // consequence card (Disconnect / durable-uncheck / Free up previews).
+  holdings: (name: string) => apiGet<SiteHoldings>(`/api/compute/sites/${cname(name)}/holdings`),
+}
+
+export interface SiteHoldings {
+  site: string
+  kept_runs: number
+  kept_bytes: number
+  dataset_homes: { entity_id: string; title?: string | null; path?: string | null }[]
+  at_risk_if_gone: number
 }

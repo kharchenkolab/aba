@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import './ProjectTree.css'
 import type { Entity, EntityType } from '../types'
 import EntityMenu from './EntityMenu'
+import LedgerStrip from './LedgerStrip'
 import SearchInput from '../components/SearchInput'
 import { RailIcon, type RailIconName } from '../components/icons'
 import FilesView from './FilesView'
@@ -532,6 +533,11 @@ export default function ProjectTree({ entities, focusedId, activeSection, onFocu
                   )}
                 </div>
               </div>
+              {/* §1 safety ledger — self-quieting: renders nothing when every
+                  item is safe and local (the local-only snapshot contract). */}
+              {(activeSection === 'data' || activeSection === 'results') && (
+                <LedgerStrip projectId={projectId} onFocus={onFocus} />
+              )}
               {/* State-filter pills removed (see Threads section above). */}
               {searchEligible && (
                 <SearchInput value={query} onChange={setQuery}

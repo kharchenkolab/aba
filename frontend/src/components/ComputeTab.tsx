@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './ComputeTab.css'
 import { computeApi } from '../lib/api'
-import type { ComputeSite } from '../lib/api'
+import type { ComputeSite, SiteHoldings } from '../lib/api'
 import { withBasePath } from '../oodBase'
 import ConnectMachine from './ConnectMachine'
 
@@ -221,6 +221,10 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
   const [footprint, setFootprint] = useState<number | null>(null)
   const [reclaim, setReclaim] = useState<number | null>(null)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  // §2 consequence cards: structural actions preview what they'd orphan.
+  // Holdings are fetched when a consequence moment opens (never on render).
+  const [holdings, setHoldings] = useState<SiteHoldings | null>(null)
+  const [confirmDurableOff, setConfirmDurableOff] = useState(false)
   const [editingRoot, setEditingRoot] = useState<string | null>(null)
   const [notesText, setNotesText] = useState(
     (s.config?.policy?.notes ?? []).join('\n'))
@@ -285,11 +289,33 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                         <input type="checkbox"
                           checked={s.config?.durable === true || (!!s.aba?.durable && typeof s.config?.durable !== 'string')}
                           disabled={busy !== null || !selfService}
-                          onChange={e => act('durable', () =>
-                            computeApi.edit(s.name, { durable: e.target.checked }))} />
+                          onChange={e => {
+                            if (e.target.checked) { act('durable', () => computeApi.edit(s.name, { durable: true })); return }
+                            // §2: un-declaring durable storage can break kept results'
+                            // promise — preview the consequence before acting.
+                            computeApi.holdings(s.name)
+                              .then(h => { setHoldings(h); if (h.kept_runs > 0) setConfirmDurableOff(true)
+                                           else act('durable', () => computeApi.edit(s.name, { durable: false })) })
+                              .catch(() => act('durable', () => computeApi.edit(s.name, { durable: false })))
+                          }} />
                         durable storage
                         <span className="cmp-dim">— results can be kept here long-term</span>
                       </label>
+                    )}
+                    {confirmDurableOff && holdings && (
+                      <div className="cmp-confirm">
+                        {holdings.kept_runs} kept result{holdings.kept_runs === 1 ? '' : 's'}
+                        {holdings.kept_bytes > 0 ? ` (${fmtGB(holdings.kept_bytes)})` : ''} on this machine
+                        would become at risk — the files stay put, but nothing promises they survive.
+                        <div className="cmp-actions">
+                          <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
+                            onClick={() => { setConfirmDurableOff(false)
+                              act('durable', () => computeApi.edit(s.name, { durable: false })) }}>
+                            Change anyway
+                          </button>
+                          <button className="cmp-btn" onClick={() => setConfirmDurableOff(false)}>Keep durable</button>
+                        </div>
+                      </div>
                     )}
                     {!isLocal && s.config?.durable !== true && (
                       typeof s.config?.durable === 'string' ? (
@@ -377,7 +403,8 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
               })}>Free up…</button>
           ) : (
             <span>
-              {fmtGB(reclaim)} reclaimable{' '}
+              {fmtGB(reclaim)} of rebuildable working files reclaimable{' '}
+              <span className="cmp-dim">(kept results and data homes are untouched)</span>{' '}
               <button className="mod-linkbtn" disabled={busy !== null || reclaim === 0}
                 onClick={() => act('gc', () => computeApi.gc(s.name, true),
                   'space reclaimed')}>Reclaim now</button>
@@ -400,7 +427,11 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
         )}
         {!isLocal && selfService && !confirmDisconnect && (
           <button className="cmp-btn cmp-btn--danger" disabled={busy !== null}
-            onClick={() => setConfirmDisconnect(true)}>Disconnect…</button>
+            onClick={() => {
+              setConfirmDisconnect(true)
+              // §2: fetch what would be orphaned so the confirm is a real preview
+              computeApi.holdings(s.name).then(setHoldings).catch(() => setHoldings(null))
+            }}>Disconnect…</button>
         )}
         {advanced && (
           <button className="cmp-btn" title="This machine in weft-ui — every knob exposed"
@@ -409,6 +440,17 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
       </div>
       {confirmDisconnect && (
         <div className="cmp-confirm">
+          {holdings && (holdings.kept_runs > 0 || holdings.dataset_homes.length > 0) && (
+            <div>
+              {[holdings.kept_runs > 0
+                  && `${holdings.kept_runs} kept result${holdings.kept_runs === 1 ? '' : 's'}`
+                     + (holdings.kept_bytes > 0 ? ` (${fmtGB(holdings.kept_bytes)})` : ''),
+                holdings.dataset_homes.length > 0
+                  && `${holdings.dataset_homes.length} data home${holdings.dataset_homes.length === 1 ? '' : 's'}`,
+               ].filter(Boolean).join(' and ')} live only there — aba keeps the
+              records but loses access to the files.
+            </div>
+          )}
           aba will forget this machine. Nothing on the machine is deleted — aba’s
           files there{footprint != null && footprint > 0 ? ` (${fmtGB(footprint)})` : ''} stay.
           <div className="cmp-actions">
