@@ -52,9 +52,13 @@ interface Props {
   /** Thread the attachment is scratch-stashed under (server keys the scratch
    *  dir + the serve url by this). The composer is per-thread. */
   threadId?: string
+  /** Context-aware idle placeholder (more_weft_ui §8b: the focused entity's
+   *  chat peek IS the conversation about it — e.g. "Ask about this run…").
+   *  Streaming copy always wins; absent → the generic default. */
+  placeholderIdle?: string
 }
 
-export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop, draftKey, projectId, threadId }: Props) {
+export default function Composer({ onSend, disabled, prefill, onPrefillConsumed, focusSignal, streaming, onSteer, onStop, draftKey, projectId, threadId, placeholderIdle }: Props) {
   // Restore any persisted draft for this thread (the composer unmounts when you
   // switch views, so without this the unsent text would vanish).
   const [value, setValue] = useState<string>(() => (draftKey && sessionStorage.getItem(draftKey)) || '')
@@ -381,7 +385,7 @@ export default function Composer({ onSend, disabled, prefill, onPrefillConsumed,
   // a click-to-send for users who don't like keyboards.
   const placeholder = streaming
     ? 'Type to queue a follow-up (Enter to queue, Cmd/Ctrl+Enter to steer)'
-    : 'Message Guide (Enter to send, Shift+Enter for newline)'
+    : placeholderIdle ?? 'Message Guide (Enter to send, Shift+Enter for newline)'
   return (
     <div className="composer">
       <div className="composer__box">
