@@ -130,6 +130,11 @@ def context_line() -> str:
             line += (". Long cells run interactively (raise timeout_s if needed); use "
                      "background=True only to parallelize independent jobs or when the user "
                      "asks — it's a fresh process with no kernel state.")
+        remotes = e.get("remote_sites") or []
+        if remotes:
+            line += (f". Remote machines available: {', '.join(remotes)} — run a step there "
+                     f"with run_python/run_r site=<name> (prefer the machine holding the "
+                     f"inputs; describe_compute for capacity).")
         return line
     except Exception:  # noqa: BLE001
         return ""
@@ -265,6 +270,15 @@ def _build_compute_env() -> dict:
             f"CUDA torch ({_cuda})" if _cuda else
             "base torch is CPU-only — a GPU step would fall back to CPU (admin: set "
             "ABA_ACCELERATOR=cuda in config.env + rebuild the env)")
+    # Declared remote machines usable via run_python/run_r site= (the detached
+    # lane) — surfaced so the agent knows its placement options WITHOUT having
+    # to call describe_compute first. Named only (kind/capacity is the tool's job).
+    try:
+        from core.jobs.weft_submitter import declared_compute_sites
+        env["remote_sites"] = [s["name"] for s in declared_compute_sites()
+                               if s["name"] != "local"]
+    except Exception:  # noqa: BLE001
+        env["remote_sites"] = []
     return env
 
 
