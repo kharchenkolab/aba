@@ -102,15 +102,29 @@ def register_curation_tools(mcp: FastMCP) -> None:
     def register_dataset(title: str,
                          path: str | None = None,
                          paths: list[str] | None = None,
+                         url: str | None = None,
+                         site: str | None = None,
                          summary: str | None = None,
                          source: str | None = None,
                          organism: str | None = None,
                          exec_id: str | None = None,
                          producing_code: str | None = None,
                          aba_ctx_id: str | None = None) -> dict:
-        """Register a file or folder (or list of files) as a Dataset
-        entity. Use after a fetch/download so the data joins the
-        project's pinnable surface.
+        """Register data as a Dataset entity so it joins the project's
+        pinnable surface. Three ways to point at the bytes:
+        - `path` (or `paths`) — a file/folder you produced or that already
+          exists. Data already in place on shared/durable storage is
+          registered BY REFERENCE (fingerprint only — no copy, however
+          large; identity is minted when it is first used).
+        - `url` — a plain http(s)/s3/gs URL: aba fetches it directly (no
+          need to download in run_python first). Add `site` to fetch it
+          straight onto that machine (bytes never travel through here) —
+          preferred when the analysis will run there.
+        - `path` + `site` — data that lives ON a connected machine (e.g. a
+          cluster's /groups share): checked and fingerprinted there,
+          registered by reference, never copied.
+        Registering the same url/path twice reuses the existing dataset (no
+        re-fetch) — it tells you so.
 
         For a downloaded/derived dataset, pass `exec_id` — the id from the
         run_python that fetched/produced it (it's in that call's result) —
@@ -123,6 +137,7 @@ def register_curation_tools(mcp: FastMCP) -> None:
         from content.bio.tools import register_dataset_tool
         return register_dataset_tool(
             {"title": title, "path": path, "paths": paths,
+             "url": url, "site": site,
              "summary": summary, "source": source, "organism": organism,
              "exec_id": exec_id, "producing_code": producing_code},
             peek_ctx(aba_ctx_id),
