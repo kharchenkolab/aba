@@ -76,3 +76,24 @@ headerless csv cost a run to a defensible parse difference); settle before
 asserting (wait_jobs_settled + durable-view settle — continuations land
 after the driven turn's stream ends); assert results against the FULL
 thread text, not just captured streams.
+
+### Multi-turn context-durability additions (agent provisioning probes)
+
+The slate above tests decisions; these test whether the CONTEXT we provision
+(rules, catalog prose, ambient compute line, continuation payloads) survives
+realistic multi-turn use without confusing the agent:
+
+13. **long_gap_recall** — a remote chain, then several turns of unrelated
+    small work, then "where does the stage-2 result live and which machine
+    computed it?" — answered from context/records without re-derivation.
+14. **cross_thread_separation** — two threads working against different
+    sites; no cross-wiring of where data/results live.
+15. **mid_chain_steering** — the user changes the target machine between
+    steps; the agent re-plans without losing prior stage state.
+16. **no_polling_compliance** — after submitting a background job the agent
+    ENDS ITS TURN (the deferred contract) instead of get_job_status loops
+    (observed: ~100 polls in one turn across several runs — an
+    instruction-compliance gap; may require tightening the tool note).
+17. **context_line_sufficiency** — the ambient per-turn compute context
+    names declared remote sites (or we fix it so it does): the agent should
+    know its placement options WITHOUT having to think of describe_compute.
