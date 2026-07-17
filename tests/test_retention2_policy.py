@@ -174,3 +174,46 @@ def test_live_retention2_semantics(tmp_path, monkeypatch):
         except Exception:  # noqa: BLE001
             pass
         ad.shutdown()
+
+
+@pytest.mark.skipif(not weft_ok, reason="weft/pixi unavailable")
+def test_resolve_output_run_rel_fallback(tmp_path, monkeypatch):
+    """The (run, relpath) fallback tier: a keep under a DIFFERENT label (so
+    the retained-tier walk misses it) still resolves via run_file_stat."""
+    import time
+    from core.compute import adapter as ad
+    monkeypatch.setenv("ABA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ABA_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setattr(ad, "_adapter", None)
+    monkeypatch.setattr(ad, "_status", {"ok": False, "severity": "info",
+                                        "detail": "un"})
+    st = ad.configure()
+    assert st["ok"], st["detail"]
+    comp = ad.get_compute()
+    try:
+        t = comp.sync_call("task_submit", {
+            "command": "mkdir -p out && echo fallback-hit > out/f.txt",
+            "site": "local", "label": "rr-fb"})
+        jid = t["job_id"]
+        while comp.sync_call("task_status", jid)[0]["state"] not in \
+                ("DONE", "FAILED"):
+            time.sleep(0.4)
+        comp.sync_call("run_retain", jid, include=["out/f.txt"],
+                       background=False, label="other-label")
+        from core import projects
+        projects.init()
+        pid = projects.create_project(f"rr-{tmp_path.name[:6]}")
+        projects.set_current(pid["id"])
+        from core.graph.entities import create_entity
+        from core.graph.derivation import imported
+        rid = create_entity(entity_type="run", title="rr", 
+                            derivation=imported("t"),
+                            metadata={"weft_targets": [jid]})
+        from content.bio.lifecycle.runs import resolve_output
+        # exact rel via the fallback (retained tier misses: label differs)
+        out = resolve_output(rid, "out/f.txt")
+        assert out is not None, "fallback tier did not resolve"
+        assert Path(out["local_path"]).read_text().strip() == "fallback-hit"
+        assert out["durability"] in ("retained", "live")
+    finally:
+        ad.shutdown()
