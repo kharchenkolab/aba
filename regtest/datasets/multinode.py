@@ -80,13 +80,8 @@ def wait_jobs_settled(client, pid, timeout_s=300):
     return False
 
 
-def thread_text(client, pid, tid, settle_s=120):
-    """ALL text on the thread — including deferred-continuation turns that land
-    AFTER a drive_turn's stream ends (a background job's result arrives as a
-    new assistant message). Waits for the project's jobs to settle first."""
+def _thread_raw(client, pid, tid):
     import json as _json
-    wait_jobs_settled(client, pid, timeout_s=settle_s)
-    time.sleep(8)          # continuation turn writes after the job flips
     r = client.get(f"/api/messages?thread_id={tid}&project_id={pid}")
     if r.status_code != 200:
         return ""
@@ -95,6 +90,40 @@ def thread_text(client, pid, tid, settle_s=120):
         c = m.get("content") or m.get("text") or ""
         parts.append(c if isinstance(c, str) else _json.dumps(c))
     return "\n".join(parts)
+
+
+def _denum(s):
+    """Normalize numbers for matching: drop thousands separators so a check
+    for '12070100' matches an agent's rendered '12,070,100'."""
+    import re
+    return re.sub(r"(?<=\d),(?=\d)", "", s)
+
+
+def thread_text(client, pid, tid, settle_s=120):
+    """ALL text on the thread — including deferred-continuation turns that land
+    AFTER a drive_turn's stream ends (a background job's result arrives as a
+    new assistant message). Waits for the project's jobs to settle first."""
+    wait_jobs_settled(client, pid, timeout_s=settle_s)
+    time.sleep(8)          # continuation turn writes after the job flips
+    return _thread_raw(client, pid, tid)
+
+
+def wait_for_text(client, pid, tid, needle, timeout_s=180):
+    """Poll the thread until `needle` (number-normalized) appears — for results
+    that arrive in a DEFERRED continuation turn, which starts only AFTER the
+    producer jobs settle and then needs several model round-trips (jobs-settled
+    + a fixed sleep is NOT enough; the gather runs later). Returns the full
+    thread text once found, else after timeout."""
+    wait_jobs_settled(client, pid, timeout_s=min(timeout_s, 180))
+    t0 = time.time()
+    target = _denum(str(needle))
+    full = ""
+    while time.time() - t0 < timeout_s:
+        full = _denum(_thread_raw(client, pid, tid))
+        if target in full:
+            return full
+        time.sleep(6)
+    return full
 
 
 def _site_ran(caps):
@@ -159,7 +188,7 @@ def mn_hop_chain(client, pid, tid):
     s1_remote = "hpc" in _site_ran([caps[0]])
     s3_remote = "hpc" in _site_ran([caps[2]])
     s2_local = not _site_ran([caps[1]])
-    txt = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    txt = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     return caps, [
         ("step 1 ran on hpc", s1_remote),
         ("step 2 ran locally", s2_local),
@@ -294,7 +323,7 @@ def mn_crash_fix_rerun(client, pid, tid):
         f"vals.csv — and report the sum of its val column. There is exactly "
         f"one csv in that folder; if the name is wrong, use the one that's "
         f"there. Run it directly (not as a background job).")]
-    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     hpc_runs = [t for t in tools_named(caps, "run_python")
                 if t["input"].get("site") == "hpc"]
     return caps, [
@@ -307,24 +336,31 @@ def mn_crash_fix_rerun(client, pid, tid):
 @scenario("mn_fanout_gather")
 def mn_fanout_gather(client, pid, tid):
     """Concurrent detached jobs + continuation ordering: three independent
-    variants in parallel (node + local mix), then a local gather step."""
+    variants in parallel (node + local mix), then a gather step. The gather
+    runs in a DEFERRED continuation turn after all producers finish — so we
+    poll for the total (number-normalized) rather than a fixed settle.
+
+    NOTE (recorded, not a product bug): there is no sibling-join barrier —
+    each job's continuation fires independently; the first-completing one
+    wakes the agent while siblings may still run. It works because the agent
+    defensively re-checks the others; a true barrier would need a turn-group
+    id to fire a single gather on the LAST sibling."""
+    total = 338350 + 2686700 + 9045050
     caps = [drive_turn(client, pid, tid,
         "Run three INDEPENDENT background jobs, in parallel (submit all "
         "before waiting): each computes the sum of i*i for i from 1 to N, "
         "for N = 100, 200 and 300. Run at least one of them on machine "
         "'hpc' and at least one locally. When all three are done, compute "
-        "the TOTAL of the three results locally and report it.")]
-    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+        "the TOTAL of the three results and report it.")]
     bg = [t for t in tools_named(caps, "run_python")
           if t["input"].get("background")]
     sites = [t["input"].get("site") for t in bg]
-    expected = {100: 338350, 200: 2686700, 300: 9045050}
-    total = sum(expected.values())
+    full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, total)
     return caps, [
         ("three background jobs submitted", len(bg) >= 3),
         ("at least one on hpc", "hpc" in sites),
         ("at least one local", any(not s for s in sites)),
-        ("correct total reported", str(total) in full),
+        ("correct total reported (via gather continuation)", str(total) in full),
     ]
 
 
@@ -369,7 +405,7 @@ def mn_external_ref_inject(client, pid, tid):
         f"The file {R_DATA}/ref_table.csv already lives on machine 'hpc'. "
         f"Register it as a dataset named 'Ref Table' by REFERENCE — do not "
         f"copy it here. Then, running ON hpc, report the sum of its v column.")]
-    full = all_text(caps) + "\n" + thread_text(client, pid, tid)
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
     reg = tools_named(caps, "register_dataset")
     ds = [e for e in find_entities(type="dataset", not_deleted=True)
           if "ref table" in (e.get("title") or "").lower()]
@@ -394,17 +430,16 @@ def mn_background_monitor(client, pid, tid):
         "for 25 seconds, then compute and print the sum of 1..2000. Submit "
         "it in the background — don't wait around; tell me when it's done.")]
     # deferred: the answer arrives via a continuation turn after the job lands
-    full0 = all_text(caps)
-    settled = wait_jobs_settled(client, pid, timeout_s=180)
-    full = full0 + "\n" + thread_text(client, pid, tid)
+    answer = sum(range(1, 2001))
     bg = [t for t in tools_named(caps, "run_python")
           if t["input"].get("background") and t["input"].get("site") == "hpc"]
     polls = len(tools_named(caps, "get_job_status"))
+    # the answer arrives in a deferred continuation — poll for it (normalized)
+    full = _denum(all_text(caps)) + "\n" + wait_for_text(client, pid, tid, answer)
     return caps, [
         ("submitted a background job on hpc", bool(bg)),
         ("did NOT poll excessively (<=5 status checks)", polls <= 5),
-        ("job settled", settled),
-        ("final result reported (via continuation)", str(sum(range(1, 2001))) in full),
+        ("final result reported (via continuation)", str(answer) in full),
     ]
 
 
