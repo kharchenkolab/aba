@@ -282,14 +282,18 @@ def mn_crash_fix_rerun(client, pid, tid):
     """The daily-life loop over the detached transport: the remote job fails
     (wrong filename), the agent reads the error, debugs, and lands the
     correct number — never fabricating."""
-    hssh(f"mkdir -p {R_DATA} && (echo idx,val; seq 1 60 | "
-         f"awk '{{print $1\",\"($1*5)%11}}') > {R_DATA}/vals_v2.csv")
+    # dedicated dir with EXACTLY ONE csv, so the debug is unambiguous — a
+    # shared dir accumulates other scenarios' files and the agent (correctly)
+    # refuses to guess among multiple val-column candidates
+    cdir = "/home/physicist/aba-mn-crash"
+    hssh(f"rm -rf {cdir} && mkdir -p {cdir} && (echo idx,val; seq 1 60 | "
+         f"awk '{{print $1\",\"($1*5)%11}}') > {cdir}/vals_v2.csv")
     total = sum((i * 5) % 11 for i in range(1, 61))
     caps = [drive_turn(client, pid, tid,
-        f"On machine 'hpc', read the csv in {R_DATA} — I think it's called "
-        f"vals.csv — and report the sum of its val column. If something "
-        f"fails, debug it right there and get me the number. This is quick, "
-        f"so just run it directly (not as a background job).")]
+        f"On machine 'hpc', read the csv in {cdir} — I think it's called "
+        f"vals.csv — and report the sum of its val column. There is exactly "
+        f"one csv in that folder; if the name is wrong, use the one that's "
+        f"there. Run it directly (not as a background job).")]
     full = all_text(caps) + "\n" + thread_text(client, pid, tid)
     hpc_runs = [t for t in tools_named(caps, "run_python")
                 if t["input"].get("site") == "hpc"]
