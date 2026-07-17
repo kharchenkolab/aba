@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1"; exit 2 ;;
   esac; shift
 done
-case "$PROFILE" in fat|slim) ;; *) echo "--profile must be fat or slim"; exit 2 ;; esac
+case "$PROFILE" in fat|slim|weft) ;; *) echo "--profile must be fat, slim, or weft"; exit 2 ;; esac
 ACCEL="${ABA_ACCELERATOR:-cpu}"   # F1: bakes the GPU torch base when 'cuda' (fat profile)
 # Base image (the .def `From:`). It supplies ONLY the root filesystem (glibc, shell,
 # coreutils) — there is NO %post, so no package manager runs; CA certs + micromamba are
@@ -173,10 +173,12 @@ if ls "$REPO_ROOT"/install/core/envs/*.yaml >/dev/null 2>&1; then
   echo "   base env packs baked: $(ls "$STAGE/installation/envs"/*.yaml | wc -l | tr -d ' ') (installation scope)"
 fi
 
-# ── fat: build the conda venv + R tools base from install/core specs ──
-if [ "$PROFILE" = "fat" ]; then
+# ── fat/weft: build the CONTROLLER conda venv (both) + the R tools base (fat only) ──
+# weft: the science python + R come from weft env IMAGES adopted at run (Phase 1), so the
+# SIF bakes only the slim controller venv — no R base, no science stack in the image.
+if [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; then
   MM="${MICROMAMBA:-micromamba}"
-  command -v "$MM" >/dev/null 2>&1 || { echo "fat build needs micromamba (set MICROMAMBA)"; exit 1; }
+  command -v "$MM" >/dev/null 2>&1 || { echo "$PROFILE build needs micromamba (set MICROMAMBA)"; exit 1; }
   # Deployment-conditional base (F1 fix): mirror the installer's create-env. Inject the
   # CUDA torch pin when ABA_ACCELERATOR=cuda so the BAKED venv resolves the GPU torch build
   # — else conda-forge bakes CPU-only torch and GPU jobs silently run on CPU (the scVI-on-CPU
@@ -200,6 +202,9 @@ if [ "$PROFILE" = "fat" ]; then
       && echo "   weft pip-installed into the baked venv" \
       || echo "WARNING: weft pip-install into the baked venv failed — substrate won't load"
   fi
+  # R tools base + the baked-base-ready marker are FAT only — weft gets R from the r-bio
+  # weft env at run, so there is no in-image R base.
+  if [ "$PROFILE" = "fat" ]; then
   echo "-- building R tools base (install/core/r-environment.yml) --"
   "$MM" create -y -q -p "$STAGE/aba-tools" -f "$REPO_ROOT/install/core/r-environment.yml" \
     || echo "WARNING: R tools base failed — R will provision on demand"
@@ -213,6 +218,7 @@ if [ "$PROFILE" = "fat" ]; then
   # runtime against the read-only mount). The python-bio module's readiness probe is
   # `base_stage: ready`, so this keeps it satisfied without any first-use env-update.
   printf 'ready\n' > "$STAGE/aba-venv/.aba-base-stage"
+  fi
 fi
 
 # ── generate the .def for this profile ──
@@ -248,7 +254,7 @@ DEF="$STAGE/aba-$PROFILE.def"
   [ -d "$STAGE/pagoda3-dist" ] && echo "    $STAGE/pagoda3-dist /opt/aba/vendor/pagoda3/dist"
   [ -f "$STAGE/ca-certificates.crt" ] && echo "    $STAGE/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
   [ -d "$STAGE/bin" ] && echo "    $STAGE/bin /opt/aba/bin"
-  [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-venv /opt/aba-venv"
+  { [ "$PROFILE" = "fat" ] || [ "$PROFILE" = "weft" ]; } && echo "    $STAGE/aba-venv /opt/aba-venv"
   [ "$PROFILE" = "fat" ] && echo "    $STAGE/aba-tools /opt/aba-envs/tools"
   # weft substrate: pixi binaries + the base env packs (weft is baked INTO the venv
   # above, so no separate copy). resolve_pixi() finds /opt/aba/tools/pixi/bin.
@@ -300,9 +306,39 @@ echo "   wrote $DEF"
 
 if [ "$STAGE_ONLY" = "1" ]; then echo "stage-only: skipping apptainer build"; exit 0; fi
 
-# ── build ──
-echo "-- apptainer build --"
-"$APPTAINER" build --force "$OUT" "$DEF"
+# ── build (native apptainer build, with a rootless fallback) ──
+# On a host with no /etc/subuid mapping, apptainer's single-step build falls back to
+# proot for its internal mksquashfs, and proot's ptrace is often seccomp-blocked
+# (`ptrace(TRACEME): Operation not permitted`) — the build dies at "Creating SIF file"
+# AFTER a full extract + %setup. The two-step path sidesteps it: `build --sandbox`
+# (stops before mksquashfs) then `unshare -rm mksquashfs` (a single-user namespace —
+# no proot, no ptrace — the same path weft uses for env images). The output is an
+# exec-able squashfs; the OOD launcher runs the image via `apptainer exec` (not the
+# runscript), so a bare squashfs is equivalent to a .sif here. See the CBE deploy notes.
+# ABA_SIF_BUILD_MODE=auto|native|sandbox (default auto: native, fall back on failure;
+# set `sandbox` on a known-proot-blocked cluster to skip the doomed native attempt).
+BUILD_MODE="${ABA_SIF_BUILD_MODE:-auto}"
+_build_native() { "$APPTAINER" build --force "$OUT" "$DEF"; }
+_build_sandbox() {
+  local sb="${STAGE}.sandbox"; rm -rf "$sb"
+  command -v unshare >/dev/null 2>&1 && command -v mksquashfs >/dev/null 2>&1 \
+    || { echo "sandbox fallback needs unshare + mksquashfs on PATH" >&2; return 1; }
+  "$APPTAINER" build --sandbox "$sb" "$DEF"        # extract + %setup; no mksquashfs
+  rm -f "$OUT"
+  unshare -rm mksquashfs "$sb" "$OUT" -noappend -no-progress   # userns path (no proot)
+  local rc=$?
+  # the sandbox tree ships read-only dirs (EL /usr/sbin is 0555), so `rm -rf` can't unlink
+  # them — chmod first, and never let cleanup failure abort the build (rc is the real result).
+  chmod -R u+w "$sb" 2>/dev/null || true; rm -rf "$sb" 2>/dev/null || true
+  return $rc
+}
+echo "-- apptainer build (mode: $BUILD_MODE) --"
+case "$BUILD_MODE" in
+  native)  _build_native ;;
+  sandbox) _build_sandbox ;;
+  auto)    _build_native || { echo "-- native build failed (proot/mksquashfs?); falling back to --sandbox + unshare mksquashfs --" >&2; _build_sandbox; } ;;
+  *) echo "ABA_SIF_BUILD_MODE must be auto|native|sandbox"; exit 2 ;;
+esac
 echo "✓ built $OUT ($(du -h "$OUT" 2>/dev/null | cut -f1))"
 
 # ── runtime prerequisites the R kernel needs (cheap, catches a lean base image) ──
