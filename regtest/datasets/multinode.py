@@ -173,21 +173,23 @@ def mn_hop_chain(client, pid, tid):
 @scenario("mn_status_surfaces")
 def mn_status_surfaces(client, pid, tid):
     """(iii) After a remote run, the SURFACES the cards render from tell the
-    truth: the run's durable view marks remote files, the ledger sees the
-    site, then bring-back makes them local — asserted on the exact JSON."""
-    hssh(f"mkdir -p {R_DATA} && seq 1 50 > {R_DATA}/seed.txt")
+    truth. In-place remote keeps apply to LARGE outputs that STAY on the node
+    (small ones auto-come-home — that's the sync/harvest design). So we
+    produce a big file on hpc, keep it in place, and assert the durable view /
+    ledger / bring-back reflect 'on hpc' — on the exact JSON the cards read."""
     caps = [drive_turn(client, pid, tid,
-        f"Open an analysis run titled 'Remote production'. Then, on machine "
-        f"'hpc', read {R_DATA}/seed.txt and write two files in the run: "
-        f"series.txt (the numbers doubled) and marker.txt (containing "
-        f"'done'). Keep them safe on hpc — don't move them off yet.")]
+        "Open an analysis run titled 'Remote production'. Then run a BACKGROUND "
+        "job on machine 'hpc' that writes a LARGE ~60 MB file called big.bin "
+        "in the run's working directory (e.g. 60*1024*1024 bytes), plus a "
+        "small marker.txt containing 'done'. It's big, so KEEP it safe on "
+        "hpc in place — do not move it off yet.")]
     wait_jobs_settled(client, pid)
     ent = _run_by_title("Remote production")
     rid = ent["id"] if ent else None
-    if not rid:   # fallback: any run whose durable view saw the outputs
+    if not rid:   # fallback: any run whose durable view saw the big output
         for r in find_entities(type="analysis", not_deleted=True):
             dv = _durable(client, r["id"])
-            if any(f["rel"].endswith(("series.txt", "marker.txt")) for f in dv["files"]):
+            if any(f["rel"].endswith("big.bin") for f in dv["files"]):
                 rid = r["id"]
                 break
     if rid:       # keeps settle asynchronously (retain at close / keep_outputs)
@@ -204,7 +206,7 @@ def mn_status_surfaces(client, pid, tid):
         remote = [f for f in dv["files"] if (f.get("site") or "") not in ("", "local")]
         led = client.get(f"/api/projects/{pid}/data-ledger").json()
         checks += [
-            ("durable view marks files on hpc", any(
+            ("durable view marks the big file on hpc", any(
                 f.get("site") == "hpc" for f in dv["files"])),
             ("remote-kept badge reads 'kept ✓ · on hpc'", any(
                 str(f.get("badge", "")).startswith("kept ✓") and "hpc" in f.get("badge", "")
@@ -213,10 +215,10 @@ def mn_status_surfaces(client, pid, tid):
              "hpc" in (led.get("remote_sites") or [])),
         ]
         bb = client.post(f"/api/runs/{rid}/bring-back")
-        time.sleep(4)
+        time.sleep(8)
         dv2 = _durable(client, rid)
-        checks.append(("files servable locally after bring-back", any(
-            f.get("url") for f in dv2["files"] if f["rel"].endswith("series.txt"))))
+        checks.append(("big file servable locally after bring-back", any(
+            f.get("url") for f in dv2["files"] if f["rel"].endswith("big.bin"))))
         caps.append(drive_turn(client, pid, tid,
             f"Where do this run's files live now, and are they safe? Brief."))
         atxt = caps[-1]["text"].lower()
@@ -282,9 +284,10 @@ def mn_crash_fix_rerun(client, pid, tid):
          f"awk '{{print $1\",\"($1*5)%11}}') > {R_DATA}/vals_v2.csv")
     total = sum((i * 5) % 11 for i in range(1, 61))
     caps = [drive_turn(client, pid, tid,
-        f"On machine 'hpc' (background), read the csv in {R_DATA} — I think "
-        f"it's called vals.csv — and report the sum of its val column. If "
-        f"something fails, debug it yourself there and get me the number.")]
+        f"On machine 'hpc', read the csv in {R_DATA} — I think it's called "
+        f"vals.csv — and report the sum of its val column. If something "
+        f"fails, debug it right there and get me the number. This is quick, "
+        f"so just run it directly (not as a background job).")]
     full = all_text(caps) + "\n" + thread_text(client, pid, tid)
     hpc_runs = [t for t in tools_named(caps, "run_python")
                 if t["input"].get("site") == "hpc"]
