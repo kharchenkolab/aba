@@ -112,9 +112,11 @@ def register_jobs_tools(mcp: FastMCP) -> None:
           meaningfully faster AND that speedup beats the partition's queue wait
           (read the `wait` label). Otherwise run interactively.
         - REMOTE (a machine in `remote_sites`): run_python/run_r with
-          `background=True, site=<name>` — chosen by DATA GRAVITY: prefer the
-          machine already holding the inputs over transferring data. The job
-          reads paths valid THERE and writes to its working directory.
+          `site=<name>` — chosen by DATA GRAVITY: prefer the machine already
+          holding the inputs over transferring data. A short step runs
+          SYNCHRONOUSLY (like a local call, fresh process there); a long one
+          adds `background=True`. It reads paths valid THERE and writes to
+          its working directory.
         - ALWAYS: a background/Slurm/remote job is a FRESH process with NONE of
           your interactive objects — load inputs from disk, write outputs to disk.
 

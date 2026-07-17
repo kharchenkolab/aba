@@ -384,19 +384,31 @@ class WeftSubmitter:
         # the one line that lights up retention + status UI for remote outputs:
         # the Run's durable panel, keep-triage, (run,rel) addressing and
         # bring-back are all target-based — give them the target
+        self._record_run_target(params, r["job_id"])
+
+    @staticmethod
+    def _record_run_target(params: dict, new_wid: str,
+                           replace: Optional[str] = None) -> None:
+        """Record a weft task id on the owning Run's `weft_targets` — the
+        SINGLE bookkeeping both submit and the poll-side re-lock resubmit go
+        through. `replace` drops a DEAD prior attempt (a platform-mismatch
+        task has no files; leaving it made retention + the durable view aim
+        at nothing — found by the live study)."""
         run_id = params.get("run_id")
-        if run_id:
-            try:
-                from core.graph.entities import get_entity, update_entity
-                ent = get_entity(run_id)
-                if ent:
-                    md = dict(ent.get("metadata") or {})
-                    tgts = list(md.get("weft_targets") or [])
-                    if r["job_id"] not in tgts:
-                        md["weft_targets"] = tgts + [r["job_id"]]
-                        update_entity(run_id, metadata=md)
-            except Exception:  # noqa: BLE001 — panel misses the target, job unaffected
-                pass
+        if not run_id:
+            return
+        try:
+            from core.graph.entities import get_entity, update_entity
+            ent = get_entity(run_id)
+            if not ent:
+                return
+            md = dict(ent.get("metadata") or {})
+            tgts = [t for t in (md.get("weft_targets") or []) if t != replace]
+            if new_wid not in tgts:
+                md["weft_targets"] = tgts + [new_wid]
+                update_entity(run_id, metadata=md)
+        except Exception:  # noqa: BLE001 — panel misses the target, job unaffected
+            pass
 
     def _poll_detached(self, job: dict, params: dict, wid: str, state: str) -> dict:
         """Terminal detached task → result-shaped dict for _finalize_job.
@@ -464,6 +476,10 @@ class WeftSubmitter:
                                        "env_id": relock["env_id"],
                                        "platform_relocked": True, **extra},
                                project_id=str(pid))
+                    # repoint the Run at the LIVE task — the dead mismatch
+                    # attempt has no files; retention + the durable view
+                    # would otherwise aim at nothing (live-study finding)
+                    self._record_run_target(params, r["job_id"], replace=wid)
                     print(f"[jobs.weft] env re-locked for {plat} and job "
                           f"{job['id']} resubmitted to {job_site}")
                     return None            # keep polling the NEW task

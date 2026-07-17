@@ -649,6 +649,84 @@ def bg_submit_kwargs(input_: dict, project_id: str) -> dict:
             "env": env_name, "timeout_s": _background_timeout_s(input_, est_min)}
 
 
+def _run_remote_sync(input_: dict, ctx: dict | None, project_id: str,
+                     thread_id: str, kind: str) -> dict:
+    """Synchronous remote run (misc/detached_compute.md): placement is
+    ORTHOGONAL to duration — a short step on a declared machine behaves
+    exactly like a local call (submit, wait in-tool, return the result),
+    just executed THERE in a fresh process. Long steps use background=True
+    (deferred + continuation), same contract as a cluster deployment.
+
+    The job ROW is still created (Jobs panel visibility, durable state,
+    cancel path) but marked `sync` so the weft poll loop leaves it to us —
+    completion here returns a NORMAL tool result, and the standard post-tool
+    registration attaches figures/tables to the Run like any local call."""
+    import time as _time
+    from core.jobs.submit import submit_python_job, submit_r_job
+    from core.jobs.weft_submitter import WeftSubmitter
+    from core.graph.jobs import get_job, update_job
+    from content.bio.lifecycle.runs import active_run_id
+
+    site = input_["site"]
+    timeout_s = max(5, min(int(input_.get("timeout_s") or 300), 1800))
+    submit = submit_r_job if kind == "run_r" else submit_python_job
+    try:
+        job = submit(input_.get("code", ""),
+                     title=input_.get("title") or f"Remote step on {site}",
+                     focus_entity_id=(ctx or {}).get("focus_entity_id"),
+                     project_id=project_id, thread_id=thread_id,
+                     run_id=active_run_id(thread_id),
+                     estimate={"runtime_min": float(input_.get("estimated_runtime_min") or 0),
+                               "cores": input_.get("est_cores"),
+                               "mem_gb": input_.get("est_mem_gb"),
+                               "gpu": input_.get("est_gpu")},
+                     env=input_.get("env"), site=site, timeout_s=timeout_s)
+    except ValueError as e:          # unknown site — names the real ones
+        return {"status": "error", "note": str(e)}
+    # re-read: _submit_detached wrote weft_id/detached onto the row via its own
+    # update_job, so merge `sync` onto the FRESH params (not the stale submit
+    # return, which would wipe weft_id and make poll() spin forever)
+    fresh = get_job(job["id"], project_id=project_id) or job
+    update_job(job["id"], project_id=project_id,
+               params={**(fresh.get("params") or {}), "sync": True})
+    sub = WeftSubmitter(site=site)
+    cancel_token = (ctx or {}).get("cancel_token")
+    t0 = _time.time()
+    while _time.time() - t0 < timeout_s + 60:
+        if cancel_token is not None and getattr(cancel_token, "cancelled", False):
+            sub.cancel(job)
+            update_job(job["id"], project_id=project_id, status="cancelled")
+            return {"status": "cancelled",
+                    "note": f"remote step on {site} cancelled"}
+        row = get_job(job["id"], project_id=project_id)
+        res = sub.poll(row)
+        if res is not None:
+            ok = "error" not in res and res.get("returncode", 0) == 0
+            update_job(job["id"], project_id=project_id,
+                       status="done" if ok else "failed",
+                       log_tail=(res.get("stdout") or res.get("error") or "")[-1500:])
+            if not ok:
+                return {"status": "error",
+                        "error": (res.get("error") or res.get("stdout") or "")[-2000:],
+                        "compute": res.get("compute"),
+                        "note": f"the step FAILED on {site} — see error; fix and retry"}
+            out = {"status": "ok", "stdout": res.get("stdout", ""),
+                   "plots": res.get("plots", []), "tables": res.get("tables", []),
+                   "files": res.get("files", []), "compute": res.get("compute"),
+                   "execution_mode": "remote-sync",
+                   "note": f"ran on {site} in a fresh process there "
+                           f"(no interactive state); outputs harvested back"}
+            return out
+        _time.sleep(1.5)
+    sub.cancel(job)
+    update_job(job["id"], project_id=project_id, status="failed",
+               error=f"timed out after {timeout_s}s")
+    return {"status": "error",
+            "note": f"the remote step exceeded {timeout_s}s and was cancelled — "
+                    f"for long work use background=True (you'll be resumed when "
+                    f"it finishes)"}
+
+
 def run_python(input_: dict, ctx: dict | None = None) -> dict:
     """Run Python in the project's scratch workspace via the shared executor.
 
@@ -713,12 +791,10 @@ def run_python(input_: dict, ctx: dict | None = None) -> dict:
     # timeout_s is a CEILING, not an estimate; routing to background keys on the
     # agent's estimated_runtime_min so a defensive timeout doesn't mis-background.
     if input_.get("site") and not input_.get("background"):
-        # site= targets a remote machine — background-only by contract
-        # (interactive kernels stay local by design; misc/detached_compute.md)
-        return {"status": "error",
-                "note": f"site='{input_['site']}' runs a BACKGROUND job on that "
-                        f"machine — pass background=True (the interactive "
-                        f"kernel always runs here)"}
+        # SYNC remote run: like a local call, executed THERE (fresh process).
+        # Long steps go background=True — deferred + continuation.
+        return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
+                                "run_python")
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),
@@ -919,12 +995,10 @@ def run_r(input_: dict, ctx: dict | None = None) -> dict:
     env_name = None if _is_default_env(env) else env.strip()
 
     if input_.get("site") and not input_.get("background"):
-        # site= targets a remote machine — background-only by contract
-        # (interactive kernels stay local by design; misc/detached_compute.md)
-        return {"status": "error",
-                "note": f"site='{input_['site']}' runs a BACKGROUND job on that "
-                        f"machine — pass background=True (the interactive "
-                        f"kernel always runs here)"}
+        # SYNC remote run: like a local call, executed THERE (fresh process).
+        # Long steps go background=True — deferred + continuation.
+        return _run_remote_sync(input_, ctx, str(project_id), str(thread_id),
+                                "run_r")
     override = "background" if input_.get("background") else None
     est_min = float(input_.get("estimated_runtime_min") or 0)
     est = {"runtime_min": est_min, "cores": input_.get("est_cores"),

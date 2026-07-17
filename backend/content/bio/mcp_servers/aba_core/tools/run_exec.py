@@ -60,12 +60,13 @@ _D_EXECUTION = (
     "runs it in ABA's own allocation with no queue wait, good when it fits here; 'auto' decides "
     "from the estimate.")
 _D_SITE = (
-    "With background=True only: run the job ON a declared remote compute machine "
-    "(names from describe_compute). Overrides `execution`. The job is a fresh process on "
-    "THAT machine — read inputs from paths valid there (e.g. a dataset home on that site), "
-    "write outputs to the working directory (they stay retrievable through the run). Prefer "
-    "the machine that already holds the inputs over transferring data. Isolated envs travel: "
-    "the env is realized on the site (re-locked for its platform automatically).")
+    "Run this step ON a declared remote machine (names from describe_compute); overrides "
+    "`execution`. WITHOUT background: synchronous — behaves like a normal call, just executed "
+    "THERE in a fresh process (no kernel state; read paths valid on that machine; write to "
+    "the working directory — outputs come back automatically). WITH background=True: a "
+    "deferred job for LONG steps — you're resumed when it finishes; do NOT poll. Prefer the "
+    "machine that already holds the inputs over transferring data. Isolated envs travel: "
+    "realized on the site, re-locked for its platform automatically.")
 
 
 def register_run_exec_tools(mcp: FastMCP) -> None:
@@ -113,10 +114,13 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
           `execution` (with background=True): `'slurm'` (default on a cluster) submits an
           sbatch job; `'local'` runs it in-place in ABA's OWN allocation — no queue wait —
           when it fits (good for a quick background job); `'auto'` decides from the estimate.
-          `site` (with background=True) runs the job ON a declared remote machine
-          (data gravity: prefer the machine holding the inputs); it overrides
-          `execution`. Never claim work ran on a machine unless the job actually
-          executed there — the job result names where it ran.
+          `site` runs the step ON a declared remote machine (data gravity:
+          prefer the machine holding the inputs); it overrides `execution`.
+          A short step: `site` alone — synchronous, like a local call, executed
+          there in a fresh process. A long step: `site` + `background=True` —
+          deferred; you're resumed when it finishes (don't poll). Never claim
+          work ran on a machine unless the job actually executed there — the
+          result names where it ran.
 
         ENVIRONMENT: omit `env` (or `env='default'`) for the project's
         normal environment. Pass `env='name'` to run inside an isolated
@@ -198,9 +202,9 @@ def register_run_exec_tools(mcp: FastMCP) -> None:
         than this node has or might exceed the remaining walltime, sized with
         est_cores/est_mem_gb/est_gpu/estimated_runtime_min. Do NOT shell out to
         Rscript via `run_python(subprocess.run(['Rscript', ...]))` —
-        background=True IS the supported path for long R work. `site` (with
-        background=True) runs the job ON a declared remote machine — same
-        rules as run_python's `site`.
+        background=True IS the supported path for long R work. `site` runs the
+        step ON a declared remote machine — same rules as run_python's `site`
+        (alone = synchronous fresh process there; + background for long steps).
 
         ROUTING NOTE: When the goal is a MODIFIED VERSION of an existing
         focused figure/table (cairo_pdf of a current figure, ggsave with

@@ -31,12 +31,18 @@ def test_run_python_threads_site_to_submit_kwargs():
     assert bg_submit_kwargs({}, "default")["site"] is None
 
 
-def test_site_without_background_is_rejected():
-    """site= targets a background job on a remote machine; the interactive
-    kernel always runs local — a site without background is a clear error."""
-    from content.bio.tools.run_exec import run_python
-    out = run_python({"code": "x=1", "site": "mendel"}, {"thread_id": "t"})
-    assert out.get("status") == "error" and "background=True" in out.get("note", "")
+def test_site_without_background_goes_sync_remote(monkeypatch):
+    """site= WITHOUT background routes to the SYNCHRONOUS remote path —
+    placement is orthogonal to duration (a short remote step behaves like a
+    local call; only long steps use background=True)."""
+    import content.bio.tools.run_exec as rx
+    seen = {}
+    monkeypatch.setattr(rx, "_run_remote_sync",
+                        lambda inp, ctx, pid, tid, kind: seen.update(
+                            site=inp["site"], kind=kind) or {"status": "ok"})
+    out = rx.run_python({"code": "x=1", "site": "mendel"}, {"thread_id": "t"})
+    assert out == {"status": "ok"}
+    assert seen == {"site": "mendel", "kind": "run_python"}
 
 
 def test_describe_compute_surfaces_remote_sites(monkeypatch):
@@ -87,7 +93,7 @@ def _standalone() -> int:
 
     rc = 0
     for t in (test_run_python_threads_site_to_submit_kwargs,
-              test_site_without_background_is_rejected,
+              test_site_without_background_goes_sync_remote,
               test_describe_compute_surfaces_remote_sites):
         mp = _MP()
         try:

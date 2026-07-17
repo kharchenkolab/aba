@@ -925,7 +925,8 @@ def _active_weft_jobs() -> list[dict]:
             for r in c.execute("SELECT * FROM jobs WHERE status IN "
                                "('queued','running')").fetchall():
                 job = _row_to_job(r)
-                if (job.get("params") or {}).get("submitter") == "weft":
+                p_ = job.get("params") or {}
+                if p_.get("submitter") == "weft" and not p_.get("sync"):
                     job["project_id"] = None      # main-DB routing
                     out.append(job)
             c.close()
@@ -946,7 +947,10 @@ def _active_weft_jobs() -> list[dict]:
                 continue
             for r in c.execute("SELECT * FROM jobs WHERE status IN ('queued','running')").fetchall():
                 job = _row_to_job(r)
-                if (job.get("params") or {}).get("submitter") == "weft":
+                p_ = job.get("params") or {}
+                # sync rows are completed IN-TOOL (_run_remote_sync) — the
+                # poll loop must not race a second finalize onto them
+                if p_.get("submitter") == "weft" and not p_.get("sync"):
                     job["project_id"] = proj_dir.name
                     out.append(job)
             c.close()

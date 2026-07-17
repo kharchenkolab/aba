@@ -274,6 +274,33 @@ def test_active_weft_jobs_seen_in_single_db_mode():
     assert "job_single_scan" in jobs
 
 
+def test_sync_remote_runs_in_tool(monkeypatch):
+    """site= WITHOUT background: synchronous — submit, wait in-tool, return a
+    NORMAL tool result (placement is orthogonal to duration; the polling
+    pathology the live study exposed does not arise: there is nothing to
+    poll). The job row is marked `sync` so the weft poll loop leaves it."""
+    comp = _FakeComp()
+    monkeypatch.setattr(ws, "_adapter", lambda: comp)
+    node_result = {"status": "ok", "returncode": 0, "stdout_tail": "S 42",
+                   "outputs": [], "runtime": "Python 3.10"}
+
+    def _fread(target, rel, max_bytes=1 << 20):
+        if rel == "result.json":
+            return {"bytes_b64": base64.b64encode(
+                json.dumps(node_result).encode()).decode(), "truncated": False}
+        raise RuntimeError("no such file")
+    monkeypatch.setattr(retmod, "file_read", _fread)
+    from content.bio.tools.run_exec import _run_remote_sync
+    out = _run_remote_sync({"code": "print('S', 42)", "site": "far",
+                            "timeout_s": 60},
+                           {"thread_id": "t"}, "default", "t", "run_python")
+    assert out["status"] == "ok" and out["stdout"] == "S 42"
+    assert out["execution_mode"] == "remote-sync" and "far" in out["note"]
+    from core.jobs.runner import _active_weft_jobs
+    # terminal + sync → invisible to the poll loop
+    assert all("sync" not in (j.get("params") or {}) for j in _active_weft_jobs())
+
+
 def test_site_validation_names_real_sites(monkeypatch):
     comp = _FakeComp()
     monkeypatch.setattr(ws, "_adapter", lambda: comp)
@@ -305,6 +332,7 @@ def _standalone() -> int:
               test_poll_side_platform_relock_resubmits,
               test_poll_relock_covers_default_env_via_base_pack,
               test_active_weft_jobs_seen_in_single_db_mode,
+              test_sync_remote_runs_in_tool,
               test_site_validation_names_real_sites):
         mp = _MP()
         try:
