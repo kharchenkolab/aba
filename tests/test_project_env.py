@@ -300,7 +300,9 @@ def test_weft_submitter_carries_snapshot(stub, monkeypatch):
     WeftSubmitter().submit(job)
     spec = json.loads(Path(captured["command"].split()[-1]).read_text())
     assert spec["env_id"] == "env:v1:jobsnap"
-    assert spec["interp"].endswith("jobsnap/bin/python")   # resolved at submit
+    # interp is resolved at the NODE from $CONDA_PREFIX (weft activates the EnvID there),
+    # not baked aba-side — the raw-prefix path broke under squashfs (#31, Round 20).
+    assert spec["interp"] is None
 
 
 def test_ensure_capability_installs_into_session(stub, monkeypatch):
@@ -349,9 +351,10 @@ def test_pack_backed_module_probe_and_install(stub, monkeypatch):
     assert manager.probe_ready(spec) is False
     monkeypatch.setattr(manager, "_pack_ready", lambda pack: True)
     assert manager.probe_ready(spec) is True
-    # install path = ensure+realize, no shell script
+    # install path = ensure+realize (strategy-blind), no shell script and no raw
+    # prefix resolve — a squashfs pack has no readable prefix at rest (#31, Round 20).
     from core.modules import reconciler
-    monkeypatch.setattr(base_env, "prefix", lambda lang, **kw: Path("/tmp"))
+    monkeypatch.setattr(base_env, "ensure_ready", lambda lang, **kw: None)
     ok = reconciler.run_module(spec, log=lambda m: None)
     assert ok is True
 
