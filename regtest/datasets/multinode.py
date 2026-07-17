@@ -594,6 +594,47 @@ def mn_rerun_asis_recomputes(client, pid, tid):
     ]
 
 
+@scenario("mn_data_gravity_recall")
+def mn_data_gravity_recall(client, pid, tid):
+    """Multi-turn context durability: a dataset is registered on hpc; then
+    several UNRELATED small local turns pass; then a heavy step over that
+    dataset must route to hpc WITHOUT being re-told the machine (data gravity
+    + the ambient remote-site context line), and the agent recalls where it
+    lives. Tests whether provisioning survives a long gap without confusing
+    the agent."""
+    hssh(f"mkdir -p {R_DATA} && (echo p,q; seq 1 400 | "
+         f"awk '{{print $1\",\"($1*6)%13}}') > {R_DATA}/gravity.csv")
+    total = sum((i * 6) % 13 for i in range(1, 401))
+    caps = [drive_turn(client, pid, tid,
+        f"Register {R_DATA}/gravity.csv on machine 'hpc' as dataset "
+        f"'Gravity Set' by reference.")]
+    # unrelated small local work — the 'long gap'
+    caps.append(drive_turn(client, pid, tid,
+        "Quick unrelated thing: what's 17 * 23? Just tell me."))
+    caps.append(drive_turn(client, pid, tid,
+        "And make a tiny local list of the first 5 even numbers."))
+    caps.append(drive_turn(client, pid, tid,
+        "One more: reverse the string 'analytics' for me."))
+    # now the heavy step — WITHOUT naming the machine
+    caps.append(drive_turn(client, pid, tid,
+        "OK — now do a heavy summation over the 'Gravity Set' dataset: sum "
+        "its q column. It's a big/heavy step, so run it in the most sensible "
+        "place given where the data lives. Tell me the sum and where it ran."))
+    heavy = caps[-1]
+    ran_hpc = "hpc" in _site_ran([heavy])
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    ftext = _denum(heavy["text"]).lower()
+    return caps, [
+        ("dataset registered on hpc", any(
+            ((e.get("metadata") or {}).get("home") or {}).get("site") == "hpc"
+            for e in find_entities(type="dataset", not_deleted=True)
+            if "gravity set" in (e.get("title") or "").lower())),
+        ("routed the heavy step to hpc WITHOUT being re-told", ran_hpc),
+        ("correct sum reported", str(total) in full),
+        ("agent recalls it ran on hpc", "hpc" in ftext),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -626,7 +667,8 @@ def main():
                   mn_pin_remote_result, mn_external_ref_inject,
                   mn_background_monitor, mn_provenance_after_chain,
                   mn_preflight_disconnect, mn_reference_drift,
-                  mn_gpu_routing, mn_rerun_asis_recomputes]]
+                  mn_gpu_routing, mn_rerun_asis_recomputes,
+                  mn_data_gravity_recall]]
     try:
         with TestClient(app) as client:
             try:
