@@ -1,7 +1,9 @@
 /**
  * F1 render verify: FileBrowser shows a per-file durability pill driven by the
- * node's `state`/`badge` (from /api/runs/{id}/durable). Covers the Run-panel list
- * view (variant="wide") and the rail tree view. output_durability.md §6.2.
+ * node's `state`/`badge` (from /api/runs/{id}/durable), in the §8c two-axis
+ * vocabulary (kept ✓ / keeping… / temporary / discarded, + location only when
+ * not simply here). Covers the Run-panel list view (variant="wide") and the
+ * rail tree view. output_durability.md §6.2 + more_weft_ui.md §8c.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -9,38 +11,62 @@ import FileBrowser, { type TreeNode } from './FileBrowser'
 
 const tree: TreeNode = {
   kind: 'root', name: '', path: '', children: [
-    { kind: 'file', name: 'umap.png', path: 'umap.png', size: 2048,
-      artifact_path: '/api/runs/r/file?rel=umap.png', state: 'retained', badge: 'retained ✓' },
-    { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', size: 99_000_000,
-      artifact_path: '/api/runs/r/file?rel=big.h5ad', state: 'saving',
-      badge: 'saving… · keeps the version at run settlement', large: true },
-    { kind: 'file', name: 'raw.h5ad', path: 'raw.h5ad', size: 99_000_000,
-      artifact_path: '/api/runs/r/file?rel=raw.h5ad', state: 'at-risk',
-      badge: 'at risk — large output on scratch, nothing has kept it yet', large: true },
+    { kind: 'file', name: 'report.png', path: 'report.png', size: 2048,
+      artifact_path: '/api/runs/r/file?rel=report.png', state: 'retained', badge: 'kept ✓' },
+    { kind: 'file', name: 'model.bin', path: 'model.bin', size: 99_000_000,
+      artifact_path: '/api/runs/r/file?rel=model.bin', state: 'saving',
+      badge: 'keeping… · keeps the version at run settlement', large: true },
+    { kind: 'file', name: 'stage2.parquet', path: 'stage2.parquet', size: 99_000_000,
+      artifact_path: '/api/runs/r/file?rel=stage2.parquet', state: 'at-risk',
+      badge: 'temporary — will be discarded; Keep it to save it', large: true },
     { kind: 'file', name: 'gone.dat', path: 'gone.dat', size: 10,
-      artifact_path: null, state: 'cleared', badge: 'cleared' },
+      artifact_path: null, state: 'cleared', badge: 'discarded — swept by housekeeping' },
   ],
 }
 
-describe('FileBrowser durability pills', () => {
-  it('renders a weft-truth state pill per file in the Run panel (list view)', () => {
+describe('FileBrowser durability pills (§8c vocabulary)', () => {
+  it('renders a protection-axis pill per file in the Run panel (list view)', () => {
     render(<FileBrowser root={tree} variant="wide" />)
-    // retained → "retained ✓"
-    expect(screen.getByText('retained ✓').className).toContain('files__badge--retained')
-    // saving → short "saving…", full designed text in the tooltip
-    const saving = screen.getByText('saving…')
-    expect(saving.className).toContain('files__badge--saving')
-    expect(saving.getAttribute('title')).toContain('keeps the version at run settlement')
-    // at-risk → red pill (large output on scratch, nothing kept it)
-    expect(screen.getByText('at risk').className).toContain('files__badge--at-risk')
-    // cleared
-    expect(screen.getByText('cleared').className).toContain('files__badge--cleared')
+    expect(screen.getByText('kept ✓').className).toContain('files__badge--retained')
+    // saving → short "keeping…", full designed text in the tooltip
+    const keeping = screen.getByText('keeping…')
+    expect(keeping.className).toContain('files__badge--saving')
+    expect(keeping.getAttribute('title')).toContain('keeps the version at run settlement')
+    // unkept after close → "temporary" (at-risk keeps its red styling key)
+    expect(screen.getByText('temporary').className).toContain('files__badge--at-risk')
+    expect(screen.getByText('discarded').className).toContain('files__badge--cleared')
+  })
+
+  it('adds the location axis only when the bytes are not simply here', () => {
+    const t: TreeNode = {
+      kind: 'root', name: '', path: '', children: [
+        { kind: 'file', name: 'far.dat', path: 'far.dat', state: 'retained',
+          badge: 'kept ✓ · on siteB', site: 'siteB' },
+        { kind: 'file', name: 'near.png', path: 'near.png', state: 'retained',
+          badge: 'kept ✓', site: 'local' },
+      ],
+    }
+    render(<FileBrowser root={t} variant="wide" />)
+    expect(screen.getByText('kept ✓ · on siteB')).toBeTruthy() // composite: safe AND not here
+    expect(screen.getByText('kept ✓')).toBeTruthy()            // local → protection only
+  })
+
+  it('OPEN-run unkept files (empty badge) show NO pill — temporary by absence', () => {
+    const t: TreeNode = {
+      kind: 'root', name: '', path: '', children: [
+        { kind: 'file', name: 'work.csv', path: 'work.csv', state: 'in-sandbox', badge: '' },
+        { kind: 'file', name: 'big.bin', path: 'big.bin', state: 'at-risk', badge: '', large: true },
+      ],
+    }
+    render(<FileBrowser root={t} variant="wide" />)
+    expect(screen.queryByText('temporary')).toBeNull()
+    expect(document.querySelector('.files__badge--dura')).toBeNull()
   })
 
   it('renders pills in the rail tree view too', () => {
     render(<FileBrowser root={tree} variant="rail" />)
-    expect(screen.getByText('retained ✓')).toBeTruthy()
-    expect(screen.getByText('saving…')).toBeTruthy()
+    expect(screen.getByText('kept ✓')).toBeTruthy()
+    expect(screen.getByText('keeping…')).toBeTruthy()
   })
 
   it('shows no pill when a node has no durable state (project rail nodes)', () => {
@@ -50,7 +76,7 @@ describe('FileBrowser durability pills', () => {
       ],
     }
     render(<FileBrowser root={plain} variant="wide" />)
-    expect(screen.queryByText('retained ✓')).toBeNull()
+    expect(screen.queryByText('kept ✓')).toBeNull()
     expect(document.querySelector('.files__badge--dura')).toBeNull()
   })
 
@@ -58,11 +84,11 @@ describe('FileBrowser durability pills', () => {
     const onKeep = vi.fn()
     const t: TreeNode = {
       kind: 'root', name: '', path: '', children: [
-        { kind: 'file', name: 'a.png', path: 'a.png', state: 'retained', badge: 'retained ✓',
+        { kind: 'file', name: 'a.png', path: 'a.png', state: 'retained', badge: 'kept ✓',
           artifact_path: '/api/runs/r/file?rel=a.png' },
-        { kind: 'file', name: 'b.h5ad', path: 'b.h5ad', state: 'at-risk', badge: 'at risk' },
-        { kind: 'file', name: 'c.csv', path: 'c.csv', state: 'in-sandbox', badge: 'in sandbox' },
-        { kind: 'file', name: 'd.dat', path: 'd.dat', state: 'cleared', badge: 'cleared' },
+        { kind: 'file', name: 'b.dat', path: 'b.dat', state: 'at-risk', badge: 'temporary' },
+        { kind: 'file', name: 'c.csv', path: 'c.csv', state: 'in-sandbox', badge: 'temporary' },
+        { kind: 'file', name: 'd.dat', path: 'd.dat', state: 'cleared', badge: 'discarded' },
       ],
     }
     render(<FileBrowser root={t} variant="wide" actions={{ onKeep }} />)
@@ -71,6 +97,6 @@ describe('FileBrowser durability pills', () => {
     expect(keep.length).toBe(2)
     fireEvent.click(keep[0])
     expect(onKeep).toHaveBeenCalledTimes(1)
-    expect(['b.h5ad', 'c.csv']).toContain(onKeep.mock.calls[0][0].path)
+    expect(['b.dat', 'c.csv']).toContain(onKeep.mock.calls[0][0].path)
   })
 })

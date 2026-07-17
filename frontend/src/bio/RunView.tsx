@@ -421,22 +421,22 @@ export default function RunView({ run, entities, onFocus, onChange, onAsk, onPre
             )}
           </div>
           {duraSummary && (duraSummary.total ?? 0) > 0 && (
-            <div className="runview__dura-summary" title="Durability of this run's outputs">
-              {(duraSummary.at_risk ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--at-risk">{duraSummary.at_risk} at risk</span>}
+            <div className="runview__dura-summary" title="Are this run's outputs safe?">
+              {/* §8c protection-axis rollup. While the run is OPEN, unkept files
+                  are the unremarkable default → no `temporary` chip (absence). */}
               {(duraSummary.retained ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--retained">{duraSummary.retained} retained</span>}
+                <span className="dura-chip dura-chip--retained">{duraSummary.retained} kept ✓</span>}
               {(duraSummary.saving ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--saving">{duraSummary.saving} saving</span>}
-              {(duraSummary.in_store ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--in-store">{duraSummary.in_store} in store</span>}
-              {(duraSummary.in_sandbox ?? 0) > 0 &&
-                <span className="dura-chip dura-chip--sandbox">{duraSummary.in_sandbox} in sandbox</span>}
+                <span className="dura-chip dura-chip--saving">{duraSummary.saving} keeping…</span>}
+              {!runOpen && ((duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)) > 0 &&
+                <span className="dura-chip dura-chip--temp"
+                      title="Not kept — housekeeping will discard these eventually">
+                  {(duraSummary.at_risk ?? 0) + (duraSummary.in_sandbox ?? 0) + (duraSummary.in_store ?? 0)} temporary</span>}
               {(duraSummary.cleared ?? 0) > 0 && (
                 <button className="dura-chip dura-chip--cleared"
                         onClick={() => setShowCleared(s => !s)}
-                        title={showCleared ? 'Hide cleared files' : 'Show cleared (swept) files'}>
-                  {duraSummary.cleared} cleared · {showCleared ? 'hide' : 'show'}
+                        title={showCleared ? 'Hide discarded files' : 'Show discarded files'}>
+                  {duraSummary.cleared} discarded · {showCleared ? 'hide' : 'show'}
                 </button>
               )}
             </div>

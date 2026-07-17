@@ -41,9 +41,9 @@ describe('treeHasPending', () => {
 })
 
 const pendingTree = { kind: 'root', name: '', path: '', children: [
-  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'saving', badge: 'saving…' }] }
+  { kind: 'file', name: 'big.dat', path: 'big.dat', state: 'saving', badge: 'saving…' }] }
 const keptTree = { kind: 'root', name: '', path: '', children: [
-  { kind: 'file', name: 'big.h5ad', path: 'big.h5ad', state: 'retained', badge: 'retained ✓' }] }
+  { kind: 'file', name: 'big.dat', path: 'big.dat', state: 'retained', badge: 'retained ✓' }] }
 
 describe('RunView durability polling', () => {
   let origFetch: typeof globalThis.fetch
@@ -65,12 +65,12 @@ describe('RunView durability polling', () => {
       render(<RunView run={run} entities={[]} onFocus={() => {}} onChange={() => {}} />)
     })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })   // flush initial fetch
-    expect(screen.getByText('saving…')).toBeTruthy()
+    expect(screen.getByText('keeping…')).toBeTruthy()
     expect(calls).toBe(1)
 
     // advance the poll → refetch → retained
     await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
-    expect(screen.getByText('retained ✓')).toBeTruthy()
+    expect(screen.getByText('kept ✓')).toBeTruthy()
     expect(calls).toBe(2)
 
     // no more polling once nothing is pending
@@ -125,12 +125,12 @@ describe('RunView durability summary + cleared toggle', () => {
     })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
 
-    expect(screen.getByText('2 retained')).toBeTruthy()
-    expect(screen.getByText('1 cleared · show')).toBeTruthy()
+    expect(screen.getByText('2 kept ✓')).toBeTruthy()
+    expect(screen.getByText('1 discarded · show')).toBeTruthy()
     expect(screen.queryByText('gone.dat')).toBeNull()       // cleared hidden by default
 
-    fireEvent.click(screen.getByText('1 cleared · show'))
+    fireEvent.click(screen.getByText('1 discarded · show'))
     expect(screen.getByText('gone.dat')).toBeTruthy()       // revealed
-    expect(screen.getByText('1 cleared · hide')).toBeTruthy()
+    expect(screen.getByText('1 discarded · hide')).toBeTruthy()
   })
 })

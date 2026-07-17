@@ -277,20 +277,21 @@ export default function FileBrowser({
     )
   }
 
-  // Per-file durability pill (output_durability.md §6.2), weft-truth vocabulary. Short label
-  // in the pill, the full designed badge text (e.g. "saving… · keeps the version at run
-  // settlement") in the tooltip. `retained`/`saving` are weft durability; `in-store` is aba's
-  // serving cache only (honest, not a fake "retained"); `at-risk` is a large output live on
-  // scratch nothing has kept yet (RED). Absent for nodes without a durable `state` (project rail).
+  // Per-file durability pill — §8c two-axis vocabulary (more_weft_ui.md): the pill
+  // says PROTECTION (kept ✓ / keeping… / temporary / discarded), plus location only
+  // when the bytes aren't simply here (`· on <site>`). State KEYS drive styling and
+  // the Keep shield, unchanged. An unkept file in an OPEN run arrives with an EMPTY
+  // badge (temporary-by-absence — backend rule) → no pill at all.
   function duraBadge(node: TreeNode): React.ReactNode {
     const st = node.state
     if (!st) return null
-    const short = st === 'retained' ? (node.site ? `on ${node.site}` : 'retained ✓')
-      : st === 'saving' ? 'saving…'
-      : st === 'in-store' ? 'in store'
-      : st === 'at-risk' ? 'at risk'
-      : st === 'in-sandbox' ? 'not kept yet'
-      : st === 'cleared' ? 'cleared' : st
+    if ((st === 'at-risk' || st === 'in-sandbox') && node.badge === '') return null
+    const short = st === 'retained' ? (node.site && node.site !== 'local' ? `kept ✓ · on ${node.site}` : 'kept ✓')
+      : st === 'saving' ? 'keeping…'
+      : st === 'in-store' ? 'temporary'
+      : st === 'at-risk' ? 'temporary'
+      : st === 'in-sandbox' ? 'temporary'
+      : st === 'cleared' ? 'discarded' : st
     return (
       <span className={`files__badge files__badge--dura files__badge--${st}`}
             title={node.badge || st}>{short}</span>
@@ -397,7 +398,7 @@ export default function FileBrowser({
                   onClick={() => hasEntity && node.entity_id && onFocus?.(node.entity_id)}
                   title={node.title || node.name}>{node.name}/</span>
             {node.ephemeral && (
-              <span className="files__badge files__badge--scratch" title={node.note || 'Scratch — not kept unless promoted'}>scratch</span>
+              <span className="files__badge files__badge--scratch" title={node.note || 'Temporary — not kept unless promoted'}>temporary</span>
             )}
             <span className="files__type">{folderTypeLabel(node)}</span>
             <span className="files__size files__size--dash">—</span>
