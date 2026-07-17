@@ -299,6 +299,33 @@ export default function ConnectMachine({ knownNames, onDone, onCancel }: Props) 
                 <span className="cmp-dim">— backed up / not auto-purged; results
                 you keep on this machine stay here</span>
               </label>
+              {!proposal.durable && (
+                proposal.durable_path == null ? (
+                  <button className="mod-linkbtn"
+                    onClick={() => patch({ durable_path: '' })}>
+                    + keep results at a safe path instead…
+                  </button>
+                ) : (
+                  <span className="cmp-addpath">
+                    <input value={proposal.durable_path} spellCheck={false}
+                      autoComplete="off" placeholder="/users/me/weft-keeps"
+                      onChange={e => patch({ durable_path: e.target.value })} />
+                    {(proposal.working.options ?? [])
+                      .filter(o => o.kind !== 'scratch').slice(0, 2)
+                      .map(o => {
+                        const sugg = o.root.replace(/\/\.weft$/, '') + '/weft-keeps'
+                        return (
+                          <button key={o.root} className="mod-linkbtn"
+                            onClick={() => patch({ durable_path: sugg })}>{sugg}</button>
+                        )
+                      })}
+                    <button className="mod-linkbtn"
+                      onClick={() => patch({ durable_path: null })}>remove</button>
+                    <span className="cmp-dim">results you keep move here (never
+                    off the machine)</span>
+                  </span>
+                )
+              )}
             </div>
 
             <label>Notes <span className="cmp-dim">(guidance for scheduling)</span></label>

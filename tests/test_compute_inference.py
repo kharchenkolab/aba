@@ -177,10 +177,25 @@ def test_build_site_config_all_partitions_means_no_allowlist():
     assert "partitions_allowed" not in cfg.get("policy", {})
 
 
-def test_build_site_config_keeps_stay_on_the_machine():
-    """Remote keeps must not silently tar-pipe home: retain.dir under the
-    working root makes the tab's 'results you keep stay here' promise true
-    (weft keeps in place only when the site declares retain.dir)."""
+def test_build_site_config_durable_topologies():
+    """retention2: `durable` is a user assertion with three honest shapes.
+    A — checkbox checked → durable: true (keeps pin in place).
+    C — unchecked + alternative path → durable: "/path" (site-side hop).
+    B — unchecked, no path → NO key (weft refuses keeps until a dest is
+        given; aba's close_run policy decides). The old retain.dir wiring
+        (which falsely asserted scratch durability via the alias) is gone."""
     p = propose(slurm_caps(), dest="me@login1.vbc.ac.at")
+    assert p["durable"] is False                      # scratch pick → B guess
     cfg = build_site_config(p, dest="me@login1.vbc.ac.at")
-    assert cfg["retain"] == {"dir": "/scratch/me/.weft/keeps"}
+    assert "durable" not in cfg and "retain" not in cfg          # B
+
+    p["durable"] = True
+    assert build_site_config(p, dest="me@x")["durable"] is True  # A
+
+    p["durable"] = False
+    p["durable_path"] = "/users/me/weft-keeps"
+    cfg = build_site_config(p, dest="me@x")
+    assert cfg["durable"] == "/users/me/weft-keeps"              # C
+
+    p["durable_path"] = "   "
+    assert "durable" not in build_site_config(p, dest="me@x")    # blank = B

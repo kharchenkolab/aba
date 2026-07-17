@@ -97,6 +97,8 @@ class Proposal(BaseModel):
     durable: bool = False           # the working root's storage lasts (keeps
                                     # are retained in place, so this is the
                                     # keeps' durability)
+    durable_path: Optional[str] = None   # topology C: durable storage at a
+                                         # separate path on the node
 
 
 class ConnectRequest(Target):
@@ -112,6 +114,7 @@ class SiteEdit(BaseModel):
     # cleaned automatically (Free up first)
     working_root: Optional[str] = None
     durable: Optional[bool] = None
+    durable_path: Optional[str] = None   # "" clears it
 
 
 class GcRequest(BaseModel):
@@ -422,6 +425,15 @@ async def edit_site(name: str, edit: SiteEdit) -> dict:
         aba["use_for"] = edit.use_for
     if edit.durable is not None:
         aba["durable"] = edit.durable
+        if edit.durable:
+            cfg["durable"] = True
+        else:
+            cfg.pop("durable", None)
+    if edit.durable_path is not None:
+        if edit.durable_path.strip():
+            cfg["durable"] = edit.durable_path.strip()
+        elif cfg.get("durable") is not True:
+            cfg.pop("durable", None)
     if edit.long_term is not None:
         aba["storage"] = [e for e in edit.long_term if e.get("path")]
         stable = [e["path"] for e in aba["storage"] if e.get("stable")]

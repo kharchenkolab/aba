@@ -116,6 +116,9 @@ class WeftAdapter:
             r = self._weft.register_site(
                 _LOCAL_SITE, "local",
                 {"root": str(self.workspace / "site-local"),
+                 # retention2: the workspace sits on the user's own disk —
+                 # keeps pin in place, never trip the no-durable refusal
+                 "durable": True,
                  "pixi_source": pixi_bin})
             if is_error_payload(r):
                 raise ComputeError.from_payload(r)

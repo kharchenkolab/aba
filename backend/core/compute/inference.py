@@ -201,8 +201,10 @@ def propose(caps: dict, *, dest: str = "",
         "notes": [],
         "working": working,
         # keeps are retained in place under the root — "durable" is the
-        # user's word on whether that storage lasts (pre-guessed from kind)
+        # user's word on whether that storage lasts (pre-guessed from kind);
+        # durable_path = topology C (durable storage elsewhere on the node)
         "durable": working.get("kind") == "home",
+        "durable_path": None,
         "long_term": [{"path": p, "stable": True} for p in shared],
         "contract": contract,
         "contract_evidence": shared,
@@ -224,14 +226,16 @@ def build_site_config(proposal: dict, *, dest: str = "",
     """A confirmed proposal → the weft `register_site` config dict. Kept next
     to propose() so the two halves of the contract stay in one file."""
     cfg: dict = {"root": proposal["working"]["root"]}
+    # retention2: `durable` is a USER ASSERTION with three honest answers —
+    # True (the root itself is durable: keeps pin in place, nothing moves),
+    # "/path" (durable storage elsewhere on the node: keeps hop site-side,
+    # never cross the wire), absent (nothing durable: weft refuses keeps
+    # until the caller says where — aba's close_run policy decides).
+    if proposal.get("durable"):
+        cfg["durable"] = True
+    elif (proposal.get("durable_path") or "").strip():
+        cfg["durable"] = proposal["durable_path"].strip()
     if proposal["kind"] in ("ssh", "slurm"):
-        # keeps stay ON the machine, in place, under the working root —
-        # without retain.dir weft tar-pipes remote keeps back to the
-        # controller, which would silently break the tab's promise
-        # ("results you keep on this machine stay here"); durability
-        # follows the root exactly as the durable checkbox states
-        cfg["retain"] = {"dir": proposal["working"]["root"].rstrip("/")
-                         + "/keeps"}
         user, _, host = dest.rpartition("@")
         cfg["host"] = host or dest
         if user:

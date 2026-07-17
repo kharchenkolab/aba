@@ -282,7 +282,8 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                     )}
                     {!isLocal && (
                       <label className="cmp-part">
-                        <input type="checkbox" checked={!!s.aba?.durable}
+                        <input type="checkbox"
+                          checked={s.config?.durable === true || (!!s.aba?.durable && typeof s.config?.durable !== 'string')}
                           disabled={busy !== null || !selfService}
                           onChange={e => act('durable', () =>
                             computeApi.edit(s.name, { durable: e.target.checked }))} />
@@ -290,6 +291,31 @@ function SiteDetail({ site, advanced, selfService, onChanged }: {
                         <span className="cmp-dim">— backed up / not auto-purged;
                         results you keep on this machine stay here</span>
                       </label>
+                    )}
+                    {!isLocal && s.config?.durable !== true && (
+                      typeof s.config?.durable === 'string' ? (
+                        <span className="cmp-part cmp-dim">
+                          results kept at <code>{s.config.durable}</code>
+                          {selfService && (
+                            <button className="mod-linkbtn" disabled={busy !== null}
+                              onClick={() => act('durable_path', () =>
+                                computeApi.edit(s.name, { durable_path: '' }),
+                                'cleared — this machine now has no safe storage; keeps will need a destination')}>
+                              remove</button>
+                          )}
+                        </span>
+                      ) : selfService ? (
+                        <button className="mod-linkbtn" disabled={busy !== null}
+                          onClick={() => {
+                            const p = window.prompt('Keep results at (a backed-up path on this machine):',
+                                                    '~/weft-keeps')
+                            if (p && p.trim()) {
+                              act('durable_path', () =>
+                                computeApi.edit(s.name, { durable_path: p.trim() }),
+                                'results you keep will move there (never off the machine)')
+                            }
+                          }}>+ keep results at a safe path…</button>
+                      ) : null
                     )}
                   </>
                 ) : (

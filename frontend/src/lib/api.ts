@@ -134,6 +134,7 @@ export interface ComputeSite {
   cpus?: number; mem_gb?: number; gpus?: number
   scheduler?: string; internet?: boolean
   config?: { root?: string; host?: string; user?: string
+             durable?: boolean | string
              policy?: { partitions_allowed?: string[]; notes?: string[]
                         storage?: Record<string, string> } }
   capabilities?: SiteCaps | null
@@ -149,6 +150,7 @@ export interface ComputeProposal {
   use_for: string[]
   notes?: string[]
   durable?: boolean
+  durable_path?: string | null
   working: { root: string; free_gb?: number | null; reason?: string
              kind?: string; options?: WorkingOption[] }
   long_term: StoragePath[]
@@ -192,7 +194,7 @@ export const computeApi = {
   reprobe: (name: string) => apiPost<{ site: string }>(`/api/compute/sites/${cname(name)}/reprobe`),
   edit: (name: string, body: { use_for?: string[]; long_term?: StoragePath[]
                                notes?: string[]; working_root?: string
-                               durable?: boolean }) =>
+                               durable?: boolean; durable_path?: string }) =>
     apiPatch<{ site: string }>(`/api/compute/sites/${cname(name)}`, body),
   disconnect: (name: string) => apiDelete<{ site: string }>(`/api/compute/sites/${cname(name)}`),
   gc: (name: string, confirm: boolean) =>
