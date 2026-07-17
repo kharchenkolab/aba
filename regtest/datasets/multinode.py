@@ -709,6 +709,34 @@ def mn_cross_thread_separation(client, pid, tid):
     ]
 
 
+@scenario("mn_mid_chain_steering")
+def mn_mid_chain_steering(client, pid, tid):
+    """Multi-turn steering: a chain starts on hpc, then the user RETARGETS the
+    next step to mendel mid-flight. The agent must retarget cleanly, carry the
+    prior stage's value across (not lose it), and land the right final number.
+    (Skips if mendel isn't available.)"""
+    if not MENDEL_OK:
+        return [], [("mendel available (scenario skipped otherwise)", False)]
+    caps = [drive_turn(client, pid, tid,
+        "STEP 1: on machine 'hpc', compute the sum of 1..300 and tell me the "
+        "number. Keep it handy for a follow-up.")]
+    s1 = sum(range(1, 301))          # 45150
+    caps.append(drive_turn(client, pid, tid,
+        "STEP 2: actually, run the NEXT step on 'mendel' instead of hpc — "
+        "take that step-1 number and multiply it by 3. Report the result and "
+        "confirm which machine each step ran on."))
+    full = _denum(all_text(caps) + "\n" + thread_text(client, pid, tid))
+    s1_ran = _site_ran([caps[0]]); s2_ran = _site_ran([caps[1]])
+    txt = full.lower()
+    return caps, [
+        ("step 1 ran on hpc", "hpc" in s1_ran),
+        ("step 2 retargeted to mendel", "mendel" in s2_ran),
+        ("step-1 value carried across (not lost)", str(s1) in full),
+        ("correct final (x3) reported", str(s1 * 3) in full),
+        ("agent confirms both machines", "hpc" in txt and "mendel" in txt),
+    ]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     only = None
@@ -758,7 +786,7 @@ def main():
                   mn_preflight_disconnect, mn_reference_drift,
                   mn_gpu_routing, mn_rerun_asis_recomputes,
                   mn_data_gravity_recall, mn_conflicting_gravity,
-                  mn_cross_thread_separation]]
+                  mn_cross_thread_separation, mn_mid_chain_steering]]
     try:
         with TestClient(app) as client:
             try:
