@@ -169,7 +169,7 @@ export interface SshTarget { dest: string; port?: number | null; ssh_opts?: stri
 const cname = (n: string) => encodeURIComponent(n)
 
 export const computeApi = {
-  status: () => apiGet<{ ok: boolean; detail: string }>('/api/compute/status'),
+  status: () => apiGet<{ ok: boolean; detail: string; self_service?: boolean }>('/api/compute/status'),
   sites: () => apiGet<{ sites: ComputeSite[] }>('/api/compute/sites'),
   site: (name: string) => apiGet<ComputeSite>(`/api/compute/sites/${cname(name)}`),
   load: (name: string) =>
