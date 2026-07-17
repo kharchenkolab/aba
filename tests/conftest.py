@@ -133,5 +133,8 @@ _seed_valid_global_db()
 try:
     from core import llm as _llm_for_tests
     _llm_for_tests._CLI_KEYCHAIN_ENABLED = False
+    _llm_for_tests._CLI_FILE_ENABLED = False   # ~/.claude/.credentials.json — real on dev boxes;
+    #                                            reading it breaks "no credentials" tests AND leaks
+    #                                            the developer's token into the assertion diff.
 except Exception:  # noqa: BLE001 — llm import problems surface in real tests
     pass

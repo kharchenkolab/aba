@@ -369,9 +369,13 @@ def _oauth_bearer():
 
 
 _CLI_CRED_CACHE: dict = {"tok": None, "until": 0.0}
-# The macOS Keychain probe is real-machine state — tests disable it globally
-# (tests/conftest.py) so credential tests stay deterministic on dev boxes.
+# The CLI credential (both the ~/.claude/.credentials.json FILE and the macOS
+# Keychain) is real-machine state — tests disable BOTH globally (tests/conftest.py)
+# so credential tests stay deterministic on dev boxes AND never read (or leak in an
+# assertion) a developer's real token. A test that exercises the CLI-fallthrough
+# re-enables the leg it drives.
 _CLI_KEYCHAIN_ENABLED = True
+_CLI_FILE_ENABLED = True
 
 
 def _cli_credential():
@@ -392,7 +396,7 @@ def _cli_credential():
 
     tok = None
     cred = os.path.expanduser("~/.claude/.credentials.json")
-    if os.path.exists(cred):
+    if _CLI_FILE_ENABLED and os.path.exists(cred):
         try:
             tok = _from_blob(json.load(open(cred)))
         except Exception:  # noqa: BLE001
