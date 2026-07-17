@@ -332,9 +332,11 @@ def main():
     if not conn:
         sys.exit("[mn] no cluster fixture — set ABA_MN_CLUSTER_PORT + "
                  "ABA_MN_KEYDIR (or write /tmp/aba_mn_{port,keydir}.txt)")
+    # durable: True — the scenario asserts kept-IN-PLACE badges; without the
+    # declaration the (correct) no-durable policy ships keepers home instead
     c.sync_call("register_site", "hpc", "slurm",
                 {"root": "/home/physicist/.weft", "host": "127.0.0.1",
-                 "port": conn["port"], "user": "physicist",
+                 "port": conn["port"], "user": "physicist", "durable": True,
                  "ssh_opts": ["-i", f"{conn['keydir']}/id_ed25519",
                               "-o", "StrictHostKeyChecking=no",
                               "-o", "UserKnownHostsFile=/dev/null",
